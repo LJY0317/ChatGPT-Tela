@@ -24,7 +24,7 @@ function tarEntries(archive: Buffer): Map<string, Buffer> {
 
 describe("ChatGPT Tela plugin packaging", () => {
   test("references one existing app and never bundles an MCP URL", () => {
-    const appId = "plugin_asdk_app_6a4c0062f3b88191855c0a80eac5d53d";
+    const appId = "plugin_asdk_app_TelaFixture123";
     const files = chatGptTelaPluginFiles(appId);
     expect([...files.keys()].sort()).toEqual([
       ".app.json",
