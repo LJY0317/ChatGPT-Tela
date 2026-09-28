@@ -318,6 +318,9 @@ class PackagedInstallOperator {
   readonly #manifest: OwnershipManifest;
   readonly #payload: PackagedPayloadManager;
   readonly #serviceInstaller: ServiceRegistrationInstaller;
+  readonly #runner: ServiceRegistrationCommandRunner;
+  readonly #platform: PackagedInstallBlueprint["platform"];
+  readonly #menuBarResourceId: string | undefined;
   readonly #registrations: ReadonlyMap<string, {
     readonly resource: Extract<OwnedResource, { readonly kind: "service-registration" }>;
     readonly definition: ServiceRegistrationDefinition;
@@ -330,6 +333,9 @@ class PackagedInstallOperator {
   }) {
     this.#manifestPath = input.blueprint.paths.installManifest;
     this.#manifest = input.manifest;
+    this.#platform = input.blueprint.platform;
+    this.#runner = input.runner ?? new SystemServiceRegistrationCommandRunner();
+    this.#menuBarResourceId = input.blueprint.menuBar?.resource.id;
     this.#payload = new PackagedPayloadManager({
       manifestPath: this.#manifestPath,
       installId: input.manifest.installId,
@@ -337,7 +343,7 @@ class PackagedInstallOperator {
     });
     this.#serviceInstaller = new ServiceRegistrationInstaller({
       platform: input.blueprint.platform,
-      runner: input.runner ?? new SystemServiceRegistrationCommandRunner(),
+      runner: this.#runner,
     });
     this.#registrations = new Map([
       ...input.blueprint.services.map(service => [service.resource.id, service] as const),
@@ -361,12 +367,28 @@ class PackagedInstallOperator {
       return Object.freeze({ created: false, detail: "unsupported packaged resource" });
     }
     if (this.#payload.observe(manifest) !== "owned") throw new Error("packaged services cannot be registered before the binary payload is verified");
-    return this.#serviceInstaller.install({
+    const installed = await this.#serviceInstaller.install({
       manifestPath: this.#manifestPath,
       manifest,
       resource: registration.resource,
       definition: registration.definition,
     });
+    if (resource.id === this.#menuBarResourceId && this.#platform === "darwin") {
+      const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+      if (uid === undefined) throw new Error("macOS menu bar install requires a user id");
+      const started = await this.#runner.run("/bin/launchctl", [
+        "kickstart",
+        `gui/${uid}/${resource.registrationId}`,
+      ]);
+      if (started.exitCode !== 0) {
+        throw new Error(`macOS menu bar launch failed after registration: ${started.stderr.trim().slice(0, 240)}`);
+      }
+      return Object.freeze({
+        created: installed.created,
+        detail: `${installed.detail}; menu bar launch requested`,
+      });
+    }
+    return installed;
   };
 }
 

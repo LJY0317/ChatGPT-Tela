@@ -25,6 +25,7 @@
     "profile:setup": "bun run profile:setup:build && electron build/profile-setup/main.cjs",
     "profile:runtime:build": "bun build apps/profile-runtime/src/main.ts --target=node --format=cjs --external electron --outfile=build/profile-runtime/main.cjs",
     "menu-bar:build": "bun run apps/menu-bar-macos/build.ts",
+    "menu-bar:start": "bun run apps/menu-bar-macos/start.ts",
     "menu-bar": "bun run menu-bar:build && ./build/chatgpt-tela-menu-bar",
     "canary:build": "bun build apps/canary/src/main.ts --target=node --format=cjs --external electron --outfile=build/canary/main.cjs",
     "canary": "bun run canary:build && electron build/canary/main.cjs",

@@ -683,6 +683,7 @@ Codex sandbox/tool authority and does not bypass ChatGPT cards that Tela cannot 
 The macOS source tree includes a lightweight AppKit menu-bar control surface:
 
 ```sh
+bun run menu-bar:start   # build and launch it detached for ordinary development/dogfooding
 bun run menu-bar
 ```
 
@@ -691,7 +692,15 @@ starts/stops/restarts Tela-owned profiles through the private local service cont
 automation, and opens Tela logs/diagnostics. The hidden Electron Codex/Web bridge calls `app.dock.hide()` on
 macOS so it does not create a second Dock-centric launcher UX. Signed macOS payloads include the same menu-bar
 binary and register `com.openai.chatgpt-tela.menu-bar` as a **product-owned** Aqua LaunchAgent with exact
-manifest/marker ownership, so install/uninstall never relies on a name-only login-item guess.
+manifest/marker ownership. Install uses `RunAtLoad=true` and explicitly kickstarts that LaunchAgent after
+registration, so the menu-bar surface appears immediately after a successful install and again on normal
+login. Install/uninstall therefore never relies on a name-only login-item guess.
+
+The current status icon uses an SF Symbol as a placeholder. Its image and future per-menu-item icons are UI
+assets, not protocol/authority identifiers, so they can be replaced later with custom artwork without changing
+Gateway/Chat/Codex correctness. Platform UI remains native by design: macOS uses the menu bar; Windows should
+use the notification area/system tray and Linux should use the desktop's supported tray/status-item mechanism
+when that product UI slice is implemented. None of those UI processes may become a backend authority.
 
 ### Privacy-safe diagnostics
 

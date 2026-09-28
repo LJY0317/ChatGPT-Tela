@@ -111,6 +111,13 @@ presence. A small AppKit menu-bar process is the intended local control surface.
 calls only Tela's private authenticated loopback contracts, and may expose user preferences such as one-shot
 approval automation. Signed installs own its Aqua LaunchAgent separately as a `product` resource; it is never
 counted as a fourth backend service and cannot manufacture workspace, turn, sandbox, or tool authority.
+The LaunchAgent is `RunAtLoad` and install explicitly kickstarts it after exact registration so successful
+installation produces a visible menu-bar surface immediately rather than waiting for the next login.
+
+This UI boundary is platform-native rather than macOS-shaped core logic. The corresponding Windows product UI
+belongs in the notification area/system tray; Linux should use an available desktop status-item/tray protocol.
+Those surfaces may differ in lifecycle and presentation while sharing only the private product-control
+contracts. A missing/restarting UI surface must never take Gateway, Chat, or Codex down with it.
 
 ## Dogfooding and self-maintenance
 

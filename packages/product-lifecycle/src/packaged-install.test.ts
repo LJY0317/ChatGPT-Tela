@@ -44,6 +44,7 @@ class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
 
 class LaunchctlFixtureRunner implements ServiceRegistrationCommandRunner {
   readonly loaded = new Set<string>();
+  readonly running = new Set<string>();
   readonly calls: Array<readonly [string, readonly string[]]> = [];
 
   async run(command: string, arguments_: readonly string[]): Promise<ServiceRegistrationCommandResult> {
@@ -59,6 +60,12 @@ class LaunchctlFixtureRunner implements ServiceRegistrationCommandRunner {
       const registrationId = definitionPath.split("/").at(-1)?.replace(/\.plist$/, "") ?? "";
       if (!registrationId) return { exitCode: 2, stdout: "", stderr: "missing registration" };
       this.loaded.add(registrationId);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    }
+    if (arguments_[0] === "kickstart") {
+      const registrationId = (arguments_[1] ?? "").split("/").at(-1) ?? "";
+      if (!this.loaded.has(registrationId)) return { exitCode: 3, stdout: "", stderr: "not loaded" };
+      this.running.add(registrationId);
       return { exitCode: 0, stdout: "", stderr: "" };
     }
     throw new Error(`unexpected launchctl args ${arguments_.join(" ")}`);
@@ -325,6 +332,10 @@ describe("packaged product install", () => {
       expect(runner.calls.some(([command, args]) => command === "/bin/launchctl"
         && args[0] === "bootstrap"
         && args[2]?.endsWith("com.openai.chatgpt-tela.menu-bar.plist"))).toBe(true);
+      expect(runner.calls.some(([command, args]) => command === "/bin/launchctl"
+        && args[0] === "kickstart"
+        && args[1]?.endsWith("/com.openai.chatgpt-tela.menu-bar"))).toBe(true);
+      expect(runner.running.has("com.openai.chatgpt-tela.menu-bar")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
