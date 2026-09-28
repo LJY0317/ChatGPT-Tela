@@ -28,7 +28,10 @@ export interface PackagedProductInstallSpec {
   readonly productVersion: string;
   readonly payloadSourcePath: string;
   readonly services: readonly PackagedServiceLaunchSpec[];
-  readonly menuBar?: { readonly executableRelativePath: string };
+  readonly menuBar?: {
+    readonly executableRelativePath: string;
+    readonly arguments?: readonly string[];
+  };
 }
 
 export interface PackagedServiceBlueprint {
@@ -166,9 +169,13 @@ function renderDarwinService(input: {
 function renderDarwinMenuBar(input: {
   readonly registrationId: string;
   readonly executable: string;
+  readonly arguments_: readonly string[];
   readonly workingDirectory: string;
 }): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${xml(input.registrationId)}</string>\n    <key>ProgramArguments</key>\n    <array>\n      <string>${xml(oneLine(input.executable, "menu bar executable"))}</string>\n    </array>\n    <key>WorkingDirectory</key>\n    <string>${xml(input.workingDirectory)}</string>\n    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <false/>\n    <key>LimitLoadToSessionType</key>\n    <string>Aqua</string>\n    <key>ProcessType</key>\n    <string>Interactive</string>\n  </dict>\n</plist>\n`;
+  const argumentsXml = [input.executable, ...input.arguments_]
+    .map(value => `      <string>${xml(oneLine(value, "menu bar argument"))}</string>`)
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${xml(input.registrationId)}</string>\n    <key>ProgramArguments</key>\n    <array>\n${argumentsXml}\n    </array>\n    <key>WorkingDirectory</key>\n    <string>${xml(input.workingDirectory)}</string>\n    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <false/>\n    <key>LimitLoadToSessionType</key>\n    <string>Aqua</string>\n    <key>ProcessType</key>\n    <string>Interactive</string>\n  </dict>\n</plist>\n`;
 }
 
 function renderLinuxService(input: {
@@ -273,9 +280,11 @@ export function createPackagedInstallBlueprint(input: {
   if (platform === "darwin" && input.spec.menuBar) {
     const registrationId = "com.openai.chatgpt-tela.menu-bar";
     const executable = installedExecutable(paths.binaryRoot, input.spec.menuBar.executableRelativePath);
+    const arguments_ = Object.freeze([...(input.spec.menuBar.arguments ?? [])]
+      .map(value => oneLine(value, "menu bar argument")));
     const definition = Object.freeze({
       platform: "darwin" as const,
-      content: renderDarwinMenuBar({ registrationId, executable, workingDirectory: paths.binaryRoot }),
+      content: renderDarwinMenuBar({ registrationId, executable, arguments_, workingDirectory: paths.binaryRoot }),
     });
     const definitionPath = serviceDefinitionPath({ platform, home, environment, registrationId })!;
     const markerPath = join(paths.stateRoot, "install", "service-markers", "menu-bar.json");

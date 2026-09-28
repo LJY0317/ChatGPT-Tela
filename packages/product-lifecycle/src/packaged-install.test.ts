@@ -260,7 +260,7 @@ describe("packaged product install", () => {
       const macSpec = {
         productVersion: "1.2.3",
         payloadSourcePath: macSource,
-        menuBar: { executableRelativePath: "menu-bar" },
+        menuBar: { executableRelativePath: "tela", arguments: ["menu-bar"] },
         services: (["gateway", "chat", "codex"] as const).map(service => ({
           service,
           executableRelativePath: "tela",
@@ -282,6 +282,7 @@ describe("packaged product install", () => {
       const menuPlist = (mac.menuBar!.definition as { content: string }).content;
       expect(menuPlist).toContain("<key>RunAtLoad</key>\n    <true/>");
       expect(menuPlist).toContain("<key>LimitLoadToSessionType</key>\n    <string>Aqua</string>");
+      expect(menuPlist).toContain("<string>menu-bar</string>");
       expect(mac.desiredResources.some(resource => resource.id === "menu-bar-registration")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
