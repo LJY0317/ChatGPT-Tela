@@ -81,6 +81,7 @@ function fixture(root: string) {
 }
 
 describe("packaged product install", () => {
+  const darwinLifecycleTest = process.platform === "win32" ? test.skip : test;
   test("payload manifest is the authoritative high-level install contract", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-packaged-manifest-install-"));
     const home = join(root, "home");
@@ -289,7 +290,7 @@ describe("packaged product install", () => {
     }
   });
 
-  test("macOS install owns and bootstraps the menu bar LaunchAgent separately from three backend services", async () => {
+  darwinLifecycleTest("macOS install owns and bootstraps the menu bar LaunchAgent separately from three backend services", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-packaged-menu-bar-install-"));
     const home = join(root, "home");
     const source = join(root, "payload");
