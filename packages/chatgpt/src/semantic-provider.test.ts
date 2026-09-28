@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
 import {
   CHATGPT_SURFACE_DRIVER,
+  ChatGptConnectorCatalogUnavailableError,
   type ChatGptSurfaceDriver,
   type ChatGptSurfaceSnapshot,
 } from "./surface";
@@ -66,6 +67,7 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   corruptReadback = false;
   sendAppearsWhenComposerNonEmpty = false;
   failConnectorSelection = false;
+  connectorCatalogUnavailable = false;
 
   constructor(initial: ChatGptSurfaceSnapshot) {
     this.current = structuredClone(initial);
@@ -157,6 +159,9 @@ class FixtureDriver implements ChatGptSurfaceDriver {
 
   async selectConnector(composerKey: string, connectorName: string): Promise<void> {
     this.connectorSelections.push(connectorName);
+    if (this.connectorCatalogUnavailable) {
+      throw new ChatGptConnectorCatalogUnavailableError();
+    }
     if (this.failConnectorSelection) {
       const mention = `@${connectorName}`;
       this.current = {
@@ -572,6 +577,27 @@ describe("ChatGPT semantic provider", () => {
       await expect(new ChatGptSemanticProvider({ connectorName: "ChatGPT Tela Development" })
         .submitTurn(surface.lease, toolRequest()))
         .rejects.toThrow("fixture connector selection failed");
+      expect(driver.activated).toEqual([]);
+      expect(driver.current.composers[0]?.textLength).toBe(0);
+      expect(driver.current.composers[0]?.connectorFingerprints).toEqual([]);
+    } finally {
+      await surface.host.close();
+    }
+  });
+
+  test("missing configured connector fails closed instead of submitting through automatic app routing", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.connectorCatalogUnavailable = true;
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({
+      connectorName: "ChatGPT Tela",
+      connectorDraftPersistenceSettleMs: 0,
+    });
+    try {
+      await expect(provider.probeConnector(surface.lease))
+        .rejects.toThrow("integration catalog does not expose the configured connector");
+      await expect(provider.submitTurn(surface.lease, toolRequest()))
+        .rejects.toThrow("integration catalog does not expose the configured connector");
       expect(driver.activated).toEqual([]);
       expect(driver.current.composers[0]?.textLength).toBe(0);
       expect(driver.current.composers[0]?.connectorFingerprints).toEqual([]);
