@@ -112,6 +112,41 @@ calls only Tela's private authenticated loopback contracts, and may expose user 
 approval automation. Signed installs own its Aqua LaunchAgent separately as a `product` resource; it is never
 counted as a fourth backend service and cannot manufacture workspace, turn, sandbox, or tool authority.
 
+## Dogfooding and self-maintenance
+
+The product should be capable of developing itself through its public/user-facing execution surfaces:
+
+- **Tela Chat** is the local-work surface and should converge on DevSpace-level ergonomics around workspace
+  discovery, bounded file operations, process execution, review, worktree isolation, and agent delegation.
+- **Tela Work/Codex** is the exact-turn Native/Web composition surface and should converge on the smooth
+  CodexGPTWeb-style experience where Web reasoning transparently uses the current Native Codex authority and
+  tools, consumes their results, and continues the same turn.
+
+This does not merge their authority. Tela Chat still owns only its approved workspace/process/agent state,
+while Native Codex remains canonical for Work/Codex task, turn, sandbox, and Native tool authority. The common
+goal is orchestration quality: a normal user request should select and sequence the existing capabilities
+without exposing internal routing mechanics.
+
+Product self-maintenance follows the same rule. Natural-language requests to update, reinstall, repair, keep
+data while removing Tela, or completely remove Tela are translated into typed lifecycle operations rather
+than arbitrary shell authority. The intended boundary is:
+
+```text
+Chat / Work request
+  -> lifecycle capability
+  -> inspect + non-destructive plan
+  -> explicit destructive scope when required
+  -> signed external maintenance helper
+  -> stop owned services
+  -> install / repair / upgrade / uninstall
+  -> verify
+  -> restart or final cleanup
+```
+
+The external helper is intentional. The running Tela binary should not depend on deleting/replacing itself,
+especially on Windows. Release builds should pin the trusted release-key set in the signed maintenance UX;
+model-generated commands and package-provided keys are not trust roots.
+
 ## Capability names and unstable dependencies
 
 OpenAI-owned or runtime-owned names are observations, not product constants. Model identifiers, Native Codex

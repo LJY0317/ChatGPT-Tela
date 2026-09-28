@@ -171,6 +171,24 @@ repair its trusted source bytes; running the new target package gives upgrade it
 is not yet the final consumer trust UX: public release packaging must pin the trusted release key set in the
 signed installer/updater rather than requiring users to supply PEM files manually.
 
+## Natural-language self-maintenance target
+
+The operator CLI is an implementation boundary, not the intended everyday UX. Tela Chat and Tela Work/Codex
+should eventually accept ordinary requests such as "update Tela", "reinstall Tela", "repair this install",
+"remove Tela but keep my data", and "remove Tela completely" and map them to the same lifecycle state
+machines documented here.
+
+The model does not gain permission to improvise installation/removal shell scripts. A maintenance request must
+resolve to a typed lifecycle intent, inspect current ownership/transition state, produce a reviewable plan, and
+then invoke only the corresponding signed lifecycle operation. Destructive data removal remains explicit.
+
+Because a running executable is a poor authority for replacing or deleting itself, the final consumer flow
+uses a signed **external maintenance helper**. The helper is launched from outside the installed binary root,
+inherits only the verified lifecycle plan and pinned release trust, stops exact-owned Tela services, performs
+install/repair/upgrade/uninstall, verifies the resulting ownership/runtime state, restarts Tela when the
+operation requires it, and cleans itself up when finished. This also gives Windows, macOS, and Linux one
+consistent product contract instead of depending on platform-specific self-deletion behavior.
+
 Persistent ChatGPT profile data follows a stricter adoption rule because it may contain login cookies and
 other user-significant state. A fresh product setup may reserve and marker-own only the exact browser profile
 directory and account-binding directory it creates. If either directory already exists without a Tela marker,
