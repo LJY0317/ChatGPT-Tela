@@ -1,4 +1,4 @@
-import type { NativeToolInvocation } from "@chatgpt-tela/core";
+import { diagnosticDurationMs, emitDiagnosticEvent, type NativeToolInvocation } from "@chatgpt-tela/core";
 import type { RemoteTurnBridge, TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import { turnCapabilityRoute } from "@chatgpt-tela/runtime";
 
@@ -25,12 +25,42 @@ export class RoutedCodexTurnBridge implements TurnBridgeBackend {
     return bridge;
   }
 
-  inventory(capability: string, query = "") {
-    return this.#bridge(capability).inventory(capability, query);
+  async inventory(capability: string, query = "") {
+    const startedAt = Date.now();
+    emitDiagnosticEvent("chatgpt_tela_codex", "tool_inventory_start");
+    try {
+      const tools = await this.#bridge(capability).inventory(capability, query);
+      emitDiagnosticEvent("chatgpt_tela_codex", "tool_inventory_complete", {
+        count: tools.length,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
+      return tools;
+    } catch (error) {
+      emitDiagnosticEvent("chatgpt_tela_codex", "tool_inventory_failed", {
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
+      throw error;
+    }
   }
 
-  invoke(capability: string, invocation: NativeToolInvocation) {
-    return this.#bridge(capability).invoke(capability, invocation);
+  async invoke(capability: string, invocation: NativeToolInvocation) {
+    const startedAt = Date.now();
+    emitDiagnosticEvent("chatgpt_tela_codex", "tool_invoke_start", { mode: invocation.mode });
+    try {
+      const result = await this.#bridge(capability).invoke(capability, invocation);
+      emitDiagnosticEvent("chatgpt_tela_codex", "tool_invoke_complete", {
+        mode: invocation.mode,
+        is_error: result.isError,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
+      return result;
+    } catch (error) {
+      emitDiagnosticEvent("chatgpt_tela_codex", "tool_invoke_failed", {
+        mode: invocation.mode,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
+      throw error;
+    }
   }
 
   get routeCount(): number {

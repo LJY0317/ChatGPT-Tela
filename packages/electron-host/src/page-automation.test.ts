@@ -14,7 +14,7 @@ class FakeWebContents implements ElectronWebContentsLike {
         clickCount?: number;
       }
     | {
-        type: "keyDown" | "keyUp";
+        type: "keyDown" | "keyUp" | "char";
         keyCode: string;
         modifiers?: readonly string[];
       }
@@ -54,7 +54,7 @@ class FakeWebContents implements ElectronWebContentsLike {
         clickCount?: number;
       }
     | {
-        type: "keyDown" | "keyUp";
+        type: "keyDown" | "keyUp" | "char";
         keyCode: string;
         modifiers?: readonly string[];
       }): void {
@@ -114,6 +114,43 @@ describe("Electron WebContents page automation", () => {
       { type: "keyUp", keyCode: "A", modifiers: [primary] },
       { type: "keyDown", keyCode: "Backspace" },
       { type: "keyUp", keyCode: "Backspace" },
+    ]);
+  });
+
+  test("focused editable typing emits trusted char input in order", async () => {
+    const webContents = new FakeWebContents();
+    const automation = new ElectronWebContentsPageAutomation(webContents);
+
+    await automation.typeFocusedEditable("@Tela");
+
+    expect(webContents.inputEvents).toEqual([
+      { type: "keyDown", keyCode: "@" },
+      { type: "char", keyCode: "@" },
+      { type: "keyUp", keyCode: "@" },
+      { type: "keyDown", keyCode: "T" },
+      { type: "char", keyCode: "T" },
+      { type: "keyUp", keyCode: "T" },
+      { type: "keyDown", keyCode: "e" },
+      { type: "char", keyCode: "e" },
+      { type: "keyUp", keyCode: "e" },
+      { type: "keyDown", keyCode: "l" },
+      { type: "char", keyCode: "l" },
+      { type: "keyUp", keyCode: "l" },
+      { type: "keyDown", keyCode: "a" },
+      { type: "char", keyCode: "a" },
+      { type: "keyUp", keyCode: "a" },
+    ]);
+  });
+
+  test("trusted key press emits one keyDown/keyUp pair", async () => {
+    const webContents = new FakeWebContents();
+    const automation = new ElectronWebContentsPageAutomation(webContents);
+
+    await automation.pressKey("ArrowDown");
+
+    expect(webContents.inputEvents).toEqual([
+      { type: "keyDown", keyCode: "ArrowDown" },
+      { type: "keyUp", keyCode: "ArrowDown" },
     ]);
   });
 

@@ -70,4 +70,34 @@ describe("default Desktop route-preserving app-server proxy", () => {
     await expect(startDefaultDesktopAppServerProxy({ upstreamEndpoint: "ws://example.com:9999/", route }))
       .rejects.toThrow("loopback");
   });
+
+  test("close is bounded even when the connected client does not initiate its own close", async () => {
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request, server) {
+        return server.upgrade(request) ? undefined : new Response(null, { status: 400 });
+      },
+      websocket: { message() {} },
+    });
+    const proxy = await startDefaultDesktopAppServerProxy({
+      upstreamEndpoint: `ws://127.0.0.1:${upstream.port}/`,
+      route: createDefaultDesktopResponsesRoute({
+        baseUrl: "http://127.0.0.1:18741/v1",
+        envKey: "CHATGPT_TELA_RUNTIME_TOKEN",
+        credential: "x".repeat(48),
+      }),
+    });
+    const client = await openSocket(proxy.endpoint);
+    client.addEventListener("error", () => { /* expected when bounded shutdown terminates the socket */ });
+    const startedAt = Date.now();
+    try {
+      await proxy.close();
+      expect(Date.now() - startedAt).toBeLessThan(2_500);
+      expect(proxy.activeConnectionCount).toBe(0);
+    } finally {
+      try { client.close(); } catch { /* already terminated by the proxy */ }
+      upstream.stop(true);
+    }
+  });
 });

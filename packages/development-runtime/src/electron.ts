@@ -38,7 +38,10 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
     readonly account: ChatGptAccountIdentity;
   }>;
   probeChatGptConnector(signal?: AbortSignal): Promise<ChatGptConnectorObservation>;
-  recoverChatGptConnectorProbeArtifact(signal?: AbortSignal): Promise<boolean>;
+  recoverChatGptConnectorProbeArtifact(
+    signal?: AbortSignal,
+    options?: { readonly allowUnknownSelectedConnector?: boolean },
+  ): Promise<boolean>;
   /**
    * Open one visible control-plane ChatGPT surface using the same persistent ChatGPT Tela profile partition.
    * It owns no Native turn authority and exists only for login/developer-mode/connector preparation.
@@ -58,6 +61,8 @@ export interface ElectronDevelopmentRuntimeOptions {
     readonly budgetTokens?: number;
   };
   readonly provider?: WebConversationProvider;
+  readonly connectorRoutingMode?: "explicit" | "automatic-fallback";
+  readonly approvalAutomationMode?: import("@chatgpt-tela/chatgpt").ChatGptApprovalAutomationMode;
   readonly webTurnTimeoutMs?: number;
   readonly accountIdentityObserver?: ChatGptAccountIdentityObserver;
   /**
@@ -103,6 +108,8 @@ export async function startElectronDevelopmentRuntime(
   });
   const provider = input.provider ?? new ChatGptSemanticProvider({
     ...(input.connectorName ? { connectorName: input.connectorName } : {}),
+    ...(input.connectorRoutingMode ? { connectorRoutingMode: input.connectorRoutingMode } : {}),
+    ...(input.approvalAutomationMode ? { approvalAutomationMode: input.approvalAutomationMode } : {}),
   });
   const checkpointCache = input.context?.checkpointCache;
   const profileControl = createChatGptProfileControl({
@@ -153,8 +160,11 @@ export async function startElectronDevelopmentRuntime(
     probeChatGptReadiness: (signal?: AbortSignal) => profileControl.probeChatGptReadiness(signal),
     probeChatGptProfile: (signal?: AbortSignal) => profileControl.probeChatGptProfile(signal),
     probeChatGptConnector: (signal?: AbortSignal) => profileControl.probeChatGptConnector(signal),
-    recoverChatGptConnectorProbeArtifact: (signal?: AbortSignal) => (
-      profileControl.recoverChatGptConnectorProbeArtifact(signal)
+    recoverChatGptConnectorProbeArtifact: (
+      signal?: AbortSignal,
+      options?: { readonly allowUnknownSelectedConnector?: boolean },
+    ) => (
+      profileControl.recoverChatGptConnectorProbeArtifact(signal, options)
     ),
     openProfileSetupSurface: (options?: { readonly reveal?: boolean }) => profileControl.openProfileSetupSurface(options),
     stop() {

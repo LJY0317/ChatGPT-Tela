@@ -12,7 +12,7 @@ export interface ElectronWebContentsLike {
         readonly clickCount?: number;
       }
     | {
-        readonly type: "keyDown" | "keyUp";
+        readonly type: "keyDown" | "keyUp" | "char";
         readonly keyCode: string;
         readonly modifiers?: readonly string[];
       }): void;
@@ -174,6 +174,38 @@ export class ElectronWebContentsPageAutomation implements BrowserPageAutomation 
     sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: [primaryModifier] });
     sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
     sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
+  }
+
+  async typeFocusedEditable(text: string, signal?: AbortSignal): Promise<void> {
+    if (!text || text.length > 512 || /[\u0000\r\n]/.test(text)) {
+      throw new Error("trusted browser typing requires 1-512 visible single-line characters");
+    }
+    assertActive(this.webContents);
+    if (signal?.aborted) throw abortError();
+    const sendInputEvent = this.webContents.sendInputEvent?.bind(this.webContents);
+    if (!sendInputEvent) {
+      throw new Error("Electron WebContents does not expose trusted keyboard input");
+    }
+    for (const character of text) {
+      if (signal?.aborted) throw abortError();
+      sendInputEvent({ type: "keyDown", keyCode: character });
+      sendInputEvent({ type: "char", keyCode: character });
+      sendInputEvent({ type: "keyUp", keyCode: character });
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 25));
+    }
+  }
+
+  async pressKey(keyCode: string, signal?: AbortSignal): Promise<void> {
+    if (!/^[A-Za-z0-9@ _+\-]{1,32}$/.test(keyCode)
+      && !["ArrowDown", "ArrowUp", "Enter", "Escape", "Tab", "Backspace"].includes(keyCode)) {
+      throw new Error("trusted browser key is invalid");
+    }
+    assertActive(this.webContents);
+    if (signal?.aborted) throw abortError();
+    const sendInputEvent = this.webContents.sendInputEvent?.bind(this.webContents);
+    if (!sendInputEvent) throw new Error("Electron WebContents does not expose trusted keyboard input");
+    sendInputEvent({ type: "keyDown", keyCode });
+    sendInputEvent({ type: "keyUp", keyCode });
   }
 
   async mutationRevision(signal?: AbortSignal): Promise<number> {

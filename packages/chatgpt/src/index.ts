@@ -175,5 +175,6 @@ export interface WebConversationProvider {
 
 export * from "./surface";
 export * from "./account-identity";
+export * from "./approval-policy";
 export * from "./dom-driver";
 export * from "./semantic-provider";

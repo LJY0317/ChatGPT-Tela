@@ -1,4 +1,9 @@
-import { payloadRootForLauncherExecutable, resolvePackagedServiceLaunch, runPackagedServiceLauncher } from "./runtime";
+import {
+  payloadRootForLauncherExecutable,
+  resolvePackagedMenuBarLaunch,
+  resolvePackagedServiceLaunch,
+  runPackagedServiceLauncher,
+} from "./runtime";
 
 function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat" | "codex" {
   if (arguments_.length !== 2 || arguments_[0] !== "service") {
@@ -12,12 +17,17 @@ function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat"
 }
 
 async function main(): Promise<void> {
-  const service = serviceFromArguments(process.argv.slice(2));
-  const launch = resolvePackagedServiceLaunch({
-    service,
-    payloadRoot: payloadRootForLauncherExecutable(),
-    launcherExecutablePath: process.execPath,
-  });
+  const args = process.argv.slice(2);
+  const launch = args.length === 1 && args[0] === "menu-bar"
+    ? resolvePackagedMenuBarLaunch({
+        payloadRoot: payloadRootForLauncherExecutable(),
+        launcherExecutablePath: process.execPath,
+      })
+    : resolvePackagedServiceLaunch({
+        service: serviceFromArguments(args),
+        payloadRoot: payloadRootForLauncherExecutable(),
+        launcherExecutablePath: process.execPath,
+      });
   process.exitCode = await runPackagedServiceLauncher({ launch });
 }
 

@@ -43,6 +43,7 @@ export interface PackagedPayloadBuildInput {
   readonly launcherSourcePath: string;
   readonly services: Readonly<Record<TelaServiceId, PackagedPayloadBuildServiceInput>>;
   readonly profileRuntime: PackagedPayloadBuildProfileRuntimeInput;
+  readonly menuBarSourcePath?: string;
   readonly signer: PackagedPayloadSigner;
   readonly finalizeStagedPayload?: (input: {
     readonly outputPath: string;
@@ -188,6 +189,11 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
   const runtimeEntrypoint = "runtime/profile-runtime.cjs";
   copyFile(runtimeEntrypointSource, join(outputPath, ...runtimeEntrypoint.split("/")));
 
+  const menuBarRelative = input.menuBarSourcePath ? "ui/chatgpt-tela-menu-bar" : undefined;
+  if (input.menuBarSourcePath && menuBarRelative) {
+    copyFile(realRegularFile(input.menuBarSourcePath, "packaged menu bar source"), join(outputPath, ...menuBarRelative.split("/")));
+  }
+
   const manifest = parsePackagedProductManifest({
     version: 1,
     product: "chatgpt-tela",
@@ -197,6 +203,7 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
       executable: `electron/${electronRelative}`,
       entrypoint: runtimeEntrypoint,
     },
+    ...(menuBarRelative ? { menuBar: { executable: menuBarRelative } } : {}),
     integrity: {
       signature: "ed25519-sha256-tree-v1",
       keyId: input.signer.keyId,

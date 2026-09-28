@@ -126,6 +126,8 @@ describe("packaged service launcher", () => {
         CHATGPT_TELA_GATEWAY_LOCAL_MCP_PORT: "18743",
         CHATGPT_TELA_GATEWAY_PUBLIC_MCP_ABI: "stable",
       });
+      expect(gateway.environment.CHATGPT_TELA_DIAGNOSTIC_FILE)
+        .toBe(join(paths.logsRoot, "gateway.diagnostics.jsonl"));
 
       const codex = resolvePackagedServiceLaunch({
         service: "codex",

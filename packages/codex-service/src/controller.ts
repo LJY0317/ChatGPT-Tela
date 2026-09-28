@@ -18,7 +18,7 @@ import {
 import { RoutedCodexTurnBridge } from "./routed-turn-bridge";
 
 const MAX_CHILD_OUTPUT_BYTES = 64 * 1024;
-const CHILD_START_TIMEOUT_MS = 45_000;
+const CHILD_START_TIMEOUT_MS = 90_000;
 const CHILD_STOP_TIMEOUT_MS = 20_000;
 
 export interface CodexServiceConfig {
@@ -265,6 +265,8 @@ export async function startCodexService(input: {
   readonly config: CodexServiceConfig;
   readonly profileRuntimeCommand: readonly [string, ...string[]];
   readonly environment?: Readonly<Record<string, string | undefined>>;
+  /** Re-read user-controlled profile preferences at each profile start without restarting the Codex service. */
+  readonly profileRuntimeEnvironment?: () => Readonly<Record<string, string | undefined>>;
   readonly nativeTargetAdapter?: CodexNativeTargetAdapter;
   readonly signal?: AbortSignal;
 }): Promise<CodexService> {
@@ -350,6 +352,7 @@ export async function startCodexService(input: {
         env: {
           ...process.env,
           ...(input.environment ?? {}),
+          ...(input.profileRuntimeEnvironment?.() ?? {}),
           CHATGPT_TELA_PRODUCT_PROFILE_SLOT: String(slot),
           CHATGPT_TELA_PRODUCT_ROUTE_ID: route,
           ...targets.profileRuntimeEnvironment(target),

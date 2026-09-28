@@ -11,6 +11,8 @@ import {
 
 const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 const MAX_QUEUED_BYTES = 2 * 1024 * 1024;
+const CLOSE_GRACE_MS = 250;
+const CLOSE_HARD_LIMIT_MS = 2_000;
 
 interface ConnectionState {
   readonly client: WebSocket;
@@ -173,15 +175,61 @@ export async function startDefaultDesktopAppServerProxy(input: {
       if (stopped) return;
       stopped = true;
       closing = true;
-      for (const state of [...connections]) {
+      const closingConnections = [...connections];
+      const ignoreShutdownError = () => {};
+      for (const state of closingConnections) {
         state.closed = true;
         connections.delete(state);
+        // `terminate()` may emit more than one error while a WebSocket is still connecting or
+        // completing its close handshake. During owned shutdown those errors are expected and
+        // must not become an unhandled EventEmitter error after the normal one-shot listener ran.
+        state.client.on("error", ignoreShutdownError);
+        state.upstream.on("error", ignoreShutdownError);
         if (state.client.readyState < WebSocket.CLOSING) state.client.close(1001, "Tela proxy stopping");
         if (state.upstream.readyState < WebSocket.CLOSING) state.upstream.close(1001, "Tela proxy stopping");
       }
-      await new Promise<void>((resolvePromise, rejectPromise) => {
-        server.close(error => error ? rejectPromise(error) : resolvePromise());
+      const terminateOwnedSockets = () => {
+        for (const state of closingConnections) {
+          try {
+            if (state.client.readyState !== WebSocket.CLOSED) state.client.terminate();
+          } catch {
+            // Best-effort bounded cleanup of an owned proxy socket.
+          }
+          try {
+            if (state.upstream.readyState !== WebSocket.CLOSED) state.upstream.terminate();
+          } catch {
+            // Best-effort bounded cleanup of an owned proxy socket.
+          }
+        }
+      };
+      let closeCompleted = false;
+      let closeError: Error | undefined;
+      const closePromise = new Promise<void>(resolvePromise => {
+        server.close(error => {
+          closeCompleted = true;
+          if (error) closeError = error;
+          resolvePromise();
+        });
       });
+      const graceTimer = setTimeout(terminateOwnedSockets, CLOSE_GRACE_MS);
+      let hardTimer: ReturnType<typeof setTimeout> | undefined;
+      const hardLimit = new Promise<void>(resolvePromise => {
+        hardTimer = setTimeout(() => {
+          terminateOwnedSockets();
+          resolvePromise();
+        }, CLOSE_HARD_LIMIT_MS);
+      });
+      await Promise.race([closePromise, hardLimit]);
+      clearTimeout(graceTimer);
+      if (hardTimer) clearTimeout(hardTimer);
+      if (!closeCompleted) {
+        terminateOwnedSockets();
+        await Promise.race([
+          closePromise,
+          new Promise<void>(resolvePromise => setTimeout(resolvePromise, CLOSE_GRACE_MS)),
+        ]);
+      }
+      if (closeError) throw closeError;
     },
   });
 }

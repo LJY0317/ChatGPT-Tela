@@ -65,4 +65,52 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  executableFixtureTest("shutdown preserves a replacement Desktop when the originally spawned pid loses current-process ownership", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-default-runtime-ownership-loss-"));
+    const home = join(root, "home");
+    mkdirSync(home);
+    const codex = join(root, "fake-codex");
+    const chat = join(root, "fake-chatgpt");
+    executable(codex, `#!/usr/bin/env bun
+const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(req,s){return s.upgrade(req)?undefined:new Response(null,{status:400})},websocket:{message(ws,msg){if(typeof msg!=="string")return;const v=JSON.parse(msg);if(v.method==="initialize")ws.send(JSON.stringify({id:v.id,result:{}}));}}});
+console.error("codex app-server (WebSockets)");console.error("  listening on: ws://127.0.0.1:"+server.port);
+const stop=()=>{server.stop(true);process.exit(0)};process.on("SIGTERM",stop);process.on("SIGINT",stop);await new Promise(()=>{});
+`);
+    executable(chat, `#!/usr/bin/env bun
+const ws=new WebSocket(process.env.CODEX_APP_SERVER_WS_URL);await new Promise((resolve,reject)=>{ws.addEventListener("open",resolve,{once:true});ws.addEventListener("error",reject,{once:true})});
+ws.addEventListener("close",()=>process.exit(0),{once:true});setInterval(()=>{},1000);
+`);
+    const route = createDefaultDesktopResponsesRoute({
+      baseUrl: "http://127.0.0.1:18741/v1",
+      envKey: "CHATGPT_TELA_RUNTIME_TOKEN",
+      credential: "r".repeat(48),
+    });
+    let normalQuitCalls = 0;
+    const runtime = await startDefaultDesktopTargetRuntime({
+      installation: {
+        platform: "darwin",
+        chatGptExecutable: chat,
+        codexExecutable: codex,
+        codexHome: join(home, ".codex"),
+        userDataDir: join(home, "Library/Application Support/Codex"),
+        normalQuitSupported: true,
+      },
+      route,
+      credential: "r".repeat(48),
+      processIds: async () => [],
+      normalQuit: async () => { normalQuitCalls += 1; },
+    });
+    try {
+      const startedAt = Date.now();
+      await runtime.stop();
+      expect(Date.now() - startedAt).toBeLessThan(3_000);
+      expect(normalQuitCalls).toBe(0);
+    } finally {
+      for (const pid of [runtime.desktopPid, runtime.backendPid]) {
+        try { process.kill(pid, "SIGKILL"); } catch { /* already stopped */ }
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

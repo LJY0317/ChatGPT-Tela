@@ -1,4 +1,5 @@
 import { createBrowserSurfaceCapability } from "@chatgpt-tela/browser-host";
+import type { ChatGptApprovalAutomationMode } from "./approval-policy";
 
 export interface ChatGptComposerObservation {
   readonly key: string;
@@ -45,12 +46,39 @@ export interface ChatGptSurfaceSnapshot {
 }
 
 /**
+ * The ChatGPT integration catalog rendered successfully, but neither the configured direct App nor
+ * packaged Plugin was present. Callers may refresh by reacquiring one fresh browser surface once;
+ * repeated refreshes must fail closed instead of looping.
+ */
+export class ChatGptConnectorCatalogUnavailableError extends Error {
+  constructor() {
+    super("ChatGPT integration catalog does not expose the configured connector");
+    this.name = "ChatGptConnectorCatalogUnavailableError";
+  }
+}
+
+/**
  * Low-level browser capability owned by the ChatGPT provider adapter. The browser-host package stays
  * product-agnostic; Electron/Playwright implementations only need to supply this capability for a
  * leased ChatGPT surface.
  */
 export interface ChatGptSurfaceDriver {
   observe(signal?: AbortSignal): Promise<ChatGptSurfaceSnapshot>;
+  /** Close transient ChatGPT menus/popovers without submitting or altering durable user content. */
+  dismissTransientUi(signal?: AbortSignal): Promise<void>;
+  /**
+   * Clear only a renderer-local connector artifact that can be structurally proven to belong to
+   * the configured connector. Raw composer text never leaves the renderer for this proof.
+   */
+  recoverConnectorArtifact(composerKey: string, connectorName: string, signal?: AbortSignal): Promise<boolean>;
+  /**
+   * Optionally handle one structurally recognized ChatGPT tool-approval card. The implementation must
+   * keep card text/tool arguments inside the renderer and must never activate an unrecognized choice.
+   */
+  processApprovalCard?(
+    mode: ChatGptApprovalAutomationMode,
+    signal?: AbortSignal,
+  ): Promise<{ readonly status: "none" | "approved"; readonly reason: string }>;
   replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;
   clearComposerText(composerKey: string, signal?: AbortSignal): Promise<void>;
   appendComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;

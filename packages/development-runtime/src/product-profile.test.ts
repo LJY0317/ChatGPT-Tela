@@ -24,7 +24,24 @@ describe("product profile native-target selection", () => {
       const config = loadProductProfileRuntimeConfig(common(root));
       expect(config.nativeTarget).toEqual({ kind: "default-desktop", targetId: "default" });
       expect(config.publicMcpAbi).toBe("stable");
+      expect(config.approvalAutomationMode).toBe("off");
       expect(JSON.stringify(config)).not.toContain("launcherCli");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("approval automation is explicit and limited to recognized one-shot cards", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-product-approval-"));
+    try {
+      expect(loadProductProfileRuntimeConfig({
+        ...common(root),
+        CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "recognized_once",
+      }).approvalAutomationMode).toBe("recognized_once");
+      expect(() => loadProductProfileRuntimeConfig({
+        ...common(root),
+        CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "full_access",
+      })).toThrow("APPROVAL_AUTOMATION_MODE");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

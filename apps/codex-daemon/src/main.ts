@@ -3,6 +3,7 @@ import {
   startCodexService,
   startCodexServiceHttpServer,
 } from "@chatgpt-tela/codex-service";
+import { readProductPreferences } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import {
   removeServiceRuntimeDescriptor,
@@ -34,6 +35,9 @@ async function main(): Promise<void> {
       : {},
     profileRuntimeCommand: [runtimeExecutable, runtimeEntrypoint],
     environment: process.env,
+    profileRuntimeEnvironment: () => ({
+      CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: readProductPreferences().approvalAutomation,
+    }),
   });
   const http = await startCodexServiceHttpServer({ service });
   writeServiceRuntimeDescriptor(descriptorPath, {

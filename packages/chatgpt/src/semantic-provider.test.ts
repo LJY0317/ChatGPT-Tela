@@ -75,6 +75,31 @@ class FixtureDriver implements ChatGptSurfaceDriver {
     return structuredClone(this.current);
   }
 
+  async dismissTransientUi(): Promise<void> {}
+
+  async recoverConnectorArtifact(composerKey: string, connectorName: string): Promise<boolean> {
+    const composer = this.current.composers.find(item => item.key === composerKey);
+    if (!composer) return false;
+    const exactMention = `@${connectorName}`;
+    const productMentions = [
+      exactMention,
+      `${exactMention} ${exactMention}`,
+      `${exactMention} ${exactMention} ${exactMention}`,
+    ];
+    const plain = composer.connectorFingerprints.length === 0
+      && productMentions.some(value => (
+        composer.textLength === value.length && composer.textFingerprint === hash(value)
+      ));
+    const selected = composer.textLength === 0
+      && composer.connectorFingerprints.length === 1
+      && (composer.connectorFingerprints[0] === hash(connectorName)
+        || (connectorName === "ChatGPT Tela"
+          && composer.connectorFingerprints[0] === hash("ChatGPT Tela Development")));
+    if (!plain && !selected) return false;
+    await this.clearComposerText(composerKey);
+    return true;
+  }
+
   async replaceComposerText(composerKey: string, text: string): Promise<void> {
     const composers = this.current.composers.map(composer => composer.key === composerKey
       ? {
@@ -392,6 +417,7 @@ describe("ChatGPT semantic provider", () => {
       expect(observed).toEqual({
         connectorName: "ChatGPT Tela",
         connectorFingerprint: hash("ChatGPT Tela"),
+        routingMode: "explicit",
       });
       expect(driver.connectorSelections).toEqual(["ChatGPT Tela"]);
       expect(driver.activated).toEqual([]);
@@ -443,6 +469,70 @@ describe("ChatGPT semantic provider", () => {
       expect(driver.current.composers[0]?.textLength).toBe(0);
       expect(driver.current.composers[0]?.connectorFingerprints).toEqual([]);
       expect(driver.activated).toEqual([]);
+    } finally {
+      await surface.host.close();
+    }
+  });
+
+  test("connector artifact recovery clears only bounded repeated Tela mention artifacts", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const mention = "@ChatGPT Tela @ChatGPT Tela";
+    driver.current = {
+      ...driver.current,
+      composers: driver.current.composers.map(composer => ({
+        ...composer,
+        textLength: mention.length,
+        textFingerprint: hash(mention),
+        connectorFingerprints: [],
+      })),
+    };
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({
+      connectorName: "ChatGPT Tela",
+      connectorDraftPersistenceSettleMs: 0,
+    });
+    try {
+      expect(await provider.recoverConnectorProbeArtifact(surface.lease)).toBe(true);
+      expect(driver.current.composers[0]?.textLength).toBe(0);
+      expect(driver.current.composers[0]?.connectorFingerprints).toEqual([]);
+    } finally {
+      await surface.host.close();
+    }
+  });
+
+  test("connector artifact recovery clears the legacy Tela Development pill but not foreign connectors", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.current = {
+      ...driver.current,
+      composers: driver.current.composers.map(composer => ({
+        ...composer,
+        textLength: 0,
+        connectorFingerprints: [hash("ChatGPT Tela Development")],
+      })),
+    };
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({
+      connectorName: "ChatGPT Tela",
+      connectorDraftPersistenceSettleMs: 0,
+    });
+    try {
+      expect(await provider.recoverConnectorProbeArtifact(surface.lease)).toBe(true);
+      expect(driver.current.composers[0]?.connectorFingerprints).toEqual([]);
+      driver.current = {
+        ...driver.current,
+        composers: driver.current.composers.map(composer => ({
+          ...composer,
+          connectorFingerprints: [hash("Unrelated Connector")],
+        })),
+      };
+      expect(await provider.recoverConnectorProbeArtifact(surface.lease)).toBe(false);
+      expect(driver.current.composers[0]?.connectorFingerprints).toEqual([hash("Unrelated Connector")]);
+      expect(await provider.recoverConnectorProbeArtifact(
+        surface.lease,
+        undefined,
+        { allowUnknownSelectedConnector: true },
+      )).toBe(true);
+      expect(driver.current.composers[0]?.connectorFingerprints).toEqual([]);
     } finally {
       await surface.host.close();
     }

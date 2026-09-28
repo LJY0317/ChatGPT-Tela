@@ -42,6 +42,29 @@ class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
   }
 }
 
+class LaunchctlFixtureRunner implements ServiceRegistrationCommandRunner {
+  readonly loaded = new Set<string>();
+  readonly calls: Array<readonly [string, readonly string[]]> = [];
+
+  async run(command: string, arguments_: readonly string[]): Promise<ServiceRegistrationCommandResult> {
+    this.calls.push([command, [...arguments_]]);
+    if (command !== "/bin/launchctl") throw new Error(`unexpected command ${command}`);
+    if (arguments_[0] === "print") {
+      const registrationId = (arguments_[1] ?? "").split("/").at(-1) ?? "";
+      const present = this.loaded.has(registrationId);
+      return { exitCode: present ? 0 : 1, stdout: present ? "loaded\n" : "", stderr: "" };
+    }
+    if (arguments_[0] === "bootstrap") {
+      const definitionPath = arguments_[2] ?? "";
+      const registrationId = definitionPath.split("/").at(-1)?.replace(/\.plist$/, "") ?? "";
+      if (!registrationId) return { exitCode: 2, stdout: "", stderr: "missing registration" };
+      this.loaded.add(registrationId);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    }
+    throw new Error(`unexpected launchctl args ${arguments_.join(" ")}`);
+  }
+}
+
 function fixture(root: string) {
   const source = join(root, "payload");
   mkdirSync(source, { recursive: true });
@@ -233,9 +256,11 @@ describe("packaged product install", () => {
       const macSource = join(root, "mac-payload");
       mkdirSync(macSource);
       writeFileSync(join(macSource, "tela"), "fixture", { mode: 0o755 });
+      writeFileSync(join(macSource, "menu-bar"), "fixture", { mode: 0o755 });
       const macSpec = {
         productVersion: "1.2.3",
         payloadSourcePath: macSource,
+        menuBar: { executableRelativePath: "menu-bar" },
         services: (["gateway", "chat", "codex"] as const).map(service => ({
           service,
           executableRelativePath: "tela",
@@ -249,6 +274,55 @@ describe("packaged product install", () => {
       expect(plist).toContain("<key>RunAtLoad</key>\n    <false/>");
       expect(plist).toContain("a&amp;b");
       expect(plist).toContain("x&lt;y");
+      expect(mac.menuBar?.resource).toMatchObject({
+        kind: "service-registration",
+        owner: "product",
+        registrationId: "com.openai.chatgpt-tela.menu-bar",
+      });
+      const menuPlist = (mac.menuBar!.definition as { content: string }).content;
+      expect(menuPlist).toContain("<key>RunAtLoad</key>\n    <true/>");
+      expect(menuPlist).toContain("<key>LimitLoadToSessionType</key>\n    <string>Aqua</string>");
+      expect(mac.desiredResources.some(resource => resource.id === "menu-bar-registration")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("macOS install owns and bootstraps the menu bar LaunchAgent separately from three backend services", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-packaged-menu-bar-install-"));
+    const home = join(root, "home");
+    const source = join(root, "payload");
+    mkdirSync(home);
+    mkdirSync(source);
+    writeFileSync(join(source, "tela"), "fixture", { mode: 0o755 });
+    writeFileSync(join(source, "menu-bar"), "fixture", { mode: 0o755 });
+    const spec = {
+      productVersion: "1.2.3",
+      payloadSourcePath: source,
+      menuBar: { executableRelativePath: "menu-bar" },
+      services: (["gateway", "chat", "codex"] as const).map(service => ({
+        service,
+        executableRelativePath: "tela",
+        arguments: ["service", service],
+      })),
+    };
+    const runner = new LaunchctlFixtureRunner();
+    try {
+      const planned = await planPackagedInstall({ spec, platform: "darwin", home, environment: {}, runner });
+      expect(planned.plan.createCount).toBe(5);
+      expect(planned.blueprint.menuBar?.resource.owner).toBe("product");
+      const applied = await applyPackagedInstall({ planned, spec, platform: "darwin", home, environment: {}, runner });
+      expect(applied.apply.createdCount).toBe(5);
+      expect(applied.verify.ready).toBe(true);
+      expect(readOwnershipManifest(planned.blueprint.paths.installManifest)?.resources)
+        .toEqual(expect.arrayContaining([expect.objectContaining({
+          id: "menu-bar-registration",
+          owner: "product",
+          registrationId: "com.openai.chatgpt-tela.menu-bar",
+        })]));
+      expect(runner.calls.some(([command, args]) => command === "/bin/launchctl"
+        && args[0] === "bootstrap"
+        && args[2]?.endsWith("com.openai.chatgpt-tela.menu-bar.plist"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

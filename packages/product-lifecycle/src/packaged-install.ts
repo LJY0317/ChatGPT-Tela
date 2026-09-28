@@ -28,10 +28,16 @@ export interface PackagedProductInstallSpec {
   readonly productVersion: string;
   readonly payloadSourcePath: string;
   readonly services: readonly PackagedServiceLaunchSpec[];
+  readonly menuBar?: { readonly executableRelativePath: string };
 }
 
 export interface PackagedServiceBlueprint {
   readonly service: TelaServiceId;
+  readonly resource: Extract<OwnedResource, { readonly kind: "service-registration" }>;
+  readonly definition: ServiceRegistrationDefinition;
+}
+
+export interface PackagedMenuBarBlueprint {
   readonly resource: Extract<OwnedResource, { readonly kind: "service-registration" }>;
   readonly definition: ServiceRegistrationDefinition;
 }
@@ -42,6 +48,7 @@ export interface PackagedInstallBlueprint {
   readonly payload: PackagedPayloadSpec;
   readonly payloadFingerprint: string;
   readonly services: readonly PackagedServiceBlueprint[];
+  readonly menuBar?: PackagedMenuBarBlueprint;
   readonly desiredResources: readonly OwnedResource[];
 }
 
@@ -156,6 +163,14 @@ function renderDarwinService(input: {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${xml(input.registrationId)}</string>\n    <key>ProgramArguments</key>\n    <array>\n${argumentsXml}\n    </array>\n    <key>WorkingDirectory</key>\n    <string>${xml(input.workingDirectory)}</string>${environmentXml}\n    <key>RunAtLoad</key>\n    <false/>\n    <key>ProcessType</key>\n    <string>Background</string>\n  </dict>\n</plist>\n`;
 }
 
+function renderDarwinMenuBar(input: {
+  readonly registrationId: string;
+  readonly executable: string;
+  readonly workingDirectory: string;
+}): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${xml(input.registrationId)}</string>\n    <key>ProgramArguments</key>\n    <array>\n      <string>${xml(oneLine(input.executable, "menu bar executable"))}</string>\n    </array>\n    <key>WorkingDirectory</key>\n    <string>${xml(input.workingDirectory)}</string>\n    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <false/>\n    <key>LimitLoadToSessionType</key>\n    <string>Aqua</string>\n    <key>ProcessType</key>\n    <string>Interactive</string>\n  </dict>\n</plist>\n`;
+}
+
 function renderLinuxService(input: {
   readonly service: TelaServiceId;
   readonly executable: string;
@@ -254,13 +269,38 @@ export function createPackagedInstallBlueprint(input: {
   for (const required of ["gateway", "chat", "codex"] as const) {
     if (!seen.has(required)) throw new Error(`packaged install requires a ${required} service spec`);
   }
+  let menuBar: PackagedMenuBarBlueprint | undefined;
+  if (platform === "darwin" && input.spec.menuBar) {
+    const registrationId = "com.openai.chatgpt-tela.menu-bar";
+    const executable = installedExecutable(paths.binaryRoot, input.spec.menuBar.executableRelativePath);
+    const definition = Object.freeze({
+      platform: "darwin" as const,
+      content: renderDarwinMenuBar({ registrationId, executable, workingDirectory: paths.binaryRoot }),
+    });
+    const definitionPath = serviceDefinitionPath({ platform, home, environment, registrationId })!;
+    const markerPath = join(paths.stateRoot, "install", "service-markers", "menu-bar.json");
+    const resource = serviceRegistrationResourceForDefinition({
+      resourceId: "menu-bar-registration",
+      owner: "product",
+      registrationId,
+      markerPath,
+      definitionPath,
+      definition,
+    });
+    menuBar = Object.freeze({ resource, definition });
+  }
   return Object.freeze({
     platform,
     paths,
     payload,
     payloadFingerprint: packagedPayloadFingerprint(payload.sourcePath),
     services: Object.freeze(services),
-    desiredResources: Object.freeze([payloadResource, ...services.map(service => service.resource)]),
+    ...(menuBar ? { menuBar } : {}),
+    desiredResources: Object.freeze([
+      payloadResource,
+      ...services.map(service => service.resource),
+      ...(menuBar ? [menuBar.resource] : []),
+    ]),
   });
 }
 
@@ -269,7 +309,10 @@ class PackagedInstallOperator {
   readonly #manifest: OwnershipManifest;
   readonly #payload: PackagedPayloadManager;
   readonly #serviceInstaller: ServiceRegistrationInstaller;
-  readonly #services: ReadonlyMap<string, PackagedServiceBlueprint>;
+  readonly #registrations: ReadonlyMap<string, {
+    readonly resource: Extract<OwnedResource, { readonly kind: "service-registration" }>;
+    readonly definition: ServiceRegistrationDefinition;
+  }>;
 
   constructor(input: {
     readonly blueprint: PackagedInstallBlueprint;
@@ -287,26 +330,33 @@ class PackagedInstallOperator {
       platform: input.blueprint.platform,
       runner: input.runner ?? new SystemServiceRegistrationCommandRunner(),
     });
-    this.#services = new Map(input.blueprint.services.map(service => [service.resource.id, service] as const));
+    this.#registrations = new Map([
+      ...input.blueprint.services.map(service => [service.resource.id, service] as const),
+      ...(input.blueprint.menuBar ? [[input.blueprint.menuBar.resource.id, input.blueprint.menuBar] as const] : []),
+    ]);
   }
 
   observe = async (resource: OwnedResource, manifest: OwnershipManifest): Promise<OwnershipObservation> => {
     if (resource.id === this.#payload.resource.id) return this.#payload.observe(manifest);
-    const service = this.#services.get(resource.id);
-    if (service && resource.kind === "service-registration") return this.#serviceInstaller.observeReady(service.resource, manifest);
+    const registration = this.#registrations.get(resource.id);
+    if (registration && resource.kind === "service-registration") {
+      return this.#serviceInstaller.observeReady(registration.resource, manifest);
+    }
     return "unknown";
   };
 
   create = async (resource: OwnedResource, manifest: OwnershipManifest): Promise<{ readonly created: boolean; readonly detail: string }> => {
     if (resource.id === this.#payload.resource.id) return this.#payload.install(manifest);
-    const service = this.#services.get(resource.id);
-    if (!service || resource.kind !== "service-registration") return Object.freeze({ created: false, detail: "unsupported packaged resource" });
+    const registration = this.#registrations.get(resource.id);
+    if (!registration || resource.kind !== "service-registration") {
+      return Object.freeze({ created: false, detail: "unsupported packaged resource" });
+    }
     if (this.#payload.observe(manifest) !== "owned") throw new Error("packaged services cannot be registered before the binary payload is verified");
     return this.#serviceInstaller.install({
       manifestPath: this.#manifestPath,
       manifest,
-      resource: service.resource,
-      definition: service.definition,
+      resource: registration.resource,
+      definition: registration.definition,
     });
   };
 }

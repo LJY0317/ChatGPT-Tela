@@ -55,9 +55,20 @@ describe("packaged product manifest", () => {
       ...base,
       launcher: { executable: "chatgpt-tela" },
       profileRuntime: { executable: "electron/Electron.app/Contents/MacOS/Electron", entrypoint: "runtime/profile-runtime.cjs" },
+      menuBar: { executable: "ui/chatgpt-tela-menu-bar" },
       integrity: { signature: "ed25519-sha256-tree-v1", keyId: "release-key" },
     };
     expect(parsePackagedProductManifest(signed).integrity?.keyId).toBe("release-key");
+    expect(parsePackagedProductManifest(signed).menuBar?.executable).toBe("ui/chatgpt-tela-menu-bar");
+    const root = mkdtempSync(join(tmpdir(), "tela-package-menu-bar-"));
+    try {
+      writeFileSync(join(root, PACKAGED_PRODUCT_MANIFEST), `${JSON.stringify(signed)}\n`);
+      expect(packagedInstallSpecFromPayload(root).menuBar).toEqual({
+        executableRelativePath: "ui/chatgpt-tela-menu-bar",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
     expect(() => parsePackagedProductManifest({ ...base, launcher: signed.launcher })).toThrow("declared together");
     expect(() => parsePackagedProductManifest({ ...signed, launcher: { executable: "runtime/chatgpt-tela" } }))
       .toThrow("payload root");

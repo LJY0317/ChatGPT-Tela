@@ -1,3 +1,4 @@
+import { diagnosticDurationMs, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import type { BackendServiceId, ServiceStatus } from "@chatgpt-tela/service-protocol";
 
 export interface GatewayBackendClient {
@@ -58,12 +59,21 @@ export class IndependentBackendRouter {
   }
 
   async status(service: BackendServiceId, signal?: AbortSignal): Promise<GatewayBackendStatus> {
+    const startedAt = Date.now();
     const client = this.#clients.get(service);
-    if (!client) return Object.freeze({ service, availability: "unavailable", detail: "backend is not mounted" });
+    if (!client) {
+      emitDiagnosticEvent("chatgpt_tela_gateway", "backend_status_unmounted", { service });
+      return Object.freeze({ service, availability: "unavailable", detail: "backend is not mounted" });
+    }
     const deadline = timeoutSignal(this.#timeoutMs, signal);
     try {
       const status = await client.status(deadline.signal);
       if (status.service !== service) throw new Error("backend returned a different service identity");
+      emitDiagnosticEvent("chatgpt_tela_gateway", "backend_status_complete", {
+        service,
+        availability: status.state === "ready" ? "ready" : "degraded",
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       return Object.freeze({
         service,
         availability: status.state === "ready" ? "ready" : "degraded",
@@ -71,6 +81,11 @@ export class IndependentBackendRouter {
         ...(status.detail ? { detail: status.detail } : {}),
       });
     } catch (error) {
+      emitDiagnosticEvent("chatgpt_tela_gateway", "backend_status_failed", {
+        service,
+        aborted: deadline.signal.aborted,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       return Object.freeze({
         service,
         availability: "unavailable",
@@ -93,12 +108,27 @@ export class IndependentBackendRouter {
     operation: (client: GatewayBackendClient, signal: AbortSignal) => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> {
+    const startedAt = Date.now();
     const client = this.#clients.get(service);
-    if (!client) throw new BackendUnavailableError(service, `${service} backend is not mounted`);
+    if (!client) {
+      emitDiagnosticEvent("chatgpt_tela_gateway", "backend_call_unmounted", { service });
+      throw new BackendUnavailableError(service, `${service} backend is not mounted`);
+    }
     const deadline = timeoutSignal(this.#timeoutMs, signal);
+    emitDiagnosticEvent("chatgpt_tela_gateway", "backend_call_start", { service });
     try {
-      return await operation(client, deadline.signal);
+      const result = await operation(client, deadline.signal);
+      emitDiagnosticEvent("chatgpt_tela_gateway", "backend_call_complete", {
+        service,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
+      return result;
     } catch (error) {
+      emitDiagnosticEvent("chatgpt_tela_gateway", "backend_call_failed", {
+        service,
+        aborted: deadline.signal.aborted,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       throw new BackendUnavailableError(service, `${service} backend request failed`, { cause: error });
     } finally {
       deadline.close();

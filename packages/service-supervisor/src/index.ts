@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { mkdir, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
+import { diagnosticDurationMs, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   readServiceRuntimeDescriptor,
   removeServiceRuntimeDescriptor,
@@ -93,8 +94,12 @@ export class LocalServiceSupervisor {
     readonly descriptorPath: string;
     readonly requestTimeoutMs?: number;
   }): Promise<RunningService<S> | undefined> {
+    const startedAt = Date.now();
     const descriptor = readServiceRuntimeDescriptor(input.descriptorPath);
-    if (!descriptor) return undefined;
+    if (!descriptor) {
+      emitDiagnosticEvent("chatgpt_tela_service", "descriptor_absent", { service: input.service });
+      return undefined;
+    }
     if (descriptor.installId !== this.#installId) {
       throw new Error(`${input.service} runtime belongs to a different Tela install instance`);
     }
@@ -102,12 +107,24 @@ export class LocalServiceSupervisor {
     const deadline = deadlineSignal(input.requestTimeoutMs ?? 1_500);
     try {
       const status = await new LocalServiceClient(exact).status(deadline.signal);
+      emitDiagnosticEvent("chatgpt_tela_service", "status_ready", {
+        service: input.service,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       return Object.freeze({ descriptor: exact, status: status as ServiceStatus & { readonly service: S } });
     } catch (error) {
       if (pidAlive(exact.pid)) {
+        emitDiagnosticEvent("chatgpt_tela_service", "status_endpoint_failed", {
+          service: input.service,
+          duration_ms: diagnosticDurationMs(startedAt),
+        });
         throw new Error(`${input.service} process is alive but its private service endpoint is unavailable`, { cause: error });
       }
       removeServiceRuntimeDescriptor(input.descriptorPath);
+      emitDiagnosticEvent("chatgpt_tela_service", "stale_descriptor_removed", {
+        service: input.service,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       return undefined;
     } finally {
       deadline.close();
@@ -115,25 +132,38 @@ export class LocalServiceSupervisor {
   }
 
   async ensure<S extends TelaServiceId>(input: EnsureServiceInput<S>): Promise<RunningService<S>> {
+    const startedAt = Date.now();
     const timeoutMs = input.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
     const release = await acquireStartLock(input.descriptorPath, timeoutMs);
     try {
       const existing = await this.current({ service: input.service, descriptorPath: input.descriptorPath }).catch(error => {
         throw error;
       });
-      if (existing) return existing;
+      if (existing) {
+        emitDiagnosticEvent("chatgpt_tela_service", "ensure_reused", {
+          service: input.service,
+          duration_ms: diagnosticDurationMs(startedAt),
+        });
+        return existing;
+      }
       mkdirSync(dirname(input.logPath), { recursive: true, mode: 0o700 });
       const logFd = openSync(input.logPath, "a", 0o600);
       let child;
       try {
+        const diagnosticLogPath = `${input.logPath}.diagnostics.jsonl`;
         child = spawn(input.command[0], input.command.slice(1), {
           cwd: input.cwd,
           detached: true,
           stdio: ["ignore", logFd, logFd],
           windowsHide: true,
-          env: { ...process.env, ...input.environment },
+          env: {
+            ...process.env,
+            ...input.environment,
+            CHATGPT_TELA_DIAGNOSTIC_FILE: diagnosticLogPath,
+          },
         });
         child.unref();
+        emitDiagnosticEvent("chatgpt_tela_service", "spawned", { service: input.service });
       } finally {
         closeSync(logFd);
       }
@@ -154,6 +184,10 @@ export class LocalServiceSupervisor {
           const requestDeadline = deadlineSignal(500);
           try {
             const status = await new LocalServiceClient(exact).status(requestDeadline.signal);
+            emitDiagnosticEvent("chatgpt_tela_service", "ensure_ready", {
+              service: input.service,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
             return Object.freeze({ descriptor: exact, status: status as ServiceStatus & { readonly service: S } });
           } finally {
             requestDeadline.close();
@@ -163,6 +197,10 @@ export class LocalServiceSupervisor {
         }
       }
       if (child.pid && pidAlive(child.pid)) child.kill("SIGTERM");
+      emitDiagnosticEvent("chatgpt_tela_service", "ensure_failed", {
+        service: input.service,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       const detail = existsSync(input.logPath) ? readFileSync(input.logPath, "utf8").slice(-4000).trim() : "";
       throw new Error(`${input.service} daemon did not become ready${detail ? `: ${detail}` : ""}`, lastError ? { cause: lastError } : undefined);
     } finally {
@@ -175,8 +213,13 @@ export class LocalServiceSupervisor {
     readonly descriptorPath: string;
     readonly stopTimeoutMs?: number;
   }): Promise<boolean> {
+    const startedAt = Date.now();
     const running = await this.current({ service: input.service, descriptorPath: input.descriptorPath });
-    if (!running) return false;
+    if (!running) {
+      emitDiagnosticEvent("chatgpt_tela_service", "shutdown_already_stopped", { service: input.service });
+      return false;
+    }
+    emitDiagnosticEvent("chatgpt_tela_service", "shutdown_start", { service: input.service });
     const requestDeadline = deadlineSignal(2_000);
     try {
       await new LocalServiceClient(running.descriptor).shutdown(requestDeadline.signal);
@@ -187,10 +230,18 @@ export class LocalServiceSupervisor {
     while (Date.now() < deadline) {
       if (!existsSync(input.descriptorPath) || !pidAlive(running.descriptor.pid)) {
         if (!pidAlive(running.descriptor.pid)) removeServiceRuntimeDescriptor(input.descriptorPath);
+        emitDiagnosticEvent("chatgpt_tela_service", "shutdown_complete", {
+          service: input.service,
+          duration_ms: diagnosticDurationMs(startedAt),
+        });
         return true;
       }
       await sleep(100);
     }
+    emitDiagnosticEvent("chatgpt_tela_service", "shutdown_timeout", {
+      service: input.service,
+      duration_ms: diagnosticDurationMs(startedAt),
+    });
     throw new Error(`${input.service} did not stop through its normal service lifecycle`);
   }
 }

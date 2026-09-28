@@ -11,6 +11,7 @@ import {
   startDefaultDesktopTargetRuntime,
   type DefaultDesktopTargetRuntime,
 } from "@chatgpt-tela/default-desktop-target";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   CHATGPT_TELA_DISPLAY_NAME,
   startCodexBridgeMcpHttpServer,
@@ -68,6 +69,7 @@ export interface ProductProfileRuntimeConfig {
   readonly responsesToken: string;
   readonly internalMcpToken: string;
   readonly publicMcpAbi: ProductProfilePublicMcpAbi;
+  readonly approvalAutomationMode: import("@chatgpt-tela/chatgpt").ChatGptApprovalAutomationMode;
   readonly webTurnTimeoutMs: number;
 }
 
@@ -153,6 +155,10 @@ export function loadProductProfileRuntimeConfig(
   if (publicMcpAbi !== "stable" && publicMcpAbi !== "unified-development") {
     throw new Error("CHATGPT_TELA_PRODUCT_PUBLIC_MCP_ABI must be stable or unified-development");
   }
+  const approvalAutomationMode = optional(env, "CHATGPT_TELA_APPROVAL_AUTOMATION_MODE") ?? "off";
+  if (approvalAutomationMode !== "off" && approvalAutomationMode !== "recognized_once") {
+    throw new Error("CHATGPT_TELA_APPROVAL_AUTOMATION_MODE must be off or recognized_once");
+  }
   const nativeKind = optional(env, "CHATGPT_TELA_PRODUCT_NATIVE_TARGET_KIND")
     ?? (optional(env, "CHATGPT_TELA_PRODUCT_LAUNCHER_CLI") ? "multi-profile" : "default-desktop");
   let nativeTarget: ProductProfileNativeTargetConfig;
@@ -181,6 +187,7 @@ export function loadProductProfileRuntimeConfig(
     responsesToken,
     internalMcpToken,
     publicMcpAbi,
+    approvalAutomationMode,
     webTurnTimeoutMs: positiveInteger(
       optional(env, "CHATGPT_TELA_PRODUCT_WEB_TURN_TIMEOUT_MS"),
       "CHATGPT_TELA_PRODUCT_WEB_TURN_TIMEOUT_MS",
@@ -198,6 +205,12 @@ export async function startProductProfileRuntime(
     readonly signal?: AbortSignal;
   } = {},
 ): Promise<ProductProfileRuntime> {
+  const startupStage = (
+    stage: string,
+    fields: Readonly<Record<string, string | number | boolean>> = {},
+  ): void => {
+    emitDiagnosticEvent("chatgpt_tela_profile_startup", stage, fields);
+  };
   const publicIdentity = productPublicMcpIdentity(config.publicMcpAbi);
   const turns = new ActiveTurnRegistry({ routeId: config.routeId });
   const source = new LateBoundCurrentTurnSource();
@@ -209,9 +222,12 @@ export async function startProductProfileRuntime(
   let routedTarget: ProductProfileRoutedTarget | undefined;
   let defaultDesktopTarget: DefaultDesktopTargetRuntime | undefined;
   try {
+    startupStage("browser_runtime_starting");
     runtime = await startElectronDevelopmentRuntime({
       profileId: config.browserProfile.profileId,
       connectorName: publicIdentity.connectorName,
+      connectorRoutingMode: config.publicMcpAbi === "stable" ? "automatic-fallback" : "explicit",
+      approvalAutomationMode: config.approvalAutomationMode,
       currentTurnSource: source,
       turns,
       mcp: { kind: "external", abi: publicIdentity.webContract },
@@ -227,30 +243,47 @@ export async function startProductProfileRuntime(
         userDataDir: config.browserProfile.userDataDir,
       },
     });
+    startupStage("browser_runtime_ready");
     internalMcp = await startCodexBridgeMcpHttpServer({
       turns,
       port: 0,
       authentication: { kind: "bearer", token: config.internalMcpToken },
     });
+    startupStage("internal_mcp_ready");
     const connectorProbeState = new ConnectorProbeState({
       directory: config.browserProfile.userDataDir,
       connectorName: publicIdentity.connectorName,
     });
     const staleConnectorProbe = connectorProbeState.pending();
-    if (staleConnectorProbe) {
-      await runtime.recoverChatGptConnectorProbeArtifact(options.signal);
-    }
+    startupStage("connector_artifact_recovery_starting");
+    const recoveredConnectorArtifact = await runtime.recoverChatGptConnectorProbeArtifact(
+      options.signal,
+      staleConnectorProbe ? { allowUnknownSelectedConnector: true } : undefined,
+    );
+    startupStage(recoveredConnectorArtifact
+      ? "connector_artifact_recovered"
+      : "connector_artifact_not_owned");
+    startupStage("profile_proof_starting");
     const observed = await runtime.probeChatGptProfile(options.signal);
     assertChatGptTelaAccountBinding(config.browserProfile, observed.account.accountFingerprint);
+    startupStage("profile_proof_complete", {
+      account_structure: observed.account.accountStructure,
+      container_fingerprint: observed.account.containerFingerprint,
+    });
     if (staleConnectorProbe) connectorProbeState.clear();
     connectorProbeState.begin();
+    startupStage("connector_proof_starting");
     await runtime.probeChatGptConnector(options.signal);
+    startupStage("connector_proof_complete");
     // Connector selection/cleanup happens on a disposable surface. Prove a second fresh surface is
     // still empty before attaching the Native target so cross-window/cloud draft restoration cannot
     // turn into a delayed consequential submit failure.
+    startupStage("fresh_readiness_proof_starting");
     await runtime.probeChatGptReadiness(options.signal);
+    startupStage("fresh_readiness_proof_complete");
     connectorProbeState.clear();
     if (config.nativeTarget.kind === "multi-profile") {
+      startupStage("native_target_starting");
       routedTarget = await client!.launchRoutedTarget({
         targetId: config.nativeTarget.targetId,
         responsesBaseUrl: runtime.responses.baseUrl,
@@ -258,7 +291,9 @@ export async function startProductProfileRuntime(
         responsesToken: config.responsesToken,
         ...(options.signal ? { signal: options.signal } : {}),
       });
+      startupStage("native_target_ready");
     } else {
+      startupStage("native_target_starting");
       const installation = resolveDefaultDesktopInstallation({ environment: process.env });
       const route = createDefaultDesktopResponsesRoute({
         baseUrl: runtime.responses.baseUrl,
@@ -272,6 +307,7 @@ export async function startProductProfileRuntime(
         credential: config.responsesToken,
         environment: process.env,
       });
+      startupStage("native_target_ready");
       const currentTurnSource = appServerCurrentTurnSource(defaultDesktopTarget.proxyEndpoint);
       routedTarget = Object.freeze({
         target: Object.freeze({ id: "default" }),
@@ -286,6 +322,7 @@ export async function startProductProfileRuntime(
       });
     }
     source.bind(routedTarget.currentTurnSource);
+    startupStage("profile_runtime_ready");
   } catch (error) {
     const cleanup: Promise<unknown>[] = [];
     if (defaultDesktopTarget) cleanup.push(defaultDesktopTarget.stop().catch(() => undefined));

@@ -25,6 +25,7 @@ function fixture(root: string) {
     writeFileSync(join(input, service), `${service}\n`, { mode: 0o755 });
   }
   writeFileSync(join(input, "profile-runtime.cjs"), "module.exports = {};\n");
+  writeFileSync(join(input, "menu-bar"), "menu-bar\n", { mode: 0o755 });
   writeFileSync(join(input, "electron", "bin", "electron"), "electron\n", { mode: 0o755 });
   return input;
 }
@@ -51,6 +52,7 @@ describe("signed packaged payload builder", () => {
           electronExecutableRelativePath: "bin/electron",
           entrypointSourcePath: join(input, "profile-runtime.cjs"),
         },
+        menuBarSourcePath: join(input, "menu-bar"),
         signer,
       });
       expect(built.manifest.launcher?.executable).toBe("chatgpt-tela");
@@ -59,8 +61,10 @@ describe("signed packaged payload builder", () => {
         executable: "electron/bin/electron",
         entrypoint: "runtime/profile-runtime.cjs",
       });
+      expect(built.manifest.menuBar).toEqual({ executable: "ui/chatgpt-tela-menu-bar" });
       expect(existsSync(join(output, "services", "gateway"))).toBe(true);
       expect(existsSync(join(output, "runtime", "profile-runtime.cjs"))).toBe(true);
+      expect(existsSync(join(output, "ui", "chatgpt-tela-menu-bar"))).toBe(true);
       expect(verifyPackagedPayloadSignature({ payloadRoot: output, trustedKeys: { "release-fixture": keys.publicKey } }))
         .toEqual(built.signature);
       const spec = packagedInstallSpecFromPayload(output);

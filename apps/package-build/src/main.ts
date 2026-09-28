@@ -69,6 +69,8 @@ function macCodesign(outputPath: string, identity: string): void {
   };
   sign(join(outputPath, "chatgpt-tela"));
   for (const service of ["gateway", "chat", "codex"] as const) sign(join(outputPath, "services", service));
+  const menuBar = join(outputPath, "ui", "chatgpt-tela-menu-bar");
+  if (existsSync(menuBar)) sign(menuBar);
   sign(join(outputPath, "electron", "Electron.app"), true);
 }
 
@@ -93,6 +95,7 @@ async function main(): Promise<void> {
     const chat = join(temporary, `chat${executableExtension}`);
     const codex = join(temporary, `codex${executableExtension}`);
     const profileRuntime = join(temporary, "profile-runtime.cjs");
+    const menuBar = process.platform === "darwin" ? join(temporary, "chatgpt-tela-menu-bar") : undefined;
 
     compileExecutable("apps/packaged-launcher/src/main.ts", launcher);
     compileExecutable("apps/gateway-daemon/src/main.ts", gateway);
@@ -100,6 +103,15 @@ async function main(): Promise<void> {
     compileExecutable("apps/codex-daemon/src/main.ts", codex);
     runBun(["build", "apps/profile-runtime/src/main.ts", "--target=node", "--format=cjs", "--external", "electron",
       `--outfile=${profileRuntime}`]);
+    if (menuBar) {
+      execFileSync("/usr/bin/xcrun", [
+        "swiftc",
+        "-parse-as-library",
+        resolve(repoRoot, "apps/menu-bar-macos/main.swift"),
+        "-framework", "AppKit",
+        "-o", menuBar,
+      ], { cwd: repoRoot, stdio: "inherit" });
+    }
 
     const built = buildPackagedPayload({
       outputPath,
@@ -115,6 +127,7 @@ async function main(): Promise<void> {
         electronExecutableRelativePath: electronExecutableRelativePath(),
         entrypointSourcePath: profileRuntime,
       },
+      ...(menuBar ? { menuBarSourcePath: menuBar } : {}),
       signer: createEd25519PackagedPayloadSigner({ keyId, privateKey }),
       ...(macCodesignIdentity
         ? { finalizeStagedPayload: ({ outputPath: staged }) => macCodesign(staged, macCodesignIdentity) }
@@ -129,6 +142,7 @@ async function main(): Promise<void> {
       services: built.manifest.services,
       launcher: built.manifest.launcher,
       profileRuntime: built.manifest.profileRuntime,
+      menuBar: built.manifest.menuBar,
     }, null, 2));
   } finally {
     rmSync(temporary, { recursive: true, force: true });

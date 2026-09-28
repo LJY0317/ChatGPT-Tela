@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import type {
   ChatGptAccountIdentity,
   ChatGptCapabilities,
@@ -7,7 +8,10 @@ import type {
   ChatGptConnectorProbe,
   WebConversationProvider,
 } from "@chatgpt-tela/chatgpt";
-import { observeChatGptAccountIdentity } from "@chatgpt-tela/chatgpt";
+import {
+  ChatGptConnectorCatalogUnavailableError,
+  observeChatGptAccountIdentity,
+} from "@chatgpt-tela/chatgpt";
 
 export interface ChatGptProfileObservation {
   readonly capabilities: ChatGptCapabilities;
@@ -30,7 +34,10 @@ export interface ElectronProfileSetupSurface {
 export interface ChatGptProfileControl {
   probeChatGptReadiness(signal?: AbortSignal): Promise<ChatGptCapabilities>;
   probeChatGptProfile(signal?: AbortSignal): Promise<ChatGptProfileObservation>;
-  recoverChatGptConnectorProbeArtifact(signal?: AbortSignal): Promise<boolean>;
+  recoverChatGptConnectorProbeArtifact(
+    signal?: AbortSignal,
+    options?: { readonly allowUnknownSelectedConnector?: boolean },
+  ): Promise<boolean>;
   probeChatGptConnector(signal?: AbortSignal): Promise<ChatGptConnectorObservation>;
   openProfileSetupSurface(options?: { readonly reveal?: boolean }): Promise<ElectronProfileSetupSurface>;
   close(): Promise<void>;
@@ -115,17 +122,26 @@ export function createChatGptProfileControl(input: {
       if (!input.provider.probeConnector) {
         throw new Error("ChatGPT provider does not support connector preflight");
       }
-      const lease = await input.browserHost.acquire({
-        taskId: "chatgpt-tela-connector-readiness",
-        epochId: `connector-${randomUUID()}`,
-      });
-      try {
-        return await input.provider.probeConnector(lease, signal);
-      } finally {
-        await input.browserHost.release(lease.leaseId);
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        const lease = await input.browserHost.acquire({
+          taskId: "chatgpt-tela-connector-readiness",
+          epochId: `connector-${randomUUID()}`,
+        });
+        try {
+          return await input.provider.probeConnector(lease, signal);
+        } catch (error) {
+          if (!(error instanceof ChatGptConnectorCatalogUnavailableError) || attempt >= 2) throw error;
+          emitDiagnosticEvent("chatgpt_tela_connector", "catalog_refresh", { attempt });
+        } finally {
+          await input.browserHost.release(lease.leaseId);
+        }
       }
+      throw new Error("ChatGPT connector catalog refresh exhausted unexpectedly");
     },
-    async recoverChatGptConnectorProbeArtifact(signal?: AbortSignal) {
+    async recoverChatGptConnectorProbeArtifact(
+      signal?: AbortSignal,
+      options: { readonly allowUnknownSelectedConnector?: boolean } = {},
+    ) {
       requireOpen();
       if (!input.provider.recoverConnectorProbeArtifact) {
         throw new Error("ChatGPT provider does not support connector artifact recovery");
@@ -135,7 +151,7 @@ export function createChatGptProfileControl(input: {
         epochId: `connector-recovery-${randomUUID()}`,
       });
       try {
-        return await input.provider.recoverConnectorProbeArtifact(lease, signal);
+        return await input.provider.recoverConnectorProbeArtifact(lease, signal, options);
       } finally {
         await input.browserHost.release(lease.leaseId);
       }

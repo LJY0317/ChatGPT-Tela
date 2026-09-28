@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@chatgpt-tela/codex-service": "workspace:*",
+    "@chatgpt-tela/product-config": "workspace:*",
     "@chatgpt-tela/product-lifecycle": "workspace:*",
     "@chatgpt-tela/service-protocol": "workspace:*"
   }

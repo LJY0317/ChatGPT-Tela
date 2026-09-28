@@ -3,9 +3,12 @@ import {
   BROWSER_PAGE_AUTOMATION,
   type BrowserSurfaceLease,
 } from "@chatgpt-tela/browser-host";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { ChatGptDomSurfaceDriver } from "./dom-driver";
+import type { ChatGptApprovalAutomationMode } from "./approval-policy";
 import {
   CHATGPT_SURFACE_DRIVER,
+  ChatGptConnectorCatalogUnavailableError,
   type ChatGptComposerObservation,
   type ChatGptSurfaceDriver,
   type ChatGptSurfaceSnapshot,
@@ -44,17 +47,23 @@ export interface ChatGptSemanticProviderOptions {
    * Production defaults to 5s; tests may set 0 because fixture state is synchronous.
    */
   readonly connectorDraftPersistenceSettleMs?: number;
+  /** Optional local approval policy. Disabled by default and never selects persistent Always allow. */
+  readonly approvalAutomationMode?: ChatGptApprovalAutomationMode;
+  /** Stable direct-MCP Apps may be workspace-routed without a visible legacy connector picker. */
+  readonly connectorRoutingMode?: "explicit" | "automatic-fallback";
 }
 
 export interface ChatGptConnectorObservation {
   readonly connectorName: string;
   readonly connectorFingerprint: string;
+  readonly routingMode: "explicit" | "automatic";
 }
 
 export interface ChatGptConnectorProbe {
   recoverConnectorProbeArtifact(
     surface: BrowserSurfaceLease,
     signal?: AbortSignal,
+    options?: { readonly allowUnknownSelectedConnector?: boolean },
   ): Promise<boolean>;
   probeConnector(
     surface: BrowserSurfaceLease,
@@ -68,6 +77,30 @@ function fingerprint(value: string): string {
 
 function evidence(...parts: string[]): readonly string[] {
   return Object.freeze(parts);
+}
+
+function routeKind(url: string): "home" | "conversation" | "auth" | "workspace" | "other" | "invalid" {
+  try {
+    const pathname = new URL(url).pathname;
+    if (pathname === "/" || pathname === "") return "home";
+    if (pathname.startsWith("/c/")) return "conversation";
+    if (pathname.startsWith("/auth/")) return "auth";
+    if (pathname.startsWith("/g/")) return "workspace";
+    return "other";
+  } catch {
+    return "invalid";
+  }
+}
+
+function surfaceDiagnostic(stage: string, snapshot: ChatGptSurfaceSnapshot, extra: Readonly<Record<string, number | boolean | string>> = {}): void {
+  emitDiagnosticEvent("chatgpt_tela_surface", stage, {
+    route_kind: routeKind(snapshot.url),
+    composer_count: snapshot.composers.length,
+    ready_composer_count: readyComposers(snapshot).length,
+    send_count: snapshot.sendControls.length,
+    turn_count: snapshot.turns.length,
+    ...extra,
+  });
 }
 
 function driverFor(surface: BrowserSurfaceLease): ChatGptSurfaceDriver {
@@ -154,7 +187,10 @@ async function waitForHydratedComposer(
       snapshot = await driver.waitForChange(snapshot.revision, deadline.combined);
     } catch (error) {
       if (callerSignal?.aborted) throw error;
-      if (deadline.timeout.aborted) return { snapshot, timedOut: true };
+      if (deadline.timeout.aborted) {
+        surfaceDiagnostic("composer_hydration_timeout", snapshot, { timed_out: true });
+        return { snapshot, timedOut: true };
+      }
       throw error;
     }
   }
@@ -179,7 +215,10 @@ async function waitForSettledEmptyComposer(
       snapshot = await driver.waitForChange(snapshot.revision, deadline.combined);
     } catch (error) {
       if (callerSignal?.aborted) throw error;
-      if (deadline.timeout.aborted) return { snapshot, timedOut: true };
+      if (deadline.timeout.aborted) {
+        surfaceDiagnostic("composer_settle_timeout", snapshot, { timed_out: true });
+        return { snapshot, timedOut: true };
+      }
       throw error;
     }
   }
@@ -210,6 +249,26 @@ async function restoreEmptyComposer(
       throw error;
     }
   }
+}
+
+async function resetAutomaticRoutingSurface(
+  surface: BrowserSurfaceLease,
+  driver: ChatGptSurfaceDriver,
+  signal?: AbortSignal,
+): Promise<ChatGptSurfaceSnapshot> {
+  emitDiagnosticEvent("chatgpt_tela_connector", "automatic_routing_surface_reset_start");
+  await surface.navigate("https://chatgpt.com/");
+  const hydrated = await waitForHydratedComposer(driver, signal);
+  const settled = await waitForSettledEmptyComposer(driver, hydrated.snapshot, signal);
+  const composer = exactComposer(settled.snapshot);
+  if (composer.textLength !== 0 || composer.connectorFingerprints.length !== 0) {
+    throw new Error("ChatGPT automatic app routing could not prove one fresh empty composer after navigation");
+  }
+  emitDiagnosticEvent("chatgpt_tela_connector", "automatic_routing_surface_reset_complete", {
+    route_kind: routeKind(settled.snapshot.url),
+    ready_composer_count: readyComposers(settled.snapshot).length,
+  });
+  return settled.snapshot;
 }
 
 function formatPhysicalContext(context: WebPhysicalContext, toolBridge: WebTurnRequest["toolBridge"]): string {
@@ -380,6 +439,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   readonly #turns = new Map<string, TrackedTurn>();
   readonly #connectorName: string | undefined;
   readonly #connectorDraftPersistenceSettleMs: number;
+  readonly #approvalAutomationMode: ChatGptApprovalAutomationMode;
+  readonly #connectorRoutingMode: "explicit" | "automatic-fallback";
 
   constructor(options: ChatGptSemanticProviderOptions = {}) {
     const connectorName = options.connectorName?.trim();
@@ -394,6 +455,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     }
     this.#connectorName = connectorName;
     this.#connectorDraftPersistenceSettleMs = settleMs;
+    this.#approvalAutomationMode = options.approvalAutomationMode ?? "off";
+    this.#connectorRoutingMode = options.connectorRoutingMode ?? "explicit";
   }
 
   async #settleConnectorDraftPersistence(
@@ -442,6 +505,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     }
     const composer = composers[0]!;
     if (composer.textLength !== 0) {
+      emitDiagnosticEvent("chatgpt_tela_readiness", "existing_draft", {
+        text_length: composer.textLength,
+        connector_count: composer.connectorFingerprints.length,
+        settle_timed_out: settled.timedOut,
+      });
       return {
         state: "probable",
         value: { observed: new Set(["composer"]) },
@@ -453,6 +521,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       };
     }
     if (composer.connectorFingerprints.length !== 0) {
+      emitDiagnosticEvent("chatgpt_tela_readiness", "retained_connector", {
+        text_length: composer.textLength,
+        connector_count: composer.connectorFingerprints.length,
+      });
       return {
         state: "probable",
         value: { observed: new Set(["composer"]) },
@@ -548,6 +620,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     if (!connectorName) throw new Error("ChatGPT connector probe requires an explicit connector identity");
     const expectedConnectorFingerprint = fingerprint(connectorName);
     const driver = driverFor(surface);
+    await driver.dismissTransientUi(signal);
     const hydrated = await waitForHydratedComposer(driver, signal);
     const settled = await waitForSettledEmptyComposer(driver, hydrated.snapshot, signal);
     let composer = exactComposer(settled.snapshot);
@@ -565,7 +638,23 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     try {
       if (composer.connectorFingerprints.length === 0) {
         cleanupNeeded = true;
-        await driver.selectConnector(composer.key, connectorName, signal);
+        try {
+          await driver.selectConnector(composer.key, connectorName, signal);
+        } catch (error) {
+          if (this.#connectorRoutingMode === "automatic-fallback"
+            && error instanceof ChatGptConnectorCatalogUnavailableError) {
+            const reset = await resetAutomaticRoutingSurface(surface, driver, signal);
+            composer = exactComposer(reset);
+            cleanupNeeded = false;
+            emitDiagnosticEvent("chatgpt_tela_connector", "automatic_routing_deferred");
+            return Object.freeze({
+              connectorName,
+              connectorFingerprint: expectedConnectorFingerprint,
+              routingMode: "automatic" as const,
+            });
+          }
+          throw error;
+        }
       }
       const deadline = timeoutSignal(signal, CHATGPT_COMPOSER_SETTLE_TIMEOUT_MS);
       const observed = await driver.observe(deadline.combined);
@@ -575,7 +664,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         || composer.connectorFingerprints[0] !== expectedConnectorFingerprint) {
         throw new Error("ChatGPT connector selection was not structurally proven by the preflight probe");
       }
-      return Object.freeze({ connectorName, connectorFingerprint: expectedConnectorFingerprint });
+      return Object.freeze({
+        connectorName,
+        connectorFingerprint: expectedConnectorFingerprint,
+        routingMode: "explicit" as const,
+      });
     } finally {
       if (cleanupNeeded) {
         await restoreEmptyComposer(driver, composer.key);
@@ -587,20 +680,42 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   async recoverConnectorProbeArtifact(
     surface: BrowserSurfaceLease,
     signal?: AbortSignal,
+    options: { readonly allowUnknownSelectedConnector?: boolean } = {},
   ): Promise<boolean> {
     const connectorName = this.#connectorName;
     if (!connectorName) throw new Error("ChatGPT connector artifact recovery requires an explicit connector identity");
     const driver = driverFor(surface);
+    await driver.dismissTransientUi(signal);
     const hydrated = await waitForHydratedComposer(driver, signal);
+    const hydratedComposers = readyComposers(hydrated.snapshot);
+    if (hydratedComposers.length === 0) return false;
     const composer = exactComposer(hydrated.snapshot);
     if (composer.textLength === 0 && composer.connectorFingerprints.length === 0) return false;
-    const artifact = `@${connectorName}`;
-    if (composer.textLength !== artifact.length
-      || composer.textFingerprint !== fingerprint(artifact)
-      || composer.connectorFingerprints.length !== 0) {
-      return false;
+    const expectedConnectorFingerprint = fingerprint(connectorName);
+    const productOwnedPlainTextArtifacts = [
+      `@${connectorName}`,
+      `@${connectorName} `,
+    ];
+    const isPlainTextArtifact = composer.connectorFingerprints.length === 0
+      && productOwnedPlainTextArtifacts.some(artifact => (
+        composer.textLength === artifact.length && composer.textFingerprint === fingerprint(artifact)
+      ));
+    const isSelectedConnectorArtifact = composer.textLength === 0
+      && composer.connectorFingerprints.length === 1
+      && composer.connectorFingerprints[0] === expectedConnectorFingerprint;
+    if (isPlainTextArtifact || isSelectedConnectorArtifact) {
+      await restoreEmptyComposer(driver, composer.key);
+      await this.#settleConnectorDraftPersistence(driver, composer.key, signal);
+      return true;
     }
-    await restoreEmptyComposer(driver, composer.key);
+    if (options.allowUnknownSelectedConnector === true
+      && composer.textLength === 0
+      && composer.connectorFingerprints.length === 1) {
+      await restoreEmptyComposer(driver, composer.key);
+      await this.#settleConnectorDraftPersistence(driver, composer.key, signal);
+      return true;
+    }
+    if (!await driver.recoverConnectorArtifact(composer.key, connectorName, signal)) return false;
     await this.#settleConnectorDraftPersistence(driver, composer.key, signal);
     return true;
   }
@@ -657,6 +772,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const expectedFingerprint = fingerprint(text);
     try {
       let preparedBaseline = baseline;
+      let connectorRouting: "none" | "explicit" | "automatic" = request.toolBridge ? "explicit" : "none";
       if (request.toolBridge) {
         const selected = composer.connectorFingerprints;
         if (selected.length > 1) throw new Error("ChatGPT composer has multiple selected connectors");
@@ -664,14 +780,30 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           throw new Error("ChatGPT composer has a different selected connector");
         }
         if (selected.length === 0) {
-          await driver.selectConnector(composer.key, connectorName!, signal);
-          preparedBaseline = await driver.observe(signal);
-          composer = exactComposer(preparedBaseline);
+          try {
+            await driver.selectConnector(composer.key, connectorName!, signal);
+            preparedBaseline = await driver.observe(signal);
+            composer = exactComposer(preparedBaseline);
+          } catch (error) {
+            if (this.#connectorRoutingMode === "automatic-fallback"
+              && error instanceof ChatGptConnectorCatalogUnavailableError) {
+              preparedBaseline = await resetAutomaticRoutingSurface(surface, driver, signal);
+              composer = exactComposer(preparedBaseline);
+              connectorRouting = "automatic";
+              emitDiagnosticEvent("chatgpt_tela_connector", "automatic_routing_submit");
+            } else {
+              throw error;
+            }
+          }
         }
-        if (composer.textLength !== 0
-          || composer.connectorFingerprints.length !== 1
-          || composer.connectorFingerprints[0] !== expectedConnectorFingerprint) {
-          throw new Error("ChatGPT connector selection was not structurally proven");
+        if (connectorRouting === "explicit") {
+          if (composer.textLength !== 0
+            || composer.connectorFingerprints.length !== 1
+            || composer.connectorFingerprints[0] !== expectedConnectorFingerprint) {
+            throw new Error("ChatGPT connector selection was not structurally proven");
+          }
+        } else if (composer.textLength !== 0 || composer.connectorFingerprints.length !== 0) {
+          throw new Error("ChatGPT automatic app routing requires one empty unbound composer");
         }
       }
       const baselineSends = visibleSends(preparedBaseline, composer.key);
@@ -682,8 +814,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       baselineTurnKeys = new Set(preparedBaseline.turns.map(turn => turn.key));
       preSubmitUserLineageKeys = baselineUserLineageKeys(preparedBaseline);
 
-      if (request.toolBridge) await driver.appendComposerText(composer.key, ` ${text}`, signal);
-      else await driver.replaceComposerText(composer.key, text, signal);
+      if (request.toolBridge && connectorRouting === "explicit") {
+        await driver.appendComposerText(composer.key, ` ${text}`, signal);
+      } else {
+        await driver.replaceComposerText(composer.key, text, signal);
+      }
       const settle = timeoutSignal(signal, CHATGPT_COMPOSER_SETTLE_TIMEOUT_MS);
       filled = await driver.observe(settle.combined);
       let sendAfterFill: ReturnType<typeof exactSend> | undefined;
@@ -696,10 +831,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         const exactReadback = filledComposer?.key === composer.key
           && filledComposer.textFingerprint === expectedFingerprint
           && filledComposer.textLength === text.length;
-        const connectorPreserved = !request.toolBridge || (
-          filledComposer?.connectorFingerprints.length === 1
-          && filledComposer.connectorFingerprints[0] === expectedConnectorFingerprint
-        );
+        const connectorPreserved = !request.toolBridge
+          || (connectorRouting === "explicit"
+            ? filledComposer?.connectorFingerprints.length === 1
+              && filledComposer.connectorFingerprints[0] === expectedConnectorFingerprint
+            : filledComposer?.connectorFingerprints.length === 0);
         if (filledComposer?.key === composer.key && filledComposer.textLength > 0 && !exactReadback) {
           return await probableBeforeSend(
             filled.revision,
@@ -915,6 +1051,12 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       const assistant = assistants[0];
       if (!assistant) continue;
+      if (assistant.phase === "tool-wait"
+        && this.#approvalAutomationMode !== "off"
+        && driver.processApprovalCard) {
+        const approval = await driver.processApprovalCard(this.#approvalAutomationMode, signal);
+        if (approval.status === "approved") continue;
+      }
       const boundary = tracked.continuationBoundary;
       if (boundary) {
         if (assistantFingerprint(assistant) === boundary.assistantFingerprint) continue;

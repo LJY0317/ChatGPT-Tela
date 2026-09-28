@@ -41,7 +41,10 @@ import {
   CHATGPT_TELA_SCHEMA_FINGERPRINT,
 } from "@chatgpt-tela/mcp";
 import {
+  readProductPreferences,
+  resolveProductPreferencesPath,
   writeProductConfig,
+  writeProductPreferences,
   type ProductConfig,
 } from "@chatgpt-tela/product-config";
 import {
@@ -115,6 +118,26 @@ function electronExecutable(): string {
   return path;
 }
 
+function manageApprovalPreferences(): void {
+  const subcommand = process.argv[3] ?? "status";
+  const path = resolveProductPreferencesPath();
+  if (subcommand === "status") {
+    console.log(JSON.stringify({ path, ...readProductPreferences(path) }, null, 2));
+    return;
+  }
+  if (subcommand !== "enable" && subcommand !== "disable") {
+    throw new Error("usage: chatgpt-tela approval <status|enable|disable>");
+  }
+  const approvalAutomation = subcommand === "enable" ? "recognized_once" : "off";
+  writeProductPreferences({ version: 1, approvalAutomation }, path);
+  console.log(JSON.stringify({
+    path,
+    approvalAutomation,
+    appliesTo: "new-or-restarted-codex-profiles",
+    persistentApproval: false,
+  }, null, 2));
+}
+
 async function currentLegacyDaemon(paths: ProductControlPaths): Promise<{
   readonly state: NonNullable<ReturnType<typeof readProductDaemonState>>;
   readonly client: ProductControlDaemonClient;
@@ -148,6 +171,43 @@ function serviceLogPath(
   service: TelaServiceId,
 ): string {
   return join(productPaths.logsRoot, `${service}.log`);
+}
+
+function diagnosticFileMetadata(path: string): Readonly<Record<string, string | number | boolean>> {
+  if (!existsSync(path)) return Object.freeze({ state: "missing" });
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) return Object.freeze({ state: "unsafe" });
+    return Object.freeze({ state: "present", bytes: stat.size });
+  } catch {
+    return Object.freeze({ state: "unreadable" });
+  }
+}
+
+function diagnosticsSummary(productPaths: ReturnType<typeof resolveProductPaths>): Readonly<Record<string, unknown>> {
+  const service = (id: TelaServiceId) => {
+    const raw = serviceLogPath(productPaths, id);
+    const sourceDiagnostics = `${raw}.diagnostics.jsonl`;
+    const packagedDiagnostics = join(productPaths.logsRoot, `${id}.diagnostics.jsonl`);
+    return Object.freeze({
+      serviceLog: diagnosticFileMetadata(raw),
+      sourceDiagnostics: diagnosticFileMetadata(sourceDiagnostics),
+      sourceDiagnosticsPrevious: diagnosticFileMetadata(`${sourceDiagnostics}.1`),
+      packagedDiagnostics: diagnosticFileMetadata(packagedDiagnostics),
+      packagedDiagnosticsPrevious: diagnosticFileMetadata(`${packagedDiagnostics}.1`),
+    });
+  };
+  return Object.freeze({
+    privacy: "metadata-only",
+    contentRead: false,
+    pathsEmitted: false,
+    rotation: "current-plus-one-previous",
+    services: Object.freeze({
+      gateway: service("gateway"),
+      chat: service("chat"),
+      codex: service("codex"),
+    }),
+  });
 }
 
 function packagedTransitionStatus(productPaths: ReturnType<typeof resolveProductPaths>): readonly Record<string, unknown>[] {
@@ -724,6 +784,10 @@ async function main(): Promise<void> {
     }, null, 2));
     return;
   }
+  if (command === "diagnostics") {
+    console.log(JSON.stringify(diagnosticsSummary(productPaths), null, 2));
+    return;
+  }
   if (command === "uninstall") {
     const dryRun = flag("--dry-run");
     const apply = flag("--apply");
@@ -920,6 +984,10 @@ async function main(): Promise<void> {
     await manageChatRoots(productPaths);
     return;
   }
+  if (command === "approval") {
+    manageApprovalPreferences();
+    return;
+  }
   if (command === "ingress") {
     await manageIngress(paths, productPaths);
     return;
@@ -1071,6 +1139,7 @@ async function main(): Promise<void> {
     + "  configure --public-mcp-url <https-url> --allow-unauthenticated-public-mcp [--multi-profile-launcher <path>] [--mcp-abi stable|unified-development] [--manage-tailscale-funnel] [--tailscale-cli <path-or-name>]\n"
     + "  paths\n"
     + "  doctor\n"
+    + "  diagnostics\n"
     + "  uninstall (--dry-run | --apply) [--remove-data]\n"
     + "  chat roots\n"
     + "  chat allow-root --path <workspace-root>\n"
@@ -1080,6 +1149,7 @@ async function main(): Promise<void> {
     + "  chat store-openai-api-key (--from-env <NAME> | --stdin)\n"
     + "  chat delete-openai-api-key\n"
     + "  chat disable-openai-agent\n"
+    + "  approval [status|enable|disable]\n"
     + "  ingress status\n"
     + "  ingress adopt-existing\n"
     + "  setup [--slot <n>]\n"

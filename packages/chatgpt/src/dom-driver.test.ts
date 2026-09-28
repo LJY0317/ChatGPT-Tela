@@ -93,12 +93,19 @@ class FakePage implements BrowserPageAutomation {
       };
       return undefined as Result;
     }
-    if (source.includes("ChatGPT connector target lookup timed out")) {
+    if (source.includes("ChatGPT connector selection refuses a non-empty composer")) {
       const input = argument as { composerKey: string; connectorName: string };
-      this.actions.push(`connector:${input.connectorName}`);
       const composer = this.raw.composers.find(item => item.key === input.composerKey);
-      if (composer?.connectorNames[0] === input.connectorName) return null as Result;
-      this.pendingConnectorName = input.connectorName;
+      if (composer?.connectorNames[0] === input.connectorName) return "selected" as Result;
+      if (composer?.text) throw new Error("fixture connector preparation requires an empty composer");
+      this.actions.push(`connector-focus:${input.connectorName}`);
+      return "ready" as Result;
+    }
+    if (source.includes("ChatGPT connector target lookup timed out")) {
+      const input = argument as { connectorName: string };
+      if (this.pendingConnectorName !== input.connectorName) {
+        throw new Error("fixture connector query was not typed before lookup");
+      }
       return { x: 25, y: 40 } as Result;
     }
     if (source.includes("ChatGPT connector activation timed out")) {
@@ -127,10 +134,27 @@ class FakePage implements BrowserPageAutomation {
     this.raw = {
       ...this.raw,
       composers: this.raw.composers.map(composer => composer.key === "composer:primary"
-        ? { ...composer, connectorNames: [connectorName] }
+        ? { ...composer, text: "", connectorNames: [connectorName] }
         : composer),
     };
     this.pendingConnectorName = undefined;
+  }
+
+  async typeFocusedEditable(text: string): Promise<void> {
+    this.actions.push(`type:${text}`);
+    if (!text.startsWith("@") || text.length < 2) throw new Error("fixture expected one connector mention query");
+    const connectorName = text.slice(1);
+    this.pendingConnectorName = connectorName;
+    this.raw = {
+      ...this.raw,
+      composers: this.raw.composers.map(composer => composer.key === "composer:primary"
+        ? { ...composer, text }
+        : composer),
+    };
+  }
+
+  async pressKey(keyCode: string): Promise<void> {
+    this.actions.push(`key:${keyCode}`);
   }
 
   async clearFocusedEditable(): Promise<void> {
@@ -267,7 +291,8 @@ describe("current ChatGPT DOM surface driver", () => {
     const snapshot = await driver.observe();
 
     expect(page.actions).toEqual([
-      "connector:ChatGPT Tela Development",
+      "connector-focus:ChatGPT Tela Development",
+      "type:@ChatGPT Tela Development",
       "pointer:25,40",
       "append:composer:primary",
     ]);

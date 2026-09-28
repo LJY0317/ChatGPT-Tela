@@ -47,6 +47,16 @@ configuration. This file is deliberately separate from ChatGPT browser-profile s
 Profile1 `control-plane/config.json` is retained only as a compatibility copy while the development CLI is
 migrated; signed packaged services read only the product-native config boundary.
 
+The same config root may contain `preferences-v1.json`, which is deliberately smaller than runtime config and
+contains only user-facing behavioral preferences. Its first setting is approval automation (`off` by default,
+or `recognized_once`). It contains no endpoint, browser/account identity, credential, prompt, tool argument,
+or persistent-approval grant. Profile processes read the current preference only when they start/restart.
+
+Service diagnostics live under the platform-standard Tela logs root. Source supervision writes
+`<service>.log.diagnostics.jsonl`; installed packaged services write `<service>.diagnostics.jsonl`. Both use the
+same bounded payload-free event format and retain at most one rotated predecessor. The CLI diagnostics summary
+reads only file metadata and deliberately omits absolute paths and event contents.
+
 Each running service publishes a private mode-600 runtime descriptor containing only its install/instance
 identity, PID, loopback endpoint, ephemeral bearer, and start time. Supervision reuses a descriptor only after
 the endpoint proves the same service/instance identity. A dead-PID stale descriptor may be removed; an alive
@@ -89,11 +99,19 @@ service registration can resume only while the same manifest/marker/definition i
 Foreign files, orphaned markers, changed payload bytes, and changed definitions remain non-destructive.
 
 The source package builder now supplies the actual multi-file runtime payload. It compiles a stable launcher
-and separate Gateway/Chat/Codex executables, carries the Electron/profile runtime, writes
+and separate Gateway/Chat/Codex executables, carries the Electron/profile runtime, and on macOS includes the
+signed AppKit menu-bar executable under the same owned payload tree. It writes
 `chatgpt-tela-package-v1.json`, performs platform-native signing before freezing the tree, and signs the tree
 fingerprint with Ed25519. Signed install and signed upgrade verify that release signature before entering their
 existing ownership transitions. The stable OS registration invokes only the launcher; the launcher re-proves
 the owned payload receipt and dispatches the exact service executable declared by the installed manifest.
+
+The menu-bar process is UI, not a fourth backend service. It may be launched from the installed launcher on
+macOS, reads the same standard product paths, and calls only authenticated loopback service endpoints. The
+macOS install blueprint registers `com.openai.chatgpt-tela.menu-bar` as a product-owned LaunchAgent with its
+own definition fingerprint and marker. It is `RunAtLoad` in the Aqua session but is never treated as
+Gateway/Chat/Codex authority; uninstall removes it only when the exact definition/marker/manifest ownership is
+still proven.
 
 Payload symlinks are not a general escape hatch. They are permitted only as relative links whose lexical and
 resolved targets remain inside the same payload root. Their raw target text is included in the fingerprint and

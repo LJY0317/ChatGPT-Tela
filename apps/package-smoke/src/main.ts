@@ -100,6 +100,12 @@ async function main(): Promise<void> {
     }
     regularFile(join(output, ...manifest.profileRuntime.entrypoint.split("/")), "packaged profile runtime entrypoint");
     regularFile(join(output, ...manifest.profileRuntime.executable.split("/")), "packaged Electron executable");
+    if (process.platform === "darwin") {
+      if (!manifest.menuBar) throw new Error("macOS package smoke payload is missing menu bar metadata");
+      regularFile(join(output, ...manifest.menuBar.executable.split("/")), "packaged menu bar executable");
+    } else if (manifest.menuBar) {
+      throw new Error("non-macOS package smoke payload unexpectedly contains menu bar metadata");
+    }
     smokeLauncher(launcherPath);
 
     console.log(JSON.stringify({
@@ -109,6 +115,7 @@ async function main(): Promise<void> {
       launcher: manifest.launcher.executable,
       services: manifest.services,
       profileRuntime: manifest.profileRuntime,
+      menuBar: manifest.menuBar,
       verified: true,
     }, null, 2));
   } finally {

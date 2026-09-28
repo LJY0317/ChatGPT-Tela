@@ -126,12 +126,17 @@ function capabilityProvider(ready: boolean): WebConversationProvider {
 }
 
 const FIXTURE_ACCOUNT = "a".repeat(64);
+const FIXTURE_CONTAINER = "b".repeat(64);
 
 function bindFixtureAccount(root: string, slot = 1, fingerprint = FIXTURE_ACCOUNT): void {
   bindChatGptTelaAccount(resolveChatGptTelaBrowserProfile({ slot, profileRoot: root }), fingerprint);
 }
 
-const fixtureAccountIdentityObserver = async () => ({ accountFingerprint: FIXTURE_ACCOUNT });
+const fixtureAccountIdentityObserver = async () => ({
+  accountFingerprint: FIXTURE_ACCOUNT,
+  containerFingerprint: FIXTURE_CONTAINER,
+  accountStructure: "personal" as const,
+});
 
 describe("development canary configuration", () => {
   test("preflight config needs no runtime or MCP bearer secrets", () => {

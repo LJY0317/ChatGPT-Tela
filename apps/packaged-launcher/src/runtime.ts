@@ -28,6 +28,13 @@ export interface ResolvedPackagedServiceLaunch {
   readonly environment: Readonly<Record<string, string>>;
 }
 
+export interface ResolvedPackagedMenuBarLaunch {
+  readonly payloadRoot: string;
+  readonly executable: string;
+  readonly arguments: readonly string[];
+  readonly environment: Readonly<Record<string, string>>;
+}
+
 function inside(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -124,6 +131,7 @@ export function resolvePackagedServiceLaunch(input: {
   const executable = regularPayloadFile(payloadRoot, entry.executable, `packaged ${input.service} executable`);
   const environment = Object.freeze({
     ...(entry.environment ?? {}),
+    CHATGPT_TELA_DIAGNOSTIC_FILE: join(paths.logsRoot, `${input.service}.diagnostics.jsonl`),
     ...derivedEnvironment({
       service: input.service,
       manifest,
@@ -141,8 +149,46 @@ export function resolvePackagedServiceLaunch(input: {
   });
 }
 
+export function resolvePackagedMenuBarLaunch(input: {
+  readonly payloadRoot: string;
+  readonly launcherExecutablePath?: string;
+  readonly pathOptions?: ProductPathOptions;
+}): ResolvedPackagedMenuBarLaunch {
+  if (process.platform !== "darwin" && input.pathOptions?.platform !== "darwin") {
+    throw new Error("packaged ChatGPT Tela menu bar is available only on macOS");
+  }
+  const payloadRoot = realpathSync(resolve(input.payloadRoot));
+  const manifest = readPackagedProductManifest(payloadRoot);
+  if (!manifest.launcher || !manifest.profileRuntime || !manifest.integrity || !manifest.menuBar) {
+    throw new Error("installed package does not declare the signed macOS menu bar layout");
+  }
+  const expectedLauncher = regularPayloadFile(payloadRoot, manifest.launcher.executable, "packaged launcher executable");
+  if (input.launcherExecutablePath && realpathSync(resolve(input.launcherExecutablePath)) !== expectedLauncher) {
+    throw new Error("running launcher executable does not match the installed package manifest");
+  }
+  const paths = resolveProductPaths(input.pathOptions);
+  if (existsSync(packagedUpgradeJournalPath(paths)) || existsSync(packagedRepairJournalPath(paths))) {
+    throw new Error("packaged menu bar launch is blocked while an install transition journal is incomplete");
+  }
+  const ownership = readOwnershipManifest(paths.installManifest);
+  if (!ownership) throw new Error("packaged launcher requires an installed ownership manifest");
+  if (ownership.productVersion !== manifest.productVersion) throw new Error("installed product version does not match the packaged launcher payload");
+  const resource = binaryResource(ownership);
+  if (realpathSync(resource.path) !== payloadRoot) throw new Error("packaged launcher root does not match the owned binary resource");
+  const observed = observeInstalledPackagedPayload(resource, ownership);
+  if (observed.state !== "owned" || observed.receipt.productVersion !== manifest.productVersion) {
+    throw new Error("packaged launcher payload ownership/receipt could not be re-proven");
+  }
+  return Object.freeze({
+    payloadRoot,
+    executable: regularPayloadFile(payloadRoot, manifest.menuBar.executable, "packaged menu bar executable"),
+    arguments: Object.freeze([]),
+    environment: Object.freeze({}),
+  });
+}
+
 export async function runPackagedServiceLauncher(input: {
-  readonly launch: ResolvedPackagedServiceLaunch;
+  readonly launch: ResolvedPackagedServiceLaunch | ResolvedPackagedMenuBarLaunch;
   readonly baseEnvironment?: NodeJS.ProcessEnv;
   readonly spawnChild?: (executable: string, arguments_: readonly string[], environment: NodeJS.ProcessEnv) => ChildProcess;
 }): Promise<number> {

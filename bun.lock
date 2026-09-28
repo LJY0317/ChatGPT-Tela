@@ -58,6 +58,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@chatgpt-tela/codex-service": "workspace:*",
+        "@chatgpt-tela/product-config": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
         "@chatgpt-tela/service-protocol": "workspace:*",
       },
@@ -123,6 +124,7 @@
       "name": "@chatgpt-tela/chat-service",
       "version": "0.0.0",
       "dependencies": {
+        "@chatgpt-tela/core": "workspace:*",
         "@chatgpt-tela/http-host": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
         "@chatgpt-tela/service-protocol": "workspace:*",
@@ -133,6 +135,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@chatgpt-tela/browser-host": "workspace:*",
+        "@chatgpt-tela/core": "workspace:*",
       },
     },
     "packages/codex": {
@@ -292,6 +295,7 @@
       "name": "@chatgpt-tela/service-supervisor",
       "version": "0.0.0",
       "dependencies": {
+        "@chatgpt-tela/core": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
         "@chatgpt-tela/service-protocol": "workspace:*",
       },
@@ -307,6 +311,7 @@
       "name": "@chatgpt-tela/tailscale-ingress",
       "version": "0.0.0",
       "dependencies": {
+        "@chatgpt-tela/core": "workspace:*",
         "@chatgpt-tela/mcp": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
       },

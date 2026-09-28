@@ -134,11 +134,13 @@ export async function startDefaultDesktopTargetRuntime(input: {
   readonly credential: string;
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly normalQuit?: (installation: DefaultDesktopInstallation, pid: number) => Promise<void>;
+  readonly processIds?: (installation: DefaultDesktopInstallation) => Promise<readonly number[]>;
 }): Promise<DefaultDesktopTargetRuntime> {
   if (!input.installation.normalQuitSupported && !input.normalQuit) {
     throw new Error(`built-in default Desktop runtime requires a normal quit lifecycle on ${input.installation.platform}`);
   }
-  const alreadyRunning = await defaultDesktopProcessIds(input.installation);
+  const processIds = input.processIds ?? defaultDesktopProcessIds;
+  const alreadyRunning = await processIds(input.installation);
   if (alreadyRunning.length > 0) {
     throw new Error("official ChatGPT Desktop is already running outside Tela; quit it normally once before starting the default Tela profile");
   }
@@ -205,12 +207,20 @@ export async function startDefaultDesktopTargetRuntime(input: {
         if (stopping) return stopping;
         stopping = (async () => {
           if (desktop && alive(desktop)) {
-            await normalQuit(input.installation, desktop.pid!);
-            if (!await waitForExit(desktop, STOP_TIMEOUT_MS)) {
-              // The pid belongs to the exact child this runtime spawned, so a bounded fallback is safe.
-              desktop.kill("SIGTERM");
-              if (!await waitForExit(desktop, 2_000)) desktop.kill("SIGKILL");
-              await waitForExit(desktop, 1_000);
+            // Re-prove that the exact Desktop pid spawned by this runtime still exists as the
+            // configured official Desktop before asking the OS to quit it. If the user/OS has
+            // already replaced that process, preserve the replacement and tear down only Tela's
+            // proxy/backend resources. This also handles an unreaped stale ChildProcess handle.
+            const currentDesktopPids = await processIds(input.installation);
+            if (currentDesktopPids.includes(desktop.pid!)) {
+              await normalQuit(input.installation, desktop.pid!);
+              if (!await waitForExit(desktop, STOP_TIMEOUT_MS)) {
+                // Discovery still proves this exact pid as the configured Desktop child, so the
+                // bounded fallback cannot target an unrelated replacement process.
+                desktop.kill("SIGTERM");
+                if (!await waitForExit(desktop, 2_000)) desktop.kill("SIGKILL");
+                await waitForExit(desktop, 1_000);
+              }
             }
           }
           await proxy!.close();

@@ -5,6 +5,10 @@ The user connects one Tela Gateway endpoint, chooses the authentication required
 ChatGPT creates the resulting personal/workspace Plugin directly. No separate App technical id, generated
 Plugin archive, or Plugin Creator conversation is required for the standard setup.
 
+ChatGPT's separate natural-language **Create plugin** flow is also a long-term supported surface. It may wrap
+the same MCP connection with Tela-specific Skills/reference material when that adds real routing/workflow
+value. It must not create a second Chat/Codex backend identity or require a different Gateway endpoint.
+
     ChatGPT / Work / Codex
             |
             v
@@ -42,6 +46,10 @@ timeouts, and diagnostics.
    for a separate install step.
 7. Start a new Chat or Work task when validating a newly created/refreshed connection.
 
+`ChatGPT Tela` is currently the required default display name while exact connector-selection E2E remains a
+release gate. The intended later design binds Tela to a stable connection identity/fingerprint separately from
+the display name, allowing user-chosen names without choosing a connector by fuzzy text or list position.
+
 The stable public MCP surface exposes exactly:
 
     chatgpt_tela_chat_capability_inventory
@@ -65,6 +73,13 @@ that are present for every connection:
 
 Runtime checks remain authoritative. Natural-language guidance never grants filesystem, process, turn,
 sandbox, approval, or destructive-action authority.
+
+## Approval automation
+
+Tela approval automation is optional and defaults off. `recognized_once` may activate only a single
+structurally recognized one-shot tool approval. It never selects persistent **Always allow** and never treats
+an unknown/ambiguous approval layout as consent. Approval card text, raw HTML, prompts, tool arguments, and
+tool output are not collected for this decision.
 
 ## Authentication
 

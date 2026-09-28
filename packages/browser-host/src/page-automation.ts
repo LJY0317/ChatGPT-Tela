@@ -20,6 +20,15 @@ export interface BrowserPageAutomation {
   pointerClick(point: { readonly x: number; readonly y: number }, signal?: AbortSignal): Promise<void>;
 
   /**
+   * Type text into the currently focused editable surface through trusted browser keyboard input.
+   * Product adapters use this for UI that reacts to real typing (for example mention/autocomplete menus).
+   */
+  typeFocusedEditable(text: string, signal?: AbortSignal): Promise<void>;
+
+  /** Send one trusted non-text keyboard key to the currently focused ChatGPT control. */
+  pressKey(keyCode: string, signal?: AbortSignal): Promise<void>;
+
+  /**
    * Clear the currently focused editable surface through trusted browser keyboard input.
    * Implementations map the primary modifier to Command on macOS and Control elsewhere.
    */

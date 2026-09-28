@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { diagnosticDurationMs, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import type {
   HttpsMcpEndpoint,
   HttpsMcpEndpointAuthentication,
@@ -278,25 +279,49 @@ export class TailscaleFunnelLeaseManager {
   }
 
   async inspect(lease: TailscaleFunnelLease, signal?: AbortSignal): Promise<TailscaleFunnelLeaseState> {
-    return inspectTailscaleFunnelLease(lease, await this.status(signal));
+    const startedAt = Date.now();
+    try {
+      const state = inspectTailscaleFunnelLease(lease, await this.status(signal));
+      emitDiagnosticEvent("chatgpt_tela_ingress", "inspect_complete", {
+        state: state.state,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
+      return state;
+    } catch (error) {
+      emitDiagnosticEvent("chatgpt_tela_ingress", "inspect_failed", {
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
+      throw error;
+    }
   }
 
   async acquire(
     lease: TailscaleFunnelLease,
     input: { readonly adoptExisting?: boolean; readonly signal?: AbortSignal } = {},
   ): Promise<TailscaleFunnelLeaseApplyResult> {
+    const startedAt = Date.now();
+    emitDiagnosticEvent("chatgpt_tela_ingress", "acquire_start");
     const manifest = readOwnershipManifest(this.#manifestPath);
     const manifestState = exactManifestResource(manifest, this.#installId, lease);
     if (manifestState === "drift") throw new Error("Tailscale route manifest identity drifted; refusing to overwrite it");
     const observed = await this.inspect(lease, input.signal);
     if (observed.state === "drift") {
+      emitDiagnosticEvent("chatgpt_tela_ingress", "acquire_preserved_drift", {
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       return Object.freeze({ state: "preserved", lease, detail: observed.reason, mutated: false });
     }
     if (observed.state === "owned") {
       if (manifestState === "exact") {
+        emitDiagnosticEvent("chatgpt_tela_ingress", "acquire_already_owned", {
+          duration_ms: diagnosticDurationMs(startedAt),
+        });
         return Object.freeze({ state: "already-owned", lease, detail: "existing Funnel route is already owned by this Tela install", mutated: false });
       }
       if (input.adoptExisting !== true) {
+        emitDiagnosticEvent("chatgpt_tela_ingress", "acquire_external_match", {
+          duration_ms: diagnosticDurationMs(startedAt),
+        });
         return Object.freeze({ state: "external-match", lease,
           detail: "matching Funnel route predates Tela ownership and was not adopted", mutated: false });
       }
@@ -320,6 +345,10 @@ export class TailscaleFunnelLeaseManager {
       throw new Error("Tailscale Funnel apply could not be verified; ownership intent was preserved", { cause: commandError ?? error });
     }
     if (verified.state === "owned") {
+      emitDiagnosticEvent("chatgpt_tela_ingress", "acquire_verified", {
+        command_reported_failure: commandError !== undefined,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       return Object.freeze({ state: "acquired", lease,
         detail: commandError ? "Funnel command reported failure but exact post-state is owned" : "Funnel route acquired and verified",
         mutated: true });
@@ -337,13 +366,22 @@ export class TailscaleFunnelLeaseManager {
     lease: TailscaleFunnelLease,
     signal?: AbortSignal,
   ): Promise<TailscaleFunnelLeaseApplyResult> {
+    const startedAt = Date.now();
+    emitDiagnosticEvent("chatgpt_tela_ingress", "release_start");
     const manifest = readOwnershipManifest(this.#manifestPath);
     const manifestState = exactManifestResource(manifest, this.#installId, lease);
     if (manifestState === "drift") {
+      emitDiagnosticEvent("chatgpt_tela_ingress", "release_preserved_manifest_drift", {
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       return Object.freeze({ state: "preserved", lease, detail: "manifest identity drifted; route was preserved", mutated: false });
     }
     const observed = await this.inspect(lease, signal);
     if (manifestState === "missing") {
+      emitDiagnosticEvent("chatgpt_tela_ingress", "release_unowned", {
+        observed_state: observed.state,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       return Object.freeze({ state: observed.state === "absent" ? "already-absent" : "preserved", lease,
         detail: observed.state === "absent"
           ? "route is absent and was never owned by this Tela install"
@@ -351,11 +389,17 @@ export class TailscaleFunnelLeaseManager {
         mutated: false });
     }
     if (observed.state === "drift") {
+      emitDiagnosticEvent("chatgpt_tela_ingress", "release_preserved_route_drift", {
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       return Object.freeze({ state: "preserved", lease, detail: observed.reason, mutated: false });
     }
     if (observed.state === "absent") {
       await unregisterOwnedResource({ path: this.#manifestPath, installId: this.#installId,
         productVersion: this.#productVersion, resourceId: tailscaleFunnelOwnedResource(lease).id });
+      emitDiagnosticEvent("chatgpt_tela_ingress", "release_already_absent", {
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       return Object.freeze({ state: "already-absent", lease, detail: "owned route is already absent; stale ownership record removed", mutated: true });
     }
     const plan = planReleaseTailscaleFunnelLease(lease, observed);
@@ -371,6 +415,10 @@ export class TailscaleFunnelLeaseManager {
     if (verified.state === "absent") {
       await unregisterOwnedResource({ path: this.#manifestPath, installId: this.#installId,
         productVersion: this.#productVersion, resourceId: tailscaleFunnelOwnedResource(lease).id });
+      emitDiagnosticEvent("chatgpt_tela_ingress", "release_verified", {
+        command_reported_failure: commandError !== undefined,
+        duration_ms: diagnosticDurationMs(startedAt),
+      });
       return Object.freeze({ state: "released", lease,
         detail: commandError ? "Funnel command reported failure but exact post-state is absent" : "Funnel route released and verified",
         mutated: true });

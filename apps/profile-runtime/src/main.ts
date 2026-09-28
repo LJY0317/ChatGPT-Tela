@@ -6,6 +6,7 @@ import { app } from "electron";
 
 async function main(): Promise<void> {
   const config = loadProductProfileRuntimeConfig();
+  if (process.platform === "darwin") app.dock?.hide();
   app.setPath("userData", config.browserProfile.userDataDir);
   const keepAliveWithoutWindows = () => {};
   app.on("window-all-closed", keepAliveWithoutWindows);

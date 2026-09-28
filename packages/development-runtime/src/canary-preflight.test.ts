@@ -79,7 +79,12 @@ function readinessProvider(ready: boolean): Pick<WebConversationProvider, "obser
 }
 
 const FIXTURE_ACCOUNT = "a".repeat(64);
-const fixtureAccountIdentityObserver = async () => ({ accountFingerprint: FIXTURE_ACCOUNT });
+const FIXTURE_CONTAINER = "b".repeat(64);
+const fixtureAccountIdentityObserver = async () => ({
+  accountFingerprint: FIXTURE_ACCOUNT,
+  containerFingerprint: FIXTURE_CONTAINER,
+  accountStructure: "personal" as const,
+});
 
 function bindFixtureAccount(root: string, slot: number): void {
   bindChatGptTelaAccount(resolveChatGptTelaBrowserProfile({ slot, profileRoot: root }), FIXTURE_ACCOUNT);

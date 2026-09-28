@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { diagnosticDurationMs, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { startWebHttpServer, type WebHttpServer } from "@chatgpt-tela/http-host";
 import {
   parseCodexToolInventoryRequest,
@@ -60,12 +61,50 @@ export async function startCodexServiceHttpServer(input: {
           return Response.json(input.service.serviceStatus());
         }
         if (request.method === "GET" && url.pathname === "/v1/codex/profiles") {
-          return Response.json({ contractVersion: 1, profiles: await input.service.profiles() });
+          const profiles = await input.service.profiles();
+          emitDiagnosticEvent("chatgpt_tela_codex", "profiles_inventory", { count: profiles.length });
+          return Response.json({ contractVersion: 1, profiles });
         }
         const startSlot = request.method === "POST" ? slot(url.pathname, "start") : undefined;
-        if (startSlot !== undefined) return Response.json(await input.service.startProfile(startSlot));
+        if (startSlot !== undefined) {
+          const startedAt = Date.now();
+          emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_begin", { slot: startSlot });
+          try {
+            const profile = await input.service.startProfile(startSlot);
+            emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_complete", {
+              slot: startSlot,
+              control_state: profile.controlState,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
+            return Response.json(profile);
+          } catch (cause) {
+            emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_failed", {
+              slot: startSlot,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
+            throw cause;
+          }
+        }
         const stopSlot = request.method === "POST" ? slot(url.pathname, "stop") : undefined;
-        if (stopSlot !== undefined) return Response.json(await input.service.stopProfile(stopSlot));
+        if (stopSlot !== undefined) {
+          const startedAt = Date.now();
+          emitDiagnosticEvent("chatgpt_tela_codex", "profile_stop_begin", { slot: stopSlot });
+          try {
+            const profile = await input.service.stopProfile(stopSlot);
+            emitDiagnosticEvent("chatgpt_tela_codex", "profile_stop_complete", {
+              slot: stopSlot,
+              control_state: profile.controlState,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
+            return Response.json(profile);
+          } catch (cause) {
+            emitDiagnosticEvent("chatgpt_tela_codex", "profile_stop_failed", {
+              slot: stopSlot,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
+            throw cause;
+          }
+        }
         if (request.method === "POST" && url.pathname === "/v1/codex/tools/inventory") {
           const parsed = parseCodexToolInventoryRequest(await request.json());
           return Response.json({ tools: await input.service.tools.inventory(parsed.turnCapability, parsed.query) });

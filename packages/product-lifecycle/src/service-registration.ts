@@ -279,7 +279,7 @@ function expectedMarker(resource: ServiceRegistrationResource, installId: string
 
 export function serviceRegistrationResourceForDefinition(input: {
   readonly resourceId: string;
-  readonly owner: "gateway" | "chat" | "codex";
+  readonly owner: "product" | "gateway" | "chat" | "codex";
   readonly registrationId: string;
   readonly markerPath: string;
   readonly definitionPath?: string;

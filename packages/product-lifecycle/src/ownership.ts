@@ -43,7 +43,7 @@ export type OwnedResource =
   | {
       readonly kind: "service-registration";
       readonly id: string;
-      readonly owner: TelaServiceId;
+      readonly owner: "product" | TelaServiceId;
       readonly registrationId: string;
       readonly identity?: ServiceRegistrationIdentity;
     }
@@ -118,7 +118,7 @@ export function parseOwnedResource(value: unknown): OwnedResource {
       path: absolutePath(item.path, "owned directory path"), dataClass: dataClass as DirectoryDataClass });
   }
   if (kind === "service-registration") {
-    if (!(["gateway", "chat", "codex"] as const).includes(owner as never)) throw new Error("service owner is invalid");
+    if (!(["product", "gateway", "chat", "codex"] as const).includes(owner as never)) throw new Error("service owner is invalid");
     let identity: ServiceRegistrationIdentity | undefined;
     if (item.identity !== undefined) {
       if (!item.identity || typeof item.identity !== "object" || Array.isArray(item.identity)) {
@@ -147,7 +147,7 @@ export function parseOwnedResource(value: unknown): OwnedResource {
         ...(definitionPath ? { definitionPath } : {}),
       });
     }
-    return Object.freeze({ kind, id, owner: owner as TelaServiceId,
+    return Object.freeze({ kind, id, owner: owner as "product" | TelaServiceId,
       registrationId: nonEmpty(item.registrationId, "service registration id"),
       ...(identity ? { identity } : {}) });
   }

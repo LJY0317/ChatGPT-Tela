@@ -6,17 +6,23 @@ import {
 } from "@chatgpt-tela/browser-host";
 import { observeChatGptAccountIdentity } from "./account-identity";
 
-test("ChatGPT account identity exports only a SHA-256 fingerprint from the page", async () => {
+test("ChatGPT account identity exports only SHA-256 fingerprints plus coarse account structure from the page", async () => {
   const page: BrowserPageAutomation = {
     async evaluate(functionSource) {
       expect(functionSource).toContain("/api/auth/session");
       expect(functionSource).toContain("crypto.subtle.digest");
       expect(functionSource).toContain("userId");
       expect(functionSource).toContain("accountId");
-      return "a".repeat(64) as never;
+      return {
+        accountFingerprint: "a".repeat(64),
+        containerFingerprint: "b".repeat(64),
+        accountStructure: "workspace",
+      } as never;
     },
-    async pointerClick() {},
-    async clearFocusedEditable() {},
+      async pointerClick() {},
+      async typeFocusedEditable() {},
+      async pressKey() {},
+      async clearFocusedEditable() {},
     async mutationRevision() { return 0; },
     async waitForDomMutation() { return 1; },
   };
@@ -34,14 +40,24 @@ test("ChatGPT account identity exports only a SHA-256 fingerprint from the page"
 
   expect(await observeChatGptAccountIdentity(surface)).toEqual({
     accountFingerprint: "a".repeat(64),
+    containerFingerprint: "b".repeat(64),
+    accountStructure: "workspace",
   });
 });
 
 test("ChatGPT account identity rejects malformed renderer output", async () => {
   const page: BrowserPageAutomation = {
-    async evaluate() { return "raw-account-id" as never; },
-    async pointerClick() {},
-    async clearFocusedEditable() {},
+    async evaluate() {
+      return {
+        accountFingerprint: "raw-account-id",
+        containerFingerprint: "also-raw",
+        accountStructure: "personal",
+      } as never;
+    },
+      async pointerClick() {},
+      async typeFocusedEditable() {},
+      async pressKey() {},
+      async clearFocusedEditable() {},
     async mutationRevision() { return 0; },
     async waitForDomMutation() { return 1; },
   };

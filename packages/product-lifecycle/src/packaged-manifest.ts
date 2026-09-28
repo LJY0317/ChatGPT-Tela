@@ -20,6 +20,10 @@ export interface PackagedProductManifestProfileRuntime {
   readonly entrypoint: string;
 }
 
+export interface PackagedProductManifestMenuBar {
+  readonly executable: string;
+}
+
 export interface PackagedProductManifestIntegrity {
   readonly signature: "ed25519-sha256-tree-v1";
   readonly keyId: string;
@@ -31,6 +35,7 @@ export interface PackagedProductManifest {
   readonly productVersion: string;
   readonly launcher?: PackagedProductManifestLauncher;
   readonly profileRuntime?: PackagedProductManifestProfileRuntime;
+  readonly menuBar?: PackagedProductManifestMenuBar;
   readonly integrity?: PackagedProductManifestIntegrity;
   readonly services: Readonly<Record<TelaServiceId, PackagedProductManifestService>>;
 }
@@ -104,6 +109,15 @@ function profileRuntime(value: unknown): PackagedProductManifestProfileRuntime |
   });
 }
 
+function menuBar(value: unknown): PackagedProductManifestMenuBar | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("packaged menu bar must be an object");
+  const item = value as Record<string, unknown>;
+  const extra = Object.keys(item).filter(key => key !== "executable");
+  if (extra.length > 0) throw new Error(`packaged menu bar contains unknown fields: ${extra.join(", ")}`);
+  return Object.freeze({ executable: relativePayloadPath(item.executable, "packaged menu bar executable") });
+}
+
 function integrity(value: unknown): PackagedProductManifestIntegrity | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("packaged integrity must be an object");
@@ -117,7 +131,7 @@ function integrity(value: unknown): PackagedProductManifestIntegrity | undefined
 export function parsePackagedProductManifest(value: unknown): PackagedProductManifest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("packaged product manifest must be an object");
   const item = value as Record<string, unknown>;
-  const extra = Object.keys(item).filter(key => !["version", "product", "productVersion", "launcher", "profileRuntime", "integrity", "services"].includes(key));
+  const extra = Object.keys(item).filter(key => !["version", "product", "productVersion", "launcher", "profileRuntime", "menuBar", "integrity", "services"].includes(key));
   if (extra.length > 0) throw new Error(`packaged product manifest contains unknown fields: ${extra.join(", ")}`);
   if (item.version !== 1 || item.product !== "chatgpt-tela") throw new Error("packaged product manifest identity is unsupported");
   if (!item.services || typeof item.services !== "object" || Array.isArray(item.services)) {
@@ -130,6 +144,7 @@ export function parsePackagedProductManifest(value: unknown): PackagedProductMan
   }
   const parsedLauncher = launcher(item.launcher);
   const parsedRuntime = profileRuntime(item.profileRuntime);
+  const parsedMenuBar = menuBar(item.menuBar);
   const parsedIntegrity = integrity(item.integrity);
   if ((parsedLauncher || parsedRuntime || parsedIntegrity) && !(parsedLauncher && parsedRuntime && parsedIntegrity)) {
     throw new Error("packaged launcher, profile runtime, and integrity must be declared together");
@@ -140,6 +155,7 @@ export function parsePackagedProductManifest(value: unknown): PackagedProductMan
     productVersion: oneLine(item.productVersion, "packaged product version"),
     ...(parsedLauncher ? { launcher: parsedLauncher } : {}),
     ...(parsedRuntime ? { profileRuntime: parsedRuntime } : {}),
+    ...(parsedMenuBar ? { menuBar: parsedMenuBar } : {}),
     ...(parsedIntegrity ? { integrity: parsedIntegrity } : {}),
     services: Object.freeze({
       gateway: service(services.gateway, "packaged gateway service"),
@@ -181,6 +197,7 @@ export function packagedInstallSpecFromPayload(payloadSourcePath: string): Packa
   return Object.freeze({
     productVersion: manifest.productVersion,
     payloadSourcePath,
+    ...(manifest.menuBar ? { menuBar: { executableRelativePath: manifest.menuBar.executable } } : {}),
     services: Object.freeze(services),
   });
 }

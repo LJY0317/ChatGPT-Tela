@@ -70,10 +70,12 @@ Tela Chat is a new implementation. The local DevSpace patches are a behavioral/r
 workspace/worktree ownership, restart-safe processes, bounded reads, review, agents, artifacts, and
 diagnostics; their implementation is not imported into the new service.
 
-Tela Codex contains the existing proven Native/Web runtime. The user-facing **ChatGPT Tela** Plugin is created
-by connecting the frozen Gateway endpoint through ChatGPT's built-in Plugins `+` flow. ChatGPT owns the saved
-endpoint/authentication metadata; Tela keeps model guidance at the MCP/runtime boundaries rather than requiring
-an additional packaged Plugin layer. The two execution paths remain separate services behind Gateway.
+Tela Codex contains the existing proven Native/Web runtime. The user-facing **ChatGPT Tela** integration is
+normally created by connecting the frozen Gateway endpoint through ChatGPT's built-in Plugins `+` / MCP-app
+flow. The natural-language Plugin Creator path is a second long-term packaging surface over the same Gateway,
+not a second runtime identity. ChatGPT owns the saved endpoint/authentication metadata; Tela keeps correctness
+guidance at the MCP/runtime boundaries so direct-MCP setup remains complete. The two execution paths remain
+separate services behind Gateway.
 
 ## Ownership
 
@@ -90,7 +92,7 @@ an additional packaged Plugin layer. The two execution paths remain separate ser
 | MCP layer | stable public tool ABI and exact invocation binding |
 | Exposure provider | making the MCP endpoint reachable, not deciding tool semantics |
 | Installed launcher | re-prove signed/owned payload state and dispatch the exact manifest-defined Gateway/Chat/Codex child |
-| Product UI/launcher | setup/status/login/diagnostics/update UI and runtime control |
+| Product UI/launcher | setup/status/login/diagnostics/update UI and runtime control; macOS menu-bar UX only, never backend authority |
 
 No projection may silently become authority for a responsibility owned above it. In particular, Tela Gateway
 may route an authenticated request but may not manufacture either Chat workspace authority or Codex
@@ -103,6 +105,12 @@ exact child executable inside the binary root, derives only Tela-owned runtime e
 Gateway exposure, and Codex packaged profile-runtime paths, then supervises that child's process lifetime.
 Gateway, Chat, and Codex therefore remain separate executables/processes/failure domains even though they share
 one signed product payload.
+
+On macOS the dedicated hidden Electron profile runtime is an implementation detail and does not own a Dock
+presence. A small AppKit menu-bar process is the intended local control surface. It refreshes status on demand,
+calls only Tela's private authenticated loopback contracts, and may expose user preferences such as one-shot
+approval automation. Signed installs own its Aqua LaunchAgent separately as a `product` resource; it is never
+counted as a fourth backend service and cannot manufacture workspace, turn, sandbox, or tool authority.
 
 ## Capability names and unstable dependencies
 
@@ -359,19 +367,31 @@ identity. Product connector validation belongs to Gateway and the product profil
 creation/connection remains an external manual setup boundary in pre-alpha: each isolated account must
 connect the exact **ChatGPT Tela** App, while development canaries use **ChatGPT Tela Development**.
 
-Tool-capable ChatGPT turns also require one explicit ChatGPT connector display identity. The provider
-never guesses from catalog order or selects an arbitrary visible plugin: it opens the mention catalog,
-requires exactly one row whose title equals the configured connector name, activates that row, and proves
-exactly one matching connector pill before attaching the physical prompt. Prompt text is appended after
-the pill so connector selection is not erased by composer replacement. Tool-free turns fail closed if a
-connector is already selected, and tool-bridge turns fail before send if no exact connector identity was
-configured or the selected pill changes while the payload is attached.
+Tool-capable ChatGPT turns currently prefer one explicit **ChatGPT Tela** connector display identity. The
+provider never guesses from catalog order or selects an arbitrary visible integration: it first attempts an
+exact connector selection and proves the selected pill before attaching the physical prompt. Stable product
+profiles may fall back to ChatGPT's own connected-app automatic routing only after exact catalog discovery is
+proved unavailable and the dedicated Tela surface is reset to one fresh empty composer. Development/canary
+profiles remain explicit. This fallback is also the migration seam for the long-term design where a stable
+binding id is stored independently from a user-chosen display name; display-name freedom is not yet treated as
+complete until that binding is empirically proven across supported surfaces.
 
 Connector activation separates semantic targeting from physical input: page DOM code proves the exact
 catalog row and returns only its viewport coordinates, the owned browser host emits one real primary-button
 pointer click, and the provider then re-proves the exact connector pill. A synthetic DOM `.click()` is not
 accepted as connector activation because it can reproduce visible markup without proving the product's
 real app/tool activation path.
+
+The current provider understands both historical `@mention` selection and the newer `+` integration picker.
+Both paths are bounded and structural. If a catalog path changes or becomes ambiguous, Tela records only
+privacy-safe counts/stages, clears or resets only its dedicated probe surface, and fails closed or defers to
+automatic connected-app routing according to the configured product mode; it never clicks an arbitrary card.
+
+Approval automation is a separate opt-in policy boundary. Default mode is `off`. The only automated mode is
+`recognized_once`: one structurally recognized tool-approval card with one deny choice and one one-shot allow
+choice may be activated. Persistent `Always allow`, unknown layouts, multiple cards, or ambiguous controls are
+never auto-approved. Approval-card text, tool arguments, prompt content, or raw HTML are not exported from the
+renderer for policy decisions or diagnostics.
 
 An accepted provider turn identity is also distinct from ChatGPT's renderer-local `data-turn-key`.
 ChatGPT may replace a provisional key when the server-hydrated turn arrives. Tela keeps its accepted
@@ -629,8 +649,22 @@ this catches platform-specific standalone compilation and Electron staging regre
 
 ## Diagnostics and performance
 
-Normal operation records small structured state. Deeper evidence is captured at a failure boundary and
-is privacy-safe and bounded by retention policy.
+Normal operation records small structured state. Cross-service diagnostics use one bounded JSON event format
+for service supervision, ingress ownership, Gateway routing, Chat capability calls, Codex profile/tool calls,
+profile startup, connector selection, readiness, and approval-policy decisions. The diagnostic writer rejects
+field names commonly carrying prompts, paths/URLs, commands/output, request arguments/content, credentials,
+cookies, session/turn capabilities, workspace ids, account ids, or user ids. Optional local JSONL sinks are
+private files with bounded rotation. Diagnostics are best-effort: failure to write them can never replace the
+real operation result.
+
+Deeper failure evidence must follow the same privacy boundary. Stable structural counts, fixed enums,
+durations, and bounded pseudonymous fingerprints are preferred over payload logging. Raw prompt/card text,
+filesystem contents, tool arguments/results, credentials, and browser-profile identifiers are not diagnostic
+material.
+
+The CLI `diagnostics` summary is an even narrower support boundary: it reads only file metadata for the known
+Tela service/diagnostic files and exposes presence/size/rotation state without opening the files or returning
+their paths. Raw diagnostic JSONL remains local and is inspected only by an explicit user/support workflow.
 
 Long-running components prefer events, demand-start, single-flight work, and coalescing over polling.
 CPU, wakeups, I/O, and battery cost are correctness-adjacent design constraints for the desktop

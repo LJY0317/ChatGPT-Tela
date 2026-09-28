@@ -47,8 +47,13 @@ The product treats the following as explicit design principles:
 
 - Make installation, repair, upgrade, and **complete removal** first-class product lifecycles. Tela records
   what it owns and never relies on an undocumented cleanup checklist.
-- Present one **ChatGPT Tela** plugin created from ChatGPT's built-in **Plugins -> +** MCP connection flow.
+- Present one **ChatGPT Tela** integration. The mainstream setup is ChatGPT's built-in
+  **Plugins -> + -> MCP app** flow, while the natural-language **Create plugin** path remains a supported
+  long-term packaging surface for richer skills/references without creating a second Tela runtime identity.
   The user supplies one endpoint/tunnel and its authentication once; ChatGPT owns that connection metadata.
+- Keep `ChatGPT Tela` as the current exact connector display identity until stable end-to-end validation is
+  complete, then decouple the stored binding identity from the display name so users may rename the app/plugin
+  without weakening exact connector proof.
 - Keep Tela Gateway, Tela Chat, and Tela Codex as separate processes with separate mutable state/lifecycle.
 - Never require the Chat path to initialize or traverse Codex/Responses/browser code, or the Codex path to
   initialize or traverse Chat workspace/process/agent code.
@@ -66,6 +71,11 @@ The product treats the following as explicit design principles:
 - Use Tailscale Funnel as the intended unified public ingress while keeping ingress details outside backend
   correctness logic.
 - Keep the desktop launcher and embedded Chromium browser host outside core correctness logic.
+- On macOS, keep the hidden Codex/Web bridge out of the Dock and expose product status/control through one
+  lightweight on-demand menu-bar surface rather than another always-visible launcher app.
+- Optional approval automation is explicit and defaults off. When enabled, it may activate only one
+  structurally recognized one-shot approval; ambiguous/unknown cards and persistent **Always allow** choices
+  remain manual/fail-closed.
 - Support macOS, Windows, and Linux by default and verify all three in CI.
 - Stay quiet when idle and collect deeper diagnostics only at a bounded failure boundary.
 
@@ -128,6 +138,7 @@ apps/codex-daemon      standalone Tela Codex process
 apps/profile-runtime   one isolated Electron/Responses runtime per product profile slot
 apps/profile-setup     setup-only Electron profile preparation helper
 apps/canary-preflight  non-mutating live-canary prerequisite checker
+apps/menu-bar-macos    lightweight on-demand macOS status/control surface
 ```
 
 The current source control plane already separates one public MCP listener from profile-specific
@@ -564,6 +575,14 @@ adapter remains a development/canary exposure until it is promoted into the stab
 5. Install/enable **ChatGPT Tela** and use that same Plugin for ordinary ChatGPT workspace requests and for the
    Tela Codex/Web path. Do not create separate Chat and Codex plugins.
 
+The current exact display name is intentionally **ChatGPT Tela** while connector selection is still being
+validated across ChatGPT UI variants. The long-term binding model will store a stable connection identity
+separately from the user-visible name so users can rename the app/plugin without losing exact routing.
+
+The newer natural-language **Create plugin** flow is a second supported long-term distribution surface, not a
+different backend architecture. It may wrap the same Tela MCP connection with richer skills/reference files;
+the direct **Create MCP app** path remains the simplest default setup.
+
 See [Plugin setup](docs/chatgpt-plugin.md) for the exact flow, failure-domain model, and surface-availability
 caveats.
 
@@ -575,6 +594,50 @@ model ignores natural-language guidance.
 Optional isolated ChatGPT accounts need their own Plugin connection because ChatGPT account/session state is
 isolated. They still use the same Gateway endpoint; ordinary single-account users do not traverse the
 multi-profile setup.
+
+### Optional approval automation
+
+ChatGPT Tela can optionally auto-activate a **recognized one-shot approval card** in the dedicated Codex/Web
+surface. It is off by default and never chooses a persistent **Always allow** action. Unknown/ambiguous cards
+remain manual. The renderer exports only structural counts/coordinates to this policy; card text, tool
+arguments, prompts, and HTML are not persisted or logged.
+
+```sh
+bun run cli approval status
+bun run cli approval enable
+bun run cli approval disable
+```
+
+Changing this preference applies to newly started/restarted Tela Codex profiles. It does not widen Native
+Codex sandbox/tool authority and does not bypass ChatGPT cards that Tela cannot structurally recognize.
+
+### macOS menu bar
+
+The macOS source tree includes a lightweight AppKit menu-bar control surface:
+
+```sh
+bun run menu-bar
+```
+
+It refreshes only when opened or explicitly refreshed (no idle polling), shows Gateway/Chat/Codex status,
+starts/stops/restarts Tela-owned profiles through the private local service contract, toggles one-shot approval
+automation, and opens Tela logs/diagnostics. The hidden Electron Codex/Web bridge calls `app.dock.hide()` on
+macOS so it does not create a second Dock-centric launcher UX. Signed macOS payloads include the same menu-bar
+binary and register `com.openai.chatgpt-tela.menu-bar` as a **product-owned** Aqua LaunchAgent with exact
+manifest/marker ownership, so install/uninstall never relies on a name-only login-item guess.
+
+### Privacy-safe diagnostics
+
+Gateway/backend routing, service supervision, ingress ownership, profile startup, connector selection,
+approval policy, Tela Chat capability calls, and Tela Codex profile/tool boundaries emit bounded structural
+events. Diagnostic field names that could carry prompts, paths/URLs, commands/output, credentials, cookies,
+session/turn capabilities, workspace/account/user ids, or request contents are rejected. Optional JSONL sinks
+are private mode-0600 files with bounded rotation; diagnostic failure never changes the product operation.
+
+`bun run cli diagnostics` is deliberately metadata-only: it reports whether the standard service/diagnostic
+files exist, their byte sizes, and whether the single rotated predecessor exists. It never opens those files,
+prints their filesystem paths, or returns event payloads. This makes it safe to use as the first support/health
+check before a user explicitly chooses to inspect a local log.
 
 For the dedicated source profile used by Tela Codex, run the setup-only profile helper with
 `CHATGPT_TELA_PROFILE_SETUP_REVEAL=1` for the target slot when login, Developer Mode, or the Plugin connection
