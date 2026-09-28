@@ -51,6 +51,7 @@ describe("runtime Web context preparation", () => {
     expect(prepared.status).toBe("ready");
     if (prepared.status !== "ready") throw new Error("expected ready context");
     expect(prepared.physicalContext.mode).toBe("checkpoint-delta");
+    expect(prepared.physicalContext.activeRequestRevisionId).toBe("r3");
     expect(prepared.physicalContext.logicalTokens).toBe(2000);
     expect(prepared.physicalContext.transferTokens).toBe(280);
     expect(prepared.physicalContext.segments).toEqual([
@@ -121,6 +122,7 @@ describe("runtime Web context preparation", () => {
     expect(prepared.status).toBe("ready");
     if (prepared.status !== "ready") throw new Error("expected ready context");
     expect(prepared.physicalContext.mode).toBe("full");
+    expect(prepared.physicalContext.activeRequestRevisionId).toBe("steer");
     expect(prepared.physicalContext.segments.map(segment => (
       segment.type === "revision" ? segment.revisionId : segment.checkpointId
     ))).toEqual(["root", "steer"]);

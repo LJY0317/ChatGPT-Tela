@@ -1,5 +1,6 @@
 export type RevisionKind =
   | "system"
+  | "developer"
   | "user"
   | "assistant"
   | "tool-call"

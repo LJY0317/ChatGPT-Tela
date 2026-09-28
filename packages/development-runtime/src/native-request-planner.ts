@@ -135,7 +135,7 @@ function webEpochId(nativeTaskId: string, transportAnchor: string): string {
 }
 
 function messageKind(role: unknown): RevisionKind {
-  if (role === "system" || role === "developer") return "system";
+  if (role === "system" || role === "developer") return role;
   if (role === "assistant") return "assistant";
   if (role === "user") return "user";
   throw new Error(`unsupported Native message role: ${String(role)}`);

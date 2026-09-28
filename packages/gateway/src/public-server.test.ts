@@ -15,7 +15,7 @@ import {
   type TurnBridgeBackend,
 } from "@chatgpt-tela/mcp";
 import type { ChatCapabilityContract } from "@chatgpt-tela/service-protocol";
-import { createPublicMcpServer } from "./public-server";
+import { CHATGPT_TELA_PUBLIC_INSTRUCTIONS, createPublicMcpServer } from "./public-server";
 
 function text(result: Awaited<ReturnType<Client["callTool"]>>): string {
   const content = result.content as unknown;
@@ -26,6 +26,15 @@ function text(result: Awaited<ReturnType<Client["callTool"]>>): string {
 }
 
 describe("ChatGPT Tela frozen ABI", () => {
+  test("keeps one concise routing harness for two independent backends", () => {
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("ordinary conversation or knowledge work");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("independent backends");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("reuse its workspace_id");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("process_status before starting the command again");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("opaque turn_capability");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("actual tool results and platform errors as evidence");
+  });
+
   test("exposes exactly four generic tools and freezes their real MCP schema fingerprint", async () => {
     const catalog: readonly ChatCapabilityContract[] = [{
       capability: "future_chat_capability_2099",

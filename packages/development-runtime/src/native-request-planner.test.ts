@@ -81,6 +81,11 @@ describe("Native request development Web planner", () => {
         { type: "reasoning", encrypted_content: "opaque-native-state" },
         {
           type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "Preserve developer priority." }],
+        },
+        {
+          type: "message",
           role: "user",
           content: [{ type: "input_text", text: "Inspect the repository." }],
         },
@@ -107,13 +112,21 @@ describe("Native request development Web planner", () => {
     expect(plan.nativeTaskId).toBe("thread-1");
     expect(plan.webEpochId).toMatch(/^dev_epoch_/);
     expect(plan.physicalContext.mode).toBe("full");
+    const activeRequest = plan.physicalContext.segments.find(segment =>
+      segment.type === "revision" && segment.revisionId === plan.physicalContext.activeRequestRevisionId);
+    expect(activeRequest).toMatchObject({
+      type: "revision",
+      kind: "user",
+      content: "Inspect the repository.",
+    });
     expect(plan.physicalContext.logicalTokens).toBe(plan.physicalContext.transferTokens);
     expect(plan.physicalContext.segments.map(segment => (
       segment.type === "revision" ? segment.kind : "checkpoint"
-    ))).toEqual(["system", "user", "tool-call", "tool-result", "assistant"]);
+    ))).toEqual(["system", "developer", "user", "tool-call", "tool-result", "assistant"]);
 
     const serialized = JSON.stringify(plan.physicalContext);
     expect(serialized).toContain("Follow the current Codex task.");
+    expect(serialized).toContain("Preserve developer priority.");
     expect(serialized).toContain("Inspect the repository.");
     expect(serialized).toContain("old-call");
     expect(serialized).not.toContain("must-not-enter-web-context");

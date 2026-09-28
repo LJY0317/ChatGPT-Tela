@@ -81,6 +81,9 @@ describe("OpenAI Responses Tela Chat agent", () => {
     const firstResponse = requests[1]!.body;
     expect(firstResponse.conversation).toBe("conv_fixture_1");
     expect(JSON.stringify(firstResponse)).not.toContain("/private/workspace");
+    expect(firstResponse.instructions).toContain("read_many only for already-known independent paths");
+    expect(firstResponse.instructions).toContain("Treat actual tool results as evidence");
+    expect(firstResponse.instructions).toContain("This run is read-only");
     expect((firstResponse.tools as Array<{ name: string }>).map(tool => tool.name)).toEqual([
       "read", "read_many", "show_changes",
     ]);
@@ -131,6 +134,8 @@ describe("OpenAI Responses Tela Chat agent", () => {
     expect(sessions).toEqual([]);
     expect(events).toEqual(["apply_patch:chatws_2"]);
     expect((requests[0]!.tools as Array<{ name: string }>).map(tool => tool.name)).toContain("apply_patch");
+    expect(requests[0]!.instructions).toContain("Read enough relevant context before editing");
+    expect(requests[0]!.instructions).toContain("inspect show_changes");
     expect(requests.every(request => request.conversation === "conv_existing_1")).toBe(true);
   });
 

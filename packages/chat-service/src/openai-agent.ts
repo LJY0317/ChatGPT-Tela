@@ -185,6 +185,25 @@ function toolResult(value: unknown): string {
   return serialized;
 }
 
+function agentInstructions(writeMode: ChatAgentRunInput["writeMode"]): string {
+  const common = [
+    "Work only through the provided Tela workspace tools. Paths are relative to one authorized workspace; do not invent access outside it.",
+    "Use read_many only for already-known independent paths. When one result determines what to inspect next, read sequentially.",
+    "Treat actual tool results as evidence. After a deterministic failure, update the working hypothesis or observable state before repeating the same call.",
+  ];
+  if (writeMode === "workspace_write") {
+    return [
+      ...common,
+      "You may inspect and patch files, but no shell or arbitrary filesystem access is available.",
+      "Read enough relevant context before editing. After the final related patch, inspect show_changes when it helps verify the resulting Git-backed state before the final answer.",
+    ].join(" ");
+  }
+  return [
+    ...common,
+    "This run is read-only. Do not request writes or shell execution, and do not claim a local mutation occurred.",
+  ].join(" ");
+}
+
 async function invokeTool(
   tools_: ChatAgentWorkspaceTools,
   input: ChatAgentRunInput,
@@ -325,9 +344,7 @@ export class OpenAiChatAgentDriver implements ChatAgentDriver {
       const response = parseResponse(await this.#post("responses", {
         model: this.#model,
         conversation,
-        instructions: input.writeMode === "workspace_write"
-          ? "Work only through the provided Tela workspace tools. Paths are relative to one authorized workspace. You may inspect and patch files, but no shell or arbitrary filesystem access is available."
-          : "Work only through the provided read-only Tela workspace tools. Paths are relative to one authorized workspace. Do not request writes or shell execution.",
+        instructions: agentInstructions(input.writeMode),
         input: nextInput,
         tools: availableTools,
         tool_choice: "auto",

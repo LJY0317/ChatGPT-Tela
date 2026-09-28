@@ -253,6 +253,10 @@
         "zod": "4.4.3",
       },
     },
+    "packages/plugin-package": {
+      "name": "@chatgpt-tela/plugin-package",
+      "version": "0.0.0",
+    },
     "packages/product-config": {
       "name": "@chatgpt-tela/product-config",
       "version": "0.0.0",
@@ -362,6 +366,8 @@
     "@chatgpt-tela/package-smoke": ["@chatgpt-tela/package-smoke@workspace:apps/package-smoke"],
 
     "@chatgpt-tela/packaged-launcher": ["@chatgpt-tela/packaged-launcher@workspace:apps/packaged-launcher"],
+
+    "@chatgpt-tela/plugin-package": ["@chatgpt-tela/plugin-package@workspace:packages/plugin-package"],
 
     "@chatgpt-tela/product-config": ["@chatgpt-tela/product-config@workspace:packages/product-config"],
 

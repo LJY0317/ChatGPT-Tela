@@ -17,6 +17,14 @@ export interface PublicChatBackend {
   call(capability: string, arguments_: Readonly<Record<string, unknown>>): Promise<unknown>;
 }
 
+export const CHATGPT_TELA_PUBLIC_INSTRUCTIONS = [
+  "Use ChatGPT Tela when the request needs the user's connected local workspace or the exact active Native Codex turn; do not invoke it for ordinary conversation or knowledge work that needs neither.",
+  "Tela Chat and Tela Codex are independent backends behind one app. A failure in one does not prove the other is unavailable, and authority must never be silently transferred between them.",
+  "For ordinary local project work, use the Tela Chat capability inventory first when the exact capability or schema is not already known. Open a workspace once and reuse its workspace_id. Batch only independent already-known reads. For commands that may mutate state or outlive one response, provide operation_id; after an uncertain response, inspect process_status before starting the command again.",
+  "For work inside the exact active Native Codex turn, use the Codex inventory with only the opaque turn_capability supplied by the active task transport. Discover the current tool inventory instead of assuming names or schemas from another turn.",
+  "Treat actual tool results and platform errors as evidence. After a deterministic failure, change the inputs, hypothesis, or observable state before retrying the same action.",
+].join(" ");
+
 function jsonText(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
@@ -30,7 +38,7 @@ export function createPublicMcpServer(input: {
     version: CHATGPT_TELA_MCP_SERVER_VERSION,
   }, {
     capabilities: { tools: { listChanged: false } },
-    instructions: "ChatGPT Tela. Chat capabilities are runtime-discovered from the independent Tela Chat backend. Native Codex tools are runtime-discovered for one opaque active turn capability. Either backend may be unavailable independently.",
+    instructions: CHATGPT_TELA_PUBLIC_INSTRUCTIONS,
   });
 
   const registerTool = server.registerTool.bind(server) as unknown as (

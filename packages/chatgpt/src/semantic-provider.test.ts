@@ -32,6 +32,7 @@ function request(): WebTurnRequest {
     webEpochId: "epoch-1",
     physicalContext: {
       headRevisionId: "rev-1",
+      activeRequestRevisionId: "rev-1",
       mode: "full",
       logicalTokens: 4,
       transferTokens: 4,
@@ -61,6 +62,7 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   readonly queued: ChatGptSurfaceSnapshot[] = [];
   activated: string[] = [];
   connectorSelections: string[] = [];
+  appendedTexts: string[] = [];
   corruptReadback = false;
   sendAppearsWhenComposerNonEmpty = false;
   failConnectorSelection = false;
@@ -109,6 +111,7 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   }
 
   async appendComposerText(composerKey: string, text: string): Promise<void> {
+    this.appendedTexts.push(text);
     const normalized = text.trimStart();
     const composers = this.current.composers.map(composer => composer.key === composerKey
       ? {
@@ -359,6 +362,13 @@ describe("ChatGPT semantic provider", () => {
       while (!driver.current.revision.includes(":appended")) await Promise.resolve();
       expect(driver.current.composers[0]?.connectorFingerprints)
         .toEqual([hash("ChatGPT Tela Development")]);
+      expect(driver.appendedTexts).toHaveLength(1);
+      expect(driver.appendedTexts[0]).toContain("<chatgpt_tela_transport_contract>");
+      expect(driver.appendedTexts[0]).toContain("system context outranks developer context");
+      expect(driver.appendedTexts[0]).toContain('"activeRequestRevisionId":"rev-1"');
+      expect(driver.appendedTexts[0]).toContain("opaque per-turn routing metadata");
+      expect(driver.appendedTexts[0]).toContain("turn-capability-0123456789abcdef");
+      expect(driver.appendedTexts[0]).toContain("<chatgpt_tela_transport_resume>");
       driver.queued.push(acceptedSnapshot(driver));
 
       const observed = await submitting;

@@ -2,8 +2,8 @@
 
 **One ChatGPT integration, two independent local runtimes: Chat and Codex.**
 
-ChatGPT Tela is being refactored into one installable product with one ChatGPT MCP App and one public
-Tailscale ingress, while keeping its two execution paths independent:
+ChatGPT Tela is being refactored into one installable product with one **ChatGPT Tela Plugin**, one
+user-registered ChatGPT App, and one public Gateway ingress, while keeping its two execution paths independent:
 
 - **Tela Chat** — a new workspace/process/agent service built from first principles, using the local DevSpace
   patches as a behavioral reference rather than copied implementation;
@@ -47,7 +47,9 @@ The product treats the following as explicit design principles:
 
 - Make installation, repair, upgrade, and **complete removal** first-class product lifecycles. Tela records
   what it owns and never relies on an undocumented cleanup checklist.
-- Present one ChatGPT MCP App/plugin and one Tailscale Funnel ingress to the user.
+- Present one **ChatGPT Tela** plugin backed by one registered ChatGPT Tela MCP App and one public ingress.
+  The plugin references the registered App through `.app.json`; it does not bundle the user's machine URL in
+  `mcp.json`.
 - Keep Tela Gateway, Tela Chat, and Tela Codex as separate processes with separate mutable state/lifecycle.
 - Never require the Chat path to initialize or traverse Codex/Responses/browser code, or the Codex path to
   initialize or traverse Chat workspace/process/agent code.
@@ -76,9 +78,11 @@ The short version:
 ```text
                            ChatGPT
                               |
-                    one ChatGPT Tela MCP App
+                    ChatGPT Tela Plugin
                               |
-                     one Tailscale Funnel
+                    one ChatGPT Tela App
+                              |
+                   one user-owned ingress
                               |
                               v
                         Tela Gateway
@@ -541,20 +545,55 @@ compatibility copy for current source tooling. Reads prefer the canonical file; 
 an error rather than a reason to fall back. The future packaged runtime therefore has no configuration
 dependency on a ChatGPT browser profile.
 
-### Manual ChatGPT Tela connector setup (pre-alpha)
+### Manual ChatGPT Tela App + plugin setup (pre-alpha)
 
-The product path requires one **ChatGPT Tela** MCP App connection for the normal ChatGPT account, plus one
-additional connection for each optional isolated account. This is a manual development step,
-not the intended final installer UX:
+The intended product surface is **one ChatGPT Tela plugin**. That plugin references **one ChatGPT Tela App**
+whose single MCP endpoint exposes both Tela Chat and Tela Codex controls. The App owns only the ChatGPT-side
+connection metadata; Gateway still routes Chat and Codex to independent local services, so failure of one
+backend does not make the other unavailable.
 
-1. Run the setup-only profile helper with `CHATGPT_TELA_PROFILE_SETUP_REVEAL=1` for the target slot.
-2. In ChatGPT, open **Plugins**, choose **Add -> Create MCP App**, and use the exact name
-   `ChatGPT Tela`.
-3. Set the server URL to the public HTTPS Streamable HTTP MCP endpoint owned by the selected exposure
-   provider. Authentication must match that exposure; do not choose unauthenticated public exposure
-   unless it is an explicitly accepted development-only configuration.
-4. Create the MCP App and choose **Connect** for that account. Multi-account users repeat the connection only
-   for the extra isolated profiles they chose to add.
+For the current stable pre-alpha source path, the user supplies their own reachable HTTPS MCP connection once.
+Tela can manage one exact Tailscale Funnel route or verify an HTTPS route owned elsewhere. The connection is
+intentionally user-specific and is never committed to this repository. The existing OpenAI Secure MCP Tunnel
+adapter remains a development/canary exposure until it is promoted into the stable product configuration.
+
+1. Start/configure Tela so its stable Gateway MCP endpoint is reachable.
+2. Enable ChatGPT **Developer Mode**.
+3. In ChatGPT Plugins, create one MCP App named exactly **ChatGPT Tela** and point it at the stable Tela
+   endpoint. Configure authentication/permissions to match that exposure.
+4. After ChatGPT creates the App, copy its technical id from the browser URL. Current Developer Mode App ids
+   begin with `plugin_asdk_app_`.
+5. Build the user-specific plugin package that references that already-registered App:
+
+```sh
+bun run plugin:package \
+  --app-id plugin_asdk_app_REPLACE_WITH_YOUR_APP_ID \
+  --output build/chatgpt-tela-plugin.tar.gz
+```
+
+6. Create/install one private **ChatGPT Tela** plugin from that archive using Plugin Creator. The generated
+   package contains `.app.json` plus the Tela routing skill and contains **no** `mcp.json` or `.mcp.json`,
+   so the user's MCP URL remains owned by the registered App rather than being bundled into a Desktop-only
+   plugin.
+7. Use the same installed plugin for ordinary ChatGPT workspace requests and for the Tela Codex/Web path.
+   Do not create separate Chat and Codex plugins.
+
+See [Plugin and App setup](docs/chatgpt-plugin.md) for the package layout, failure-domain model, and
+surface-availability caveats.
+
+The bundled routing skill is deliberately guidance rather than authority. In ordinary ChatGPT it directs
+local project requests to Tela Chat and avoids invoking Tela for unrelated conversation. In the Codex/Web
+path it requires the exact active Native turn capability and runtime-discovered Native tool inventory.
+Runtime ownership, approved roots, exact-turn authority, sandboxing, and destructive-action safety continue
+to be enforced in code even if a model ignores natural-language guidance.
+
+Optional isolated ChatGPT accounts need their own App connection because ChatGPT account/session state is
+isolated. They still use the same Tela plugin design and the same Gateway endpoint; ordinary single-account
+users do not traverse the multi-profile setup.
+
+For the dedicated source profile used by Tela Codex, run the setup-only profile helper with
+`CHATGPT_TELA_PROFILE_SETUP_REVEAL=1` for the target slot when login, Developer Mode, or the App connection
+still needs manual preparation.
 
 For the live canary's dedicated ChatGPT browser profile, developers can prepare login/Developer Mode
 without starting Responses, MCP exposure, or changing a Codex route:

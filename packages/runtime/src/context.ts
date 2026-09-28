@@ -43,6 +43,8 @@ export async function prepareWebContext(input: {
 
   const active = input.lineage.activePath(input.headId);
   const byId = new Map(active.map(revision => [revision.id, revision]));
+  const activeRequestRevisionId = [...active].reverse()
+    .find(revision => revision.kind === "user" || revision.kind === "steering")?.id;
   const segments: WebPhysicalContextSegment[] = [];
 
   if (plan.mode === "checkpoint-delta") {
@@ -74,6 +76,7 @@ export async function prepareWebContext(input: {
     plan,
     physicalContext: Object.freeze({
       headRevisionId: input.headId,
+      ...(activeRequestRevisionId ? { activeRequestRevisionId } : {}),
       mode: plan.mode,
       logicalTokens: plan.logicalTokens,
       transferTokens: plan.transferTokens,

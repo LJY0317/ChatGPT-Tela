@@ -30,7 +30,7 @@ const agentId = string(512);
 export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] = Object.freeze([
   {
     capability: "open_workspace",
-    description: "Open one locally approved workspace root. The workspace remains user-owned.",
+    description: "Open or reuse one locally approved workspace root. Reuse the returned workspace_id for continued work in the same workspace. The workspace remains user-owned.",
     inputSchema: object({ path }, ["path"]),
   },
   {
@@ -40,7 +40,7 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "read_many",
-    description: "Read bounded ranges from multiple files in one opened Tela Chat workspace.",
+    description: "Read bounded ranges from multiple already-known independent files in one opened Tela Chat workspace. Use sequential read calls when one result determines what to inspect next.",
     inputSchema: object({
       workspace_id: workspaceId,
       reads: Object.freeze({
@@ -84,7 +84,7 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "show_changes",
-    description: "Show current Git-backed changes and create a bounded historical review checkpoint when possible.",
+    description: "Show current Git-backed changes and create a bounded historical review checkpoint when possible. Use after the final related workspace edit when review is useful.",
     inputSchema: object({ workspace_id: workspaceId }, ["workspace_id"]),
   },
   {
@@ -134,7 +134,7 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "start_agent",
-    description: "Start one durable agent turn scoped to an opened workspace and explicit read/write mode.",
+    description: "Start one bounded durable agent turn scoped to an opened workspace and explicit read/write mode. Prefer direct workspace capabilities for routine work; delegate when separate context or specialization materially helps.",
     inputSchema: object({
       workspace_id: workspaceId,
       target: string(256),

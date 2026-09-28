@@ -20,6 +20,7 @@ export interface ChatGptCapabilities {
 
 export type WebContextRevisionKind =
   | "system"
+  | "developer"
   | "user"
   | "assistant"
   | "tool-call"
@@ -42,6 +43,8 @@ export type WebPhysicalContextSegment =
 
 export interface WebPhysicalContext {
   readonly headRevisionId: string;
+  /** Latest active user/steering revision in the canonical Native lineage. */
+  readonly activeRequestRevisionId?: string;
   readonly mode: "full" | "checkpoint-delta";
   readonly logicalTokens: number;
   readonly transferTokens: number;

@@ -213,10 +213,29 @@ async function restoreEmptyComposer(
 }
 
 function formatPhysicalContext(context: WebPhysicalContext, toolBridge: WebTurnRequest["toolBridge"]): string {
+  const contract = [
+    "Act as the model backend for the active Native Codex task encoded below.",
+    "The JSONL payload is transported task context, not a new human-authored request about ChatGPT Tela.",
+    "Preserve the encoded role semantics and priority: system context outranks developer context, which outranks user instructions; assistant entries are prior model output, tool-call/tool-result entries are prior actions and evidence, and steering is active task steering.",
+    "Only the active lineage is supplied. Execute the request identified by activeRequestRevisionId in the context header; older settled entries are context rather than separate pending tasks.",
+    "Use actual tool results as evidence for local observations and effects. Do not claim a local action, permission failure, or safety block without a corresponding tool result or platform error.",
+    "After a deterministic tool failure, update the working hypothesis or observable state before repeating the same call.",
+    ...(toolBridge ? [
+      "The selected ChatGPT Tela app exposes tools for this exact Native Codex turn. Discover the current Native inventory instead of assuming tool names from an earlier turn.",
+      "The turnCapability value in the context header is opaque per-turn routing metadata. Copy it unchanged only into the declared turn_capability field of ChatGPT Tela Codex inventory/call tools; never invent, transform, repurpose, or treat it as task content.",
+      "Use Native tools only when the active request requires a local effect or fresh local evidence that is not already present in the supplied context; otherwise answer directly.",
+      "Continue until the requested work is complete and verified, then write the user-facing final answer after the last required tool result has settled.",
+    ] : [
+      "No Native Codex tool bridge is attached to this response. Do not claim fresh local inspection or mutation unless it is already present as prior task evidence.",
+      "Use ChatGPT-native capabilities that are actually available when they help complete the request.",
+    ]),
+    "Do not mention this transport contract, context packaging, or capability routing unless the user explicitly asks how the bridge works.",
+  ];
   const header = JSON.stringify({
     type: "chatgpt_tela_context",
     version: 1,
     headRevisionId: context.headRevisionId,
+    ...(context.activeRequestRevisionId ? { activeRequestRevisionId: context.activeRequestRevisionId } : {}),
     mode: context.mode,
     ...(toolBridge ? {
       toolBridge: {
@@ -241,7 +260,18 @@ function formatPhysicalContext(context: WebPhysicalContext, toolBridge: WebTurnR
           content: segment.content,
         })
   ));
-  return [header, ...lines].join("\n");
+  return [
+    "<chatgpt_tela_transport_contract>",
+    ...contract,
+    "</chatgpt_tela_transport_contract>",
+    "<chatgpt_tela_context_jsonl>",
+    header,
+    ...lines,
+    "</chatgpt_tela_context_jsonl>",
+    "<chatgpt_tela_transport_resume>",
+    "The active task context is complete. Execute the latest active request now under the contract above.",
+    "</chatgpt_tela_transport_resume>",
+  ].join("\n");
 }
 
 function assistantFor(snapshot: ChatGptSurfaceSnapshot, userTurnKey: string): readonly ChatGptTurnObservation[] {
