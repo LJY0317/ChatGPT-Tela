@@ -159,8 +159,7 @@ export function loadProductProfileRuntimeConfig(
   if (approvalAutomationMode !== "off" && approvalAutomationMode !== "recognized_once") {
     throw new Error("CHATGPT_TELA_APPROVAL_AUTOMATION_MODE must be off or recognized_once");
   }
-  const nativeKind = optional(env, "CHATGPT_TELA_PRODUCT_NATIVE_TARGET_KIND")
-    ?? (optional(env, "CHATGPT_TELA_PRODUCT_LAUNCHER_CLI") ? "multi-profile" : "default-desktop");
+  const nativeKind = optional(env, "CHATGPT_TELA_PRODUCT_NATIVE_TARGET_KIND") ?? "default-desktop";
   let nativeTarget: ProductProfileNativeTargetConfig;
   if (nativeKind === "default-desktop") {
     if (browserProfile.slot !== 1) throw new Error("built-in default Desktop target is available only for canonical profile slot 1");

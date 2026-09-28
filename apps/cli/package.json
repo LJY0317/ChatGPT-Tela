@@ -5,7 +5,6 @@
   "type": "module",
   "dependencies": {
     "@chatgpt-tela/chat-service": "workspace:*",
-    "@chatgpt-tela/control-plane": "workspace:*",
     "@chatgpt-tela/credential-store": "workspace:*",
     "@chatgpt-tela/development-runtime": "workspace:*",
     "@chatgpt-tela/default-desktop-target": "workspace:*",

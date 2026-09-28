@@ -368,12 +368,12 @@ describe("development canary configuration", () => {
 
   test("Multi-Profile mode is explicit, needs only the public control CLI/target, and forbids config mutation", () => {
     const root = scratch();
-    const controlCli = join(root, "codex-profile");
+    const controlCli = join(root, "plura-desktop");
     writeFileSync(controlCli, "fixture\n");
     const base = {
       CHATGPT_TELA_CANARY_NATIVE_MODE: "multi-profile",
-      CHATGPT_TELA_MULTI_PROFILE_CLI: controlCli,
-      CHATGPT_TELA_CANARY_MULTI_PROFILE_TARGET: "local.codex-multi-profile-launcher.profile2",
+      CHATGPT_TELA_PLURA_DESKTOP_CLI: controlCli,
+      CHATGPT_TELA_CANARY_PLURA_DESKTOP_TARGET: "local.plura-desktop.profile2",
       CHATGPT_TELA_CANARY_PROFILE_SLOT: "2",
       CHATGPT_TELA_CANARY_CONNECTOR_NAME: "ChatGPT Tela Development",
       CHATGPT_TELA_PROFILE_ROOT: root,
@@ -389,7 +389,7 @@ describe("development canary configuration", () => {
       expect(config.nativeProfile).toEqual({
         kind: "multi-profile",
         controlCli,
-        targetId: "local.codex-multi-profile-launcher.profile2",
+        targetId: "local.plura-desktop.profile2",
       });
       expect(() => loadDevelopmentCanaryConfig({
         ...base,
@@ -402,13 +402,13 @@ describe("development canary configuration", () => {
 
   test("Multi-Profile target slot cannot reuse another ChatGPT Tela account profile", () => {
     const root = scratch();
-    const controlCli = join(root, "codex-profile");
+    const controlCli = join(root, "plura-desktop");
     writeFileSync(controlCli, "fixture\n");
     try {
       expect(() => loadDevelopmentCanaryPreflightConfig({
         CHATGPT_TELA_CANARY_NATIVE_MODE: "multi-profile",
-        CHATGPT_TELA_MULTI_PROFILE_CLI: controlCli,
-        CHATGPT_TELA_CANARY_MULTI_PROFILE_TARGET: "local.codex-multi-profile-launcher.profile2",
+        CHATGPT_TELA_PLURA_DESKTOP_CLI: controlCli,
+        CHATGPT_TELA_CANARY_PLURA_DESKTOP_TARGET: "local.plura-desktop.profile2",
         CHATGPT_TELA_CANARY_PROFILE_SLOT: "1",
         CHATGPT_TELA_CANARY_CONNECTOR_NAME: "ChatGPT Tela Development",
         CHATGPT_TELA_PROFILE_ROOT: root,
@@ -661,18 +661,18 @@ describe("development canary runtime", () => {
 
   test("managed profile uses only the public launcher contract and keeps Tela alive until the target quits", async () => {
     const root = scratch();
-    const controlCli = join(root, "codex-profile");
+    const controlCli = join(root, "plura-desktop");
     writeFileSync(controlCli, "fixture\n");
     const responsesPort = freePort();
     const localMcpPort = freePort();
     const mcpToken = "b".repeat(48);
     const responsesToken = "r".repeat(48);
-    const targetId = "local.codex-multi-profile-launcher.profile2";
+    const targetId = "local.plura-desktop.profile2";
     const routeFingerprint = "a".repeat(64);
     const config = loadDevelopmentCanaryConfig({
       CHATGPT_TELA_CANARY_NATIVE_MODE: "multi-profile",
-      CHATGPT_TELA_MULTI_PROFILE_CLI: controlCli,
-      CHATGPT_TELA_CANARY_MULTI_PROFILE_TARGET: targetId,
+      CHATGPT_TELA_PLURA_DESKTOP_CLI: controlCli,
+      CHATGPT_TELA_CANARY_PLURA_DESKTOP_TARGET: targetId,
       CHATGPT_TELA_CANARY_PROFILE_SLOT: "2",
       CHATGPT_TELA_CANARY_CONNECTOR_NAME: "ChatGPT Tela Development",
       CHATGPT_TELA_PROFILE_ROOT: root,

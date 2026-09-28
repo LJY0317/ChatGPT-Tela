@@ -198,6 +198,7 @@ export interface MultiProfileTargetSession {
   readonly state: string;
   readonly endpoint?: string;
   readonly responsesRouteFingerprint?: string;
+  readonly desktopProcessId?: number;
 }
 
 export interface MultiProfileManagedRuntime {
@@ -253,11 +254,17 @@ function parseSession(value: Record<string, unknown>, expectedTargetId: string):
   const responsesRouteFingerprint = value.responsesRouteFingerprint === undefined
     ? undefined
     : fingerprint(value.responsesRouteFingerprint);
+  const desktopProcessID = value.desktopProcessID;
+  if (desktopProcessID !== undefined
+    && (!Number.isSafeInteger(desktopProcessID) || (desktopProcessID as number) < 1)) {
+    throw new Error("Multi-Profile target session desktop process id is invalid");
+  }
   return Object.freeze({
     targetId: returnedTargetId,
     state,
     ...(endpoint ? { endpoint } : {}),
     ...(responsesRouteFingerprint ? { responsesRouteFingerprint } : {}),
+    ...(desktopProcessID !== undefined ? { desktopProcessId: desktopProcessID as number } : {}),
   });
 }
 
@@ -267,8 +274,8 @@ function parseSession(value: Record<string, unknown>, expectedTargetId: string):
  * ChatGPT Tela never reconstructs managed CODEX_HOME/user-data paths. Plura Desktop remains lifecycle
  * owner; ChatGPT Tela supplies only a loopback Responses route at launch, consumes the returned
  * public session endpoint, and binds Native authority through Codex app-server's public read API.
- * Development stock canaries do not instantiate this adapter. The product control plane may use the
- * same public contract for the canonical `default` target through launchRoutedTarget().
+ * Development stock canaries do not instantiate this adapter. Product callers may use the same public
+ * contract for the canonical `default` target through launchRoutedTarget().
  */
 export class MultiProfileControlClient {
   readonly #command: readonly [string, ...string[]];
@@ -419,14 +426,4 @@ export class MultiProfileControlClient {
     }
     return result;
   }
-}
-
-/**
- * Explicit opt-in only. No launcher path is guessed, keeping the stock single-profile path primary.
- */
-export function multiProfileCommandFromEnvironment(
-  env: Readonly<Record<string, string | undefined>> = process.env,
-): readonly [string] | undefined {
-  const value = env.CHATGPT_TELA_MULTI_PROFILE_CLI?.trim();
-  return value ? Object.freeze([value]) : undefined;
 }

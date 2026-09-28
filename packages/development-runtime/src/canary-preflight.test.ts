@@ -184,13 +184,13 @@ describe("development canary preflight", () => {
 
   test("managed preflight reads the public contract but never launches or reroutes the target", async () => {
     const root = scratch();
-    const cli = join(root, "codex-profile");
+    const cli = join(root, "plura-desktop");
     writeFileSync(cli, "fixture\n");
     const runner = new FixtureMultiProfileRunner();
     runner.results.push(jsonResult({
       contractVersion: 1,
       targets: [{
-        id: "local.codex-multi-profile-launcher.profile2",
+        id: "local.plura-desktop.profile2",
         displayName: "ChatGPT Profile 2",
         managed: true,
         role: "managed",
@@ -202,15 +202,15 @@ describe("development canary preflight", () => {
     }));
     runner.results.push(jsonResult({
       contractVersion: 1,
-      targetID: "local.codex-multi-profile-launcher.profile2",
+      targetID: "local.plura-desktop.profile2",
       state: "ready",
       endpoint: "ws://127.0.0.1:55123",
     }));
     try {
       const config = loadDevelopmentCanaryPreflightConfig({
         CHATGPT_TELA_CANARY_NATIVE_MODE: "multi-profile",
-        CHATGPT_TELA_MULTI_PROFILE_CLI: cli,
-        CHATGPT_TELA_CANARY_MULTI_PROFILE_TARGET: "local.codex-multi-profile-launcher.profile2",
+        CHATGPT_TELA_PLURA_DESKTOP_CLI: cli,
+        CHATGPT_TELA_CANARY_PLURA_DESKTOP_TARGET: "local.plura-desktop.profile2",
         CHATGPT_TELA_CANARY_PROFILE_SLOT: "2",
         CHATGPT_TELA_PROFILE_ROOT: root,
         CHATGPT_TELA_CANARY_RESPONSES_PORT: String(freePort()),
@@ -232,7 +232,7 @@ describe("development canary preflight", () => {
       expect(result.checks.find(check => check.id === "managed-target-restart-boundary")?.status).toBe("blocked");
       expect(runner.calls).toEqual([
         ["targets", "--json"],
-        ["target-session", "--target", "local.codex-multi-profile-launcher.profile2", "--json"],
+        ["target-session", "--target", "local.plura-desktop.profile2", "--json"],
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });

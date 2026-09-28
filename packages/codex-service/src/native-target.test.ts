@@ -18,7 +18,7 @@ const targets: readonly MultiProfileTarget[] = [
     responsesRouteSupported: true,
   },
   {
-    id: "local.profile2",
+    id: "local.plura-desktop.profile2",
     displayName: "ChatGPT Profile 2",
     role: "managed",
     managed: true,
@@ -31,13 +31,17 @@ const targets: readonly MultiProfileTarget[] = [
 ];
 
 function session(targetId: string): MultiProfileTargetSession {
-  return { targetId, state: "available" };
+  return {
+    targetId,
+    state: "available",
+    ...(targetId === "default" ? {} : { desktopProcessId: 4321 }),
+  };
 }
 
 describe("Multi-Profile native-target adapter", () => {
   test("keeps slot mapping inside the optional adapter instead of the Codex core", async () => {
     const adapter = new MultiProfileNativeTargetAdapter({
-      launcherCli: "/fixture/codex-profile",
+      launcherCli: "/fixture/plura-desktop",
       client: {
         targets: async () => targets,
         targetSession: async targetId => session(targetId),
@@ -45,11 +49,12 @@ describe("Multi-Profile native-target adapter", () => {
       },
     });
     expect((await adapter.resolve(1)).target).toMatchObject({ slot: 1, adapterKind: "multi-profile", id: "default", managed: false });
-    expect((await adapter.resolve(2)).target).toMatchObject({ slot: 2, adapterKind: "multi-profile", id: "local.profile2", managed: true });
+    expect((await adapter.resolve(2)).target).toMatchObject({ slot: 2, adapterKind: "multi-profile", id: "local.plura-desktop.profile2", managed: true });
+    expect((await adapter.resolve(2)).session.desktopProcessId).toBe(4321);
     expect(adapter.profileRuntimeEnvironment((await adapter.resolve(2)).target)).toEqual({
       CHATGPT_TELA_PRODUCT_NATIVE_TARGET_KIND: "multi-profile",
-      CHATGPT_TELA_PRODUCT_TARGET_ID: "local.profile2",
-      CHATGPT_TELA_PRODUCT_LAUNCHER_CLI: "/fixture/codex-profile",
+      CHATGPT_TELA_PRODUCT_TARGET_ID: "local.plura-desktop.profile2",
+      CHATGPT_TELA_PRODUCT_LAUNCHER_CLI: "/fixture/plura-desktop",
     });
   });
 });
@@ -107,7 +112,7 @@ describe("composite product native-target adapter", () => {
       normalQuit: async () => {},
     });
     const multiProfile = new MultiProfileNativeTargetAdapter({
-      launcherCli: "/fixture/codex-profile",
+      launcherCli: "/fixture/plura-desktop",
       client: {
         targets: async () => targets,
         targetSession: async targetId => session(targetId),
@@ -118,7 +123,7 @@ describe("composite product native-target adapter", () => {
     expect((await adapter.resolve(1)).target.adapterKind).toBe("default-desktop");
     expect((await adapter.resolve(2)).target).toMatchObject({
       adapterKind: "multi-profile",
-      id: "local.profile2",
+      id: "local.plura-desktop.profile2",
       slot: 2,
     });
     expect((await adapter.profiles()).map(item => [item.target.slot, item.target.adapterKind])).toEqual([

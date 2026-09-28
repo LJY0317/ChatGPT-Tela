@@ -41,7 +41,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@chatgpt-tela/chat-service": "workspace:*",
-        "@chatgpt-tela/control-plane": "workspace:*",
         "@chatgpt-tela/credential-store": "workspace:*",
         "@chatgpt-tela/default-desktop-target": "workspace:*",
         "@chatgpt-tela/development-runtime": "workspace:*",
@@ -61,13 +60,6 @@
         "@chatgpt-tela/product-config": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
         "@chatgpt-tela/service-protocol": "workspace:*",
-      },
-    },
-    "apps/control-daemon": {
-      "name": "@chatgpt-tela/control-daemon",
-      "version": "0.0.0",
-      "dependencies": {
-        "@chatgpt-tela/control-plane": "workspace:*",
       },
     },
     "apps/gateway-daemon": {
@@ -156,19 +148,6 @@
         "@chatgpt-tela/runtime": "workspace:*",
         "@chatgpt-tela/service-protocol": "workspace:*",
         "@chatgpt-tela/setup": "workspace:*",
-      },
-    },
-    "packages/control-plane": {
-      "name": "@chatgpt-tela/control-plane",
-      "version": "0.0.0",
-      "dependencies": {
-        "@chatgpt-tela/codex-service": "workspace:*",
-        "@chatgpt-tela/development-runtime": "workspace:*",
-        "@chatgpt-tela/gateway": "workspace:*",
-        "@chatgpt-tela/http-host": "workspace:*",
-        "@chatgpt-tela/mcp": "workspace:*",
-        "@chatgpt-tela/product-config": "workspace:*",
-        "@chatgpt-tela/service-protocol": "workspace:*",
       },
     },
     "packages/core": {
@@ -337,10 +316,6 @@
     "@chatgpt-tela/codex-daemon": ["@chatgpt-tela/codex-daemon@workspace:apps/codex-daemon"],
 
     "@chatgpt-tela/codex-service": ["@chatgpt-tela/codex-service@workspace:packages/codex-service"],
-
-    "@chatgpt-tela/control-daemon": ["@chatgpt-tela/control-daemon@workspace:apps/control-daemon"],
-
-    "@chatgpt-tela/control-plane": ["@chatgpt-tela/control-plane@workspace:packages/control-plane"],
 
     "@chatgpt-tela/core": ["@chatgpt-tela/core@workspace:packages/core"],
 

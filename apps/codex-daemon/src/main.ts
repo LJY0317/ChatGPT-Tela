@@ -17,13 +17,7 @@ function required(key: string): string {
 }
 
 async function main(): Promise<void> {
-  const legacyKind = process.env.CHATGPT_TELA_CODEX_NATIVE_TARGET_KIND?.trim();
-  if (legacyKind && legacyKind !== "default-desktop" && legacyKind !== "multi-profile") {
-    throw new Error("legacy Tela Codex native target kind is invalid");
-  }
-  const multiProfileLauncher = process.env.CHATGPT_TELA_CODEX_MULTI_PROFILE_LAUNCHER_CLI?.trim()
-    || (legacyKind === "multi-profile" ? required("CHATGPT_TELA_CODEX_LAUNCHER_CLI") : undefined)
-    || process.env.CHATGPT_TELA_CODEX_LAUNCHER_CLI?.trim();
+  const multiProfileLauncher = process.env.CHATGPT_TELA_CODEX_MULTI_PROFILE_LAUNCHER_CLI?.trim();
   const runtimeExecutable = required("CHATGPT_TELA_PRODUCT_PROFILE_RUNTIME_EXECUTABLE");
   const runtimeEntrypoint = required("CHATGPT_TELA_PRODUCT_PROFILE_RUNTIME_ENTRYPOINT");
   const installId = required("CHATGPT_TELA_INSTALL_ID");

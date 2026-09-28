@@ -313,10 +313,8 @@ separation.
 Product configuration is also independent from browser-profile ownership. The canonical version-1 config is
 stored under the platform-native product `configRoot` as `product-v1.json` and is parsed by the standalone
 `@chatgpt-tela/product-config` boundary. It contains only secret-free runtime selection/exposure metadata.
-The older Profile1-scoped `control-plane/config.json` remains a source-development compatibility copy only;
-packaged services must never use a ChatGPT browser profile as their product configuration root. During the
-pre-alpha migration, source CLI reads canonical config first and falls back to the legacy copy only when the
-canonical file is absent. A malformed canonical file fails closed rather than reviving legacy state.
+Source and packaged services read only this canonical product-native config. The retired Profile1-scoped
+control-plane config is not a fallback, and malformed canonical state fails closed.
 
 Development Electron runs also receive an explicit ChatGPT Tela-owned `userData` directory before Electron
 readiness, so a generic `electron` binary cannot accidentally place ChatGPT Tela cookies/session data in the

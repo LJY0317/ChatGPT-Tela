@@ -241,6 +241,7 @@ function mappedSession(session: MultiProfileTargetSession): CodexNativeTargetSes
     ...(session.responsesRouteFingerprint
       ? { responsesRouteFingerprint: session.responsesRouteFingerprint }
       : {}),
+    ...(session.desktopProcessId ? { desktopProcessId: session.desktopProcessId } : {}),
   });
 }
 

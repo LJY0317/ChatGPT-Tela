@@ -29,14 +29,6 @@ import {
   OPENAI_AGENT_API_KEY_CREDENTIAL_ID,
 } from "@chatgpt-tela/credential-store";
 import {
-  ProductControlDaemonClient,
-  readProductDaemonState,
-  removeProductDaemonState,
-  resolveProductControlPaths,
-  writeProductControlConfig,
-  type ProductControlPaths,
-} from "@chatgpt-tela/control-plane";
-import {
   CHATGPT_TELA_DISPLAY_NAME,
   CHATGPT_TELA_SCHEMA_FINGERPRINT,
 } from "@chatgpt-tela/mcp";
@@ -138,27 +130,6 @@ function manageApprovalPreferences(): void {
   }, null, 2));
 }
 
-async function currentLegacyDaemon(paths: ProductControlPaths): Promise<{
-  readonly state: NonNullable<ReturnType<typeof readProductDaemonState>>;
-  readonly client: ProductControlDaemonClient;
-} | undefined> {
-  const state = readProductDaemonState(paths);
-  if (!state) return undefined;
-  const client = new ProductControlDaemonClient({ endpoint: state.controlUrl, token: state.controlToken });
-  try {
-    await client.status();
-    return { state, client };
-  } catch (error) {
-    let alive = false;
-    try { process.kill(state.pid, 0); alive = true; } catch { /* stale pid */ }
-    if (alive) {
-      throw new Error("ChatGPT Tela control daemon is running but its local control endpoint is unavailable", { cause: error });
-    }
-    removeProductDaemonState(paths);
-    return undefined;
-  }
-}
-
 function serviceDescriptorPath(
   productPaths: ReturnType<typeof resolveProductPaths>,
   service: TelaServiceId,
@@ -238,18 +209,13 @@ async function productSupervisor(productPaths: ReturnType<typeof resolveProductP
 }
 
 async function ensureSourceServices(
-  controlPaths: ProductControlPaths,
   productPaths: ReturnType<typeof resolveProductPaths>,
 ): Promise<{
   readonly supervisor: LocalServiceSupervisor;
   readonly codex: CodexServiceClient;
   readonly chatError?: string;
 }> {
-  const legacy = await currentLegacyDaemon(controlPaths);
-  if (legacy) {
-    throw new Error("legacy ChatGPT Tela control daemon is still running; run `bun run cli shutdown` before starting split services");
-  }
-  const config = readEffectiveProductConfig(controlPaths, productPaths);
+  const config = readEffectiveProductConfig(productPaths);
   const { installId, supervisor } = await productSupervisor(productPaths);
   const upgradeJournal = readPackagedUpgradeJournal(packagedUpgradeJournalPath(productPaths));
   if (upgradeJournal) {
@@ -340,12 +306,11 @@ async function serviceStatus(
 }
 
 function publicMcpStatus(
-  controlPaths: ProductControlPaths,
   productPaths: ReturnType<typeof resolveProductPaths>,
 ): Record<string, unknown> {
-  if (!hasEffectiveProductConfig(controlPaths, productPaths)) return { status: "unconfigured" };
+  if (!hasEffectiveProductConfig(productPaths)) return { status: "unconfigured" };
   try {
-    const config = readEffectiveProductConfig(controlPaths, productPaths);
+    const config = readEffectiveProductConfig(productPaths);
     return config.publicMcpAbi === "stable"
       ? {
           generation: 1,
@@ -364,13 +329,9 @@ function publicMcpStatus(
 }
 
 async function configure(
-  paths: ProductControlPaths,
   productPaths: ReturnType<typeof resolveProductPaths>,
 ): Promise<void> {
-  const launcher = option("--multi-profile-launcher") ?? option("--launcher");
-  if (option("--multi-profile-launcher") && option("--launcher")) {
-    throw new Error("configure accepts only one of --multi-profile-launcher or legacy --launcher");
-  }
+  const launcher = option("--multi-profile-launcher");
   if (launcher) {
     const path = resolve(launcher);
     if (!existsSync(path)) throw new Error(`optional multi-profile launcher does not exist: ${path}`);
@@ -413,12 +374,9 @@ async function configure(
           allowUnauthenticatedPublicEndpoint: true,
         },
   };
-  // Compatibility write first: if the canonical product-native write fails, existing source tooling can
-  // still read the same normalized value from the legacy Profile1-scoped path.
-  writeProductControlConfig(config, paths);
   const productConfigPath = nativeProductConfigPath(productPaths);
   writeProductConfig(config, productConfigPath);
-  console.log(JSON.stringify({ configured: true, path: productConfigPath, legacyCompatibilityPath: paths.config,
+  console.log(JSON.stringify({ configured: true, path: productConfigPath,
     defaultNativeTarget: "default-desktop",
     extraProfiles: launcher ? "multi-profile" : "none",
     publicMcpAbi,
@@ -697,11 +655,10 @@ function profileSetupActivityBlockers(
 }
 
 async function manageIngress(
-  controlPaths: ProductControlPaths,
   productPaths: ReturnType<typeof resolveProductPaths>,
 ): Promise<void> {
   const subcommand = process.argv[3] ?? "status";
-  const config = readEffectiveProductConfig(controlPaths, productPaths);
+  const config = readEffectiveProductConfig(productPaths);
   if (config.exposure.kind !== "tailscale-funnel") {
     throw new Error("ingress management requires configure --manage-tailscale-funnel");
   }
@@ -734,14 +691,13 @@ async function manageIngress(
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? "help";
-  const paths = resolveProductControlPaths();
   const productPaths = resolveProductPaths();
   if (command === "version") {
     console.log("ChatGPT Tela 0.0.0 (pre-alpha)");
     return;
   }
   if (command === "configure") {
-    await configure(paths, productPaths);
+    await configure(productPaths);
     return;
   }
   if (command === "paths") {
@@ -771,13 +727,13 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "doctor") {
-    const configured = hasEffectiveProductConfig(paths, productPaths);
+    const configured = hasEffectiveProductConfig(productPaths);
     console.log(JSON.stringify({
       stage: "pre-alpha",
       defaultDesktop: await diagnoseDefaultDesktop(),
       productConfigured: configured,
       optionalMultiProfileConfigured: configured
-        ? Boolean(readEffectiveProductConfig(paths, productPaths).multiProfile)
+        ? Boolean(readEffectiveProductConfig(productPaths).multiProfile)
         : false,
       packagedTransitions: packagedTransitionStatus(productPaths),
       mutating: false,
@@ -883,15 +839,6 @@ async function main(): Promise<void> {
       shutdownFailures.push({ owner: "codex-profile-setup", detail: activityBlockers.join("; ") });
     }
     if (apply) {
-      const legacy = await currentLegacyDaemon(paths);
-      if (legacy) {
-        try { await legacy.client.shutdown(); }
-        catch (error) {
-          blockedOwners.add("gateway");
-          blockedOwners.add("codex");
-          shutdownFailures.push({ owner: "legacy-gateway-codex", detail: error instanceof Error ? error.message : String(error) });
-        }
-      }
       const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
       for (const service of ["gateway", "chat", "codex"] as const) {
         try {
@@ -989,7 +936,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "ingress") {
-    await manageIngress(paths, productPaths);
+    await manageIngress(productPaths);
     return;
   }
   if (command === "setup") {
@@ -997,7 +944,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "start") {
-    const services = await ensureSourceServices(paths, productPaths);
+    const services = await ensureSourceServices(productPaths);
     const result = await services.codex.startProfile(slot());
     console.log(JSON.stringify({
       ...result,
@@ -1007,15 +954,6 @@ async function main(): Promise<void> {
   }
   if (command === "stop") {
     const profileSlot = slot();
-    const legacy = await currentLegacyDaemon(paths);
-    if (legacy) {
-      const result = await legacy.client.stopProfile(profileSlot);
-      const status = await legacy.client.status();
-      const stillOwned = status.profiles.some(profile => profile.controlState === "running" || profile.controlState === "orphaned");
-      if (!stillOwned) await legacy.client.shutdown();
-      console.log(JSON.stringify(result, null, 2));
-      return;
-    }
     const manifest = readOwnershipManifest(productPaths.installManifest);
     if (!manifest) {
       console.log(JSON.stringify({ codex: "stopped", slot: profileSlot }, null, 2));
@@ -1044,12 +982,6 @@ async function main(): Promise<void> {
   }
   if (command === "shutdown") {
     const failures: unknown[] = [];
-    let legacyStopped = false;
-    const legacy = await currentLegacyDaemon(paths);
-    if (legacy) {
-      try { await legacy.client.shutdown(); legacyStopped = true; }
-      catch (error) { failures.push(error); }
-    }
     const manifest = readOwnershipManifest(productPaths.installManifest);
     const stopped: TelaServiceId[] = [];
     if (manifest) {
@@ -1064,33 +996,16 @@ async function main(): Promise<void> {
       }));
       for (const result of backendResults) if (result.status === "rejected") failures.push(result.reason);
     }
-    console.log(JSON.stringify({ legacyControlDaemonStopped: legacyStopped, stoppedServices: stopped }, null, 2));
+    console.log(JSON.stringify({ stoppedServices: stopped }, null, 2));
     if (failures.length > 0) throw new AggregateError(failures, "one or more Tela services did not shut down normally");
     return;
   }
   if (command === "status" || command === "profiles") {
-    const legacy = await currentLegacyDaemon(paths);
-    if (legacy) {
-      const status = await legacy.client.status();
-      console.log(JSON.stringify(command === "profiles" ? status.profiles : {
-        stage: "pre-alpha",
-        publicMcpAbi: {
-          displayName: CHATGPT_TELA_DISPLAY_NAME,
-          schemaFingerprint: CHATGPT_TELA_SCHEMA_FINGERPRINT,
-          status: "frozen",
-        },
-        executableBridge: "live-canary-proven",
-        connectorSetup: "manual-pre-alpha",
-        runtime: "legacy-control-daemon",
-        controlPlane: { state: "running", pid: legacy.state.pid, ...status },
-      }, null, 2));
-      return;
-    }
     const manifest = readOwnershipManifest(productPaths.installManifest);
     if (!manifest) {
       console.log(JSON.stringify({
         stage: "pre-alpha",
-        publicMcpAbi: publicMcpStatus(paths, productPaths),
+        publicMcpAbi: publicMcpStatus(productPaths),
         executableBridge: "live-canary-proven",
         connectorSetup: "manual-pre-alpha",
         runtime: "split-services",
@@ -1100,7 +1015,7 @@ async function main(): Promise<void> {
           codex: { state: "stopped" },
         },
         packagedTransitions: packagedTransitionStatus(productPaths),
-        configured: hasEffectiveProductConfig(paths, productPaths),
+        configured: hasEffectiveProductConfig(productPaths),
       }, null, 2));
       return;
     }
@@ -1121,14 +1036,14 @@ async function main(): Promise<void> {
     ]);
     console.log(JSON.stringify({
       stage: "pre-alpha",
-      publicMcpAbi: publicMcpStatus(paths, productPaths),
+      publicMcpAbi: publicMcpStatus(productPaths),
       executableBridge: "live-canary-proven",
       connectorSetup: "manual-pre-alpha",
       runtime: "split-services",
       services: { gateway: gatewayStatus, chat: chatStatus, codex: codexStatus },
       profiles,
       packagedTransitions: packagedTransitionStatus(productPaths),
-      configured: existsSync(paths.config),
+      configured: hasEffectiveProductConfig(productPaths),
     }, null, 2));
     return;
   }

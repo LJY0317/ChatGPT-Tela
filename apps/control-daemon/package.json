@@ -1,9 +1,0 @@
-{
-  "name": "@chatgpt-tela/control-daemon",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@chatgpt-tela/control-plane": "workspace:*"
-  }
-}

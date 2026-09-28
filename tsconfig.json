@@ -17,7 +17,6 @@
       "@chatgpt-tela/browser-host": ["packages/browser-host/src/index.ts"],
       "@chatgpt-tela/chatgpt": ["packages/chatgpt/src/index.ts"],
       "@chatgpt-tela/chat-service": ["packages/chat-service/src/index.ts"],
-      "@chatgpt-tela/control-plane": ["packages/control-plane/src/index.ts"],
       "@chatgpt-tela/codex": ["packages/codex/src/index.ts"],
       "@chatgpt-tela/codex-service": ["packages/codex-service/src/index.ts"],
       "@chatgpt-tela/core": ["packages/core/src/index.ts"],

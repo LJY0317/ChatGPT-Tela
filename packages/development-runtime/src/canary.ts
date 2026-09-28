@@ -415,7 +415,7 @@ export function loadDevelopmentCanaryPreflightConfig(
       sqliteHome,
     });
   } else if (nativeMode === "multi-profile") {
-    const targetId = required(env, "CHATGPT_TELA_CANARY_MULTI_PROFILE_TARGET");
+    const targetId = required(env, "CHATGPT_TELA_CANARY_PLURA_DESKTOP_TARGET");
     const encodedSlot = /\.profile([1-9][0-9]*)$/.exec(targetId)?.[1];
     if (encodedSlot && Number(encodedSlot) !== browserProfile.slot) {
       throw new Error(
@@ -425,8 +425,8 @@ export function loadDevelopmentCanaryPreflightConfig(
     nativeProfile = Object.freeze({
       kind: "multi-profile" as const,
       controlCli: absoluteFile(
-        required(env, "CHATGPT_TELA_MULTI_PROFILE_CLI"),
-        "CHATGPT_TELA_MULTI_PROFILE_CLI",
+        required(env, "CHATGPT_TELA_PLURA_DESKTOP_CLI"),
+        "CHATGPT_TELA_PLURA_DESKTOP_CLI",
       ),
       targetId,
     });

@@ -124,14 +124,12 @@ packages/setup         inspect-plan-apply-verify setup lifecycle
 packages/product-lifecycle install ownership, product paths, and safe uninstall planning
 packages/service-protocol private authenticated Gateway/backend contracts
 packages/tailscale-ingress exact-path Funnel lease inspection/planning
-packages/gateway       public-ingress/backend routing and legacy v1 gateway compatibility
+packages/gateway       public-ingress/backend routing
 packages/chat-service  new independent Chat workspace/process service
 packages/codex-service independent Codex profile/Responses/browser service
-packages/control-plane compatibility composition root while service daemons replace the old monolith
 apps/cli               development entry point
 apps/packaged-launcher stable installed service launcher that verifies and dispatches the signed payload
 apps/package-build      source release-payload builder/signing entry point
-apps/control-daemon    source control-plane daemon
 apps/gateway-daemon    standalone Tela Gateway process
 apps/chat-daemon       standalone Tela Chat process
 apps/codex-daemon      standalone Tela Codex process
@@ -141,9 +139,8 @@ apps/canary-preflight  non-mutating live-canary prerequisite checker
 apps/menu-bar-macos    lightweight on-demand macOS status/control surface
 ```
 
-The current source control plane already separates one public MCP listener from profile-specific
-Electron/Responses children. The refactor moves public ingress into Tela Gateway and turns the current
-profile/controller logic into Tela Codex. Tela Chat is a new sibling service, not a library inside Codex.
+The source runtime uses independent Tela Gateway, Tela Chat, and Tela Codex services. Tela Codex owns
+profile/controller logic while Tela Chat remains a sibling service, not a library inside Codex.
 
 The first Tela Chat source slice is executable behind its private service boundary. A **locally approved**
 workspace root can be opened and used for bounded `read`/`read_many`, transactional `apply_patch`, resumable
@@ -290,9 +287,8 @@ unsigned payload; the final updater/installer UI must provide the trusted releas
 ChatGPT Tela is not yet packaged as an end-user product. The Tela Codex bridge has passed live
 end-to-end canaries on both the stock/default Native profile and an isolated managed second profile. The
 source CLI now supervises **Gateway, Chat, and Codex as separate daemons** for `start`, `stop`, `profiles`,
-`status`, and `shutdown`; the old one-process control daemon is retained only as a migration/normal-shutdown
-compatibility path while existing development sessions are phased out. ChatGPT MCP App creation/connection
-remains manual and the current public exposure modes are development-only. Tela Chat has its first
+`status`, and `shutdown`; the retired one-process control daemon is no longer part of the runtime. ChatGPT MCP
+App creation/connection remains manual and the current public exposure modes are development-only. Tela Chat has its first
 workspace/file/process/review slice, ownership-safe managed worktrees, and bounded privacy-safe failure
 incidents, plus an optional OpenAI Responses agent over bounded workspace read/patch authority. Installed
 service credential provisioning now exists through a per-user platform credential store; a real external
@@ -540,18 +536,16 @@ bun run cli shutdown
 
 An advanced profile is stopped explicitly with `bun run cli stop --slot <n>`.
 
-The persistent control config contains no runtime bearer secrets. Per-profile Responses/internal-MCP
+The persistent product config contains no runtime bearer secrets. Per-profile Responses/internal-MCP
 credentials are generated for each start, while each Gateway/Chat/Codex daemon writes its own mode-600
 loopback runtime descriptor with an ephemeral bearer. `status` probes each service independently. `shutdown`
 quiesces Gateway first, then asks Chat and Codex to stop independently; one backend shutdown failure does not
-skip the other backend's normal shutdown attempt. A live legacy control-daemon state is detected rather than
-silently starting a second owner on the same public route.
+skip the other backend's normal shutdown attempt.
 
-Configuration storage is now migrating away from the old Profile1-scoped control-plane path. `configure`
-writes canonical `product-v1.json` under Tela's platform-native product config root and also writes a legacy
-compatibility copy for current source tooling. Reads prefer the canonical file; a malformed canonical file is
-an error rather than a reason to fall back. The future packaged runtime therefore has no configuration
-dependency on a ChatGPT browser profile.
+`configure` writes the canonical `product-v1.json` under Tela's platform-native product config root. Source
+and packaged runtimes read only this product-native boundary; a malformed canonical file fails closed rather
+than reviving retired profile-scoped configuration. Product configuration therefore has no dependency on a
+ChatGPT browser profile.
 
 ### Manual ChatGPT Tela plugin setup (pre-alpha)
 

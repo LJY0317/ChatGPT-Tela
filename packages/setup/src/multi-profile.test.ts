@@ -3,10 +3,7 @@ import type {
   MultiProfileControlResult,
   MultiProfileControlRunner,
 } from "./multi-profile";
-import {
-  MultiProfileControlClient,
-  multiProfileCommandFromEnvironment,
-} from "./multi-profile";
+import { MultiProfileControlClient } from "./multi-profile";
 
 class FixtureRunner implements MultiProfileControlRunner {
   readonly calls: Array<{
@@ -40,7 +37,7 @@ function targetsContract(overrides: Record<string, unknown> = {}): Record<string
     contractVersion: 1,
     platform: "macos",
     targets: [{
-      id: "local.codex-multi-profile-launcher.profile2",
+      id: "local.plura-desktop.profile2",
       displayName: "ChatGPT Profile 2",
       role: "managed",
       managed: true,
@@ -58,12 +55,12 @@ describe("optional Multi-Profile control client", () => {
   test("discovers managed targets only through the public versioned JSON contract", async () => {
     const runner = new FixtureRunner();
     runner.results.push(result(targetsContract()));
-    const client = new MultiProfileControlClient({ command: ["/opt/bin/codex-profile"], runner });
+    const client = new MultiProfileControlClient({ command: ["/opt/bin/plura-desktop"], runner });
 
     const targets = await client.targets();
 
     expect(targets).toEqual([{
-      id: "local.codex-multi-profile-launcher.profile2",
+      id: "local.plura-desktop.profile2",
       displayName: "ChatGPT Profile 2",
       role: "managed",
       managed: true,
@@ -74,7 +71,7 @@ describe("optional Multi-Profile control client", () => {
       profileIndex: 2,
     }]);
     expect(runner.calls).toEqual([{
-      command: ["/opt/bin/codex-profile"],
+      command: ["/opt/bin/plura-desktop"],
       arguments: ["targets", "--json"],
     }]);
   });
@@ -84,23 +81,24 @@ describe("optional Multi-Profile control client", () => {
     runner.results.push(result(targetsContract()));
     runner.results.push(result({
       contractVersion: 1,
-      targetID: "local.codex-multi-profile-launcher.profile2",
+      targetID: "local.plura-desktop.profile2",
       state: "ready",
       endpoint: "ws://127.0.0.1:19002",
       responsesRouteFingerprint: "a".repeat(64),
+      desktopProcessID: 4321,
     }));
-    const client = new MultiProfileControlClient({ command: ["/opt/bin/codex-profile"], runner });
+    const client = new MultiProfileControlClient({ command: ["/opt/bin/plura-desktop"], runner });
     const secret = "s".repeat(48);
 
     const runtime = await client.launchManagedTarget({
-      targetId: "local.codex-multi-profile-launcher.profile2",
+      targetId: "local.plura-desktop.profile2",
       responsesBaseUrl: "http://127.0.0.1:18741/",
       responsesEnvKey: "CHATGPT_TELA_RUNTIME_TOKEN",
       responsesToken: secret,
     });
 
     expect(runtime.session).toEqual({
-      targetId: "local.codex-multi-profile-launcher.profile2",
+      targetId: "local.plura-desktop.profile2",
       state: "ready",
       endpoint: "ws://127.0.0.1:19002/",
       responsesRouteFingerprint: "a".repeat(64),
@@ -108,7 +106,7 @@ describe("optional Multi-Profile control client", () => {
     expect(runner.calls[1]?.arguments).toEqual([
       "launch-target",
       "--target",
-      "local.codex-multi-profile-launcher.profile2",
+      "local.plura-desktop.profile2",
       "--responses-base-url",
       "http://127.0.0.1:18741/v1",
       "--responses-env-key",
@@ -127,7 +125,7 @@ describe("optional Multi-Profile control client", () => {
       role: "default",
       managed: false,
     })));
-    const client = new MultiProfileControlClient({ command: ["codex-profile"], runner });
+    const client = new MultiProfileControlClient({ command: ["plura-desktop"], runner });
 
     await expect(client.launchManagedTarget({
       targetId: "default",
@@ -153,7 +151,7 @@ describe("optional Multi-Profile control client", () => {
       endpoint: "ws://127.0.0.1:19001",
       responsesRouteFingerprint: "b".repeat(64),
     }));
-    const client = new MultiProfileControlClient({ command: ["codex-profile"], runner });
+    const client = new MultiProfileControlClient({ command: ["plura-desktop"], runner });
 
     const runtime = await client.launchRoutedTarget({
       targetId: "default",
@@ -183,13 +181,13 @@ describe("optional Multi-Profile control client", () => {
       targetID: "default",
       state: "available",
     }));
-    const client = new MultiProfileControlClient({ command: ["codex-profile"], runner });
+    const client = new MultiProfileControlClient({ command: ["plura-desktop"], runner });
 
     const session = await client.quitTarget("default");
 
     expect(session).toEqual({ targetId: "default", state: "available" });
     expect(runner.calls).toEqual([{
-      command: ["codex-profile"],
+      command: ["plura-desktop"],
       arguments: ["quit-target", "--target", "default", "--json"],
     }]);
   });
@@ -197,20 +195,20 @@ describe("optional Multi-Profile control client", () => {
   test("fails closed on unsupported contracts, remote app-server endpoints, or missing route proof", async () => {
     const badContract = new FixtureRunner();
     badContract.results.push(result({ contractVersion: 2, targets: [] }));
-    await expect(new MultiProfileControlClient({ command: ["codex-profile"], runner: badContract }).targets())
+    await expect(new MultiProfileControlClient({ command: ["plura-desktop"], runner: badContract }).targets())
       .rejects.toThrow("unsupported Multi-Profile contract version");
 
     const remote = new FixtureRunner();
     remote.results.push(result(targetsContract()));
     remote.results.push(result({
       contractVersion: 1,
-      targetID: "local.codex-multi-profile-launcher.profile2",
+      targetID: "local.plura-desktop.profile2",
       state: "ready",
       endpoint: "ws://192.0.2.5:19002",
       responsesRouteFingerprint: "a".repeat(64),
     }));
-    await expect(new MultiProfileControlClient({ command: ["codex-profile"], runner: remote }).launchManagedTarget({
-      targetId: "local.codex-multi-profile-launcher.profile2",
+    await expect(new MultiProfileControlClient({ command: ["plura-desktop"], runner: remote }).launchManagedTarget({
+      targetId: "local.plura-desktop.profile2",
       responsesBaseUrl: "http://127.0.0.1:18741/v1",
       responsesEnvKey: "CHATGPT_TELA_RUNTIME_TOKEN",
       responsesToken: "s".repeat(48),
@@ -220,25 +218,45 @@ describe("optional Multi-Profile control client", () => {
     missingProof.results.push(result(targetsContract()));
     missingProof.results.push(result({
       contractVersion: 1,
-      targetID: "local.codex-multi-profile-launcher.profile2",
+      targetID: "local.plura-desktop.profile2",
       state: "ready",
       endpoint: "ws://127.0.0.1:19002",
     }));
-    await expect(new MultiProfileControlClient({ command: ["codex-profile"], runner: missingProof }).launchManagedTarget({
-      targetId: "local.codex-multi-profile-launcher.profile2",
+    await expect(new MultiProfileControlClient({ command: ["plura-desktop"], runner: missingProof }).launchManagedTarget({
+      targetId: "local.plura-desktop.profile2",
       responsesBaseUrl: "http://127.0.0.1:18741/v1",
       responsesEnvKey: "CHATGPT_TELA_RUNTIME_TOKEN",
       responsesToken: "s".repeat(48),
     })).rejects.toThrow("did not return a ready routed target session");
   });
 
-  test("launcher integration is explicit opt-in rather than path guessing", () => {
-    expect(multiProfileCommandFromEnvironment({})).toBeUndefined();
-    expect(multiProfileCommandFromEnvironment({
-      CHATGPT_TELA_MULTI_PROFILE_CLI: "/Users/example/Library/Application Support/PluraDesktop/plura-desktop",
-    })).toEqual([
-      "/Users/example/Library/Application Support/PluraDesktop/plura-desktop",
-    ]);
+  test("preserves Plura Desktop's optional foreground process observation", async () => {
+    const runner = new FixtureRunner();
+    runner.results.push(result({
+      contractVersion: 1,
+      targetID: "local.plura-desktop.profile2",
+      state: "restart-required",
+      desktopProcessID: 4321,
+    }));
+    const client = new MultiProfileControlClient({ command: ["plura-desktop"], runner });
+    expect(await client.targetSession("local.plura-desktop.profile2")).toEqual({
+      targetId: "local.plura-desktop.profile2",
+      state: "restart-required",
+      desktopProcessId: 4321,
+    });
+  });
+
+  test("rejects invalid Plura Desktop process observations", async () => {
+    const runner = new FixtureRunner();
+    runner.results.push(result({
+      contractVersion: 1,
+      targetID: "local.plura-desktop.profile2",
+      state: "restart-required",
+      desktopProcessID: 0,
+    }));
+    await expect(new MultiProfileControlClient({ command: ["plura-desktop"], runner })
+      .targetSession("local.plura-desktop.profile2"))
+      .rejects.toThrow("desktop process id");
   });
 
   test("control failures preserve actionable stderr while redacting the routed bearer", async () => {
@@ -250,10 +268,10 @@ describe("optional Multi-Profile control client", () => {
       stderr: `Target is already running with a different Responses route; token=${secret}`,
       exitCode: 1,
     });
-    const client = new MultiProfileControlClient({ command: ["codex-profile"], runner });
+    const client = new MultiProfileControlClient({ command: ["plura-desktop"], runner });
 
     await expect(client.launchManagedTarget({
-      targetId: "local.codex-multi-profile-launcher.profile2",
+      targetId: "local.plura-desktop.profile2",
       responsesBaseUrl: "http://127.0.0.1:18741/v1",
       responsesEnvKey: "CHATGPT_TELA_RUNTIME_TOKEN",
       responsesToken: secret,

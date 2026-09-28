@@ -78,7 +78,7 @@ describe("product profile native-target selection", () => {
 
   test("extra profiles require the explicit Multi-Profile adapter", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-product-multi-"));
-    const launcher = join(root, "codex-profile");
+    const launcher = join(root, "plura-desktop");
     writeFileSync(launcher, "fixture", { mode: 0o700 });
     chmodSync(launcher, 0o700);
     try {
@@ -103,9 +103,9 @@ describe("product profile native-target selection", () => {
     }
   });
 
-  test("legacy launcher-bearing child env remains an explicit Multi-Profile compatibility path", () => {
+  test("launcher path alone does not implicitly select the optional adapter", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-product-legacy-multi-"));
-    const launcher = join(root, "codex-profile");
+    const launcher = join(root, "plura-desktop");
     writeFileSync(launcher, "fixture", { mode: 0o700 });
     try {
       const config = loadProductProfileRuntimeConfig({
@@ -113,7 +113,7 @@ describe("product profile native-target selection", () => {
         CHATGPT_TELA_PRODUCT_TARGET_ID: "default",
         CHATGPT_TELA_PRODUCT_LAUNCHER_CLI: launcher,
       });
-      expect(config.nativeTarget.kind).toBe("multi-profile");
+      expect(config.nativeTarget).toEqual({ kind: "default-desktop", targetId: "default" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -43,9 +43,8 @@ Tela Gateway has its own small subroot. Removing/resetting one backend therefore
 other backend's state.
 
 The product-native `config/` root contains `product-v1.json`, the canonical secret-free runtime/exposure
-configuration. This file is deliberately separate from ChatGPT browser-profile state. The source-era
-Profile1 `control-plane/config.json` is retained only as a compatibility copy while the development CLI is
-migrated; signed packaged services read only the product-native config boundary.
+configuration. This file is deliberately separate from ChatGPT browser-profile state. Source and signed
+packaged services read only this product-native config boundary.
 
 The same config root may contain `preferences-v1.json`, which is deliberately smaller than runtime config and
 contains only user-facing behavioral preferences. Its first setting is approval automation (`off` by default,
