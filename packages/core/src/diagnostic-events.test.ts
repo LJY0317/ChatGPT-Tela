@@ -40,6 +40,9 @@ describe("privacy-safe diagnostic events", () => {
       process.stderr.write = original;
     }
     expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0]!) as { ts?: string }).toMatchObject({
+      ts: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    });
     expect(writes[0]).toContain('"status":"ready"');
     expect(writes[0]).not.toContain("do not log me");
     expect(writes[0]).not.toContain("/private/user/path");
@@ -58,6 +61,9 @@ describe("privacy-safe diagnostic events", () => {
       process.stderr.write = original;
     }
     const stored = readFileSync(path, "utf8");
+    expect(JSON.parse(stored.trim()) as { ts?: string }).toMatchObject({
+      ts: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    });
     expect(stored).toContain('"stage":"persisted"');
     expect(stored).toContain('"count":3');
     expect(stored).not.toContain("never-write");

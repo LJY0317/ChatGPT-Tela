@@ -2,6 +2,16 @@ import { diagnosticDurationMs, emitDiagnosticEvent, type NativeToolInvocation } 
 import type { RemoteTurnBridge, TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import { turnCapabilityRoute } from "@chatgpt-tela/runtime";
 
+function payloadBytes(value: unknown): number {
+  if (typeof value === "string") return Buffer.byteLength(value, "utf8");
+  try {
+    const json = JSON.stringify(value);
+    return json === undefined ? 0 : Buffer.byteLength(json, "utf8");
+  } catch {
+    return 0;
+  }
+}
+
 export class RoutedCodexTurnBridge implements TurnBridgeBackend {
   readonly #children = new Map<string, RemoteTurnBridge>();
 
@@ -45,13 +55,24 @@ export class RoutedCodexTurnBridge implements TurnBridgeBackend {
 
   async invoke(capability: string, invocation: NativeToolInvocation) {
     const startedAt = Date.now();
-    emitDiagnosticEvent("chatgpt_tela_codex", "tool_invoke_start", { mode: invocation.mode });
+    const requestBytes = invocation.mode === "freeform"
+      ? Buffer.byteLength(invocation.input, "utf8")
+      : (() => {
+          try { return Buffer.byteLength(JSON.stringify(invocation.arguments), "utf8"); }
+          catch { return 0; }
+        })();
+    emitDiagnosticEvent("chatgpt_tela_codex", "tool_invoke_start", {
+      mode: invocation.mode,
+      request_bytes: requestBytes,
+    });
     try {
       const result = await this.#bridge(capability).invoke(capability, invocation);
       emitDiagnosticEvent("chatgpt_tela_codex", "tool_invoke_complete", {
         mode: invocation.mode,
         is_error: result.isError,
         duration_ms: diagnosticDurationMs(startedAt),
+        request_bytes: requestBytes,
+        result_bytes: payloadBytes(result.content),
       });
       return result;
     } catch (error) {

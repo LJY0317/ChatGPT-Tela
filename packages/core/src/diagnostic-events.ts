@@ -55,6 +55,7 @@ export function emitDiagnosticEvent(
       normalized[key] = safeFieldValue(value, key);
     }
     const line = `${JSON.stringify({
+      ts: new Date().toISOString(),
       event: safeName(event, "diagnostic event"),
       stage: safeName(stage, "diagnostic stage"),
       ...normalized,

@@ -132,6 +132,13 @@ belongs in the notification area/system tray; Linux should use an available desk
 Those surfaces may differ in lifecycle and presentation while sharing only the private product-control
 contracts. A missing/restarting UI surface must never take Gateway, Chat, or Codex down with it.
 
+Performance diagnosis follows the same ownership boundary. Tela records only product-owned structural load:
+timestamped Chat capability completions, Native tool invocation counts, bounded request/result byte sizes,
+truncation/has-more state, and duration/error metadata. It never records prompts, commands, arguments, file
+contents, or tool-result text for this purpose. OS-wide renderer/GPU/WindowServer CPU and RSS remain the job of
+an independent system monitor. Correlating those two timestamped streams is preferred over hard-coding foreign
+process names or continuous profilers into Tela.
+
 ## Dogfooding and self-maintenance
 
 The product should be capable of developing itself through its public/user-facing execution surfaces:

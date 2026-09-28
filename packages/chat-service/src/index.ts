@@ -37,6 +37,30 @@ function sameSecret(candidate: string | undefined, expected: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+function resultDiagnosticFields(result: unknown): Readonly<Record<string, number | boolean>> {
+  let resultBytes: number | undefined;
+  try {
+    const json = JSON.stringify(result);
+    if (json !== undefined) resultBytes = Buffer.byteLength(json, "utf8");
+  } catch {
+    // Result serialization belongs to the response boundary; diagnostics stay best-effort.
+  }
+  const record = result && typeof result === "object" && !Array.isArray(result)
+    ? result as Record<string, unknown>
+    : undefined;
+  const array = Array.isArray(result) ? result : undefined;
+  const hasMore = record?.hasMore === true
+    || array?.some(item => item && typeof item === "object" && !Array.isArray(item)
+      && (item as Record<string, unknown>).hasMore === true) === true;
+  const outputTruncated = record?.outputTruncated === true;
+  return Object.freeze({
+    ...(resultBytes === undefined ? {} : { result_bytes: resultBytes }),
+    ...(array ? { item_count: array.length } : {}),
+    ...(hasMore ? { has_more: true } : {}),
+    ...(outputTruncated ? { truncated: true } : {}),
+  });
+}
+
 export async function startChatService(input: {
   readonly bearerToken: string;
   readonly tools?: ChatToolRuntime;
@@ -94,6 +118,7 @@ export async function startChatService(input: {
           emitDiagnosticEvent("chatgpt_tela_chat", "capability_call_complete", {
             capability: record.capability,
             duration_ms: diagnosticDurationMs(startedAt),
+            ...resultDiagnosticFields(result),
           });
           return Response.json({ contractVersion: 1, service: "chat", capability: record.capability, result });
         } catch (error) {

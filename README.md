@@ -727,6 +727,15 @@ files exist, their byte sizes, and whether the single rotated predecessor exists
 prints their filesystem paths, or returns event payloads. This makes it safe to use as the first support/health
 check before a user explicitly chooses to inspect a local log.
 
+For UI/performance investigations, `bun run cli diagnostics workload --minutes 15` reads only Tela's already
+privacy-bounded Chat/Codex diagnostic JSONL and returns structural counts plus request/result byte totals. It
+does not return prompts, tool arguments, commands, file contents, tool output, paths, or raw event payloads.
+Each diagnostic event now carries an ISO timestamp so this workload view can be aligned with an independent OS
+sampler such as MacLagMonitor. Chat completion events record result byte size and bounded/truncated indicators;
+Codex Native-tool completion events record request/result byte sizes and error state. This is the product-owned
+evidence needed to distinguish "many tool calls" from "a few very large results" without teaching Tela to
+identify external ChatGPT/Codex renderer processes by executable-name regex.
+
 For the dedicated source profile used by Tela Codex, run the setup-only profile helper with
 `CHATGPT_TELA_PROFILE_SETUP_REVEAL=1` for the target slot when login, Developer Mode, or the Plugin connection
 still needs manual preparation.

@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareProfileOwnership } from "./profile-ownership";
+import { summarizeDiagnosticWorkload } from "./diagnostic-workload";
 import { diagnoseDefaultDesktop } from "@chatgpt-tela/default-desktop-target";
 import {
   hasEffectiveProductConfig,
@@ -167,6 +168,15 @@ function diagnosticsSummary(productPaths: ReturnType<typeof resolveProductPaths>
       codex: service("codex"),
     }),
   });
+}
+
+function diagnosticWorkloadPaths(productPaths: ReturnType<typeof resolveProductPaths>): readonly string[] {
+  return Object.freeze((["chat", "codex"] as const).flatMap(id => {
+    const raw = serviceLogPath(productPaths, id);
+    const source = `${raw}.diagnostics.jsonl`;
+    const packaged = join(productPaths.logsRoot, `${id}.diagnostics.jsonl`);
+    return [source, `${source}.1`, packaged, `${packaged}.1`];
+  }));
 }
 
 function packagedTransitionStatus(productPaths: ReturnType<typeof resolveProductPaths>): readonly Record<string, unknown>[] {
@@ -706,6 +716,17 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "diagnostics") {
+    const subcommand = process.argv[3];
+    if (subcommand === "workload") {
+      const minutesRaw = option("--minutes");
+      const minutes = minutesRaw === undefined ? 15 : Number(minutesRaw);
+      console.log(JSON.stringify(summarizeDiagnosticWorkload({
+        paths: diagnosticWorkloadPaths(productPaths),
+        minutes,
+      }), null, 2));
+      return;
+    }
+    if (subcommand !== undefined) throw new Error("usage: chatgpt-tela diagnostics [workload [--minutes <1-120>]]");
     console.log(JSON.stringify(diagnosticsSummary(productPaths), null, 2));
     return;
   }
@@ -848,6 +869,7 @@ async function main(): Promise<void> {
     + "  paths\n"
     + "  doctor\n"
     + "  diagnostics\n"
+    + "  diagnostics workload [--minutes <1-120>]\n"
     + "  uninstall (--dry-run | --apply) [--remove-data]\n"
     + "  chat roots\n"
     + "  chat allow-root --path <workspace-root>\n"
