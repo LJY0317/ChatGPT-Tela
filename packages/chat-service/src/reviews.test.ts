@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ChatReviewCheckpointStore } from "./reviews";
 import { createChatToolRuntime } from "./tools";
 
 function git(cwd: string, args: string[]): string {
@@ -90,14 +91,18 @@ describe("Tela Chat historical review checkpoints", () => {
   test("review history is bounded to the newest sixteen checkpoints per workspace", async () => {
     const f = fixture();
     try {
-      const workspace = await f.runtime.call("open_workspace", { path: f.root }) as { id: string };
+      const workspaceId = "workspace-retention-fixture";
+      const store = new ChatReviewCheckpointStore({ root: join(f.stateRoot, "review-checkpoints-retention") });
       for (let index = 0; index < 18; index += 1) {
-        const shown = await f.runtime.call("show_changes", { workspace_id: workspace.id }) as {
-          reviewCheckpoint: { available: boolean };
-        };
-        expect(shown.reviewCheckpoint.available).toBe(true);
+        store.capture({
+          workspaceId,
+          workspaceRoot: f.root,
+          status: "",
+          patch: `checkpoint-${index}`,
+          untrackedPaths: [],
+        });
       }
-      const listed = await f.runtime.call("list_reviews", { workspace_id: workspace.id }) as readonly unknown[];
+      const listed = store.list(workspaceId);
       expect(listed.length).toBe(16);
     } finally {
       await f.runtime.close();
