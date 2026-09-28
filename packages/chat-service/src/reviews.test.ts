@@ -11,8 +11,14 @@ function git(cwd: string, args: string[]): string {
 }
 
 function objectCount(cwd: string): number {
-  const line = git(cwd, ["count-objects", "-v"]).split(/\r?\n/).find(item => item.startsWith("count: "));
-  return Number(line?.slice("count: ".length) ?? "0");
+  const lines = git(cwd, ["count-objects", "-v"]).split(/\r?\n/);
+  const value = (name: string): number => {
+    const line = lines.find(item => item.startsWith(`${name}: `));
+    return Number(line?.slice(`${name}: `.length) ?? "0");
+  };
+  // Git may auto-pack loose objects between observations (notably on Linux CI). Review capture must
+  // not create repository objects, but packing an existing object must not look like object loss.
+  return value("count") + value("in-pack");
 }
 
 function fixture() {
