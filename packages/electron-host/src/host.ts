@@ -1,4 +1,5 @@
 import {
+  BROWSER_READ_ONLY_PREVIEW,
   BROWSER_PAGE_AUTOMATION,
   ControlledBrowserHost,
   type BrowserHost,
@@ -58,7 +59,7 @@ export function createElectronBrowserHost(input: {
   readonly initialUrl?: string;
   readonly window?: Readonly<Pick<BrowserWindowConstructorOptions,
     "width" | "height" | "minWidth" | "minHeight" | "title">>;
-}): BrowserHost {
+}): ControlledBrowserHost {
   const profile = electronProfileIdentity(input.profileId);
   const initialUrl = input.initialUrl ? supportedNavigation(input.initialUrl).href : undefined;
 
@@ -83,6 +84,21 @@ export function createElectronBrowserHost(input: {
     }
 
     const automation = new ElectronWebContentsPageAutomation(window.webContents);
+    const preview = window.webContents.capturePage
+      ? Object.freeze({
+          async captureJpeg(): Promise<Uint8Array> {
+            if (closed || window.isDestroyed() || window.webContents.isDestroyed()) {
+              throw new Error("Electron browser surface is closed");
+            }
+            const image = await window.webContents.capturePage!();
+            const bytes = image.toJPEG(70);
+            if (bytes.byteLength > 4 * 1024 * 1024) {
+              throw new Error("Electron browser preview exceeded the bounded response size");
+            }
+            return new Uint8Array(bytes);
+          },
+        })
+      : undefined;
     try {
       if (initialUrl) await window.loadURL(initialUrl);
     } catch (error) {
@@ -110,7 +126,9 @@ export function createElectronBrowserHost(input: {
         if (!window.isDestroyed()) window.destroy();
       },
       capability<T>(capability: BrowserSurfaceCapability<T>): T | undefined {
-        return capability === BROWSER_PAGE_AUTOMATION ? automation as T : undefined;
+        if (capability === BROWSER_PAGE_AUTOMATION) return automation as T;
+        if (capability === BROWSER_READ_ONLY_PREVIEW && preview) return preview as T;
+        return undefined;
       },
       taskId,
       epochId,
@@ -143,7 +161,7 @@ export async function createElectronMainProcessBrowserHost(input: {
     "width" | "height" | "minWidth" | "minHeight" | "title">>;
   /** Test seam only; production callers use Electron's main-process module. */
   readonly loadRuntime?: () => Promise<ElectronMainRuntimeLike>;
-}): Promise<BrowserHost> {
+}): Promise<ControlledBrowserHost> {
   const runtime = await (input.loadRuntime ?? loadElectronMainRuntime)();
   if (input.userDataDir) {
     if (!runtime.app.setPath) {

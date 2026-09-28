@@ -36,6 +36,7 @@ import {
 
 const DEFAULT_WEB_TURN_TIMEOUT_MS = 120_000;
 export const PRODUCT_RESPONSES_ENV_KEY = "CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN";
+export const PRODUCT_UI_ENV_KEY = "CHATGPT_TELA_PRODUCT_UI_TOKEN";
 const PRODUCT_UNIFIED_DEVELOPMENT_CONNECTOR_NAME = "ChatGPT Tela Development";
 
 export type ProductProfilePublicMcpAbi = "stable" | "unified-development";
@@ -68,6 +69,7 @@ export interface ProductProfileRuntimeConfig {
   readonly browserProfile: ChatGptTelaBrowserProfile;
   readonly responsesToken: string;
   readonly internalMcpToken: string;
+  readonly uiToken: string;
   readonly publicMcpAbi: ProductProfilePublicMcpAbi;
   readonly approvalAutomationMode: import("@chatgpt-tela/chatgpt").ChatGptApprovalAutomationMode;
   readonly webTurnTimeoutMs: number;
@@ -149,8 +151,10 @@ export function loadProductProfileRuntimeConfig(
   }
   const responsesToken = required(env, PRODUCT_RESPONSES_ENV_KEY);
   const internalMcpToken = required(env, "CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN");
+  const uiToken = required(env, PRODUCT_UI_ENV_KEY);
   if (responsesToken.length < 32) throw new Error(`${PRODUCT_RESPONSES_ENV_KEY} is too short`);
   if (internalMcpToken.length < 32) throw new Error("CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN is too short");
+  if (uiToken.length < 32) throw new Error(`${PRODUCT_UI_ENV_KEY} is too short`);
   const publicMcpAbi = optional(env, "CHATGPT_TELA_PRODUCT_PUBLIC_MCP_ABI") ?? "stable";
   if (publicMcpAbi !== "stable" && publicMcpAbi !== "unified-development") {
     throw new Error("CHATGPT_TELA_PRODUCT_PUBLIC_MCP_ABI must be stable or unified-development");
@@ -185,6 +189,7 @@ export function loadProductProfileRuntimeConfig(
     browserProfile,
     responsesToken,
     internalMcpToken,
+    uiToken,
     publicMcpAbi,
     approvalAutomationMode,
     webTurnTimeoutMs: positiveInteger(

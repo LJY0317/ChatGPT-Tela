@@ -108,6 +108,7 @@ async function main(): Promise<void> {
         "swiftc",
         "-parse-as-library",
         resolve(repoRoot, "apps/menu-bar-macos/main.swift"),
+        resolve(repoRoot, "apps/menu-bar-macos/control-center.swift"),
         "-framework", "AppKit",
         "-o", menuBar,
       ], { cwd: repoRoot, stdio: "inherit" });

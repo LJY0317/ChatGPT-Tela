@@ -58,6 +58,15 @@ export interface CodexProfileStatusContract {
   readonly responsesRouteFingerprint?: string;
 }
 
+export interface CodexBridgePreviewContract {
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly activeSurfaceCount: number;
+  readonly previewAvailable: boolean;
+  readonly imageMimeType?: "image/jpeg";
+  readonly imageBase64?: string;
+}
+
 export interface ChatCapabilityContract {
   readonly capability: string;
   readonly description: string;
@@ -89,6 +98,38 @@ export function parseCodexProfileStatusContract(value: unknown): CodexProfileSta
     controlState,
     ...(item.childProcessId === undefined ? {} : { childProcessId: item.childProcessId as number }),
     ...(fingerprint === undefined ? {} : { responsesRouteFingerprint: fingerprint }),
+  });
+}
+
+export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePreviewContract {
+  const item = object(value, "Codex bridge preview");
+  if (item.contractVersion !== 1) throw new Error("unsupported Codex bridge preview version");
+  if (!Number.isSafeInteger(item.slot) || (item.slot as number) < 1 || (item.slot as number) > 99) {
+    throw new Error("Codex bridge preview slot is invalid");
+  }
+  if (!Number.isSafeInteger(item.activeSurfaceCount)
+    || (item.activeSurfaceCount as number) < 0
+    || (item.activeSurfaceCount as number) > 128) {
+    throw new Error("Codex bridge preview active surface count is invalid");
+  }
+  if (typeof item.previewAvailable !== "boolean") throw new Error("Codex bridge preview availability is invalid");
+  const imageMimeType = item.imageMimeType;
+  const imageBase64 = item.imageBase64;
+  if (item.previewAvailable) {
+    if (item.activeSurfaceCount !== 1 || imageMimeType !== "image/jpeg" || typeof imageBase64 !== "string"
+      || imageBase64.length < 4 || imageBase64.length > 6 * 1024 * 1024
+      || !/^[A-Za-z0-9+/]+={0,2}$/.test(imageBase64)) {
+      throw new Error("Codex bridge preview image is invalid");
+    }
+  } else if (imageMimeType !== undefined || imageBase64 !== undefined) {
+    throw new Error("unavailable Codex bridge preview must not include image data");
+  }
+  return Object.freeze({
+    contractVersion: 1,
+    slot: item.slot as number,
+    activeSurfaceCount: item.activeSurfaceCount as number,
+    previewAvailable: item.previewAvailable,
+    ...(item.previewAvailable ? { imageMimeType: "image/jpeg" as const, imageBase64: imageBase64 as string } : {}),
   });
 }
 

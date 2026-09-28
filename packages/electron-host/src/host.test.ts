@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { BROWSER_PAGE_AUTOMATION } from "@chatgpt-tela/browser-host";
+import { BROWSER_PAGE_AUTOMATION, BROWSER_READ_ONLY_PREVIEW } from "@chatgpt-tela/browser-host";
 import type { BrowserWindowConstructorOptions } from "electron";
 import { createElectronBrowserHost, type ElectronBrowserWindowLike } from "./host";
 import { createElectronMainProcessBrowserHost } from "./host";
@@ -10,6 +10,9 @@ class FakeWebContents implements ElectronWebContentsLike {
   destroyed = false;
   executeJavaScript(): Promise<unknown> { return Promise.resolve(0); }
   sendInputEvent(): void {}
+  async capturePage() {
+    return { toJPEG: () => new Uint8Array([1, 2, 3, 4]) };
+  }
   isDestroyed(): boolean { return this.destroyed; }
 }
 
@@ -67,6 +70,9 @@ describe("Electron browser host", () => {
     expect(windows[0]?.events).toEqual(["load:https://chatgpt.com/"]);
 
     expect(first.capability(BROWSER_PAGE_AUTOMATION)).toBeDefined();
+    const observed = host.singleActiveCapability(BROWSER_READ_ONLY_PREVIEW);
+    expect(observed.activeSurfaceCount).toBe(2);
+    expect(observed.capability).toBeUndefined();
     await first.reveal();
     await first.hide();
     await first.navigate("https://chatgpt.com/c/example");
@@ -81,6 +87,27 @@ describe("Electron browser host", () => {
     ]);
 
     await host.release(second.leaseId);
+    await host.close();
+  });
+
+  test("captures one active hidden surface without revealing or focusing it", async () => {
+    const windows: FakeWindow[] = [];
+    const host = createElectronBrowserHost({
+      profileId: "preview-profile",
+      initialUrl: "https://chatgpt.com/",
+      createWindow() {
+        const window = new FakeWindow();
+        windows.push(window);
+        return window;
+      },
+    });
+    const lease = await host.acquire({ taskId: "task", epochId: "epoch" });
+    const before = [...windows[0]!.events];
+    const observed = host.singleActiveCapability(BROWSER_READ_ONLY_PREVIEW);
+    expect(observed.activeSurfaceCount).toBe(1);
+    expect(await observed.capability?.captureJpeg()).toEqual(new Uint8Array([1, 2, 3, 4]));
+    expect(windows[0]!.events).toEqual(before);
+    await host.release(lease.leaseId);
     await host.close();
   });
 

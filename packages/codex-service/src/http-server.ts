@@ -40,6 +40,13 @@ function slot(pathname: string, action: "start" | "stop"): number | undefined {
   return Number.isSafeInteger(value) && value >= 1 && value <= 99 ? value : undefined;
 }
 
+function previewSlot(pathname: string): number | undefined {
+  const match = /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/bridge-preview$/.exec(pathname);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) && value >= 1 && value <= 99 ? value : undefined;
+}
+
 export async function startCodexServiceHttpServer(input: {
   readonly service: CodexService;
   readonly bearerToken?: string;
@@ -64,6 +71,12 @@ export async function startCodexServiceHttpServer(input: {
           const profiles = await input.service.profiles();
           emitDiagnosticEvent("chatgpt_tela_codex", "profiles_inventory", { count: profiles.length });
           return Response.json({ contractVersion: 1, profiles });
+        }
+        const bridgeSlot = request.method === "GET" ? previewSlot(url.pathname) : undefined;
+        if (bridgeSlot !== undefined) {
+          return Response.json(await input.service.bridgePreview(bridgeSlot), {
+            headers: { "cache-control": "no-store" },
+          });
         }
         const startSlot = request.method === "POST" ? slot(url.pathname, "start") : undefined;
         if (startSlot !== undefined) {

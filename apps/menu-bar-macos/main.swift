@@ -49,6 +49,7 @@ private func runLaunchctl(_ arguments: [String]) {
 final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var statusItem: NSStatusItem!
   private var snapshot: MenuSnapshot?
+  private let controlCenter = TelaControlCenterController()
   private let fileManager = FileManager.default
   private let home = FileManager.default.homeDirectoryForCurrentUser
 
@@ -208,6 +209,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     guard let menu = statusItem.menu else { return }
     menu.removeAllItems()
     addDisabled("ChatGPT Tela", to: menu)
+    menu.addItem(NSMenuItem(title: "Open ChatGPT Tela…", action: #selector(openControlCenter), keyEquivalent: "o"))
     menu.addItem(.separator())
     if loading || snapshot == nil {
       addDisabled("Refreshing status…", to: menu)
@@ -331,6 +333,10 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     try? fileManager.createDirectory(at: logsURL, withIntermediateDirectories: true,
                                      attributes: [.posixPermissions: 0o700])
     NSWorkspace.shared.open(logsURL)
+  }
+
+  @objc private func openControlCenter() {
+    controlCenter.show()
   }
 
   @objc private func openDiagnostics() {

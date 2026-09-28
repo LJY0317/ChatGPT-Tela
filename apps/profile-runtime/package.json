@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@chatgpt-tela/development-runtime": "workspace:*"
+    "@chatgpt-tela/development-runtime": "workspace:*",
+    "@chatgpt-tela/http-host": "workspace:*"
   }
 }

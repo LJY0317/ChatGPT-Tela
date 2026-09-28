@@ -3,6 +3,7 @@ import {
   startProductProfileRuntime,
 } from "@chatgpt-tela/development-runtime";
 import { app } from "electron";
+import { startProfileBridgePreviewServer, type ProfileBridgePreviewServer } from "./bridge-preview-server";
 
 async function main(): Promise<void> {
   const config = loadProductProfileRuntimeConfig();
@@ -11,6 +12,17 @@ async function main(): Promise<void> {
   const keepAliveWithoutWindows = () => {};
   app.on("window-all-closed", keepAliveWithoutWindows);
   const runtime = await startProductProfileRuntime(config);
+  let preview: ProfileBridgePreviewServer;
+  try {
+    preview = await startProfileBridgePreviewServer({
+      slot: config.slot,
+      bearerToken: config.uiToken,
+      observe: () => runtime.runtime.observeBridgePreview(),
+    });
+  } catch (error) {
+    await runtime.stop().catch(() => {});
+    throw error;
+  }
   process.stdout.write(`${JSON.stringify({
     stage: "product-profile-ready",
     slot: config.slot,
@@ -19,6 +31,7 @@ async function main(): Promise<void> {
     nativeTargetKind: config.nativeTarget.kind,
     profileId: config.browserProfile.profileId,
     internalMcpUrl: runtime.internalMcp.endpointUrl.href,
+    bridgePreviewUrl: preview.endpoint.href,
     responsesUrl: runtime.runtime.responses.baseUrl.href,
     responsesRouteFingerprint: runtime.routedTarget.session.responsesRouteFingerprint,
     ...(runtime.routedTarget.session.desktopProcessId
@@ -30,7 +43,7 @@ async function main(): Promise<void> {
   let stopping: Promise<void> | undefined;
   const stop = () => {
     if (!stopping) {
-      stopping = runtime.stop().then(() => {
+      stopping = preview.close().then(() => runtime.stop()).then(() => {
         app.removeListener("window-all-closed", keepAliveWithoutWindows);
         app.quit();
       }).catch(error => {

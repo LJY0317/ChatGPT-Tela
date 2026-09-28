@@ -14,6 +14,7 @@ function common(root: string): Record<string, string> {
     CHATGPT_TELA_PRODUCT_ROUTE_ID: "route1234",
     CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN: "r".repeat(48),
     CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN: "m".repeat(48),
+    CHATGPT_TELA_PRODUCT_UI_TOKEN: "u".repeat(48),
   };
 }
 

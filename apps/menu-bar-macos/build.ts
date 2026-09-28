@@ -17,6 +17,7 @@ execFileSync("/usr/bin/xcrun", [
   "swiftc",
   "-parse-as-library",
   resolve(repoRoot, "apps/menu-bar-macos/main.swift"),
+  resolve(repoRoot, "apps/menu-bar-macos/control-center.swift"),
   "-framework", "AppKit",
   "-o", output,
 ], { cwd: repoRoot, stdio: "inherit" });

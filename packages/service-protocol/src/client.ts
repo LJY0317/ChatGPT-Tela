@@ -4,11 +4,13 @@ import type {
 } from "@chatgpt-tela/core";
 import {
   parseChatCapabilityContract,
+  parseCodexBridgePreviewContract,
   parseCodexProfileStatusContract,
   parseCodexToolInventoryResponse,
   parseCodexToolInvokeResponse,
   parseServiceStatus,
   type CodexProfileStatusContract,
+  type CodexBridgePreviewContract,
   type ChatCapabilityContract,
   type ServiceRuntimeDescriptor,
   type ServiceStatus,
@@ -108,6 +110,16 @@ export class CodexServiceClient extends LocalServiceClient {
   async stopProfile(slot: number, signal?: AbortSignal): Promise<CodexProfileStatusContract> {
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("Codex profile slot must be an integer from 1 to 99");
     return parseCodexProfileStatusContract(await this.request(`v1/codex/profiles/${slot}/stop`, "POST", {}, signal));
+  }
+
+  async bridgePreview(slot: number, signal?: AbortSignal): Promise<CodexBridgePreviewContract> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("Codex profile slot must be an integer from 1 to 99");
+    return parseCodexBridgePreviewContract(await this.request(
+      `v1/codex/profiles/${slot}/bridge-preview`,
+      "GET",
+      undefined,
+      signal,
+    ));
   }
 }
 

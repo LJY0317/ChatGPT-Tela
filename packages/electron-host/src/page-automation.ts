@@ -16,6 +16,9 @@ export interface ElectronWebContentsLike {
         readonly keyCode: string;
         readonly modifiers?: readonly string[];
       }): void;
+  capturePage?(): Promise<{
+    toJPEG(quality: number): Uint8Array;
+  }>;
   isDestroyed(): boolean;
 }
 

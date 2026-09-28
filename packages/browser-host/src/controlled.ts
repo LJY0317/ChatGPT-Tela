@@ -97,4 +97,18 @@ export class ControlledBrowserHost implements BrowserHost {
   get activeSurfaceCount(): number {
     return this.#surfaces.size;
   }
+
+  singleActiveCapability<T>(capability: BrowserSurfaceCapability<T>): {
+    readonly activeSurfaceCount: number;
+    readonly capability?: T;
+  } {
+    const activeSurfaceCount = this.#surfaces.size;
+    if (activeSurfaceCount !== 1) return Object.freeze({ activeSurfaceCount });
+    const surface = this.#surfaces.values().next().value as OwnedSurface | undefined;
+    const value = surface?.controller.capability?.(capability);
+    return Object.freeze({
+      activeSurfaceCount,
+      ...(value === undefined ? {} : { capability: value }),
+    });
+  }
 }

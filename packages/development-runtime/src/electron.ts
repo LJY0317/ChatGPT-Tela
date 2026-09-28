@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { BROWSER_READ_ONLY_PREVIEW } from "@chatgpt-tela/browser-host";
 import {
   createElectronMainProcessBrowserHost,
   type ElectronMainRuntimeLike,
@@ -42,6 +43,14 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
     signal?: AbortSignal,
     options?: { readonly allowUnknownSelectedConnector?: boolean },
   ): Promise<boolean>;
+  /**
+   * Observe the hidden bridge without revealing/focusing it or sending any page input.
+   * A preview is returned only when exactly one task/epoch surface is active.
+   */
+  observeBridgePreview(): Promise<{
+    readonly activeSurfaceCount: number;
+    readonly jpeg?: Uint8Array;
+  }>;
   /**
    * Open one visible control-plane ChatGPT surface using the same persistent ChatGPT Tela profile partition.
    * It owns no Native turn authority and exists only for login/developer-mode/connector preparation.
@@ -166,6 +175,14 @@ export async function startElectronDevelopmentRuntime(
     ) => (
       profileControl.recoverChatGptConnectorProbeArtifact(signal, options)
     ),
+    async observeBridgePreview() {
+      const observed = browserHost.singleActiveCapability(BROWSER_READ_ONLY_PREVIEW);
+      if (!observed.capability) return Object.freeze({ activeSurfaceCount: observed.activeSurfaceCount });
+      return Object.freeze({
+        activeSurfaceCount: observed.activeSurfaceCount,
+        jpeg: await observed.capability.captureJpeg(),
+      });
+    },
     openProfileSetupSurface: (options?: { readonly reveal?: boolean }) => profileControl.openProfileSetupSurface(options),
     stop() {
       if (stopping) return stopping;

@@ -6,7 +6,11 @@ import {
   type RemoteTurnBridge,
   type TurnBridgeBackend,
 } from "@chatgpt-tela/mcp";
-import type { ServiceStatus } from "@chatgpt-tela/service-protocol";
+import {
+  parseCodexBridgePreviewContract,
+  type CodexBridgePreviewContract,
+  type ServiceStatus,
+} from "@chatgpt-tela/service-protocol";
 import {
   CompositeNativeTargetAdapter,
   DefaultDesktopNativeTargetAdapter,
@@ -44,6 +48,7 @@ interface ChildReady {
   readonly nativeTargetKind: "default-desktop" | "multi-profile";
   readonly profileId: string;
   readonly internalMcpUrl: string;
+  readonly bridgePreviewUrl: string;
   readonly responsesUrl: string;
   readonly responsesRouteFingerprint: string;
   readonly targetProcessId?: number;
@@ -60,6 +65,8 @@ interface OwnedProfile {
   readonly targetProcessId?: number;
   readonly child: ProfileChildProcess;
   readonly bridge: RemoteTurnBridge;
+  readonly bridgePreviewUrl: string;
+  readonly uiToken: string;
   readonly unmount: () => void;
   stopping: Promise<void> | undefined;
 }
@@ -72,6 +79,7 @@ export interface CodexService {
   profiles(): Promise<readonly CodexProfileStatus[]>;
   startProfile(slot: number): Promise<CodexProfileStatus>;
   stopProfile(slot: number): Promise<CodexProfileStatus>;
+  bridgePreview(slot: number): Promise<CodexBridgePreviewContract>;
   close(): Promise<void>;
   readonly activeProfileCount: number;
 }
@@ -113,8 +121,9 @@ function childReady(value: unknown, expected: {
     throw new Error("profile child readiness identity does not match the requested profile");
   }
   const internalMcpUrl = new URL(string("internalMcpUrl"));
+  const bridgePreviewUrl = new URL(string("bridgePreviewUrl"));
   const responsesUrl = new URL(string("responsesUrl"));
-  for (const url of [internalMcpUrl, responsesUrl]) {
+  for (const url of [internalMcpUrl, bridgePreviewUrl, responsesUrl]) {
     if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) {
       throw new Error("profile child readiness exposed a non-loopback endpoint");
     }
@@ -134,6 +143,7 @@ function childReady(value: unknown, expected: {
     nativeTargetKind: expected.nativeTargetKind,
     profileId: string("profileId"),
     internalMcpUrl: internalMcpUrl.href,
+    bridgePreviewUrl: bridgePreviewUrl.href,
     responsesUrl: responsesUrl.href,
     responsesRouteFingerprint: fingerprint,
     ...(targetProcessId === undefined ? {} : { targetProcessId: targetProcessId as number }),
@@ -348,6 +358,7 @@ export async function startCodexService(input: {
       const route = routeId();
       const responsesToken = secret();
       const internalMcpToken = secret();
+      const uiToken = secret();
       const child = spawn(input.profileRuntimeCommand[0], input.profileRuntimeCommand.slice(1), {
         env: {
           ...process.env,
@@ -358,6 +369,7 @@ export async function startCodexService(input: {
           ...targets.profileRuntimeEnvironment(target),
           CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN: responsesToken,
           CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN: internalMcpToken,
+          CHATGPT_TELA_PRODUCT_UI_TOKEN: uiToken,
         },
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
@@ -389,6 +401,8 @@ export async function startCodexService(input: {
           ...(ready.targetProcessId === undefined ? {} : { targetProcessId: ready.targetProcessId }),
           child,
           bridge,
+          bridgePreviewUrl: ready.bridgePreviewUrl,
+          uiToken,
           unmount,
           stopping: undefined,
         };
@@ -416,6 +430,27 @@ export async function startCodexService(input: {
         throw new Error(`${target.displayName} is routed by another owner; refusing to stop it`);
       }
       return statusFor(target, slot, session, undefined);
+    },
+    async bridgePreview(slotValue: number) {
+      const slot = slotNumber(slotValue);
+      const profile = owned.get(slot);
+      if (!profile || profile.child.exitCode !== null || profile.child.signalCode !== null) {
+        return Object.freeze({
+          contractVersion: 1 as const,
+          slot,
+          activeSurfaceCount: 0,
+          previewAvailable: false,
+        });
+      }
+      const response = await fetch(new URL("v1/bridge-preview", profile.bridgePreviewUrl), {
+        headers: { authorization: `Bearer ${profile.uiToken}` },
+        signal: AbortSignal.timeout(3_000),
+      });
+      const value = await response.json().catch(() => undefined) as unknown;
+      if (!response.ok) throw new Error(`profile bridge preview failed with HTTP ${response.status}`);
+      const preview = parseCodexBridgePreviewContract(value);
+      if (preview.slot !== slot) throw new Error("profile bridge preview slot does not match its owner");
+      return preview;
     },
     close() {
       if (closing) return closing;

@@ -696,6 +696,18 @@ manifest/marker ownership. Install uses `RunAtLoad=true` and explicitly kickstar
 registration, so the menu-bar surface appears immediately after a successful install and again on normal
 login. Install/uninstall therefore never relies on a name-only login-item guess.
 
+The menu contains **Open ChatGPT Tela…**, which opens a Dock-less AppKit Control Center window. Closing that
+window hides only the UI; the menu-bar process and Gateway/Chat/Codex services continue running. The first
+Control Center slice provides Overview, Chat, Work/Codex, Profiles, Bridge, Updates, Settings, and Diagnostics
+sections backed only by the existing authenticated loopback contracts.
+
+The Bridge section is intentionally **observation-only**. It never reveals/focuses the hidden Electron window
+and never sends mouse, keyboard, DOM, navigation, Stop, or other page actions. While exactly one Work/Codex
+browser surface is active, Electron captures that already-rendered surface and the private Codex service relays
+a bounded JPEG snapshot to the Control Center. With zero or multiple surfaces the preview is withheld instead
+of guessing which work belongs to the user. The preview is on-demand rather than idle polling, so inspecting
+Tela cannot perturb the Native/Web turn it is observing.
+
 The current status icon uses an SF Symbol as a placeholder. Its image and future per-menu-item icons are UI
 assets, not protocol/authority identifiers, so they can be replaced later with custom artwork without changing
 Gateway/Chat/Codex correctness. Platform UI remains native by design: macOS uses the menu bar; Windows should

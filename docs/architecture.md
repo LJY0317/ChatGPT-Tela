@@ -114,6 +114,19 @@ counted as a fourth backend service and cannot manufacture workspace, turn, sand
 The LaunchAgent is `RunAtLoad` and install explicitly kickstarts it after exact registration so successful
 installation produces a visible menu-bar surface immediately rather than waiting for the next login.
 
+The same accessory process owns a normal resizable **Control Center** window. Because the application remains
+an AppKit accessory, opening the window does not create a permanent Dock presence; closing the last Control
+Center window hides only that window and leaves the background product running. The menu bar is the quick
+surface while the Control Center is the larger status/settings/recovery surface.
+
+Bridge observation is deliberately weaker than bridge authority. An active Electron Work/Codex surface may
+expose a bounded read-only capture capability to its owner. The product profile runtime serves that snapshot
+over a per-profile authenticated loopback endpoint; Tela Codex proxies only the validated image/status through
+its private service contract; and the Control Center renders it as a non-interactive image. Capturing does not
+show or focus the BrowserWindow and does not inject page input. A snapshot is available only when exactly one
+active task/epoch surface exists for that profile. This prevents the UI from selecting among concurrent work or
+turning a debugging/view surface into a second source of browser authority.
+
 This UI boundary is platform-native rather than macOS-shaped core logic. The corresponding Windows product UI
 belongs in the notification area/system tray; Linux should use an available desktop status-item/tray protocol.
 Those surfaces may differ in lifecycle and presentation while sharing only the private product-control
