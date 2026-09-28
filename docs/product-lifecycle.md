@@ -206,6 +206,12 @@ immediately before every destructive resource operation. The normal uninstall se
 7. remove product binaries/helpers last;
 8. verify that no removable owned service, listener, route, helper, worktree, or manifest entry remains.
 
+Source and packaged uninstall use one shared orchestration runtime rather than duplicating ownership policy.
+The packaged launcher exposes `uninstall --dry-run`, `uninstall --apply`, and optional `--remove-data`.
+Packaged apply must run from a separately extracted package copy: if the current executable resolves inside
+the installed Tela binary root, it fails before stopping services or deleting anything. This avoids relying
+on platform-specific self-deletion behavior and keeps the same removal sequence on macOS, Windows, and Linux.
+
 If a backend cannot stop, uninstall reports it separately; a Tela Chat failure must not prevent normal Tela
 Codex cleanup, and vice versa. Forced termination is a bounded fallback only for an exact product-owned pid
 whose executable/instance identity still matches the ownership record.

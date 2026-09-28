@@ -205,8 +205,7 @@ is not a write sandbox and therefore cannot prove workspace-only authority. Prov
 opaque durable OpenAI Conversation id; provider-side conversation state contains the prompts/tool traffic sent
 to the API, while Tela still does not persist submitted prompts in its own agent store.
 
-The source pre-alpha uninstaller supports both a reviewable dry-run and explicit apply for resources already
-covered by exact ownership adapters:
+The source pre-alpha CLI and packaged launcher now share the same reviewable uninstall runtime:
 
 ```sh
 bun run cli uninstall --dry-run --remove-data
@@ -219,8 +218,8 @@ clean/base managed worktrees can be removed. Marker-owned browser/account state 
 is removable only with explicit `--remove-data` after profile setup/runtime activity has stopped; dirty,
 committed, drifted, ambiguous, or service-blocked resources are preserved. User repositories are
 never uninstall targets. Legacy name-only service registrations stay preserved. The signed multi-file
-application/binary layout now exists, but Developer ID/notarization plus the final end-user installer/updater
-surface remain release work, so this source uninstaller is not yet the complete end-user product uninstaller.
+application/binary layout and packaged uninstall entrypoint now exist, but Developer ID/notarization plus the
+final signed end-user installer/updater UX remain release work.
 
 The product-lifecycle package also has a concrete packaged-install operator. It plans without touching disk,
 fingerprints the exact staged payload, creates only a marker-owned binary root, and registers the three
@@ -294,12 +293,23 @@ out-of-band, and both planning and apply re-verify the target package before mut
 # Run the launcher from the target package for an upgrade:
 ./chatgpt-tela upgrade --dry-run --trusted-public-key ./chatgpt-tela-release.pem
 ./chatgpt-tela upgrade --apply   --trusted-public-key ./chatgpt-tela-release.pem
+
+# Run uninstall apply from a separately extracted package copy, not the installed binary root:
+./chatgpt-tela uninstall --dry-run
+./chatgpt-tela uninstall --apply
+./chatgpt-tela uninstall --apply --remove-data
 ```
 
 The package directory defaults to the directory containing the launcher; `--payload <directory>` can select
 another package explicitly. `--dry-run` and `--apply` are mutually exclusive. This is deliberately still a
 pre-release operator surface: a public release must pin the trusted release-key set in the signed
 installer/updater instead of asking ordinary users to locate a PEM file themselves.
+
+Packaged uninstall uses the same ownership-aware engine as the source CLI. It re-proves exact resource
+ownership immediately before every destructive step, preserves drifted/dirty/foreign resources, and keeps
+config/state/browser data unless `--remove-data` is explicit. `uninstall --apply` fails before mutation when
+the currently executing launcher is inside the installed Tela binary root; run it from a separately extracted
+package copy so Windows and other platforms are not asked to delete the executable that is still running.
 
 ## Developer preview
 

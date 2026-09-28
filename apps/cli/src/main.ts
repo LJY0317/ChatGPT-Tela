@@ -2,7 +2,6 @@ import {
   existsSync,
   lstatSync,
   realpathSync,
-  rmSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
@@ -16,8 +15,6 @@ import {
 } from "./product-config-selection";
 import { profileSlotFromArguments } from "./profile-selection";
 import {
-  ChatManagedWorktreeManager,
-  ChatManagedWorktreeOwnershipObserver,
   readChatAgentProvidersConfig,
   readChatApprovedRootsConfig,
   writeChatAgentProvidersConfig,
@@ -41,11 +38,7 @@ import {
 } from "@chatgpt-tela/product-config";
 import {
   acquireProductActivity,
-  applyUninstallPlan,
   ensureOwnershipManifest,
-  FilesystemOwnershipObserver,
-  observeProductActivity,
-  planUninstall,
   packagedRepairJournalPath,
   packagedUpgradeJournalPath,
   productActivityPath,
@@ -54,11 +47,8 @@ import {
   readOwnershipManifest,
   releaseProductActivity,
   resolveProductPaths,
-  ServiceRegistrationManager,
-  ServiceRegistrationOwnershipObserver,
-  SystemServiceRegistrationCommandRunner,
-  unregisterOwnedResource,
 } from "@chatgpt-tela/product-lifecycle";
+import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import {
   type TelaServiceId,
 } from "@chatgpt-tela/service-protocol";
@@ -71,8 +61,6 @@ import {
   createTailscaleFunnelLease,
   SystemTailscaleCommandRunner,
   TailscaleFunnelLeaseManager,
-  tailscaleFunnelLeaseFromResource,
-  TailscaleFunnelOwnershipObserver,
 } from "@chatgpt-tela/tailscale-ingress";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -631,29 +619,6 @@ async function manageChatRoots(productPaths: ReturnType<typeof resolveProductPat
   throw new Error("chat command is unsupported");
 }
 
-function profileSetupActivityBlockers(
-  productPaths: ReturnType<typeof resolveProductPaths>,
-  installId: string,
-): readonly string[] {
-  const blockers: string[] = [];
-  for (let profileSlot = 1; profileSlot <= 99; profileSlot += 1) {
-    const path = productActivityPath(productPaths.runtimeRoot, "profile-setup", String(profileSlot));
-    try {
-      const state = observeProductActivity({
-        path,
-        installId,
-        kind: "profile-setup",
-        scope: String(profileSlot),
-      });
-      if (state === "active") blockers.push(`profile ${profileSlot} setup is active`);
-      else if (state === "drift") blockers.push(`profile ${profileSlot} setup activity ownership is ambiguous`);
-    } catch {
-      blockers.push(`profile ${profileSlot} setup activity state is unreadable or unsafe`);
-    }
-  }
-  return Object.freeze(blockers);
-}
-
 async function manageIngress(
   productPaths: ReturnType<typeof resolveProductPaths>,
 ): Promise<void> {
@@ -748,183 +713,11 @@ async function main(): Promise<void> {
     const dryRun = flag("--dry-run");
     const apply = flag("--apply");
     if (dryRun === apply) throw new Error("uninstall requires exactly one of --dry-run or --apply");
-    const manifest = readOwnershipManifest(productPaths.installManifest);
-    if (!manifest) {
-      console.log(JSON.stringify({
-        status: "not-installed-by-manifest",
-        installManifest: productPaths.installManifest,
-        destructiveActions: 0,
-      }, null, 2));
-      return;
-    }
-    const upgradeJournal = readPackagedUpgradeJournal(packagedUpgradeJournalPath(productPaths));
-    if (apply && upgradeJournal) {
-      throw new Error(`packaged upgrade ${upgradeJournal.fromVersion} -> ${upgradeJournal.toVersion} is incomplete; resume or repair it before uninstall apply`);
-    }
-    const repairJournal = readPackagedRepairJournal(packagedRepairJournalPath(productPaths));
-    if (apply && repairJournal) {
-      throw new Error(`packaged repair for ${repairJournal.productVersion} is incomplete; resume it before uninstall apply`);
-    }
-    const filesystemObserver = new FilesystemOwnershipObserver();
-    const hasManagedWorktrees = manifest.resources.some(resource => resource.kind === "managed-worktree");
-    const hasTailscaleRoutes = manifest.resources.some(resource => resource.kind === "tailscale-route");
-    const hasServiceRegistrations = manifest.resources.some(resource => resource.kind === "service-registration");
-    const hasCredentials = manifest.resources.some(resource => resource.kind === "credential");
-    const managedWorktreeManager = hasManagedWorktrees
-      ? new ChatManagedWorktreeManager({
-          managedRoot: join(productPaths.serviceState("chat"), "managed-worktrees"),
-          storePath: join(productPaths.serviceState("chat"), "managed-worktrees-v1.json"),
-          ownershipManifestPath: productPaths.installManifest,
-          installId: manifest.installId,
-          productVersion: manifest.productVersion,
-          createManagedRoot: false,
-        })
-      : undefined;
-    const managedWorktreeObserver = managedWorktreeManager
-      ? new ChatManagedWorktreeOwnershipObserver(managedWorktreeManager)
-      : undefined;
-    const tailscaleManager = hasTailscaleRoutes
-      ? new TailscaleFunnelLeaseManager({
-          runner: new SystemTailscaleCommandRunner(process.env.CHATGPT_TELA_TAILSCALE_CLI?.trim() || "tailscale"),
-          manifestPath: productPaths.installManifest,
-          installId: manifest.installId,
-          productVersion: manifest.productVersion,
-        })
-      : undefined;
-    const tailscaleObserver = tailscaleManager
-      ? new TailscaleFunnelOwnershipObserver(tailscaleManager)
-      : undefined;
-    const serviceRegistrationManager = hasServiceRegistrations
-      ? new ServiceRegistrationManager({ runner: new SystemServiceRegistrationCommandRunner() })
-      : undefined;
-    const serviceRegistrationObserver = serviceRegistrationManager
-      ? new ServiceRegistrationOwnershipObserver(serviceRegistrationManager)
-      : undefined;
-    const credentialStore = hasCredentials
-      ? createPlatformCredentialStore({ stateRoot: productPaths.stateRoot })
-      : undefined;
-    const credentialOwnership = credentialStore
-      ? new CredentialOwnershipManager({
-          store: credentialStore,
-          manifestPath: productPaths.installManifest,
-          installId: manifest.installId,
-          productVersion: manifest.productVersion,
-        })
-      : undefined;
-    const activityBlockers = profileSetupActivityBlockers(productPaths, manifest.installId);
-    const codexActivityBlocked = activityBlockers.length > 0;
-    const observer = {
-      observe(resource: Parameters<FilesystemOwnershipObserver["observe"]>[0], currentManifest: typeof manifest) {
-        if (resource.owner === "codex" && codexActivityBlocked) return "dirty" as const;
-        if (resource.kind === "managed-worktree" && managedWorktreeObserver) {
-          return managedWorktreeObserver.observe(resource, currentManifest);
-        }
-        if (resource.kind === "tailscale-route" && tailscaleObserver) {
-          return tailscaleObserver.observe(resource, currentManifest);
-        }
-        if (resource.kind === "service-registration" && serviceRegistrationObserver) {
-          return serviceRegistrationObserver.observe(resource, currentManifest);
-        }
-        if (resource.kind === "credential" && credentialOwnership) {
-          return credentialOwnership.observe(resource, currentManifest);
-        }
-        return filesystemObserver.observe(resource, currentManifest);
-      },
-    };
-
-    const blockedOwners = new Set<"product" | "gateway" | "chat" | "codex">();
-    const shutdownFailures: Array<{ readonly owner: string; readonly detail: string }> = [];
-    if (codexActivityBlocked) {
-      blockedOwners.add("codex");
-      shutdownFailures.push({ owner: "codex-profile-setup", detail: activityBlockers.join("; ") });
-    }
-    if (apply) {
-      const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
-      for (const service of ["gateway", "chat", "codex"] as const) {
-        try {
-          await supervisor.shutdown({ service, descriptorPath: serviceDescriptorPath(productPaths, service) });
-        } catch (error) {
-          blockedOwners.add(service);
-          shutdownFailures.push({ owner: service, detail: error instanceof Error ? error.message : String(error) });
-        }
-      }
-    }
-
-    const plan = await planUninstall({
-      manifest,
-      observer,
+    console.log(JSON.stringify(await runProductUninstall({
+      mode: apply ? "apply" : "dry-run",
       removeData: flag("--remove-data"),
-    });
-    if (dryRun) {
-      console.log(JSON.stringify({ dryRun: true, activityBlockers, ...plan }, null, 2));
-      return;
-    }
-
-    const result = await applyUninstallPlan({
-      manifest,
-      plan,
-      blockedOwners,
-      operator: {
-        observe: observer.observe,
-        async remove(resource, currentManifest) {
-          if (resource.kind === "managed-worktree") {
-            if (!managedWorktreeManager) return { removed: false, detail: "managed worktree lifecycle is unavailable" };
-            const record = managedWorktreeManager.recordForResource(resource.id);
-            if (!record) return { removed: false, detail: "managed worktree resource is not present in the Chat ownership store" };
-            const removed = await managedWorktreeManager.remove(record.id);
-            return { removed: removed.removed, detail: removed.detail };
-          }
-          if (resource.kind === "tailscale-route") {
-            if (!tailscaleManager) return { removed: false, detail: "Tailscale lifecycle is unavailable" };
-            const released = await tailscaleManager.release(tailscaleFunnelLeaseFromResource(resource));
-            return { removed: released.state === "released" || released.state === "already-absent", detail: released.detail };
-          }
-          if (resource.kind === "directory") {
-            if (await filesystemObserver.observe(resource, currentManifest) !== "owned") {
-              return { removed: false, detail: "directory ownership could not be re-proven immediately before removal" };
-            }
-            const absolute = resolve(resource.path);
-            if (dirname(absolute) === absolute) throw new Error("refusing to remove a filesystem root");
-            rmSync(absolute, { recursive: true, force: false });
-            return { removed: true, detail: "exact marker-owned directory removed" };
-          }
-          if (resource.kind === "service-registration") {
-            if (!serviceRegistrationManager) return { removed: false, detail: "service-registration lifecycle is unavailable" };
-            return serviceRegistrationManager.release(resource, currentManifest);
-          }
-          if (resource.kind === "credential") {
-            if (!credentialOwnership) return { removed: false, detail: "credential lifecycle is unavailable" };
-            return credentialOwnership.remove(resource, currentManifest);
-          }
-          return { removed: false, detail: "resource lifecycle is unavailable" };
-        },
-      },
-    });
-
-    for (const step of result.steps) {
-      if (step.outcome !== "removed" && step.outcome !== "already-absent") continue;
-      if (!existsSync(productPaths.installManifest)) continue;
-      await unregisterOwnedResource({
-        path: productPaths.installManifest,
-        installId: manifest.installId,
-        productVersion: manifest.productVersion,
-        resourceId: step.resourceId,
-      });
-    }
-    const remaining = readOwnershipManifest(productPaths.installManifest);
-    const canRemoveManifest = flag("--remove-data")
-      && result.failedCount === 0
-      && result.preservedCount === 0
-      && (remaining?.resources.length ?? 0) === 0;
-    if (canRemoveManifest) rmSync(productPaths.installManifest, { force: true });
-    console.log(JSON.stringify({
-      applied: true,
-      removeData: flag("--remove-data"),
-      activityBlockers,
-      shutdownFailures,
-      ...result,
-      manifestRemoved: canRemoveManifest,
-    }, null, 2));
+      paths: productPaths,
+    }), null, 2));
     return;
   }
   if (command === "chat") {

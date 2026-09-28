@@ -30,6 +30,7 @@
       "@chatgpt-tela/mcp": ["packages/mcp/src/index.ts"],
       "@chatgpt-tela/local-server": ["packages/local-server/src/index.ts"],
       "@chatgpt-tela/product-lifecycle": ["packages/product-lifecycle/src/index.ts"],
+      "@chatgpt-tela/product-uninstall": ["packages/product-uninstall/src/index.ts"],
       "@chatgpt-tela/product-config": ["packages/product-config/src/index.ts"],
       "@chatgpt-tela/responses": ["packages/responses/src/index.ts"],
       "@chatgpt-tela/runtime": ["packages/runtime/src/index.ts"],

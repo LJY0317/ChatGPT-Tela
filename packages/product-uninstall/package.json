@@ -1,18 +1,13 @@
 {
-  "name": "@chatgpt-tela/cli",
+  "name": "@chatgpt-tela/product-uninstall",
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": "./src/index.ts",
   "dependencies": {
     "@chatgpt-tela/chat-service": "workspace:*",
     "@chatgpt-tela/credential-store": "workspace:*",
-    "@chatgpt-tela/development-runtime": "workspace:*",
-    "@chatgpt-tela/default-desktop-target": "workspace:*",
-    "@chatgpt-tela/mcp": "workspace:*",
-    "@chatgpt-tela/product-config": "workspace:*",
     "@chatgpt-tela/product-lifecycle": "workspace:*",
-    "@chatgpt-tela/product-uninstall": "workspace:*",
-    "@chatgpt-tela/service-protocol": "workspace:*",
     "@chatgpt-tela/service-supervisor": "workspace:*",
     "@chatgpt-tela/tailscale-ingress": "workspace:*"
   }

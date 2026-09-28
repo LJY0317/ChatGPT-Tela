@@ -47,6 +47,7 @@
         "@chatgpt-tela/mcp": "workspace:*",
         "@chatgpt-tela/product-config": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
+        "@chatgpt-tela/product-uninstall": "workspace:*",
         "@chatgpt-tela/service-protocol": "workspace:*",
         "@chatgpt-tela/service-supervisor": "workspace:*",
         "@chatgpt-tela/tailscale-ingress": "workspace:*",
@@ -92,6 +93,7 @@
       "dependencies": {
         "@chatgpt-tela/product-config": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
+        "@chatgpt-tela/product-uninstall": "workspace:*",
       },
     },
     "apps/profile-runtime": {
@@ -246,6 +248,17 @@
       "name": "@chatgpt-tela/product-lifecycle",
       "version": "0.0.0",
     },
+    "packages/product-uninstall": {
+      "name": "@chatgpt-tela/product-uninstall",
+      "version": "0.0.0",
+      "dependencies": {
+        "@chatgpt-tela/chat-service": "workspace:*",
+        "@chatgpt-tela/credential-store": "workspace:*",
+        "@chatgpt-tela/product-lifecycle": "workspace:*",
+        "@chatgpt-tela/service-supervisor": "workspace:*",
+        "@chatgpt-tela/tailscale-ingress": "workspace:*",
+      },
+    },
     "packages/responses": {
       "name": "@chatgpt-tela/responses",
       "version": "0.0.0",
@@ -346,6 +359,8 @@
     "@chatgpt-tela/product-config": ["@chatgpt-tela/product-config@workspace:packages/product-config"],
 
     "@chatgpt-tela/product-lifecycle": ["@chatgpt-tela/product-lifecycle@workspace:packages/product-lifecycle"],
+
+    "@chatgpt-tela/product-uninstall": ["@chatgpt-tela/product-uninstall@workspace:packages/product-uninstall"],
 
     "@chatgpt-tela/profile-runtime": ["@chatgpt-tela/profile-runtime@workspace:apps/profile-runtime"],
 
