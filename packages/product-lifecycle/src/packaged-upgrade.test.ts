@@ -183,7 +183,10 @@ describe("packaged upgrade journal", () => {
       expect(readOwnershipManifest(plan.targetBlueprint.paths.installManifest)?.productVersion).toBe("2.0.0");
 
       services.events.length = 0;
-      const completed = await applyPackagedUpgradeFromPayload({ plan, payloadSourcePath: target, services,
+      const replanned = await planPackagedUpgradeFromPayload({ payloadSourcePath: target, platform: "linux",
+        home, environment: {}, runner });
+      expect(replanned).toMatchObject({ fromVersion: "1.0.0", toVersion: "2.0.0" });
+      const completed = await applyPackagedUpgradeFromPayload({ plan: replanned, payloadSourcePath: target, services,
         platform: "linux", home, environment: {}, runner });
       expect(completed.resumedServices).toEqual(["chat", "codex", "gateway"]);
       expect(services.events).toEqual(["start:gateway"]);

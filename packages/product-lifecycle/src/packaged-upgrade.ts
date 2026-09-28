@@ -149,6 +149,21 @@ function assertStableServiceDefinitions(manifest: OwnershipManifest, blueprint: 
   }
 }
 
+async function assertStableServiceRegistrations(input: {
+  readonly manifest: OwnershipManifest;
+  readonly blueprint: PackagedInstallBlueprint;
+  readonly runner?: ServiceRegistrationCommandRunner;
+}): Promise<void> {
+  const installer = new ServiceRegistrationInstaller({
+    platform: input.blueprint.platform,
+    runner: input.runner ?? new SystemServiceRegistrationCommandRunner(),
+  });
+  for (const service of input.blueprint.services) {
+    const state = await installer.observeReady(service.resource, input.manifest);
+    if (state !== "owned") throw new Error(`packaged upgrade service registration is not exact-owned: ${service.service} (${state})`);
+  }
+}
+
 export async function planPackagedUpgradeFromPayload(input: {
   readonly payloadSourcePath: string;
   readonly platform?: NodeJS.Platform;
@@ -166,6 +181,37 @@ export async function planPackagedUpgradeFromPayload(input: {
   assertNoConflictingPackagedTransition(blueprint.paths, "upgrade");
   const manifest = readOwnershipManifest(blueprint.paths.installManifest);
   if (!manifest) throw new Error("packaged upgrade requires an existing owned install manifest");
+  const journal = readPackagedUpgradeJournal(packagedUpgradeJournalPath(blueprint.paths));
+  if (journal) {
+    if (journal.installId !== manifest.installId
+      || journal.toVersion !== spec.productVersion
+      || journal.targetPayloadFingerprint !== blueprint.payloadFingerprint) {
+      throw new Error("a different packaged upgrade journal already owns this install");
+    }
+    if (manifest.productVersion !== journal.fromVersion && manifest.productVersion !== journal.toVersion) {
+      throw new Error("packaged upgrade manifest version changed outside the active transition");
+    }
+    assertStableServiceDefinitions(manifest, blueprint);
+    await assertStableServiceRegistrations({
+      manifest,
+      blueprint,
+      ...(input.runner ? { runner: input.runner } : {}),
+    });
+    return Object.freeze({
+      installId: journal.installId,
+      fromVersion: journal.fromVersion,
+      toVersion: journal.toVersion,
+      sourcePayload: Object.freeze({
+        version: 1 as const,
+        installId: journal.installId,
+        resourceId: blueprint.payload.resource.id,
+        productVersion: journal.fromVersion,
+        payloadFingerprint: journal.sourcePayloadFingerprint,
+      }),
+      targetPayloadFingerprint: journal.targetPayloadFingerprint,
+      targetBlueprint: blueprint,
+    });
+  }
   if (manifest.productVersion === spec.productVersion) throw new Error("target package version already matches the installed version; use repair instead of upgrade");
   if (!exactResource(manifest, blueprint.payload.resource.id, blueprint.payload.resource)) {
     throw new Error("packaged upgrade binary resource identity does not match the installed manifest");
@@ -175,14 +221,7 @@ export async function planPackagedUpgradeFromPayload(input: {
     throw new Error("installed packaged payload cannot be proven exact for the current product version");
   }
   assertStableServiceDefinitions(manifest, blueprint);
-  const installer = new ServiceRegistrationInstaller({
-    platform: blueprint.platform,
-    runner: input.runner ?? new SystemServiceRegistrationCommandRunner(),
-  });
-  for (const service of blueprint.services) {
-    const state = await installer.observeReady(service.resource, manifest);
-    if (state !== "owned") throw new Error(`packaged upgrade service registration is not exact-owned: ${service.service} (${state})`);
-  }
+  await assertStableServiceRegistrations({ manifest, blueprint, ...(input.runner ? { runner: input.runner } : {}) });
   return Object.freeze({
     installId: manifest.installId,
     fromVersion: manifest.productVersion,

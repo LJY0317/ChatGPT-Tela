@@ -4,6 +4,21 @@ import {
   resolvePackagedServiceLaunch,
   runPackagedServiceLauncher,
 } from "./runtime";
+import { runPackagedLifecycleCommand } from "./lifecycle";
+
+const USAGE = `ChatGPT Tela packaged runtime
+
+Usage:
+  chatgpt-tela install (--dry-run | --apply) --trusted-public-key <release-public-key.pem> [--payload <package-directory>]
+  chatgpt-tela repair  (--dry-run | --apply) --trusted-public-key <release-public-key.pem> [--payload <package-directory>]
+  chatgpt-tela upgrade (--dry-run | --apply) --trusted-public-key <release-public-key.pem> [--payload <package-directory>]
+
+The package directory defaults to the directory containing this launcher. Use --dry-run before --apply.
+
+Internal runtime commands:
+  chatgpt-tela service <gateway|chat|codex>
+  chatgpt-tela menu-bar
+`;
 
 function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat" | "codex" {
   if (arguments_.length !== 2 || arguments_[0] !== "service") {
@@ -18,6 +33,17 @@ function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat"
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args.length === 0 || (args.length === 1 && (args[0] === "--help" || args[0] === "-h"))) {
+    process.stdout.write(USAGE);
+    return;
+  }
+  if (args[0] === "install" || args[0] === "repair" || args[0] === "upgrade") {
+    const result = await runPackagedLifecycleCommand(args, {
+      defaultPayloadRoot: payloadRootForLauncherExecutable(),
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
   const launch = args.length === 1 && args[0] === "menu-bar"
     ? resolvePackagedMenuBarLaunch({
         payloadRoot: payloadRootForLauncherExecutable(),

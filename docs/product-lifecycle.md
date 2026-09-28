@@ -158,8 +158,18 @@ services. Repair and upgrade journals are mutually exclusive, and package launch
 start and destructive uninstall apply are blocked while either transition is incomplete.
 
 Signed repair plan/apply entrypoints verify the same Ed25519 package signature boundary as signed
-install/upgrade. The development CLI does not accept arbitrary trusted keys or unsigned payloads for repair;
-the end-user updater/installer must own the trusted release-key set.
+install/upgrade. The packaged launcher exposes a pre-release operator CLI for `install`, `repair`, and
+`upgrade`; every command requires exactly one of `--dry-run`/`--apply` and an explicit
+`--trusted-public-key <pem>`. The key is intentionally external to the package being verified, so replacing a
+payload and its embedded metadata cannot redefine trust. Planning verifies the target signature before it
+observes or reserves install state, and apply verifies the target signature again before mutation. A wrong
+key therefore fails before ownership manifest/service-registration creation.
+
+For the common package-directory flow, the payload defaults to the directory containing the launcher. A
+caller may select another target with `--payload <directory>`. Running a known-good same-version package gives
+repair its trusted source bytes; running the new target package gives upgrade its replacement bytes. This CLI
+is not yet the final consumer trust UX: public release packaging must pin the trusted release key set in the
+signed installer/updater rather than requiring users to supply PEM files manually.
 
 Persistent ChatGPT profile data follows a stricter adoption rule because it may contain login cookies and
 other user-significant state. A fresh product setup may reserve and marker-own only the exact browser profile

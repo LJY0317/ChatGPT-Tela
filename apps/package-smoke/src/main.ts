@@ -54,7 +54,7 @@ function ensureElectronDistribution(): void {
 }
 
 function smokeLauncher(path: string): void {
-  const result = spawnSync(path, [], {
+  const result = spawnSync(path, ["--help"], {
     encoding: "utf8",
     windowsHide: true,
     timeout: 5_000,
@@ -62,7 +62,7 @@ function smokeLauncher(path: string): void {
   });
   if (result.error) throw result.error;
   const combined = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-  if (result.status !== 1 || !combined.includes("usage: chatgpt-tela service <gateway|chat|codex>")) {
+  if (result.status !== 0 || !combined.includes("chatgpt-tela install") || !combined.includes("--trusted-public-key")) {
     throw new Error(`packaged launcher did not execute its expected CLI boundary (exit=${result.status ?? -1})`);
   }
 }

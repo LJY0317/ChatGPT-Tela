@@ -279,8 +279,27 @@ Repair and upgrade journals are mutually exclusive, and packaged service launch/
 start, and destructive uninstall apply refuse to cross an incomplete transition.
 
 Signed repair plan/apply entrypoints use the same Ed25519 package trust boundary as signed install/upgrade.
-Tela intentionally does not expose a development repair command that accepts an arbitrary public key or an
-unsigned payload; the final updater/installer UI must provide the trusted release-key set.
+The packaged launcher now exposes a pre-release lifecycle CLI for exercising that real boundary. It never
+trusts a key stored inside the package being verified: callers must provide a release public key obtained
+out-of-band, and both planning and apply re-verify the target package before mutation.
+
+```sh
+./chatgpt-tela install --dry-run --trusted-public-key ./chatgpt-tela-release.pem
+./chatgpt-tela install --apply   --trusted-public-key ./chatgpt-tela-release.pem
+
+# Run the launcher from a known-good same-version package for repair:
+./chatgpt-tela repair --dry-run --trusted-public-key ./chatgpt-tela-release.pem
+./chatgpt-tela repair --apply   --trusted-public-key ./chatgpt-tela-release.pem
+
+# Run the launcher from the target package for an upgrade:
+./chatgpt-tela upgrade --dry-run --trusted-public-key ./chatgpt-tela-release.pem
+./chatgpt-tela upgrade --apply   --trusted-public-key ./chatgpt-tela-release.pem
+```
+
+The package directory defaults to the directory containing the launcher; `--payload <directory>` can select
+another package explicitly. `--dry-run` and `--apply` are mutually exclusive. This is deliberately still a
+pre-release operator surface: a public release must pin the trusted release-key set in the signed
+installer/updater instead of asking ordinary users to locate a PEM file themselves.
 
 ## Developer preview
 
@@ -293,7 +312,7 @@ workspace/file/process/review slice, ownership-safe managed worktrees, and bound
 incidents, plus an optional OpenAI Responses agent over bounded workspace read/patch authority. Installed
 service credential provisioning now exists through a per-user platform credential store; a real external
 provider call still requires a user credential. General artifact transfer, the frozen one-plugin public generation, Developer ID/notarized release packaging,
-and the final end-user installer/updater surface remain active pre-alpha work.
+and the final signed installer/updater UX remain active pre-alpha work.
 
 The stable **ChatGPT Tela** connector also has a live product exact-turn proof on the isolated Profile 2 path:
 one persistent Native Codex turn was routed to ChatGPT Web, the Web turn discovered the exact current Native
@@ -313,7 +332,7 @@ bun run cli status
 
 CI runs the same `package:smoke` on macOS, Windows, and Linux. It generates an ephemeral Ed25519 key, compiles
 the stable launcher plus separate Gateway/Chat/Codex executables, stages the real Electron/profile runtime,
-verifies the signed package tree, and executes the packaged launcher's CLI boundary. macOS additionally uses
+verifies the signed package tree, and executes the packaged launcher's lifecycle/help CLI boundary. macOS additionally uses
 ad-hoc codesign for this CI proof; public releases still require Developer ID signing and notarization.
 
 `doctor` is a non-mutating default-profile preflight. It resolves the platform's official ChatGPT/Codex
