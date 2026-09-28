@@ -2,12 +2,16 @@ import type { BrowserHost } from "@chatgpt-tela/browser-host";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   ChatGptSemanticProvider,
+  selectChatGptWebModel,
+  type ChatGptWebEffort,
   type WebConversationProvider,
   type WebPhysicalContext,
 } from "@chatgpt-tela/chatgpt";
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 import {
   startLocalResponsesServer,
+  type LocalResponsesAuthentication,
+  type LocalResponsesRequestRouter,
   type LocalResponsesServer,
 } from "@chatgpt-tela/local-server";
 import {
@@ -42,6 +46,10 @@ export interface DevelopmentWebTurnPlan {
   readonly nativeTaskId: string;
   readonly webEpochId: string;
   readonly physicalContext: WebPhysicalContext;
+  readonly browserModel?: {
+    readonly familyKey: string;
+    readonly effort: ChatGptWebEffort;
+  };
   readonly diagnostics?: Readonly<Record<string, string | number | boolean>>;
   /**
    * Planner-owned transactional settlement. Implementations may advance retained-context state only
@@ -122,6 +130,8 @@ export interface DevelopmentRuntimeOptions {
     readonly hostname?: string;
     readonly port?: number;
     readonly runtimeToken?: string;
+    readonly authentication?: LocalResponsesAuthentication;
+    readonly requestRouter?: LocalResponsesRequestRouter;
     readonly maxRequestBodyBytes?: number;
   };
 }
@@ -173,6 +183,13 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
               turnCapability: turn.capability,
             },
             proveCapabilities: !acquired.reused,
+            ...(plan.browserModel ? {
+              prepareForSubmit: (surface, signal) => selectChatGptWebModel(
+                surface,
+                plan.browserModel!,
+                signal,
+              ),
+            } : {}),
             signal,
           });
           plan.settle?.({ status: "completed", answer });
@@ -265,6 +282,8 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
       ...(input.responses?.hostname ? { hostname: input.responses.hostname } : {}),
       ...(input.responses?.port !== undefined ? { port: input.responses.port } : {}),
       ...(input.responses?.runtimeToken ? { runtimeToken: input.responses.runtimeToken } : {}),
+      ...(input.responses?.authentication ? { authentication: input.responses.authentication } : {}),
+      ...(input.responses?.requestRouter ? { requestRouter: input.responses.requestRouter } : {}),
       ...(input.responses?.maxRequestBodyBytes !== undefined
         ? { maxRequestBodyBytes: input.responses.maxRequestBodyBytes }
         : {}),

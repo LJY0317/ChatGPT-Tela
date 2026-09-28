@@ -9,6 +9,7 @@ import {
   createDefaultDesktopResponsesRoute,
   resolveDefaultDesktopInstallation,
   startDefaultDesktopTargetRuntime,
+  TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
   type DefaultDesktopTargetRuntime,
 } from "@chatgpt-tela/default-desktop-target";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
@@ -29,10 +30,16 @@ import {
 import { FileContextCheckpointCache } from "./context-cache";
 import { ConnectorProbeState } from "./connector-probe-state";
 import {
+  createDefaultProfileCompositeProviderRouter,
+  type DefaultProfileCompositeProviderRouter,
+} from "./composite-provider-router";
+import {
   startElectronDevelopmentRuntime,
   type ElectronDevelopmentRuntime,
   type ElectronDevelopmentRuntimeOptions,
 } from "./electron";
+import type { NativeCodexFetch } from "./native-passthrough";
+import { augmentCodexAppServerModelList } from "./app-server-model-list";
 
 const DEFAULT_WEB_TURN_TIMEOUT_MS = 120_000;
 export const PRODUCT_RESPONSES_ENV_KEY = "CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN";
@@ -206,6 +213,8 @@ export async function startProductProfileRuntime(
     readonly electron?: ElectronDevelopmentRuntimeOptions["electron"];
     readonly multiProfileClient?: MultiProfileControlClient;
     readonly defaultDesktopTargetStarter?: typeof startDefaultDesktopTargetRuntime;
+    readonly defaultDesktopNativeFetch?: NativeCodexFetch;
+    readonly modelFamilyDiscovery?: ElectronDevelopmentRuntimeOptions["modelFamilyDiscovery"];
     readonly signal?: AbortSignal;
   } = {},
 ): Promise<ProductProfileRuntime> {
@@ -225,6 +234,16 @@ export async function startProductProfileRuntime(
   let internalMcp: CodexBridgeMcpHttpServer | undefined;
   let routedTarget: ProductProfileRoutedTarget | undefined;
   let defaultDesktopTarget: DefaultDesktopTargetRuntime | undefined;
+  const compositeRouter: DefaultProfileCompositeProviderRouter | undefined = config.nativeTarget.kind === "default-desktop"
+    ? createDefaultProfileCompositeProviderRouter({
+        runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
+        ...(options.defaultDesktopNativeFetch ? { fetchUpstream: options.defaultDesktopNativeFetch } : {}),
+        async discoverWebModelFamilies(signal) {
+          if (!runtime) throw new Error("default profile Web model discovery ran before the browser runtime was ready");
+          return runtime.discoverChatGptWebModelFamilies(signal);
+        },
+      })
+    : undefined;
   try {
     startupStage("browser_runtime_starting");
     runtime = await startElectronDevelopmentRuntime({
@@ -241,7 +260,18 @@ export async function startProductProfileRuntime(
         }),
       },
       webTurnTimeoutMs: config.webTurnTimeoutMs,
-      responses: { port: 0, runtimeToken: config.responsesToken },
+      responses: {
+        port: 0,
+        runtimeToken: config.responsesToken,
+        ...(compositeRouter ? {
+          authentication: {
+            kind: "header" as const,
+            name: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
+          },
+          requestRouter: request => compositeRouter.route(request),
+        } : {}),
+      },
+      ...(options.modelFamilyDiscovery ? { modelFamilyDiscovery: options.modelFamilyDiscovery } : {}),
       electron: {
         ...(options.electron ?? {}),
         userDataDir: config.browserProfile.userDataDir,
@@ -286,6 +316,11 @@ export async function startProductProfileRuntime(
     await runtime.probeChatGptReadiness(options.signal);
     startupStage("fresh_readiness_proof_complete");
     connectorProbeState.clear();
+    if (compositeRouter) {
+      startupStage("web_model_catalog_discovery_starting");
+      const families = await compositeRouter.refreshWebModelFamilies(options.signal);
+      startupStage("web_model_catalog_discovery_complete", { family_count: families.length });
+    }
     if (config.nativeTarget.kind === "multi-profile") {
       startupStage("native_target_starting");
       routedTarget = await client!.launchRoutedTarget({
@@ -310,6 +345,10 @@ export async function startProductProfileRuntime(
         route,
         credential: config.responsesToken,
         environment: process.env,
+        augmentModelList: result => augmentCodexAppServerModelList(
+          result,
+          compositeRouter!.cachedWebModelFamilies,
+        ),
       });
       startupStage("native_target_ready");
       const currentTurnSource = appServerCurrentTurnSource(defaultDesktopTarget.proxyEndpoint);

@@ -28,6 +28,16 @@ function fixtureService(): CodexService {
         imageBase64: "AQIDBA==",
       };
     },
+    async modelSelectionCanary(slot) {
+      return {
+        contractVersion: 1,
+        slot,
+        familyCount: 3,
+        exercised: true,
+        testedEffort: "medium",
+        restoredEffort: "high",
+      };
+    },
     async close() {},
     activeProfileCount: 0,
   };
@@ -51,6 +61,31 @@ describe("Tela Codex private HTTP server", () => {
         previewAvailable: true,
         imageMimeType: "image/jpeg",
         imageBase64: "AQIDBA==",
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("serves explicit model-selection canary through the private service only", async () => {
+    const token = "m".repeat(48);
+    const server = await startCodexServiceHttpServer({ service: fixtureService(), bearerToken: token });
+    try {
+      const url = new URL("v1/codex/profiles/1/model-selection-canary", server.endpoint);
+      expect((await fetch(url, { method: "POST" })).status).toBe(401);
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toEqual({
+        contractVersion: 1,
+        slot: 1,
+        familyCount: 3,
+        exercised: true,
+        testedEffort: "medium",
+        restoredEffort: "high",
       });
     } finally {
       await server.close();

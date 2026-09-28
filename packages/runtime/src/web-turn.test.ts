@@ -223,6 +223,32 @@ describe("browser turn runner", () => {
     expect(released).toEqual(["surface-1"]);
   });
 
+  test("surface preparation completes before the consequential submit boundary", async () => {
+    const events = new EventQueue();
+    const channel = new RuntimeTurnChannel(binding());
+    const order: string[] = [];
+    const fixture = provider(events);
+    const wrapped: WebConversationProvider = {
+      ...fixture,
+      async submitTurn(...args) {
+        order.push("submit");
+        return fixture.submitTurn(...args);
+      },
+    };
+    events.push({ kind: "completed", providerTurnId: "web-turn-1", answer: "done" });
+    const result = await runBrowserTurn({
+      browserHost: browserHost([]),
+      provider: wrapped,
+      channel,
+      nativeTaskId: "task-1",
+      webEpochId: "epoch-1",
+      physicalContext,
+      prepareForSubmit: async () => { order.push("prepare"); },
+    });
+    expect(result).toBe("done");
+    expect(order).toEqual(["prepare", "submit"]);
+  });
+
   test("completion after a tool result fails closed until Web continuation is observed", async () => {
     const events = new EventQueue();
     const channel = new RuntimeTurnChannel(binding());

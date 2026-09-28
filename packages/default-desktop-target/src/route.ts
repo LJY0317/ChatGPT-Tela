@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 
 export const TELA_DEFAULT_DESKTOP_PROVIDER_ID = "chatgpt_tela_responses";
+export const TELA_DEFAULT_DESKTOP_RUNTIME_HEADER = "X-ChatGPT-Tela-Runtime-Token";
 
 export interface DefaultDesktopResponsesRoute {
   readonly baseUrl: string;
   readonly envKey: string;
   readonly providerId: string;
+  readonly runtimeHeaderName: string;
+  readonly modelCatalogUrl: string;
   readonly fingerprint: string;
 }
 
@@ -39,17 +42,23 @@ export function createDefaultDesktopResponsesRoute(input: {
   if (input.credential.length < 32) throw new Error("default Desktop Responses credential is too short");
   const baseUrl = normalizedBaseUrl(input.baseUrl);
   const envKey = environmentKey(input.envKey);
+  const runtimeHeaderName = TELA_DEFAULT_DESKTOP_RUNTIME_HEADER;
+  const modelCatalogUrl = `${baseUrl}/models`;
   const credentialHash = createHash("sha256").update(input.credential, "utf8").digest("hex");
   const fingerprint = createHash("sha256").update(JSON.stringify({
     baseUrl,
     credentialHash,
     envKey,
+    runtimeHeaderName,
+    modelCatalogUrl,
     providerId: TELA_DEFAULT_DESKTOP_PROVIDER_ID,
   })).digest("hex");
   return Object.freeze({
     baseUrl,
     envKey,
     providerId: TELA_DEFAULT_DESKTOP_PROVIDER_ID,
+    runtimeHeaderName,
+    modelCatalogUrl,
     fingerprint,
   });
 }
@@ -58,11 +67,12 @@ export function defaultDesktopCodexConfigArguments(route: DefaultDesktopResponse
   const prefix = `model_providers.${route.providerId}`;
   return Object.freeze([
     "-c", `model_provider=${JSON.stringify(route.providerId)}`,
-    "-c", `${prefix}.name=${JSON.stringify("ChatGPT Tela Responses")}`,
+    "-c", `${prefix}.name=${JSON.stringify("ChatGPT Tela Native + Web")}`,
     "-c", `${prefix}.base_url=${JSON.stringify(route.baseUrl)}`,
+    "-c", `${prefix}.model_catalog_url=${JSON.stringify(route.modelCatalogUrl)}`,
     "-c", `${prefix}.wire_api=${JSON.stringify("responses")}`,
-    "-c", `${prefix}.env_key=${JSON.stringify(route.envKey)}`,
-    "-c", `${prefix}.requires_openai_auth=false`,
+    "-c", `${prefix}.env_http_headers.${JSON.stringify(route.runtimeHeaderName)}=${JSON.stringify(route.envKey)}`,
+    "-c", `${prefix}.requires_openai_auth=true`,
     "-c", `${prefix}.supports_websockets=false`,
   ]);
 }
@@ -95,11 +105,12 @@ export function rewriteDefaultDesktopAppServerRequest(
   }
   const providers = { ...(record(existingProviders) ?? {}) };
   providers[route.providerId] = {
-    name: "ChatGPT Tela Responses",
+    name: "ChatGPT Tela Native + Web",
     base_url: route.baseUrl,
+    model_catalog_url: route.modelCatalogUrl,
     wire_api: "responses",
-    env_key: route.envKey,
-    requires_openai_auth: false,
+    env_http_headers: { [route.runtimeHeaderName]: route.envKey },
+    requires_openai_auth: true,
     supports_websockets: false,
   };
   config.model_provider = route.providerId;

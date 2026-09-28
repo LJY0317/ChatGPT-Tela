@@ -12,6 +12,13 @@ private struct ServiceStatus: Decodable {
   let state: String
 }
 
+private struct IngressStatus: Decodable {
+  let contractVersion: Int
+  let availability: String
+  let cause: String
+  let detail: String
+}
+
 private struct ProfileStatus: Decodable {
   let slot: Int
   let targetDisplayName: String
@@ -31,6 +38,7 @@ private struct Preferences: Codable {
 
 private struct MenuSnapshot {
   let services: [(String, String)]
+  let ingress: IngressStatus?
   let profiles: [ProfileStatus]
   let approvalAutomation: String?
   let approvalError: Bool
@@ -145,6 +153,21 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     }
   }
 
+  private func inspectIngress() async -> IngressStatus? {
+    do {
+      guard let descriptor = try readDescriptor("gateway") else { return nil }
+      let data = try await request(descriptor, path: "v1/ingress")
+      let status = try JSONDecoder().decode(IngressStatus.self, from: data)
+      guard status.contractVersion == 1,
+            ["ready", "unavailable", "unconfigured"].contains(status.availability),
+            !status.cause.isEmpty,
+            !status.detail.isEmpty else { return nil }
+      return status
+    } catch {
+      return nil
+    }
+  }
+
   private func readPreferences() throws -> Preferences {
     guard fileManager.fileExists(atPath: preferencesURL.path) else {
       return Preferences(version: 1, approvalAutomation: "off")
@@ -182,6 +205,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     async let gateway = inspectService("gateway")
     async let chat = inspectService("chat")
     async let codex = inspectService("codex")
+    async let ingress = inspectIngress()
     var profiles: [ProfileStatus] = []
     if let descriptor = try? readDescriptor("codex") {
       if let data = try? await request(descriptor, path: "v1/codex/profiles"),
@@ -192,6 +216,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     let preferences = try? readPreferences()
     return MenuSnapshot(
       services: [("Gateway", await gateway), ("Chat", await chat), ("Codex", await codex)],
+      ingress: await ingress,
       profiles: profiles,
       approvalAutomation: preferences?.approvalAutomation,
       approvalError: preferences == nil,
@@ -216,6 +241,27 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     } else if let snapshot {
       for (name, state) in snapshot.services {
         addDisabled("\(name): \(state)", to: menu)
+      }
+      if let ingress = snapshot.ingress {
+        let title: String
+        if ingress.availability == "ready" {
+          title = "Public connector: Ready"
+        } else if ingress.cause == "tailscale-backend-unreachable" || ingress.cause == "tailscale-stopped" {
+          title = "Public connector: Tailscale is off"
+        } else if ingress.cause == "tailscale-needs-login" {
+          title = "Public connector: Tailscale sign-in required"
+        } else if ingress.cause == "tailscale-offline" {
+          title = "Public connector: Tailscale offline"
+        } else if ingress.cause == "local-mcp-unreachable" {
+          title = "Public connector: Gateway MCP unavailable"
+        } else if ingress.cause == "funnel-route-absent" || ingress.cause == "funnel-route-drift" {
+          title = "Public connector: Funnel route unavailable"
+        } else {
+          title = "Public connector: Unavailable"
+        }
+        addDisabled(title, to: menu)
+      } else if snapshot.services.first(where: { $0.0 == "Gateway" })?.1 == "Stopped" {
+        addDisabled("Public connector: Gateway stopped", to: menu)
       }
       if snapshot.installedServiceControls {
         menu.addItem(NSMenuItem(title: "Start Background Services", action: #selector(startServices), keyEquivalent: ""))

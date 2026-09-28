@@ -166,6 +166,49 @@ class FixtureCheckpointProvider implements WebContextCheckpointProvider {
 }
 
 describe("Electron development runtime composition", () => {
+  test("discovers Web model families on one disposable non-Native surface", async () => {
+    const [, serverTransport] = InMemoryTransport.createLinkedPair();
+    const windows: FakeWindow[] = [];
+    class RuntimeWindow extends FakeWindow {
+      constructor(_input: BrowserWindowConstructorOptions) {
+        super();
+        windows.push(this);
+      }
+    }
+    let observedTaskId: string | undefined;
+    const runtime = await startElectronDevelopmentRuntime({
+      profileId: "profile-models",
+      currentTurnSource: source,
+      mcp: { kind: "transport", transport: serverTransport },
+      provider: new FinalProvider(),
+      async modelFamilyDiscovery(surface) {
+        observedTaskId = surface.taskId;
+        return [{ key: "a".repeat(20), label: "Observed Web", availableEfforts: ["medium", "high"] }];
+      },
+      electron: {
+        async loadRuntime() {
+          return {
+            app: { setPath() {}, async whenReady() {} },
+            BrowserWindow: RuntimeWindow,
+          };
+        },
+      },
+    });
+    try {
+      const families = await runtime.discoverChatGptWebModelFamilies();
+      expect(families).toEqual([{
+        key: "a".repeat(20),
+        label: "Observed Web",
+        availableEfforts: ["medium", "high"],
+      }]);
+      expect(observedTaskId).toBe("profile-model-catalog:profile-models");
+      expect(windows).toHaveLength(1);
+      expect(windows[0]?.destroyed).toBe(true);
+    } finally {
+      await runtime.stop();
+    }
+  });
+
   test("one profile boundary creates the persistent Electron host and shared runtime lifecycle", async () => {
     const [, serverTransport] = InMemoryTransport.createLinkedPair();
     const events: string[] = [];

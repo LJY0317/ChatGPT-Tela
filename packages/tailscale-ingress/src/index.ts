@@ -50,6 +50,34 @@ export interface TailscaleCommandRunner {
   run(arguments_: readonly string[], signal?: AbortSignal): Promise<TailscaleCommandResult>;
 }
 
+export type TailscaleBackendHealth =
+  | { readonly state: "ready"; readonly backendState: "Running" }
+  | { readonly state: "needs-login"; readonly backendState: string }
+  | { readonly state: "offline"; readonly backendState: string }
+  | { readonly state: "stopped"; readonly backendState: string }
+  | { readonly state: "backend-unreachable" }
+  | { readonly state: "cli-unavailable" }
+  | { readonly state: "unavailable"; readonly backendState?: string };
+
+export type TailscaleFunnelDiagnosisCause =
+  | "ready"
+  | "tailscale-cli-unavailable"
+  | "tailscale-backend-unreachable"
+  | "tailscale-needs-login"
+  | "tailscale-offline"
+  | "tailscale-stopped"
+  | "tailscale-status-unavailable"
+  | "funnel-route-absent"
+  | "funnel-route-drift";
+
+export interface TailscaleFunnelDiagnosis {
+  readonly availability: "ready" | "unavailable";
+  readonly cause: TailscaleFunnelDiagnosisCause;
+  readonly backend: TailscaleBackendHealth;
+  readonly route?: TailscaleFunnelLeaseState;
+  readonly ownership: "unowned" | "owned" | "drift";
+}
+
 export class SystemTailscaleCommandRunner implements TailscaleCommandRunner {
   readonly #command: string;
 
@@ -153,6 +181,82 @@ function object(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+function boundedBackendState(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value)
+    ? value
+    : undefined;
+}
+
+export function inspectTailscaleBackendHealth(status: unknown): TailscaleBackendHealth {
+  const root = object(status);
+  if (!root) return Object.freeze({ state: "unavailable" as const });
+  const backendState = boundedBackendState(root.BackendState);
+  const self = object(root.Self);
+  const online = self?.Online;
+  if (backendState === "Running" && online === true) {
+    return Object.freeze({ state: "ready" as const, backendState: "Running" as const });
+  }
+  if (backendState === "NeedsLogin") {
+    return Object.freeze({ state: "needs-login" as const, backendState });
+  }
+  if (backendState === "Stopped" || backendState === "NoState") {
+    return Object.freeze({ state: "stopped" as const, backendState });
+  }
+  if (backendState === "Running" && online === false) {
+    return Object.freeze({ state: "offline" as const, backendState });
+  }
+  return Object.freeze({
+    state: "unavailable" as const,
+    ...(backendState ? { backendState } : {}),
+  });
+}
+
+function commandFailureCode(error: unknown): "cli-unavailable" | "backend-unreachable" | "unavailable" {
+  if (error && typeof error === "object") {
+    const item = error as { code?: unknown; message?: unknown; stderr?: unknown };
+    if (item.code === "ENOENT") return "cli-unavailable";
+    const text = [item.message, item.stderr]
+      .filter((value): value is string => typeof value === "string")
+      .join(" ")
+      .toLowerCase();
+    if (text.includes("tailscaled")
+      || text.includes("local tailscale")
+      || text.includes("tailscale service")
+      || text.includes("tailscale is not running")
+      || text.includes("failed to connect")
+      || text.includes("connect to local")) {
+      return "backend-unreachable";
+    }
+  }
+  return "unavailable";
+}
+
+function diagnosisCause(backend: TailscaleBackendHealth): TailscaleFunnelDiagnosisCause {
+  switch (backend.state) {
+    case "cli-unavailable": return "tailscale-cli-unavailable";
+    case "backend-unreachable": return "tailscale-backend-unreachable";
+    case "needs-login": return "tailscale-needs-login";
+    case "offline": return "tailscale-offline";
+    case "stopped": return "tailscale-stopped";
+    case "unavailable": return "tailscale-status-unavailable";
+    case "ready": return "ready";
+  }
+}
+
+export function tailscaleDiagnosisDetail(cause: TailscaleFunnelDiagnosisCause): string {
+  switch (cause) {
+    case "ready": return "Tailscale Funnel and the exact Tela route are ready";
+    case "tailscale-cli-unavailable": return "Tailscale CLI is unavailable; install Tailscale or fix the configured CLI path";
+    case "tailscale-backend-unreachable": return "Tailscale is not running or its local backend cannot be reached; open Tailscale and wait until it is connected";
+    case "tailscale-needs-login": return "Tailscale requires sign-in before ChatGPT Tela public ingress can work";
+    case "tailscale-offline": return "Tailscale is running but this device is offline from the tailnet";
+    case "tailscale-stopped": return "Tailscale backend is stopped; start Tailscale before using the ChatGPT Tela connector";
+    case "tailscale-status-unavailable": return "Tailscale status could not be determined";
+    case "funnel-route-absent": return "Tailscale is online, but the configured ChatGPT Tela Funnel route is absent";
+    case "funnel-route-drift": return "Tailscale is online, but the configured ChatGPT Tela Funnel route no longer matches its expected target";
+  }
 }
 
 export function inspectTailscaleFunnelLease(
@@ -276,6 +380,66 @@ export class TailscaleFunnelLeaseManager {
     const result = await this.#runner.run(["serve", "status", "--json"], signal);
     try { return JSON.parse(result.stdout) as unknown; }
     catch (error) { throw new Error("Tailscale serve status returned invalid JSON", { cause: error }); }
+  }
+
+  async backendHealth(signal?: AbortSignal): Promise<TailscaleBackendHealth> {
+    const startedAt = Date.now();
+    let health: TailscaleBackendHealth;
+    try {
+      const result = await this.#runner.run(["status", "--json"], signal);
+      let parsed: unknown;
+      try { parsed = JSON.parse(result.stdout) as unknown; }
+      catch { parsed = undefined; }
+      health = inspectTailscaleBackendHealth(parsed);
+    } catch (error) {
+      const code = commandFailureCode(error);
+      health = Object.freeze({ state: code } as TailscaleBackendHealth);
+    }
+    emitDiagnosticEvent("chatgpt_tela_ingress", "tailscale_backend_check", {
+      state: health.state,
+      duration_ms: diagnosticDurationMs(startedAt),
+    });
+    return health;
+  }
+
+  async diagnose(lease: TailscaleFunnelLease, signal?: AbortSignal): Promise<TailscaleFunnelDiagnosis> {
+    const backend = await this.backendHealth(signal);
+    const ownership = this.ownership(lease);
+    if (backend.state !== "ready") {
+      return Object.freeze({
+        availability: "unavailable" as const,
+        cause: diagnosisCause(backend),
+        backend,
+        ownership,
+      });
+    }
+    let route: TailscaleFunnelLeaseState;
+    try {
+      route = await this.inspect(lease, signal);
+    } catch {
+      return Object.freeze({
+        availability: "unavailable" as const,
+        cause: "tailscale-status-unavailable" as const,
+        backend,
+        ownership,
+      });
+    }
+    if (route.state === "owned") {
+      return Object.freeze({
+        availability: "ready" as const,
+        cause: "ready" as const,
+        backend,
+        route,
+        ownership,
+      });
+    }
+    return Object.freeze({
+      availability: "unavailable" as const,
+      cause: route.state === "absent" ? "funnel-route-absent" as const : "funnel-route-drift" as const,
+      backend,
+      route,
+      ownership,
+    });
   }
 
   async inspect(lease: TailscaleFunnelLease, signal?: AbortSignal): Promise<TailscaleFunnelLeaseState> {
@@ -480,6 +644,10 @@ export class TailscaleFunnelExposure implements McpExposureProvider {
   }
 
   async prepare(signal?: AbortSignal): Promise<HttpsMcpEndpoint> {
+    const backend = await this.#manager.backendHealth(signal);
+    if (backend.state !== "ready") {
+      throw new Error(tailscaleDiagnosisDetail(diagnosisCause(backend)));
+    }
     const result = await this.#manager.acquire(this.#lease, signal ? { signal } : {});
     if (result.state === "preserved") throw new Error(`Tailscale Funnel route cannot be acquired: ${result.detail}`);
     this.#acquiredThisPrepare = result.state === "acquired";

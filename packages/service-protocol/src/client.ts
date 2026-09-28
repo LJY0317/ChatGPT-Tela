@@ -5,12 +5,14 @@ import type {
 import {
   parseChatCapabilityContract,
   parseCodexBridgePreviewContract,
+  parseCodexModelSelectionCanaryContract,
   parseCodexProfileStatusContract,
   parseCodexToolInventoryResponse,
   parseCodexToolInvokeResponse,
   parseServiceStatus,
   type CodexProfileStatusContract,
   type CodexBridgePreviewContract,
+  type CodexModelSelectionCanaryContract,
   type ChatCapabilityContract,
   type ServiceRuntimeDescriptor,
   type ServiceStatus,
@@ -118,6 +120,16 @@ export class CodexServiceClient extends LocalServiceClient {
       `v1/codex/profiles/${slot}/bridge-preview`,
       "GET",
       undefined,
+      signal,
+    ));
+  }
+
+  async modelSelectionCanary(slot: number, signal?: AbortSignal): Promise<CodexModelSelectionCanaryContract> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("Codex profile slot must be an integer from 1 to 99");
+    return parseCodexModelSelectionCanaryContract(await this.request(
+      `v1/codex/profiles/${slot}/model-selection-canary`,
+      "POST",
+      {},
       signal,
     ));
   }

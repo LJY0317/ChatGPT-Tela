@@ -18,6 +18,7 @@ async function main(): Promise<void> {
       slot: config.slot,
       bearerToken: config.uiToken,
       observe: () => runtime.runtime.observeBridgePreview(),
+      probeModelSelection: () => runtime.runtime.probeChatGptWebModelSelection(),
     });
   } catch (error) {
     await runtime.stop().catch(() => {});

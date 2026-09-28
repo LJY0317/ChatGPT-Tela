@@ -10,6 +10,10 @@ import { prepareProfileOwnership } from "./profile-ownership";
 import { summarizeDiagnosticWorkload } from "./diagnostic-workload";
 import { diagnoseDefaultDesktop } from "@chatgpt-tela/default-desktop-target";
 import {
+  probePublicMcp,
+  probeUnifiedDevelopmentMcp,
+} from "@chatgpt-tela/gateway";
+import {
   hasEffectiveProductConfig,
   nativeProductConfigPath,
   readEffectiveProductConfig,
@@ -61,6 +65,7 @@ import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
 import {
   createTailscaleFunnelLease,
   SystemTailscaleCommandRunner,
+  tailscaleDiagnosisDetail,
   TailscaleFunnelLeaseManager,
 } from "@chatgpt-tela/tailscale-ingress";
 
@@ -324,6 +329,94 @@ function publicMcpStatus(
   } catch (error) {
     return { status: "configuration-error", detail: error instanceof Error ? error.message : String(error) };
   }
+}
+
+async function diagnoseConfiguredIngress(
+  productPaths: ReturnType<typeof resolveProductPaths>,
+): Promise<Record<string, unknown>> {
+  if (!hasEffectiveProductConfig(productPaths)) {
+    return { state: "unconfigured", cause: "product-unconfigured" };
+  }
+  const config = readEffectiveProductConfig(productPaths);
+  const probe = config.publicMcpAbi === "stable" ? probePublicMcp : probeUnifiedDevelopmentMcp;
+  const probeEndpoint = async (url: URL): Promise<Record<string, unknown>> => {
+    const health = await probe(url, AbortSignal.timeout(4_000));
+    return health.ready
+      ? { state: "ready" }
+      : { state: "unavailable", cause: "public-mcp-unreachable", detail: health.detail ?? "public MCP probe failed" };
+  };
+  const localMcp = await probeEndpoint(new URL(`http://127.0.0.1:${config.exposure.localPort}/mcp`));
+  const normalizedLocalMcp = localMcp.state === "ready"
+    ? localMcp
+    : { ...localMcp, cause: "local-mcp-unreachable" };
+
+  if (config.exposure.kind !== "tailscale-funnel") {
+    if (normalizedLocalMcp.state !== "ready") {
+      return {
+        kind: "existing-https",
+        state: "unavailable",
+        cause: "local-mcp-unreachable",
+        detail: "The configured public route cannot work because the local Tela Gateway MCP listener is not reachable",
+        localMcp: normalizedLocalMcp,
+        publicMcp: { state: "not-probed", blockedBy: "local-mcp-unreachable" },
+      };
+    }
+    const publicMcp = await probeEndpoint(new URL(config.exposure.publicUrl));
+    return {
+      kind: "existing-https",
+      state: publicMcp.state,
+      cause: publicMcp.state === "ready" ? "ready" : "public-mcp-unreachable",
+      localMcp: normalizedLocalMcp,
+      publicMcp,
+    };
+  }
+
+  const manifest = readOwnershipManifest(productPaths.installManifest);
+  const manager = new TailscaleFunnelLeaseManager({
+    runner: new SystemTailscaleCommandRunner(config.exposure.tailscaleCli),
+    manifestPath: productPaths.installManifest,
+    installId: manifest?.installId ?? "diagnostic-unowned-install",
+    productVersion: manifest?.productVersion ?? "0.0.0",
+  });
+  const lease = createTailscaleFunnelLease({
+    publicUrl: config.exposure.publicUrl,
+    localTarget: `http://127.0.0.1:${config.exposure.localPort}/mcp`,
+  });
+  const tailscale = await manager.diagnose(lease);
+  if (tailscale.availability !== "ready") {
+    return {
+      kind: "tailscale-funnel",
+      state: "unavailable",
+      cause: tailscale.cause,
+      detail: tailscaleDiagnosisDetail(tailscale.cause),
+      localMcp: normalizedLocalMcp,
+      tailscale,
+      publicMcp: { state: "not-probed", blockedBy: tailscale.cause },
+    };
+  }
+  if (normalizedLocalMcp.state !== "ready") {
+    return {
+      kind: "tailscale-funnel",
+      state: "unavailable",
+      cause: "local-mcp-unreachable",
+      detail: "Tailscale and the exact Funnel route are ready, but the local Tela Gateway MCP listener is not reachable",
+      localMcp: normalizedLocalMcp,
+      tailscale,
+      publicMcp: { state: "not-probed", blockedBy: "local-mcp-unreachable" },
+    };
+  }
+  const publicMcp = await probeEndpoint(new URL(config.exposure.publicUrl));
+  return {
+    kind: "tailscale-funnel",
+    state: publicMcp.state,
+    cause: publicMcp.state === "ready" ? "ready" : "public-mcp-unreachable",
+    detail: publicMcp.state === "ready"
+      ? "Tailscale is online, the exact Funnel route is present, and the public ChatGPT Tela MCP probe succeeded"
+      : "Tailscale and the Funnel route are ready, but the public ChatGPT Tela MCP endpoint is not reachable",
+    localMcp: normalizedLocalMcp,
+    tailscale,
+    publicMcp,
+  };
 }
 
 async function configure(
@@ -637,6 +730,10 @@ async function manageIngress(
   if (config.exposure.kind !== "tailscale-funnel") {
     throw new Error("ingress management requires configure --manage-tailscale-funnel");
   }
+  if (subcommand === "status") {
+    console.log(JSON.stringify(await diagnoseConfiguredIngress(productPaths), null, 2));
+    return;
+  }
   const manifest = await ensureOwnershipManifest({ path: productPaths.installManifest, productVersion: "0.0.0" });
   const manager = new TailscaleFunnelLeaseManager({
     runner: new SystemTailscaleCommandRunner(config.exposure.tailscaleCli),
@@ -648,10 +745,6 @@ async function manageIngress(
     publicUrl: config.exposure.publicUrl,
     localTarget: `http://127.0.0.1:${config.exposure.localPort}/mcp`,
   });
-  if (subcommand === "status") {
-    console.log(JSON.stringify({ lease, physical: await manager.inspect(lease), ownership: manager.ownership(lease) }, null, 2));
-    return;
-  }
   if (subcommand === "adopt-existing") {
     const physical = await manager.inspect(lease);
     if (physical.state !== "owned") {
@@ -706,6 +799,7 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({
       stage: "pre-alpha",
       defaultDesktop: await diagnoseDefaultDesktop(),
+      ingress: await diagnoseConfiguredIngress(productPaths),
       productConfigured: configured,
       optionalMultiProfileConfigured: configured
         ? Boolean(readEffectiveProductConfig(productPaths).multiProfile)
@@ -843,10 +937,11 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(profiles, null, 2));
       return;
     }
-    const [gatewayStatus, chatStatus, codexStatus] = await Promise.all([
+    const [gatewayStatus, chatStatus, codexStatus, ingressStatus] = await Promise.all([
       serviceStatus(supervisor, productPaths, "gateway"),
       serviceStatus(supervisor, productPaths, "chat"),
       serviceStatus(supervisor, productPaths, "codex"),
+      diagnoseConfiguredIngress(productPaths),
     ]);
     console.log(JSON.stringify({
       stage: "pre-alpha",
@@ -855,10 +950,25 @@ async function main(): Promise<void> {
       connectorSetup: "manual-pre-alpha",
       runtime: "split-services",
       services: { gateway: gatewayStatus, chat: chatStatus, codex: codexStatus },
+      ingress: ingressStatus,
       profiles,
       packagedTransitions: packagedTransitionStatus(productPaths),
       configured: hasEffectiveProductConfig(productPaths),
     }, null, 2));
+    return;
+  }
+  if (command === "model-canary") {
+    const profileSlot = slot();
+    const manifest = readOwnershipManifest(productPaths.installManifest);
+    if (!manifest) throw new Error("model-canary requires a running Tela Codex service/profile");
+    const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
+    const running = await supervisor.current({
+      service: "codex",
+      descriptorPath: serviceDescriptorPath(productPaths, "codex"),
+    });
+    if (!running) throw new Error("model-canary requires a running Tela Codex service/profile");
+    const codex = new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
+    console.log(JSON.stringify(await codex.modelSelectionCanary(profileSlot), null, 2));
     return;
   }
   console.log(
@@ -886,6 +996,7 @@ async function main(): Promise<void> {
     + "  start [--slot <n>]\n"
     + "  stop [--slot <n>]\n"
     + "  profiles\n"
+    + "  model-canary [--slot <n>]\n"
     + "  status\n"
     + "  shutdown",
   );

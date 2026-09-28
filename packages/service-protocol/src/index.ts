@@ -67,6 +67,15 @@ export interface CodexBridgePreviewContract {
   readonly imageBase64?: string;
 }
 
+export interface CodexModelSelectionCanaryContract {
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly familyCount: number;
+  readonly exercised: boolean;
+  readonly testedEffort?: "low" | "medium" | "high" | "xhigh" | "max";
+  readonly restoredEffort: "low" | "medium" | "high" | "xhigh" | "max";
+}
+
 export interface ChatCapabilityContract {
   readonly capability: string;
   readonly description: string;
@@ -131,6 +140,44 @@ export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePrev
     previewAvailable: item.previewAvailable,
     ...(item.previewAvailable ? { imageMimeType: "image/jpeg" as const, imageBase64: imageBase64 as string } : {}),
   });
+}
+
+export function parseCodexModelSelectionCanaryContract(value: unknown): CodexModelSelectionCanaryContract {
+  const item = object(value, "Codex model selection canary");
+  if (item.contractVersion !== 1) throw new Error("unsupported Codex model selection canary version");
+  if (!Number.isSafeInteger(item.slot) || (item.slot as number) < 1 || (item.slot as number) > 99) {
+    throw new Error("Codex model selection canary slot is invalid");
+  }
+  if (!Number.isSafeInteger(item.familyCount) || (item.familyCount as number) < 0 || (item.familyCount as number) > 64) {
+    throw new Error("Codex model selection canary family count is invalid");
+  }
+  if (typeof item.exercised !== "boolean") throw new Error("Codex model selection canary exercised flag is invalid");
+  const efforts = ["low", "medium", "high", "xhigh", "max"] as const;
+  const restoredEffort = item.restoredEffort;
+  if (!efforts.includes(restoredEffort as never)) throw new Error("Codex model selection canary restored effort is invalid");
+  const testedEffort = item.testedEffort;
+  if (testedEffort !== undefined && !efforts.includes(testedEffort as never)) {
+    throw new Error("Codex model selection canary tested effort is invalid");
+  }
+  if (item.exercised && testedEffort === undefined) {
+    throw new Error("exercised Codex model selection canary is missing its tested effort");
+  }
+  if (!item.exercised && testedEffort !== undefined) {
+    throw new Error("non-exercised Codex model selection canary must not report a tested effort");
+  }
+  const base = {
+    contractVersion: 1 as const,
+    slot: item.slot as number,
+    familyCount: item.familyCount as number,
+    exercised: item.exercised,
+    restoredEffort: restoredEffort as CodexModelSelectionCanaryContract["restoredEffort"],
+  };
+  return testedEffort === undefined
+    ? Object.freeze(base)
+    : Object.freeze({
+        ...base,
+        testedEffort: testedEffort as CodexModelSelectionCanaryContract["restoredEffort"],
+      });
 }
 
 function text(value: unknown, field: string): string {

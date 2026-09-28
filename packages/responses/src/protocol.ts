@@ -85,15 +85,18 @@ export function encodeNativeResponsesOutcome(input: {
 }): EncodedNativeResponsesOutcome {
   if (!input.model.trim()) throw new Error("Native Responses model must be non-empty");
   const key = deliveryKey(input.outcome);
-  const responseId = stableId("resp", key);
+  // Keep bridge-owned identities visibly distinct from first-party Responses ids. Native
+  // passthrough can then remove only Tela artifacts when a thread switches back to a native model
+  // without guessing whether an opaque `resp_*`/`msg_*` id came from OpenAI or from this bridge.
+  const responseId = stableId("resp_tela", key);
   const outputItemId = stableId(
     input.outcome.type === "final"
-      ? "msg"
+      ? "msg_tela"
       : input.outcome.item.type === "function_call"
-        ? "fc"
+        ? "fc_tela"
         : input.outcome.item.type === "custom_tool_call"
-          ? "ctc"
-          : "tsc",
+          ? "ctc_tela"
+          : "tsc_tela",
     key,
   );
   const outputItem = input.outcome.type === "tool-call"

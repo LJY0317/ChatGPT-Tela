@@ -3,6 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  chatGptWebFamilyKey,
+  chatGptWebModelId,
+} from "@chatgpt-tela/chatgpt";
+import {
   NativeToolInventory,
   defineNativeTurnAuthority,
 } from "@chatgpt-tela/core";
@@ -156,6 +160,40 @@ describe("Native request development Web planner", () => {
     await expect(planner(registered(), {
       input: [{ type: "reasoning", encrypted_content: "opaque" }],
     })).rejects.toThrow("no supported logical context");
+  });
+
+  test("synthetic Web model ids carry exact browser family/effort selection while Native ids do not", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const familyKey = chatGptWebFamilyKey("Observed Family");
+    const web = await planner(registered(), {
+      model: chatGptWebModelId(familyKey),
+      reasoning: { effort: "xhigh" },
+      input: [{ type: "message", role: "user", content: "Use the Web route." }],
+    });
+    expect(web.browserModel).toEqual({ familyKey, effort: "xhigh" });
+    web.settle?.({ status: "failed" });
+
+    const native = await planner(registered(), {
+      model: "gpt-native",
+      reasoning: { effort: "high" },
+      input: [{ type: "message", role: "user", content: "Native route fixture." }],
+    });
+    expect(native.browserModel).toBeUndefined();
+    native.settle?.({ status: "failed" });
+  });
+
+  test("synthetic Web model ids fail before browser work when reasoning effort is absent or unsupported", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const model = chatGptWebModelId(chatGptWebFamilyKey("Observed Family"));
+    await expect(planner(registered(), {
+      model,
+      input: [{ type: "message", role: "user", content: "missing effort" }],
+    })).rejects.toThrow("supported reasoning effort");
+    await expect(planner(registered(), {
+      model,
+      reasoning: { effort: "future-effort" },
+      input: [{ type: "message", role: "user", content: "bad effort" }],
+    })).rejects.toThrow("supported reasoning effort");
   });
 
   test("canonical prefixes keep stable revision ids across later turns and append-only steering-like input", () => {

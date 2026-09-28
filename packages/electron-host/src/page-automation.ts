@@ -200,7 +200,7 @@ export class ElectronWebContentsPageAutomation implements BrowserPageAutomation 
 
   async pressKey(keyCode: string, signal?: AbortSignal): Promise<void> {
     if (!/^[A-Za-z0-9@ _+\-]{1,32}$/.test(keyCode)
-      && !["ArrowDown", "ArrowUp", "Enter", "Escape", "Tab", "Backspace"].includes(keyCode)) {
+      && !["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Enter", "Escape", "Tab", "Backspace"].includes(keyCode)) {
       throw new Error("trusted browser key is invalid");
     }
     assertActive(this.webContents);

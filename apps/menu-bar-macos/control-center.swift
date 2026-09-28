@@ -12,6 +12,14 @@ private struct ControlCenterServiceStatus: Decodable {
   let state: String
 }
 
+private struct ControlCenterIngressStatus: Decodable {
+  let contractVersion: Int
+  let availability: String
+  let cause: String
+  let detail: String
+  let exposureKind: String?
+}
+
 private struct ControlCenterProfileStatus: Decodable {
   let slot: Int
   let targetDisplayName: String
@@ -57,6 +65,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var detailStack: NSStackView?
   private var selectedPage: ControlCenterPage = .overview
   private var serviceStates: [String: String] = [:]
+  private var ingressStatus: ControlCenterIngressStatus?
   private var profiles: [ControlCenterProfileStatus] = []
   private var approvalAutomation = "off"
   private var bridgeImage: NSImage?
@@ -200,6 +209,16 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       for service in ["gateway", "chat", "codex"] {
         stack.addArrangedSubview(label("\(service.capitalized): \(serviceStates[service] ?? "Unknown")"))
       }
+      if serviceStates["gateway"] == "Stopped" {
+        stack.addArrangedSubview(label("Public ingress: Unavailable — Gateway is stopped."))
+      } else if let ingressStatus {
+        stack.addArrangedSubview(label("Public ingress: \(ingressStatus.availability.capitalized)"))
+        if ingressStatus.availability != "ready" {
+          stack.addArrangedSubview(label(ingressStatus.detail))
+        }
+      } else {
+        stack.addArrangedSubview(label("Public ingress: Unknown"))
+      }
       addRefreshButton()
     case .chat:
       stack.addArrangedSubview(label("Tela Chat: \(serviceStates["chat"] ?? "Unknown")"))
@@ -241,6 +260,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       addRefreshButton()
     case .diagnostics:
       stack.addArrangedSubview(label("Tela diagnostics are privacy-bounded and stored separately from user prompts, tool arguments, and file contents."))
+      if let ingressStatus {
+        stack.addArrangedSubview(label("Public ingress · \(ingressStatus.cause)\n\(ingressStatus.detail)"))
+      } else if serviceStates["gateway"] == "Stopped" {
+        stack.addArrangedSubview(label("Public ingress · local-mcp-unreachable\nGateway is stopped, so the public connector cannot reach Tela."))
+      }
       let logs = NSButton(title: "Open Logs", target: self, action: #selector(openLogs))
       stack.addArrangedSubview(logs)
     }
@@ -294,7 +318,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     async let gateway = serviceState("gateway")
     async let chat = serviceState("chat")
     async let codex = serviceState("codex")
+    async let ingress = loadIngressStatus()
     serviceStates = ["gateway": await gateway, "chat": await chat, "codex": await codex]
+    ingressStatus = await ingress
     profiles = await loadProfiles()
     if let data = try? Data(contentsOf: preferencesURL),
        let preferences = try? JSONDecoder().decode(ControlCenterPreferences.self, from: data),
@@ -319,6 +345,18 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       let envelope = try JSONDecoder().decode(ControlCenterProfilesEnvelope.self, from: await request(descriptor, path: "v1/codex/profiles"))
       return envelope.profiles.sorted { $0.slot < $1.slot }
     } catch { return [] }
+  }
+
+  private func loadIngressStatus() async -> ControlCenterIngressStatus? {
+    do {
+      guard let descriptor = try readDescriptor("gateway") else { return nil }
+      let value = try JSONDecoder().decode(ControlCenterIngressStatus.self, from: await request(descriptor, path: "v1/ingress"))
+      guard value.contractVersion == 1,
+            ["ready", "unavailable", "unconfigured"].contains(value.availability),
+            !value.cause.isEmpty,
+            !value.detail.isEmpty else { return nil }
+      return value
+    } catch { return nil }
   }
 
   private func loadBridgePreview() async {

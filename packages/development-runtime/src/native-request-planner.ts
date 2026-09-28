@@ -6,7 +6,12 @@ import {
   type LogicalRevision,
   type RevisionKind,
 } from "@chatgpt-tela/core";
-import type { WebPhysicalContext } from "@chatgpt-tela/chatgpt";
+import {
+  CHATGPT_WEB_EFFORTS,
+  parseChatGptWebModelId,
+  type ChatGptWebEffort,
+  type WebPhysicalContext,
+} from "@chatgpt-tela/chatgpt";
 import {
   prepareWebContext,
   type ContextProjectionSource,
@@ -151,6 +156,23 @@ function routeIdentity(value: unknown): string {
     .update(normalized)
     .digest("base64url")
     .slice(0, 20);
+}
+
+function browserModelRoute(value: unknown): {
+  readonly familyKey: string;
+  readonly effort: ChatGptWebEffort;
+} | undefined {
+  const body = record(value);
+  const model = typeof body?.model === "string" ? body.model : undefined;
+  if (!model) return undefined;
+  const parsed = parseChatGptWebModelId(model);
+  if (!parsed) return undefined;
+  const reasoning = record(body?.reasoning);
+  const effort = typeof reasoning?.effort === "string" ? reasoning.effort : undefined;
+  if (!effort || !(CHATGPT_WEB_EFFORTS as readonly string[]).includes(effort)) {
+    throw new Error("ChatGPT Web model requires one supported reasoning effort from the Native request");
+  }
+  return Object.freeze({ familyKey: parsed.familyKey, effort: effort as ChatGptWebEffort });
 }
 
 function contentFingerprint(value: string): string {
@@ -405,6 +427,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
       throw new Error("native task already has an unsettled Web context plan");
     }
     const projection = projectNativeRequestContext(threadId, nativeRequest);
+    const browserModel = browserModelRoute(nativeRequest);
     const currentRouteIdentity = routeIdentity(nativeRequest);
     const committed = retainedByTask.get(threadId);
     const retained = committed
@@ -418,6 +441,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
         nativeTaskId: threadId,
         webEpochId: committed.webEpochId,
         physicalContext: retained,
+        ...(browserModel ? { browserModel } : {}),
         diagnostics: Object.freeze({
           provider_projection: false,
           retained_delta: true,
@@ -517,6 +541,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
       nativeTaskId: threadId,
       webEpochId: epochId,
       physicalContext: providerProjection.context,
+      ...(browserModel ? { browserModel } : {}),
       diagnostics: Object.freeze({
         provider_projection: true,
         retained_delta: false,

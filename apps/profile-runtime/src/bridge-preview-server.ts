@@ -24,6 +24,12 @@ export async function startProfileBridgePreviewServer(input: {
   readonly slot: number;
   readonly bearerToken: string;
   readonly observe: () => Promise<{ readonly activeSurfaceCount: number; readonly jpeg?: Uint8Array }>;
+  readonly probeModelSelection?: () => Promise<{
+    readonly familyCount: number;
+    readonly exercised: boolean;
+    readonly testedEffort?: "low" | "medium" | "high" | "xhigh" | "max";
+    readonly restoredEffort: "low" | "medium" | "high" | "xhigh" | "max";
+  }>;
 }): Promise<ProfileBridgePreviewServer> {
   if (!Number.isSafeInteger(input.slot) || input.slot < 1 || input.slot > 99) {
     throw new Error("profile bridge preview slot must be 1-99");
@@ -37,9 +43,23 @@ export async function startProfileBridgePreviewServer(input: {
       if (request.headers.has("origin")) return new Response(null, { status: 403 });
       if (!sameSecret(bearer(request), input.bearerToken)) return new Response(null, { status: 401 });
       const url = new URL(request.url);
-      if (request.method !== "GET" || url.pathname !== "/v1/bridge-preview") {
-        return new Response(null, { status: 404 });
+      if (request.method === "POST" && url.pathname === "/v1/model-selection-canary") {
+        if (!input.probeModelSelection) return new Response(null, { status: 404 });
+        try {
+          const result = await input.probeModelSelection();
+          return Response.json({ contractVersion: 1, slot: input.slot, ...result }, {
+            headers: { "cache-control": "no-store" },
+          });
+        } catch (error) {
+          return Response.json({
+            error: {
+              type: "chatgpt_tela_model_selection_canary_error",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          }, { status: 409, headers: { "cache-control": "no-store" } });
+        }
       }
+      if (request.method !== "GET" || url.pathname !== "/v1/bridge-preview") return new Response(null, { status: 404 });
       const observed = await input.observe();
       const jpeg = observed.activeSurfaceCount === 1 ? observed.jpeg : undefined;
       if (jpeg && jpeg.byteLength > MAX_JPEG_BYTES) {

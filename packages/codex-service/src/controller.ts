@@ -8,7 +8,9 @@ import {
 } from "@chatgpt-tela/mcp";
 import {
   parseCodexBridgePreviewContract,
+  parseCodexModelSelectionCanaryContract,
   type CodexBridgePreviewContract,
+  type CodexModelSelectionCanaryContract,
   type ServiceStatus,
 } from "@chatgpt-tela/service-protocol";
 import {
@@ -80,6 +82,7 @@ export interface CodexService {
   startProfile(slot: number): Promise<CodexProfileStatus>;
   stopProfile(slot: number): Promise<CodexProfileStatus>;
   bridgePreview(slot: number): Promise<CodexBridgePreviewContract>;
+  modelSelectionCanary(slot: number): Promise<CodexModelSelectionCanaryContract>;
   close(): Promise<void>;
   readonly activeProfileCount: number;
 }
@@ -451,6 +454,30 @@ export async function startCodexService(input: {
       const preview = parseCodexBridgePreviewContract(value);
       if (preview.slot !== slot) throw new Error("profile bridge preview slot does not match its owner");
       return preview;
+    },
+    async modelSelectionCanary(slotValue: number) {
+      const slot = slotNumber(slotValue);
+      const profile = owned.get(slot);
+      if (!profile || profile.child.exitCode !== null || profile.child.signalCode !== null) {
+        throw new Error(`Tela Codex profile ${slot} is not running`);
+      }
+      const response = await fetch(new URL("v1/model-selection-canary", profile.bridgePreviewUrl), {
+        method: "POST",
+        headers: { authorization: `Bearer ${profile.uiToken}` },
+        signal: AbortSignal.timeout(20_000),
+      });
+      const value = await response.json().catch(() => undefined) as unknown;
+      if (!response.ok) {
+        const message = value && typeof value === "object" && !Array.isArray(value)
+          ? (value as { error?: { message?: unknown } }).error?.message
+          : undefined;
+        throw new Error(typeof message === "string" && message.trim()
+          ? message
+          : `profile model selection canary failed with HTTP ${response.status}`);
+      }
+      const canary = parseCodexModelSelectionCanaryContract(value);
+      if (canary.slot !== slot) throw new Error("profile model selection canary slot does not match its owner");
+      return canary;
     },
     close() {
       if (closing) return closing;

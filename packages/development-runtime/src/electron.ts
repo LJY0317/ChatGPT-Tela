@@ -1,14 +1,21 @@
 import { randomUUID } from "node:crypto";
-import { BROWSER_READ_ONLY_PREVIEW } from "@chatgpt-tela/browser-host";
+import {
+  BROWSER_READ_ONLY_PREVIEW,
+  type BrowserSurfaceLease,
+} from "@chatgpt-tela/browser-host";
 import {
   createElectronMainProcessBrowserHost,
   type ElectronMainRuntimeLike,
 } from "@chatgpt-tela/electron-host";
 import {
   ChatGptSemanticProvider,
+  discoverChatGptWebModelFamilies as discoverWebModelFamilies,
+  probeChatGptWebModelSelection as probeWebModelSelection,
   type ChatGptAccountIdentity,
   type ChatGptCapabilities,
   type ChatGptConnectorObservation,
+  type ChatGptWebModelFamily,
+  type ChatGptWebModelSelectionCanary,
   type WebConversationProvider,
   type WebContextCheckpointProvider,
 } from "@chatgpt-tela/chatgpt";
@@ -43,6 +50,10 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
     signal?: AbortSignal,
     options?: { readonly allowUnknownSelectedConnector?: boolean },
   ): Promise<boolean>;
+  /** Read the authenticated ChatGPT account's current selectable Web model families and efforts. */
+  discoverChatGptWebModelFamilies(signal?: AbortSignal): Promise<readonly ChatGptWebModelFamily[]>;
+  /** Non-submit exact model/effort selection + restoration canary on one disposable surface. */
+  probeChatGptWebModelSelection(signal?: AbortSignal): Promise<ChatGptWebModelSelectionCanary>;
   /**
    * Observe the hidden bridge without revealing/focusing it or sending any page input.
    * A preview is returned only when exactly one task/epoch surface is active.
@@ -74,6 +85,15 @@ export interface ElectronDevelopmentRuntimeOptions {
   readonly approvalAutomationMode?: import("@chatgpt-tela/chatgpt").ChatGptApprovalAutomationMode;
   readonly webTurnTimeoutMs?: number;
   readonly accountIdentityObserver?: ChatGptAccountIdentityObserver;
+  /** Test/provider seam; production uses the ChatGPT semantic model-picker implementation. */
+  readonly modelFamilyDiscovery?: (
+    surface: BrowserSurfaceLease,
+    signal?: AbortSignal,
+  ) => Promise<readonly ChatGptWebModelFamily[]>;
+  readonly modelSelectionCanary?: (
+    surface: BrowserSurfaceLease,
+    signal?: AbortSignal,
+  ) => Promise<ChatGptWebModelSelectionCanary>;
   /**
    * Explicit one-purpose checkpoint provider. The default ChatGPT turn provider is not reused
    * implicitly because ordinary assistant replies are not checkpoint authority.
@@ -84,6 +104,8 @@ export interface ElectronDevelopmentRuntimeOptions {
     readonly hostname?: string;
     readonly port?: number;
     readonly runtimeToken?: string;
+    readonly authentication?: import("@chatgpt-tela/local-server").LocalResponsesAuthentication;
+    readonly requestRouter?: import("@chatgpt-tela/local-server").LocalResponsesRequestRouter;
     readonly maxRequestBodyBytes?: number;
   };
   readonly electron?: {
@@ -121,6 +143,8 @@ export async function startElectronDevelopmentRuntime(
     ...(input.approvalAutomationMode ? { approvalAutomationMode: input.approvalAutomationMode } : {}),
   });
   const checkpointCache = input.context?.checkpointCache;
+  const modelFamilyDiscovery = input.modelFamilyDiscovery ?? discoverWebModelFamilies;
+  const modelSelectionCanary = input.modelSelectionCanary ?? probeWebModelSelection;
   const profileControl = createChatGptProfileControl({
     browserHost,
     provider,
@@ -175,6 +199,30 @@ export async function startElectronDevelopmentRuntime(
     ) => (
       profileControl.recoverChatGptConnectorProbeArtifact(signal, options)
     ),
+    async discoverChatGptWebModelFamilies(signal?: AbortSignal) {
+      const epochId = `profile-model-catalog-${randomUUID()}`;
+      const surface = await browserHost.acquire({
+        taskId: `profile-model-catalog:${input.profileId}`,
+        epochId,
+      });
+      try {
+        return await modelFamilyDiscovery(surface, signal);
+      } finally {
+        await browserHost.release(surface.leaseId);
+      }
+    },
+    async probeChatGptWebModelSelection(signal?: AbortSignal) {
+      const epochId = `profile-model-canary-${randomUUID()}`;
+      const surface = await browserHost.acquire({
+        taskId: `profile-model-canary:${input.profileId}`,
+        epochId,
+      });
+      try {
+        return await modelSelectionCanary(surface, signal);
+      } finally {
+        await browserHost.release(surface.leaseId);
+      }
+    },
     async observeBridgePreview() {
       const observed = browserHost.singleActiveCapability(BROWSER_READ_ONLY_PREVIEW);
       if (!observed.capability) return Object.freeze({ activeSurfaceCount: observed.activeSurfaceCount });

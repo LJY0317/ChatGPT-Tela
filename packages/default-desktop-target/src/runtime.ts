@@ -7,7 +7,11 @@ import {
   requestDefaultDesktopNormalQuit,
   type DefaultDesktopInstallation,
 } from "./platform";
-import { startDefaultDesktopAppServerProxy, type DefaultDesktopAppServerProxy } from "./proxy";
+import {
+  startDefaultDesktopAppServerProxy,
+  type DefaultDesktopAppServerModelListAugmenter,
+  type DefaultDesktopAppServerProxy,
+} from "./proxy";
 import {
   defaultDesktopCodexConfigArguments,
   type DefaultDesktopResponsesRoute,
@@ -135,6 +139,7 @@ export async function startDefaultDesktopTargetRuntime(input: {
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly normalQuit?: (installation: DefaultDesktopInstallation, pid: number) => Promise<void>;
   readonly processIds?: (installation: DefaultDesktopInstallation) => Promise<readonly number[]>;
+  readonly augmentModelList?: DefaultDesktopAppServerModelListAugmenter;
 }): Promise<DefaultDesktopTargetRuntime> {
   if (!input.installation.normalQuitSupported && !input.normalQuit) {
     throw new Error(`built-in default Desktop runtime requires a normal quit lifecycle on ${input.installation.platform}`);
@@ -173,7 +178,11 @@ export async function startDefaultDesktopTargetRuntime(input: {
     backend.stderr.resume();
     const rpc = await connectCodexAppServerWebSocket(appServerEndpoint);
     await rpc.close();
-    proxy = await startDefaultDesktopAppServerProxy({ upstreamEndpoint: appServerEndpoint, route: input.route });
+    proxy = await startDefaultDesktopAppServerProxy({
+      upstreamEndpoint: appServerEndpoint,
+      route: input.route,
+      ...(input.augmentModelList ? { augmentModelList: input.augmentModelList } : {}),
+    });
 
     const desktopEnvironment: NodeJS.ProcessEnv = {
       ...process.env,

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { readOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import {
   createTailscaleFunnelLease,
+  inspectTailscaleBackendHealth,
   inspectTailscaleFunnelLease,
   planAcquireTailscaleFunnelLease,
   planReleaseTailscaleFunnelLease,
@@ -12,6 +13,7 @@ import {
   TailscaleFunnelExposure,
   TailscaleFunnelLeaseManager,
   TailscaleFunnelOwnershipObserver,
+  tailscaleDiagnosisDetail,
   type TailscaleCommandResult,
   type TailscaleCommandRunner,
 } from "./index";
@@ -49,6 +51,12 @@ class FakeTailscaleRunner implements TailscaleCommandRunner {
 
   async run(arguments_: readonly string[]): Promise<TailscaleCommandResult> {
     this.calls.push([...arguments_]);
+    if (arguments_.join(" ") === "status --json") {
+      return {
+        stdout: JSON.stringify({ BackendState: "Running", Self: { Online: true } }),
+        stderr: "",
+      };
+    }
     if (arguments_.join(" ") === "serve status --json") {
       return { stdout: JSON.stringify(this.status()), stderr: "" };
     }
@@ -68,6 +76,104 @@ class FakeTailscaleRunner implements TailscaleCommandRunner {
 }
 
 describe("Tailscale Funnel ownership lease", () => {
+  test("separates local Tailscale backend health from Funnel route ownership", () => {
+    expect(inspectTailscaleBackendHealth({
+      BackendState: "Running",
+      Self: { Online: true },
+    })).toEqual({ state: "ready", backendState: "Running" });
+    expect(inspectTailscaleBackendHealth({
+      BackendState: "Running",
+      Self: { Online: false },
+    })).toEqual({ state: "offline", backendState: "Running" });
+    expect(inspectTailscaleBackendHealth({
+      BackendState: "NeedsLogin",
+      Self: { Online: false },
+    })).toEqual({ state: "needs-login", backendState: "NeedsLogin" });
+    expect(inspectTailscaleBackendHealth({
+      BackendState: "Stopped",
+      Self: { Online: false },
+    })).toEqual({ state: "stopped", backendState: "Stopped" });
+  });
+
+  test("diagnosis reports Tailscale-off as the root cause before inspecting Funnel state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-tailscale-diagnose-off-"));
+    const calls: string[][] = [];
+    const runner: TailscaleCommandRunner = {
+      async run(arguments_) {
+        calls.push([...arguments_]);
+        if (arguments_.join(" ") === "status --json") {
+          const error = new Error("failed to connect to local Tailscale service; is Tailscale running?") as Error & { stderr?: string };
+          error.stderr = "failed to connect to local Tailscale service";
+          throw error;
+        }
+        throw new Error("Funnel status must not be inspected while the backend is unreachable");
+      },
+    };
+    const manager = new TailscaleFunnelLeaseManager({
+      runner,
+      manifestPath: join(root, "ownership-v1.json"),
+      installId: "diagnose-off",
+      productVersion: "0.0.0",
+    });
+    const lease = createTailscaleFunnelLease({
+      publicUrl: "https://machine.tail.example.ts.net/tela",
+      localTarget: "http://127.0.0.1:19000/mcp",
+    });
+    try {
+      const diagnosis = await manager.diagnose(lease);
+      expect(diagnosis).toMatchObject({
+        availability: "unavailable",
+        cause: "tailscale-backend-unreachable",
+        backend: { state: "backend-unreachable" },
+      });
+      expect(calls).toEqual([["status", "--json"]]);
+      expect(tailscaleDiagnosisDetail(diagnosis.cause)).toContain("open Tailscale");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("diagnosis distinguishes online Tailscale from a missing Funnel path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-tailscale-diagnose-route-"));
+    const runner: TailscaleCommandRunner = {
+      async run(arguments_) {
+        if (arguments_.join(" ") === "status --json") {
+          return { stdout: JSON.stringify({ BackendState: "Running", Self: { Online: true } }), stderr: "" };
+        }
+        if (arguments_.join(" ") === "serve status --json") {
+          return {
+            stdout: JSON.stringify({
+              Web: { "machine.tail.example.ts.net:443": { Handlers: {} } },
+              AllowFunnel: { "machine.tail.example.ts.net:443": true },
+            }),
+            stderr: "",
+          };
+        }
+        throw new Error("unexpected fake command");
+      },
+    };
+    const manager = new TailscaleFunnelLeaseManager({
+      runner,
+      manifestPath: join(root, "ownership-v1.json"),
+      installId: "diagnose-route",
+      productVersion: "0.0.0",
+    });
+    const lease = createTailscaleFunnelLease({
+      publicUrl: "https://machine.tail.example.ts.net/tela",
+      localTarget: "http://127.0.0.1:19000/mcp",
+    });
+    try {
+      expect(await manager.diagnose(lease)).toMatchObject({
+        availability: "unavailable",
+        cause: "funnel-route-absent",
+        backend: { state: "ready" },
+        route: { state: "absent" },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("recognizes only the exact path and loopback target as owned", () => {
     const lease = createTailscaleFunnelLease({
       publicUrl: "https://machine.tail.example.ts.net/tela",
@@ -230,6 +336,39 @@ describe("Tailscale Funnel ownership lease", () => {
       await exposure.stop();
       expect(runner.handlers.has("/tela")).toBe(false);
       expect(readOwnershipManifest(join(root, "ownership-v1.json"))?.resources).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("managed exposure reports Tailscale-off before attempting Funnel mutation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-tailscale-exposure-off-"));
+    const calls: string[][] = [];
+    const runner: TailscaleCommandRunner = {
+      async run(arguments_) {
+        calls.push([...arguments_]);
+        if (arguments_.join(" ") === "status --json") {
+          throw new Error("failed to connect to local Tailscale service; is Tailscale running?");
+        }
+        throw new Error("unexpected command after backend preflight");
+      },
+    };
+    const manager = new TailscaleFunnelLeaseManager({
+      runner,
+      manifestPath: join(root, "ownership-v1.json"),
+      installId: "tailscale-install-exposure-off",
+      productVersion: "0.0.0",
+    });
+    const exposure = new TailscaleFunnelExposure({
+      publicUrl: "https://machine.tail.example.ts.net/tela",
+      localTarget: "http://127.0.0.1:19000/mcp",
+      authentication: { kind: "none" },
+      manager,
+      probe: async () => ({ ready: true }),
+    });
+    try {
+      await expect(exposure.prepare()).rejects.toThrow("open Tailscale");
+      expect(calls).toEqual([["status", "--json"]]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -29,6 +29,45 @@ export interface DefaultDesktopAppServerProxy {
   close(): Promise<void>;
 }
 
+export type DefaultDesktopAppServerModelListAugmenter = (result: unknown) => unknown;
+
+function jsonRpcIdKey(value: unknown): string | undefined {
+  if (typeof value === "string" && value.length > 0 && value.length <= 512) return `s:${value}`;
+  if (typeof value === "number" && Number.isSafeInteger(value)) return `n:${value}`;
+  return undefined;
+}
+
+function modelListRequestId(message: string): string | undefined {
+  let parsed: unknown;
+  try { parsed = JSON.parse(message) as unknown; } catch { return undefined; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const item = parsed as Record<string, unknown>;
+  return item.method === "model/list" ? jsonRpcIdKey(item.id) : undefined;
+}
+
+function augmentModelListResponse(
+  message: string,
+  pending: Set<string>,
+  augmenter: DefaultDesktopAppServerModelListAugmenter | undefined,
+): string {
+  if (!augmenter || pending.size === 0) return message;
+  let parsed: unknown;
+  try { parsed = JSON.parse(message) as unknown; } catch { return message; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return message;
+  const item = parsed as Record<string, unknown>;
+  const key = jsonRpcIdKey(item.id);
+  if (!key || !pending.has(key)) return message;
+  pending.delete(key);
+  if (!("result" in item) || item.error !== undefined) return message;
+  try {
+    return JSON.stringify({ ...item, result: augmenter(item.result) });
+  } catch {
+    // A browser-catalog mismatch must never take Native Codex models away from the Desktop. The
+    // original app-server response remains valid authority; this merely omits optional Tela rows.
+    return message;
+  }
+}
+
 function loopbackWebSocket(value: string): string {
   const url = new URL(value);
   if (url.protocol !== "ws:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) {
@@ -68,6 +107,7 @@ function protocols(header: string | undefined): readonly string[] {
 export async function startDefaultDesktopAppServerProxy(input: {
   readonly upstreamEndpoint: string;
   readonly route: DefaultDesktopResponsesRoute;
+  readonly augmentModelList?: DefaultDesktopAppServerModelListAugmenter;
 }): Promise<DefaultDesktopAppServerProxy> {
   const upstreamEndpoint = loopbackWebSocket(input.upstreamEndpoint);
   const connections = new Set<ConnectionState>();
@@ -105,6 +145,7 @@ export async function startDefaultDesktopAppServerProxy(input: {
       queuedBytes: 0,
       closed: false,
     };
+    const pendingModelLists = new Set<string>();
     connections.add(state);
 
     const closeBoth = (code: number, reason: string) => {
@@ -126,11 +167,12 @@ export async function startDefaultDesktopAppServerProxy(input: {
       state.queuedBytes = 0;
     });
     upstream.on("message", (data, isBinary) => {
-      const message = textMessage(data, isBinary);
+      let message = textMessage(data, isBinary);
       if (message === undefined) {
         closeBoth(isBinary ? 1003 : 1009, isBinary ? "text JSON required" : "message too large");
         return;
       }
+      message = augmentModelListResponse(message, pendingModelLists, input.augmentModelList);
       if (client.readyState === WebSocket.OPEN) client.send(message);
     });
     upstream.once("error", () => closeBoth(1011, "upstream app-server connection failed"));
@@ -150,6 +192,8 @@ export async function startDefaultDesktopAppServerProxy(input: {
         closeBoth(1008, "invalid routed app-server request");
         return;
       }
+      const modelListId = modelListRequestId(message);
+      if (modelListId) pendingModelLists.add(modelListId);
       if (upstream.readyState === WebSocket.OPEN) {
         upstream.send(routed);
         return;

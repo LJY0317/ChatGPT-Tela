@@ -152,6 +152,12 @@ describe("Electron WebContents page automation", () => {
       { type: "keyDown", keyCode: "ArrowDown" },
       { type: "keyUp", keyCode: "ArrowDown" },
     ]);
+
+    await automation.pressKey("ArrowRight");
+    expect(webContents.inputEvents.slice(-2)).toEqual([
+      { type: "keyDown", keyCode: "ArrowRight" },
+      { type: "keyUp", keyCode: "ArrowRight" },
+    ]);
   });
 
   test("mutation wait is event-driven and abort cleans the renderer waiter", async () => {

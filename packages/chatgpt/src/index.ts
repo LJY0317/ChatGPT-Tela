@@ -180,3 +180,4 @@ export * from "./account-identity";
 export * from "./approval-policy";
 export * from "./dom-driver";
 export * from "./semantic-provider";
+export * from "./model-picker";

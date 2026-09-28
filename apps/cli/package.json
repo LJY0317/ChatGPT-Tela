@@ -8,6 +8,7 @@
     "@chatgpt-tela/credential-store": "workspace:*",
     "@chatgpt-tela/development-runtime": "workspace:*",
     "@chatgpt-tela/default-desktop-target": "workspace:*",
+    "@chatgpt-tela/gateway": "workspace:*",
     "@chatgpt-tela/mcp": "workspace:*",
     "@chatgpt-tela/product-config": "workspace:*",
     "@chatgpt-tela/product-lifecycle": "workspace:*",

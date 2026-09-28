@@ -17,6 +17,11 @@ export interface BrowserTurnRunInput {
   readonly webEpochId: string;
   readonly physicalContext: WebPhysicalContext;
   readonly toolBridge?: WebToolBridgeContext;
+  /** Non-submit surface preparation that must finish immediately before provider submission. */
+  readonly prepareForSubmit?: (
+    surface: BrowserSurfaceLease,
+    signal?: AbortSignal,
+  ) => Promise<void>;
   readonly signal?: AbortSignal;
 }
 
@@ -98,6 +103,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
     if (input.proveCapabilities !== false) {
       requireProven(await input.provider.observeCapabilities(surface, input.signal));
     }
+    await input.prepareForSubmit?.(surface, input.signal);
 
     // From this point a submit may have side effects. Mark it before invoking the provider so a
     // thrown/ambiguous result can never be interpreted as permission to auto-resubmit.

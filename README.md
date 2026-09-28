@@ -708,6 +708,31 @@ a bounded JPEG snapshot to the Control Center. With zero or multiple surfaces th
 of guessing which work belongs to the user. The preview is on-demand rather than idle polling, so inspecting
 Tela cannot perturb the Native/Web turn it is observing.
 
+Overview and Diagnostics also report **Public connector** health separately from Gateway/Chat/Codex process
+health. For managed Tailscale Funnel, Tela distinguishes a stopped/unreachable Tailscale backend, sign-in or
+offline state, missing/drifted Funnel mapping, unavailable local Gateway MCP listener, and an end-to-end public
+MCP failure. `bun run cli status`, `bun run cli doctor`, and `bun run cli ingress status` expose the same causal
+breakdown. In particular, quitting the Tailscale app no longer looks like an unexplained generic connector
+failure: the private Gateway remains available for diagnostics while public exposure retries in the background.
+
+### Native and Web model choices in Work/Codex
+
+For the built-in default Desktop profile, Tela preserves Codex's Native model choices and appends live
+ChatGPT-backed choices with a `(Web)` suffix. Native rows remain first-party Native requests; selecting a Web
+row explicitly opts that turn into the Tela browser bridge. The Web rows are discovered from the currently
+authenticated ChatGPT browser session rather than a hardcoded GPT-version/account-plan table, and the selected
+family/effort is re-proved immediately before the Web message is sent.
+
+The local non-submit model-picker canary exercises that UI boundary and restores the original mode:
+
+```sh
+bun run cli model-canary --slot 1
+```
+
+It does not send a ChatGPT message or create Native task authority. The single-profile/default Desktop path is
+the current live-proven composite catalog path; optional Profile 2+ targets still need the corresponding Plura
+app-server catalog projection before they expose the same `(Web)` rows.
+
 The current status icon uses an SF Symbol as a placeholder. Its image and future per-menu-item icons are UI
 assets, not protocol/authority identifiers, so they can be replaced later with custom artwork without changing
 Gateway/Chat/Codex correctness. Platform UI remains native by design: macOS uses the menu bar; Windows should

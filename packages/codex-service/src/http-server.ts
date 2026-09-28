@@ -47,6 +47,13 @@ function previewSlot(pathname: string): number | undefined {
   return Number.isSafeInteger(value) && value >= 1 && value <= 99 ? value : undefined;
 }
 
+function modelCanarySlot(pathname: string): number | undefined {
+  const match = /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/model-selection-canary$/.exec(pathname);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) && value >= 1 && value <= 99 ? value : undefined;
+}
+
 export async function startCodexServiceHttpServer(input: {
   readonly service: CodexService;
   readonly bearerToken?: string;
@@ -77,6 +84,27 @@ export async function startCodexServiceHttpServer(input: {
           return Response.json(await input.service.bridgePreview(bridgeSlot), {
             headers: { "cache-control": "no-store" },
           });
+        }
+        const canarySlot = request.method === "POST" ? modelCanarySlot(url.pathname) : undefined;
+        if (canarySlot !== undefined) {
+          const startedAt = Date.now();
+          emitDiagnosticEvent("chatgpt_tela_codex", "model_selection_canary_begin", { slot: canarySlot });
+          try {
+            const result = await input.service.modelSelectionCanary(canarySlot);
+            emitDiagnosticEvent("chatgpt_tela_codex", "model_selection_canary_complete", {
+              slot: canarySlot,
+              family_count: result.familyCount,
+              exercised: result.exercised,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
+            return Response.json(result, { headers: { "cache-control": "no-store" } });
+          } catch (cause) {
+            emitDiagnosticEvent("chatgpt_tela_codex", "model_selection_canary_failed", {
+              slot: canarySlot,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
+            throw cause;
+          }
         }
         const startSlot = request.method === "POST" ? slot(url.pathname, "start") : undefined;
         if (startSlot !== undefined) {

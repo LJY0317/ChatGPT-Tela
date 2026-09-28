@@ -123,6 +123,66 @@ describe("local Native Responses server", () => {
     }
   });
 
+  test("can authenticate Tela locally through a dedicated header without consuming upstream authorization", async () => {
+    const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async () => {});
+    let observedAuthorization: string | null | undefined;
+    const server = await startLocalResponsesServer({
+      gateway,
+      authentication: { kind: "header", name: "X-ChatGPT-Tela-Runtime-Token" },
+      async requestRouter(request) {
+        observedAuthorization = request.headers.get("authorization");
+        return new Response("native", { status: 202 });
+      },
+    });
+    try {
+      const missing = await fetch(new URL("responses", server.baseUrl), {
+        method: "POST",
+        headers: {
+          authorization: "Bearer upstream-chatgpt-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(requestBody()),
+      });
+      expect(missing.status).toBe(401);
+
+      const response = await fetch(new URL("responses", server.baseUrl), {
+        method: "POST",
+        headers: {
+          authorization: "Bearer upstream-chatgpt-token",
+          "x-chatgpt-tela-runtime-token": server.runtimeToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(requestBody()),
+      });
+      expect(response.status).toBe(202);
+      expect(await response.text()).toBe("native");
+      expect(observedAuthorization).toBe("Bearer upstream-chatgpt-token");
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("router may own non-responses provider endpoints behind the same local capability", async () => {
+    const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async () => {});
+    const server = await startLocalResponsesServer({
+      gateway,
+      async requestRouter(request) {
+        return new URL(request.url).pathname === "/v1/models"
+          ? Response.json({ models: [] })
+          : undefined;
+      },
+    });
+    try {
+      const response = await fetch(new URL("models", server.baseUrl), {
+        headers: { authorization: `Bearer ${server.runtimeToken}` },
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ models: [] });
+    } finally {
+      await server.stop();
+    }
+  });
+
   test("server stop is idempotent", async () => {
     const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async () => {});
     const server = await startLocalResponsesServer({ gateway });

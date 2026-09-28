@@ -119,7 +119,7 @@ describe("Native Responses HTTP transport", () => {
     expect(json.created_at).toBe(125);
     expect(json.output).toEqual([{
       type: "message",
-      id: expect.stringMatching(/^msg_/),
+      id: expect.stringMatching(/^msg_tela_/),
       status: "completed",
       role: "assistant",
       content: [{ type: "output_text", text: "hello", annotations: [] }],

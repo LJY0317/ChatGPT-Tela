@@ -688,6 +688,15 @@ Tailscale Serve alone is not a public ChatGPT endpoint; Funnel is the product pu
 only its exact configured route lease, not the Tailnet, Tailscale installation, device login, hostname, or
 unrelated routes. Install/uninstall must preserve any route whose current ownership no longer matches Tela.
 
+Public ingress health is intentionally separate from private Gateway health. The private Gateway may remain
+ready while the ChatGPT connector is unreachable. For managed Funnel, support/status checks diagnose the chain
+in causal order: Tailscale CLI/local backend and login/online state, exact Funnel lease mapping, the local
+Gateway MCP listener, then the public MCP endpoint. A stopped/unreachable Tailscale backend is therefore
+reported explicitly rather than collapsing into a generic `UNAVAILABLE` result. The Gateway daemon registers
+its private descriptor before public exposure succeeds and retries public exposure in the background, so a
+temporarily stopped Tailscale app does not remove the diagnostic/control plane and can recover after Tailscale
+returns without treating Chat/Codex backend processes as failed.
+
 For HTTPS-based exposure, ChatGPT Tela now has a loopback Streamable HTTP MCP server with bounded stateful MCP
 sessions. Each remote MCP session owns one SDK transport/server pair but shares the single
 `ActiveTurnRegistry`, so HTTP session state never becomes tool or filesystem authority. The local
@@ -767,6 +776,29 @@ their paths. Raw diagnostic JSONL remains local and is inspected only by an expl
 Long-running components prefer events, demand-start, single-flight work, and coalescing over polling.
 CPU, wakeups, I/O, and battery cost are correctness-adjacent design constraints for the desktop
 runtime.
+
+### Native and explicit Web model routing
+
+The built-in default Desktop target owns the app-server proxy, so it can preserve Codex's live Native
+`model/list` rows exactly and append current ChatGPT browser families as explicit `(Web)` choices. The Web
+identity uses an opaque stable key derived from normalized observed family semantics rather than a GPT-version
+allowlist. The authenticated hidden browser is the authority for which families and effort positions are
+currently selectable.
+
+One Codex provider owns both routes because current Codex threads can change model without changing
+`model_provider`. First-party ChatGPT authorization therefore remains on the provider request while Tela's
+loopback authorization travels in a separate environment-backed header. Native model ids are forwarded to
+the first-party Codex backend; only the `chatgpt-tela-web/family/*` namespace enters the ChatGPT Web bridge.
+When a mixed thread returns to Native, only visibly Tela-owned response/item ids are removed before forwarding;
+opaque first-party ids and semantic history are never guessed or rewritten.
+
+For a Web model, family and effort are independent browser controls. Tela selects them on the owned surface
+immediately before the submit boundary and accepts the selection only after exact semantic readback. The
+current Power picker may require a bounded non-submit convergence because an offscreen synthetic tick event
+can move the effort while temporarily changing the selected family; Tela re-proves both controls together and
+fails closed if they do not converge. `cli model-canary --slot 1` exercises this selection/readback/restoration
+path on a disposable surface without sending a ChatGPT message. The default Profile 1 path is live-proven;
+Profile 2+ still requires the equivalent app-server catalog projection at the Plura-owned target boundary.
 
 ## Vertical slices
 
