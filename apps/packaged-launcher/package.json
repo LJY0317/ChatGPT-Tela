@@ -1,0 +1,10 @@
+{
+  "name": "@chatgpt-tela/packaged-launcher",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@chatgpt-tela/product-config": "workspace:*",
+    "@chatgpt-tela/product-lifecycle": "workspace:*"
+  }
+}

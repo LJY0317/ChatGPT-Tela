@@ -1,0 +1,23 @@
+{
+  "name": "@chatgpt-tela/development-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./browser-profile": "./src/browser-profile.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@chatgpt-tela/browser-host": "workspace:*",
+    "@chatgpt-tela/chatgpt": "workspace:*",
+    "@chatgpt-tela/codex": "workspace:*",
+    "@chatgpt-tela/core": "workspace:*",
+    "@chatgpt-tela/default-desktop-target": "workspace:*",
+    "@chatgpt-tela/electron-host": "workspace:*",
+    "@chatgpt-tela/local-server": "workspace:*",
+    "@chatgpt-tela/mcp": "workspace:*",
+    "@chatgpt-tela/runtime": "workspace:*",
+    "@chatgpt-tela/setup": "workspace:*"
+  }
+}

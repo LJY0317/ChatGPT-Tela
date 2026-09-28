@@ -1,0 +1,14 @@
+node_modules/
+.DS_Store
+dist/
+build/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+
+# Local-only maintainer/agent working state.
+/AGENTS.md
+/STATE.md
+/MILESTONES.md

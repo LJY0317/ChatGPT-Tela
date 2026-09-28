@@ -1,0 +1,9 @@
+{
+  "name": "@chatgpt-tela/package-build",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@chatgpt-tela/product-lifecycle": "workspace:*"
+  }
+}

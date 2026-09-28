@@ -1,0 +1,22 @@
+{
+  "revision": "r1",
+  "url": "https://chatgpt.com/",
+  "composers": [
+    {
+      "key": "composer-a",
+      "visible": true,
+      "editable": true,
+      "ownedByChatGptForm": true,
+      "textLength": 0
+    },
+    {
+      "key": "composer-b",
+      "visible": true,
+      "editable": true,
+      "ownedByChatGptForm": true,
+      "textLength": 0
+    }
+  ],
+  "sendControls": [],
+  "turns": []
+}

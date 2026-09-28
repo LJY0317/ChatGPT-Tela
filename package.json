@@ -1,0 +1,38 @@
+{
+  "name": "chatgpt-tela",
+  "version": "0.0.0",
+  "description": "One ChatGPT integration for independent Chat and Codex runtimes.",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "bun": "1.4.0"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "verify": "bun run typecheck && bun test",
+    "cli": "bun run apps/cli/src/main.ts",
+    "gateway:daemon": "bun run apps/gateway-daemon/src/main.ts",
+    "chat:daemon": "bun run apps/chat-daemon/src/main.ts",
+    "codex:daemon": "bun run apps/codex-daemon/src/main.ts",
+    "package:build": "bun run apps/package-build/src/main.ts",
+    "package:smoke": "bun run apps/package-smoke/src/main.ts",
+    "profile:setup:build": "bun build apps/profile-setup/src/main.ts --target=node --format=cjs --external electron --outfile=build/profile-setup/main.cjs",
+    "profile:setup": "bun run profile:setup:build && electron build/profile-setup/main.cjs",
+    "profile:runtime:build": "bun build apps/profile-runtime/src/main.ts --target=node --format=cjs --external electron --outfile=build/profile-runtime/main.cjs",
+    "canary:build": "bun build apps/canary/src/main.ts --target=node --format=cjs --external electron --outfile=build/canary/main.cjs",
+    "canary": "bun run canary:build && electron build/canary/main.cjs",
+    "canary:preflight:build": "bun build apps/canary-preflight/src/main.ts --target=node --format=cjs --external electron --outfile=build/canary-preflight/main.cjs",
+    "canary:preflight": "bun run canary:preflight:build && electron build/canary-preflight/main.cjs"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "@types/node": "^22.10.2",
+    "electron": "^44.4.5",
+    "typescript": "5.9.3"
+  }
+}

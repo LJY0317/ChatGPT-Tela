@@ -1,0 +1,12 @@
+{
+  "name": "@chatgpt-tela/local-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@chatgpt-tela/http-host": "workspace:*",
+    "@chatgpt-tela/responses": "workspace:*",
+    "@chatgpt-tela/runtime": "workspace:*"
+  }
+}

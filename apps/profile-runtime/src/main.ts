@@ -1,0 +1,63 @@
+import {
+  loadProductProfileRuntimeConfig,
+  startProductProfileRuntime,
+} from "@chatgpt-tela/development-runtime";
+import { app } from "electron";
+
+async function main(): Promise<void> {
+  const config = loadProductProfileRuntimeConfig();
+  app.setPath("userData", config.browserProfile.userDataDir);
+  const keepAliveWithoutWindows = () => {};
+  app.on("window-all-closed", keepAliveWithoutWindows);
+  const runtime = await startProductProfileRuntime(config);
+  process.stdout.write(`${JSON.stringify({
+    stage: "product-profile-ready",
+    slot: config.slot,
+    routeId: config.routeId,
+    targetId: config.nativeTarget.targetId,
+    nativeTargetKind: config.nativeTarget.kind,
+    profileId: config.browserProfile.profileId,
+    internalMcpUrl: runtime.internalMcp.endpointUrl.href,
+    responsesUrl: runtime.runtime.responses.baseUrl.href,
+    responsesRouteFingerprint: runtime.routedTarget.session.responsesRouteFingerprint,
+    ...(runtime.routedTarget.session.desktopProcessId
+      ? { targetProcessId: runtime.routedTarget.session.desktopProcessId }
+      : {}),
+    accountBinding: "verified",
+  })}\n`);
+
+  let stopping: Promise<void> | undefined;
+  const stop = () => {
+    if (!stopping) {
+      stopping = runtime.stop().then(() => {
+        app.removeListener("window-all-closed", keepAliveWithoutWindows);
+        app.quit();
+      }).catch(error => {
+        stopping = undefined;
+        throw error;
+      });
+    }
+    return stopping;
+  };
+
+  await new Promise<void>(resolve => {
+    const arm = () => {
+      process.once("SIGINT", shutdown);
+      process.once("SIGTERM", shutdown);
+    };
+    const shutdown = () => {
+      process.removeListener("SIGINT", shutdown);
+      process.removeListener("SIGTERM", shutdown);
+      void stop().then(resolve, error => {
+        console.error(error);
+        arm();
+      });
+    };
+    arm();
+  });
+}
+
+void main().catch(error => {
+  console.error(error);
+  app.exit(1);
+});

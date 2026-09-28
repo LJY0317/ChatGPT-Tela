@@ -1,0 +1,12 @@
+{
+  "name": "@chatgpt-tela/gateway-daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@chatgpt-tela/gateway": "workspace:*",
+    "@chatgpt-tela/product-lifecycle": "workspace:*",
+    "@chatgpt-tela/service-protocol": "workspace:*",
+    "@chatgpt-tela/tailscale-ingress": "workspace:*"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@chatgpt-tela/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@chatgpt-tela/browser-host": "workspace:*",
+    "@chatgpt-tela/chatgpt": "workspace:*",
+    "@chatgpt-tela/codex": "workspace:*",
+    "@chatgpt-tela/core": "workspace:*"
+  }
+}

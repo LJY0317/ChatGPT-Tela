@@ -1,0 +1,11 @@
+{
+  "name": "@chatgpt-tela/tailscale-ingress",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@chatgpt-tela/mcp": "workspace:*",
+    "@chatgpt-tela/product-lifecycle": "workspace:*"
+  }
+}

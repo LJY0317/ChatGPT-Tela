@@ -1,0 +1,9 @@
+{
+  "name": "@chatgpt-tela/canary-preflight",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@chatgpt-tela/development-runtime": "workspace:*"
+  }
+}

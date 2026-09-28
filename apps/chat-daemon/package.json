@@ -1,0 +1,12 @@
+{
+  "name": "@chatgpt-tela/chat-daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@chatgpt-tela/chat-service": "workspace:*",
+    "@chatgpt-tela/credential-store": "workspace:*",
+    "@chatgpt-tela/product-lifecycle": "workspace:*",
+    "@chatgpt-tela/service-protocol": "workspace:*"
+  }
+}

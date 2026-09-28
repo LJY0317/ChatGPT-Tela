@@ -1,0 +1,10 @@
+{
+  "name": "@chatgpt-tela/canary",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@chatgpt-tela/development-runtime": "workspace:*",
+    "@chatgpt-tela/mcp": "workspace:*"
+  }
+}

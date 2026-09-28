@@ -1,0 +1,948 @@
+import { createHash } from "node:crypto";
+import {
+  BROWSER_PAGE_AUTOMATION,
+  type BrowserSurfaceLease,
+} from "@chatgpt-tela/browser-host";
+import { ChatGptDomSurfaceDriver } from "./dom-driver";
+import {
+  CHATGPT_SURFACE_DRIVER,
+  type ChatGptComposerObservation,
+  type ChatGptSurfaceDriver,
+  type ChatGptSurfaceSnapshot,
+  type ChatGptTurnObservation,
+} from "./surface";
+import type {
+  ChatGptCapabilities,
+  SemanticObservation,
+  WebConversationProvider,
+  WebPhysicalContext,
+  WebToolContinuationBoundary,
+  WebTurnEvent,
+  WebTurnHandle,
+  WebTurnRequest,
+  WebTurnState,
+} from "./index";
+
+interface TrackedTurn {
+  readonly handle: WebTurnHandle;
+  readonly surfaceLeaseId: string;
+  userTurnKey: string;
+  readonly baselineUserLineageKeys: ReadonlySet<string>;
+  revision: string;
+  continuationBoundary?: {
+    readonly callId: string;
+    readonly assistantFingerprint: string;
+  };
+  pendingCompletedAnswer?: string;
+}
+
+export interface ChatGptSemanticProviderOptions {
+  /** Exact ChatGPT connector display identity to attach only when a Web turn owns a tool bridge. */
+  readonly connectorName?: string;
+  /**
+   * Bounded post-cleanup window for ChatGPT to persist removal of a connector mention draft.
+   * Production defaults to 5s; tests may set 0 because fixture state is synchronous.
+   */
+  readonly connectorDraftPersistenceSettleMs?: number;
+}
+
+export interface ChatGptConnectorObservation {
+  readonly connectorName: string;
+  readonly connectorFingerprint: string;
+}
+
+export interface ChatGptConnectorProbe {
+  recoverConnectorProbeArtifact(
+    surface: BrowserSurfaceLease,
+    signal?: AbortSignal,
+  ): Promise<boolean>;
+  probeConnector(
+    surface: BrowserSurfaceLease,
+    signal?: AbortSignal,
+  ): Promise<ChatGptConnectorObservation>;
+}
+
+function fingerprint(value: string): string {
+  return createHash("sha256").update(value).digest("base64url");
+}
+
+function evidence(...parts: string[]): readonly string[] {
+  return Object.freeze(parts);
+}
+
+function driverFor(surface: BrowserSurfaceLease): ChatGptSurfaceDriver {
+  const driver = surface.capability(CHATGPT_SURFACE_DRIVER);
+  if (driver) return driver;
+  const page = surface.capability(BROWSER_PAGE_AUTOMATION);
+  if (page) return new ChatGptDomSurfaceDriver(page);
+  throw new Error("browser surface does not expose ChatGPT or page automation capability");
+}
+
+function readyComposers(snapshot: ChatGptSurfaceSnapshot): readonly ChatGptComposerObservation[] {
+  return snapshot.composers.filter(composer => (
+    composer.visible && composer.editable && composer.ownedByChatGptForm
+  ));
+}
+
+function exactComposer(snapshot: ChatGptSurfaceSnapshot): ChatGptComposerObservation {
+  const composers = readyComposers(snapshot);
+  if (composers.length !== 1) {
+    throw new Error(`ChatGPT semantic surface requires exactly one ready composer; observed ${composers.length}`);
+  }
+  return composers[0]!;
+}
+
+function exactSend(snapshot: ChatGptSurfaceSnapshot, composerKey: string) {
+  const controls = snapshot.sendControls.filter(control => (
+    control.semantic === "send"
+    && control.composerKey === composerKey
+    && control.visible
+  ));
+  if (controls.length !== 1) {
+    throw new Error(`ChatGPT semantic surface requires exactly one send control; observed ${controls.length}`);
+  }
+  return controls[0]!;
+}
+
+function visibleSends(snapshot: ChatGptSurfaceSnapshot, composerKey: string) {
+  return snapshot.sendControls.filter(control => (
+    control.semantic === "send" && control.composerKey === composerKey && control.visible
+  ));
+}
+
+const READINESS_PROBE_TEXT = "ChatGPT Tela readiness probe";
+const CHATGPT_READINESS_TIMEOUT_MS = 30_000;
+const CHATGPT_COMPOSER_SETTLE_TIMEOUT_MS = 5_000;
+const CHATGPT_CONNECTOR_DRAFT_PERSISTENCE_SETTLE_MS = 5_000;
+
+async function waitForDuration(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms === 0) return;
+  if (signal?.aborted) throw signal.reason ?? new DOMException("operation aborted", "AbortError");
+  await new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (complete: () => void) => {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      complete();
+    };
+    const abort = () => finish(() => reject(signal?.reason ?? new DOMException("operation aborted", "AbortError")));
+    timer = setTimeout(() => finish(resolve), ms);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+  });
+}
+
+function timeoutSignal(caller: AbortSignal | undefined, timeoutMs: number): {
+  readonly combined: AbortSignal;
+  readonly timeout: AbortSignal;
+} {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return {
+    combined: caller ? AbortSignal.any([caller, timeout]) : timeout,
+    timeout,
+  };
+}
+
+async function waitForHydratedComposer(
+  driver: ChatGptSurfaceDriver,
+  callerSignal?: AbortSignal,
+): Promise<{ readonly snapshot: ChatGptSurfaceSnapshot; readonly timedOut: boolean }> {
+  const deadline = timeoutSignal(callerSignal, CHATGPT_READINESS_TIMEOUT_MS);
+  let snapshot = await driver.observe(deadline.combined);
+  while (readyComposers(snapshot).length === 0) {
+    try {
+      snapshot = await driver.waitForChange(snapshot.revision, deadline.combined);
+    } catch (error) {
+      if (callerSignal?.aborted) throw error;
+      if (deadline.timeout.aborted) return { snapshot, timedOut: true };
+      throw error;
+    }
+  }
+  return { snapshot, timedOut: false };
+}
+
+async function waitForSettledEmptyComposer(
+  driver: ChatGptSurfaceDriver,
+  initial: ChatGptSurfaceSnapshot,
+  callerSignal?: AbortSignal,
+): Promise<{ readonly snapshot: ChatGptSurfaceSnapshot; readonly timedOut: boolean }> {
+  const deadline = timeoutSignal(callerSignal, CHATGPT_COMPOSER_SETTLE_TIMEOUT_MS);
+  let snapshot = initial;
+  for (;;) {
+    const composers = readyComposers(snapshot);
+    if (composers.length !== 1
+      || composers[0]?.textLength === 0
+      || (composers[0]?.textLength ?? 0) > 1) {
+      return { snapshot, timedOut: false };
+    }
+    try {
+      snapshot = await driver.waitForChange(snapshot.revision, deadline.combined);
+    } catch (error) {
+      if (callerSignal?.aborted) throw error;
+      if (deadline.timeout.aborted) return { snapshot, timedOut: true };
+      throw error;
+    }
+  }
+}
+
+async function restoreEmptyComposer(
+  driver: ChatGptSurfaceDriver,
+  composerKey: string,
+): Promise<void> {
+  await driver.clearComposerText(composerKey);
+  const deadline = timeoutSignal(undefined, CHATGPT_COMPOSER_SETTLE_TIMEOUT_MS);
+  let snapshot = await driver.observe(deadline.combined);
+  for (;;) {
+    const composers = readyComposers(snapshot);
+    if (composers.length === 1
+      && composers[0]?.key === composerKey
+      && composers[0]?.textLength === 0
+      && composers[0]?.connectorFingerprints.length === 0) return;
+    if (composers.length > 1) {
+      throw new Error("ChatGPT readiness probe cleanup found multiple active composers");
+    }
+    try {
+      snapshot = await driver.waitForChange(snapshot.revision, deadline.combined);
+    } catch (error) {
+      if (deadline.timeout.aborted) {
+        throw new Error("ChatGPT readiness probe could not restore the empty composer", { cause: error });
+      }
+      throw error;
+    }
+  }
+}
+
+function formatPhysicalContext(context: WebPhysicalContext, toolBridge: WebTurnRequest["toolBridge"]): string {
+  const header = JSON.stringify({
+    type: "chatgpt_tela_context",
+    version: 1,
+    headRevisionId: context.headRevisionId,
+    mode: context.mode,
+    ...(toolBridge ? {
+      toolBridge: {
+        protocol: toolBridge.protocol,
+        contract: toolBridge.contract,
+        turnCapability: toolBridge.turnCapability,
+      },
+    } : {}),
+  });
+  const lines = context.segments.map(segment => (
+    segment.type === "checkpoint"
+      ? JSON.stringify({
+          type: "checkpoint",
+          checkpointId: segment.checkpointId,
+          sourceRevisionId: segment.sourceRevisionId,
+          content: segment.content,
+        })
+      : JSON.stringify({
+          type: "revision",
+          revisionId: segment.revisionId,
+          kind: segment.kind,
+          content: segment.content,
+        })
+  ));
+  return [header, ...lines].join("\n");
+}
+
+function assistantFor(snapshot: ChatGptSurfaceSnapshot, userTurnKey: string): readonly ChatGptTurnObservation[] {
+  return snapshot.turns.filter(turn => turn.role === "assistant" && turn.parentUserTurnKey === userTurnKey);
+}
+
+interface AssistantLineageResolution {
+  readonly assistants: readonly ChatGptTurnObservation[];
+  readonly ambiguous: boolean;
+}
+
+function baselineUserLineageKeys(snapshot: ChatGptSurfaceSnapshot): ReadonlySet<string> {
+  return new Set(snapshot.turns.flatMap(turn => turn.role === "user"
+    ? [turn.key]
+    : turn.parentUserTurnKey ? [turn.parentUserTurnKey] : []));
+}
+
+/**
+ * ChatGPT may replace the provisional data-turn-key after server hydration. Keep the accepted
+ * provider handle stable, but rebind its renderer key only when exactly one assistant lineage is
+ * new relative to the pre-submit baseline. Multiple new lineages are never guessed between.
+ */
+function resolveAssistantLineage(
+  snapshot: ChatGptSurfaceSnapshot,
+  tracked: TrackedTurn,
+): AssistantLineageResolution {
+  const direct = assistantFor(snapshot, tracked.userTurnKey);
+  if (direct.length > 0) return { assistants: direct, ambiguous: false };
+
+  const byParent = new Map<string, ChatGptTurnObservation[]>();
+  for (const turn of snapshot.turns) {
+    if (turn.role !== "assistant" || !turn.parentUserTurnKey) continue;
+    if (tracked.baselineUserLineageKeys.has(turn.parentUserTurnKey)) continue;
+    const items = byParent.get(turn.parentUserTurnKey) ?? [];
+    items.push(turn);
+    byParent.set(turn.parentUserTurnKey, items);
+  }
+  if (byParent.size === 0) return { assistants: [], ambiguous: false };
+  if (byParent.size > 1) {
+    return { assistants: [...byParent.values()].flat(), ambiguous: true };
+  }
+
+  const [nextKey, assistants] = byParent.entries().next().value!;
+  tracked.userTurnKey = nextKey;
+  return { assistants, ambiguous: false };
+}
+
+function assistantFingerprint(assistant: ChatGptTurnObservation | undefined): string {
+  return fingerprint(JSON.stringify(assistant ?? null));
+}
+
+function stateFromSnapshot(
+  snapshot: ChatGptSurfaceSnapshot,
+  tracked: TrackedTurn,
+): SemanticObservation<WebTurnState> {
+  const lineage = resolveAssistantLineage(snapshot, tracked);
+  const assistants = lineage.assistants;
+  if (lineage.ambiguous) {
+    return {
+      state: "ambiguous",
+      candidates: Object.freeze(assistants.map(assistant => ({
+        providerTurnId: tracked.handle.providerTurnId,
+        phase: assistant.phase === "complete" ? "completed" as const : "continuing" as const,
+      }))),
+      evidence: evidence("multiple new assistant lineages appeared after one accepted ChatGPT turn"),
+    };
+  }
+  if (assistants.length > 1) {
+    return {
+      state: "ambiguous",
+      candidates: Object.freeze(assistants.map(assistant => ({
+        providerTurnId: tracked.handle.providerTurnId,
+        phase: assistant.phase === "complete" ? "completed" as const : "continuing" as const,
+      }))),
+      evidence: evidence("multiple assistant descendants for one accepted user turn"),
+    };
+  }
+  const assistant = assistants[0];
+  if (!assistant) {
+    return {
+      state: "proven",
+      value: { providerTurnId: tracked.handle.providerTurnId, phase: "accepted" },
+      evidence: evidence("accepted user turn has no assistant descendant yet"),
+    };
+  }
+  const phase = assistant.phase === "tool-wait"
+    ? "tool-wait"
+    : assistant.phase === "complete"
+      ? "completed"
+      : assistant.phase === "failed"
+        ? "failed"
+        : "continuing";
+  return {
+    state: "proven",
+    value: { providerTurnId: tracked.handle.providerTurnId, phase },
+    evidence: evidence(`assistant descendant phase=${assistant.phase ?? "unknown"}`),
+  };
+}
+
+/**
+ * First structural ChatGPT provider. It consumes sanitized semantic snapshots/actions supplied by a
+ * browser driver and keeps DOM selectors out of runtime/core. Structural proof predicates are exact;
+ * no score or arbitrary confidence threshold authorizes submit, acceptance, continuation, or final.
+ */
+export class ChatGptSemanticProvider implements WebConversationProvider, ChatGptConnectorProbe {
+  readonly #turns = new Map<string, TrackedTurn>();
+  readonly #connectorName: string | undefined;
+  readonly #connectorDraftPersistenceSettleMs: number;
+
+  constructor(options: ChatGptSemanticProviderOptions = {}) {
+    const connectorName = options.connectorName?.trim();
+    if (connectorName !== undefined
+      && (!connectorName || connectorName.length > 128 || /[\u0000\r\n]/.test(connectorName))) {
+      throw new Error("ChatGPT connector identity must be 1-128 visible single-line characters");
+    }
+    const settleMs = options.connectorDraftPersistenceSettleMs
+      ?? CHATGPT_CONNECTOR_DRAFT_PERSISTENCE_SETTLE_MS;
+    if (!Number.isSafeInteger(settleMs) || settleMs < 0 || settleMs > 30_000) {
+      throw new Error("ChatGPT connector draft persistence settle must be 0-30000ms");
+    }
+    this.#connectorName = connectorName;
+    this.#connectorDraftPersistenceSettleMs = settleMs;
+  }
+
+  async #settleConnectorDraftPersistence(
+    driver: ChatGptSurfaceDriver,
+    composerKey: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await waitForDuration(this.#connectorDraftPersistenceSettleMs, signal);
+    const snapshot = await driver.observe(signal);
+    const composer = exactComposer(snapshot);
+    if (composer.key !== composerKey
+      || composer.textLength !== 0
+      || composer.connectorFingerprints.length !== 0) {
+      throw new Error("ChatGPT connector cleanup did not remain empty through the draft persistence window");
+    }
+  }
+
+  async observeCapabilities(
+    surface: BrowserSurfaceLease,
+    signal?: AbortSignal,
+  ): Promise<SemanticObservation<ChatGptCapabilities>> {
+    const driver = driverFor(surface);
+    const hydrated = await waitForHydratedComposer(driver, signal);
+    const settled = await waitForSettledEmptyComposer(driver, hydrated.snapshot, signal);
+    const snapshot = settled.snapshot;
+    const composers = readyComposers(snapshot);
+    if (composers.length === 0) {
+      return {
+        state: "probable",
+        value: { observed: new Set<string>() },
+        evidence: evidence(
+          hydrated.timedOut
+            ? "no visible editable ChatGPT-owned composer before readiness deadline"
+            : "no visible editable ChatGPT-owned composer",
+        ),
+      };
+    }
+    if (composers.length > 1) {
+      return {
+        state: "ambiguous",
+        candidates: Object.freeze(composers.map(composer => ({
+          observed: new Set([`composer:${composer.key}`]),
+        }))),
+        evidence: evidence("multiple visible editable ChatGPT-owned composers"),
+      };
+    }
+    const composer = composers[0]!;
+    if (composer.textLength !== 0) {
+      return {
+        state: "probable",
+        value: { observed: new Set(["composer"]) },
+        evidence: evidence(
+          settled.timedOut
+            ? "composer retained a non-empty draft after hydration settle deadline"
+            : "composer contains an existing draft",
+        ),
+      };
+    }
+    if (composer.connectorFingerprints.length !== 0) {
+      return {
+        state: "probable",
+        value: { observed: new Set(["composer"]) },
+        evidence: evidence("composer retains a selected connector from prior browser state"),
+      };
+    }
+    const sends = visibleSends(snapshot, composer.key);
+    if (sends.length !== 1) {
+      if (sends.length > 1) {
+        return {
+            state: "ambiguous",
+            candidates: Object.freeze(sends.map(send => ({ observed: new Set(["composer", `send:${send.key}`]) }))),
+            evidence: evidence("multiple send controls belong to the same composer"),
+          };
+      }
+      let probeStarted = false;
+      try {
+        probeStarted = true;
+        await driver.replaceComposerText(composer.key, READINESS_PROBE_TEXT, signal);
+        const deadline = timeoutSignal(signal, CHATGPT_COMPOSER_SETTLE_TIMEOUT_MS);
+        let filled = await driver.observe(deadline.combined);
+        for (;;) {
+          const filledComposers = readyComposers(filled);
+          if (filledComposers.length > 1) {
+            return {
+              state: "ambiguous",
+              candidates: Object.freeze(filledComposers.map(candidate => ({
+                observed: new Set([`composer:${candidate.key}`]),
+              }))),
+              evidence: evidence("readiness probe made the active composer ambiguous"),
+            };
+          }
+          const filledComposer = filledComposers.length === 1 ? filledComposers[0]! : undefined;
+          const exactReadback = filledComposer?.key === composer.key
+            && filledComposer.textLength === READINESS_PROBE_TEXT.length
+            && filledComposer.textFingerprint === fingerprint(READINESS_PROBE_TEXT);
+          const probedSends = exactReadback ? visibleSends(filled, composer.key) : [];
+          if (probedSends.length > 1) {
+            return {
+              state: "ambiguous",
+              candidates: Object.freeze(probedSends.map(send => ({
+                observed: new Set(["composer", `send:${send.key}`]),
+              }))),
+              evidence: evidence("multiple send controls appeared during inert readiness probe"),
+            };
+          }
+          if (exactReadback && probedSends.length === 1) {
+            return {
+              state: "proven",
+              value: { observed: new Set(["composer", "send"]) },
+              evidence: evidence(
+                "one ChatGPT-owned composer",
+                "one matching visible send control after exact inert non-submitting probe",
+              ),
+            };
+          }
+          try {
+            filled = await driver.waitForChange(filled.revision, deadline.combined);
+          } catch (error) {
+            if (signal?.aborted) throw error;
+            if (deadline.timeout.aborted) {
+              return {
+                state: "probable",
+                value: { observed: new Set(["composer"]) },
+                evidence: evidence(
+                  exactReadback
+                    ? "send control did not appear after exact inert composer readback before readiness deadline"
+                    : "readiness probe composer readback did not settle before readiness deadline",
+                ),
+              };
+            }
+            throw error;
+          }
+        }
+      } finally {
+        if (probeStarted) {
+          await restoreEmptyComposer(driver, composer.key);
+        }
+      }
+    }
+    return {
+      state: "proven",
+      value: { observed: new Set(["composer", "send"]) },
+      evidence: evidence("one ChatGPT-owned composer", "one matching visible send control"),
+    };
+  }
+
+  async probeConnector(
+    surface: BrowserSurfaceLease,
+    signal?: AbortSignal,
+  ): Promise<ChatGptConnectorObservation> {
+    const connectorName = this.#connectorName;
+    if (!connectorName) throw new Error("ChatGPT connector probe requires an explicit connector identity");
+    const expectedConnectorFingerprint = fingerprint(connectorName);
+    const driver = driverFor(surface);
+    const hydrated = await waitForHydratedComposer(driver, signal);
+    const settled = await waitForSettledEmptyComposer(driver, hydrated.snapshot, signal);
+    let composer = exactComposer(settled.snapshot);
+    if (composer.textLength !== 0) {
+      throw new Error("ChatGPT connector probe refuses a non-empty composer draft");
+    }
+    if (composer.connectorFingerprints.length > 1) {
+      throw new Error("ChatGPT connector probe found multiple selected connectors");
+    }
+    if (composer.connectorFingerprints.length === 1
+      && composer.connectorFingerprints[0] !== expectedConnectorFingerprint) {
+      throw new Error("ChatGPT connector probe found a different selected connector");
+    }
+    let cleanupNeeded = composer.connectorFingerprints.length === 1;
+    try {
+      if (composer.connectorFingerprints.length === 0) {
+        cleanupNeeded = true;
+        await driver.selectConnector(composer.key, connectorName, signal);
+      }
+      const deadline = timeoutSignal(signal, CHATGPT_COMPOSER_SETTLE_TIMEOUT_MS);
+      const observed = await driver.observe(deadline.combined);
+      composer = exactComposer(observed);
+      if (composer.textLength !== 0
+        || composer.connectorFingerprints.length !== 1
+        || composer.connectorFingerprints[0] !== expectedConnectorFingerprint) {
+        throw new Error("ChatGPT connector selection was not structurally proven by the preflight probe");
+      }
+      return Object.freeze({ connectorName, connectorFingerprint: expectedConnectorFingerprint });
+    } finally {
+      if (cleanupNeeded) {
+        await restoreEmptyComposer(driver, composer.key);
+        await this.#settleConnectorDraftPersistence(driver, composer.key, signal);
+      }
+    }
+  }
+
+  async recoverConnectorProbeArtifact(
+    surface: BrowserSurfaceLease,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const connectorName = this.#connectorName;
+    if (!connectorName) throw new Error("ChatGPT connector artifact recovery requires an explicit connector identity");
+    const driver = driverFor(surface);
+    const hydrated = await waitForHydratedComposer(driver, signal);
+    const composer = exactComposer(hydrated.snapshot);
+    if (composer.textLength === 0 && composer.connectorFingerprints.length === 0) return false;
+    const artifact = `@${connectorName}`;
+    if (composer.textLength !== artifact.length
+      || composer.textFingerprint !== fingerprint(artifact)
+      || composer.connectorFingerprints.length !== 0) {
+      return false;
+    }
+    await restoreEmptyComposer(driver, composer.key);
+    await this.#settleConnectorDraftPersistence(driver, composer.key, signal);
+    return true;
+  }
+
+  async submitTurn(
+    surface: BrowserSurfaceLease,
+    request: WebTurnRequest,
+    signal?: AbortSignal,
+  ): Promise<SemanticObservation<WebTurnHandle>> {
+    const driver = driverFor(surface);
+    const hydrated = await waitForHydratedComposer(driver, signal);
+    const settled = await waitForSettledEmptyComposer(driver, hydrated.snapshot, signal);
+    const baseline = settled.snapshot;
+    let composer = exactComposer(baseline);
+    if (composer.textLength !== 0) {
+      throw new Error("ChatGPT semantic submit refuses to overwrite a non-empty composer draft");
+    }
+    const connectorName = this.#connectorName;
+    const expectedConnectorFingerprint = connectorName ? fingerprint(connectorName) : undefined;
+    if (!request.toolBridge && composer.connectorFingerprints.length !== 0) {
+      throw new Error("tool-free ChatGPT semantic submit refuses a selected connector");
+    }
+    if (request.toolBridge && !connectorName) {
+      throw new Error("ChatGPT tool bridge requires an explicit connector identity");
+    }
+    let cleanupAttempted = false;
+    let sendActivationAttempted = false;
+    const cleanupPreparedComposer = async (): Promise<void> => {
+      if (cleanupAttempted) return;
+      cleanupAttempted = true;
+      await restoreEmptyComposer(driver, composer.key);
+    };
+    const probableBeforeSend = async (
+      revision: string,
+      detail: string,
+    ): Promise<SemanticObservation<WebTurnHandle>> => {
+      await cleanupPreparedComposer();
+      return {
+        state: "probable",
+        value: {
+          nativeTaskId: request.nativeTaskId,
+          nativeTurnId: request.nativeTurnId,
+          webEpochId: request.webEpochId,
+          providerTurnId: `unaccepted:${revision}`,
+        },
+        evidence: evidence(detail),
+      };
+    };
+
+    let filled: ChatGptSurfaceSnapshot;
+    let baselineTurnKeys: Set<string>;
+    let preSubmitUserLineageKeys: ReadonlySet<string>;
+    const text = formatPhysicalContext(request.physicalContext, request.toolBridge);
+    const expectedFingerprint = fingerprint(text);
+    try {
+      let preparedBaseline = baseline;
+      if (request.toolBridge) {
+        const selected = composer.connectorFingerprints;
+        if (selected.length > 1) throw new Error("ChatGPT composer has multiple selected connectors");
+        if (selected.length === 1 && selected[0] !== expectedConnectorFingerprint) {
+          throw new Error("ChatGPT composer has a different selected connector");
+        }
+        if (selected.length === 0) {
+          await driver.selectConnector(composer.key, connectorName!, signal);
+          preparedBaseline = await driver.observe(signal);
+          composer = exactComposer(preparedBaseline);
+        }
+        if (composer.textLength !== 0
+          || composer.connectorFingerprints.length !== 1
+          || composer.connectorFingerprints[0] !== expectedConnectorFingerprint) {
+          throw new Error("ChatGPT connector selection was not structurally proven");
+        }
+      }
+      const baselineSends = visibleSends(preparedBaseline, composer.key);
+      if (baselineSends.length > 1) {
+        throw new Error(`ChatGPT semantic surface requires at most one baseline send control; observed ${baselineSends.length}`);
+      }
+      const baselineSendKey = baselineSends[0]?.key;
+      baselineTurnKeys = new Set(preparedBaseline.turns.map(turn => turn.key));
+      preSubmitUserLineageKeys = baselineUserLineageKeys(preparedBaseline);
+
+      if (request.toolBridge) await driver.appendComposerText(composer.key, ` ${text}`, signal);
+      else await driver.replaceComposerText(composer.key, text, signal);
+      const settle = timeoutSignal(signal, CHATGPT_COMPOSER_SETTLE_TIMEOUT_MS);
+      filled = await driver.observe(settle.combined);
+      let sendAfterFill: ReturnType<typeof exactSend> | undefined;
+      for (;;) {
+        const filledComposers = readyComposers(filled);
+        if (filledComposers.length > 1) {
+          throw new Error(`ChatGPT semantic surface requires exactly one ready composer after fill; observed ${filledComposers.length}`);
+        }
+        const filledComposer = filledComposers.length === 1 ? filledComposers[0]! : undefined;
+        const exactReadback = filledComposer?.key === composer.key
+          && filledComposer.textFingerprint === expectedFingerprint
+          && filledComposer.textLength === text.length;
+        const connectorPreserved = !request.toolBridge || (
+          filledComposer?.connectorFingerprints.length === 1
+          && filledComposer.connectorFingerprints[0] === expectedConnectorFingerprint
+        );
+        if (filledComposer?.key === composer.key && filledComposer.textLength > 0 && !exactReadback) {
+          return await probableBeforeSend(
+            filled.revision,
+            "composer readback did not prove the exact prepared payload",
+          );
+        }
+        if (exactReadback && !connectorPreserved) {
+          throw new Error("ChatGPT connector selection was lost while attaching the exact payload");
+        }
+        const sendsAfterFill = exactReadback && connectorPreserved ? visibleSends(filled, composer.key) : [];
+        if (sendsAfterFill.length > 1) {
+          throw new Error(`ChatGPT semantic surface requires exactly one send control after fill; observed ${sendsAfterFill.length}`);
+        }
+        if (exactReadback && sendsAfterFill.length === 1 && sendsAfterFill[0]!.enabled) {
+          sendAfterFill = sendsAfterFill[0]!;
+          break;
+        }
+        try {
+          filled = await driver.waitForChange(filled.revision, settle.combined);
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          if (settle.timeout.aborted) {
+            return await probableBeforeSend(
+              filled.revision,
+              exactReadback
+                ? "send control was not uniquely enabled after exact composer readback before submit deadline"
+                : "composer readback did not prove the exact prepared payload before submit deadline",
+            );
+          }
+          throw error;
+        }
+      }
+      if (baselineSendKey && sendAfterFill.key !== baselineSendKey) {
+        return await probableBeforeSend(
+          filled.revision,
+          "send control identity changed after exact composer readback",
+        );
+      }
+
+      // From this point activation itself may have submitted the message. Mark the boundary before
+      // calling the driver so an exception can never authorize cleanup or implicit retry.
+      sendActivationAttempted = true;
+      await driver.activateSend(sendAfterFill.key, signal);
+    } catch (error) {
+      if (!sendActivationAttempted && !cleanupAttempted) {
+        try {
+          await cleanupPreparedComposer();
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "ChatGPT pre-submit preparation failed and composer cleanup was incomplete",
+          );
+        }
+      }
+      throw error;
+    }
+
+    let snapshot = await driver.waitForChange(filled.revision, signal);
+    for (;;) {
+      const newUserTurns = snapshot.turns.filter(turn => (
+        turn.role === "user" && !baselineTurnKeys.has(turn.key)
+      ));
+      if (newUserTurns.length > 1) {
+        return {
+          state: "ambiguous",
+          candidates: Object.freeze(newUserTurns.map(turn => ({
+            nativeTaskId: request.nativeTaskId,
+            nativeTurnId: request.nativeTurnId,
+            webEpochId: request.webEpochId,
+            providerTurnId: turn.key,
+          }))),
+          evidence: evidence("multiple new user turns appeared after one exact send activation"),
+        };
+      }
+      if (newUserTurns.length === 1) {
+        const userTurn = newUserTurns[0]!;
+        const handle = Object.freeze({
+          nativeTaskId: request.nativeTaskId,
+          nativeTurnId: request.nativeTurnId,
+          webEpochId: request.webEpochId,
+          providerTurnId: userTurn.key,
+        });
+        this.#turns.set(handle.providerTurnId, {
+          handle,
+          surfaceLeaseId: surface.leaseId,
+          userTurnKey: userTurn.key,
+          baselineUserLineageKeys: preSubmitUserLineageKeys,
+          revision: snapshot.revision,
+        });
+        return {
+          state: "proven",
+          value: handle,
+          evidence: evidence(
+            userTurn.contentFingerprint === expectedFingerprint
+              ? "one new stable user turn acknowledges the exact submitted payload fingerprint"
+              : "one new stable user turn acknowledges the exact pre-send composer readback and send activation",
+          ),
+        };
+      }
+      snapshot = await driver.waitForChange(snapshot.revision, signal);
+    }
+  }
+
+  async observeTurn(
+    surface: BrowserSurfaceLease,
+    turn: WebTurnHandle,
+    signal?: AbortSignal,
+  ): Promise<SemanticObservation<WebTurnState>> {
+    const tracked = this.#tracked(surface, turn);
+    const snapshot = await driverFor(surface).observe(signal);
+    tracked.revision = snapshot.revision;
+    return stateFromSnapshot(snapshot, tracked);
+  }
+
+  async armToolContinuation(
+    surface: BrowserSurfaceLease,
+    turn: WebTurnHandle,
+    callId: string,
+    signal?: AbortSignal,
+  ): Promise<SemanticObservation<WebToolContinuationBoundary>> {
+    if (!callId.trim()) throw new Error("Web tool continuation call id must be non-empty");
+    const tracked = this.#tracked(surface, turn);
+    const snapshot = await driverFor(surface).observe(signal);
+    const lineage = resolveAssistantLineage(snapshot, tracked);
+    const assistants = lineage.assistants;
+    if (lineage.ambiguous) {
+      return {
+        state: "ambiguous",
+        candidates: Object.freeze(assistants.map(() => ({
+          providerTurnId: tracked.handle.providerTurnId,
+          callId,
+        }))),
+        evidence: evidence("multiple new assistant lineages exist at the exact tool-result boundary"),
+      };
+    }
+    if (assistants.length > 1) {
+      return {
+        state: "ambiguous",
+        candidates: Object.freeze(assistants.map(() => ({
+          providerTurnId: tracked.handle.providerTurnId,
+          callId,
+        }))),
+        evidence: evidence("multiple assistant descendants exist at the exact tool-result boundary"),
+      };
+    }
+    const assistant = assistants[0];
+    if (assistant?.phase === "complete" || assistant?.phase === "failed") {
+      return {
+        state: "probable",
+        value: { providerTurnId: tracked.handle.providerTurnId, callId },
+        evidence: evidence(`assistant was already ${assistant.phase} before MCP result handoff`),
+      };
+    }
+    tracked.revision = snapshot.revision;
+    tracked.continuationBoundary = {
+      callId,
+      assistantFingerprint: assistantFingerprint(assistant),
+    };
+    return {
+      state: "proven",
+      value: { providerTurnId: tracked.handle.providerTurnId, callId },
+      evidence: evidence("captured exact assistant state before MCP result handoff"),
+    };
+  }
+
+  async waitForTurnEvent(
+    surface: BrowserSurfaceLease,
+    turn: WebTurnHandle,
+    signal?: AbortSignal,
+  ): Promise<SemanticObservation<WebTurnEvent>> {
+    const tracked = this.#tracked(surface, turn);
+    const driver = driverFor(surface);
+
+    if (tracked.pendingCompletedAnswer !== undefined) {
+      const answer = tracked.pendingCompletedAnswer;
+      delete tracked.pendingCompletedAnswer;
+      this.#turns.delete(tracked.handle.providerTurnId);
+      return {
+        state: "proven",
+        value: {
+          kind: "completed",
+          providerTurnId: tracked.handle.providerTurnId,
+          answer,
+        },
+        evidence: evidence("assistant completion followed a proven post-tool continuation boundary"),
+      };
+    }
+
+    for (;;) {
+      const snapshot = await driver.waitForChange(tracked.revision, signal);
+      tracked.revision = snapshot.revision;
+      const lineage = resolveAssistantLineage(snapshot, tracked);
+      const assistants = lineage.assistants;
+      if (lineage.ambiguous) {
+        return {
+          state: "ambiguous",
+          candidates: Object.freeze(assistants.map(() => ({
+            kind: "continuing" as const,
+            providerTurnId: tracked.handle.providerTurnId,
+          }))),
+          evidence: evidence("multiple new assistant lineages appeared after one accepted ChatGPT turn"),
+        };
+      }
+      if (assistants.length > 1) {
+        return {
+          state: "ambiguous",
+          candidates: Object.freeze(assistants.map(() => ({
+            kind: "continuing" as const,
+            providerTurnId: tracked.handle.providerTurnId,
+          }))),
+          evidence: evidence("multiple assistant descendants for one accepted user turn"),
+        };
+      }
+      const assistant = assistants[0];
+      if (!assistant) continue;
+      const boundary = tracked.continuationBoundary;
+      if (boundary) {
+        if (assistantFingerprint(assistant) === boundary.assistantFingerprint) continue;
+        delete tracked.continuationBoundary;
+        if (assistant.phase === "failed") {
+          this.#turns.delete(tracked.handle.providerTurnId);
+          return {
+            state: "proven",
+            value: {
+              kind: "failed",
+              providerTurnId: tracked.handle.providerTurnId,
+              detail: assistant.failureDetail ?? "ChatGPT turn failed",
+            },
+            evidence: evidence(`assistant failed after MCP result handoff for ${boundary.callId}`),
+          };
+        }
+        if (assistant.phase === "complete") tracked.pendingCompletedAnswer = assistant.text ?? "";
+        return {
+          state: "proven",
+          value: { kind: "continuing", providerTurnId: tracked.handle.providerTurnId },
+          evidence: evidence(`assistant state changed after exact MCP result handoff for ${boundary.callId}`),
+        };
+      }
+      if (assistant.phase === "complete") {
+        this.#turns.delete(tracked.handle.providerTurnId);
+        return {
+          state: "proven",
+          value: {
+            kind: "completed",
+            providerTurnId: tracked.handle.providerTurnId,
+            answer: assistant.text ?? "",
+          },
+          evidence: evidence("one assistant descendant reached complete state"),
+        };
+      }
+      if (assistant.phase === "failed") {
+        this.#turns.delete(tracked.handle.providerTurnId);
+        return {
+          state: "proven",
+          value: {
+            kind: "failed",
+            providerTurnId: tracked.handle.providerTurnId,
+            detail: assistant.failureDetail ?? "ChatGPT turn failed",
+          },
+          evidence: evidence("one assistant descendant reached failed state"),
+        };
+      }
+    }
+  }
+
+  #tracked(surface: BrowserSurfaceLease, turn: WebTurnHandle): TrackedTurn {
+    const tracked = this.#turns.get(turn.providerTurnId);
+    if (!tracked || tracked.surfaceLeaseId !== surface.leaseId
+      || tracked.handle.nativeTaskId !== turn.nativeTaskId
+      || tracked.handle.nativeTurnId !== turn.nativeTurnId
+      || tracked.handle.webEpochId !== turn.webEpochId) {
+      throw new Error("ChatGPT turn handle is not bound to this browser surface and Native turn");
+    }
+    return tracked;
+  }
+}

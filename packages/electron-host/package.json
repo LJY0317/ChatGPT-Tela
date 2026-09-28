@@ -1,0 +1,13 @@
+{
+  "name": "@chatgpt-tela/electron-host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@chatgpt-tela/browser-host": "workspace:*"
+  },
+  "peerDependencies": {
+    "electron": "^44.4.5"
+  }
+}

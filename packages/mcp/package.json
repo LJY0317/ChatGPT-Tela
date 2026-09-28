@@ -1,0 +1,14 @@
+{
+  "name": "@chatgpt-tela/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@chatgpt-tela/core": "workspace:*",
+    "@chatgpt-tela/http-host": "workspace:*",
+    "@chatgpt-tela/runtime": "workspace:*",
+    "zod": "4.4.3"
+  }
+}

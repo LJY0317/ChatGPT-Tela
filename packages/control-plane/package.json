@@ -1,0 +1,16 @@
+{
+  "name": "@chatgpt-tela/control-plane",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@chatgpt-tela/codex-service": "workspace:*",
+    "@chatgpt-tela/development-runtime": "workspace:*",
+    "@chatgpt-tela/gateway": "workspace:*",
+    "@chatgpt-tela/http-host": "workspace:*",
+    "@chatgpt-tela/mcp": "workspace:*",
+    "@chatgpt-tela/product-config": "workspace:*",
+    "@chatgpt-tela/service-protocol": "workspace:*"
+  }
+}

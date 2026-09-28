@@ -1,0 +1,11 @@
+{
+  "name": "@chatgpt-tela/codex-daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@chatgpt-tela/codex-service": "workspace:*",
+    "@chatgpt-tela/product-lifecycle": "workspace:*",
+    "@chatgpt-tela/service-protocol": "workspace:*"
+  }
+}

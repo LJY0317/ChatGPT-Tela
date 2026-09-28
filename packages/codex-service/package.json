@@ -1,0 +1,16 @@
+{
+  "name": "@chatgpt-tela/codex-service",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@chatgpt-tela/core": "workspace:*",
+    "@chatgpt-tela/default-desktop-target": "workspace:*",
+    "@chatgpt-tela/http-host": "workspace:*",
+    "@chatgpt-tela/mcp": "workspace:*",
+    "@chatgpt-tela/runtime": "workspace:*",
+    "@chatgpt-tela/service-protocol": "workspace:*",
+    "@chatgpt-tela/setup": "workspace:*"
+  }
+}

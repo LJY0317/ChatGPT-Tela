@@ -1,0 +1,15 @@
+{
+  "name": "@chatgpt-tela/gateway",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@chatgpt-tela/core": "workspace:*",
+    "@chatgpt-tela/http-host": "workspace:*",
+    "@chatgpt-tela/mcp": "workspace:*",
+    "@chatgpt-tela/service-protocol": "workspace:*",
+    "zod": "^3.25.0"
+  }
+}
