@@ -660,6 +660,10 @@ durations, and bounded pseudonymous fingerprints are preferred over payload logg
 filesystem contents, tool arguments/results, credentials, and browser-profile identifiers are not diagnostic
 material.
 
+Public Gateway Chat/Codex routes resolve the current private backend descriptor only when each call arrives.
+Those dynamic routes emit the same payload-free `backend_call_*` lifecycle diagnostics as the private Gateway
+router, so successful public tool traffic is observable without persisting capabilities, arguments, or results.
+
 The CLI `diagnostics` summary is an even narrower support boundary: it reads only file metadata for the known
 Tela service/diagnostic files and exposes presence/size/rotation state without opening the files or returning
 their paths. Raw diagnostic JSONL remains local and is inspected only by an explicit user/support workflow.

@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { startWebHttpServer } from "@chatgpt-tela/http-host";
 import { DynamicChatBackend } from "./dynamic-chat-backend";
 
 describe("dynamic Tela Chat backend", () => {
   test("resolves the current Chat descriptor per call and crosses only the private service protocol", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-gateway-dynamic-chat-"));
+    const diagnosticPath = join(root, "gateway-diagnostics.jsonl");
+    const previousDiagnosticPath = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = diagnosticPath;
     const token = "h".repeat(48);
     const seen: unknown[] = [];
     const server = await startWebHttpServer({
@@ -53,8 +60,19 @@ describe("dynamic Tela Chat backend", () => {
       expect(seen).toEqual([{ capability: "read", arguments: { workspace_id: "chatws_fixture", path: "README.md" } }]);
       available = false;
       await expect(backend.call("read", {})).rejects.toThrow("Chat backend is unavailable");
+      const diagnostics = readFileSync(diagnosticPath, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(diagnostics.map(item => [item.stage, item.service])).toEqual([
+        ["backend_call_start", "chat"],
+        ["backend_call_complete", "chat"],
+        ["backend_call_start", "chat"],
+        ["backend_call_complete", "chat"],
+        ["backend_call_unmounted", "chat"],
+      ]);
     } finally {
       await server.stop();
+      if (previousDiagnosticPath === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previousDiagnosticPath;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

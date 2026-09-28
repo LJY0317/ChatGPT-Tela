@@ -7,6 +7,7 @@ import {
   CodexServiceClient,
   descriptorForService,
 } from "@chatgpt-tela/service-protocol/client";
+import { dynamicBackendCall } from "./dynamic-backend-call";
 
 export type CodexDescriptorResolver = (
 ) => ServiceRuntimeDescriptor | undefined | Promise<ServiceRuntimeDescriptor | undefined>;
@@ -18,17 +19,25 @@ export class DynamicCodexTurnBridge implements TurnBridgeBackend {
     this.#resolveDescriptor = resolveDescriptor;
   }
 
-  async #client(): Promise<CodexServiceClient> {
-    const descriptor = await this.#resolveDescriptor();
-    if (!descriptor) throw new Error("Tela Codex backend is unavailable");
-    return new CodexServiceClient(descriptorForService(descriptor, "codex"));
-  }
-
   async inventory(capability: string, query = "") {
-    return (await this.#client()).inventory(capability, query);
+    return dynamicBackendCall({
+      service: "codex",
+      resolveClient: async () => {
+        const descriptor = await this.#resolveDescriptor();
+        return descriptor ? new CodexServiceClient(descriptorForService(descriptor, "codex")) : undefined;
+      },
+      operation: client => client.inventory(capability, query),
+    });
   }
 
   async invoke(capability: string, invocation: NativeToolInvocation): Promise<NativeToolResult> {
-    return (await this.#client()).invoke(capability, invocation);
+    return dynamicBackendCall({
+      service: "codex",
+      resolveClient: async () => {
+        const descriptor = await this.#resolveDescriptor();
+        return descriptor ? new CodexServiceClient(descriptorForService(descriptor, "codex")) : undefined;
+      },
+      operation: client => client.invoke(capability, invocation),
+    });
   }
 }

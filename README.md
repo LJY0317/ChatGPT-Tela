@@ -295,6 +295,12 @@ service credential provisioning now exists through a per-user platform credentia
 provider call still requires a user credential. General artifact transfer, the frozen one-plugin public generation, Developer ID/notarized release packaging,
 and the final end-user installer/updater surface remain active pre-alpha work.
 
+The stable **ChatGPT Tela** connector also has a live product exact-turn proof on the isolated Profile 2 path:
+one persistent Native Codex turn was routed to ChatGPT Web, the Web turn discovered the exact current Native
+inventory through the public connector, invoked Native `exec_command`, received its result, and completed the
+same Native turn with the requested final response. The test Native thread was then deleted through the public
+app-server lifecycle rather than left in the user's Codex history.
+
 ChatGPT Tela currently requires Bun 1.4.0:
 
 ```sh
