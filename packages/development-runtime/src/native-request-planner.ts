@@ -19,7 +19,9 @@ import type {
 import type {
   DevelopmentWebTurnPlan,
   DevelopmentWebTurnPlanner,
+  DevelopmentWebTurnSettlement,
 } from "./runtime";
+import { projectFreshWebPhysicalContext } from "./provider-projection";
 
 export interface ProjectedNativeRevision {
   readonly revision: LogicalRevision;
@@ -122,16 +124,95 @@ function revisionId(
   return `native_${digest}`;
 }
 
-function webEpochId(nativeTaskId: string, transportAnchor: string): string {
+function webEpochId(nativeTaskId: string, transportAnchor: string, routeIdentity: string): string {
   const digest = createHash("sha256")
     .update("chatgpt-tela-web-epoch-v1")
     .update("\0")
     .update(nativeTaskId)
     .update("\0")
     .update(transportAnchor)
+    .update("\0")
+    .update(routeIdentity)
     .digest("base64url")
     .slice(0, 24);
   return `dev_epoch_${digest}`;
+}
+
+function routeIdentity(value: unknown): string {
+  const body = record(value);
+  const reasoning = record(body?.reasoning);
+  const normalized = stableJson({
+    model: typeof body?.model === "string" ? body.model : null,
+    effort: typeof reasoning?.effort === "string" ? reasoning.effort : null,
+  });
+  return createHash("sha256")
+    .update("chatgpt-tela-web-route-v1")
+    .update("\0")
+    .update(normalized)
+    .digest("base64url")
+    .slice(0, 20);
+}
+
+function contentFingerprint(value: string): string {
+  return createHash("sha256").update(value).digest("base64url");
+}
+
+interface CommittedRetainedContext {
+  readonly webEpochId: string;
+  readonly inputHeadRevisionId: string;
+  readonly answerFingerprint: string;
+  readonly routeIdentity: string;
+  readonly epochTransferTokens: number;
+}
+
+function retainedDelta(
+  projection: NativeRequestContextProjection,
+  committed: CommittedRetainedContext,
+  currentRouteIdentity: string,
+  budgetTokens: number | undefined,
+): WebPhysicalContext | undefined {
+  if (committed.routeIdentity !== currentRouteIdentity) return undefined;
+  const inputHeadIndex = projection.revisions.findIndex(item => (
+    item.revision.id === committed.inputHeadRevisionId
+  ));
+  if (inputHeadIndex < 0) return undefined;
+
+  let assistantIndex = -1;
+  for (let index = projection.revisions.length - 1; index > inputHeadIndex; index -= 1) {
+    const item = projection.revisions[index]!;
+    if (item.revision.kind !== "assistant") continue;
+    assistantIndex = index;
+    break;
+  }
+  if (assistantIndex < 0) return undefined;
+  const assistant = projection.revisions[assistantIndex]!;
+  if (contentFingerprint(assistant.content) !== committed.answerFingerprint) return undefined;
+
+  const delta = projection.revisions.slice(assistantIndex + 1);
+  if (delta.length === 0) return undefined;
+  const activeRequest = [...delta].reverse().find(item => (
+    item.revision.kind === "user" || item.revision.kind === "steering"
+  ));
+  if (!activeRequest) return undefined;
+  const transferTokens = delta.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
+  const projectedEpochTokens = committed.epochTransferTokens + transferTokens;
+  if (budgetTokens !== undefined && projectedEpochTokens > budgetTokens) return undefined;
+  const logicalTokens = projection.revisions
+    .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
+  return Object.freeze({
+    headRevisionId: projection.headId,
+    baseRevisionId: assistant.revision.id,
+    activeRequestRevisionId: activeRequest.revision.id,
+    mode: "retained-delta" as const,
+    logicalTokens,
+    transferTokens,
+    segments: Object.freeze(delta.map(item => Object.freeze({
+      type: "revision" as const,
+      revisionId: item.revision.id,
+      kind: item.revision.kind,
+      content: item.content,
+    }))),
+  });
 }
 
 function messageKind(role: unknown): RevisionKind {
@@ -316,9 +397,46 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
   readonly budgetTokens?: number;
   readonly checkpointProducer?: NativeRequestCheckpointProducer;
 } = {}): DevelopmentWebTurnPlanner {
+  const retainedByTask = new Map<string, CommittedRetainedContext>();
+  const pendingByTask = new Map<string, symbol>();
   return async (turn: RegisteredTurn, nativeRequest: unknown): Promise<DevelopmentWebTurnPlan> => {
     const threadId = turn.channel.binding.authority.threadId;
+    if (pendingByTask.has(threadId)) {
+      throw new Error("native task already has an unsettled Web context plan");
+    }
     const projection = projectNativeRequestContext(threadId, nativeRequest);
+    const currentRouteIdentity = routeIdentity(nativeRequest);
+    const committed = retainedByTask.get(threadId);
+    const retained = committed
+      ? retainedDelta(projection, committed, currentRouteIdentity, options.budgetTokens)
+      : undefined;
+    const pending = Symbol(threadId);
+    if (retained && committed) {
+      pendingByTask.set(threadId, pending);
+      const nextEpochTransferTokens = committed.epochTransferTokens + retained.transferTokens;
+      return Object.freeze({
+        nativeTaskId: threadId,
+        webEpochId: committed.webEpochId,
+        physicalContext: retained,
+        diagnostics: Object.freeze({
+          provider_projection: false,
+          retained_delta: true,
+          epoch_transfer_tokens: nextEpochTransferTokens,
+        }),
+        settle(outcome: DevelopmentWebTurnSettlement) {
+          if (pendingByTask.get(threadId) !== pending) return;
+          pendingByTask.delete(threadId);
+          if (outcome.status !== "completed") return;
+          retainedByTask.set(threadId, Object.freeze({
+            webEpochId: committed.webEpochId,
+            inputHeadRevisionId: projection.headId,
+            answerFingerprint: contentFingerprint(outcome.answer),
+            routeIdentity: currentRouteIdentity,
+            epochTransferTokens: nextEpochTransferTokens,
+          }));
+        },
+      });
+    }
     const contentById = new Map(projection.revisions.map(item => [item.revision.id, item.content]));
     const candidates = await cachedCheckpoints(options.checkpointCache, threadId);
     let selected = activeCheckpoint(projection, candidates, options.budgetTokens);
@@ -389,13 +507,38 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
         `Native request context requires a checkpoint to fit the ${prepared.budgetTokens}-token Web budget`,
       );
     }
+    const providerProjection = projectFreshWebPhysicalContext(prepared.physicalContext);
     const transportAnchor = prepared.plan.mode === "checkpoint-delta"
       ? `checkpoint:${prepared.plan.checkpointId}`
       : `full:${projection.headId}`;
+    const epochId = webEpochId(threadId, transportAnchor, currentRouteIdentity);
+    pendingByTask.set(threadId, pending);
     return Object.freeze({
       nativeTaskId: threadId,
-      webEpochId: webEpochId(threadId, transportAnchor),
-      physicalContext: prepared.physicalContext,
+      webEpochId: epochId,
+      physicalContext: providerProjection.context,
+      diagnostics: Object.freeze({
+        provider_projection: true,
+        retained_delta: false,
+        projection_original_bytes: providerProjection.stats.originalRevisionBytes,
+        projection_projected_bytes: providerProjection.stats.projectedRevisionBytes,
+        projection_truncated_assistant: providerProjection.stats.truncatedAssistantRevisions,
+        projection_omitted_assistant: providerProjection.stats.omittedAssistantRevisions,
+        projection_truncated_tool_results: providerProjection.stats.truncatedToolResults,
+        projection_omitted_tool_results: providerProjection.stats.omittedToolResults,
+      }),
+      settle(outcome: DevelopmentWebTurnSettlement) {
+        if (pendingByTask.get(threadId) !== pending) return;
+        pendingByTask.delete(threadId);
+        if (outcome.status !== "completed") return;
+        retainedByTask.set(threadId, Object.freeze({
+          webEpochId: epochId,
+          inputHeadRevisionId: projection.headId,
+          answerFingerprint: contentFingerprint(outcome.answer),
+          routeIdentity: currentRouteIdentity,
+          epochTransferTokens: providerProjection.context.transferTokens,
+        }));
+      },
     });
   };
 }

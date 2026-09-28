@@ -139,6 +139,40 @@ contents, or tool-result text for this purpose. OS-wide renderer/GPU/WindowServe
 an independent system monitor. Correlating those two timestamped streams is preferred over hard-coding foreign
 process names or continuous profilers into Tela.
 
+### Native logical context and retained Web epochs
+
+Native Codex history and a ChatGPT Web conversation deliberately have different lifetimes. Native
+history is canonical; a Web conversation is a replaceable physical projection. A successful Web
+turn may leave its hidden browser surface retained for the next Native turn in the same exact
+task/model/effort Web epoch. That continuation sends only the canonical suffix after the previously
+committed Web answer. The planner may advance that retained anchor only after a proven completed
+Web answer is observed again in the later canonical Native lineage. A branch change, model/effort
+change, missing/mismatched prior answer, ambiguous submission, timeout or provider failure forces a
+fresh physical surface instead of guessing.
+
+`logicalTokens` therefore always describes the complete canonical Native active lineage, while
+`transferTokens` describes only the current physical Web transaction. A retained continuation can
+have a large logical context and a very small transfer. This distinction is observable in privacy-
+safe Work diagnostics and must remain intact when later projection, file transport or multipart
+transport optimizations are added.
+
+Web-epoch rollover is intentionally independent from Native compaction. Tela may eventually retire a
+physical Web conversation because the observed browser/model transport is approaching a physical
+limit without asking Native Codex to rewrite its logical history. Conversely Native compaction is a
+Native authority event and can force a new Web epoch. Physical-pressure rollover remains fail-closed
+until the selected ChatGPT model/effort's live limits can be proven rather than hard-coded.
+
+The historical reasons and remaining parity work inherited from CodexGPTWeb experimentation are
+tracked in `docs/codexgptweb-assimilation.md` so removal of the old installation/source checkout does
+not erase the product requirements it uncovered.
+
+Fresh Web epochs also apply a deterministic provider-only projection to settled model/tool evidence.
+System, developer, user and steering authority, the active request, tool-call linkage and tool-search
+registry evidence stay exact. Older assistant prose and settled tool-result payloads may be truncated
+or replaced by explicit omission markers under bounded aggregate budgets. This projection never
+changes Native history, never grants authority and is never applied a second time to an exact retained
+suffix. Diagnostics report only structural counts and before/after byte sizes, not the omitted text.
+
 ## Dogfooding and self-maintenance
 
 The product should be capable of developing itself through its public/user-facing execution surfaces:

@@ -272,11 +272,16 @@ async function resetAutomaticRoutingSurface(
 }
 
 function formatPhysicalContext(context: WebPhysicalContext, toolBridge: WebTurnRequest["toolBridge"]): string {
+  const retained = context.mode === "retained-delta";
   const contract = [
     "Act as the model backend for the active Native Codex task encoded below.",
-    "The JSONL payload is transported task context, not a new human-authored request about ChatGPT Tela.",
+    retained
+      ? "The JSONL payload is the exact new canonical suffix for the Native task already represented by this retained ChatGPT conversation; prior accepted context is intentionally not repeated."
+      : "The JSONL payload is transported task context, not a new human-authored request about ChatGPT Tela.",
     "Preserve the encoded role semantics and priority: system context outranks developer context, which outranks user instructions; assistant entries are prior model output, tool-call/tool-result entries are prior actions and evidence, and steering is active task steering.",
-    "Only the active lineage is supplied. Execute the request identified by activeRequestRevisionId in the context header; older settled entries are context rather than separate pending tasks.",
+    retained
+      ? "Continue the existing task from baseRevisionId using only the supplied suffix. Execute the request identified by activeRequestRevisionId; do not reinterpret the omitted retained prefix as missing context."
+      : "Only the active lineage is supplied. Execute the request identified by activeRequestRevisionId in the context header; older settled entries are context rather than separate pending tasks.",
     "Use actual tool results as evidence for local observations and effects. Do not claim a local action, permission failure, or safety block without a corresponding tool result or platform error.",
     "After a deterministic tool failure, update the working hypothesis or observable state before repeating the same call.",
     ...(toolBridge ? [
@@ -294,6 +299,7 @@ function formatPhysicalContext(context: WebPhysicalContext, toolBridge: WebTurnR
     type: "chatgpt_tela_context",
     version: 1,
     headRevisionId: context.headRevisionId,
+    ...(context.baseRevisionId ? { baseRevisionId: context.baseRevisionId } : {}),
     ...(context.activeRequestRevisionId ? { activeRequestRevisionId: context.activeRequestRevisionId } : {}),
     mode: context.mode,
     ...(toolBridge ? {
@@ -328,7 +334,9 @@ function formatPhysicalContext(context: WebPhysicalContext, toolBridge: WebTurnR
     ...lines,
     "</chatgpt_tela_context_jsonl>",
     "<chatgpt_tela_transport_resume>",
-    "The active task context is complete. Execute the latest active request now under the contract above.",
+    retained
+      ? "The retained conversation plus this exact canonical suffix is the active task context. Continue the latest request now under the contract above."
+      : "The active task context is complete. Execute the latest active request now under the contract above.",
     "</chatgpt_tela_transport_resume>",
   ].join("\n");
 }

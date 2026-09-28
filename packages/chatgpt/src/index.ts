@@ -43,9 +43,11 @@ export type WebPhysicalContextSegment =
 
 export interface WebPhysicalContext {
   readonly headRevisionId: string;
+  /** Exact canonical revision already represented by a retained Web conversation. */
+  readonly baseRevisionId?: string;
   /** Latest active user/steering revision in the canonical Native lineage. */
   readonly activeRequestRevisionId?: string;
-  readonly mode: "full" | "checkpoint-delta";
+  readonly mode: "full" | "checkpoint-delta" | "retained-delta";
   readonly logicalTokens: number;
   readonly transferTokens: number;
   readonly segments: readonly WebPhysicalContextSegment[];

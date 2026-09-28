@@ -20,7 +20,13 @@ export interface BrowserTurnRunInput {
   readonly signal?: AbortSignal;
 }
 
-function validateHandle(input: BrowserTurnRunInput, handle: WebTurnHandle): void {
+export interface BrowserTurnSurfaceRunInput extends Omit<BrowserTurnRunInput, "browserHost"> {
+  readonly surface: BrowserSurfaceLease;
+  /** Fresh surfaces require a non-consequential readiness proof; retained surfaces prove state in submitTurn. */
+  readonly proveCapabilities?: boolean;
+}
+
+function validateHandle(input: BrowserTurnSurfaceRunInput, handle: WebTurnHandle): void {
   const authority = input.channel.binding.authority;
   if (handle.nativeTaskId !== input.nativeTaskId
     || handle.nativeTurnId !== authority.turnId
@@ -47,7 +53,7 @@ type BrowserTurnSignal =
   | { readonly kind: "channel" };
 
 async function waitForBrowserTurnSignal(
-  input: BrowserTurnRunInput,
+  input: BrowserTurnSurfaceRunInput,
   surface: BrowserSurfaceLease,
   handle: WebTurnHandle,
 ): Promise<BrowserTurnSignal> {
@@ -86,15 +92,12 @@ async function waitForBrowserTurnSignal(
  * owns browser surface lifetime and semantic Web lifecycle proof. It never retries a submitted
  * turn: an ambiguous submit leaves the channel in `submitted` for recovery observation.
  */
-export async function runBrowserTurn(input: BrowserTurnRunInput): Promise<string> {
-  let surface: BrowserSurfaceLease | undefined;
+export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput): Promise<string> {
+  const surface = input.surface;
   try {
-    surface = await input.browserHost.acquire({
-      taskId: input.nativeTaskId,
-      epochId: input.webEpochId,
-    });
-
-    requireProven(await input.provider.observeCapabilities(surface, input.signal));
+    if (input.proveCapabilities !== false) {
+      requireProven(await input.provider.observeCapabilities(surface, input.signal));
+    }
 
     // From this point a submit may have side effects. Mark it before invoking the provider so a
     // thrown/ambiguous result can never be interpreted as permission to auto-resubmit.
@@ -164,7 +167,18 @@ export async function runBrowserTurn(input: BrowserTurnRunInput): Promise<string
       }
     }
     throw error;
+  }
+}
+
+/** One-shot compatibility wrapper. Development/Product runtimes use retained epoch ownership. */
+export async function runBrowserTurn(input: BrowserTurnRunInput): Promise<string> {
+  const surface = await input.browserHost.acquire({
+    taskId: input.nativeTaskId,
+    epochId: input.webEpochId,
+  });
+  try {
+    return await runBrowserTurnOnSurface({ ...input, surface });
   } finally {
-    if (surface) await input.browserHost.release(surface.leaseId);
+    await input.browserHost.release(surface.leaseId);
   }
 }

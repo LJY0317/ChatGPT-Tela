@@ -299,9 +299,11 @@ describe("Electron development runtime composition", () => {
       expect(provider.submitted?.toolBridge).toBeDefined();
       expect(await cache.list("thread-1")).toHaveLength(1);
       expect(windows).toHaveLength(2);
-      expect(windows.every(window => window.destroyed)).toBe(true);
+      expect(windows[0]?.destroyed).toBe(true); // one-purpose checkpoint surface
+      expect(windows[1]?.destroyed).toBe(false); // successful ordinary epoch stays retained
     } finally {
       await runtime.stop();
+      expect(windows.every(window => window.destroyed)).toBe(true);
       rmSync(root, { recursive: true, force: true });
     }
   });

@@ -133,9 +133,11 @@ describe("Native request development Web planner", () => {
     expect(serialized).not.toContain("secret_tool_schema");
     expect(serialized).not.toContain("opaque-native-state");
 
+    plan.settle?.({ status: "failed" });
     const replay = await planner(turn, structuredClone(request));
     expect(replay.webEpochId).toBe(plan.webEpochId);
     expect(replay.physicalContext).toEqual(plan.physicalContext);
+    replay.settle?.({ status: "failed" });
   });
 
   test("fails closed on attachment content instead of silently flattening it into text", async () => {
@@ -176,6 +178,121 @@ describe("Native request development Web planner", () => {
     expect(later.revisions.slice(0, earlier.revisions.length).map(item => item.revision.id))
       .toEqual(earlier.revisions.map(item => item.revision.id));
     expect(later.headId).not.toBe(earlier.headId);
+  });
+
+  test("committed Web answers retain one epoch and send only the exact later Native suffix", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const first = await planner(registered(), {
+      model: "native-model-a",
+      reasoning: { effort: "high" },
+      instructions: "Keep working in the same repository.",
+      input: [{ type: "message", role: "user", content: "Inspect A." }],
+    });
+    expect(first.physicalContext.mode).toBe("full");
+    first.settle?.({ status: "completed", answer: "A inspected." });
+
+    const second = await planner(registered(), {
+      model: "native-model-a",
+      reasoning: { effort: "high" },
+      instructions: "Keep working in the same repository.",
+      input: [
+        { type: "message", role: "user", content: "Inspect A." },
+        { type: "message", role: "assistant", content: "A inspected." },
+        { type: "message", role: "user", content: "Now inspect B." },
+      ],
+    });
+
+    expect(second.webEpochId).toBe(first.webEpochId);
+    expect(second.physicalContext).toMatchObject({
+      mode: "retained-delta",
+      activeRequestRevisionId: second.physicalContext.headRevisionId,
+    });
+    expect(second.physicalContext.baseRevisionId).toBeDefined();
+    expect(second.physicalContext.logicalTokens).toBeGreaterThan(second.physicalContext.transferTokens);
+    expect(second.physicalContext.segments).toEqual([
+      expect.objectContaining({ type: "revision", kind: "user", content: "Now inspect B." }),
+    ]);
+    second.settle?.({ status: "completed", answer: "B inspected." });
+
+    const third = await planner(registered(), {
+      model: "native-model-a",
+      reasoning: { effort: "high" },
+      instructions: "Keep working in the same repository.",
+      input: [
+        { type: "message", role: "user", content: "Inspect A." },
+        { type: "message", role: "assistant", content: "A inspected." },
+        { type: "message", role: "user", content: "Now inspect B." },
+        { type: "message", role: "assistant", content: "B inspected." },
+        { type: "message", role: "user", content: "Finally inspect C." },
+      ],
+    });
+    expect(third.webEpochId).toBe(first.webEpochId);
+    expect(third.physicalContext.mode).toBe("retained-delta");
+    expect(third.physicalContext.segments.map(segment => (
+      segment.type === "revision" ? segment.content : "checkpoint"
+    ))).toEqual(["Finally inspect C."]);
+    third.settle?.({ status: "failed" });
+  });
+
+  test("retained continuation fails closed to a fresh epoch when ancestry, answer, or route identity changes", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const firstRequest = {
+      model: "native-model-a",
+      reasoning: { effort: "medium" },
+      instructions: "Stable authority.",
+      input: [{ type: "message", role: "user", content: "Do A." }],
+    };
+    const first = await planner(registered(), firstRequest);
+    first.settle?.({ status: "completed", answer: "A done." });
+
+    const changedModel = await planner(registered(), {
+      ...firstRequest,
+      model: "native-model-b",
+      input: [
+        { type: "message", role: "user", content: "Do A." },
+        { type: "message", role: "assistant", content: "A done." },
+        { type: "message", role: "user", content: "Do B." },
+      ],
+    });
+    expect(changedModel.physicalContext.mode).toBe("full");
+    expect(changedModel.webEpochId).not.toBe(first.webEpochId);
+    changedModel.settle?.({ status: "failed" });
+
+    const changedBranch = await planner(registered(), {
+      model: "native-model-a",
+      reasoning: { effort: "medium" },
+      instructions: "Different authority.",
+      input: [
+        { type: "message", role: "user", content: "Different A." },
+        { type: "message", role: "assistant", content: "A done." },
+        { type: "message", role: "user", content: "Do B." },
+      ],
+    });
+    expect(changedBranch.physicalContext.mode).toBe("full");
+    changedBranch.settle?.({ status: "failed" });
+
+    const wrongAnswer = await planner(registered(), {
+      ...firstRequest,
+      input: [
+        { type: "message", role: "user", content: "Do A." },
+        { type: "message", role: "assistant", content: "Different answer." },
+        { type: "message", role: "user", content: "Do B." },
+      ],
+    });
+    expect(wrongAnswer.physicalContext.mode).toBe("full");
+    wrongAnswer.settle?.({ status: "failed" });
+  });
+
+  test("failed plans clear transactional pending state without advancing retained context", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const request = { input: [{ type: "message", role: "user", content: "Do A." }] };
+    const first = await planner(registered(), request);
+    await expect(planner(registered(), request)).rejects.toThrow("unsettled Web context plan");
+    first.settle?.({ status: "failed" });
+    const retry = await planner(registered(), request);
+    expect(retry.webEpochId).toBe(first.webEpochId);
+    expect(retry.physicalContext).toEqual(first.physicalContext);
+    retry.settle?.({ status: "failed" });
   });
 
   test("persistent checkpoints reduce physical transfer while canonical Native history remains rebuildable", async () => {

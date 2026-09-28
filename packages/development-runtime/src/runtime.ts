@@ -1,4 +1,5 @@
 import type { BrowserHost } from "@chatgpt-tela/browser-host";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   ChatGptSemanticProvider,
   type WebConversationProvider,
@@ -28,14 +29,25 @@ import {
 import {
   ActiveTurnRegistry,
   NativeResponsesGateway,
-  runBrowserTurn,
+  RetainedBrowserEpochRegistry,
+  runBrowserTurnOnSurface,
   type RegisteredTurn,
 } from "@chatgpt-tela/runtime";
+
+export type DevelopmentWebTurnSettlement =
+  | { readonly status: "completed"; readonly answer: string }
+  | { readonly status: "failed" };
 
 export interface DevelopmentWebTurnPlan {
   readonly nativeTaskId: string;
   readonly webEpochId: string;
   readonly physicalContext: WebPhysicalContext;
+  readonly diagnostics?: Readonly<Record<string, string | number | boolean>>;
+  /**
+   * Planner-owned transactional settlement. Implementations may advance retained-context state only
+   * after a completed Web answer; failed/ambiguous turns must leave the prior committed state intact.
+   */
+  readonly settle?: (outcome: DevelopmentWebTurnSettlement) => void;
 }
 
 export type DevelopmentWebTurnPlanner = (
@@ -132,25 +144,57 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
   const provider = input.provider ?? new ChatGptSemanticProvider();
   const abortController = new AbortController();
   const webRuns = new Set<Promise<unknown>>();
+  const browserEpochs = new RetainedBrowserEpochRegistry(input.browserHost);
 
   const startWebTurn = (turn: RegisteredTurn, nativeRequest: unknown): Promise<unknown> => {
     const run = (async () => {
       const plan = await input.planWebTurn(turn, nativeRequest);
+      const execute = async (signal: AbortSignal): Promise<string> => {
+        let acquired: Awaited<ReturnType<RetainedBrowserEpochRegistry["acquire"]>> | undefined;
+        try {
+          acquired = await browserEpochs.acquire(plan.nativeTaskId, plan.webEpochId);
+          emitDiagnosticEvent("chatgpt_tela_work", "web_turn_plan", {
+            context_mode: plan.physicalContext.mode,
+            logical_tokens: plan.physicalContext.logicalTokens,
+            transfer_tokens: plan.physicalContext.transferTokens,
+            retained_surface: acquired.reused,
+            ...(plan.diagnostics ?? {}),
+          });
+          const answer = await runBrowserTurnOnSurface({
+            surface: acquired.surface,
+            provider,
+            channel: turn.channel,
+            nativeTaskId: plan.nativeTaskId,
+            webEpochId: plan.webEpochId,
+            physicalContext: plan.physicalContext,
+            toolBridge: {
+              protocol: "mcp",
+              contract: webMcpContract,
+              turnCapability: turn.capability,
+            },
+            proveCapabilities: !acquired.reused,
+            signal,
+          });
+          plan.settle?.({ status: "completed", answer });
+          browserEpochs.complete(plan.nativeTaskId, plan.webEpochId);
+          return answer;
+        } catch (error) {
+          plan.settle?.({ status: "failed" });
+          if (acquired) {
+            try {
+              await browserEpochs.fail(plan.nativeTaskId, plan.webEpochId);
+            } catch (releaseError) {
+              throw new AggregateError(
+                [error, releaseError],
+                "Web turn failed and its retained browser surface could not be retired",
+              );
+            }
+          }
+          throw error;
+        }
+      };
       if (input.webTurnTimeoutMs === undefined) {
-        return runBrowserTurn({
-          browserHost: input.browserHost,
-          provider,
-          channel: turn.channel,
-          nativeTaskId: plan.nativeTaskId,
-          webEpochId: plan.webEpochId,
-          physicalContext: plan.physicalContext,
-          toolBridge: {
-            protocol: "mcp",
-            contract: webMcpContract,
-            turnCapability: turn.capability,
-          },
-          signal: abortController.signal,
-        });
+        return execute(abortController.signal);
       }
 
       const turnController = new AbortController();
@@ -163,20 +207,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
         ));
       }, input.webTurnTimeoutMs);
       try {
-        return await runBrowserTurn({
-          browserHost: input.browserHost,
-          provider,
-          channel: turn.channel,
-          nativeTaskId: plan.nativeTaskId,
-          webEpochId: plan.webEpochId,
-          physicalContext: plan.physicalContext,
-          toolBridge: {
-            protocol: "mcp",
-            contract: webMcpContract,
-            turnCapability: turn.capability,
-          },
-          signal: turnController.signal,
-        });
+        return await execute(turnController.signal);
       } finally {
         clearTimeout(timeout);
         abortController.signal.removeEventListener("abort", forwardRuntimeAbort);

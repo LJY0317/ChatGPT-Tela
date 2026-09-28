@@ -193,6 +193,58 @@ class ExternalContractProvider implements WebConversationProvider {
   }
 }
 
+class RetainedFinalProvider implements WebConversationProvider {
+  readonly surfaceLeaseIds: string[] = [];
+  capabilityProofs = 0;
+
+  async observeCapabilities() {
+    this.capabilityProofs += 1;
+    return {
+      state: "proven" as const,
+      value: { observed: new Set(["composer", "send"]) },
+      evidence: ["fixture"],
+    };
+  }
+
+  async submitTurn(surface: { leaseId: string }, request: WebTurnRequest) {
+    this.surfaceLeaseIds.push(surface.leaseId);
+    return {
+      state: "proven" as const,
+      value: {
+        nativeTaskId: request.nativeTaskId,
+        nativeTurnId: request.nativeTurnId,
+        webEpochId: request.webEpochId,
+        providerTurnId: `web-${request.nativeTurnId}`,
+      },
+      evidence: ["fixture"],
+    };
+  }
+
+  async observeTurn(_surface: unknown, turn: WebTurnHandle) {
+    return {
+      state: "proven" as const,
+      value: { providerTurnId: turn.providerTurnId, phase: "accepted" as const },
+      evidence: ["fixture"],
+    };
+  }
+
+  async armToolContinuation(_surface: unknown, turn: WebTurnHandle, callId: string) {
+    return {
+      state: "proven" as const,
+      value: { providerTurnId: turn.providerTurnId, callId },
+      evidence: ["fixture"],
+    };
+  }
+
+  async waitForTurnEvent(_surface: unknown, turn: WebTurnHandle) {
+    return {
+      state: "proven" as const,
+      value: { kind: "completed" as const, providerTurnId: turn.providerTurnId, answer: `done:${turn.nativeTurnId}` },
+      evidence: ["fixture"],
+    };
+  }
+}
+
 class HangingProvider implements WebConversationProvider {
   async observeCapabilities() {
     return {
@@ -260,6 +312,89 @@ async function post(baseUrl: URL, token: string, body: unknown): Promise<Respons
 }
 
 describe("development runtime composition", () => {
+  test("retains one browser surface across sequential Native turns in the same Web epoch", async () => {
+    let canonicalTurnId = "turn-1";
+    const sequentialSource: CanonicalCurrentTurnSource = {
+      async currentTurn(threadId) {
+        return {
+          threadId,
+          turnId: canonicalTurnId,
+          cwd: "/workspace",
+          workspaceRoots: ["/workspace"],
+          sandbox: { kind: "read-only", network: "restricted" },
+          proof: "turn-context",
+          environmentSourceTurnId: canonicalTurnId,
+        };
+      },
+    };
+    const browserEvents: string[] = [];
+    let browserCreations = 0;
+    const browserHost = new ControlledBrowserHost(async () => {
+      browserCreations += 1;
+      return {
+        async navigate() {}, async reveal() {}, async hide() {},
+        async close() { browserEvents.push("surface-close"); },
+      };
+    });
+    const provider = new RetainedFinalProvider();
+    const runtime = await startDevelopmentRuntime({
+      currentTurnSource: sequentialSource,
+      browserHost,
+      mcp: { kind: "external", abi: "stable" },
+      provider,
+      planWebTurn(turn) {
+        const turnId = turn.channel.binding.authority.turnId;
+        return {
+          nativeTaskId: turn.channel.binding.authority.threadId,
+          webEpochId: "shared-epoch",
+          physicalContext: {
+            headRevisionId: `revision-${turnId}`,
+            mode: turnId === "turn-1" ? "full" : "retained-delta",
+            ...(turnId === "turn-2" ? { baseRevisionId: "revision-turn-1" } : {}),
+            activeRequestRevisionId: `revision-${turnId}`,
+            logicalTokens: turnId === "turn-1" ? 10 : 20,
+            transferTokens: 10,
+            segments: [{
+              type: "revision",
+              revisionId: `revision-${turnId}`,
+              kind: "user",
+              content: `request:${turnId}`,
+            }],
+          },
+        };
+      },
+    });
+    const requestFor = (turnId: string) => ({
+      ...nativeRequest([{ type: "message", role: "user", content: `request:${turnId}` }]),
+      client_metadata: {
+        "x-codex-turn-metadata": {
+          request_kind: "turn",
+          thread_id: "thread-1",
+          turn_id: turnId,
+        },
+      },
+    });
+
+    try {
+      const first = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, requestFor("turn-1"));
+      expect(first.status).toBe(200);
+      expect(await first.text()).toContain("done:turn-1");
+      canonicalTurnId = "turn-2";
+      const second = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, requestFor("turn-2"));
+      expect(second.status).toBe(200);
+      expect(await second.text()).toContain("done:turn-2");
+
+      expect(browserCreations).toBe(1);
+      expect(provider.capabilityProofs).toBe(1);
+      expect(provider.surfaceLeaseIds).toHaveLength(2);
+      expect(new Set(provider.surfaceLeaseIds).size).toBe(1);
+      expect(browserEvents).toEqual([]);
+    } finally {
+      await runtime.stop();
+    }
+    expect(browserEvents).toEqual(["surface-close"]);
+  });
+
   test("owns one Native HTTP -> browser -> MCP -> Native result -> Web final lifecycle", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "chatgpt-tela-dev-runtime-test", version: "0.0.0" }, { capabilities: {} });
@@ -312,11 +447,13 @@ describe("development runtime composition", () => {
       const secondText = await second.text();
       expect(secondText).toContain('"delta":"web-final"');
       expect(runtime.turns.size).toBe(0);
-      expect(browserEvents).toEqual(["surface-close"]);
+      // A successful task epoch remains physically retained for a later Native turn.
+      expect(browserEvents).toEqual([]);
     } finally {
       await runtime.stop();
       await client.close();
     }
+    expect(browserEvents).toEqual(["surface-close"]);
   });
 
   test("can run the same exact-turn lifecycle through the stable Codex bridge contract", async () => {
