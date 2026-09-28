@@ -3,7 +3,7 @@
 ChatGPT Tela is designed around two premises:
 
 1. Chat/workspace execution and Codex/Web execution are separate services and must remain separate failure
-   domains even though the user installs one ChatGPT Tela Plugin backed by one registered ChatGPT Tela App.
+   domains even though the user connects one ChatGPT Tela Plugin to one public MCP endpoint.
 2. Inside Tela Codex, a web application is an unversioned external dependency while the Native Codex task is
    the durable source of task authority.
 
@@ -16,8 +16,6 @@ correctness independent from web representation, browser lifecycle, MCP transpor
                            ChatGPT
                               |
                     ChatGPT Tela Plugin
-                              |
-                       ChatGPT Tela App
                               |
                        Tailscale Funnel
                               |
@@ -72,10 +70,10 @@ Tela Chat is a new implementation. The local DevSpace patches are a behavioral/r
 workspace/worktree ownership, restart-safe processes, bounded reads, review, agents, artifacts, and
 diagnostics; their implementation is not imported into the new service.
 
-Tela Codex contains the existing proven Native/Web runtime. The user-facing **ChatGPT Tela** Plugin references
-one user-registered ChatGPT App, which connects to the frozen Gateway endpoint for both Tela Chat and Tela
-Codex. The Plugin contains routing/workflow guidance but no machine-specific MCP URL. The two execution paths
-remain separate services behind Gateway.
+Tela Codex contains the existing proven Native/Web runtime. The user-facing **ChatGPT Tela** Plugin is created
+by connecting the frozen Gateway endpoint through ChatGPT's built-in Plugins `+` flow. ChatGPT owns the saved
+endpoint/authentication metadata; Tela keeps model guidance at the MCP/runtime boundaries rather than requiring
+an additional packaged Plugin layer. The two execution paths remain separate services behind Gateway.
 
 ## Ownership
 
@@ -533,7 +531,7 @@ Gateway initialization and `tools/list` must not depend on both backends being h
 unavailable backend returns a bounded backend-unavailable result without disabling the other backend or
 terminating Gateway. Backend timeouts, circuit state, connections, and diagnostics remain isolated.
 
-The intended unified product exposure is one user-connected ChatGPT App terminating at Tela Gateway.
+The intended unified product exposure is one user-created ChatGPT Plugin connection terminating at Tela Gateway.
 Tailscale Funnel is the current managed public-HTTPS provider:
 
 ```text
@@ -541,9 +539,6 @@ ChatGPT / Work / Codex
    |
    v
 ChatGPT Tela Plugin
-   |
-   v
-ChatGPT Tela App
    |
    v
 Tailscale Funnel
@@ -554,10 +549,10 @@ Tela Gateway
    +-- private local protocol --> Tela Codex
 ```
 
-The Plugin references the existing App through `.app.json`; it does not declare the MCP server again through
-`mcp.json` or `.mcp.json`. The App therefore owns endpoint/authentication availability while Gateway owns only
-Tela routing. One Plugin/App ingress does not merge backend failure domains: Chat and Codex descriptors are
-resolved per call, and an unavailable backend returns an error without disabling the peer service.
+The standard setup is created directly in ChatGPT's Plugin connection dialog, so Tela ships no imported
+`mcp.json`/`.mcp.json` package for that path. ChatGPT owns endpoint/authentication availability while Gateway
+owns only Tela routing. One Plugin ingress does not merge backend failure domains: Chat and Codex descriptors
+are resolved per call, and an unavailable backend returns an error without disabling the peer service.
 
 The current local machine already demonstrates one Funnel host routing independent DevSpace and Tela
 listeners. The final product exposes only Gateway; backend services become loopback/local-IPC only.

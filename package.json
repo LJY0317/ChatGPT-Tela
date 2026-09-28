@@ -21,7 +21,6 @@
     "codex:daemon": "bun run apps/codex-daemon/src/main.ts",
     "package:build": "bun run apps/package-build/src/main.ts",
     "package:smoke": "bun run apps/package-smoke/src/main.ts",
-    "plugin:package": "bun run packages/plugin-package/src/cli.ts",
     "profile:setup:build": "bun build apps/profile-setup/src/main.ts --target=node --format=cjs --external electron --outfile=build/profile-setup/main.cjs",
     "profile:setup": "bun run profile:setup:build && electron build/profile-setup/main.cjs",
     "profile:runtime:build": "bun build apps/profile-runtime/src/main.ts --target=node --format=cjs --external electron --outfile=build/profile-runtime/main.cjs",

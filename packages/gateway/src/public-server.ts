@@ -19,9 +19,11 @@ export interface PublicChatBackend {
 
 export const CHATGPT_TELA_PUBLIC_INSTRUCTIONS = [
   "Use ChatGPT Tela when the request needs the user's connected local workspace or the exact active Native Codex turn; do not invoke it for ordinary conversation or knowledge work that needs neither.",
-  "Tela Chat and Tela Codex are independent backends behind one app. A failure in one does not prove the other is unavailable, and authority must never be silently transferred between them.",
+  "Tela Chat and Tela Codex are independent backends behind one Plugin connection. A failure in one does not prove the other is unavailable, and authority must never be silently transferred between them.",
   "For ordinary local project work, use the Tela Chat capability inventory first when the exact capability or schema is not already known. Open a workspace once and reuse its workspace_id. Batch only independent already-known reads. For commands that may mutate state or outlive one response, provide operation_id; after an uncertain response, inspect process_status before starting the command again.",
+  "After related edits, use an available change-review capability when it helps verify the final workspace state. Prefer direct workspace capabilities for routine work and delegate to a Tela Chat agent only when separate context or specialization materially helps.",
   "For work inside the exact active Native Codex turn, use the Codex inventory with only the opaque turn_capability supplied by the active task transport. Discover the current tool inventory instead of assuming names or schemas from another turn.",
+  "Invoke only tools returned for that same turn capability with arguments matching the returned schema, and continue from the current task state rather than repeating completed work after context rollover or a fresh Web conversation.",
   "Treat actual tool results and platform errors as evidence. After a deterministic failure, change the inputs, hypothesis, or observable state before retrying the same action.",
 ].join(" ");
 

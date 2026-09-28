@@ -1,22 +1,15 @@
-# ChatGPT Tela Plugin and App
+# ChatGPT Tela Plugin setup
 
-ChatGPT Tela uses **one plugin that references one user-registered ChatGPT App**. The App owns the user's
-connection to their own Tela Gateway endpoint; the Plugin adds reusable routing/workflow guidance for both
-ordinary ChatGPT conversations and Work/Codex.
-
-The Plugin deliberately contains no bundled MCP server manifest. A direct MCP declaration would bake one
-machine's endpoint into the package and can make the Plugin Desktop-only. Instead, each user registers their
-own Tela Gateway once and the generated Plugin references that existing App by its opaque technical ID.
+ChatGPT Tela uses ChatGPT's standard **Plugins -> +** MCP connection flow as its primary installation path.
+The user connects one Tela Gateway endpoint, chooses the authentication required by that exposure, and
+ChatGPT creates the resulting personal/workspace Plugin directly. No separate App technical id, generated
+Plugin archive, or Plugin Creator conversation is required for the standard setup.
 
     ChatGPT / Work / Codex
             |
             v
       ChatGPT Tela Plugin
-       routing + workflow skill
-            |
-            v
-      ChatGPT Tela App
-     user-registered connection
+       saved MCP connection
             |
             v
          Tela Gateway
@@ -26,75 +19,70 @@ own Tela Gateway once and the generated Plugin references that existing App by i
 
 ## Why one Plugin still preserves two failure domains
 
-The Plugin and App are discovery/routing surfaces, not execution owners. Gateway resolves each backend only
-when the corresponding control is called. Tela Chat and Tela Codex keep separate processes, mutable state,
-health, timeouts, and diagnostics.
+The Plugin is an ingress/discovery surface, not an execution owner. Gateway resolves each backend only when
+the corresponding control is called. Tela Chat and Tela Codex keep separate processes, mutable state, health,
+timeouts, and diagnostics.
 
 - If Tela Chat is unavailable, Codex inventory/calls can still work.
 - If Tela Codex is unavailable, Chat workspace capabilities can still work.
 - A backend failure is not permission to silently move an operation to the other backend.
-- Gateway or the user's tunnel is the intentional shared ingress failure domain.
+- Gateway or the user's tunnel/HTTPS route is the intentional shared ingress failure domain.
 
 ## First-time connection
 
-The current pre-alpha path is deliberately similar to connecting DevSpace or a local Codex Web harness:
-the user owns the endpoint and performs the ChatGPT connection once.
+1. Configure and start ChatGPT Tela so Gateway has a reachable MCP endpoint.
+2. In ChatGPT, enable **Developer Mode** under Settings -> Security and login.
+3. Open **ChatGPT Plugins** and select **+**.
+4. Enter the user-facing name **ChatGPT Tela**, the Tela Gateway MCP endpoint, and the authentication method
+   that matches the selected exposure. For the current development Tailscale Funnel path, authentication is
+   `None`; authenticated production paths should use the authentication contract actually enforced by the
+   endpoint.
+5. Create the connection and review the four discovered public controls.
+6. Open the resulting Plugin in Personal/Workspace Plugins and install/enable it if the current surface asks
+   for a separate install step.
+7. Start a new Chat or Work task when validating a newly created/refreshed connection.
 
-1. Configure and start ChatGPT Tela so that Gateway has a reachable MCP endpoint. For the managed Tailscale
-   path this is the configured public HTTPS URL ending in /chatgpt-tela.
-2. In ChatGPT, enable Developer Mode and create a custom App named **ChatGPT Tela**. Point it at that Gateway
-   endpoint and choose authentication that matches the exposure you configured.
-3. Finish the App connection/authorization for the ChatGPT account that will use Tela.
-4. Copy the App's **technical ID** from ChatGPT. Current Developer Mode-created App IDs are opaque values such
-   as plugin_asdk_app_...; keep the exact value rather than deriving or renaming it.
-5. From a Tela source checkout, generate the Plugin archive:
+The stable public MCP surface exposes exactly:
 
-       bun run plugin:package --app-id plugin_asdk_app_...
+    chatgpt_tela_chat_capability_inventory
+    chatgpt_tela_chat_capability_call
+    chatgpt_tela_codex_tool_inventory
+    chatgpt_tela_codex_tool_call
 
-   The default output is build/chatgpt-tela-plugin.tar.gz. The technical App ID is written only into that
-   ignored build artifact; it is not committed to Git.
-6. In the ChatGPT workspace's Plugins administration surface, upload/install that archive as
-   **ChatGPT Tela**. The referenced App must also remain available to the user's role/account.
-7. Start a new conversation/task when validating a newly installed or updated Plugin.
+The first pair routes ordinary local workspace work to Tela Chat. The second pair is reserved for the exact
+active Native Codex turn and routes only through Tela Codex.
 
-The generated archive contains only:
+## Model guidance
 
-    plugin.json
-    .codex-plugin/plugin.json
-    .app.json
-    skills/chatgpt-tela/SKILL.md
+The standard direct-MCP Plugin does not depend on an extra packaged Skill. Model guidance lives at boundaries
+that are present for every connection:
 
-It deliberately contains no mcp.json or .mcp.json.
+- MCP server instructions decide when Tela is relevant and preserve the Chat/Codex authority split.
+- Tool and capability descriptions require runtime discovery rather than guessed tool names/schemas.
+- Tela Chat agent instructions guide bounded reads, edits, verification, and retry behavior.
+- The Codex/Web transport contract preserves system/developer/user priority, exact active request identity,
+  opaque turn-capability routing, evidence requirements, and same-task continuation.
 
-## Model routing
+Runtime checks remain authoritative. Natural-language guidance never grants filesystem, process, turn,
+sandbox, approval, or destructive-action authority.
 
-The bundled skill is intentionally short enough to guide rather than replace runtime enforcement.
+## Authentication
 
-- In ordinary ChatGPT conversations, use Tela Chat when the request needs local project/workspace evidence or
-  effects. Open/reuse one workspace, discover runtime capabilities, use bounded reads, and avoid duplicate
-  command execution after uncertain responses.
-- In Work/Codex, use Tela Codex only for the exact active Native turn. The active transport supplies an opaque
-  turn capability; the model must reuse it unchanged and discover that turn's current Native tool inventory.
-- Actual tool results and platform errors are evidence. The model should not manufacture local success,
-  permission failures, or safety blocks.
-- Ordinary knowledge/conversation requests that need neither local workspace access nor active-turn
-  delegation should not activate Tela.
+The current pre-alpha Tailscale Funnel proof uses `None` only because the endpoint is a development path and
+has no OAuth resource server yet. For a long-lived consumer product, any route that exposes private local data
+or write actions must have authentication enforced by the MCP exposure. OpenAI Secure MCP Tunnel is a strong
+local-first candidate because it avoids exposing the local listener directly; OAuth 2.1 is the appropriate
+choice when Tela later has a shared/hosted multi-user service or an identity provider-backed endpoint.
 
-Runtime checks remain authoritative. The skill does not grant filesystem, process, turn, sandbox, or approval
-authority.
+## Availability
 
-## Availability and publication
-
-This path is intended for a private/personal or workspace Plugin and does not require publishing ChatGPT Tela
-to a global Plugin Directory or obtaining an OpenAI Verified badge. Surface availability still depends on the
-ChatGPT workspace, role, client, and the connected App itself.
-
-The Plugin package avoids the known Desktop-only trigger of directly declaring an MCP server, but that alone
-does not guarantee every ChatGPT client can execute every custom App. Web/mobile/desktop behavior must be
-validated against the user's actual account and current ChatGPT product surface.
+This direct connection path is the same class of Plugin setup used by OpenAI's MCP Plugin quickstart and does
+not require public Plugin Directory publication or an OpenAI Verified badge. Client availability still depends
+on the user's plan/workspace, role, and current ChatGPT surface. Web/mobile/desktop behavior should therefore
+be validated empirically on the target account.
 
 ## Multi-account setups
 
 Single account is the default. Users who intentionally maintain additional isolated ChatGPT accounts repeat
-only the App connection/account binding for those extra profiles. The local Tela Gateway and the Plugin
-architecture do not fork the Chat and Codex backend implementations per account.
+only the Plugin connection/account binding for those extra profiles. The local Tela Gateway and the Chat/Codex
+backend implementations stay shared and do not become per-account copies.
