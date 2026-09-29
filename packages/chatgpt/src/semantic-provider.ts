@@ -251,6 +251,18 @@ async function restoreEmptyComposer(
       && composers[0]?.textLength === 0
       && composers[0]?.connectorFingerprints.length === 0
       && composerAttachmentNames(composers[0]!).length === 0) return;
+    const current = composers.find(composer => composer.key === composerKey);
+    if (current
+      && current.textLength === 0
+      && current.connectorFingerprints.length === 0
+      && composerAttachmentNames(current).length > 0) {
+      emitDiagnosticEvent("chatgpt_tela_readiness", "composer_cleanup_blocked_by_attachment", {
+        attachment_count: composerAttachmentNames(current).length,
+      });
+      throw new Error(
+        "ChatGPT composer contains an existing attachment; Tela preserved it instead of guessing ownership",
+      );
+    }
     if (composers.length > 1) {
       throw new Error("ChatGPT readiness probe cleanup found multiple active composers");
     }
@@ -258,6 +270,13 @@ async function restoreEmptyComposer(
       snapshot = await driver.waitForChange(snapshot.revision, deadline.combined);
     } catch (error) {
       if (deadline.timeout.aborted) {
+        const current = readyComposers(snapshot).find(composer => composer.key === composerKey);
+        emitDiagnosticEvent("chatgpt_tela_readiness", "composer_cleanup_timeout", {
+          ready_composer_count: readyComposers(snapshot).length,
+          text_length: current?.textLength ?? -1,
+          connector_count: current?.connectorFingerprints.length ?? -1,
+          attachment_count: current ? composerAttachmentNames(current).length : -1,
+        });
         throw new Error("ChatGPT readiness probe could not restore the empty composer", { cause: error });
       }
       throw error;
@@ -726,15 +745,23 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     signal?: AbortSignal,
     options: { readonly allowUnknownSelectedConnector?: boolean } = {},
   ): Promise<boolean> {
-    const connectorName = this.#connectorName;
-    if (!connectorName) throw new Error("ChatGPT connector artifact recovery requires an explicit connector identity");
     const driver = driverFor(surface);
     await driver.dismissTransientUi(signal);
     const hydrated = await waitForHydratedComposer(driver, signal);
     const hydratedComposers = readyComposers(hydrated.snapshot);
     if (hydratedComposers.length === 0) return false;
     const composer = exactComposer(hydrated.snapshot);
-    if (composer.textLength === 0 && composer.connectorFingerprints.length === 0) return false;
+    if (composer.textLength === 0
+      && composer.connectorFingerprints.length === 0
+      && composerAttachmentNames(composer).length === 0) return false;
+    if (composer.connectorFingerprints.length === 0
+      && driver.recoverContextPreloadArtifact
+      && await driver.recoverContextPreloadArtifact(composer.key, signal)) {
+      await this.#settleConnectorDraftPersistence(driver, composer.key, signal);
+      return true;
+    }
+    const connectorName = this.#connectorName;
+    if (!connectorName) return false;
     const expectedConnectorFingerprint = fingerprint(connectorName);
     const productOwnedPlainTextArtifacts = [
       `@${connectorName}`,
@@ -782,8 +809,18 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
 
     const hydrated = await waitForHydratedComposer(driver, deadline.combined);
     const settled = await waitForSettledEmptyComposer(driver, hydrated.snapshot, deadline.combined);
-    const baseline = settled.snapshot;
-    const composer = exactComposer(baseline);
+    let baseline = settled.snapshot;
+    let composer = exactComposer(baseline);
+    if (composer.textLength !== 0
+      && composer.connectorFingerprints.length === 0
+      && composerAttachmentNames(composer).length === 0
+      && driver.recoverContextPreloadArtifact
+      && await driver.recoverContextPreloadArtifact(composer.key, deadline.combined)) {
+      await this.#settleConnectorDraftPersistence(driver, composer.key, deadline.combined);
+      baseline = await driver.observe(deadline.combined);
+      composer = exactComposer(baseline);
+      emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_stale_draft_cleared");
+    }
     if (composer.textLength !== 0
       || composer.connectorFingerprints.length !== 0
       || composerAttachmentNames(composer).length !== 0) {
@@ -801,7 +838,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       || preparedComposer.connectorFingerprints.length !== 0) {
       throw new Error("ChatGPT context preload prompt did not have exact connector-free readback");
     }
+    emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_prompt_ready");
     await driver.attachFiles(composer.key, [stage.file], deadline.combined);
+    emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_file_accepted");
     prepared = await driver.observe(deadline.combined);
     preparedComposer = exactComposer(prepared);
     if (preparedComposer.textLength !== stage.text.length
@@ -816,6 +855,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     }
 
     await driver.activateSend(sends[0]!.key, deadline.combined);
+    emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_send_activated");
     let snapshot = await driver.waitForChange(prepared.revision, deadline.combined);
     let userTurnKey: string | undefined;
     for (;;) {
@@ -835,6 +875,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       if (newUsers.length === 1) {
         userTurnKey = newUsers[0]!.key;
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_user_turn_observed");
         break;
       }
       snapshot = await driver.waitForChange(snapshot.revision, deadline.combined);
@@ -897,6 +938,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           providerOperationId: userTurnKey,
         });
         if (assistant.text?.trim() !== stage.acknowledgement) {
+          emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_receipt_mismatch");
           return {
             state: "probable",
             value: result,

@@ -75,6 +75,11 @@ export interface ChatGptSurfaceDriver {
    */
   recoverConnectorArtifact(composerKey: string, connectorName: string, signal?: AbortSignal): Promise<boolean>;
   /**
+   * Clear only an exact Tela-owned inert context-preload draft. Raw draft text stays inside the
+   * renderer for classification; arbitrary/user-authored drafts must return false unchanged.
+   */
+  recoverContextPreloadArtifact?(composerKey: string, signal?: AbortSignal): Promise<boolean>;
+  /**
    * Optionally handle one structurally recognized ChatGPT tool-approval card. The implementation must
    * keep card text/tool arguments inside the renderer and must never activate an unrecognized choice.
    */

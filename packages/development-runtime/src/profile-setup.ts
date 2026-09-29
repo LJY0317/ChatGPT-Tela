@@ -1,11 +1,15 @@
+import { randomUUID } from "node:crypto";
 import {
   createElectronMainProcessBrowserHost,
   type ElectronMainRuntimeLike,
 } from "@chatgpt-tela/electron-host";
 import {
   type ChatGptAccountIdentity,
+  type ChatGptConnectorProbe,
   ChatGptSemanticProvider,
   type ChatGptCapabilities,
+  createChatGptContextAttachment,
+  requireProven,
   type WebConversationProvider,
 } from "@chatgpt-tela/chatgpt";
 import {
@@ -26,6 +30,7 @@ export interface ElectronProfileSetupConfig {
   readonly accountBindingPath: string;
   readonly chatGptUrl?: string;
   readonly revealWhenReady: boolean;
+  readonly runContextCanary: boolean;
 }
 
 export interface ElectronProfileSetupRuntime {
@@ -33,6 +38,11 @@ export interface ElectronProfileSetupRuntime {
   probeChatGptProfile(signal?: AbortSignal): Promise<{
     readonly capabilities: ChatGptCapabilities;
     readonly account: ChatGptAccountIdentity;
+  }>;
+  recoverChatGptStartupArtifact(signal?: AbortSignal): Promise<boolean>;
+  probeChatGptContextAttachment(signal?: AbortSignal): Promise<{
+    readonly attachmentBytes: number;
+    readonly receiptVerified: true;
   }>;
   openProfileSetupSurface(options?: { readonly reveal?: boolean }): Promise<ElectronProfileSetupSurface>;
   stop(): Promise<void>;
@@ -78,6 +88,7 @@ export function loadElectronProfileSetupConfig(
     accountBindingPath: profile.accountBindingPath,
     ...(chatGptUrl ? { chatGptUrl } : {}),
     revealWhenReady: optionalBoolean(env, "CHATGPT_TELA_PROFILE_SETUP_REVEAL"),
+    runContextCanary: optionalBoolean(env, "CHATGPT_TELA_PROFILE_SETUP_CONTEXT_CANARY"),
   });
 }
 
@@ -91,7 +102,9 @@ export function loadElectronProfileSetupConfig(
 export async function startElectronProfileSetupRuntime(
   config: ElectronProfileSetupConfig,
   options: {
-    readonly provider?: Pick<WebConversationProvider, "observeCapabilities">;
+    readonly provider?: Pick<WebConversationProvider, "observeCapabilities">
+      & Partial<Pick<WebConversationProvider, "preloadContextAttachment">>
+      & Partial<ChatGptConnectorProbe>;
     readonly accountIdentityObserver?: ChatGptAccountIdentityObserver;
     readonly electron?: {
       readonly loadRuntime?: () => Promise<ElectronMainRuntimeLike>;
@@ -122,6 +135,50 @@ export async function startElectronProfileSetupRuntime(
   return Object.freeze({
     probeChatGptReadiness: (signal?: AbortSignal) => control.probeChatGptReadiness(signal),
     probeChatGptProfile: (signal?: AbortSignal) => control.probeChatGptProfile(signal),
+    async recoverChatGptStartupArtifact(signal?: AbortSignal) {
+      if (!provider.recoverConnectorProbeArtifact) return false;
+      return control.recoverChatGptConnectorProbeArtifact(signal);
+    },
+    async probeChatGptContextAttachment(signal?: AbortSignal) {
+      const preload = provider.preloadContextAttachment;
+      if (!preload) throw new Error("Web provider does not support context attachment preload");
+      const epochId = `profile-setup-context-canary-${randomUUID()}`;
+      const taskId = `profile-setup-context-canary:${config.profileId}`;
+      const surface = await browserHost.acquire({ taskId, epochId });
+      try {
+        const attachment = createChatGptContextAttachment(Object.freeze({
+          headRevisionId: "context-canary-r1",
+          activeRequestRevisionId: "context-canary-r1",
+          mode: "full" as const,
+          logicalTokens: 12,
+          transferTokens: 12,
+          segments: Object.freeze([Object.freeze({
+            type: "revision" as const,
+            revisionId: "context-canary-r1",
+            kind: "user" as const,
+            content: "ChatGPT Tela setup-only context attachment canary. No Native task execution is requested.",
+          })]),
+        }));
+        const result = requireProven(await preload.call(provider as WebConversationProvider, surface, {
+          nativeTaskId: taskId,
+          webEpochId: epochId,
+          attachment,
+        }, signal));
+        if (result.nativeTaskId !== taskId
+          || result.webEpochId !== epochId
+          || result.attachmentName !== attachment.name
+          || result.attachmentSha256 !== attachment.sha256
+          || !result.providerOperationId.trim()) {
+          throw new Error("setup-only context attachment canary returned mismatched proof identity");
+        }
+        return Object.freeze({
+          attachmentBytes: Buffer.byteLength(attachment.contextJson, "utf8"),
+          receiptVerified: true as const,
+        });
+      } finally {
+        await browserHost.release(surface.leaseId);
+      }
+    },
     openProfileSetupSurface: (options?: { readonly reveal?: boolean }) => control.openProfileSetupSurface(options),
     stop() {
       if (stopping) return stopping;

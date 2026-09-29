@@ -101,10 +101,179 @@ export const CHATGPT_CURRENT_COMPOSER_SELECTOR = [
 ].join(', ');
 
 const COMPOSER_SELECTOR_SOURCE = JSON.stringify(CHATGPT_CURRENT_COMPOSER_SELECTOR);
-const CHATGPT_GENERIC_UPLOAD_INPUT_SELECTOR = [
-  'input[data-testid="upload-photos-input"]',
-  'form[data-chatgpt-composer] input[type="file"][multiple]:not([accept])',
-].join(", ");
+const CHATGPT_MEMORY_UPLOAD_TARGET_SELECTOR = 'input[data-chatgpt-tela-memory-upload="context"]';
+
+const LOCATE_ADD_CONTEXT_CONTROL = String.raw`function () {
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const buttons = [...document.querySelectorAll('button[data-composer-navigation-target="add-context"]')].filter(visible);
+  if (buttons.length !== 1) throw new Error("ChatGPT add-context control is not unique");
+  const rect = buttons[0].getBoundingClientRect();
+  if (![rect.left, rect.top, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) {
+    throw new Error("ChatGPT add-context control has no trusted pointer target");
+  }
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}`;
+
+const FOCUS_ADD_CONTEXT_CONTROL = String.raw`function () {
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const buttons = [...document.querySelectorAll('button[data-composer-navigation-target="add-context"]')].filter(visible);
+  if (buttons.length !== 1) throw new Error("ChatGPT add-context control is not unique");
+  buttons[0].focus({ preventScroll: true });
+  if (document.activeElement !== buttons[0]) throw new Error("ChatGPT add-context control did not become keyboard owner");
+  return true;
+}`;
+
+const ACTIVATE_ADD_CONTEXT_CONTROL = String.raw`function () {
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const buttons = [...document.querySelectorAll('button[data-composer-navigation-target="add-context"]')].filter(visible);
+  if (buttons.length !== 1) throw new Error("ChatGPT add-context control is not unique");
+  buttons[0].click();
+  return true;
+}`;
+
+const OBSERVE_ACTIVE_ADD_CONTEXT_UPLOAD_ACTION = String.raw`function () {
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const normalized = element => ((element.innerText || element.textContent || "").split("\n")[0] || "")
+    .replace(/\s+/g, " ").trim();
+  const rows = [...document.querySelectorAll(
+    'button[data-list-navigation-item="true"], [role="menuitem"], [role="option"]',
+  )].filter(visible);
+  const uploadText = value => /^(?:Upload files?|Upload from computer|Add files?|Attach files?|Add photos?\s*(?:&|and)\s*files?|Upload photos?\s*(?:&|and)\s*files?|파일 업로드|컴퓨터에서 업로드|파일 추가|파일 첨부|사진\s*(?:및|과)\s*파일\s*(?:추가|업로드))$/i.test(value);
+  const genericPattern = /(upload|files?|attach|파일|첨부)/i;
+  const genericAttributeShapes = rows.flatMap((row, index) => {
+    const values = [
+      ["aria-label", row.getAttribute("aria-label")],
+      ["title", row.getAttribute("title")],
+      ["data-testid", row.getAttribute("data-testid")],
+      ["data-value", row.getAttribute("data-value")],
+      ["data-action", row.getAttribute("data-action")],
+    ].filter(([, value]) => typeof value === "string" && genericPattern.test(value));
+    return values.map(([name, value]) => [index, name, value].join(":"));
+  });
+  const semantic = rows.filter(row => {
+    if (uploadText(normalized(row))) return true;
+    return ["aria-label", "title", "data-testid", "data-value", "data-action"]
+      .some(name => genericPattern.test(row.getAttribute(name) || ""));
+  });
+  const highlighted = rows.filter(row => row.getAttribute("data-highlighted") !== null
+    || row.getAttribute("aria-current") === "true"
+    || row.getAttribute("aria-selected") === "true");
+  const target = semantic.length === 1 ? semantic[0] : semantic.length === 0 && highlighted.length === 1 ? highlighted[0] : undefined;
+  const targetKind = semantic.length === 1 ? "semantic" : target ? "highlighted" : "none";
+  if (!target) return {
+    rowCount: rows.length,
+    semanticCount: semantic.length,
+    highlightedCount: highlighted.length,
+    targetKind,
+    genericAttributeShapes,
+  };
+  const rect = target.getBoundingClientRect();
+  if (![rect.left, rect.top, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) {
+    return {
+      rowCount: rows.length,
+      semanticCount: semantic.length,
+      highlightedCount: highlighted.length,
+      targetKind,
+      genericAttributeShapes,
+    };
+  }
+  return {
+    rowCount: rows.length,
+    semanticCount: semantic.length,
+    highlightedCount: highlighted.length,
+    targetKind,
+    targetIndex: rows.indexOf(target),
+    genericAttributeShapes,
+    point: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+  };
+}`;
+
+const PREPARE_CONTEXT_UPLOAD_INPUT = String.raw`function () {
+  const composerSelector = ${COMPOSER_SELECTOR_SOURCE};
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const composers = [...document.querySelectorAll(composerSelector)].filter(visible);
+  if (composers.length !== 1) {
+    return { ready: false, reason: "composer_ambiguous", composerCount: composers.length, fileInputCount: 0, addContextCount: 0 };
+  }
+  const composer = composers[0];
+  const form = composer.closest('form[data-chatgpt-composer], form');
+  if (!(form instanceof HTMLFormElement)) {
+    return { ready: false, reason: "form_missing", composerCount: 1, fileInputCount: 0, addContextCount: 0 };
+  }
+  document.querySelectorAll('[data-chatgpt-tela-memory-upload="context"]').forEach(element => {
+    element.removeAttribute('data-chatgpt-tela-memory-upload');
+  });
+  const inputs = [...document.querySelectorAll('input[type="file"]')]
+    .filter(element => element instanceof HTMLInputElement);
+  const inForm = inputs.filter(input => input.closest('form[data-chatgpt-composer], form') === form);
+  const noAccept = input => !input.hasAttribute('accept') || !(input.getAttribute('accept') || '').trim();
+  const imageOnly = input => {
+    const raw = (input.getAttribute('accept') || '').toLowerCase().trim();
+    if (!raw) return false;
+    const parts = raw.split(',').map(part => part.trim()).filter(Boolean);
+    return parts.length > 0 && parts.every(part => part.startsWith('image/')
+      || ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.heif', '.avif'].includes(part));
+  };
+  const chooseOne = (values, kind) => values.length === 1 ? { input: values[0], kind } : undefined;
+  const candidates = [
+    chooseOne(inForm.filter(input => input.multiple && noAccept(input)), 'composer-generic'),
+    chooseOne(inputs.filter(input => input.multiple && noAccept(input)), 'global-generic'),
+    chooseOne(inForm.filter(input => !imageOnly(input)), 'composer-general'),
+    chooseOne(inputs.filter(input => !imageOnly(input)), 'global-general'),
+  ].filter(Boolean);
+  const unique = candidates.find(candidate => candidate);
+  const addContextCount = [...form.querySelectorAll('button[data-composer-navigation-target="add-context"]')].filter(visible).length;
+  const summary = {
+    composerCount: 1,
+    fileInputCount: inputs.length,
+    formFileInputCount: inForm.length,
+    genericInputCount: inputs.filter(input => input.multiple && noAccept(input)).length,
+    imageOnlyInputCount: inputs.filter(imageOnly).length,
+    addContextCount,
+    inputSummaries: inputs.slice(0, 8).map((input, index) => ({
+      index,
+      inForm: input.closest('form[data-chatgpt-composer], form') === form,
+      multiple: input.multiple,
+      disabled: input.disabled,
+      acceptKind: noAccept(input) ? 'none' : imageOnly(input) ? 'image-only' : 'general',
+      testIdKind: input.getAttribute('data-testid') === 'upload-photos-input' ? 'upload-photos' : input.hasAttribute('data-testid') ? 'other' : 'none',
+      selected: Boolean(unique && unique.input === input),
+    })),
+  };
+  if (!unique) return { ready: false, reason: "generic_input_missing", ...summary };
+  // Refuse a lower-priority candidate when the same semantic tier is ambiguous. The priority list
+  // above may contain the same exact input at multiple tiers, so deduplicate by identity first.
+  const sameTier = candidates.filter(candidate => candidate.kind === unique.kind);
+  if (sameTier.length !== 1) return { ready: false, reason: "generic_input_ambiguous", ...summary };
+  unique.input.setAttribute('data-chatgpt-tela-memory-upload', 'context');
+  return { ready: true, reason: "ready", targetKind: unique.kind, ...summary };
+}`;
+
+const CLEAR_CONTEXT_UPLOAD_INPUT_MARKER = String.raw`function () {
+  document.querySelectorAll('[data-chatgpt-tela-memory-upload="context"]').forEach(element => {
+    element.removeAttribute('data-chatgpt-tela-memory-upload');
+  });
+}`;
 
 const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
   const visible = element => {
@@ -349,6 +518,97 @@ const CLASSIFY_CONNECTOR_ARTIFACT = String.raw`function (argument) {
     selectedCount: selected.length,
     selectedExact,
     selectedKnownDevelopment,
+  };
+}`;
+
+const CLASSIFY_CONTEXT_PRELOAD_ARTIFACT = String.raw`function (argument) {
+  const selector = ${COMPOSER_SELECTOR_SOURCE};
+  const pillSelector = '[data-id^="plugin:"][data-keyword], [app-mention-path^="app://"][app-mention-display-name][contenteditable="false"]';
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const composers = [...document.querySelectorAll(selector)].filter(visible);
+  if (composers.length !== 1 || argument.composerKey !== "composer:primary") {
+    return { owned: false, reason: "composer_ambiguous" };
+  }
+  const composer = composers[0];
+  if (composer.querySelectorAll(pillSelector).length !== 0) {
+    return { owned: false, reason: "connector_present" };
+  }
+  const form = composer.closest("form[data-chatgpt-composer], form");
+  if (!(form instanceof HTMLElement)) return { owned: false, reason: "form_missing" };
+  const attachmentNames = () => {
+    const result = new Set();
+    const add = value => {
+      const normalized = String(value || "").replace(/\s+/g, " ").trim();
+      if (normalized && normalized.length <= 240 && !/[\r\n]/.test(normalized)) result.add(normalized);
+    };
+    for (const candidate of form.querySelectorAll('[role="group"], .composer-attachment-surface')) {
+      if (!(candidate instanceof HTMLElement) || !visible(candidate)) continue;
+      add(candidate.getAttribute("aria-label"));
+      const labelledBy = candidate.getAttribute("aria-labelledby");
+      if (labelledBy) add(document.getElementById(labelledBy)?.textContent);
+    }
+    for (const root of form.querySelectorAll('[data-composer-attachments]')) {
+      if (!(root instanceof HTMLElement) || !visible(root)) continue;
+      for (const candidate of root.querySelectorAll('[aria-label], span, p')) {
+        if (!(candidate instanceof HTMLElement) || !visible(candidate)) continue;
+        add(candidate.getAttribute("aria-label"));
+        add(candidate.textContent);
+      }
+    }
+    return [...result];
+  };
+  const clone = composer.cloneNode(true);
+  if (!(clone instanceof HTMLElement)) return { owned: false, reason: "clone_failed" };
+  clone.querySelectorAll(pillSelector + ', [data-inline-selection-pill-cursor-target]').forEach(part => part.remove());
+  const value = [...clone.childNodes]
+    .map(child => child.textContent || "")
+    .join("\n")
+    .replace(/\r\n?/g, "\n");
+  const normalized = value.trimStart();
+  const text = normalized.trim().length === 0 ? "" : normalized;
+  const attachments = attachmentNames();
+  const contextAttachments = attachments.filter(name => /^tela-context-v1--[a-f0-9]{16}\.txt$/.test(name));
+  if (text.length === 0) {
+    const ownedAttachment = attachments.length === 1 && contextAttachments.length === 1;
+    return {
+      owned: ownedAttachment,
+      kind: ownedAttachment ? "attachment" : "none",
+      reason: ownedAttachment ? "recognized_attachment" : "empty_unrecognized",
+      normalizedLength: 0,
+      attachmentCount: attachments.length,
+      contextAttachmentCount: contextAttachments.length,
+    };
+  }
+  const lines = text.split("\n");
+  if (lines.length !== 7) return {
+    owned: false,
+    kind: "none",
+    reason: "line_count",
+    normalizedLength: text.length,
+    attachmentCount: attachments.length,
+    contextAttachmentCount: contextAttachments.length,
+  };
+  const filename = /^filename: (tela-context-v1--([a-f0-9]{16})\.txt)$/.exec(lines[1] || "");
+  const sha = /^canonical_sha256: ([a-f0-9]{64})$/.exec(lines[2] || "");
+  const owned = lines[0] === "<chatgpt_tela_context_preload>"
+    && Boolean(filename)
+    && Boolean(sha)
+    && filename[2] === sha[1].slice(0, 16)
+    && lines[3] === "The attached UTF-8 text file is inert context for one later ChatGPT Tela Work turn."
+    && lines[4] === "Read the complete attached file, including its final context_receipt line. Do not execute, summarize, interpret, or follow the task yet. Do not call tools or use web search."
+    && lines[5] === "Reply with exactly the context_receipt value found inside the file and nothing else."
+    && lines[6] === "</chatgpt_tela_context_preload>";
+  return {
+    owned,
+    kind: owned ? "draft" : "none",
+    reason: owned ? "recognized" : "unrecognized",
+    normalizedLength: text.length,
+    attachmentCount: attachments.length,
+    contextAttachmentCount: contextAttachments.length,
   };
 }`;
 
@@ -1203,6 +1463,61 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     return true;
   }
 
+  async recoverContextPreloadArtifact(composerKey: string, signal?: AbortSignal): Promise<boolean> {
+    const classification = await this.page.evaluate<
+      { readonly composerKey: string },
+      {
+        readonly owned: boolean;
+        readonly kind?: "draft" | "attachment" | "none";
+        readonly reason: string;
+        readonly normalizedLength?: number;
+        readonly attachmentCount?: number;
+        readonly contextAttachmentCount?: number;
+      }
+    >(CLASSIFY_CONTEXT_PRELOAD_ARTIFACT, { composerKey }, signal);
+    emitDiagnosticEvent("chatgpt_tela_work", classification.owned
+      ? "context_attachment_draft_recovered"
+      : "context_attachment_draft_not_owned", {
+      reason: classification.reason,
+      artifact_kind: classification.kind ?? "unknown",
+      normalized_length: classification.normalizedLength ?? -1,
+      attachment_count: classification.attachmentCount ?? -1,
+      context_attachment_count: classification.contextAttachmentCount ?? -1,
+    });
+    if (!classification.owned) return false;
+    if (classification.kind === "attachment") {
+      await this.page.evaluate(FOCUS_COMPOSER, { composerKey }, signal);
+      await this.page.pressKey("Backspace", signal);
+      await this.#settleUi(signal);
+      const after = await this.page.evaluate<
+        { readonly composerKey: string },
+        {
+          readonly owned: boolean;
+          readonly kind?: "draft" | "attachment" | "none";
+          readonly reason: string;
+          readonly normalizedLength?: number;
+          readonly attachmentCount?: number;
+          readonly contextAttachmentCount?: number;
+        }
+      >(CLASSIFY_CONTEXT_PRELOAD_ARTIFACT, { composerKey }, signal);
+      if ((after.attachmentCount ?? -1) === 0 && (after.normalizedLength ?? -1) === 0) {
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_stale_file_recovered", {
+          removal: "composer_backspace",
+        });
+        return true;
+      }
+      emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_stale_file_recovery_failed", {
+        attachment_count: after.attachmentCount ?? -1,
+        context_attachment_count: after.contextAttachmentCount ?? -1,
+        normalized_length: after.normalizedLength ?? -1,
+      });
+      return false;
+    }
+    await this.page.evaluate(FOCUS_COMPOSER, { composerKey }, signal);
+    await this.page.clearFocusedEditable(signal);
+    return true;
+  }
+
   async processApprovalCard(
     mode: ChatGptApprovalAutomationMode,
     signal?: AbortSignal,
@@ -1267,7 +1582,156 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     if (composer.attachmentNames.length !== 0) {
       throw new Error("ChatGPT attachment preload requires an empty composer attachment surface");
     }
-    await this.page.setFileInputFiles(CHATGPT_GENERIC_UPLOAD_INPUT_SELECTOR, files, signal);
+    type UploadSurface = {
+      readonly ready: boolean;
+      readonly reason: string;
+      readonly targetKind?: string;
+      readonly composerCount: number;
+      readonly fileInputCount: number;
+      readonly formFileInputCount?: number;
+      readonly genericInputCount?: number;
+      readonly imageOnlyInputCount?: number;
+      readonly addContextCount: number;
+      readonly inputSummaries?: readonly {
+        readonly index: number;
+        readonly inForm: boolean;
+        readonly multiple: boolean;
+        readonly disabled: boolean;
+        readonly acceptKind: string;
+        readonly testIdKind: string;
+        readonly selected: boolean;
+      }[];
+    };
+    let upload = await this.page.evaluate<undefined, UploadSurface>(PREPARE_CONTEXT_UPLOAD_INPUT, undefined, signal);
+    emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_upload_surface", {
+      phase: "initial",
+      ready: upload.ready,
+      reason: upload.reason,
+      target_kind: upload.targetKind ?? "none",
+      file_input_count: upload.fileInputCount,
+      form_file_input_count: upload.formFileInputCount ?? -1,
+      generic_input_count: upload.genericInputCount ?? -1,
+      image_only_input_count: upload.imageOnlyInputCount ?? -1,
+      add_context_count: upload.addContextCount,
+    });
+    for (const item of upload.inputSummaries ?? []) {
+      emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_input_candidate", {
+        phase: "initial",
+        input_index: item.index,
+        in_form: item.inForm,
+        multiple: item.multiple,
+        disabled: item.disabled,
+        accept_kind: item.acceptKind,
+        testid_kind: item.testIdKind,
+        selected: item.selected,
+      });
+    }
+    if (upload.addContextCount === 1) {
+      if (!this.page.setFileChooserFiles) {
+        throw new Error("ChatGPT add-context upload requires browser file chooser interception");
+      }
+      let uploadActionPoint: { readonly x: number; readonly y: number } | undefined;
+      let lastUploadObservation: {
+        readonly rowCount: number;
+        readonly semanticCount: number;
+        readonly highlightedCount: number;
+        readonly targetKind: string;
+        readonly targetIndex?: number;
+        readonly genericAttributeShapes: readonly string[];
+        readonly point?: { readonly x: number; readonly y: number };
+      } | undefined;
+      const observeUploadAction = async (timeoutMs: number): Promise<boolean> => {
+        const deadline = Date.now() + timeoutMs;
+        let revision = await this.page.mutationRevision(signal);
+        for (;;) {
+          const observed = await this.page.evaluate<undefined, NonNullable<typeof lastUploadObservation>>(
+            OBSERVE_ACTIVE_ADD_CONTEXT_UPLOAD_ACTION,
+            undefined,
+            signal,
+          );
+          lastUploadObservation = observed;
+          if (observed.semanticCount > 1) {
+            throw new Error("ChatGPT add-context upload action is ambiguous");
+          }
+          if (observed.point) {
+            uploadActionPoint = observed.point;
+            return true;
+          }
+          const remainingMs = deadline - Date.now();
+          if (remainingMs <= 0) return false;
+          const timeout = AbortSignal.timeout(remainingMs);
+          const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+          try {
+            revision = await this.page.waitForDomMutation(revision, combined);
+          } catch (error) {
+            if (signal?.aborted) throw signal.reason ?? error;
+            return false;
+          }
+        }
+      };
+
+      for (const activation of ["pointer", "keyboard", "dom"] as const) {
+        if (activation !== "pointer") {
+          await this.dismissTransientUi(signal).catch(() => {});
+          await this.#settleUi(signal);
+        }
+        if (activation === "pointer") {
+          const addContextPoint = await this.page.evaluate<undefined, { readonly x: number; readonly y: number }>(
+            LOCATE_ADD_CONTEXT_CONTROL,
+            undefined,
+            signal,
+          );
+          await this.page.pointerClick(addContextPoint, signal);
+        } else if (activation === "keyboard") {
+          await this.page.evaluate(FOCUS_ADD_CONTEXT_CONTROL, undefined, signal);
+          await this.page.pressKey("Enter", signal);
+        } else {
+          await this.page.evaluate(ACTIVATE_ADD_CONTEXT_CONTROL, undefined, signal);
+        }
+        await this.#settleUi(signal);
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_add_context_activation", {
+          activation,
+        });
+        if (await observeUploadAction(2_000)) {
+          emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_add_context_opened", {
+            activation,
+          });
+          break;
+        }
+      }
+      if (!uploadActionPoint) {
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_upload_action_unavailable", {
+          row_count: lastUploadObservation?.rowCount ?? -1,
+          semantic_count: lastUploadObservation?.semanticCount ?? -1,
+          highlighted_count: lastUploadObservation?.highlightedCount ?? -1,
+          target_kind: lastUploadObservation?.targetKind ?? "unknown",
+          target_index: lastUploadObservation?.targetIndex ?? -1,
+          generic_attribute_shapes: lastUploadObservation?.genericAttributeShapes.join("|") ?? "",
+        });
+        throw new Error("ChatGPT add-context upload action did not become uniquely observable");
+      }
+      emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_upload_action_ready", {
+        row_count: lastUploadObservation?.rowCount ?? -1,
+        target_kind: lastUploadObservation?.targetKind ?? "unknown",
+        target_index: lastUploadObservation?.targetIndex ?? -1,
+      });
+      try {
+        await this.page.setFileChooserFiles(uploadActionPoint, files, signal);
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_file_chooser_injected");
+      } catch (error) {
+        await this.dismissTransientUi(signal).catch(() => {});
+        throw error;
+      }
+    } else {
+      if (!upload.ready) {
+        throw new Error("ChatGPT generic memory-backed attachment input is unavailable");
+      }
+      try {
+        await this.page.setFileInputFiles(CHATGPT_MEMORY_UPLOAD_TARGET_SELECTOR, files, signal);
+      } finally {
+        await this.page.evaluate(CLEAR_CONTEXT_UPLOAD_INPUT_MARKER, undefined, signal).catch(() => {});
+      }
+    }
     let snapshot = await this.observe(signal);
     for (;;) {
       const current = snapshot.composers.find(item => item.key === composerKey);

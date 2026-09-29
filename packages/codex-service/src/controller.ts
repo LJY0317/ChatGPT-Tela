@@ -491,7 +491,10 @@ export async function startCodexService(input: {
       const response = await fetch(new URL("v1/context-attachment-canary", profile.bridgePreviewUrl), {
         method: "POST",
         headers: { authorization: `Bearer ${profile.uiToken}` },
-        signal: AbortSignal.timeout(30_000),
+        // The semantic preload owns a bounded 120s proof window (attachment upload + exact
+        // receipt). Keep the service envelope slightly wider and propagate cancellation through
+        // the profile HTTP request instead of abandoning a hidden browser operation in place.
+        signal: AbortSignal.timeout(150_000),
       });
       const value = await response.json().catch(() => undefined) as unknown;
       if (!response.ok) {

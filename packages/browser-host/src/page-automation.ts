@@ -45,6 +45,18 @@ export interface BrowserPageAutomation {
     signal?: AbortSignal,
   ): Promise<void>;
 
+  /**
+   * Activate one exact trusted UI target while intercepting the native file chooser, then install
+   * memory-backed files on the exact file input that opened that chooser. Implementations must
+   * suppress the OS dialog, must not persist temporary files, and must fail closed if no unique
+   * chooser/input boundary is observed.
+   */
+  setFileChooserFiles?(
+    triggerPoint: { readonly x: number; readonly y: number },
+    files: readonly BrowserMemoryFile[],
+    signal?: AbortSignal,
+  ): Promise<void>;
+
   /** Monotonic renderer-local DOM mutation revision. Reading it also ensures the event source exists. */
   mutationRevision(signal?: AbortSignal): Promise<number>;
 

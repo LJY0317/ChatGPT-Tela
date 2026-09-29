@@ -20,6 +20,35 @@ class FakeWebContents implements ElectronWebContentsLike {
       }
   > = [];
   pendingWait: { resolve: (value: number) => void } | undefined;
+  readonly debuggerCalls: Array<{ method: string; params?: Record<string, unknown> }> = [];
+  debuggerMessageListener:
+    | ((event: unknown, method: string, params: Record<string, unknown>) => void)
+    | undefined;
+  debuggerAttached = false;
+  debuggerInterceptFileChooser = false;
+  readonly debugger = {
+    attach: (_protocolVersion?: string) => { this.debuggerAttached = true; },
+    detach: () => { this.debuggerAttached = false; },
+    isAttached: () => this.debuggerAttached,
+    sendCommand: async (method: string, params?: Record<string, unknown>): Promise<unknown> => {
+      this.debuggerCalls.push({ method, ...(params ? { params } : {}) });
+      if (method === "Page.setInterceptFileChooserDialog") {
+        this.debuggerInterceptFileChooser = params?.enabled === true;
+        return {};
+      }
+      if (method === "DOM.resolveNode") return { object: { objectId: "file-input-object" } };
+      if (method === "Runtime.callFunctionOn") {
+        return { result: { value: { count: 1, names: ["context.txt"] } } };
+      }
+      return {};
+    },
+    on: (_event: "message", listener: (event: unknown, method: string, params: Record<string, unknown>) => void) => {
+      this.debuggerMessageListener = listener;
+    },
+    removeListener: (_event: "message", listener: (event: unknown, method: string, params: Record<string, unknown>) => void) => {
+      if (this.debuggerMessageListener === listener) this.debuggerMessageListener = undefined;
+    },
+  };
 
   isDestroyed(): boolean {
     return this.destroyed;
@@ -62,6 +91,13 @@ class FakeWebContents implements ElectronWebContentsLike {
         modifiers?: readonly string[];
       }): void {
     this.inputEvents.push(event);
+    if (event.type === "mouseUp" && this.debuggerInterceptFileChooser) {
+      this.debuggerMessageListener?.({}, "Page.fileChooserOpened", {
+        mode: "selectMultiple",
+        frameId: "frame-1",
+        backendNodeId: 42,
+      });
+    }
   }
 
   mutate(): void {
@@ -176,6 +212,48 @@ describe("Electron WebContents page automation", () => {
     expect(code).toContain(Buffer.from("hello").toString("base64"));
     expect(code).toContain("DataTransfer");
     expect(code).not.toContain("/tmp/");
+    const assignedIndex = code.indexOf("const assigned =");
+    const inputDispatchIndex = code.indexOf('input.dispatchEvent(new Event("input"');
+    const changeDispatchIndex = code.indexOf('input.dispatchEvent(new Event("change"');
+    const returnIndex = code.indexOf("return assigned");
+    expect(assignedIndex).toBeGreaterThan(-1);
+    expect(inputDispatchIndex).toBeGreaterThan(-1);
+    expect(changeDispatchIndex).toBeGreaterThan(-1);
+    expect(returnIndex).toBeGreaterThan(-1);
+    expect(assignedIndex).toBeLessThan(inputDispatchIndex);
+    expect(returnIndex).toBeGreaterThan(changeDispatchIndex);
+  });
+
+  test("intercepted file chooser keeps payload in memory and targets the exact chooser input", async () => {
+    const webContents = new FakeWebContents();
+    const automation = new ElectronWebContentsPageAutomation(webContents);
+
+    await automation.setFileChooserFiles(
+      { x: 22.4, y: 31.6 },
+      [{ name: "context.txt", mimeType: "text/plain", bytes: Buffer.from("chooser-bytes") }],
+    );
+
+    expect(webContents.inputEvents).toEqual([
+      { type: "mouseMove", x: 22, y: 32 },
+      { type: "mouseDown", x: 22, y: 32, button: "left", clickCount: 1 },
+      { type: "mouseUp", x: 22, y: 32, button: "left", clickCount: 1 },
+    ]);
+    expect(webContents.debuggerCalls.map(call => call.method)).toEqual([
+      "Page.enable",
+      "Page.setInterceptFileChooserDialog",
+      "DOM.resolveNode",
+      "Runtime.callFunctionOn",
+      "Page.setInterceptFileChooserDialog",
+      "Runtime.releaseObjectGroup",
+    ]);
+    const call = webContents.debuggerCalls.find(item => item.method === "Runtime.callFunctionOn")!;
+    expect(call.params?.objectId).toBe("file-input-object");
+    expect(String(call.params?.functionDeclaration)).toContain("chatgpt-tela-memory-file-chooser-v1");
+    expect(JSON.stringify(call.params?.arguments)).toContain(Buffer.from("chooser-bytes").toString("base64"));
+    expect(JSON.stringify(call.params)).not.toContain("/tmp/");
+    expect(webContents.debuggerInterceptFileChooser).toBe(false);
+    expect(webContents.debuggerMessageListener).toBeUndefined();
+    expect(webContents.debuggerAttached).toBe(false);
   });
 
   test("mutation wait is event-driven and abort cleans the renderer waiter", async () => {

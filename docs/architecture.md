@@ -178,6 +178,22 @@ headroom; if the irreducible view itself exceeds the hard window, the turn fails
 mutation and Native history remains unchanged. The exact final formatted composer message is also
 checked against the effort-specific character limit before model selection or `markSubmitted()`.
 
+Large **fresh** physical contexts may use a receipt-verified memory-backed text attachment instead of
+placing the whole projection in one composer message. This is representation-only: Native history,
+`logicalTokens`, revision identity and compaction authority do not change. Tela builds one deterministic
+`tela-context-v1--<digest>.txt` payload entirely in memory, submits an inert tool-free preload with no
+connector selected, and authorizes the real Work execution message only after ChatGPT returns the exact
+random receipt stored solely at the end of that file. The receipt proves that the uploaded bytes were
+accessed with the expected identity; it is deliberately not treated as proof that every byte was
+semantically understood. The execution message re-presents the exact active Native request while referring
+to the acknowledged context attachment. Retained-delta continuations remain inline because their prior
+physical context is already resident in the retained Web conversation.
+
+Attachment recovery is ownership-bounded. Tela may clear an exact recognized preload draft and may attempt
+to retire a sole exact Tela context-file artifact, but it preserves any unknown pre-existing attachment or
+user draft rather than guessing ownership. A product-path `context-canary` exercises the same hidden browser,
+memory-file, upload, receipt and cleanup boundary without granting Native task authority.
+
 The historical reasons and remaining parity work inherited from CodexGPTWeb experimentation are
 tracked in `docs/codexgptweb-assimilation.md` so removal of the old installation/source checkout does
 not erase the product requirements it uncovered.

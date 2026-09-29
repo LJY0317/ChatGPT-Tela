@@ -19,7 +19,7 @@ async function main(): Promise<void> {
       bearerToken: config.uiToken,
       observe: () => runtime.runtime.observeBridgePreview(),
       probeModelSelection: () => runtime.runtime.probeChatGptWebModelSelection(),
-      probeContextAttachment: () => runtime.runtime.probeChatGptContextAttachment(),
+      probeContextAttachment: signal => runtime.runtime.probeChatGptContextAttachment(signal),
     });
   } catch (error) {
     await runtime.stop().catch(() => {});

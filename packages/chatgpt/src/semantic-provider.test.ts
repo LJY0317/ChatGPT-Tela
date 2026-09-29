@@ -68,6 +68,7 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   corruptReadback = false;
   sendAppearsWhenComposerNonEmpty = false;
   failConnectorSelection = false;
+  recoverContextPreload = false;
   autoContextPreload = false;
   attachedFiles: string[] = [];
   contextAcknowledgement: string | undefined;
@@ -101,6 +102,12 @@ class FixtureDriver implements ChatGptSurfaceDriver {
         || (connectorName === "ChatGPT Tela"
           && composer.connectorFingerprints[0] === hash("ChatGPT Tela Development")));
     if (!plain && !selected) return false;
+    await this.clearComposerText(composerKey);
+    return true;
+  }
+
+  async recoverContextPreloadArtifact(composerKey: string): Promise<boolean> {
+    if (!this.recoverContextPreload) return false;
     await this.clearComposerText(composerKey);
     return true;
   }
@@ -317,6 +324,45 @@ describe("ChatGPT semantic provider", () => {
       expect(driver.contextAcknowledgement).toMatch(/^TELA_CONTEXT_ACK ctxr_[a-f0-9]{32}$/);
       expect(driver.activated).toHaveLength(1);
       expect(driver.current.composers[0]?.attachmentNames).toEqual([]);
+    } finally {
+      await host.release(lease.leaseId);
+      await host.close();
+    }
+  });
+
+  test("context attachment preload clears only an exact driver-proven stale Tela preload draft before staging", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const staleDraft = "<chatgpt_tela_context_preload>fixture</chatgpt_tela_context_preload>";
+    driver.current = {
+      ...driver.current,
+      composers: driver.current.composers.map(composer => ({
+        ...composer,
+        textLength: staleDraft.length,
+        textFingerprint: hash(staleDraft),
+        connectorFingerprints: [],
+        attachmentNames: [],
+      })),
+    };
+    driver.recoverContextPreload = true;
+    driver.autoContextPreload = true;
+    const { host, lease } = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ connectorDraftPersistenceSettleMs: 0 });
+    const attachment = createChatGptContextAttachment({
+      headRevisionId: "r1",
+      activeRequestRevisionId: "r1",
+      mode: "full",
+      logicalTokens: 4,
+      transferTokens: 4,
+      segments: [{ type: "revision", revisionId: "r1", kind: "user", content: "hello" }],
+    });
+    try {
+      const result = await provider.preloadContextAttachment(lease, {
+        nativeTaskId: "task-1",
+        webEpochId: "epoch-1",
+        attachment,
+      });
+      expect(result.state).toBe("proven");
+      expect(driver.attachedFiles).toEqual([attachment.name]);
     } finally {
       await host.release(lease.leaseId);
       await host.close();
@@ -634,6 +680,35 @@ describe("ChatGPT semantic provider", () => {
     }
   });
 
+  test("startup artifact recovery clears only a driver-proven Tela context preload draft", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const draft = "<chatgpt_tela_context_preload>fixture</chatgpt_tela_context_preload>";
+    driver.current = {
+      ...driver.current,
+      composers: driver.current.composers.map(composer => ({
+        ...composer,
+        textLength: draft.length,
+        textFingerprint: hash(draft),
+        connectorFingerprints: [],
+        attachmentNames: [],
+      })),
+    };
+    driver.recoverContextPreload = true;
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({
+      connectorName: "ChatGPT Tela",
+      connectorDraftPersistenceSettleMs: 0,
+    });
+    try {
+      expect(await provider.recoverConnectorProbeArtifact(surface.lease)).toBe(true);
+      expect(driver.current.composers[0]?.textLength).toBe(0);
+      expect(driver.current.composers[0]?.attachmentNames).toEqual([]);
+      expect(driver.activated).toEqual([]);
+    } finally {
+      await surface.host.close();
+    }
+  });
+
   test("connector artifact recovery preserves a non-matching user draft", async () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     const draft = "keep this draft";
@@ -655,6 +730,33 @@ describe("ChatGPT semantic provider", () => {
       expect(await provider.recoverConnectorProbeArtifact(surface.lease)).toBe(false);
       expect(driver.current.composers[0]?.textLength).toBe(draft.length);
       expect(driver.current.composers[0]?.textFingerprint).toBe(hash(draft));
+    } finally {
+      await surface.host.close();
+    }
+  });
+
+  test("connector preflight preserves an existing unknown attachment instead of guessing ownership", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.current = {
+      ...driver.current,
+      composers: driver.current.composers.map(composer => ({
+        ...composer,
+        textLength: 0,
+        connectorFingerprints: [],
+        attachmentNames: ["user-document.txt"],
+      })),
+    };
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({
+      connectorName: "ChatGPT Tela",
+      connectorDraftPersistenceSettleMs: 0,
+    });
+    try {
+      await expect(provider.probeConnector(surface.lease)).rejects.toThrow(
+        "existing attachment; Tela preserved it instead of guessing ownership",
+      );
+      expect(driver.current.composers[0]?.attachmentNames).toEqual(["user-document.txt"]);
+      expect(driver.activated).toEqual([]);
     } finally {
       await surface.host.close();
     }

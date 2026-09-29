@@ -22,6 +22,22 @@ async function main(): Promise<void> {
   let setupSurface: ElectronProfileSetupSurface | undefined;
 
   try {
+    if (config.runContextCanary) {
+      await runtime.recoverChatGptStartupArtifact();
+      const observed = await runtime.probeChatGptProfile();
+      bindChatGptTelaAccount(profile, observed.account.accountFingerprint);
+      const canary = await runtime.probeChatGptContextAttachment(AbortSignal.timeout(150_000));
+      process.stdout.write(`${JSON.stringify({
+        stage: "profile-setup-context-canary",
+        slot: config.slot,
+        profileId: config.profileId,
+        accountBinding: "verified",
+        ...canary,
+      }, null, 2)}\n`);
+      await runtime.stop();
+      app.quit();
+      return;
+    }
     setupSurface = await runtime.openProfileSetupSurface({ reveal: false });
     const observed = await setupSurface.probeChatGptProfile();
     bindChatGptTelaAccount(profile, observed.account.accountFingerprint);

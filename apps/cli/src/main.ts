@@ -478,6 +478,7 @@ async function configure(
 async function setupProfile(
   profileSlot: number,
   productPaths: ReturnType<typeof resolveProductPaths>,
+  input: { readonly contextCanary?: boolean } = {},
 ): Promise<void> {
   const manifest = await ensureOwnershipManifest({ path: productPaths.installManifest, productVersion: "0.0.0" });
   const activityPath = productActivityPath(productPaths.runtimeRoot, "profile-setup", String(profileSlot));
@@ -507,7 +508,8 @@ async function setupProfile(
       env: {
         ...process.env,
         CHATGPT_TELA_PROFILE_SETUP_SLOT: String(profileSlot),
-        CHATGPT_TELA_PROFILE_SETUP_REVEAL: "1",
+        CHATGPT_TELA_PROFILE_SETUP_REVEAL: input.contextCanary ? "0" : "1",
+        ...(input.contextCanary ? { CHATGPT_TELA_PROFILE_SETUP_CONTEXT_CANARY: "1" } : {}),
       },
     });
     if (result.error) throw result.error;
@@ -983,6 +985,10 @@ async function main(): Promise<void> {
   }
   if (command === "context-canary") {
     const profileSlot = slot();
+    if (flag("--setup-only")) {
+      await setupProfile(profileSlot, productPaths, { contextCanary: true });
+      return;
+    }
     const manifest = readOwnershipManifest(productPaths.installManifest);
     if (!manifest) throw new Error("context-canary requires a running Tela Codex service/profile");
     const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
@@ -1022,7 +1028,7 @@ async function main(): Promise<void> {
     + "  stop [--slot <n>]\n"
     + "  profiles\n"
     + "  model-canary [--slot <n>]\n"
-    + "  context-canary [--slot <n>]\n"
+    + "  context-canary [--slot <n>] [--setup-only]\n"
     + "  status\n"
     + "  shutdown",
   );

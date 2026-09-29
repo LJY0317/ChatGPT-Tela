@@ -30,7 +30,7 @@ export async function startProfileBridgePreviewServer(input: {
     readonly testedEffort?: "low" | "medium" | "high" | "xhigh" | "max";
     readonly restoredEffort: "low" | "medium" | "high" | "xhigh" | "max";
   }>;
-  readonly probeContextAttachment?: () => Promise<{
+  readonly probeContextAttachment?: (signal?: AbortSignal) => Promise<{
     readonly attachmentBytes: number;
     readonly receiptVerified: true;
   }>;
@@ -66,7 +66,7 @@ export async function startProfileBridgePreviewServer(input: {
       if (request.method === "POST" && url.pathname === "/v1/context-attachment-canary") {
         if (!input.probeContextAttachment) return new Response(null, { status: 404 });
         try {
-          const result = await input.probeContextAttachment();
+          const result = await input.probeContextAttachment(request.signal);
           return Response.json({ contractVersion: 1, slot: input.slot, ...result }, {
             headers: { "cache-control": "no-store" },
           });

@@ -18,6 +18,7 @@ function setupConfig(root: string): ElectronProfileSetupConfig {
     browserUserDataDir: join(normalized, "Canary-Profile1"),
     accountBindingPath: join(normalized, "account-bindings", "Profile1.json"),
     revealWhenReady: false,
+    runContextCanary: false,
   };
 }
 
@@ -75,18 +76,70 @@ describe("Electron ChatGPT profile setup runtime", () => {
       accountBindingPath: join(profileRoot, "account-bindings", "Profile1.json"),
       chatGptUrl: "https://chatgpt.com/",
       revealWhenReady: false,
+      runContextCanary: false,
     });
     expect(loadElectronProfileSetupConfig({
       CHATGPT_TELA_PROFILE_SETUP_SLOT: "1",
       CHATGPT_TELA_PROFILE_ROOT: "/tmp/chatgpt-tela-profile-setup",
       CHATGPT_TELA_PROFILE_SETUP_REVEAL: "1",
     }).revealWhenReady).toBe(true);
+    expect(loadElectronProfileSetupConfig({
+      CHATGPT_TELA_PROFILE_SETUP_SLOT: "1",
+      CHATGPT_TELA_PROFILE_ROOT: "/tmp/chatgpt-tela-profile-setup",
+      CHATGPT_TELA_PROFILE_SETUP_CONTEXT_CANARY: "1",
+    }).runContextCanary).toBe(true);
     expect(() => loadElectronProfileSetupConfig({
       CHATGPT_TELA_PROFILE_SETUP_SLOT: "1",
       CHATGPT_TELA_PROFILE_ROOT: "/tmp/chatgpt-tela-profile-setup",
       CHATGPT_TELA_PROFILE_SETUP_REVEAL: "yes",
     })).toThrow("must be 0 or 1");
     expect(() => loadElectronProfileSetupConfig({})).toThrow("CHATGPT_TELA_PROFILE_SETUP_SLOT");
+  });
+
+  test("runs the context attachment canary on one setup-only surface without Native runtime ownership", async () => {
+    const windows: FakeWindow[] = [];
+    class RuntimeWindow extends FakeWindow {
+      constructor(_input: BrowserWindowConstructorOptions) {
+        super();
+        windows.push(this);
+      }
+    }
+    const runtime = await startElectronProfileSetupRuntime(
+      setupConfig("/tmp/chatgpt-tela-profile-setup-context-canary-test"),
+      {
+        provider: {
+          ...provider(),
+          async preloadContextAttachment(_surface, request) {
+            return {
+              state: "proven" as const,
+              value: {
+                nativeTaskId: request.nativeTaskId,
+                webEpochId: request.webEpochId,
+                attachmentName: request.attachment.name,
+                attachmentSha256: request.attachment.sha256,
+                providerOperationId: "fixture-context-preload-turn",
+              },
+              evidence: ["fixture-context-receipt"],
+            };
+          },
+        },
+        electron: {
+          async loadRuntime() {
+            return {
+              app: { setPath() {}, async whenReady() {} },
+              BrowserWindow: RuntimeWindow,
+            };
+          },
+        },
+      },
+    );
+
+    const result = await runtime.probeChatGptContextAttachment();
+    expect(result.receiptVerified).toBe(true);
+    expect(result.attachmentBytes).toBeGreaterThan(0);
+    expect(windows).toHaveLength(1);
+    expect(windows[0]?.events).toEqual(["load:https://chatgpt.com/", "destroy"]);
+    await runtime.stop();
   });
 
   test("probes and reveals the same persistent profile without starting Native/MCP runtime state", async () => {

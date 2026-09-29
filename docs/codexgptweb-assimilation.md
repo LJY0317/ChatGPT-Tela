@@ -34,7 +34,7 @@ Status vocabulary:
 | Web physical rollover may occur without Native compaction | **absorbed** | retained epochs track their fresh physical baseline separately from Native logical history; downstream-calibrated conservative soft/hard Web limits trigger a fresh physical epoch without requesting Native compaction. Growth includes assistant output already resident in the retained Web conversation, not merely bytes resent in later suffixes. |
 | Bound old settled tool evidence and assistant prose in a fresh provider projection | **absorbed** | all system/developer/user/steering and tool-call structure stay exact; `tool_search` registry stays exact; settled assistant/tool payloads are bounded only in the disposable Web view and the reduction is diagnosed structurally. |
 | Hard-fit a fresh projection to the measured Web window without changing Native history | **absorbed** | fresh projection budgets are searched from irreducible step 0 through the default retained-evidence budget; Tela maximizes reducible historical assistant/tool evidence under the soft limit, uses remaining hard-window headroom only when irreducible authority already exceeds soft pressure, and fails closed if step 0 still exceeds the hard window. Exact final composer characters are also checked before model preparation or submit. |
-| Large fresh context as memory-backed file + exact receipt before enabling work | **pending** | representation-only optimization; no disk temp file, no connector on preload, no claim that receipt proves semantic comprehension. |
+| Large fresh context as memory-backed file + exact receipt before enabling work | **absorbed** | large fresh physical context can be staged as one deterministic UTF-8 attachment held entirely in memory; ChatGPT must return the exact receipt stored only at the end of the file before the real execution message is authorized. The inert preload has no connector/tool bridge, Native logical history/tokens remain unchanged, the active request is re-presented exactly in the execution message, and receipt proves file access/integrity rather than semantic comprehension. Profile 1 product-path canary is live-proven; unknown pre-existing attachments are preserved fail-closed instead of being deleted by filename guess. |
 | Multipart Bigger Context changes physical transport only | **pending** | must not inflate Native logical context or move Native compaction thresholds. |
 
 ## Model catalog and model/effort selection
@@ -113,7 +113,7 @@ Status vocabulary:
 3. browser semantic model-family/effort discovery (**absorbed**, Profile 1 live-proven);
 4. composite Native + explicit Tela Web `model/list` surface and routing (**partial**: default Desktop absorbed; Profile 2+ adapter pending);
 5. independent physical-pressure epoch rollover + fresh hard-fit planner (**absorbed**);
-6. receipt-verified large-context/file and multipart transports;
+6. receipt-verified large-context/file transport (**absorbed**) and multipart transport;
 7. retained compaction proof/canary (**absorbed for retained live reuse; compaction-specific proof remains**), richer incident diagnostics, approval/subagent/skill audits;
 8. final parity audit against both the downstream snapshot and then-current upstream before the old
    project is considered replaceable.
