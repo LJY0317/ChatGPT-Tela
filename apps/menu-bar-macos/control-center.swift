@@ -166,6 +166,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     stack.spacing = 12
     stack.translatesAutoresizingMaskIntoConstraints = false
     document.addSubview(stack)
+    scroll.documentView = document
     NSLayoutConstraint.activate([
       stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 28),
       stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -28),
@@ -173,7 +174,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       stack.bottomAnchor.constraint(lessThanOrEqualTo: document.bottomAnchor, constant: -28),
       document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
     ])
-    scroll.documentView = document
     detailStack = stack
     return scroll
   }

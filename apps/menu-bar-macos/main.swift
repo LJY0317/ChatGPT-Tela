@@ -236,11 +236,17 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     menu.addItem(item)
   }
 
+  private func actionItem(_ title: String, action: Selector, keyEquivalent: String = "") -> NSMenuItem {
+    let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+    item.target = self
+    return item
+  }
+
   private func rebuildMenu(loading: Bool) {
     guard let menu = statusItem.menu else { return }
     menu.removeAllItems()
     addDisabled("ChatGPT Tela", to: menu)
-    menu.addItem(NSMenuItem(title: "Open ChatGPT Tela…", action: #selector(openControlCenter), keyEquivalent: "o"))
+    menu.addItem(actionItem("Open ChatGPT Tela…", action: #selector(openControlCenter), keyEquivalent: "o"))
     menu.addItem(.separator())
     if loading || snapshot == nil {
       addDisabled("Refreshing status…", to: menu)
@@ -270,8 +276,8 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         addDisabled("Public connector: Gateway stopped", to: menu)
       }
       if snapshot.installedServiceControls {
-        menu.addItem(NSMenuItem(title: "Start Background Services", action: #selector(startServices), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Stop Background Services", action: #selector(stopServices), keyEquivalent: ""))
+        menu.addItem(actionItem("Start Background Services", action: #selector(startServices)))
+        menu.addItem(actionItem("Stop Background Services", action: #selector(stopServices)))
       }
       menu.addItem(.separator())
       if snapshot.profiles.isEmpty {
@@ -291,13 +297,13 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
             actionTitle = "Start Profile \(profile.slot)"
             action = #selector(startProfile(_:))
           }
-          let item = NSMenuItem(title: actionTitle, action: action, keyEquivalent: "")
+          let item = actionItem(actionTitle, action: action)
           item.representedObject = profile.slot
           menu.addItem(item)
         }
       }
       menu.addItem(.separator())
-      let approval = NSMenuItem(title: "Auto-approve recognized one-shot cards", action: #selector(toggleApproval), keyEquivalent: "")
+      let approval = actionItem("Auto-approve recognized one-shot cards", action: #selector(toggleApproval))
       approval.state = snapshot.approvalAutomation == "recognized_once" ? .on : .off
       approval.isEnabled = !snapshot.approvalError
       menu.addItem(approval)
@@ -311,7 +317,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       let delayRoot = NSMenuItem(title: "Approval delay: \(selectedLabel)", action: nil, keyEquivalent: "")
       let delayMenu = NSMenu()
       for (preset, title) in delayLabels {
-        let item = NSMenuItem(title: title, action: #selector(setApprovalDelay(_:)), keyEquivalent: "")
+        let item = actionItem(title, action: #selector(setApprovalDelay(_:)))
         item.representedObject = preset
         item.state = preset == selectedDelay ? .on : .off
         item.isEnabled = !snapshot.approvalError
@@ -328,11 +334,11 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       }
     }
     menu.addItem(.separator())
-    menu.addItem(NSMenuItem(title: "Open Logs", action: #selector(openLogs), keyEquivalent: ""))
-    menu.addItem(NSMenuItem(title: "Open Diagnostics", action: #selector(openDiagnostics), keyEquivalent: ""))
-    menu.addItem(NSMenuItem(title: "Refresh", action: #selector(refresh), keyEquivalent: "r"))
+    menu.addItem(actionItem("Open Logs", action: #selector(openLogs)))
+    menu.addItem(actionItem("Open Diagnostics", action: #selector(openDiagnostics)))
+    menu.addItem(actionItem("Refresh", action: #selector(refresh), keyEquivalent: "r"))
     menu.addItem(.separator())
-    menu.addItem(NSMenuItem(title: "Quit Menu Bar", action: #selector(quitMenuBar), keyEquivalent: "q"))
+    menu.addItem(actionItem("Quit Menu Bar", action: #selector(quitMenuBar), keyEquivalent: "q"))
   }
 
   @objc private func startServices() {
