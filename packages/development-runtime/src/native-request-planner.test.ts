@@ -330,7 +330,7 @@ describe("Native request development Web planner", () => {
       physical_rollover: true,
       provider_projection: true,
     });
-    expect(Number(second.diagnostics?.previous_epoch_estimated_input_tokens)).toBeGreaterThanOrEqual(95_000);
+    expect(Number(second.diagnostics?.previous_epoch_input_estimate)).toBeGreaterThanOrEqual(95_000);
     second.settle?.({ status: "failed" });
   });
 

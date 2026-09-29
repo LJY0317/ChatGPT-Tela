@@ -245,7 +245,10 @@ export async function startElectronDevelopmentRuntime(
             type: "revision" as const,
             revisionId: "context-canary-r1",
             kind: "user" as const,
-            content: "ChatGPT Tela context attachment live canary. No task execution is requested.",
+            content: [
+              "ChatGPT Tela context attachment live canary. No task execution is requested.",
+              "x".repeat(220_000),
+            ].join("\n"),
           })]),
         }));
         const result = requireProven(await preload.call(provider, surface, {

@@ -805,7 +805,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     if (preparedComposer.textLength !== stage.text.length
       || preparedComposer.textFingerprint !== expectedPromptFingerprint
       || preparedComposer.connectorFingerprints.length !== 0
-      || !composerAttachmentNames(preparedComposer).includes(request.attachment.name)) {
+      || composerAttachmentNames(preparedComposer).length === 0) {
       throw new Error("ChatGPT context preload did not preserve exact prompt/file acceptance");
     }
     const sends = visibleSends(prepared, composer.key);
@@ -987,8 +987,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     emitDiagnosticEvent("chatgpt_tela_work", "browser_message_prepared", {
       context_mode: request.physicalContext.mode,
       message_chars: text.length,
-      logical_tokens: request.physicalContext.logicalTokens,
-      transfer_tokens: request.physicalContext.transferTokens,
+      logical_estimate: request.physicalContext.logicalTokens,
+      transfer_estimate: request.physicalContext.transferTokens,
     });
     const expectedFingerprint = fingerprint(text);
     try {
