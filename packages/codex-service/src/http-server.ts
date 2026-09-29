@@ -54,6 +54,13 @@ function modelCanarySlot(pathname: string): number | undefined {
   return Number.isSafeInteger(value) && value >= 1 && value <= 99 ? value : undefined;
 }
 
+function contextAttachmentCanarySlot(pathname: string): number | undefined {
+  const match = /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/context-attachment-canary$/.exec(pathname);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) && value >= 1 && value <= 99 ? value : undefined;
+}
+
 export async function startCodexServiceHttpServer(input: {
   readonly service: CodexService;
   readonly bearerToken?: string;
@@ -101,6 +108,27 @@ export async function startCodexServiceHttpServer(input: {
           } catch (cause) {
             emitDiagnosticEvent("chatgpt_tela_codex", "model_selection_canary_failed", {
               slot: canarySlot,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
+            throw cause;
+          }
+        }
+        const contextCanarySlot = request.method === "POST" ? contextAttachmentCanarySlot(url.pathname) : undefined;
+        if (contextCanarySlot !== undefined) {
+          const startedAt = Date.now();
+          emitDiagnosticEvent("chatgpt_tela_codex", "context_attachment_canary_begin", { slot: contextCanarySlot });
+          try {
+            const result = await input.service.contextAttachmentCanary(contextCanarySlot);
+            emitDiagnosticEvent("chatgpt_tela_codex", "context_attachment_canary_complete", {
+              slot: contextCanarySlot,
+              attachment_bytes: result.attachmentBytes,
+              receipt_verified: result.receiptVerified,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
+            return Response.json(result, { headers: { "cache-control": "no-store" } });
+          } catch (cause) {
+            emitDiagnosticEvent("chatgpt_tela_codex", "context_attachment_canary_failed", {
+              slot: contextCanarySlot,
               duration_ms: diagnosticDurationMs(startedAt),
             });
             throw cause;

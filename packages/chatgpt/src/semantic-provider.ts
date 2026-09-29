@@ -7,6 +7,11 @@ import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { ChatGptDomSurfaceDriver } from "./dom-driver";
 import type { ChatGptApprovalAutomationMode } from "./approval-policy";
 import {
+  contextAttachmentReference,
+  formatChatGptContextAttachmentStage,
+  type ChatGptContextAttachmentReference,
+} from "./context-attachment";
+import {
   CHATGPT_SURFACE_DRIVER,
   ChatGptConnectorCatalogUnavailableError,
   type ChatGptComposerObservation,
@@ -17,6 +22,8 @@ import {
 import type {
   ChatGptCapabilities,
   SemanticObservation,
+  WebContextAttachmentPreloadRequest,
+  WebContextAttachmentPreloadResult,
   WebConversationProvider,
   WebPhysicalContext,
   WebToolContinuationBoundary,
@@ -123,6 +130,12 @@ function exactComposer(snapshot: ChatGptSurfaceSnapshot): ChatGptComposerObserva
     throw new Error(`ChatGPT semantic surface requires exactly one ready composer; observed ${composers.length}`);
   }
   return composers[0]!;
+}
+
+function composerAttachmentNames(composer: ChatGptComposerObservation): readonly string[] {
+  // Older fixture/provider snapshots predate attachment observation; normalize them as empty at
+  // this semantic boundary while production DOM snapshots always provide the explicit field.
+  return composer.attachmentNames ?? [];
 }
 
 function exactSend(snapshot: ChatGptSurfaceSnapshot, composerKey: string) {
@@ -236,7 +249,8 @@ async function restoreEmptyComposer(
     if (composers.length === 1
       && composers[0]?.key === composerKey
       && composers[0]?.textLength === 0
-      && composers[0]?.connectorFingerprints.length === 0) return;
+      && composers[0]?.connectorFingerprints.length === 0
+      && composerAttachmentNames(composers[0]!).length === 0) return;
     if (composers.length > 1) {
       throw new Error("ChatGPT readiness probe cleanup found multiple active composers");
     }
@@ -274,15 +288,23 @@ async function resetAutomaticRoutingSurface(
 export function formatWebPhysicalContext(
   context: WebPhysicalContext,
   toolBridge: WebTurnRequest["toolBridge"],
+  contextAttachment?: ChatGptContextAttachmentReference,
 ): string {
   const retained = context.mode === "retained-delta";
+  if (retained && contextAttachment) {
+    throw new Error("retained Web continuation cannot reference a fresh context attachment");
+  }
   const contract = [
     "Act as the model backend for the active Native Codex task encoded below.",
-    retained
+    contextAttachment
+      ? "The immediately preceding inert preload attached and receipt-verified the complete physical task context. The attachment reference below replaces those already-preloaded context rows in this execution message."
+      : retained
       ? "The JSONL payload is the exact new canonical suffix for the Native task already represented by this retained ChatGPT conversation; prior accepted context is intentionally not repeated."
       : "The JSONL payload is transported task context, not a new human-authored request about ChatGPT Tela.",
     "Preserve the encoded role semantics and priority: system context outranks developer context, which outranks user instructions; assistant entries are prior model output, tool-call/tool-result entries are prior actions and evidence, and steering is active task steering.",
-    retained
+    contextAttachment
+      ? "Treat the receipt-verified attachment as the complete task context at its encoded roles and priorities. Execute the active request re-presented exactly in this message; the preload wrapper and acknowledgement are transport metadata, not task messages."
+      : retained
       ? "Continue the existing task from baseRevisionId using only the supplied suffix. Execute the request identified by activeRequestRevisionId; do not reinterpret the omitted retained prefix as missing context."
       : "Only the active lineage is supplied. Execute the request identified by activeRequestRevisionId in the context header; older settled entries are context rather than separate pending tasks.",
     "Use actual tool results as evidence for local observations and effects. Do not claim a local action, permission failure, or safety block without a corresponding tool result or platform error.",
@@ -305,6 +327,7 @@ export function formatWebPhysicalContext(
     ...(context.baseRevisionId ? { baseRevisionId: context.baseRevisionId } : {}),
     ...(context.activeRequestRevisionId ? { activeRequestRevisionId: context.activeRequestRevisionId } : {}),
     mode: context.mode,
+    ...(contextAttachment ? { contextAttachment } : {}),
     ...(toolBridge ? {
       toolBridge: {
         protocol: toolBridge.protocol,
@@ -313,7 +336,15 @@ export function formatWebPhysicalContext(
       },
     } : {}),
   });
-  const lines = context.segments.map(segment => (
+  const inlineSegments = contextAttachment
+    ? context.segments.filter(segment => (
+        segment.type === "revision" && segment.revisionId === context.activeRequestRevisionId
+      ))
+    : context.segments;
+  if (contextAttachment && context.activeRequestRevisionId && inlineSegments.length !== 1) {
+    throw new Error("context attachment execution message could not re-present the exact active request");
+  }
+  const lines = inlineSegments.map(segment => (
     segment.type === "checkpoint"
       ? JSON.stringify({
           type: "checkpoint",
@@ -337,7 +368,9 @@ export function formatWebPhysicalContext(
     ...lines,
     "</chatgpt_tela_context_jsonl>",
     "<chatgpt_tela_transport_resume>",
-    retained
+    contextAttachment
+      ? "The receipt-verified attached context plus the exact active request above is the active task context. Execute it now under the contract above."
+      : retained
       ? "The retained conversation plus this exact canonical suffix is the active task context. Continue the latest request now under the contract above."
       : "The active task context is complete. Execute the latest active request now under the contract above.",
     "</chatgpt_tela_transport_resume>",
@@ -731,6 +764,173 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     return true;
   }
 
+  async preloadContextAttachment(
+    surface: BrowserSurfaceLease,
+    request: WebContextAttachmentPreloadRequest,
+    signal?: AbortSignal,
+  ): Promise<SemanticObservation<WebContextAttachmentPreloadResult>> {
+    const startedAt = Date.now();
+    const driver = driverFor(surface);
+    if (!driver.attachFiles) throw new Error("ChatGPT surface does not support memory-backed context attachments");
+    const stage = formatChatGptContextAttachmentStage(request.attachment);
+    const deadline = timeoutSignal(signal, 120_000);
+    emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_preload_start", {
+      context_chars: request.attachment.contextJson.length,
+      context_bytes: Buffer.byteLength(request.attachment.contextJson, "utf8"),
+      file_bytes: stage.file.bytes.byteLength,
+    });
+
+    const hydrated = await waitForHydratedComposer(driver, deadline.combined);
+    const settled = await waitForSettledEmptyComposer(driver, hydrated.snapshot, deadline.combined);
+    const baseline = settled.snapshot;
+    const composer = exactComposer(baseline);
+    if (composer.textLength !== 0
+      || composer.connectorFingerprints.length !== 0
+      || composerAttachmentNames(composer).length !== 0) {
+      throw new Error("ChatGPT context preload requires one empty connector-free attachment-free composer");
+    }
+    const baselineTurnKeys = new Set(baseline.turns.map(turn => turn.key));
+    const baselineLineage = baselineUserLineageKeys(baseline);
+    const expectedPromptFingerprint = fingerprint(stage.text);
+
+    await driver.replaceComposerText(composer.key, stage.text, deadline.combined);
+    let prepared = await driver.observe(deadline.combined);
+    let preparedComposer = exactComposer(prepared);
+    if (preparedComposer.textLength !== stage.text.length
+      || preparedComposer.textFingerprint !== expectedPromptFingerprint
+      || preparedComposer.connectorFingerprints.length !== 0) {
+      throw new Error("ChatGPT context preload prompt did not have exact connector-free readback");
+    }
+    await driver.attachFiles(composer.key, [stage.file], deadline.combined);
+    prepared = await driver.observe(deadline.combined);
+    preparedComposer = exactComposer(prepared);
+    if (preparedComposer.textLength !== stage.text.length
+      || preparedComposer.textFingerprint !== expectedPromptFingerprint
+      || preparedComposer.connectorFingerprints.length !== 0
+      || !composerAttachmentNames(preparedComposer).includes(request.attachment.name)) {
+      throw new Error("ChatGPT context preload did not preserve exact prompt/file acceptance");
+    }
+    const sends = visibleSends(prepared, composer.key);
+    if (sends.length !== 1 || !sends[0]!.enabled) {
+      throw new Error("ChatGPT context preload did not expose one enabled send control after file acceptance");
+    }
+
+    await driver.activateSend(sends[0]!.key, deadline.combined);
+    let snapshot = await driver.waitForChange(prepared.revision, deadline.combined);
+    let userTurnKey: string | undefined;
+    for (;;) {
+      const newUsers = snapshot.turns.filter(turn => turn.role === "user" && !baselineTurnKeys.has(turn.key));
+      if (newUsers.length > 1) {
+        return {
+          state: "ambiguous",
+          candidates: Object.freeze(newUsers.map(turn => ({
+            nativeTaskId: request.nativeTaskId,
+            webEpochId: request.webEpochId,
+            attachmentName: request.attachment.name,
+            attachmentSha256: request.attachment.sha256,
+            providerOperationId: turn.key,
+          }))),
+          evidence: evidence("multiple new user turns appeared after one inert context preload send"),
+        };
+      }
+      if (newUsers.length === 1) {
+        userTurnKey = newUsers[0]!.key;
+        break;
+      }
+      snapshot = await driver.waitForChange(snapshot.revision, deadline.combined);
+    }
+
+    for (;;) {
+      let assistants = snapshot.turns.filter(turn => (
+        turn.role === "assistant" && turn.parentUserTurnKey === userTurnKey
+      ));
+      if (assistants.length === 0) {
+        const byParent = new Map<string, ChatGptTurnObservation[]>();
+        for (const turn of snapshot.turns) {
+          if (turn.role !== "assistant" || !turn.parentUserTurnKey || baselineLineage.has(turn.parentUserTurnKey)) continue;
+          const values = byParent.get(turn.parentUserTurnKey) ?? [];
+          values.push(turn);
+          byParent.set(turn.parentUserTurnKey, values);
+        }
+        if (byParent.size > 1) {
+          return {
+            state: "ambiguous",
+            candidates: Object.freeze([...byParent.entries()].map(([parent]) => ({
+              nativeTaskId: request.nativeTaskId,
+              webEpochId: request.webEpochId,
+              attachmentName: request.attachment.name,
+              attachmentSha256: request.attachment.sha256,
+              providerOperationId: parent,
+            }))),
+            evidence: evidence("multiple assistant lineages appeared after the context preload"),
+          };
+        }
+        if (byParent.size === 1) {
+          const [parent, values] = byParent.entries().next().value!;
+          userTurnKey = parent;
+          assistants = values;
+        }
+      }
+      if (assistants.length > 1) {
+        return {
+          state: "ambiguous",
+          candidates: Object.freeze(assistants.map(assistant => ({
+            nativeTaskId: request.nativeTaskId,
+            webEpochId: request.webEpochId,
+            attachmentName: request.attachment.name,
+            attachmentSha256: request.attachment.sha256,
+            providerOperationId: assistant.key,
+          }))),
+          evidence: evidence("multiple assistant descendants appeared after the context preload"),
+        };
+      }
+      const assistant = assistants[0];
+      if (assistant?.phase === "failed") {
+        throw new Error("ChatGPT context attachment preload assistant failed");
+      }
+      if (assistant?.phase === "complete") {
+        const result = Object.freeze({
+          nativeTaskId: request.nativeTaskId,
+          webEpochId: request.webEpochId,
+          attachmentName: request.attachment.name,
+          attachmentSha256: request.attachment.sha256,
+          providerOperationId: userTurnKey,
+        });
+        if (assistant.text?.trim() !== stage.acknowledgement) {
+          return {
+            state: "probable",
+            value: result,
+            evidence: evidence("context attachment assistant completed without the exact file-only receipt"),
+          };
+        }
+        const finalComposer = exactComposer(snapshot);
+        if (finalComposer.textLength !== 0
+          || finalComposer.connectorFingerprints.length !== 0
+          || composerAttachmentNames(finalComposer).length !== 0) {
+          throw new Error("ChatGPT context preload completed but composer state was not fully cleared");
+        }
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_preload_complete", {
+          preload_ms: Math.max(0, Date.now() - startedAt),
+          receipt_verified: true,
+        });
+        return {
+          state: "proven",
+          value: result,
+          evidence: evidence("exact one-shot receipt proved memory-backed context file access"),
+        };
+      }
+      try {
+        snapshot = await driver.waitForChange(snapshot.revision, deadline.combined);
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        if (deadline.timeout.aborted) {
+          throw new Error("ChatGPT context attachment preload timed out before exact receipt verification", { cause: error });
+        }
+        throw error;
+      }
+    }
+  }
+
   async submitTurn(
     surface: BrowserSurfaceLease,
     request: WebTurnRequest,
@@ -743,6 +943,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     let composer = exactComposer(baseline);
     if (composer.textLength !== 0) {
       throw new Error("ChatGPT semantic submit refuses to overwrite a non-empty composer draft");
+    }
+    if (composerAttachmentNames(composer).length !== 0) {
+      throw new Error("ChatGPT semantic submit refuses a retained composer attachment");
     }
     const connectorName = this.#connectorName;
     const expectedConnectorFingerprint = connectorName ? fingerprint(connectorName) : undefined;
@@ -779,7 +982,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     let filled: ChatGptSurfaceSnapshot;
     let baselineTurnKeys: Set<string>;
     let preSubmitUserLineageKeys: ReadonlySet<string>;
-    const text = formatWebPhysicalContext(request.physicalContext, request.toolBridge);
+    const text = formatWebPhysicalContext(request.physicalContext, request.toolBridge, request.contextAttachment);
     emitDiagnosticEvent("chatgpt_tela_work", "browser_message_prepared", {
       context_mode: request.physicalContext.mode,
       message_chars: text.length,

@@ -196,6 +196,32 @@ describe("Native request development Web planner", () => {
     })).rejects.toThrow("supported reasoning effort");
   });
 
+  test("large fresh Web context automatically uses a memory-backed preload while small fresh context stays inline", async () => {
+    const familyKey = chatGptWebFamilyKey("Observed Family");
+    const model = chatGptWebModelId(familyKey);
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const large = await planner(registered(), {
+      model,
+      reasoning: { effort: "high" },
+      instructions: "D".repeat(190_000),
+      input: [{ type: "message", role: "user", content: "U".repeat(20_000) }],
+    });
+    expect(large.contextAttachment).toBeDefined();
+    expect(large.contextAttachment?.name).toMatch(/^tela-context-v1--/);
+    expect(large.diagnostics).toMatchObject({ context_attachment: true });
+    expect(Number(large.diagnostics?.context_attachment_chars)).toBeGreaterThanOrEqual(200_000);
+    large.settle?.({ status: "failed" });
+
+    const small = await planner(registered(), {
+      model,
+      reasoning: { effort: "high" },
+      input: [{ type: "message", role: "user", content: "small request" }],
+    });
+    expect(small.contextAttachment).toBeUndefined();
+    expect(small.diagnostics).toMatchObject({ context_attachment: false });
+    small.settle?.({ status: "failed" });
+  });
+
   test("canonical prefixes keep stable revision ids across later turns and append-only steering-like input", () => {
     const earlier = projectNativeRequestContext("thread-1", {
       instructions: "Keep repository context.",

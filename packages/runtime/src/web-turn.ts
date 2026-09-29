@@ -1,7 +1,10 @@
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
+  contextAttachmentReference,
   formatWebPhysicalContext,
   requireProven,
+  type ChatGptContextAttachment,
   type ChatGptWebPhysicalLimits,
   type WebConversationProvider,
   type WebPhysicalContext,
@@ -18,6 +21,7 @@ export interface BrowserTurnRunInput {
   readonly nativeTaskId: string;
   readonly webEpochId: string;
   readonly physicalContext: WebPhysicalContext;
+  readonly contextAttachment?: ChatGptContextAttachment;
   readonly physicalLimits?: ChatGptWebPhysicalLimits;
   readonly toolBridge?: WebToolBridgeContext;
   /** Non-submit surface preparation that must finish immediately before provider submission. */
@@ -106,8 +110,40 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
     if (input.proveCapabilities !== false) {
       requireProven(await input.provider.observeCapabilities(surface, input.signal));
     }
+    const attachmentReference = input.contextAttachment
+      ? contextAttachmentReference(input.contextAttachment)
+      : undefined;
+    if (input.contextAttachment) {
+      if (input.proveCapabilities === false) {
+        throw new Error("fresh ChatGPT context attachment cannot preload on a retained Web surface");
+      }
+      const preload = input.provider.preloadContextAttachment;
+      if (!preload) throw new Error("Web provider does not support context attachment preload");
+      const startedAt = Date.now();
+      const result = requireProven(await preload.call(input.provider, surface, {
+        nativeTaskId: input.nativeTaskId,
+        webEpochId: input.webEpochId,
+        attachment: input.contextAttachment,
+      }, input.signal));
+      if (result.nativeTaskId !== input.nativeTaskId
+        || result.webEpochId !== input.webEpochId
+        || result.attachmentName !== input.contextAttachment.name
+        || result.attachmentSha256 !== input.contextAttachment.sha256) {
+        throw new Error("context attachment preload receipt belongs to a different physical Web transaction");
+      }
+      emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_verified", {
+        context_chars: input.contextAttachment.contextJson.length,
+        context_bytes: Buffer.byteLength(input.contextAttachment.contextJson, "utf8"),
+        preload_ms: Math.max(0, Date.now() - startedAt),
+        receipt_verified: true,
+      });
+    }
     if (input.physicalLimits) {
-      const messageChars = formatWebPhysicalContext(input.physicalContext, input.toolBridge).length;
+      const messageChars = formatWebPhysicalContext(
+        input.physicalContext,
+        input.toolBridge,
+        attachmentReference,
+      ).length;
       if (messageChars > input.physicalLimits.composerCharLimit) {
         throw new Error(
           `Fresh ChatGPT Web message requires ${messageChars} characters, exceeding the ${input.physicalLimits.composerCharLimit}-character browser message limit; Native context was left unchanged`,
@@ -124,6 +160,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       nativeTurnId: input.channel.binding.authority.turnId,
       webEpochId: input.webEpochId,
       physicalContext: input.physicalContext,
+      ...(attachmentReference ? { contextAttachment: attachmentReference } : {}),
       ...(input.toolBridge ? { toolBridge: input.toolBridge } : {}),
     }, input.signal));
     validateHandle(input, handle);

@@ -981,6 +981,20 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(await codex.modelSelectionCanary(profileSlot), null, 2));
     return;
   }
+  if (command === "context-canary") {
+    const profileSlot = slot();
+    const manifest = readOwnershipManifest(productPaths.installManifest);
+    if (!manifest) throw new Error("context-canary requires a running Tela Codex service/profile");
+    const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
+    const running = await supervisor.current({
+      service: "codex",
+      descriptorPath: serviceDescriptorPath(productPaths, "codex"),
+    });
+    if (!running) throw new Error("context-canary requires a running Tela Codex service/profile");
+    const codex = new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
+    console.log(JSON.stringify(await codex.contextAttachmentCanary(profileSlot), null, 2));
+    return;
+  }
   console.log(
     "ChatGPT Tela — independent Chat and Codex runtimes.\n\n"
     + "Commands:\n"
@@ -1008,6 +1022,7 @@ async function main(): Promise<void> {
     + "  stop [--slot <n>]\n"
     + "  profiles\n"
     + "  model-canary [--slot <n>]\n"
+    + "  context-canary [--slot <n>]\n"
     + "  status\n"
     + "  shutdown",
   );

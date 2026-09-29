@@ -72,4 +72,39 @@ describe("profile bridge preview server", () => {
       await server.close();
     }
   });
+
+  test("runs context-attachment canary only as an authenticated explicit POST", async () => {
+    const token = "a".repeat(48);
+    let calls = 0;
+    const server = await startProfileBridgePreviewServer({
+      slot: 1,
+      bearerToken: token,
+      async observe() { return { activeSurfaceCount: 0 }; },
+      async probeContextAttachment() {
+        calls += 1;
+        return { attachmentBytes: 777, receiptVerified: true };
+      },
+    });
+    try {
+      const url = new URL("v1/context-attachment-canary", server.endpoint);
+      expect((await fetch(url)).status).toBe(401);
+      expect((await fetch(url, { method: "GET", headers: { authorization: `Bearer ${token}` } })).status).toBe(404);
+      expect((await fetch(url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, origin: "https://chatgpt.com" },
+      })).status).toBe(403);
+      const response = await fetch(url, { method: "POST", headers: { authorization: `Bearer ${token}` } });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toEqual({
+        contractVersion: 1,
+        slot: 1,
+        attachmentBytes: 777,
+        receiptVerified: true,
+      });
+      expect(calls).toBe(1);
+    } finally {
+      await server.close();
+    }
+  });
 });

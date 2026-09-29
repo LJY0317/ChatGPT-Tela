@@ -76,6 +76,13 @@ export interface CodexModelSelectionCanaryContract {
   readonly restoredEffort: "low" | "medium" | "high" | "xhigh" | "max";
 }
 
+export interface CodexContextAttachmentCanaryContract {
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly attachmentBytes: number;
+  readonly receiptVerified: true;
+}
+
 export interface ChatCapabilityContract {
   readonly capability: string;
   readonly description: string;
@@ -178,6 +185,28 @@ export function parseCodexModelSelectionCanaryContract(value: unknown): CodexMod
         ...base,
         testedEffort: testedEffort as CodexModelSelectionCanaryContract["restoredEffort"],
       });
+}
+
+export function parseCodexContextAttachmentCanaryContract(value: unknown): CodexContextAttachmentCanaryContract {
+  const item = object(value, "Codex context attachment canary");
+  if (item.contractVersion !== 1) throw new Error("unsupported Codex context attachment canary version");
+  if (!Number.isSafeInteger(item.slot) || (item.slot as number) < 1 || (item.slot as number) > 99) {
+    throw new Error("Codex context attachment canary slot is invalid");
+  }
+  if (!Number.isSafeInteger(item.attachmentBytes)
+    || (item.attachmentBytes as number) < 1
+    || (item.attachmentBytes as number) > 20_000_000) {
+    throw new Error("Codex context attachment canary byte count is invalid");
+  }
+  if (item.receiptVerified !== true) {
+    throw new Error("Codex context attachment canary receipt is not proven");
+  }
+  return Object.freeze({
+    contractVersion: 1 as const,
+    slot: item.slot as number,
+    attachmentBytes: item.attachmentBytes as number,
+    receiptVerified: true as const,
+  });
 }
 
 function text(value: unknown, field: string): string {

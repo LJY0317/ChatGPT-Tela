@@ -1,4 +1,5 @@
 import { createBrowserSurfaceCapability } from "@chatgpt-tela/browser-host";
+import type { BrowserMemoryFile } from "@chatgpt-tela/browser-host";
 import type { ChatGptApprovalAutomationMode } from "./approval-policy";
 
 export interface ChatGptComposerObservation {
@@ -10,6 +11,8 @@ export interface ChatGptComposerObservation {
   readonly textFingerprint?: string;
   /** SHA-256/base64url identities of currently selected ChatGPT connector pills. */
   readonly connectorFingerprints: readonly string[];
+  /** Visible filenames from the product-owned composer attachment surface only. */
+  readonly attachmentNames: readonly string[];
 }
 
 export interface ChatGptSendObservation {
@@ -82,6 +85,12 @@ export interface ChatGptSurfaceDriver {
   replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;
   clearComposerText(composerKey: string, signal?: AbortSignal): Promise<void>;
   appendComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;
+  /** Install memory-backed files and prove the product rendered every exact filename as accepted. */
+  attachFiles?(
+    composerKey: string,
+    files: readonly BrowserMemoryFile[],
+    signal?: AbortSignal,
+  ): Promise<void>;
   selectConnector(composerKey: string, connectorName: string, signal?: AbortSignal): Promise<void>;
   activateSend(controlKey: string, signal?: AbortSignal): Promise<void>;
   waitForChange(afterRevision: string, signal?: AbortSignal): Promise<ChatGptSurfaceSnapshot>;

@@ -6,6 +6,7 @@ import {
   parseChatCapabilityContract,
   parseCodexBridgePreviewContract,
   parseCodexModelSelectionCanaryContract,
+  parseCodexContextAttachmentCanaryContract,
   parseCodexProfileStatusContract,
   parseCodexToolInventoryResponse,
   parseCodexToolInvokeResponse,
@@ -13,6 +14,7 @@ import {
   type CodexProfileStatusContract,
   type CodexBridgePreviewContract,
   type CodexModelSelectionCanaryContract,
+  type CodexContextAttachmentCanaryContract,
   type ChatCapabilityContract,
   type ServiceRuntimeDescriptor,
   type ServiceStatus,
@@ -128,6 +130,16 @@ export class CodexServiceClient extends LocalServiceClient {
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("Codex profile slot must be an integer from 1 to 99");
     return parseCodexModelSelectionCanaryContract(await this.request(
       `v1/codex/profiles/${slot}/model-selection-canary`,
+      "POST",
+      {},
+      signal,
+    ));
+  }
+
+  async contextAttachmentCanary(slot: number, signal?: AbortSignal): Promise<CodexContextAttachmentCanaryContract> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("Codex profile slot must be an integer from 1 to 99");
+    return parseCodexContextAttachmentCanaryContract(await this.request(
+      `v1/codex/profiles/${slot}/context-attachment-canary`,
       "POST",
       {},
       signal,

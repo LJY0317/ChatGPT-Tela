@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import type {
+  ChatGptContextAttachment,
   SemanticObservation,
   WebConversationProvider,
   WebTurnEvent,
   WebTurnHandle,
 } from "@chatgpt-tela/chatgpt";
+import { createChatGptContextAttachment } from "@chatgpt-tela/chatgpt";
 import {
   NativeToolInventory,
   defineNativeTurnAuthority,
@@ -171,6 +173,92 @@ function provider(events: EventQueue, submitState: "proven" | "probable" = "prov
 }
 
 describe("browser turn runner", () => {
+  test("receipt-proven context preload completes before the real Native execution submit", async () => {
+    const events = new EventQueue();
+    events.push({ kind: "completed", providerTurnId: "web-turn-1", answer: "done" });
+    const order: string[] = [];
+    const fixture = provider(events);
+    const attachment = createChatGptContextAttachment({
+      ...physicalContext,
+      activeRequestRevisionId: "r1",
+    });
+    const wrapped: WebConversationProvider = {
+      ...fixture,
+      async preloadContextAttachment(_surface, request) {
+        order.push("preload");
+        return {
+          state: "proven",
+          value: {
+            nativeTaskId: request.nativeTaskId,
+            webEpochId: request.webEpochId,
+            attachmentName: request.attachment.name,
+            attachmentSha256: request.attachment.sha256,
+            providerOperationId: "preload-1",
+          },
+          evidence: ["fixture"],
+        };
+      },
+      async submitTurn(...args) {
+        order.push("submit");
+        return fixture.submitTurn(...args);
+      },
+    };
+    const result = await runBrowserTurn({
+      browserHost: browserHost([]),
+      provider: wrapped,
+      channel: new RuntimeTurnChannel(binding()),
+      nativeTaskId: "task-1",
+      webEpochId: "epoch-1",
+      physicalContext: { ...physicalContext, activeRequestRevisionId: "r1" },
+      contextAttachment: attachment,
+    });
+    expect(result).toBe("done");
+    expect(order).toEqual(["preload", "submit"]);
+  });
+
+  test("unproven context preload blocks the real Native execution submit", async () => {
+    const events = new EventQueue();
+    const order: string[] = [];
+    const fixture = provider(events);
+    const attachment: ChatGptContextAttachment = createChatGptContextAttachment({
+      ...physicalContext,
+      activeRequestRevisionId: "r1",
+    });
+    const wrapped: WebConversationProvider = {
+      ...fixture,
+      async preloadContextAttachment(_surface, request) {
+        order.push("preload");
+        return {
+          state: "probable",
+          value: {
+            nativeTaskId: request.nativeTaskId,
+            webEpochId: request.webEpochId,
+            attachmentName: request.attachment.name,
+            attachmentSha256: request.attachment.sha256,
+            providerOperationId: "preload-uncertain",
+          },
+          evidence: ["receipt mismatch"],
+        };
+      },
+      async submitTurn(...args) {
+        order.push("submit");
+        return fixture.submitTurn(...args);
+      },
+    };
+    const channel = new RuntimeTurnChannel(binding());
+    await expect(runBrowserTurn({
+      browserHost: browserHost([]),
+      provider: wrapped,
+      channel,
+      nativeTaskId: "task-1",
+      webEpochId: "epoch-1",
+      physicalContext: { ...physicalContext, activeRequestRevisionId: "r1" },
+      contextAttachment: attachment,
+    })).rejects.toThrow("requires proven state");
+    expect(order).toEqual(["preload"]);
+    expect(channel.phase).toBe("prepared");
+  });
+
   test("integrates a tool round, proven continuation, final response, and surface release", async () => {
     const events = new EventQueue();
     const released: string[] = [];

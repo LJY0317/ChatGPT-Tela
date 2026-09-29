@@ -30,6 +30,10 @@ export async function startProfileBridgePreviewServer(input: {
     readonly testedEffort?: "low" | "medium" | "high" | "xhigh" | "max";
     readonly restoredEffort: "low" | "medium" | "high" | "xhigh" | "max";
   }>;
+  readonly probeContextAttachment?: () => Promise<{
+    readonly attachmentBytes: number;
+    readonly receiptVerified: true;
+  }>;
 }): Promise<ProfileBridgePreviewServer> {
   if (!Number.isSafeInteger(input.slot) || input.slot < 1 || input.slot > 99) {
     throw new Error("profile bridge preview slot must be 1-99");
@@ -54,6 +58,22 @@ export async function startProfileBridgePreviewServer(input: {
           return Response.json({
             error: {
               type: "chatgpt_tela_model_selection_canary_error",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          }, { status: 409, headers: { "cache-control": "no-store" } });
+        }
+      }
+      if (request.method === "POST" && url.pathname === "/v1/context-attachment-canary") {
+        if (!input.probeContextAttachment) return new Response(null, { status: 404 });
+        try {
+          const result = await input.probeContextAttachment();
+          return Response.json({ contractVersion: 1, slot: input.slot, ...result }, {
+            headers: { "cache-control": "no-store" },
+          });
+        } catch (error) {
+          return Response.json({
+            error: {
+              type: "chatgpt_tela_context_attachment_canary_error",
               message: error instanceof Error ? error.message : String(error),
             },
           }, { status: 409, headers: { "cache-control": "no-store" } });

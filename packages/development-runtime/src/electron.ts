@@ -9,8 +9,10 @@ import {
 } from "@chatgpt-tela/electron-host";
 import {
   ChatGptSemanticProvider,
+  createChatGptContextAttachment,
   discoverChatGptWebModelFamilies as discoverWebModelFamilies,
   probeChatGptWebModelSelection as probeWebModelSelection,
+  requireProven,
   type ChatGptAccountIdentity,
   type ChatGptCapabilities,
   type ChatGptConnectorObservation,
@@ -54,6 +56,11 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
   discoverChatGptWebModelFamilies(signal?: AbortSignal): Promise<readonly ChatGptWebModelFamily[]>;
   /** Non-submit exact model/effort selection + restoration canary on one disposable surface. */
   probeChatGptWebModelSelection(signal?: AbortSignal): Promise<ChatGptWebModelSelectionCanary>;
+  /** Inert live canary for memory-backed attachment acceptance + exact receipt verification. */
+  probeChatGptContextAttachment(signal?: AbortSignal): Promise<{
+    readonly attachmentBytes: number;
+    readonly receiptVerified: true;
+  }>;
   /**
    * Observe the hidden bridge without revealing/focusing it or sending any page input.
    * A preview is returned only when exactly one task/epoch surface is active.
@@ -219,6 +226,45 @@ export async function startElectronDevelopmentRuntime(
       });
       try {
         return await modelSelectionCanary(surface, signal);
+      } finally {
+        await browserHost.release(surface.leaseId);
+      }
+    },
+    async probeChatGptContextAttachment(signal?: AbortSignal) {
+      const epochId = `profile-context-canary-${randomUUID()}`;
+      const taskId = `profile-context-canary:${input.profileId}`;
+      const surface = await browserHost.acquire({ taskId, epochId });
+      try {
+        const preload = provider.preloadContextAttachment;
+        if (!preload) throw new Error("Web provider does not support context attachment preload");
+        const attachment = createChatGptContextAttachment(Object.freeze({
+          headRevisionId: "context-canary-r1",
+          activeRequestRevisionId: "context-canary-r1",
+          mode: "full" as const,
+          logicalTokens: 12,
+          transferTokens: 12,
+          segments: Object.freeze([Object.freeze({
+            type: "revision" as const,
+            revisionId: "context-canary-r1",
+            kind: "user" as const,
+            content: "ChatGPT Tela context attachment live canary. No task execution is requested.",
+          })]),
+        }));
+        const result = requireProven(await preload.call(provider, surface, {
+          nativeTaskId: taskId,
+          webEpochId: epochId,
+          attachment,
+        }, signal));
+        if (result.nativeTaskId !== taskId
+          || result.webEpochId !== epochId
+          || result.attachmentName !== attachment.name
+          || result.attachmentSha256 !== attachment.sha256) {
+          throw new Error("context attachment canary receipt belongs to a different physical transaction");
+        }
+        return Object.freeze({
+          attachmentBytes: Buffer.byteLength(attachment.contextJson, "utf8"),
+          receiptVerified: true as const,
+        });
       } finally {
         await browserHost.release(surface.leaseId);
       }

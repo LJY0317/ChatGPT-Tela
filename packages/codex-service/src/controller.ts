@@ -8,8 +8,10 @@ import {
 } from "@chatgpt-tela/mcp";
 import {
   parseCodexBridgePreviewContract,
+  parseCodexContextAttachmentCanaryContract,
   parseCodexModelSelectionCanaryContract,
   type CodexBridgePreviewContract,
+  type CodexContextAttachmentCanaryContract,
   type CodexModelSelectionCanaryContract,
   type ServiceStatus,
 } from "@chatgpt-tela/service-protocol";
@@ -82,6 +84,7 @@ export interface CodexService {
   startProfile(slot: number): Promise<CodexProfileStatus>;
   stopProfile(slot: number): Promise<CodexProfileStatus>;
   bridgePreview(slot: number): Promise<CodexBridgePreviewContract>;
+  contextAttachmentCanary(slot: number): Promise<CodexContextAttachmentCanaryContract>;
   modelSelectionCanary(slot: number): Promise<CodexModelSelectionCanaryContract>;
   close(): Promise<void>;
   readonly activeProfileCount: number;
@@ -477,6 +480,30 @@ export async function startCodexService(input: {
       }
       const canary = parseCodexModelSelectionCanaryContract(value);
       if (canary.slot !== slot) throw new Error("profile model selection canary slot does not match its owner");
+      return canary;
+    },
+    async contextAttachmentCanary(slotValue: number) {
+      const slot = slotNumber(slotValue);
+      const profile = owned.get(slot);
+      if (!profile || profile.child.exitCode !== null || profile.child.signalCode !== null) {
+        throw new Error(`Tela Codex profile ${slot} is not running`);
+      }
+      const response = await fetch(new URL("v1/context-attachment-canary", profile.bridgePreviewUrl), {
+        method: "POST",
+        headers: { authorization: `Bearer ${profile.uiToken}` },
+        signal: AbortSignal.timeout(30_000),
+      });
+      const value = await response.json().catch(() => undefined) as unknown;
+      if (!response.ok) {
+        const message = value && typeof value === "object" && !Array.isArray(value)
+          ? (value as { error?: { message?: unknown } }).error?.message
+          : undefined;
+        throw new Error(typeof message === "string" && message.trim()
+          ? message
+          : `profile context attachment canary failed with HTTP ${response.status}`);
+      }
+      const canary = parseCodexContextAttachmentCanaryContract(value);
+      if (canary.slot !== slot) throw new Error("profile context attachment canary slot does not match its owner");
       return canary;
     },
     close() {

@@ -3,6 +3,7 @@ import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   ChatGptSemanticProvider,
   selectChatGptWebModel,
+  type ChatGptContextAttachment,
   type ChatGptWebEffort,
   type ChatGptWebPhysicalLimits,
   type WebConversationProvider,
@@ -47,6 +48,7 @@ export interface DevelopmentWebTurnPlan {
   readonly nativeTaskId: string;
   readonly webEpochId: string;
   readonly physicalContext: WebPhysicalContext;
+  readonly contextAttachment?: ChatGptContextAttachment;
   readonly browserModel?: {
     readonly familyKey: string;
     readonly effort: ChatGptWebEffort;
@@ -179,6 +181,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             nativeTaskId: plan.nativeTaskId,
             webEpochId: plan.webEpochId,
             physicalContext: plan.physicalContext,
+            ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
             ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
             toolBridge: {
               protocol: "mcp",

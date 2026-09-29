@@ -27,6 +27,9 @@ class FakeWebContents implements ElectronWebContentsLike {
 
   executeJavaScript(code: string): Promise<unknown> {
     this.calls.push(code);
+    if (code.includes("chatgpt-tela-memory-file-input-v1")) {
+      return Promise.resolve({ count: 1, names: ["context.txt"] });
+    }
     if (code.includes("return state.revision")) return Promise.resolve(this.revision);
     if (code.includes("return state.wait(")) {
       const match = code.match(/state\.wait\((\d+),/);
@@ -158,6 +161,21 @@ describe("Electron WebContents page automation", () => {
       { type: "keyDown", keyCode: "ArrowRight" },
       { type: "keyUp", keyCode: "ArrowRight" },
     ]);
+  });
+
+  test("memory-backed file input keeps bytes off disk and proves exact filename readback", async () => {
+    const webContents = new FakeWebContents();
+    const automation = new ElectronWebContentsPageAutomation(webContents);
+
+    await automation.setFileInputFiles(
+      'form input[type="file"]',
+      [{ name: "context.txt", mimeType: "text/plain", bytes: Buffer.from("hello") }],
+    );
+
+    const code = webContents.calls.find(value => value.includes("chatgpt-tela-memory-file-input-v1"))!;
+    expect(code).toContain(Buffer.from("hello").toString("base64"));
+    expect(code).toContain("DataTransfer");
+    expect(code).not.toContain("/tmp/");
   });
 
   test("mutation wait is event-driven and abort cleans the renderer waiter", async () => {

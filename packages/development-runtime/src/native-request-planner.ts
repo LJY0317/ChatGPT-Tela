@@ -9,7 +9,10 @@ import {
 import {
   CHATGPT_WEB_EFFORTS,
   chatGptWebPhysicalLimits,
+  createChatGptContextAttachment,
+  estimateChatGptContextAttachmentTransferTokens,
   parseChatGptWebModelId,
+  shouldUseChatGptContextAttachment,
   type ChatGptWebEffort,
   type ChatGptWebPhysicalLimits,
   type WebPhysicalContext,
@@ -558,6 +561,18 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
     const providerProjection = physicalLimits
       ? fitFreshWebPhysicalContext(prepared.physicalContext, physicalLimits)
       : projectFreshWebPhysicalContext(prepared.physicalContext);
+    const contextAttachment = browserModel && shouldUseChatGptContextAttachment(providerProjection.context)
+      ? createChatGptContextAttachment(providerProjection.context)
+      : undefined;
+    const physicalContext = contextAttachment
+      ? Object.freeze({
+          ...providerProjection.context,
+          transferTokens: Math.max(
+            providerProjection.context.transferTokens,
+            estimateChatGptContextAttachmentTransferTokens(contextAttachment),
+          ),
+        })
+      : providerProjection.context;
     const transportAnchor = prepared.plan.mode === "checkpoint-delta"
       ? `checkpoint:${prepared.plan.checkpointId}`
       : `full:${projection.headId}`;
@@ -566,7 +581,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
     return Object.freeze({
       nativeTaskId: threadId,
       webEpochId: epochId,
-      physicalContext: providerProjection.context,
+      physicalContext,
+      ...(contextAttachment ? { contextAttachment } : {}),
       ...(browserModel ? { browserModel } : {}),
       ...(physicalLimits ? { physicalLimits } : {}),
       diagnostics: Object.freeze({
@@ -585,6 +601,11 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
         projection_omitted_tool_results: providerProjection.stats.omittedToolResults,
         projection_retention_step: providerProjection.stats.retentionStep,
         projection_fit_target: providerProjection.stats.fitTarget,
+        context_attachment: contextAttachment !== undefined,
+        ...(contextAttachment ? {
+          context_attachment_chars: contextAttachment.contextJson.length,
+          context_attachment_bytes: Buffer.byteLength(contextAttachment.contextJson, "utf8"),
+        } : {}),
       }),
       settle(outcome: DevelopmentWebTurnSettlement) {
         if (pendingByTask.get(threadId) !== pending) return;
@@ -596,7 +617,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
           answerFingerprint: contentFingerprint(outcome.answer),
           routeIdentity: currentRouteIdentity,
           baseLogicalInputTokens: currentLogicalInputTokens,
-          baseTransferInputTokens: providerProjection.context.transferTokens,
+          baseTransferInputTokens: physicalContext.transferTokens,
           ...(physicalLimits ? { physicalLimits } : {}),
         }));
       },

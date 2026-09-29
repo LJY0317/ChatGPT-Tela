@@ -8,6 +8,7 @@ import type { ElectronBrowserWindowLike } from "@chatgpt-tela/electron-host";
 import type {
   SemanticObservation,
   WebConversationProvider,
+  WebContextAttachmentPreloadRequest,
   WebContextCheckpointProvider,
   WebContextCheckpointRequest,
   WebToolContinuationBoundary,
@@ -106,6 +107,28 @@ class FinalProvider implements WebConversationProvider {
   }
 }
 
+class ContextCanaryProvider extends FinalProvider {
+  preloadRequests: WebContextAttachmentPreloadRequest[] = [];
+
+  async preloadContextAttachment(
+    _surface: unknown,
+    request: WebContextAttachmentPreloadRequest,
+  ) {
+    this.preloadRequests.push(request);
+    return {
+      state: "proven" as const,
+      value: {
+        nativeTaskId: request.nativeTaskId,
+        webEpochId: request.webEpochId,
+        attachmentName: request.attachment.name,
+        attachmentSha256: request.attachment.sha256,
+        providerOperationId: "context-canary-op",
+      },
+      evidence: ["fixture-context-canary"],
+    };
+  }
+}
+
 function nativeRequest(): Record<string, unknown> {
   return {
     model: "chatgpt-tela-test-model",
@@ -166,6 +189,44 @@ class FixtureCheckpointProvider implements WebContextCheckpointProvider {
 }
 
 describe("Electron development runtime composition", () => {
+  test("context attachment canary owns one disposable non-Native surface and requires a proven receipt", async () => {
+    const [, serverTransport] = InMemoryTransport.createLinkedPair();
+    const windows: FakeWindow[] = [];
+    class RuntimeWindow extends FakeWindow {
+      constructor(_input: BrowserWindowConstructorOptions) {
+        super();
+        windows.push(this);
+      }
+    }
+    const provider = new ContextCanaryProvider();
+    const runtime = await startElectronDevelopmentRuntime({
+      profileId: "profile-context-canary",
+      currentTurnSource: source,
+      mcp: { kind: "transport", transport: serverTransport },
+      provider,
+      electron: {
+        async loadRuntime() {
+          return {
+            app: { setPath() {}, async whenReady() {} },
+            BrowserWindow: RuntimeWindow,
+          };
+        },
+      },
+    });
+    try {
+      const result = await runtime.probeChatGptContextAttachment();
+      expect(result.receiptVerified).toBe(true);
+      expect(result.attachmentBytes).toBeGreaterThan(0);
+      expect(provider.preloadRequests).toHaveLength(1);
+      expect(provider.preloadRequests[0]?.nativeTaskId).toBe("profile-context-canary:profile-context-canary");
+      expect(provider.submitted).toBeUndefined();
+      expect(windows).toHaveLength(1);
+      expect(windows[0]?.destroyed).toBe(true);
+    } finally {
+      await runtime.stop();
+    }
+  });
+
   test("discovers Web model families on one disposable non-Native surface", async () => {
     const [, serverTransport] = InMemoryTransport.createLinkedPair();
     const windows: FakeWindow[] = [];

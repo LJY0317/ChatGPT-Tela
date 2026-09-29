@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { BrowserPageAutomation } from "@chatgpt-tela/browser-host";
+import type { BrowserMemoryFile, BrowserPageAutomation } from "@chatgpt-tela/browser-host";
 
 export interface ElectronWebContentsLike {
   executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>;
@@ -23,6 +23,33 @@ export interface ElectronWebContentsLike {
 }
 
 const MUTATION_CLOCK_KEY = "__chatgpt_tela_dom_mutation_clock_v1__";
+const MAX_MEMORY_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_MEMORY_FILE_COUNT = 10;
+
+const SET_FILE_INPUT_FILES = String.raw`function (argument) {
+  const marker = "chatgpt-tela-memory-file-input-v1"; void marker;
+  const inputs = [...document.querySelectorAll(argument.selector)]
+    .filter(element => element instanceof HTMLInputElement && element.type === "file");
+  if (inputs.length !== 1) throw new Error("browser memory file input is not uniquely addressable");
+  if (typeof DataTransfer !== "function" || typeof File !== "function") {
+    throw new Error("browser does not expose memory-backed file primitives");
+  }
+  const transfer = new DataTransfer();
+  for (const item of argument.files) {
+    const binary = atob(item.base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    transfer.items.add(new File([bytes], item.name, { type: item.mimeType, lastModified: 0 }));
+  }
+  const input = inputs[0];
+  input.files = transfer.files;
+  input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+  return {
+    count: input.files?.length ?? 0,
+    names: input.files ? [...input.files].map(file => file.name) : [],
+  };
+}`;
 
 function abortError(): DOMException {
   return new DOMException("browser page operation aborted", "AbortError");
@@ -177,6 +204,47 @@ export class ElectronWebContentsPageAutomation implements BrowserPageAutomation 
     sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: [primaryModifier] });
     sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
     sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
+  }
+
+  async setFileInputFiles(
+    selector: string,
+    files: readonly BrowserMemoryFile[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!selector.trim() || selector.length > 2_048 || selector.includes("\u0000")) {
+      throw new Error("browser memory file selector is invalid");
+    }
+    if (files.length < 1 || files.length > MAX_MEMORY_FILE_COUNT) {
+      throw new Error("browser memory file count is invalid");
+    }
+    let totalBytes = 0;
+    const serialized = files.map(file => {
+      if (!file.name || file.name.length > 240 || /[\\/\u0000\r\n]/.test(file.name)) {
+        throw new Error("browser memory file name is invalid");
+      }
+      if (!/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,126}\/[A-Za-z0-9][A-Za-z0-9.+_-]{0,126}$/.test(file.mimeType)) {
+        throw new Error("browser memory file MIME type is invalid");
+      }
+      if (!(file.bytes instanceof Uint8Array) || file.bytes.byteLength < 1 || file.bytes.byteLength > MAX_MEMORY_FILE_BYTES) {
+        throw new Error("browser memory file size is invalid");
+      }
+      totalBytes += file.bytes.byteLength;
+      if (totalBytes > MAX_MEMORY_FILE_BYTES) throw new Error("browser memory file payload is too large");
+      return Object.freeze({
+        name: file.name,
+        mimeType: file.mimeType,
+        base64: Buffer.from(file.bytes).toString("base64"),
+      });
+    });
+    const result = await this.evaluate<
+      { readonly selector: string; readonly files: readonly { name: string; mimeType: string; base64: string }[] },
+      { readonly count: number; readonly names: readonly string[] }
+    >(SET_FILE_INPUT_FILES, { selector, files: serialized }, signal);
+    if (result.count !== files.length
+      || result.names.length !== files.length
+      || result.names.some((name, index) => name !== files[index]?.name)) {
+      throw new Error("browser memory file input readback did not match the requested files");
+    }
   }
 
   async typeFocusedEditable(text: string, signal?: AbortSignal): Promise<void> {

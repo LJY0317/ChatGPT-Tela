@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
-import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
+import { ControlledBrowserHost, type BrowserMemoryFile } from "@chatgpt-tela/browser-host";
+import { createChatGptContextAttachment } from "./context-attachment";
 import {
   CHATGPT_SURFACE_DRIVER,
   type ChatGptSurfaceDriver,
@@ -17,6 +18,7 @@ function fixture(name: string): ChatGptSurfaceSnapshot {
     composers: parsed.composers.map(composer => ({
       ...composer,
       connectorFingerprints: composer.connectorFingerprints ?? [],
+      attachmentNames: composer.attachmentNames ?? [],
     })),
   };
 }
@@ -66,6 +68,9 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   corruptReadback = false;
   sendAppearsWhenComposerNonEmpty = false;
   failConnectorSelection = false;
+  autoContextPreload = false;
+  attachedFiles: string[] = [];
+  contextAcknowledgement: string | undefined;
 
   constructor(initial: ChatGptSurfaceSnapshot) {
     this.current = structuredClone(initial);
@@ -155,6 +160,25 @@ class FixtureDriver implements ChatGptSurfaceDriver {
     };
   }
 
+  async attachFiles(composerKey: string, files: readonly BrowserMemoryFile[]): Promise<void> {
+    this.attachedFiles.push(...files.map(file => file.name));
+    for (const file of files) {
+      const text = Buffer.from(file.bytes).toString("utf8");
+      const match = text.match(/context_receipt: (TELA_CONTEXT_ACK ctxr_[a-f0-9]{32})/);
+      if (match) this.contextAcknowledgement = match[1];
+    }
+    this.current = {
+      ...this.current,
+      revision: `${this.current.revision}:files`,
+      composers: this.current.composers.map(composer => composer.key === composerKey
+        ? { ...composer, attachmentNames: files.map(file => file.name) }
+        : composer),
+      sendControls: this.current.sendControls.map(control => control.composerKey === composerKey
+        ? { ...control, enabled: true }
+        : control),
+    };
+  }
+
   async selectConnector(composerKey: string, connectorName: string): Promise<void> {
     this.connectorSelections.push(connectorName);
     if (this.failConnectorSelection) {
@@ -183,6 +207,42 @@ class FixtureDriver implements ChatGptSurfaceDriver {
 
   async activateSend(controlKey: string): Promise<void> {
     this.activated.push(controlKey);
+    if (this.autoContextPreload && this.contextAcknowledgement) {
+      const userKey = "user:context-preload";
+      const accepted: ChatGptSurfaceSnapshot = {
+        ...this.current,
+        revision: `${this.current.revision}:accepted-preload`,
+        composers: this.current.composers.map(composer => {
+          const { textFingerprint: _textFingerprint, ...rest } = composer;
+          return {
+            ...rest,
+            textLength: 0,
+            connectorFingerprints: [],
+            attachmentNames: [],
+          };
+        }),
+        turns: [
+          ...this.current.turns,
+          { key: userKey, role: "user" },
+        ],
+      };
+      const completed: ChatGptSurfaceSnapshot = {
+        ...accepted,
+        revision: `${accepted.revision}:assistant-complete`,
+        turns: [
+          ...accepted.turns,
+          {
+            key: "assistant:context-preload",
+            role: "assistant",
+            parentUserTurnKey: userKey,
+            phase: "complete",
+            text: this.contextAcknowledgement,
+          },
+        ],
+      };
+      this.current = structuredClone(accepted);
+      this.queued.push(completed);
+    }
   }
 
   async waitForChange(afterRevision: string): Promise<ChatGptSurfaceSnapshot> {
@@ -227,6 +287,42 @@ function acceptedSnapshot(
 }
 
 describe("ChatGPT semantic provider", () => {
+  test("context attachment preload proves exact file-only receipt before execution is authorized", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.autoContextPreload = true;
+    const { host, lease } = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ connectorDraftPersistenceSettleMs: 0 });
+    const attachment = createChatGptContextAttachment({
+      headRevisionId: "r1",
+      activeRequestRevisionId: "r1",
+      mode: "full",
+      logicalTokens: 4,
+      transferTokens: 4,
+      segments: [{ type: "revision", revisionId: "r1", kind: "user", content: "hello" }],
+    });
+    try {
+      const result = await provider.preloadContextAttachment(lease, {
+        nativeTaskId: "task-1",
+        webEpochId: "epoch-1",
+        attachment,
+      });
+      expect(result.state).toBe("proven");
+      if (result.state === "proven") {
+        expect(result.value).toMatchObject({
+          attachmentName: attachment.name,
+          attachmentSha256: attachment.sha256,
+        });
+      }
+      expect(driver.attachedFiles).toEqual([attachment.name]);
+      expect(driver.contextAcknowledgement).toMatch(/^TELA_CONTEXT_ACK ctxr_[a-f0-9]{32}$/);
+      expect(driver.activated).toHaveLength(1);
+      expect(driver.current.composers[0]?.attachmentNames).toEqual([]);
+    } finally {
+      await host.release(lease.leaseId);
+      await host.close();
+    }
+  });
+
   test("proves capabilities only from one owned composer and one matching send control", async () => {
     const ready = new FixtureDriver(fixture("ready-new-chat"));
     const readySurface = await leaseFor(ready);

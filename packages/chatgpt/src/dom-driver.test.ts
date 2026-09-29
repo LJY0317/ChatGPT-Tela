@@ -251,6 +251,7 @@ describe("current ChatGPT DOM surface driver", () => {
       textLength: "draft secret".length,
       textFingerprint: digest("draft secret"),
       connectorFingerprints: [],
+      attachmentNames: [],
     });
     expect(snapshot.turns[0]).toEqual({
       key: "user:t1",

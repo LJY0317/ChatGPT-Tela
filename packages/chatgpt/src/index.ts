@@ -1,4 +1,8 @@
 import type { BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import type {
+  ChatGptContextAttachment,
+  ChatGptContextAttachmentReference,
+} from "./context-attachment";
 
 export type ProofState = "proven" | "probable" | "ambiguous";
 
@@ -65,7 +69,22 @@ export interface WebTurnRequest {
   readonly nativeTurnId: string;
   readonly webEpochId: string;
   readonly physicalContext: WebPhysicalContext;
+  readonly contextAttachment?: ChatGptContextAttachmentReference;
   readonly toolBridge?: WebToolBridgeContext;
+}
+
+export interface WebContextAttachmentPreloadRequest {
+  readonly nativeTaskId: string;
+  readonly webEpochId: string;
+  readonly attachment: ChatGptContextAttachment;
+}
+
+export interface WebContextAttachmentPreloadResult {
+  readonly nativeTaskId: string;
+  readonly webEpochId: string;
+  readonly attachmentName: string;
+  readonly attachmentSha256: string;
+  readonly providerOperationId: string;
 }
 
 export interface WebTurnHandle {
@@ -144,6 +163,12 @@ export interface WebConversationProvider {
     signal?: AbortSignal,
   ): Promise<SemanticObservation<ChatGptCapabilities>>;
 
+  preloadContextAttachment?(
+    surface: BrowserSurfaceLease,
+    request: WebContextAttachmentPreloadRequest,
+    signal?: AbortSignal,
+  ): Promise<SemanticObservation<WebContextAttachmentPreloadResult>>;
+
   submitTurn(
     surface: BrowserSurfaceLease,
     request: WebTurnRequest,
@@ -182,3 +207,4 @@ export * from "./dom-driver";
 export * from "./semantic-provider";
 export * from "./model-picker";
 export * from "./physical-limits";
+export * from "./context-attachment";

@@ -19,6 +19,7 @@ interface RawComposer {
   readonly ownedByChatGptForm: boolean;
   readonly text: string;
   readonly connectorNames: readonly string[];
+  readonly attachmentNames: readonly string[];
 }
 
 interface RawSend {
@@ -100,6 +101,10 @@ export const CHATGPT_CURRENT_COMPOSER_SELECTOR = [
 ].join(', ');
 
 const COMPOSER_SELECTOR_SOURCE = JSON.stringify(CHATGPT_CURRENT_COMPOSER_SELECTOR);
+const CHATGPT_GENERIC_UPLOAD_INPUT_SELECTOR = [
+  'input[data-testid="upload-photos-input"]',
+  'form[data-chatgpt-composer] input[type="file"][multiple]:not([accept])',
+].join(", ");
 
 const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
   const visible = element => {
@@ -134,6 +139,31 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
     )].map(part => part.getAttribute("data-keyword") || part.getAttribute("app-mention-display-name") || "")
       .filter(name => name.length > 0);
   };
+  const attachmentNames = element => {
+    if (!(element instanceof HTMLElement)) return [];
+    const form = element.closest("form[data-chatgpt-composer], form");
+    if (!(form instanceof HTMLElement)) return [];
+    const result = new Set();
+    const add = value => {
+      const normalized = String(value || "").replace(/\s+/g, " ").trim();
+      if (normalized && normalized.length <= 240 && !/[\r\n]/.test(normalized)) result.add(normalized);
+    };
+    for (const candidate of form.querySelectorAll('[role="group"], .composer-attachment-surface')) {
+      if (!(candidate instanceof HTMLElement) || !visible(candidate)) continue;
+      add(candidate.getAttribute("aria-label"));
+      const labelledBy = candidate.getAttribute("aria-labelledby");
+      if (labelledBy) add(document.getElementById(labelledBy)?.textContent);
+    }
+    for (const root of form.querySelectorAll('[data-composer-attachments]')) {
+      if (!(root instanceof HTMLElement) || !visible(root)) continue;
+      for (const candidate of root.querySelectorAll('[aria-label], span, p')) {
+        if (!(candidate instanceof HTMLElement) || !visible(candidate)) continue;
+        add(candidate.getAttribute("aria-label"));
+        add(candidate.textContent);
+      }
+    }
+    return [...result];
+  };
 
   const composerSelector = ${COMPOSER_SELECTOR_SOURCE};
   const composerElements = [...document.querySelectorAll(composerSelector)];
@@ -144,6 +174,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
     ownedByChatGptForm: element.closest("form[data-chatgpt-composer], form") !== null,
     text: composerText(element),
     connectorNames: connectorNames(element),
+    attachmentNames: attachmentNames(element),
   }));
 
   const sendControls = [];
@@ -1075,6 +1106,7 @@ function composer(raw: RawComposer): ChatGptComposerObservation {
     textLength: raw.text.length,
     ...(raw.text.length > 0 ? { textFingerprint: fingerprint(raw.text) } : {}),
     connectorFingerprints: Object.freeze(raw.connectorNames.map(fingerprint)),
+    attachmentNames: Object.freeze([...(raw.attachmentNames ?? [])]),
   });
 }
 
@@ -1218,6 +1250,32 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
 
   async appendComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void> {
     await this.page.evaluate(APPEND_COMPOSER_TEXT, { composerKey, text }, signal);
+  }
+
+  async attachFiles(
+    composerKey: string,
+    files: readonly import("@chatgpt-tela/browser-host").BrowserMemoryFile[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (composerKey !== "composer:primary") throw new Error("ChatGPT attachment composer is not uniquely addressable");
+    if (!this.page.setFileInputFiles) throw new Error("browser surface does not support memory-backed file input");
+    const before = await this.observe(signal);
+    const composer = before.composers.find(item => item.key === composerKey);
+    if (!composer || !composer.visible || !composer.editable || !composer.ownedByChatGptForm) {
+      throw new Error("ChatGPT attachment composer is not ready");
+    }
+    if (composer.attachmentNames.length !== 0) {
+      throw new Error("ChatGPT attachment preload requires an empty composer attachment surface");
+    }
+    await this.page.setFileInputFiles(CHATGPT_GENERIC_UPLOAD_INPUT_SELECTOR, files, signal);
+    let snapshot = await this.observe(signal);
+    for (;;) {
+      const current = snapshot.composers.find(item => item.key === composerKey);
+      const accepted = current && files.every(file => current.attachmentNames.includes(file.name));
+      const sends = snapshot.sendControls.filter(control => control.composerKey === composerKey && control.visible);
+      if (accepted && sends.length === 1 && sends[0]!.enabled) return;
+      snapshot = await this.waitForChange(snapshot.revision, signal);
+    }
   }
 
   async selectConnector(composerKey: string, connectorName: string, signal?: AbortSignal): Promise<void> {

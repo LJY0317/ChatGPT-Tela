@@ -38,6 +38,14 @@ function fixtureService(): CodexService {
         restoredEffort: "high",
       };
     },
+    async contextAttachmentCanary(slot) {
+      return {
+        contractVersion: 1,
+        slot,
+        attachmentBytes: 512,
+        receiptVerified: true,
+      };
+    },
     async close() {},
     activeProfileCount: 0,
   };
@@ -86,6 +94,33 @@ describe("Tela Codex private HTTP server", () => {
         exercised: true,
         testedEffort: "medium",
         restoredEffort: "high",
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("serves explicit context-attachment canary through the private service only", async () => {
+    const token = "a".repeat(48);
+    const server = await startCodexServiceHttpServer({ service: fixtureService(), bearerToken: token });
+    try {
+      const url = new URL("v1/codex/profiles/1/context-attachment-canary", server.endpoint);
+      expect((await fetch(url, { method: "POST" })).status).toBe(401);
+      expect((await fetch(url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, origin: "https://chatgpt.com" },
+      })).status).toBe(403);
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toEqual({
+        contractVersion: 1,
+        slot: 1,
+        attachmentBytes: 512,
+        receiptVerified: true,
       });
     } finally {
       await server.close();
