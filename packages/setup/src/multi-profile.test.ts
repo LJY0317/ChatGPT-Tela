@@ -136,6 +136,45 @@ describe("optional Multi-Profile control client", () => {
     expect(runner.calls).toHaveLength(1);
   });
 
+  test("composite Profile 2 requires overlay capability and exact ready-session proof", async () => {
+    const secret = "s".repeat(48);
+    const launch = {
+      targetId: "local.plura-desktop.profile2",
+      responsesBaseUrl: "http://127.0.0.1:18741/v1",
+      responsesEnvKey: "LOCAL_TOKEN",
+      responsesToken: secret,
+      runtimeHeaderName: "X-Local-Runtime-Token",
+      modelListOverlay: {
+        url: "http://127.0.0.1:18741/model-list-overlay",
+        envKey: "LOCAL_TOKEN",
+        token: secret,
+      },
+    } as const;
+    const unsupported = new FixtureRunner();
+    unsupported.results.push(result(targetsContract()));
+    await expect(new MultiProfileControlClient({ command: ["plura-desktop"], runner: unsupported })
+      .launchRoutedTarget(launch)).rejects.toThrow("model-list overlay contract");
+    expect(unsupported.calls).toHaveLength(1);
+
+    const runner = new FixtureRunner();
+    runner.results.push(result(targetsContract({ modelListOverlaySupported: true })));
+    runner.results.push(result({
+      contractVersion: 1,
+      targetID: launch.targetId,
+      state: "ready",
+      endpoint: "ws://127.0.0.1:19002",
+      responsesRouteFingerprint: "a".repeat(64),
+      modelListOverlayFingerprint: "b".repeat(64),
+    }));
+    const runtime = await new MultiProfileControlClient({ command: ["plura-desktop"], runner })
+      .launchRoutedTarget(launch);
+    expect(runtime.session.modelListOverlayFingerprint).toBe("b".repeat(64));
+    expect(runner.calls[1]?.arguments).toContain("--responses-runtime-header-name");
+    expect(runner.calls[1]?.arguments).toContain("--model-list-overlay-url");
+    expect(runner.calls[1]?.arguments.join(" ")).not.toContain(secret);
+    expect(runner.calls[1]?.environment).toEqual({ LOCAL_TOKEN: secret });
+  });
+
   test("product routed-target API accepts the canonical default target", async () => {
     const runner = new FixtureRunner();
     runner.results.push(result(targetsContract({

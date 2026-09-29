@@ -828,7 +828,11 @@ current Power picker may require a bounded non-submit convergence because an off
 can move the effort while temporarily changing the selected family; Tela re-proves both controls together and
 fails closed if they do not converge. `cli model-canary --slot 1` exercises this selection/readback/restoration
 path on a disposable surface without sending a ChatGPT message. The default Profile 1 path is live-proven;
-Profile 2+ still requires the equivalent app-server catalog projection at the Plura-owned target boundary.
+For Plura-owned Profile 2+, Tela supplies an authenticated loopback model-list overlay callback through
+Plura's optional public launch contract. Plura keeps ownership of the app-server proxy and preserves the
+Native result if the callback fails. The composite Responses route carries first-party Codex authorization
+and a separate Tela runtime header, so Native and explicit Web choices retain the same provider boundary.
+The target's ready-session fingerprint proves that the requested overlay was actually bound.
 
 ## Vertical slices
 
