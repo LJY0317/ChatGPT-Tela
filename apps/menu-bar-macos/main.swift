@@ -59,6 +59,8 @@ private func runLaunchctl(_ arguments: [String]) {
 final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var statusItem: NSStatusItem!
   private var snapshot: MenuSnapshot?
+  private var menuOpen = false
+  private var refreshGeneration = 0
   private let controlCenter = TelaControlCenterController()
   private let fileManager = FileManager.default
   private let home = FileManager.default.homeDirectoryForCurrentUser
@@ -90,15 +92,18 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     menu.delegate = self
     statusItem.menu = menu
     rebuildMenu(loading: true)
+    Task { await refreshNow() }
   }
 
   func menuWillOpen(_ menu: NSMenu) {
-    rebuildMenu(loading: true)
-    Task {
-      let observed = await inspect()
-      snapshot = observed
-      rebuildMenu(loading: false)
-    }
+    menuOpen = true
+    rebuildMenu(loading: snapshot == nil)
+    Task { await refreshNow() }
+  }
+
+  func menuDidClose(_ menu: NSMenu) {
+    menuOpen = false
+    rebuildMenu(loading: snapshot == nil)
   }
 
   private func descriptorURL(_ service: String) -> URL {
@@ -367,31 +372,49 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     }
   }
 
-  private func profileAction(slot: Int, action: String) async {
+  private func profileAction(slot: Int, action: String) async -> Bool {
     do {
-      guard let descriptor = try readDescriptor("codex") else { return }
+      guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "ChatGPTTelaMenuBar", code: 7) }
       _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/\(action)", method: "POST")
     } catch {
       NSSound.beep()
+      await refreshNow()
+      return false
     }
     await refreshNow()
+    return true
+  }
+
+  private func confirmProfileInterruption(slot: Int, restarting: Bool) -> Bool {
+    let alert = NSAlert()
+    alert.alertStyle = .warning
+    alert.messageText = "\(restarting ? "Restart" : "Stop") Profile \(slot)?"
+    alert.informativeText = restarting
+      ? "The ChatGPT app for this profile will close and reopen. Any running turn will be interrupted."
+      : "The ChatGPT app for this profile will close. Any running turn will be interrupted. You can reopen it with Start Profile \(slot)."
+    alert.addButton(withTitle: restarting ? "Restart Profile" : "Stop Profile")
+    alert.addButton(withTitle: "Cancel")
+    return alert.runModal() == .alertFirstButtonReturn
   }
 
   @objc private func startProfile(_ sender: NSMenuItem) {
     guard let slot = sender.representedObject as? Int else { return }
-    Task { await profileAction(slot: slot, action: "start") }
+    Task { _ = await profileAction(slot: slot, action: "start") }
   }
 
   @objc private func stopProfile(_ sender: NSMenuItem) {
-    guard let slot = sender.representedObject as? Int else { return }
-    Task { await profileAction(slot: slot, action: "stop") }
+    guard let slot = sender.representedObject as? Int,
+          confirmProfileInterruption(slot: slot, restarting: false) else { return }
+    Task { _ = await profileAction(slot: slot, action: "stop") }
   }
 
   @objc private func restartProfile(_ sender: NSMenuItem) {
-    guard let slot = sender.representedObject as? Int else { return }
+    guard let slot = sender.representedObject as? Int,
+          confirmProfileInterruption(slot: slot, restarting: true) else { return }
     Task {
-      await profileAction(slot: slot, action: "stop")
-      await profileAction(slot: slot, action: "start")
+      if await profileAction(slot: slot, action: "stop") {
+        _ = await profileAction(slot: slot, action: "start")
+      }
     }
   }
 
@@ -439,8 +462,12 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   }
 
   private func refreshNow() async {
-    snapshot = await inspect()
-    rebuildMenu(loading: false)
+    refreshGeneration += 1
+    let generation = refreshGeneration
+    let observed = await inspect()
+    guard generation == refreshGeneration else { return }
+    snapshot = observed
+    if !menuOpen { rebuildMenu(loading: false) }
   }
 
   @objc private func quitMenuBar() {
