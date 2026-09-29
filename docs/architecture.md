@@ -411,16 +411,13 @@ package's bundled Codex executable, ignores `.staging-*`, and accepts exactly on
 with the same hash. Explicit executable overrides stay higher-authority. Real Windows/Linux product E2E
 validation remains unfinished.
 
-The product adapter is composite rather than mutually exclusive: slot 1 is always resolved by the built-in
-default Desktop adapter, while an optional Multi-Profile adapter may contribute only slot 2+. This lets a
-multi-account user keep the same ordinary default path as everyone else instead of switching the entire Tela
-installation into a different runtime mode.
-
-That isolation has a live macOS source proof: slot 1 was started and stopped through the built-in adapter while
-an independently supervised Multi-Profile slot 2 remained `ready` with the same running target. Gateway/Codex
-shutdown for the default slot did not close the Chat backend, and the later whole-product shutdown closed only
-the remaining Tela Chat daemon. This is the intended failure/lifecycle boundary rather than merely a type-level
-separation.
+Desktop lifecycle ownership is mutually exclusive. With no Multi-Profile provider configured, slot 1 is resolved
+by the built-in default Desktop adapter and remains independent of every optional provider. When a Multi-Profile
+provider is explicitly configured, that provider resolves slot 1 and any additional managed slots through one
+public target/session contract. Tela must not run its built-in default supervisor beside the provider: both would
+otherwise own the same default ChatGPT user-data directory and invalidate each other's canonical session. This
+changes only Desktop lifecycle ownership; Tela's Responses/browser/task authority remains in the same product
+runtime.
 
 Product configuration is also independent from browser-profile ownership. The canonical version-1 config is
 stored under the platform-native product `configRoot` as `product-v1.json` and is parsed by the standalone
@@ -519,7 +516,7 @@ If the selected profile slot has no verified account binding yet, preflight repo
 opening Electron or creating that slot's browser user-data directory.
 The result is a structured `pass`/`warning`/`blocked` checklist rather than a partial canary lifecycle.
 
-Canary Native selection now has two explicit modes. `stock` is the default and keeps the normal
+Canary Native selection now has two explicit modes. `stock` is the default and keeps the isolated canary's normal
 single official ChatGPT Desktop / default Codex path independent of every multi-profile component.
 `multi-profile` requires an explicit public control-CLI path plus target id and does not accept a
 `CODEX_HOME` mutation lease. ChatGPT Tela starts its authenticated Responses endpoint first, then asks
