@@ -457,6 +457,7 @@ async function configure(
   }
   const localPort = Number(option("--local-mcp-port") ?? "18743");
   const manageTailscale = flag("--manage-tailscale-funnel");
+  const requestedTailscaleCli = option("--tailscale-cli") ?? "tailscale";
   const publicMcpAbi = option("--mcp-abi") ?? "stable";
   if (publicMcpAbi !== "stable" && publicMcpAbi !== "unified-development") {
     throw new Error("--mcp-abi must be stable or unified-development");
@@ -472,7 +473,9 @@ async function configure(
           localPort,
           authentication: "none",
           allowUnauthenticatedPublicEndpoint: true,
-          tailscaleCli: option("--tailscale-cli") ?? "tailscale",
+          // Service managers often start Gateway with a narrower PATH than this setup shell.
+          // Persist the resolved executable so source and packaged services use the same CLI.
+          tailscaleCli: Bun.which(requestedTailscaleCli) ?? requestedTailscaleCli,
         }
       : {
           kind: "existing-https",

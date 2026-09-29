@@ -43,7 +43,7 @@ Status vocabulary:
 
 | Downstream lesson | Tela status | Tela contract |
 | --- | --- | --- |
-| Preserve every Native model and add explicit Web-backed choices | **partial** | The default Desktop path is live-proven. Profile 2+ uses Plura's authenticated model-list overlay contract and preserves Native rows on callback failure. A source-build Profile 2 canary selected/restored a Web family, observed 3 Web rows among 10 `model/list` rows, and completed both Native passthrough and Web turns. Installed Plura still lacks this contract. |
+| Preserve every Native model and add explicit Web-backed choices | **absorbed** | The default Desktop and Profile 2 paths use Plura's authenticated model-list overlay contract and preserve Native rows on callback failure. The current Plura source was installed into the local development runtime; live Profile 1 `model/list` returned 3 Web rows among 10 total rows, and its family/effort select-and-restore canary passed. Profile 2 source-build canaries selected/restored a Web family, observed 3 Web rows among 10 rows, and completed both Native passthrough and Web turns. Published Plura release validation remains separate. |
 | Discover current ChatGPT model families from the authenticated browser | **absorbed** | the hidden authenticated browser discovers live family rows and effort availability; no GPT-version allowlist or account-plan guess exists in product constants. Live canaries proved three current families on Profile 1 and eight on Profile 2, confirming that account-local browser observation—not one global catalog—is the authority. |
 | Give dynamic model families stable opaque route identities | **absorbed** | NFKC/whitespace/case-normalized observed family semantics derive an opaque SHA-256 family key; display labels are not authority. |
 | Verify selected Web family/effort immediately before Send | **absorbed** | the runtime preparation hook executes immediately before the consequential submit boundary; exact family + effort readback must converge within a fixed bound or the message is not sent. Private non-submit live canaries proved select/readback/restore on both Profile 1 and Profile 2. Hidden/offscreen family activation uses bounded DOM/pointer fallbacks only with semantic checked-row readback. |
@@ -93,6 +93,7 @@ Status vocabulary:
 | Stable login partition with task tabs isolated from each other | **absorbed** | one persistent partition per Tela profile; task/Web-epoch surfaces are separate documents. |
 | Default single-profile UX, optional multi-profile isolation | **absorbed** | Profile 1 remains the default. Without Plura Desktop, Tela uses its built-in single-profile owner; when Plura Desktop is configured, the same public control contract owns Profile 1 and Profile 2+ so two supervisors never compete for the default Desktop. |
 | Configuration, user preference and process-local state have different owners | **partial** | Tela lifecycle ownership is explicit; remaining Control Center preferences should not become backend authority. |
+| Keep an existing Native chat resumable without Tela | **partial** | Tela leaves the user's `config.toml` unchanged, but the routed Desktop app-server currently records its process-local `external_responses_runtime` provider in resumed thread state. A thread last opened through Tela can therefore require the Tela route on its next resume. Remove this coupling at the route/session boundary before treating ordinary Desktop fallback as complete. |
 | Transactional install/update/repair/uninstall | **absorbed** | signed package trust, ownership manifest, resumable upgrade/repair and shared uninstall runtime. |
 | Cross-platform packaging/verification | **absorbed** | macOS/Windows/Linux CI and signed-package smoke are release gates. |
 
@@ -113,7 +114,7 @@ Status vocabulary:
 1. retained Web epoch + suffix-only continuation (**absorbed**);
 2. deterministic fresh provider projection + physical pressure telemetry (**absorbed**);
 3. browser semantic model-family/effort discovery (**absorbed**, Profile 1 live-proven);
-4. composite Native + explicit Tela Web `model/list` surface and routing (**partial**: default Desktop and Profile 2 source-build Native/Web turns proven; installed Plura update pending);
+4. composite Native + explicit Tela Web `model/list` surface and routing (**absorbed** in the local development runtime; published Plura release validation remains);
 5. independent physical-pressure epoch rollover + fresh hard-fit planner (**absorbed**);
 6. receipt-verified large-context/file transport (**absorbed**) and multipart transport;
 7. retained compaction proof/canary (**absorbed for retained live reuse; compaction-specific proof remains**), richer incident diagnostics, approval/subagent/skill audits;
