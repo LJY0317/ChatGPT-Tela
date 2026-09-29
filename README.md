@@ -761,6 +761,8 @@ same retained browser surface. `status: "not-observed"` is not a failure; it mea
 window did not contain that proof (for example only a first turn was run, or a physical-pressure
 rollover intentionally opened a fresh Web epoch). The command reads no prompt, tool argument/result,
 file content, workspace path, or browser transcript.
+Two sequential Profile 2 Web turns in one disposable Native task completed, and this canary returned
+`pass` with two retained-delta/retained-surface plans. The test Native thread was deleted.
 
 It does not send a ChatGPT message or create Native task authority. The single-profile/default Desktop path is
 live-proven. A source-build Plura Profile 2 canary also proved the app-server catalog projection: 3 Web rows
