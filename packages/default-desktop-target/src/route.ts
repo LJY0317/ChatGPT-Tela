@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
-export const TELA_DEFAULT_DESKTOP_PROVIDER_ID = "chatgpt_tela_responses";
-export const TELA_DEFAULT_DESKTOP_RUNTIME_HEADER = "X-ChatGPT-Tela-Runtime-Token";
+export const TELA_DEFAULT_DESKTOP_PROVIDER_ID = "openai";
+export const TELA_DEFAULT_DESKTOP_RUNTIME_HEADER = "OpenAI-Organization";
 
 export interface DefaultDesktopResponsesRoute {
   readonly baseUrl: string;
@@ -64,16 +64,9 @@ export function createDefaultDesktopResponsesRoute(input: {
 }
 
 export function defaultDesktopCodexConfigArguments(route: DefaultDesktopResponsesRoute): readonly string[] {
-  const prefix = `model_providers.${route.providerId}`;
   return Object.freeze([
     "-c", `model_provider=${JSON.stringify(route.providerId)}`,
-    "-c", `${prefix}.name=${JSON.stringify("ChatGPT Tela Native + Web")}`,
-    "-c", `${prefix}.base_url=${JSON.stringify(route.baseUrl)}`,
-    "-c", `${prefix}.model_catalog_url=${JSON.stringify(route.modelCatalogUrl)}`,
-    "-c", `${prefix}.wire_api=${JSON.stringify("responses")}`,
-    "-c", `${prefix}.env_http_headers.${JSON.stringify(route.runtimeHeaderName)}=${JSON.stringify(route.envKey)}`,
-    "-c", `${prefix}.requires_openai_auth=true`,
-    "-c", `${prefix}.supports_websockets=false`,
+    "-c", `openai_base_url=${JSON.stringify(route.baseUrl)}`,
   ]);
 }
 
@@ -103,18 +96,8 @@ export function rewriteDefaultDesktopAppServerRequest(
   if (existingProviders !== undefined && !record(existingProviders)) {
     throw new Error("routed app-server request has non-object model_providers");
   }
-  const providers = { ...(record(existingProviders) ?? {}) };
-  providers[route.providerId] = {
-    name: "ChatGPT Tela Native + Web",
-    base_url: route.baseUrl,
-    model_catalog_url: route.modelCatalogUrl,
-    wire_api: "responses",
-    env_http_headers: { [route.runtimeHeaderName]: route.envKey },
-    requires_openai_auth: true,
-    supports_websockets: false,
-  };
   config.model_provider = route.providerId;
-  config.model_providers = providers;
+  config.openai_base_url = route.baseUrl;
   const routedParams = {
     ...params,
     config,

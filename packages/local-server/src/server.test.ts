@@ -162,6 +162,25 @@ describe("local Native Responses server", () => {
     }
   });
 
+  test("authenticated WebSocket upgrade requests ask Codex to use HTTP Responses", async () => {
+    const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async () => {});
+    const server = await startLocalResponsesServer({
+      gateway,
+      authentication: { kind: "header", name: "OpenAI-Organization" },
+    });
+    try {
+      const response = await fetch(new URL("responses", server.baseUrl), {
+        headers: {
+          "OpenAI-Organization": server.runtimeToken,
+          upgrade: "websocket",
+        },
+      });
+      expect(response.status).toBe(426);
+    } finally {
+      await server.stop();
+    }
+  });
+
   test("router may own non-responses provider endpoints behind the same local capability", async () => {
     const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async () => {});
     const server = await startLocalResponsesServer({

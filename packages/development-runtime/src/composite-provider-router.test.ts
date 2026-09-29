@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
 import { createDefaultProfileCompositeProviderRouter } from "./composite-provider-router";
 
-const header = "X-ChatGPT-Tela-Runtime-Token";
+const header = "OpenAI-Organization";
 
 function request(path: string, body?: unknown): Request {
   return new Request(`http://127.0.0.1:9000${path}`, {

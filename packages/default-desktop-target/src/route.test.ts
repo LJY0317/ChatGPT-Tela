@@ -13,21 +13,21 @@ const route = createDefaultDesktopResponsesRoute({
 });
 
 describe("built-in default Desktop Responses route", () => {
-  test("contains only Tela-owned routing identity and no model or Native tool catalog", () => {
+  test("keeps the built-in provider identity and a secret-free route", () => {
     expect(route.baseUrl).toBe("http://127.0.0.1:18741/v1");
     expect(route.providerId).toBe(TELA_DEFAULT_DESKTOP_PROVIDER_ID);
-    expect(route.runtimeHeaderName).toBe("X-ChatGPT-Tela-Runtime-Token");
+    expect(route.runtimeHeaderName).toBe("OpenAI-Organization");
     expect(route.modelCatalogUrl).toBe("http://127.0.0.1:18741/v1/models");
     expect(route.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     const args = defaultDesktopCodexConfigArguments(route).join(" ");
     expect(args).toContain(TELA_DEFAULT_DESKTOP_PROVIDER_ID);
-    expect(args).toContain("model_catalog_url");
-    expect(args).toContain("requires_openai_auth=true");
-    expect(args).toContain("X-ChatGPT-Tela-Runtime-Token");
+    expect(args).toContain("model_provider=\"openai\"");
+    expect(args).toContain("openai_base_url=\"http://127.0.0.1:18741/v1\"");
+    expect(args).not.toContain("model_providers.");
     expect(args).not.toContain("gpt-");
     expect(args).not.toContain("tool_");
     expect(args).not.toContain("s".repeat(48));
-    expect(args).not.toContain(".env_key=");
+    expect(args).not.toContain("OPENAI_ORGANIZATION");
   });
 
   test("overlays only thread lifecycle requests and preserves unrelated JSON-RPC bytes", () => {
@@ -38,28 +38,20 @@ describe("built-in default Desktop Responses route", () => {
       id: 2,
       method: "thread/start",
       params: {
-        modelProvider: "some_runtime_provider",
+        modelProvider: "chatgpt_tela_responses",
         config: {
           arbitrary_future_field: { keep: true },
-          model_providers: { other_provider: { name: "keep-me" } },
+          model_providers: { chatgpt_tela_responses: { name: "previous local route" } },
         },
       },
     });
     const output = JSON.parse(rewriteDefaultDesktopAppServerRequest(input, route)) as any;
     expect(output.params.modelProvider).toBe(TELA_DEFAULT_DESKTOP_PROVIDER_ID);
     expect(output.params.config.model_provider).toBe(TELA_DEFAULT_DESKTOP_PROVIDER_ID);
+    expect(output.params.config.openai_base_url).toBe(route.baseUrl);
     expect(output.params.config.arbitrary_future_field).toEqual({ keep: true });
-    expect(output.params.config.model_providers.other_provider).toEqual({ name: "keep-me" });
-    expect(output.params.config.model_providers[TELA_DEFAULT_DESKTOP_PROVIDER_ID]).toMatchObject({
-      base_url: "http://127.0.0.1:18741/v1",
-      model_catalog_url: "http://127.0.0.1:18741/v1/models",
-      env_http_headers: {
-        "X-ChatGPT-Tela-Runtime-Token": "CHATGPT_TELA_RUNTIME_TOKEN",
-      },
-      wire_api: "responses",
-      requires_openai_auth: true,
-    });
-    expect(output.params.config.model_providers[TELA_DEFAULT_DESKTOP_PROVIDER_ID].env_key).toBeUndefined();
+    expect(output.params.config.model_providers.chatgpt_tela_responses).toEqual({ name: "previous local route" });
+    expect(output.params.config.model_providers[TELA_DEFAULT_DESKTOP_PROVIDER_ID]).toBeUndefined();
   });
 
   test("fails closed instead of replacing malformed routed config", () => {

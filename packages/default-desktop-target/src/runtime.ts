@@ -157,6 +157,11 @@ export async function startDefaultDesktopTargetRuntime(input: {
     CODEX_HOME: input.installation.codexHome,
     [input.route.envKey]: input.credential,
   };
+  const inheritedOrganization = backendEnvironment.OPENAI_ORGANIZATION;
+  if (inheritedOrganization && inheritedOrganization !== input.credential) {
+    throw new Error("default Desktop Responses route cannot replace an existing OPENAI_ORGANIZATION value");
+  }
+  backendEnvironment.OPENAI_ORGANIZATION = input.credential;
   const backend = spawn(input.installation.codexExecutable, [
     ...defaultDesktopCodexConfigArguments(input.route),
     "-c", "features.code_mode_host=true",

@@ -115,6 +115,11 @@ export async function startLocalResponsesServer(input: {
       if (!sameSecret(authenticationToken(request, authentication), runtimeToken)) {
         return unauthorized(authentication);
       }
+      if (url.pathname === "/v1/responses" && request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        // Codex's built-in openai provider advertises WebSocket support. An explicit 426 makes it
+        // fall back to the HTTP Responses transport that Tela implements for this local route.
+        return new Response(null, { status: 426, headers: { upgrade: "websocket" } });
+      }
 
       const length = request.headers.get("content-length");
       if (length !== null) {
