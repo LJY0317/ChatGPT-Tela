@@ -160,7 +160,18 @@ Web-epoch rollover is intentionally independent from Native compaction. Tela may
 physical Web conversation because the observed browser/model transport is approaching a physical
 limit without asking Native Codex to rewrite its logical history. Conversely Native compaction is a
 Native authority event and can force a new Web epoch. Physical-pressure rollover remains fail-closed
-until the selected ChatGPT model/effort's live limits can be proven rather than hard-coded.
+and uses a single isolated calibration table inherited from the downstream Web harness. Those limits
+govern disposable Web state only and never define Native history. Pressure is estimated as the fresh
+epoch's physical transfer baseline plus non-negative Native logical growth since that boundary; this
+therefore includes prior assistant output already resident in the retained ChatGPT conversation even
+though later suffix transport does not resend it. If a fresh projection necessarily begins above the
+soft rollover boundary, that epoch owns the remaining verified hard-window headroom rather than
+immediately reconstructing an equally large conversation.
+
+Every prepared browser message also emits only its character count alongside logical/transfer token
+counts. No prompt text is recorded. A later hard-fit planner may use the same isolated calibration to
+reduce only already-designated provider projection budgets before a fresh submit; it must still fail
+closed rather than delete current authority or causal evidence.
 
 The historical reasons and remaining parity work inherited from CodexGPTWeb experimentation are
 tracked in `docs/codexgptweb-assimilation.md` so removal of the old installation/source checkout does

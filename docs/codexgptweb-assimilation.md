@@ -31,7 +31,7 @@ Status vocabulary:
 | Advance retained state only after a proven completed Web turn | **absorbed** | planner settlement is transactional; failed/ambiguous turns do not move the committed retained anchor. |
 | Never inherit uncertain browser state after failure | **absorbed** | any failed retained turn destroys that physical surface before another turn can run. |
 | Model/effort change starts a new physical epoch | **absorbed** | Web epoch identity includes the current Native model + reasoning-effort route identity. |
-| Web physical rollover may occur without Native compaction | **partial** | independent Web epoch abstraction exists; production still needs browser-discovered physical soft/hard limits before pressure-based rollover is enabled. |
+| Web physical rollover may occur without Native compaction | **absorbed** | retained epochs track their fresh physical baseline separately from Native logical history; downstream-calibrated conservative soft/hard Web limits trigger a fresh physical epoch without requesting Native compaction. Growth includes assistant output already resident in the retained Web conversation, not merely bytes resent in later suffixes. |
 | Bound old settled tool evidence and assistant prose in a fresh provider projection | **absorbed** | all system/developer/user/steering and tool-call structure stay exact; `tool_search` registry stays exact; settled assistant/tool payloads are bounded only in the disposable Web view and the reduction is diagnosed structurally. |
 | Hard-fit a fresh projection to the measured Web window without changing Native history | **pending** | depends on live model/effort limit discovery; never silently delete irreducible authority/current causal state. |
 | Large fresh context as memory-backed file + exact receipt before enabling work | **pending** | representation-only optimization; no disk temp file, no connector on preload, no claim that receipt proves semantic comprehension. |
@@ -77,7 +77,7 @@ Status vocabulary:
 | Downstream lesson | Tela status | Tela contract |
 | --- | --- | --- |
 | Structural/privacy-safe turn diagnostics instead of raw prompt logs | **absorbed** | timestamped counts/byte sizes/duration/error/truncation only. |
-| Distinguish logical input, physical transfer and browser/render pressure | **partial** | logical/transfer token counts now emit on Work plans; browser message-char and physical epoch-pressure telemetry remain pending. |
+| Distinguish logical input, physical transfer and browser/render pressure | **absorbed** | Work diagnostics separately emit logical tokens, current transfer tokens, estimated retained-epoch input, effective rollover boundary, rollover decisions, and exact prepared browser-message character count without recording message text. |
 | Bounded incident snapshot with structural allowlist | **pending** | keep MacLagMonitor for OS-level Renderer/WindowServer evidence; Tela should own product causal evidence. |
 | On-demand deep trace rather than permanent heavy profiling | **pending** | add a user-triggered/incident-scoped product trace; never a permanent browser profiler. |
 | Isolated development canary using the real product path | **partial** | existing exact-turn canaries remain; `cli model-canary --slot 1` now live-proves model family/effort selection + restoration without submitting a message. A retained-context multi-turn live canary still remains. |
@@ -108,10 +108,10 @@ Status vocabulary:
 ## Assimilation order
 
 1. retained Web epoch + suffix-only continuation (**absorbed**);
-2. deterministic fresh provider projection (**absorbed**) + physical pressure telemetry;
+2. deterministic fresh provider projection + physical pressure telemetry (**absorbed**);
 3. browser semantic model-family/effort discovery (**absorbed**, Profile 1 live-proven);
 4. composite Native + explicit Tela Web `model/list` surface and routing (**partial**: default Desktop absorbed; Profile 2+ adapter pending);
-5. independent physical-pressure epoch rollover + hard-fit planner;
+5. independent physical-pressure epoch rollover (**absorbed**) + fresh hard-fit planner;
 6. receipt-verified large-context/file and multipart transports;
 7. retained compaction proof/canary, richer incident diagnostics, approval/subagent/skill audits;
 8. final parity audit against both the downstream snapshot and then-current upstream before the old

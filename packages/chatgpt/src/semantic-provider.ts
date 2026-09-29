@@ -777,6 +777,12 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     let baselineTurnKeys: Set<string>;
     let preSubmitUserLineageKeys: ReadonlySet<string>;
     const text = formatPhysicalContext(request.physicalContext, request.toolBridge);
+    emitDiagnosticEvent("chatgpt_tela_work", "browser_message_prepared", {
+      context_mode: request.physicalContext.mode,
+      message_chars: text.length,
+      logical_tokens: request.physicalContext.logicalTokens,
+      transfer_tokens: request.physicalContext.transferTokens,
+    });
     const expectedFingerprint = fingerprint(text);
     try {
       let preparedBaseline = baseline;

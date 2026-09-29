@@ -272,6 +272,42 @@ describe("Native request development Web planner", () => {
     third.settle?.({ status: "failed" });
   });
 
+  test("large retained assistant growth rolls over only the physical Web epoch while Native history stays complete", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const familyKey = chatGptWebFamilyKey("Observed Family");
+    const model = chatGptWebModelId(familyKey);
+    const first = await planner(registered(), {
+      model,
+      reasoning: { effort: "high" },
+      instructions: "Preserve the Native task exactly.",
+      input: [{ type: "message", role: "user", content: "Produce the large fixture." }],
+    });
+    const largeAnswer = "A".repeat(390_000);
+    first.settle?.({ status: "completed", answer: largeAnswer });
+
+    const second = await planner(registered(), {
+      model,
+      reasoning: { effort: "high" },
+      instructions: "Preserve the Native task exactly.",
+      input: [
+        { type: "message", role: "user", content: "Produce the large fixture." },
+        { type: "message", role: "assistant", content: largeAnswer },
+        { type: "message", role: "user", content: "Continue with the next small step." },
+      ],
+    });
+
+    expect(second.webEpochId).not.toBe(first.webEpochId);
+    expect(second.physicalContext.mode).not.toBe("retained-delta");
+    expect(second.physicalContext.logicalTokens).toBeGreaterThan(95_000);
+    expect(second.physicalContext.transferTokens).toBeLessThan(second.physicalContext.logicalTokens);
+    expect(second.diagnostics).toMatchObject({
+      physical_rollover: true,
+      provider_projection: true,
+    });
+    expect(Number(second.diagnostics?.previous_epoch_estimated_input_tokens)).toBeGreaterThanOrEqual(95_000);
+    second.settle?.({ status: "failed" });
+  });
+
   test("retained continuation fails closed to a fresh epoch when ancestry, answer, or route identity changes", async () => {
     const planner = createNativeRequestDevelopmentWebTurnPlanner();
     const firstRequest = {

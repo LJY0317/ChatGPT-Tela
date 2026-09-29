@@ -8,8 +8,10 @@ import {
 } from "@chatgpt-tela/core";
 import {
   CHATGPT_WEB_EFFORTS,
+  chatGptWebPhysicalLimits,
   parseChatGptWebModelId,
   type ChatGptWebEffort,
+  type ChatGptWebPhysicalLimits,
   type WebPhysicalContext,
 } from "@chatgpt-tela/chatgpt";
 import {
@@ -27,6 +29,7 @@ import type {
   DevelopmentWebTurnSettlement,
 } from "./runtime";
 import { projectFreshWebPhysicalContext } from "./provider-projection";
+import { assessWebEpochPressure, type WebEpochPressure } from "./web-epoch-pressure";
 
 export interface ProjectedNativeRevision {
   readonly revision: LogicalRevision;
@@ -184,7 +187,9 @@ interface CommittedRetainedContext {
   readonly inputHeadRevisionId: string;
   readonly answerFingerprint: string;
   readonly routeIdentity: string;
-  readonly epochTransferTokens: number;
+  readonly baseLogicalInputTokens: number;
+  readonly baseTransferInputTokens: number;
+  readonly physicalLimits?: ChatGptWebPhysicalLimits;
 }
 
 function retainedDelta(
@@ -217,8 +222,7 @@ function retainedDelta(
   ));
   if (!activeRequest) return undefined;
   const transferTokens = delta.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
-  const projectedEpochTokens = committed.epochTransferTokens + transferTokens;
-  if (budgetTokens !== undefined && projectedEpochTokens > budgetTokens) return undefined;
+  if (budgetTokens !== undefined && transferTokens > budgetTokens) return undefined;
   const logicalTokens = projection.revisions
     .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
   return Object.freeze({
@@ -430,13 +434,23 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
     const browserModel = browserModelRoute(nativeRequest);
     const currentRouteIdentity = routeIdentity(nativeRequest);
     const committed = retainedByTask.get(threadId);
-    const retained = committed
+    const currentLogicalInputTokens = projection.revisions
+      .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
+    const pressure: WebEpochPressure | undefined = committed?.physicalLimits
+      ? assessWebEpochPressure({
+          baseLogicalInputTokens: committed.baseLogicalInputTokens,
+          baseTransferInputTokens: committed.baseTransferInputTokens,
+          rolloverTokenLimit: committed.physicalLimits.rolloverTokenLimit,
+          contextWindowTokenLimit: committed.physicalLimits.contextWindowTokenLimit,
+          currentLogicalInputTokens,
+        })
+      : undefined;
+    const retained = committed && pressure?.shouldRollover !== true
       ? retainedDelta(projection, committed, currentRouteIdentity, options.budgetTokens)
       : undefined;
     const pending = Symbol(threadId);
     if (retained && committed) {
       pendingByTask.set(threadId, pending);
-      const nextEpochTransferTokens = committed.epochTransferTokens + retained.transferTokens;
       return Object.freeze({
         nativeTaskId: threadId,
         webEpochId: committed.webEpochId,
@@ -445,7 +459,11 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
         diagnostics: Object.freeze({
           provider_projection: false,
           retained_delta: true,
-          epoch_transfer_tokens: nextEpochTransferTokens,
+          ...(pressure ? {
+            epoch_estimated_input_tokens: pressure.estimatedEpochInputTokens,
+            epoch_rollover_token_limit: pressure.effectiveRolloverTokenLimit,
+            physical_rollover: false,
+          } : {}),
         }),
         settle(outcome: DevelopmentWebTurnSettlement) {
           if (pendingByTask.get(threadId) !== pending) return;
@@ -456,7 +474,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
             inputHeadRevisionId: projection.headId,
             answerFingerprint: contentFingerprint(outcome.answer),
             routeIdentity: currentRouteIdentity,
-            epochTransferTokens: nextEpochTransferTokens,
+            baseLogicalInputTokens: committed.baseLogicalInputTokens,
+            baseTransferInputTokens: committed.baseTransferInputTokens,
+            ...(committed.physicalLimits ? { physicalLimits: committed.physicalLimits } : {}),
           }));
         },
       });
@@ -532,6 +552,12 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
       );
     }
     const providerProjection = projectFreshWebPhysicalContext(prepared.physicalContext);
+    const physicalLimits = browserModel ? chatGptWebPhysicalLimits(browserModel.effort) : undefined;
+    if (physicalLimits && providerProjection.context.transferTokens >= physicalLimits.contextWindowTokenLimit) {
+      throw new Error(
+        `Fresh ChatGPT Web physical projection requires ${providerProjection.context.transferTokens} estimated tokens, exceeding the ${physicalLimits.contextWindowTokenLimit}-token physical Web window; Native context was left unchanged`,
+      );
+    }
     const transportAnchor = prepared.plan.mode === "checkpoint-delta"
       ? `checkpoint:${prepared.plan.checkpointId}`
       : `full:${projection.headId}`;
@@ -545,6 +571,11 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
       diagnostics: Object.freeze({
         provider_projection: true,
         retained_delta: false,
+        physical_rollover: pressure?.shouldRollover === true,
+        ...(pressure ? {
+          previous_epoch_estimated_input_tokens: pressure.estimatedEpochInputTokens,
+          previous_epoch_rollover_token_limit: pressure.effectiveRolloverTokenLimit,
+        } : {}),
         projection_original_bytes: providerProjection.stats.originalRevisionBytes,
         projection_projected_bytes: providerProjection.stats.projectedRevisionBytes,
         projection_truncated_assistant: providerProjection.stats.truncatedAssistantRevisions,
@@ -561,7 +592,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
           inputHeadRevisionId: projection.headId,
           answerFingerprint: contentFingerprint(outcome.answer),
           routeIdentity: currentRouteIdentity,
-          epochTransferTokens: providerProjection.context.transferTokens,
+          baseLogicalInputTokens: currentLogicalInputTokens,
+          baseTransferInputTokens: providerProjection.context.transferTokens,
+          ...(physicalLimits ? { physicalLimits } : {}),
         }));
       },
     });

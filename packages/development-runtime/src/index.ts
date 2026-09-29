@@ -3,6 +3,7 @@ export * from "./canary-preflight";
 export * from "./native-passthrough";
 export * from "./web-model-catalog";
 export * from "./composite-provider-router";
+export * from "./web-epoch-pressure";
 export * from "./app-server-model-list";
 export * from "./browser-profile";
 export * from "./context-cache";
