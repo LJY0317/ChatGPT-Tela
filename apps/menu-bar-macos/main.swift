@@ -39,8 +39,6 @@ private struct Preferences: Codable {
 
 private struct MenuSnapshot {
   let services: [(String, String)]
-  let ingress: IngressStatus?
-  let profiles: [ProfileStatus]
   let approvalAutomation: String?
   let approvalDelay: String?
   let approvalError: Bool
@@ -74,10 +72,6 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private var preferencesURL: URL {
     supportRoot.appendingPathComponent("config/preferences-v1.json", isDirectory: false)
   }
-  private var logsURL: URL {
-    home.appendingPathComponent("Library/Logs/ChatGPT Tela", isDirectory: true)
-  }
-
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -128,17 +122,13 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     return value
   }
 
-  private func request(
-    _ descriptor: ServiceDescriptor,
-    path: String,
-    method: String = "GET"
-  ) async throws -> Data {
+  private func request(_ descriptor: ServiceDescriptor, path: String) async throws -> Data {
     guard let base = URL(string: descriptor.endpoint),
           let url = URL(string: path, relativeTo: base) else {
       throw NSError(domain: "ChatGPTTelaMenuBar", code: 3)
     }
     var request = URLRequest(url: url)
-    request.httpMethod = method
+    request.httpMethod = "GET"
     request.setValue("Bearer \(descriptor.bearerToken)", forHTTPHeaderField: "Authorization")
     request.timeoutInterval = 3
     let (data, response) = try await URLSession.shared.data(for: request)
@@ -216,18 +206,28 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     async let chat = inspectService("chat")
     async let codex = inspectService("codex")
     async let ingress = inspectIngress()
-    var profiles: [ProfileStatus] = []
+    var workProfileReady = false
     if let descriptor = try? readDescriptor("codex") {
       if let data = try? await request(descriptor, path: "v1/codex/profiles"),
          let envelope = try? JSONDecoder().decode(ProfilesEnvelope.self, from: data) {
-        profiles = envelope.profiles.sorted { $0.slot < $1.slot }
+        workProfileReady = envelope.profiles.contains {
+          $0.controlState == "running" && $0.targetSessionState == "ready"
+        }
       }
     }
+    let gatewayState = await gateway
+    let chatState = await chat
+    let codexState = await codex
+    let ingressStatus = await ingress
+    let connectionReady = gatewayState == "Ready" && ingressStatus?.availability == "ready"
+    let chatReady = connectionReady && chatState == "Ready"
+    let codexReady = connectionReady && codexState == "Ready" && workProfileReady
     let preferences = try? readPreferences()
     return MenuSnapshot(
-      services: [("Gateway", await gateway), ("Chat", await chat), ("Codex", await codex)],
-      ingress: await ingress,
-      profiles: profiles,
+      services: [
+        ("Chat", chatReady ? "Available" : "Unavailable"),
+        ("Work / Codex", codexReady ? "Available" : "Unavailable")
+      ],
       approvalAutomation: preferences?.approvalAutomation,
       approvalDelay: preferences?.approvalDelay ?? "instant",
       approvalError: preferences == nil,
@@ -254,58 +254,15 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     menu.addItem(actionItem("Open ChatGPT Tela…", action: #selector(openControlCenter), keyEquivalent: "o"))
     menu.addItem(.separator())
     if loading || snapshot == nil {
-      addDisabled("Refreshing status…", to: menu)
+      addDisabled("Chat: Checking…", to: menu)
+      addDisabled("Work / Codex: Checking…", to: menu)
     } else if let snapshot {
       for (name, state) in snapshot.services {
         addDisabled("\(name): \(state)", to: menu)
       }
-      if let ingress = snapshot.ingress {
-        let title: String
-        if ingress.availability == "ready" {
-          title = "Public connector: Ready"
-        } else if ingress.cause == "tailscale-backend-unreachable" || ingress.cause == "tailscale-stopped" {
-          title = "Public connector: Tailscale is off"
-        } else if ingress.cause == "tailscale-needs-login" {
-          title = "Public connector: Tailscale sign-in required"
-        } else if ingress.cause == "tailscale-offline" {
-          title = "Public connector: Tailscale offline"
-        } else if ingress.cause == "local-mcp-unreachable" {
-          title = "Public connector: Gateway MCP unavailable"
-        } else if ingress.cause == "funnel-route-absent" || ingress.cause == "funnel-route-drift" {
-          title = "Public connector: Funnel route unavailable"
-        } else {
-          title = "Public connector: Unavailable"
-        }
-        addDisabled(title, to: menu)
-      } else if snapshot.services.first(where: { $0.0 == "Gateway" })?.1 == "Stopped" {
-        addDisabled("Public connector: Gateway stopped", to: menu)
-      }
       if snapshot.installedServiceControls {
         menu.addItem(actionItem("Start Background Services", action: #selector(startServices)))
         menu.addItem(actionItem("Stop Background Services", action: #selector(stopServices)))
-      }
-      menu.addItem(.separator())
-      if snapshot.profiles.isEmpty {
-        addDisabled("Codex profiles unavailable", to: menu)
-      } else {
-        for profile in snapshot.profiles {
-          addDisabled("\(profile.targetDisplayName): \(profile.controlState)", to: menu)
-          let actionTitle: String
-          let action: Selector
-          if profile.controlState == "running" {
-            actionTitle = "Stop Profile \(profile.slot)"
-            action = #selector(stopProfile(_:))
-          } else if profile.controlState == "restart-required" {
-            actionTitle = "Restart Profile \(profile.slot)"
-            action = #selector(restartProfile(_:))
-          } else {
-            actionTitle = "Start Profile \(profile.slot)"
-            action = #selector(startProfile(_:))
-          }
-          let item = actionItem(actionTitle, action: action)
-          item.representedObject = profile.slot
-          menu.addItem(item)
-        }
       }
       menu.addItem(.separator())
       let approval = actionItem("Auto-approve recognized one-shot cards", action: #selector(toggleApproval))
@@ -331,17 +288,10 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       delayRoot.submenu = delayMenu
       delayRoot.isEnabled = !snapshot.approvalError
       menu.addItem(delayRoot)
-      if snapshot.approvalAutomation == "recognized_once" && snapshot.profiles.contains(where: { $0.controlState == "running" }) {
-        addDisabled("Restart active profile(s) to apply approval changes", to: menu)
-      }
       if snapshot.approvalError {
         addDisabled("Approval preferences are invalid; fix preferences-v1.json", to: menu)
       }
     }
-    menu.addItem(.separator())
-    menu.addItem(actionItem("Open Logs", action: #selector(openLogs)))
-    menu.addItem(actionItem("Open Diagnostics", action: #selector(openDiagnostics)))
-    menu.addItem(actionItem("Refresh", action: #selector(refresh), keyEquivalent: "r"))
     menu.addItem(.separator())
     menu.addItem(actionItem("Quit Menu Bar", action: #selector(quitMenuBar), keyEquivalent: "q"))
   }
@@ -372,52 +322,6 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     }
   }
 
-  private func profileAction(slot: Int, action: String) async -> Bool {
-    do {
-      guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "ChatGPTTelaMenuBar", code: 7) }
-      _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/\(action)", method: "POST")
-    } catch {
-      NSSound.beep()
-      await refreshNow()
-      return false
-    }
-    await refreshNow()
-    return true
-  }
-
-  private func confirmProfileInterruption(slot: Int, restarting: Bool) -> Bool {
-    let alert = NSAlert()
-    alert.alertStyle = .warning
-    alert.messageText = "\(restarting ? "Restart" : "Stop") Profile \(slot)?"
-    alert.informativeText = restarting
-      ? "The ChatGPT app for this profile will close and reopen. Any running turn will be interrupted."
-      : "The ChatGPT app for this profile will close. Any running turn will be interrupted. You can reopen it with Start Profile \(slot)."
-    alert.addButton(withTitle: restarting ? "Restart Profile" : "Stop Profile")
-    alert.addButton(withTitle: "Cancel")
-    return alert.runModal() == .alertFirstButtonReturn
-  }
-
-  @objc private func startProfile(_ sender: NSMenuItem) {
-    guard let slot = sender.representedObject as? Int else { return }
-    Task { _ = await profileAction(slot: slot, action: "start") }
-  }
-
-  @objc private func stopProfile(_ sender: NSMenuItem) {
-    guard let slot = sender.representedObject as? Int,
-          confirmProfileInterruption(slot: slot, restarting: false) else { return }
-    Task { _ = await profileAction(slot: slot, action: "stop") }
-  }
-
-  @objc private func restartProfile(_ sender: NSMenuItem) {
-    guard let slot = sender.representedObject as? Int,
-          confirmProfileInterruption(slot: slot, restarting: true) else { return }
-    Task {
-      if await profileAction(slot: slot, action: "stop") {
-        _ = await profileAction(slot: slot, action: "start")
-      }
-    }
-  }
-
   @objc private func toggleApproval() {
     do {
       var preferences = try readPreferences()
@@ -441,24 +345,8 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     Task { await refreshNow() }
   }
 
-  @objc private func openLogs() {
-    try? fileManager.createDirectory(at: logsURL, withIntermediateDirectories: true,
-                                     attributes: [.posixPermissions: 0o700])
-    NSWorkspace.shared.open(logsURL)
-  }
-
   @objc private func openControlCenter() {
     controlCenter.show()
-  }
-
-  @objc private func openDiagnostics() {
-    try? fileManager.createDirectory(at: logsURL, withIntermediateDirectories: true,
-                                     attributes: [.posixPermissions: 0o700])
-    NSWorkspace.shared.open(logsURL)
-  }
-
-  @objc private func refresh() {
-    Task { await refreshNow() }
   }
 
   private func refreshNow() async {

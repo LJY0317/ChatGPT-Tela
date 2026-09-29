@@ -695,10 +695,11 @@ bun run menu-bar:start   # build and launch it detached for ordinary development
 bun run menu-bar
 ```
 
-It refreshes at launch, when opened, or explicitly refreshed (no idle polling), shows Gateway/Chat/Codex status,
-starts/stops/restarts Tela-owned profiles through the private local service contract, toggles one-shot approval
-automation, and opens Tela logs/diagnostics. The hidden Electron Codex/Web bridge calls `app.dock.hide()` on
-macOS so it does not create a second Dock-centric launcher UX. Signed macOS payloads include the same menu-bar
+It refreshes at launch and when opened (no idle polling). The menu shows whether Chat and Work/Codex are
+available through the public connector, opens the Control Center, and controls one-shot approval automation.
+The Control Center provides profile start/stop/restart controls with confirmation before interruption, plus
+refresh, logs, and detailed service/connector diagnostics. The hidden Electron Codex/Web bridge calls
+`app.dock.hide()` on macOS so it does not create a second Dock-centric launcher UX. Signed macOS payloads include the same menu-bar
 binary and register `com.openai.chatgpt-tela.menu-bar` as a **product-owned** Aqua LaunchAgent with exact
 manifest/marker ownership. Install uses `RunAtLoad=true` and explicitly kickstarts that LaunchAgent after
 registration, so the menu-bar surface appears immediately after a successful install and again on normal

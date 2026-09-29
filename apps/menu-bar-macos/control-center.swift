@@ -237,6 +237,13 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       if profiles.isEmpty { stack.addArrangedSubview(label("No profiles reported by Tela Codex.")) }
       for profile in profiles {
         stack.addArrangedSubview(label("Profile \(profile.slot): \(profile.targetDisplayName)\nTarget: \(profile.targetState) · Session: \(profile.targetSessionState) · Control: \(profile.controlState)"))
+        let action = profile.controlState == "running" ? "stop" :
+          (profile.controlState == "restart-required" ? "restart" : "start")
+        let title = action == "stop" ? "Stop Profile \(profile.slot)" :
+          (action == "restart" ? "Restart Profile \(profile.slot)" : "Start Profile \(profile.slot)")
+        let button = NSButton(title: title, target: self, action: #selector(changeProfile(_:)))
+        button.identifier = NSUserInterfaceItemIdentifier("profile:\(profile.slot):\(action)")
+        stack.addArrangedSubview(button)
       }
       addRefreshButton()
     case .bridge:
@@ -270,6 +277,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       }
       let logs = NSButton(title: "Open Logs", target: self, action: #selector(openLogs))
       stack.addArrangedSubview(logs)
+      addRefreshButton()
     }
   }
 
@@ -283,6 +291,40 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   @objc private func refreshPage() { Task { await refreshCurrentPage() } }
   @objc private func refreshBridgePreview() { Task { await loadBridgePreview() } }
+
+  @objc private func changeProfile(_ sender: NSButton) {
+    guard let identifier = sender.identifier?.rawValue else { return }
+    let parts = identifier.split(separator: ":")
+    guard parts.count == 3, parts[0] == "profile",
+          let slot = Int(parts[1]), ["start", "stop", "restart"].contains(String(parts[2])) else { return }
+    let action = String(parts[2])
+    if action != "start" {
+      let alert = NSAlert()
+      alert.alertStyle = .warning
+      alert.messageText = "\(action == "restart" ? "Restart" : "Stop") Profile \(slot)?"
+      alert.informativeText = action == "restart"
+        ? "The ChatGPT app for this profile will close and reopen. Any running turn will be interrupted."
+        : "The ChatGPT app for this profile will close. Any running turn will be interrupted. You can reopen it from Profiles."
+      alert.addButton(withTitle: action == "restart" ? "Restart Profile" : "Stop Profile")
+      alert.addButton(withTitle: "Cancel")
+      guard alert.runModal() == .alertFirstButtonReturn else { return }
+    }
+    sender.isEnabled = false
+    Task {
+      do {
+        guard let descriptor = try readDescriptor("codex") else {
+          throw NSError(domain: "ChatGPTTelaControlCenter", code: 7)
+        }
+        if action == "restart" {
+          _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/stop", method: "POST")
+        }
+        _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/\(action == "restart" ? "start" : action)", method: "POST")
+      } catch {
+        NSSound.beep()
+      }
+      await refreshCurrentPage()
+    }
+  }
 
   private func descriptorURL(_ service: String) -> URL {
     runtimeServicesRoot.appendingPathComponent("\(service)/descriptor.json", isDirectory: false)
@@ -302,12 +344,12 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     return value
   }
 
-  private func request(_ descriptor: ControlCenterServiceDescriptor, path: String) async throws -> Data {
+  private func request(_ descriptor: ControlCenterServiceDescriptor, path: String, method: String = "GET") async throws -> Data {
     guard let base = URL(string: descriptor.endpoint), let url = URL(string: path, relativeTo: base) else {
       throw NSError(domain: "ChatGPTTelaControlCenter", code: 3)
     }
     var request = URLRequest(url: url)
-    request.httpMethod = "GET"
+    request.httpMethod = method
     request.setValue("Bearer \(descriptor.bearerToken)", forHTTPHeaderField: "Authorization")
     request.timeoutInterval = 4
     let (data, response) = try await URLSession.shared.data(for: request)
