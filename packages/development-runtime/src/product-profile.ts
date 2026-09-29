@@ -249,7 +249,6 @@ export async function startProductProfileRuntime(
     runtime = await startElectronDevelopmentRuntime({
       profileId: config.browserProfile.profileId,
       connectorName: publicIdentity.connectorName,
-      connectorRoutingMode: config.publicMcpAbi === "stable" ? "automatic-fallback" : "explicit",
       approvalAutomationMode: config.approvalAutomationMode,
       currentTurnSource: source,
       turns,

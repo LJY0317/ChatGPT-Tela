@@ -493,11 +493,12 @@ connect the exact **ChatGPT Tela** App, while development canaries use **ChatGPT
 Tool-capable ChatGPT turns currently prefer one explicit **ChatGPT Tela** connector display identity. The
 provider never guesses from catalog order or selects an arbitrary visible integration: it first attempts an
 exact connector selection and proves the selected pill before attaching the physical prompt. Stable product
-profiles may fall back to ChatGPT's own connected-app automatic routing only after exact catalog discovery is
-proved unavailable and the dedicated Tela surface is reset to one fresh empty composer. Development/canary
-profiles remain explicit. This fallback is also the migration seam for the long-term design where a stable
-binding id is stored independently from a user-chosen display name; display-name freedom is not yet treated as
-complete until that binding is empirically proven across supported surfaces.
+profiles and development canaries both fail closed when the configured connector cannot be selected. A live
+stable-product proof showed that submitting an unbound prompt and relying on ChatGPT's automatic connected-app
+routing can complete a Web answer without invoking the required exact-turn Native tool, so that behavior is
+not accepted as connector proof. The long-term design may bind by a stable technical identity independently
+from a user-chosen display name, but display-name freedom remains incomplete until that binding is empirically
+proven across supported surfaces.
 
 Connector activation separates semantic targeting from physical input: page DOM code proves the exact
 catalog row and returns only its viewport coordinates, the owned browser host emits one real primary-button
@@ -507,8 +508,8 @@ real app/tool activation path.
 
 The current provider understands both historical `@mention` selection and the newer `+` integration picker.
 Both paths are bounded and structural. If a catalog path changes or becomes ambiguous, Tela records only
-privacy-safe counts/stages, clears or resets only its dedicated probe surface, and fails closed or defers to
-automatic connected-app routing according to the configured product mode; it never clicks an arbitrary card.
+privacy-safe counts/stages, clears only its dedicated probe surface, and fails closed; it never clicks an
+arbitrary card or treats an unbound submission as equivalent to selecting **ChatGPT Tela**.
 
 Approval automation is a separate opt-in policy boundary. Default mode is `off`. The only automated mode is
 `recognized_once`: one structurally recognized tool-approval card with one deny choice and one one-shot allow

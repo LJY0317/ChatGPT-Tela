@@ -50,8 +50,8 @@ export interface ChatGptSurfaceSnapshot {
 
 /**
  * The ChatGPT integration catalog rendered successfully, but neither the configured direct App nor
- * packaged Plugin was present. Callers may refresh by reacquiring one fresh browser surface once;
- * repeated refreshes must fail closed instead of looping.
+ * packaged Plugin was present. Tool-capable callers fail closed rather than submitting an unbound
+ * prompt and assuming ChatGPT will route it to the intended connector automatically.
  */
 export class ChatGptConnectorCatalogUnavailableError extends Error {
   constructor() {

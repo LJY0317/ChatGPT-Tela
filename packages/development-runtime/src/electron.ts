@@ -88,7 +88,6 @@ export interface ElectronDevelopmentRuntimeOptions {
     readonly budgetTokens?: number;
   };
   readonly provider?: WebConversationProvider;
-  readonly connectorRoutingMode?: "explicit" | "automatic-fallback";
   readonly approvalAutomationMode?: import("@chatgpt-tela/chatgpt").ChatGptApprovalAutomationMode;
   readonly webTurnTimeoutMs?: number;
   readonly accountIdentityObserver?: ChatGptAccountIdentityObserver;
@@ -146,7 +145,6 @@ export async function startElectronDevelopmentRuntime(
   });
   const provider = input.provider ?? new ChatGptSemanticProvider({
     ...(input.connectorName ? { connectorName: input.connectorName } : {}),
-    ...(input.connectorRoutingMode ? { connectorRoutingMode: input.connectorRoutingMode } : {}),
     ...(input.approvalAutomationMode ? { approvalAutomationMode: input.approvalAutomationMode } : {}),
   });
   const checkpointCache = input.context?.checkpointCache;
