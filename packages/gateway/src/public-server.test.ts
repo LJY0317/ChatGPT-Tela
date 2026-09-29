@@ -16,6 +16,10 @@ import {
 } from "@chatgpt-tela/mcp";
 import type { ChatCapabilityContract } from "@chatgpt-tela/service-protocol";
 import { CHATGPT_TELA_PUBLIC_INSTRUCTIONS, createPublicMcpServer } from "./public-server";
+import {
+  CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
+  CHATGPT_TELA_REVIEW_RESOURCE_URI,
+} from "./review-widget";
 
 function text(result: Awaited<ReturnType<Client["callTool"]>>): string {
   const content = result.content as unknown;
@@ -46,6 +50,18 @@ describe("ChatGPT Tela frozen ABI", () => {
       async inventory(query = "") { return query ? catalog.filter(item => item.capability.includes(query)) : catalog; },
       async call(capability: string, arguments_: Readonly<Record<string, unknown>>) {
         chatCalls.push({ capability, arguments_ });
+        if (capability === "show_changes") {
+          return {
+            summary: { files: 1, additions: 1, removals: 0, trackedFiles: 1, untrackedFiles: 0, complete: true },
+            reviewDelta: {
+              available: true,
+              since: "last_shown",
+              patch: "diff --git a/a.txt b/a.txt\n+hello\n",
+              files: [{ path: "a.txt", additions: 1, removals: 0, binary: false }],
+              summary: { files: 1, additions: 1, removals: 0, trackedFiles: 1, untrackedFiles: 0, complete: true },
+            },
+          };
+        }
         return { capability, ok: true };
       },
     };
@@ -96,7 +112,36 @@ describe("ChatGPT Tela frozen ABI", () => {
         arguments: { capability: "future_chat_capability_2099", arguments: { future: true } },
       });
       expect(JSON.parse(text(chatCall))).toEqual({ capability: "future_chat_capability_2099", ok: true });
+      expect(chatCall._meta).toBeUndefined();
       expect(chatCalls).toEqual([{ capability: "future_chat_capability_2099", arguments_: { future: true } }]);
+
+      const reviewCall = await client.callTool({
+        name: CHATGPT_TELA_CHAT_CAPABILITY_CALL,
+        arguments: { capability: "show_changes", arguments: { workspace_id: "chatws_fixture" } },
+      });
+      expect(JSON.parse(text(reviewCall))).toMatchObject({
+        reviewDelta: { available: true, since: "last_shown" },
+      });
+      expect(reviewCall._meta).toEqual({ ui: { resourceUri: CHATGPT_TELA_REVIEW_RESOURCE_URI } });
+      expect(chatCalls.at(-1)).toEqual({
+        capability: "show_changes",
+        arguments_: { workspace_id: "chatws_fixture" },
+      });
+
+      const resources = await client.listResources();
+      expect(resources.resources).toContainEqual(expect.objectContaining({
+        uri: CHATGPT_TELA_REVIEW_RESOURCE_URI,
+        mimeType: CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
+      }));
+      const reviewResource = await client.readResource({ uri: CHATGPT_TELA_REVIEW_RESOURCE_URI });
+      expect(reviewResource.contents).toHaveLength(1);
+      const reviewContent = reviewResource.contents[0] as { mimeType?: string; text?: string; _meta?: unknown };
+      expect(reviewContent.mimeType).toBe(CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE);
+      expect(reviewContent.text).toContain("Tela Chat review");
+      expect(reviewContent.text).toContain("ui/notifications/tool-result");
+      expect(reviewContent.text).toContain("textContent");
+      expect(reviewContent.text).not.toContain("innerHTML");
+      expect(reviewContent._meta).toEqual({ ui: { prefersBorder: true } });
 
       const codexInventory = await client.callTool({
         name: CHATGPT_TELA_CODEX_TOOL_INVENTORY,

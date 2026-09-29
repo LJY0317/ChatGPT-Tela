@@ -5,6 +5,7 @@ export * from "./dynamic-chat-backend";
 export * from "./gateway-service";
 export * from "./public-gateway";
 export * from "./public-server";
+export * from "./review-widget";
 export * from "./service-client";
 export * from "./unified-server";
 export * from "./unified-gateway";

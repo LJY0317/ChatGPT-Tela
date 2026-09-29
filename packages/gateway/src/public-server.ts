@@ -11,6 +11,11 @@ import {
   type TurnBridgeBackend,
 } from "@chatgpt-tela/mcp";
 import type { ChatCapabilityContract } from "@chatgpt-tela/service-protocol";
+import {
+  CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
+  CHATGPT_TELA_REVIEW_RESOURCE_URI,
+  CHATGPT_TELA_REVIEW_WIDGET_HTML,
+} from "./review-widget";
 
 export interface PublicChatBackend {
   inventory(query?: string): readonly ChatCapabilityContract[] | Promise<readonly ChatCapabilityContract[]>;
@@ -53,8 +58,22 @@ export function createPublicMcpServer(input: {
     handler: (arguments_: Readonly<Record<string, unknown>>) => Promise<{
       readonly content: readonly { readonly type: "text"; readonly text: string }[];
       readonly isError?: boolean;
+      readonly _meta?: Readonly<Record<string, unknown>>;
     }>,
   ) => void;
+
+  server.registerResource("tela-chat-review", CHATGPT_TELA_REVIEW_RESOURCE_URI, {
+    title: "Tela Chat review",
+    description: "Read-only review card for a Tela Chat show_changes result.",
+    mimeType: CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
+  }, async () => ({
+    contents: [{
+      uri: CHATGPT_TELA_REVIEW_RESOURCE_URI,
+      mimeType: CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
+      text: CHATGPT_TELA_REVIEW_WIDGET_HTML,
+      _meta: { ui: { prefersBorder: true } },
+    }],
+  }));
 
   registerTool(CHATGPT_TELA_CHAT_CAPABILITY_INVENTORY, {
     title: "Tela Chat capability inventory",
@@ -81,7 +100,12 @@ export function createPublicMcpServer(input: {
       : {};
     try {
       const result = await input.chat.call(capability, arguments_);
-      return { content: [{ type: "text", text: jsonText(result) }] };
+      return {
+        content: [{ type: "text", text: jsonText(result) }],
+        ...(capability === "show_changes"
+          ? { _meta: { ui: { resourceUri: CHATGPT_TELA_REVIEW_RESOURCE_URI } } }
+          : {}),
+      };
     } catch (error) {
       return {
         content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],

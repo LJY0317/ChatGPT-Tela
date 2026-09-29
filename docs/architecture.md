@@ -899,6 +899,19 @@ without advancing `last_shown`, or can explicitly mark that comparison reviewed.
 are protected from ordinary count-based review pruning while still remaining subject to the global 30-day
 retention horizon. Richer host review UI remains separate product work.
 
+The public frozen Chat capability call can attach UI **per result** without adding a fifth model-visible MCP
+tool. `show_changes` responses carry `_meta.ui.resourceUri` pointing to a registered, self-contained MCP Apps
+review resource; other dynamic Chat capabilities do not. The widget renders only the already-returned review
+envelope, performs no network requests, and inserts paths/patches with `textContent`. The four public tool names,
+descriptions, and input schemas therefore keep the same frozen fingerprint. This is covered by MCP client
+resource/result tests, while a real ChatGPT rendering canary remains required before the UI is called live-proven.
+
+The same selective-result mechanism removes the public-ABI blocker for future native file import: a dedicated
+import widget can ask ChatGPT's file-library APIs for an authorized file id and temporary download URL, then call
+the existing generic Chat capability. It does **not** remove the filesystem safety requirement. Tela will not
+publish arbitrary binary bytes into a workspace until the destination operation is race-safe on macOS, Linux,
+and Windows and refuses overwrite/symlink/reparse-point ambiguity.
+
 Review checkpoints intentionally do **not** create permanent refs or deliberate review objects in the user's
 Git object database. A checkpoint stores the tracked binary-capable diff plus bounded snapshots of untracked
 regular files and symlink targets. Intermediate symlink escapes are re-proven against the workspace root
