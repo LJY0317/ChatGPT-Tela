@@ -769,8 +769,9 @@ contract before normal Profile 2 sessions expose those rows. The browser selecti
 is live-proven on both Profile 1 and Profile 2; the latter currently exposes a different live family catalog,
 which is why Tela treats account/browser discovery as authority rather than assuming one global model list.
 A source-build Profile 2 canary also completed a Native passthrough turn through the runtime-header
-route. The Temporary Chat send guard has automated coverage; live confirmation that a new Web turn
-does not appear in ChatGPT history is still pending.
+route. A separate Profile 2 Web turn completed with the Temporary Chat send guard active, and its
+disposable Native test thread was deleted. Direct inspection of the ChatGPT history list after that
+turn is still pending.
 
 The current status icon uses an SF Symbol as a placeholder. Its image and future per-menu-item icons are UI
 assets, not protocol/authority identifiers, so they can be replaced later with custom artwork without changing
