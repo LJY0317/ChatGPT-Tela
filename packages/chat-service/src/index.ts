@@ -17,6 +17,7 @@ export * from "./patch";
 export * from "./paths";
 export * from "./processes";
 export * from "./reviews";
+export * from "./review-diff";
 export * from "./skills";
 export * from "./tools";
 export * from "./workspaces";

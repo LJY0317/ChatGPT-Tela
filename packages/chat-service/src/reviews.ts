@@ -30,6 +30,7 @@ export interface ChatReviewUntrackedSnapshot {
   readonly size: number;
   readonly sha256: string;
   readonly encoding: "utf8" | "base64" | "symlink";
+  readonly mode: "100644" | "100755" | "120000";
   readonly content: string;
 }
 
@@ -63,6 +64,18 @@ export interface ChatReviewSummary {
   readonly changes: ChatReviewChangeSummary;
 }
 
+interface ChatReviewBaselineRecord {
+  readonly workspaceId: string;
+  readonly openReviewRef: string;
+  readonly reviewRef: string;
+  readonly updatedAt: string;
+}
+
+interface ChatReviewBaselineStore {
+  readonly version: 1;
+  readonly baselines: readonly ChatReviewBaselineRecord[];
+}
+
 function inside(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
@@ -86,9 +99,13 @@ function parseUntracked(value: unknown, index: number): ChatReviewUntrackedSnaps
   const item = value as Record<string, unknown>;
   const kind = item.kind;
   const encoding = item.encoding;
+  const mode = item.mode;
   if (kind !== "file" && kind !== "symlink") throw new Error(`review untracked[${index}].kind is invalid`);
   if (!(encoding === "utf8" || encoding === "base64" || encoding === "symlink")) {
     throw new Error(`review untracked[${index}].encoding is invalid`);
+  }
+  if (!(mode === undefined || mode === "100644" || mode === "100755" || mode === "120000")) {
+    throw new Error(`review untracked[${index}].mode is invalid`);
   }
   if (!Number.isSafeInteger(item.size) || (item.size as number) < 0) throw new Error("review untracked size is invalid");
   const sha256 = text(item.sha256, `review untracked[${index}].sha256`);
@@ -99,6 +116,7 @@ function parseUntracked(value: unknown, index: number): ChatReviewUntrackedSnaps
     size: item.size as number,
     sha256,
     encoding,
+    mode: mode ?? (kind === "symlink" ? "120000" : "100644"),
     content: typeof item.content === "string" ? item.content : (() => { throw new Error("review untracked content is invalid"); })(),
   });
 }
@@ -144,6 +162,7 @@ function snapshotUntracked(root: string, paths: readonly string[]): readonly Cha
         size: bytes.length,
         sha256: createHash("sha256").update(bytes).digest("hex"),
         encoding: "symlink",
+        mode: "120000",
         content: target,
       }));
       continue;
@@ -171,6 +190,7 @@ function snapshotUntracked(root: string, paths: readonly string[]): readonly Cha
       size: bytes.length,
       sha256: createHash("sha256").update(bytes).digest("hex"),
       encoding,
+      mode: (stat.mode & 0o111) !== 0 ? "100755" : "100644",
       content,
     }));
   }
@@ -187,22 +207,25 @@ function trackedPatchCounts(patch: string): {
   readonly files: number;
   readonly additions: number;
   readonly removals: number;
+  readonly complete: boolean;
 } {
   let files = 0;
   let additions = 0;
   let removals = 0;
+  let complete = true;
   for (const line of patch.split(/\r?\n/)) {
     if (line.startsWith("diff --git ")) files += 1;
     else if (line.startsWith("+") && !line.startsWith("+++")) additions += 1;
     else if (line.startsWith("-") && !line.startsWith("---")) removals += 1;
+    else if (line === "GIT binary patch" || line.startsWith("Binary files ")) complete = false;
   }
-  return Object.freeze({ files, additions, removals });
+  return Object.freeze({ files, additions, removals, complete });
 }
 
 export function summarizeChatReview(record: Pick<ChatReviewRecord, "patch" | "untracked">): ChatReviewChangeSummary {
   const tracked = trackedPatchCounts(record.patch);
   let additions = tracked.additions;
-  let complete = true;
+  let complete = tracked.complete;
   for (const item of record.untracked) {
     if (item.kind === "symlink") additions += 1;
     else if (item.encoding === "utf8") additions += textLineCount(item.content);
@@ -226,7 +249,7 @@ export function summarizeLiveChatChanges(patch: string, untrackedFiles: number):
     removals: tracked.removals,
     trackedFiles: tracked.files,
     untrackedFiles,
-    complete: untrackedFiles === 0,
+    complete: tracked.complete && untrackedFiles === 0,
   });
 }
 
@@ -242,11 +265,36 @@ function summary(record: ChatReviewRecord): ChatReviewSummary {
   });
 }
 
+function parseBaselineStore(value: unknown): ChatReviewBaselineStore {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("review baseline store must be an object");
+  const root = value as Record<string, unknown>;
+  if (root.version !== 1 || !Array.isArray(root.baselines)) throw new Error("review baseline store version is invalid");
+  const seen = new Set<string>();
+  const baselines = root.baselines.map((entry, index): ChatReviewBaselineRecord => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`review baseline[${index}] is invalid`);
+    const item = entry as Record<string, unknown>;
+    const workspaceId = text(item.workspaceId, `review baseline[${index}].workspaceId`);
+    if (seen.has(workspaceId)) throw new Error(`duplicate review baseline workspace id: ${workspaceId}`);
+    seen.add(workspaceId);
+    const updatedAt = text(item.updatedAt, `review baseline[${index}].updatedAt`);
+    if (!Number.isFinite(Date.parse(updatedAt))) throw new Error(`review baseline[${index}].updatedAt is invalid`);
+    return Object.freeze({
+      workspaceId,
+      openReviewRef: item.openReviewRef === undefined ? reviewRef(item.reviewRef) : reviewRef(item.openReviewRef),
+      reviewRef: reviewRef(item.reviewRef),
+      updatedAt,
+    });
+  });
+  return Object.freeze({ version: 1 as const, baselines: Object.freeze(baselines) });
+}
+
 export class ChatReviewCheckpointStore {
   readonly #root: string;
+  readonly #baselinePath: string;
 
   constructor(input: { readonly root: string }) {
     this.#root = resolve(input.root);
+    this.#baselinePath = join(this.#root, "baselines-v1.json");
     mkdirSync(this.#root, { recursive: true, mode: 0o700 });
   }
 
@@ -309,6 +357,55 @@ export class ChatReviewCheckpointStore {
       .map(summary));
   }
 
+  baselineRef(workspaceId: string): string | undefined {
+    const parsedWorkspaceId = text(workspaceId, "review baseline workspace id");
+    return this.#readBaselines().baselines.find(item => item.workspaceId === parsedWorkspaceId)?.reviewRef;
+  }
+
+  openBaselineRef(workspaceId: string): string | undefined {
+    const parsedWorkspaceId = text(workspaceId, "review baseline workspace id");
+    return this.#readBaselines().baselines.find(item => item.workspaceId === parsedWorkspaceId)?.openReviewRef;
+  }
+
+  setBaseline(workspaceId: string, ref: string): void {
+    const parsedWorkspaceId = text(workspaceId, "review baseline workspace id");
+    const parsedRef = reviewRef(ref);
+    this.read(parsedWorkspaceId, parsedRef);
+    const store = this.#readBaselines();
+    const existing = store.baselines.find(item => item.workspaceId === parsedWorkspaceId);
+    const current = store.baselines.filter(item => item.workspaceId !== parsedWorkspaceId);
+    current.push(Object.freeze({
+      workspaceId: parsedWorkspaceId,
+      openReviewRef: existing?.openReviewRef ?? parsedRef,
+      reviewRef: parsedRef,
+      updatedAt: new Date().toISOString(),
+    }));
+    this.#writeBaselines(Object.freeze({ version: 1 as const, baselines: Object.freeze(current) }));
+  }
+
+  clearBaseline(workspaceId: string): void {
+    const parsedWorkspaceId = text(workspaceId, "review baseline workspace id");
+    const store = this.#readBaselines();
+    const next = store.baselines.filter(item => item.workspaceId !== parsedWorkspaceId);
+    if (next.length === store.baselines.length) return;
+    this.#writeBaselines(Object.freeze({ version: 1 as const, baselines: Object.freeze(next) }));
+  }
+
+  #readBaselines(): ChatReviewBaselineStore {
+    if (!existsSync(this.#baselinePath)) return Object.freeze({ version: 1 as const, baselines: Object.freeze([]) });
+    const stat = lstatSync(this.#baselinePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("review baseline store is unsafe or replaced");
+    return parseBaselineStore(JSON.parse(readFileSync(this.#baselinePath, "utf8")) as unknown);
+  }
+
+  #writeBaselines(store: ChatReviewBaselineStore): void {
+    const serialized = `${JSON.stringify(store, null, 2)}\n`;
+    const temporary = `${this.#baselinePath}.tmp-${process.pid}-${randomUUID()}`;
+    writeFileSync(temporary, serialized, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    try { chmodSync(temporary, 0o600); } catch { /* Windows ACLs own permissions there. */ }
+    renameSync(temporary, this.#baselinePath);
+  }
+
   #records(): ChatReviewRecord[] {
     const records: ChatReviewRecord[] = [];
     for (const entry of readdirSync(this.#root)) {
@@ -329,6 +426,12 @@ export class ChatReviewCheckpointStore {
     const now = Date.now();
     const records = this.#records().sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
     const remove = new Set<string>();
+    let protectedRefs = new Set<string>();
+    try {
+      protectedRefs = new Set(this.#readBaselines().baselines.flatMap(item => [item.openReviewRef, item.reviewRef]));
+    } catch {
+      // Corrupt baseline state cannot become retention authority.
+    }
     for (const record of records) {
       if (now - Date.parse(record.createdAt) > REVIEW_RETENTION_MS) remove.add(record.reviewRef);
     }
@@ -339,10 +442,18 @@ export class ChatReviewCheckpointStore {
       byWorkspace.set(record.workspaceId, list);
     }
     for (const list of byWorkspace.values()) {
-      while (list.length > MAX_REVIEWS_PER_WORKSPACE) remove.add(list.shift()!.reviewRef);
+      while (list.filter(record => !remove.has(record.reviewRef)).length > MAX_REVIEWS_PER_WORKSPACE) {
+        const candidate = list.find(record => !remove.has(record.reviewRef) && !protectedRefs.has(record.reviewRef));
+        if (!candidate) break;
+        remove.add(candidate.reviewRef);
+      }
     }
     const remaining = records.filter(record => !remove.has(record.reviewRef));
-    while (remaining.length > MAX_REVIEWS_TOTAL) remove.add(remaining.shift()!.reviewRef);
+    while (remaining.filter(record => !remove.has(record.reviewRef)).length > MAX_REVIEWS_TOTAL) {
+      const candidate = remaining.find(record => !remove.has(record.reviewRef) && !protectedRefs.has(record.reviewRef));
+      if (!candidate) break;
+      remove.add(candidate.reviewRef);
+    }
     for (const ref of remove) rmSync(this.#path(ref), { force: true });
 
     // Bound ancient corrupt/unknown files too, without touching recent ambiguous state.

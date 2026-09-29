@@ -138,6 +138,18 @@ function optionalInteger(value: unknown, field: string): number | undefined {
   return value as number;
 }
 
+function optionalBoolean(value: unknown, field: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
+  return value;
+}
+
+function reviewSince(value: unknown): "last_shown" | "workspace_open" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "last_shown" || value === "workspace_open") return value;
+  throw new Error("since must be last_shown or workspace_open");
+}
+
 function agentWriteMode(value: unknown): ChatAgentWriteMode | undefined {
   if (value === undefined) return undefined;
   if (value === "read_only" || value === "workspace_write") return value;
@@ -174,7 +186,7 @@ export function createChatToolRuntime(input: {
   const processes = new ChatProcessManager({ workspaces, storePath: join(input.stateRoot, "process-operations-v1.json") });
   const reviews = new ChatReviewCheckpointStore({ root: join(input.stateRoot, "reviews") });
   const incidents = new ChatIncidentStore({ root: join(input.stateRoot, "incidents") });
-  const changes = new ChatChangeReviewer(workspaces, reviews);
+  const changes = new ChatChangeReviewer(workspaces, reviews, join(input.stateRoot, "review-comparisons"));
   const agentWorkspaceTools: ChatAgentWorkspaceTools = Object.freeze({
     workspaceInstructions: (workspaceId: string) => {
       const workspace = workspaces.get(workspaceId);
@@ -238,7 +250,8 @@ export function createChatToolRuntime(input: {
         switch (selected) {
         case "open_workspace": {
           const workspace = workspaces.open(text(args.path, "workspace path"));
-          return Object.freeze({ ...workspace, ...discoverWorkspaceInstructions(workspace.root) });
+          const reviewBaseline = await changes.initializeWorkspace(workspace.id);
+          return Object.freeze({ ...workspace, ...discoverWorkspaceInstructions(workspace.root), reviewBaseline });
         }
         case "list_directory":
           return exploration.listDirectory({
@@ -296,8 +309,14 @@ export function createChatToolRuntime(input: {
             ...(optionalInteger(args.yield_time_ms, "yield_time_ms") === undefined ? {} : { yieldTimeMs: optionalInteger(args.yield_time_ms, "yield_time_ms")! }) });
         case "process_status":
           return processes.status(text(args.workspace_id, "workspace_id"), text(args.operation_id, "operation_id"));
-        case "show_changes":
-          return changes.show(text(args.workspace_id, "workspace_id"));
+        case "show_changes": {
+          const since = reviewSince(args.since);
+          const markReviewed = optionalBoolean(args.mark_reviewed, "mark_reviewed");
+          return changes.show(text(args.workspace_id, "workspace_id"), {
+            ...(since === undefined ? {} : { since }),
+            ...(markReviewed === undefined ? {} : { markReviewed }),
+          });
+        }
         case "show_review":
           return changes.showReview(text(args.workspace_id, "workspace_id"), text(args.review_ref, "review_ref"));
         case "list_reviews":

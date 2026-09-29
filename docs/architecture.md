@@ -889,8 +889,15 @@ or a service restart cannot silently change what an old review reference means.
 Current and historical review results also expose a compact file/addition/removal summary. When a historical
 checkpoint has captured text/symlink untracked content, that summary includes it; binary untracked content or
 a live checkpoint-capture failure marks the summary incomplete rather than inventing line counts. Turn-oriented
-`last_shown` / workspace-open baselines remain separate work because Tela does not create permanent review refs
-or deliberate review objects in the user's Git object database merely to emulate the reference workflow.
+`last_shown` review is implemented through a private persisted checkpoint pointer. To compare two self-contained
+checkpoints, Tela reconstructs each snapshot into a short-lived product-owned Git object/index directory that
+uses the user's repository objects only as read-only alternates, diffs the two private commits, then deletes the
+temporary object store. The user's Git object database and refs remain byte/object-count neutral. A successful
+comparison advances the private baseline; an unavailable comparison preserves the old baseline instead of
+silently skipping unreviewed work. `show_changes` can also compare against the pinned workspace-open checkpoint
+without advancing `last_shown`, or can explicitly mark that comparison reviewed. Open and last-shown checkpoints
+are protected from ordinary count-based review pruning while still remaining subject to the global 30-day
+retention horizon. Richer host review UI remains separate product work.
 
 Review checkpoints intentionally do **not** create permanent refs or deliberate review objects in the user's
 Git object database. A checkpoint stores the tracked binary-capable diff plus bounded snapshots of untracked

@@ -25,13 +25,14 @@ const object = (
 const workspaceId = string(512);
 const path = string(16_384);
 const boolean = Object.freeze({ type: "boolean" });
+const reviewSince = Object.freeze({ type: "string", enum: Object.freeze(["last_shown", "workspace_open"]) });
 const operationId = Object.freeze({ type: "string", format: "uuid" });
 const agentId = string(512);
 
 export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] = Object.freeze([
   {
     capability: "open_workspace",
-    description: "Open or reuse one locally approved workspace root. Reuse the returned workspace_id for continued work. Follow returned root instructions; before working under a subtree listed in availableInstructionFiles, read its applicable instruction file. If instructionScanComplete is false, do not assume undiscovered subtrees have no instructions. The workspace remains user-owned.",
+    description: "Open or reuse one locally approved workspace root. Reuse the returned workspace_id for continued work. Follow returned root instructions; before working under a subtree listed in availableInstructionFiles, read its applicable instruction file. If instructionScanComplete is false, do not assume undiscovered subtrees have no instructions. A Git workspace also establishes or reuses a private last-shown review baseline when safe. The workspace remains user-owned.",
     inputSchema: object({ path }, ["path"]),
   },
   {
@@ -117,8 +118,8 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "show_changes",
-    description: "Show current Git-backed changes with a compact file/addition/removal summary and create a bounded historical review checkpoint when possible. Use after the final related workspace edit when review is useful.",
-    inputSchema: object({ workspace_id: workspaceId }, ["workspace_id"]),
+    description: "Show current Git-backed changes with a compact summary and create a bounded historical checkpoint. reviewDelta compares against the private last_shown baseline by default or the original workspace_open baseline when requested. A proven comparison advances last_shown unless mark_reviewed=false. Use once after the final related workspace edit when review is useful.",
+    inputSchema: object({ workspace_id: workspaceId, since: reviewSince, mark_reviewed: boolean }, ["workspace_id"]),
   },
   {
     capability: "show_review",

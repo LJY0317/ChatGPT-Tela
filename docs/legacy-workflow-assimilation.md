@@ -43,7 +43,7 @@ The initial Tela Chat parity backlog is behavioral, not source-copy based:
 | Bounded file read/read-many | **absorbed** |
 | Transactional patch with containment checks | **absorbed** |
 | Resumable/idempotent process operations | **absorbed** |
-| Git-backed current + historical review | **partial** — self-contained historical checkpoints and compact file/addition/removal summaries are absorbed; turn-oriented `last_shown`/workspace-open baselines and richer host review UI remain |
+| Git-backed current + historical review | **absorbed** — self-contained historical checkpoints, compact summaries, persistent private `last_shown` deltas, and explicit `workspace_open` comparison are implemented without writing review refs/objects into the user repository; richer host review UI is tracked separately |
 | Ownership-safe isolated Git worktrees | **absorbed** |
 | Privacy-safe incident records | **absorbed** |
 | Durable bounded delegated agents | **partial** — provider-neutral lifecycle exists; provider breadth and safe process authority remain |
