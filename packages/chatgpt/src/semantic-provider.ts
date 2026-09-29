@@ -727,6 +727,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       await this.#settleConnectorDraftPersistence(driver, composer.key, signal);
       return true;
     }
+    // A matching Tela mention or connector pill does not establish ownership of an attachment
+    // beside it. Leave the entire draft intact until the attachment itself is proven to be ours.
+    if (composerAttachmentNames(composer).length > 0) return false;
     const connectorName = this.#connectorName;
     if (!connectorName) return false;
     const expectedConnectorFingerprint = fingerprint(connectorName);

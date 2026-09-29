@@ -779,6 +779,38 @@ describe("ChatGPT semantic provider", () => {
     }
   });
 
+  test("connector artifact recovery preserves a Tela mention beside an unknown attachment", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const mention = "@ChatGPT Tela ";
+    driver.current = {
+      ...driver.current,
+      composers: driver.current.composers.map(composer => ({
+        ...composer,
+        textLength: mention.length,
+        textFingerprint: hash(mention),
+        connectorFingerprints: [],
+        attachmentNames: ["user-document.txt"],
+      })),
+    };
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({
+      connectorName: "ChatGPT Tela",
+      connectorDraftPersistenceSettleMs: 0,
+    });
+    try {
+      expect(await provider.recoverConnectorProbeArtifact(surface.lease)).toBe(false);
+      expect(driver.current.composers[0]).toMatchObject({
+        textLength: mention.length,
+        textFingerprint: hash(mention),
+        connectorFingerprints: [],
+        attachmentNames: ["user-document.txt"],
+      });
+      expect(driver.activated).toEqual([]);
+    } finally {
+      await surface.host.close();
+    }
+  });
+
   test("connector preflight preserves an existing unknown attachment instead of guessing ownership", async () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.current = {
