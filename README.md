@@ -473,15 +473,12 @@ whose SHA-256 equals the current package's bundled `app/resources/codex.exe`. Ex
 `CHATGPT_EXECUTABLE` / `CODEX_EXECUTABLE` overrides remain available for nonstandard installs. Real-OS
 product validation is still required before public Windows/Linux release.
 
-**Plura Desktop** is therefore an optional advanced adapter for additional isolated accounts, not a required
-dependency. Even when configured, canonical slot 1 always uses Tela's built-in official Desktop adapter;
-Plura contributes only slot 2 and above through its public target/session contract. Ordinary single-account
-users do not install or traverse that adapter path.
-
-The macOS source path has also passed a live product-lifecycle smoke with an already-running managed Profile 2:
-plain `bun run cli start` brought up slot 1 through the built-in official Desktop adapter, the public frozen
-ChatGPT Tela endpoint stayed reachable, `bun run cli stop` removed only slot 1/Gateway/Codex, and Profile 2 stayed
-ready throughout. A final `shutdown` removed the independent Chat daemon without touching Profile 2.
+**Plura Desktop** is therefore an optional advanced lifecycle provider, not a required dependency. Without it,
+canonical slot 1 uses Tela's built-in official Desktop adapter exactly as before. When the provider is explicitly
+configured, Plura Desktop becomes the single Desktop lifecycle owner for slot 1 and any additional managed slots
+through the same public target/session contract. Tela still owns its Responses/browser/task runtime, but it no
+longer starts a competing supervisor for the same default ChatGPT user-data directory. Ordinary single-account
+users do not install or traverse the provider path.
 
 The source runtime supports two explicit public exposure ownership modes. `existing-https` verifies and reuses a
 route owned elsewhere. `tailscale-funnel` lets Tela create and verify one exact Funnel path and record that

@@ -89,7 +89,7 @@ Status vocabulary:
 | Downstream lesson | Tela status | Tela contract |
 | --- | --- | --- |
 | Stable login partition with task tabs isolated from each other | **absorbed** | one persistent partition per Tela profile; task/Web-epoch surfaces are separate documents. |
-| Default single-profile UX, optional multi-profile isolation | **absorbed** | Profile 1 is the default; Profile 2+ goes through Plura Desktop control. |
+| Default single-profile UX, optional multi-profile isolation | **absorbed** | Profile 1 remains the default. Without Plura Desktop, Tela uses its built-in single-profile owner; when Plura Desktop is configured, the same public control contract owns Profile 1 and Profile 2+ so two supervisors never compete for the default Desktop. |
 | Configuration, user preference and process-local state have different owners | **partial** | Tela lifecycle ownership is explicit; remaining Control Center preferences should not become backend authority. |
 | Transactional install/update/repair/uninstall | **absorbed** | signed package trust, ownership manifest, resumable upgrade/repair and shared uninstall runtime. |
 | Cross-platform packaging/verification | **absorbed** | macOS/Windows/Linux CI and signed-package smoke are release gates. |
