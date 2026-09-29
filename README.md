@@ -730,6 +730,11 @@ ChatGPT-backed choices with a `(Web)` suffix. Native rows remain first-party Nat
 row explicitly opts that turn into the Tela browser bridge. The Web rows are discovered from the currently
 authenticated ChatGPT browser session rather than a hardcoded GPT-version/account-plan table, and the selected
 family/effort is re-proved immediately before the Web message is sent.
+Work opens each browser task in ChatGPT Temporary Chat. Before the first browser send, Tela checks
+that the leased surface still has the Temporary Chat URL; it refuses to send if ChatGPT returned to
+ordinary saved chat. A Temporary Chat may acquire a `/c/...` URL after its first message while the
+same leased task continues. Profile setup remains on ordinary ChatGPT so login and connector setup
+are available. This does not remove conversations created by older builds or manual smoke tests.
 
 The local non-submit model-picker canary exercises that UI boundary and restores the original mode:
 
@@ -763,6 +768,9 @@ appeared beside Native rows in a 10-row `model/list` result. The installed Plura
 contract before normal Profile 2 sessions expose those rows. The browser selection boundary itself
 is live-proven on both Profile 1 and Profile 2; the latter currently exposes a different live family catalog,
 which is why Tela treats account/browser discovery as authority rather than assuming one global model list.
+A source-build Profile 2 canary also completed a Native passthrough turn through the runtime-header
+route. The Temporary Chat send guard has automated coverage; live confirmation that a new Web turn
+does not appear in ChatGPT history is still pending.
 
 The current status icon uses an SF Symbol as a placeholder. Its image and future per-menu-item icons are UI
 assets, not protocol/authority identifiers, so they can be replaced later with custom artwork without changing

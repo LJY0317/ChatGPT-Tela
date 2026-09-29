@@ -10,6 +10,7 @@ import {
 import {
   CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS,
   ChatGptSemanticProvider,
+  isChatGptTemporaryChatUrl,
   createChatGptContextAttachment,
   discoverChatGptWebModelFamilies as discoverWebModelFamilies,
   probeChatGptWebModelSelection as probeWebModelSelection,
@@ -146,6 +147,7 @@ export async function startElectronDevelopmentRuntime(
     ...(input.electron?.loadRuntime ? { loadRuntime: input.electron.loadRuntime } : {}),
   });
   const provider = input.provider ?? new ChatGptSemanticProvider({
+    requireTemporaryChat: isChatGptTemporaryChatUrl(input.chatGptUrl ?? ""),
     ...(input.connectorName ? { connectorName: input.connectorName } : {}),
     ...(input.approvalAutomationMode ? { approvalAutomationMode: input.approvalAutomationMode } : {}),
     ...(input.approvalAutomationDelayMs !== undefined

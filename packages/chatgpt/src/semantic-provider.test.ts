@@ -10,6 +10,7 @@ import {
   type ChatGptSurfaceSnapshot,
 } from "./surface";
 import { ChatGptSemanticProvider } from "./semantic-provider";
+import { CHATGPT_TEMPORARY_CHAT_URL } from "./session";
 import type { WebTurnRequest } from "./index";
 
 function fixture(name: string): ChatGptSurfaceSnapshot {
@@ -546,6 +547,68 @@ describe("ChatGPT semantic provider", () => {
         expect(observed.value.providerTurnId).toBe("user-turn-1");
       }
       expect(driver.activated).toEqual(["send-main"]);
+    } finally {
+      await surface.host.close();
+    }
+  });
+
+  test("Work send requires a fresh Temporary Chat and rechecks the surface before activation", async () => {
+    const saved = new FixtureDriver(fixture("ready-new-chat"));
+    const savedSurface = await leaseFor(saved);
+    const provider = new ChatGptSemanticProvider({ requireTemporaryChat: true });
+    try {
+      await expect(provider.submitTurn(savedSurface.lease, request()))
+        .rejects.toThrow("verified Temporary Chat surface");
+      expect(saved.activated).toEqual([]);
+    } finally {
+      await savedSurface.host.close();
+    }
+
+    const redirected = new FixtureDriver({
+      ...fixture("ready-new-chat"), url: CHATGPT_TEMPORARY_CHAT_URL,
+    });
+    const originalFill = redirected.replaceComposerText.bind(redirected);
+    redirected.replaceComposerText = async (key, value) => {
+      await originalFill(key, value);
+      redirected.current = { ...redirected.current, url: "https://chatgpt.com/" };
+    };
+    const redirectedSurface = await leaseFor(redirected);
+    try {
+      await expect(provider.submitTurn(redirectedSurface.lease, request()))
+        .rejects.toThrow("verified Temporary Chat surface");
+      expect(redirected.activated).toEqual([]);
+    } finally {
+      await redirectedSurface.host.close();
+    }
+  });
+
+  test("Work send starts from Temporary Chat and continues after conversation URL promotion", async () => {
+    const driver = new FixtureDriver({
+      ...fixture("ready-new-chat"), url: CHATGPT_TEMPORARY_CHAT_URL,
+    });
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ requireTemporaryChat: true });
+    try {
+      const submitting = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      expect((await submitting).state).toBe("proven");
+      driver.current = {
+        ...driver.current,
+        revision: "second-ready",
+        url: "https://chatgpt.com/c/temporary-conversation",
+        composers: driver.current.composers.map(composer => {
+          const { textFingerprint: _fingerprint, ...rest } = composer;
+          return { ...rest, textLength: 0 };
+        }),
+      };
+      const continuing = provider.submitTurn(surface.lease, {
+        ...request(), nativeTurnId: "turn-2",
+      });
+      while (driver.current.revision === "second-ready") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver, "user-turn-2"));
+      expect((await continuing).state).toBe("proven");
+      expect(driver.activated).toEqual(["send-main", "send-main"]);
     } finally {
       await surface.host.close();
     }

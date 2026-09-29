@@ -31,6 +31,7 @@ import type {
   WebTurnRequest,
   WebTurnState,
 } from "./index";
+import { isChatGptTemporaryChatUrl } from "./session";
 
 interface TrackedTurn {
   readonly handle: WebTurnHandle;
@@ -57,6 +58,8 @@ export interface ChatGptSemanticProviderOptions {
   readonly approvalAutomationMode?: ChatGptApprovalAutomationMode;
   /** Optional bounded delay before inspecting the current one-shot approval card. */
   readonly approvalAutomationDelayMs?: number;
+  /** Require the first send on each leased surface to start in a fresh Temporary Chat. */
+  readonly requireTemporaryChat?: boolean;
 }
 
 export interface ChatGptConnectorObservation {
@@ -483,6 +486,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   readonly #connectorDraftPersistenceSettleMs: number;
   readonly #approvalAutomationMode: ChatGptApprovalAutomationMode;
   readonly #approvalAutomationDelayMs: number;
+  readonly #requireTemporaryChat: boolean;
+  readonly #temporaryChatSurfaces = new WeakSet<BrowserSurfaceLease>();
 
   constructor(options: ChatGptSemanticProviderOptions = {}) {
     const connectorName = options.connectorName?.trim();
@@ -503,6 +508,16 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       throw new Error("ChatGPT approval automation delay must be 0-15000ms");
     }
     this.#approvalAutomationDelayMs = approvalDelayMs;
+    this.#requireTemporaryChat = options.requireTemporaryChat ?? false;
+  }
+
+  #assertTemporaryChatSurface(surface: BrowserSurfaceLease, snapshot: ChatGptSurfaceSnapshot): void {
+    if (!this.#requireTemporaryChat) return;
+    if (isChatGptTemporaryChatUrl(snapshot.url)) return;
+    if (this.#temporaryChatSurfaces.has(surface)
+      && new URL(snapshot.url).origin === "https://chatgpt.com"
+      && /^\/c\/[^/]+$/.test(new URL(snapshot.url).pathname)) return;
+    throw new Error("ChatGPT Work send requires a verified Temporary Chat surface");
   }
 
   async #settleConnectorDraftPersistence(
@@ -799,6 +814,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const baselineTurnKeys = new Set(baseline.turns.map(turn => turn.key));
     const baselineLineage = baselineUserLineageKeys(baseline);
     const expectedPromptFingerprint = fingerprint(stage.text);
+    this.#assertTemporaryChatSurface(surface, baseline);
 
     await driver.replaceComposerText(composer.key, stage.text, deadline.combined);
     let prepared = await driver.observe(deadline.combined);
@@ -824,7 +840,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       throw new Error("ChatGPT context preload did not expose one enabled send control after file acceptance");
     }
 
+    this.#assertTemporaryChatSurface(surface, prepared);
     await driver.activateSend(sends[0]!.key, deadline.combined);
+    this.#temporaryChatSurfaces.add(surface);
     emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_send_activated");
     let snapshot = await driver.waitForChange(prepared.revision, deadline.combined);
     let userTurnKey: string | undefined;
@@ -952,6 +970,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const hydrated = await waitForHydratedComposer(driver, signal);
     const settled = await waitForSettledEmptyComposer(driver, hydrated.snapshot, signal);
     const baseline = settled.snapshot;
+    this.#assertTemporaryChatSurface(surface, baseline);
     let composer = exactComposer(baseline);
     if (composer.textLength !== 0) {
       throw new Error("ChatGPT semantic submit refuses to overwrite a non-empty composer draft");
@@ -1090,8 +1109,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
 
       // From this point activation itself may have submitted the message. Mark the boundary before
       // calling the driver so an exception can never authorize cleanup or implicit retry.
+      this.#assertTemporaryChatSurface(surface, filled);
       sendActivationAttempted = true;
       await driver.activateSend(sendAfterFill.key, signal);
+      this.#temporaryChatSurfaces.add(surface);
     } catch (error) {
       if (!sendActivationAttempted && !cleanupAttempted) {
         try {
