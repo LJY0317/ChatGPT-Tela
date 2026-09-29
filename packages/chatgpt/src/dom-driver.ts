@@ -61,6 +61,7 @@ const INSPECT_APPROVAL_CARD = String.raw`function () {
     allowCount: 0,
     allowOnceCount: 0,
     alwaysAllowCount: 0,
+    unknownCount: 0,
     allowPoint: null,
     allowOncePoint: null,
   };
@@ -83,6 +84,7 @@ const INSPECT_APPROVAL_CARD = String.raw`function () {
       result.allowCount += 1;
       if (result.allowCount === 1) result.allowPoint = point(button);
     } else if (label === "Always allow") result.alwaysAllowCount += 1;
+    else result.unknownCount += 1;
   }
   return result;
 }`;
@@ -1528,6 +1530,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       readonly allowCount: number;
       readonly allowOnceCount: number;
       readonly alwaysAllowCount: number;
+      readonly unknownCount: number;
       readonly allowPoint: { readonly x: number; readonly y: number } | null;
       readonly allowOncePoint: { readonly x: number; readonly y: number } | null;
     }>(INSPECT_APPROVAL_CARD, undefined, signal);
@@ -1540,6 +1543,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       allow_count: observed.allowCount,
       allow_once_count: observed.allowOnceCount,
       always_allow_count: observed.alwaysAllowCount,
+      unknown_count: observed.unknownCount,
     });
     if (decision.action !== "approve_once") {
       return Object.freeze({ status: "none" as const, reason: decision.reason });
