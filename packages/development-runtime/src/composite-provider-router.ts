@@ -139,6 +139,19 @@ export function createDefaultProfileCompositeProviderRouter(input: {
         if (model && parseChatGptWebModelId(model)) return undefined;
         return native(request, endpoint);
       }
+      if (endpoint === "responses/compact") {
+        const model = await requestModel(request);
+        if (model && parseChatGptWebModelId(model)) {
+          emitDiagnosticEvent("chatgpt_tela_work", "web_remote_compaction_unavailable");
+          return Response.json({
+            error: {
+              type: "unsupported_feature",
+              message: "Tela Web remote compaction is not yet available for this model",
+            },
+          }, { status: 501 });
+        }
+        return native(request, endpoint);
+      }
       if (endpoint !== "models") return native(request, endpoint);
 
       const upstream = await native(request, "models");

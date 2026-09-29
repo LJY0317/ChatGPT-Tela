@@ -47,7 +47,13 @@ describe("default-profile composite provider router", () => {
     expect(await native?.text()).toBe("native-ok");
     const key = chatGptWebFamilyKey("Web Family");
     expect(await router.route(request("/v1/responses", { model: chatGptWebModelId(key), input: [] }))).toBeUndefined();
-    expect(upstream).toEqual(["https://native.invalid/backend-api/codex/responses"]);
+    const webCompaction = await router.route(request("/v1/responses/compact", { model: chatGptWebModelId(key), input: [] }));
+    expect(webCompaction?.status).toBe(501);
+    expect(await router.route(request("/v1/responses/compact", { model: "native-model", input: [] }))).toBeDefined();
+    expect(upstream).toEqual([
+      "https://native.invalid/backend-api/codex/responses",
+      "https://native.invalid/backend-api/codex/responses/compact",
+    ]);
   });
 
   test("augments native model discovery and coalesces/caches browser discovery", async () => {
