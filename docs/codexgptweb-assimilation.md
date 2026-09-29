@@ -33,7 +33,7 @@ Status vocabulary:
 | Model/effort change starts a new physical epoch | **absorbed** | Web epoch identity includes the current Native model + reasoning-effort route identity. |
 | Web physical rollover may occur without Native compaction | **absorbed** | retained epochs track their fresh physical baseline separately from Native logical history; downstream-calibrated conservative soft/hard Web limits trigger a fresh physical epoch without requesting Native compaction. Growth includes assistant output already resident in the retained Web conversation, not merely bytes resent in later suffixes. |
 | Bound old settled tool evidence and assistant prose in a fresh provider projection | **absorbed** | all system/developer/user/steering and tool-call structure stay exact; `tool_search` registry stays exact; settled assistant/tool payloads are bounded only in the disposable Web view and the reduction is diagnosed structurally. |
-| Hard-fit a fresh projection to the measured Web window without changing Native history | **pending** | depends on live model/effort limit discovery; never silently delete irreducible authority/current causal state. |
+| Hard-fit a fresh projection to the measured Web window without changing Native history | **absorbed** | fresh projection budgets are searched from irreducible step 0 through the default retained-evidence budget; Tela maximizes reducible historical assistant/tool evidence under the soft limit, uses remaining hard-window headroom only when irreducible authority already exceeds soft pressure, and fails closed if step 0 still exceeds the hard window. Exact final composer characters are also checked before model preparation or submit. |
 | Large fresh context as memory-backed file + exact receipt before enabling work | **pending** | representation-only optimization; no disk temp file, no connector on preload, no claim that receipt proves semantic comprehension. |
 | Multipart Bigger Context changes physical transport only | **pending** | must not inflate Native logical context or move Native compaction thresholds. |
 
@@ -111,7 +111,7 @@ Status vocabulary:
 2. deterministic fresh provider projection + physical pressure telemetry (**absorbed**);
 3. browser semantic model-family/effort discovery (**absorbed**, Profile 1 live-proven);
 4. composite Native + explicit Tela Web `model/list` surface and routing (**partial**: default Desktop absorbed; Profile 2+ adapter pending);
-5. independent physical-pressure epoch rollover (**absorbed**) + fresh hard-fit planner;
+5. independent physical-pressure epoch rollover + fresh hard-fit planner (**absorbed**);
 6. receipt-verified large-context/file and multipart transports;
 7. retained compaction proof/canary, richer incident diagnostics, approval/subagent/skill audits;
 8. final parity audit against both the downstream snapshot and then-current upstream before the old

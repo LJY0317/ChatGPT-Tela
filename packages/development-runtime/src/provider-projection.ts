@@ -7,6 +7,7 @@ export const WEB_HISTORICAL_TOOL_ENTRY_TOKENS = 1_000;
 export const WEB_HISTORICAL_TOOL_TOTAL_TOKENS = 10_000;
 export const WEB_HISTORICAL_ASSISTANT_ENTRY_TOKENS = 5_000;
 export const WEB_HISTORICAL_ASSISTANT_TOTAL_TOKENS = 20_000;
+const PROJECTION_RETENTION_STEPS = 1_024;
 
 const APPROX_BYTES_PER_TOKEN = 4;
 const OMITTED_TOOL_OUTPUT = "[settled tool evidence omitted from Tela Web working context]";
@@ -21,11 +22,42 @@ export interface ProviderProjectionStats {
   readonly omittedToolResults: number;
   readonly originalRevisionBytes: number;
   readonly projectedRevisionBytes: number;
+  readonly retentionStep: number;
+  readonly fitTarget: "default" | "soft" | "hard";
 }
 
 export interface ProviderProjectionResult {
   readonly context: WebPhysicalContext;
   readonly stats: ProviderProjectionStats;
+}
+
+export interface ProviderProjectionBudget {
+  readonly historicalToolTotalTokens: number;
+  readonly historicalAssistantTotalTokens: number;
+}
+
+export interface ProviderProjectionPhysicalLimits {
+  readonly rolloverTokenLimit: number;
+  readonly contextWindowTokenLimit: number;
+}
+
+const DEFAULT_PROJECTION_BUDGET: ProviderProjectionBudget = Object.freeze({
+  historicalToolTotalTokens: WEB_HISTORICAL_TOOL_TOTAL_TOKENS,
+  historicalAssistantTotalTokens: WEB_HISTORICAL_ASSISTANT_TOTAL_TOKENS,
+});
+
+function projectionBudgetAt(step: number): ProviderProjectionBudget {
+  if (!Number.isSafeInteger(step) || step < 0 || step > PROJECTION_RETENTION_STEPS) {
+    throw new Error("Web provider projection retention step is invalid");
+  }
+  return Object.freeze({
+    historicalToolTotalTokens: Math.floor(
+      WEB_HISTORICAL_TOOL_TOTAL_TOKENS * step / PROJECTION_RETENTION_STEPS,
+    ),
+    historicalAssistantTotalTokens: Math.floor(
+      WEB_HISTORICAL_ASSISTANT_TOTAL_TOKENS * step / PROJECTION_RETENTION_STEPS,
+    ),
+  });
 }
 
 function bytes(value: string): number {
@@ -127,7 +159,16 @@ function revisionSegment(
  * tool-call structure are always exact. The active request is exact. Historical assistant prose
  * and tool-result payloads are considered provider presentation and are bounded newest-first.
  */
-export function projectFreshWebPhysicalContext(context: WebPhysicalContext): ProviderProjectionResult {
+export function projectFreshWebPhysicalContext(
+  context: WebPhysicalContext,
+  budget: ProviderProjectionBudget = DEFAULT_PROJECTION_BUDGET,
+  metadata: { readonly retentionStep?: number; readonly fitTarget?: ProviderProjectionStats["fitTarget"] } = {},
+): ProviderProjectionResult {
+  for (const [name, value] of Object.entries(budget)) {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Web provider projection ${name} is invalid`);
+  }
+  const retentionStep = metadata.retentionStep ?? PROJECTION_RETENTION_STEPS;
+  const fitTarget = metadata.fitTarget ?? "default";
   if (context.mode === "retained-delta") {
     return Object.freeze({
       context,
@@ -140,13 +181,15 @@ export function projectFreshWebPhysicalContext(context: WebPhysicalContext): Pro
         omittedToolResults: 0,
         originalRevisionBytes: 0,
         projectedRevisionBytes: 0,
+        retentionStep,
+        fitTarget,
       }),
     });
   }
 
   const projected = [...context.segments];
-  let assistantBudget = WEB_HISTORICAL_ASSISTANT_TOTAL_TOKENS;
-  let toolBudget = WEB_HISTORICAL_TOOL_TOTAL_TOKENS;
+  let assistantBudget = budget.historicalAssistantTotalTokens;
+  let toolBudget = budget.historicalToolTotalTokens;
   let assistantRevisions = 0;
   let truncatedAssistantRevisions = 0;
   let omittedAssistantRevisions = 0;
@@ -226,6 +269,67 @@ export function projectFreshWebPhysicalContext(context: WebPhysicalContext): Pro
       omittedToolResults,
       originalRevisionBytes,
       projectedRevisionBytes,
+      retentionStep,
+      fitTarget,
     }),
   });
+}
+
+/**
+ * Maximize retained settled provider evidence while fitting one fresh Web epoch.
+ * Native logical history and irreducible authority/current causal evidence are never altered.
+ */
+export function fitFreshWebPhysicalContext(
+  context: WebPhysicalContext,
+  limits: ProviderProjectionPhysicalLimits,
+): ProviderProjectionResult {
+  if (!Number.isSafeInteger(limits.rolloverTokenLimit) || limits.rolloverTokenLimit <= 0
+    || !Number.isSafeInteger(limits.contextWindowTokenLimit) || limits.contextWindowTokenLimit <= 0
+    || limits.contextWindowTokenLimit < limits.rolloverTokenLimit) {
+    throw new Error("Web provider physical limits are invalid");
+  }
+  const initial = projectFreshWebPhysicalContext(context);
+  if (initial.context.mode === "retained-delta"
+    || initial.context.transferTokens < limits.rolloverTokenLimit) return initial;
+
+  const minimum = projectFreshWebPhysicalContext(
+    context,
+    projectionBudgetAt(0),
+    { retentionStep: 0, fitTarget: "hard" },
+  );
+  if (minimum.context.transferTokens >= limits.contextWindowTokenLimit) {
+    throw new Error(
+      `Fresh ChatGPT Web projection requires ${minimum.context.transferTokens} estimated tokens after all reducible settled provider evidence was minimized, exceeding the ${limits.contextWindowTokenLimit}-token physical Web window; Native context was left unchanged`,
+    );
+  }
+
+  const target = minimum.context.transferTokens < limits.rolloverTokenLimit ? "soft" as const : "hard" as const;
+  const targetLimit = target === "soft" ? limits.rolloverTokenLimit : limits.contextWindowTokenLimit;
+  if (target === "hard" && initial.context.transferTokens < limits.contextWindowTokenLimit) {
+    return projectFreshWebPhysicalContext(context, DEFAULT_PROJECTION_BUDGET, {
+      retentionStep: PROJECTION_RETENTION_STEPS,
+      fitTarget: "hard",
+    });
+  }
+
+  let lower = 0;
+  let upper = PROJECTION_RETENTION_STEPS;
+  let best = projectFreshWebPhysicalContext(context, projectionBudgetAt(0), {
+    retentionStep: 0,
+    fitTarget: target,
+  });
+  while (upper - lower > 1) {
+    const step = Math.floor((lower + upper) / 2);
+    const candidate = projectFreshWebPhysicalContext(context, projectionBudgetAt(step), {
+      retentionStep: step,
+      fitTarget: target,
+    });
+    if (candidate.context.transferTokens < targetLimit) {
+      lower = step;
+      best = candidate;
+    } else {
+      upper = step;
+    }
+  }
+  return best;
 }

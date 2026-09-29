@@ -271,7 +271,10 @@ async function resetAutomaticRoutingSurface(
   return settled.snapshot;
 }
 
-function formatPhysicalContext(context: WebPhysicalContext, toolBridge: WebTurnRequest["toolBridge"]): string {
+export function formatWebPhysicalContext(
+  context: WebPhysicalContext,
+  toolBridge: WebTurnRequest["toolBridge"],
+): string {
   const retained = context.mode === "retained-delta";
   const contract = [
     "Act as the model backend for the active Native Codex task encoded below.",
@@ -776,7 +779,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     let filled: ChatGptSurfaceSnapshot;
     let baselineTurnKeys: Set<string>;
     let preSubmitUserLineageKeys: ReadonlySet<string>;
-    const text = formatPhysicalContext(request.physicalContext, request.toolBridge);
+    const text = formatWebPhysicalContext(request.physicalContext, request.toolBridge);
     emitDiagnosticEvent("chatgpt_tela_work", "browser_message_prepared", {
       context_mode: request.physicalContext.mode,
       message_chars: text.length,

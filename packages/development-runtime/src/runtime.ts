@@ -4,6 +4,7 @@ import {
   ChatGptSemanticProvider,
   selectChatGptWebModel,
   type ChatGptWebEffort,
+  type ChatGptWebPhysicalLimits,
   type WebConversationProvider,
   type WebPhysicalContext,
 } from "@chatgpt-tela/chatgpt";
@@ -50,6 +51,7 @@ export interface DevelopmentWebTurnPlan {
     readonly familyKey: string;
     readonly effort: ChatGptWebEffort;
   };
+  readonly physicalLimits?: ChatGptWebPhysicalLimits;
   readonly diagnostics?: Readonly<Record<string, string | number | boolean>>;
   /**
    * Planner-owned transactional settlement. Implementations may advance retained-context state only
@@ -177,6 +179,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             nativeTaskId: plan.nativeTaskId,
             webEpochId: plan.webEpochId,
             physicalContext: plan.physicalContext,
+            ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
             toolBridge: {
               protocol: "mcp",
               contract: webMcpContract,

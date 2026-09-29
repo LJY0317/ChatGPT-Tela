@@ -1,6 +1,8 @@
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import {
+  formatWebPhysicalContext,
   requireProven,
+  type ChatGptWebPhysicalLimits,
   type WebConversationProvider,
   type WebPhysicalContext,
   type WebToolBridgeContext,
@@ -16,6 +18,7 @@ export interface BrowserTurnRunInput {
   readonly nativeTaskId: string;
   readonly webEpochId: string;
   readonly physicalContext: WebPhysicalContext;
+  readonly physicalLimits?: ChatGptWebPhysicalLimits;
   readonly toolBridge?: WebToolBridgeContext;
   /** Non-submit surface preparation that must finish immediately before provider submission. */
   readonly prepareForSubmit?: (
@@ -102,6 +105,14 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
   try {
     if (input.proveCapabilities !== false) {
       requireProven(await input.provider.observeCapabilities(surface, input.signal));
+    }
+    if (input.physicalLimits) {
+      const messageChars = formatWebPhysicalContext(input.physicalContext, input.toolBridge).length;
+      if (messageChars > input.physicalLimits.composerCharLimit) {
+        throw new Error(
+          `Fresh ChatGPT Web message requires ${messageChars} characters, exceeding the ${input.physicalLimits.composerCharLimit}-character browser message limit; Native context was left unchanged`,
+        );
+      }
     }
     await input.prepareForSubmit?.(surface, input.signal);
 

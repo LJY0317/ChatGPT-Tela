@@ -28,7 +28,10 @@ import type {
   DevelopmentWebTurnPlanner,
   DevelopmentWebTurnSettlement,
 } from "./runtime";
-import { projectFreshWebPhysicalContext } from "./provider-projection";
+import {
+  fitFreshWebPhysicalContext,
+  projectFreshWebPhysicalContext,
+} from "./provider-projection";
 import { assessWebEpochPressure, type WebEpochPressure } from "./web-epoch-pressure";
 
 export interface ProjectedNativeRevision {
@@ -551,13 +554,10 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
         `Native request context requires a checkpoint to fit the ${prepared.budgetTokens}-token Web budget`,
       );
     }
-    const providerProjection = projectFreshWebPhysicalContext(prepared.physicalContext);
     const physicalLimits = browserModel ? chatGptWebPhysicalLimits(browserModel.effort) : undefined;
-    if (physicalLimits && providerProjection.context.transferTokens >= physicalLimits.contextWindowTokenLimit) {
-      throw new Error(
-        `Fresh ChatGPT Web physical projection requires ${providerProjection.context.transferTokens} estimated tokens, exceeding the ${physicalLimits.contextWindowTokenLimit}-token physical Web window; Native context was left unchanged`,
-      );
-    }
+    const providerProjection = physicalLimits
+      ? fitFreshWebPhysicalContext(prepared.physicalContext, physicalLimits)
+      : projectFreshWebPhysicalContext(prepared.physicalContext);
     const transportAnchor = prepared.plan.mode === "checkpoint-delta"
       ? `checkpoint:${prepared.plan.checkpointId}`
       : `full:${projection.headId}`;
@@ -568,6 +568,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
       webEpochId: epochId,
       physicalContext: providerProjection.context,
       ...(browserModel ? { browserModel } : {}),
+      ...(physicalLimits ? { physicalLimits } : {}),
       diagnostics: Object.freeze({
         provider_projection: true,
         retained_delta: false,
@@ -582,6 +583,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
         projection_omitted_assistant: providerProjection.stats.omittedAssistantRevisions,
         projection_truncated_tool_results: providerProjection.stats.truncatedToolResults,
         projection_omitted_tool_results: providerProjection.stats.omittedToolResults,
+        projection_retention_step: providerProjection.stats.retentionStep,
+        projection_fit_target: providerProjection.stats.fitTarget,
       }),
       settle(outcome: DevelopmentWebTurnSettlement) {
         if (pendingByTask.get(threadId) !== pending) return;

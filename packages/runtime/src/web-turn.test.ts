@@ -249,6 +249,44 @@ describe("browser turn runner", () => {
     expect(order).toEqual(["prepare", "submit"]);
   });
 
+  test("exact browser-message char preflight fails before model preparation or submit", async () => {
+    const events = new EventQueue();
+    const channel = new RuntimeTurnChannel(binding());
+    const order: string[] = [];
+    const fixture = provider(events);
+    const wrapped: WebConversationProvider = {
+      ...fixture,
+      async submitTurn(...args) {
+        order.push("submit");
+        return fixture.submitTurn(...args);
+      },
+    };
+    await expect(runBrowserTurn({
+      browserHost: browserHost([]),
+      provider: wrapped,
+      channel,
+      nativeTaskId: "task-1",
+      webEpochId: "epoch-1",
+      physicalContext: {
+        ...physicalContext,
+        segments: [{
+          type: "revision",
+          revisionId: "r1",
+          kind: "user",
+          content: "x".repeat(5_000),
+        }],
+      },
+      physicalLimits: {
+        rolloverTokenLimit: 100,
+        contextWindowTokenLimit: 200,
+        composerCharLimit: 100,
+      },
+      prepareForSubmit: async () => { order.push("prepare"); },
+    })).rejects.toThrow("browser message limit");
+    expect(order).toEqual([]);
+    expect(channel.phase).toBe("prepared");
+  });
+
   test("completion after a tool result fails closed until Web continuation is observed", async () => {
     const events = new EventQueue();
     const channel = new RuntimeTurnChannel(binding());

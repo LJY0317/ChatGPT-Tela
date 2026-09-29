@@ -170,8 +170,13 @@ immediately reconstructing an equally large conversation.
 
 Every prepared browser message also emits only its character count alongside logical/transfer token
 counts. No prompt text is recorded. A later hard-fit planner may use the same isolated calibration to
-reduce only already-designated provider projection budgets before a fresh submit; it must still fail
-closed rather than delete current authority or causal evidence.
+reduce only already-designated provider projection budgets before a fresh submit. The current planner
+does exactly that: it binary-searches the provider-only assistant/tool aggregate budgets to preserve
+the maximum settled evidence below the soft rollover boundary. If the irreducible view already starts
+above soft pressure but below the hard context window, it uses only the remaining hard-window
+headroom; if the irreducible view itself exceeds the hard window, the turn fails before browser
+mutation and Native history remains unchanged. The exact final formatted composer message is also
+checked against the effort-specific character limit before model selection or `markSubmitted()`.
 
 The historical reasons and remaining parity work inherited from CodexGPTWeb experimentation are
 tracked in `docs/codexgptweb-assimilation.md` so removal of the old installation/source checkout does
