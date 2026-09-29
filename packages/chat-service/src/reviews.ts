@@ -44,6 +44,15 @@ export interface ChatReviewRecord {
   readonly untracked: readonly ChatReviewUntrackedSnapshot[];
 }
 
+export interface ChatReviewChangeSummary {
+  readonly files: number;
+  readonly additions: number;
+  readonly removals: number;
+  readonly trackedFiles: number;
+  readonly untrackedFiles: number;
+  readonly complete: boolean;
+}
+
 export interface ChatReviewSummary {
   readonly reviewRef: string;
   readonly workspaceId: string;
@@ -51,6 +60,7 @@ export interface ChatReviewSummary {
   readonly head?: string;
   readonly patchBytes: number;
   readonly untrackedFiles: number;
+  readonly changes: ChatReviewChangeSummary;
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -167,6 +177,59 @@ function snapshotUntracked(root: string, paths: readonly string[]): readonly Cha
   return Object.freeze(snapshots);
 }
 
+function textLineCount(content: string): number {
+  if (!content) return 0;
+  const newlines = content.match(/\n/g)?.length ?? 0;
+  return newlines + (content.endsWith("\n") ? 0 : 1);
+}
+
+function trackedPatchCounts(patch: string): {
+  readonly files: number;
+  readonly additions: number;
+  readonly removals: number;
+} {
+  let files = 0;
+  let additions = 0;
+  let removals = 0;
+  for (const line of patch.split(/\r?\n/)) {
+    if (line.startsWith("diff --git ")) files += 1;
+    else if (line.startsWith("+") && !line.startsWith("+++")) additions += 1;
+    else if (line.startsWith("-") && !line.startsWith("---")) removals += 1;
+  }
+  return Object.freeze({ files, additions, removals });
+}
+
+export function summarizeChatReview(record: Pick<ChatReviewRecord, "patch" | "untracked">): ChatReviewChangeSummary {
+  const tracked = trackedPatchCounts(record.patch);
+  let additions = tracked.additions;
+  let complete = true;
+  for (const item of record.untracked) {
+    if (item.kind === "symlink") additions += 1;
+    else if (item.encoding === "utf8") additions += textLineCount(item.content);
+    else complete = false;
+  }
+  return Object.freeze({
+    files: tracked.files + record.untracked.length,
+    additions,
+    removals: tracked.removals,
+    trackedFiles: tracked.files,
+    untrackedFiles: record.untracked.length,
+    complete,
+  });
+}
+
+export function summarizeLiveChatChanges(patch: string, untrackedFiles: number): ChatReviewChangeSummary {
+  const tracked = trackedPatchCounts(patch);
+  return Object.freeze({
+    files: tracked.files + untrackedFiles,
+    additions: tracked.additions,
+    removals: tracked.removals,
+    trackedFiles: tracked.files,
+    untrackedFiles,
+    complete: untrackedFiles === 0,
+  });
+}
+
 function summary(record: ChatReviewRecord): ChatReviewSummary {
   return Object.freeze({
     reviewRef: record.reviewRef,
@@ -175,6 +238,7 @@ function summary(record: ChatReviewRecord): ChatReviewSummary {
     ...(record.head ? { head: record.head } : {}),
     patchBytes: Buffer.byteLength(record.patch, "utf8"),
     untrackedFiles: record.untracked.length,
+    changes: summarizeChatReview(record),
   });
 }
 

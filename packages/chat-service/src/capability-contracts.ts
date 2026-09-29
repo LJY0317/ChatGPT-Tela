@@ -117,12 +117,12 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "show_changes",
-    description: "Show current Git-backed changes and create a bounded historical review checkpoint when possible. Use after the final related workspace edit when review is useful.",
+    description: "Show current Git-backed changes with a compact file/addition/removal summary and create a bounded historical review checkpoint when possible. Use after the final related workspace edit when review is useful.",
     inputSchema: object({ workspace_id: workspaceId }, ["workspace_id"]),
   },
   {
     capability: "show_review",
-    description: "Open one immutable bounded Tela Chat review checkpoint by review_ref.",
+    description: "Open one immutable bounded Tela Chat review checkpoint by review_ref, including its compact change summary.",
     inputSchema: object({ workspace_id: workspaceId, review_ref: string(512) }, ["workspace_id", "review_ref"]),
   },
   {

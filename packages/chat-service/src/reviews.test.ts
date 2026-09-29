@@ -49,9 +49,18 @@ describe("Tela Chat historical review checkpoints", () => {
       const shown = await f.runtime.call("show_changes", { workspace_id: workspace.id }) as {
         reviewRef?: string;
         reviewCheckpoint: { available: boolean; reviewRef?: string };
+        summary: { files: number; additions: number; removals: number; trackedFiles: number; untrackedFiles: number; complete: boolean };
       };
       expect(shown.reviewCheckpoint.available).toBe(true);
       expect(shown.reviewRef).toMatch(/^chatreview_/);
+      expect(shown.summary).toEqual({
+        files: 2,
+        additions: 2,
+        removals: 1,
+        trackedFiles: 1,
+        untrackedFiles: 1,
+        complete: true,
+      });
       const reviewRef = shown.reviewRef!;
 
       await f.runtime.call("apply_patch", {
@@ -65,8 +74,10 @@ describe("Tela Chat historical review checkpoints", () => {
         historical: boolean;
         patch: string;
         untracked: readonly { path: string; encoding: string; content: string }[];
+        summary: { files: number; additions: number; removals: number; trackedFiles: number; untrackedFiles: number; complete: boolean };
       };
       expect(historical.historical).toBe(true);
+      expect(historical.summary).toEqual(shown.summary);
       expect(historical.patch).toContain("+tela");
       expect(historical.patch).not.toContain("+later");
       expect(historical.untracked.find(item => item.path === "notes.txt"))
@@ -125,11 +136,13 @@ describe("Tela Chat historical review checkpoints", () => {
         untracked: readonly string[];
         reviewRef?: string;
         reviewCheckpoint: { available: boolean; reason?: string };
+        summary: { files: number; untrackedFiles: number; complete: boolean };
       };
       expect(shown.untracked).toContain("large.bin");
       expect(shown.reviewRef).toBeUndefined();
       expect(shown.reviewCheckpoint.available).toBe(false);
       expect(shown.reviewCheckpoint.reason).toContain("exceeds");
+      expect(shown.summary).toMatchObject({ files: 1, untrackedFiles: 1, complete: false });
     } finally {
       await f.runtime.close();
       rmSync(f.base, { recursive: true, force: true });

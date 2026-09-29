@@ -1,7 +1,14 @@
 import { execFile } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { promisify } from "node:util";
-import { ChatReviewCheckpointStore, type ChatReviewRecord, type ChatReviewSummary } from "./reviews";
+import {
+  ChatReviewCheckpointStore,
+  summarizeChatReview,
+  summarizeLiveChatChanges,
+  type ChatReviewChangeSummary,
+  type ChatReviewRecord,
+  type ChatReviewSummary,
+} from "./reviews";
 import type { ChatWorkspaceRegistry } from "./workspaces";
 
 const execFileAsync = promisify(execFile);
@@ -18,6 +25,7 @@ export interface ChatChangesResult {
   readonly reviewCheckpoint:
     | { readonly available: true; readonly reviewRef: string }
     | { readonly available: false; readonly reason: string };
+  readonly summary: ChatReviewChangeSummary;
 }
 
 function untrackedFromPorcelainZ(value: string): readonly string[] {
@@ -74,6 +82,7 @@ export class ChatChangeReviewer {
       "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=no", "--", ".",
     ]));
     let checkpoint: ChatChangesResult["reviewCheckpoint"];
+    let captured: ChatReviewRecord | undefined;
     try {
       const review = this.reviews.capture({
         workspaceId,
@@ -83,6 +92,7 @@ export class ChatChangeReviewer {
         patch,
         untrackedPaths: untracked,
       });
+      captured = review;
       checkpoint = Object.freeze({ available: true as const, reviewRef: review.reviewRef });
     } catch (error) {
       checkpoint = Object.freeze({ available: false as const,
@@ -97,11 +107,13 @@ export class ChatChangeReviewer {
       historical: false as const,
       ...(checkpoint.available ? { reviewRef: checkpoint.reviewRef } : {}),
       reviewCheckpoint: checkpoint,
+      summary: captured ? summarizeChatReview(captured) : summarizeLiveChatChanges(patch, untracked.length),
     });
   }
 
-  showReview(workspaceId: string, ref: string): ChatReviewRecord & { readonly historical: true } {
-    return Object.freeze({ ...this.reviews.read(workspaceId, ref), historical: true as const });
+  showReview(workspaceId: string, ref: string): ChatReviewRecord & { readonly historical: true; readonly summary: ChatReviewChangeSummary } {
+    const review = this.reviews.read(workspaceId, ref);
+    return Object.freeze({ ...review, historical: true as const, summary: summarizeChatReview(review) });
   }
 
   listReviews(workspaceId: string): readonly ChatReviewSummary[] {

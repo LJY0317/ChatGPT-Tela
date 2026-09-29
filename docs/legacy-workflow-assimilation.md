@@ -10,7 +10,7 @@ tested, and dogfooded through Tela's own authority boundaries:
 
 | Reference workflow | Tela owner | Retirement-ready gate | Current state |
 | --- | --- | --- | --- |
-| DevSpace local patches | Tela Chat | routine local development can be completed through Tela Chat with equivalent workspace/instruction, bounded file, transactional edit, process, worktree, review, artifact, skills, and delegated-agent ergonomics | **partial** — workspace/instructions/exploration/standard skills/read/patch/process/review/incidents/worktrees/agents exist; general artifact exchange, richer review ergonomics, legacy DevSpace-only skill migration, and sandboxed agent process authority remain |
+| DevSpace local patches | Tela Chat | routine local development can be completed through Tela Chat with equivalent workspace/instruction, bounded file, transactional edit, process, worktree, review, artifact, skills, and delegated-agent ergonomics | **partial** — workspace/instructions/exploration/standard skills/read/patch/process/review/incidents/worktrees/agents exist; native file ingress, review baselines/UI, legacy DevSpace-only skill migration, and sandboxed agent process authority remain |
 | CodexGPTWeb local patches | Tela Codex | the final downstream parity audit passes against the retained snapshot/current upstream and normal Work can use Native + explicit `(Web)` models without the old bridge | **advanced partial** — tracked in `codexgptweb-assimilation.md`; most ledger items are absorbed and Profile 1 exact-turn/tool/retention/context proofs are live-proven, while remaining partial/pending items still block retirement-readiness |
 | Permity | product UI + ChatGPT semantic approval policy | Tela covers every Permity behavior the maintainer still relies on, with explicit policy/UX decisions for any deliberately rejected behavior | **partial** — opt-in fail-closed recognized one-shot approval and product preference/diagnostics are absorbed; general allowlist/full-access policy, bounded delays, unknown-approval evidence/review, browser/AX adapters, and Work-handoff policy are not yet assimilated |
 | LJY's Menu Bar | product UI / lifecycle | Tela's own menu bar/Control Center covers the surviving daily controls after DevSpace/CodexGPTWeb retirement-readiness, without importing backend authority into the UI | **partial** — split-service/profile control, approval preference, diagnostics, bridge preview, updates/settings surfaces and signed lifecycle ownership exist; legacy DevSpace/CodexWeb aggregate controls remain useful until those systems themselves become unnecessary |
@@ -43,13 +43,13 @@ The initial Tela Chat parity backlog is behavioral, not source-copy based:
 | Bounded file read/read-many | **absorbed** |
 | Transactional patch with containment checks | **absorbed** |
 | Resumable/idempotent process operations | **absorbed** |
-| Git-backed current + historical review | **absorbed**, richer summaries/baselines remain |
+| Git-backed current + historical review | **partial** — self-contained historical checkpoints and compact file/addition/removal summaries are absorbed; turn-oriented `last_shown`/workspace-open baselines and richer host review UI remain |
 | Ownership-safe isolated Git worktrees | **absorbed** |
 | Privacy-safe incident records | **absorbed** |
 | Durable bounded delegated agents | **partial** — provider-neutral lifecycle exists; provider breadth and safe process authority remain |
 | Code/directory search and efficient repository exploration | **absorbed** — bounded `list_directory` + recursive `search_text`, with dependency/build and symlink traversal excluded by contract |
 | Standard/project skills discovery and loading | **absorbed** — project `.agents/skills` + standard global `~/.agents/skills`, bounded `read_skill`, project-over-global precedence; legacy DevSpace-only skill migration remains separate |
-| General artifact upload/download/exchange | **pending** |
+| Native ChatGPT file import into a workspace | **pending contract decision** — ChatGPT's file-parameter metadata names top-level tool input fields, while Tela's frozen generic Chat capability nests dynamic arguments. Do not break the frozen four-tool ABI or paste raw download URLs as a shortcut; a future ABI generation or dedicated proven file-ingress surface is required. |
 | Host-facing review/artifact UX comparable to the mature workflow | **pending** |
 
 ## CodexGPTWeb assimilation ledger

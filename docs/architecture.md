@@ -886,6 +886,12 @@ untracked paths for only the selected workspace. It also writes a bounded self-c
 artifact under Tela Chat state. `show_review` reads only that retained artifact, so later working-tree edits
 or a service restart cannot silently change what an old review reference means.
 
+Current and historical review results also expose a compact file/addition/removal summary. When a historical
+checkpoint has captured text/symlink untracked content, that summary includes it; binary untracked content or
+a live checkpoint-capture failure marks the summary incomplete rather than inventing line counts. Turn-oriented
+`last_shown` / workspace-open baselines remain separate work because Tela does not create permanent review refs
+or deliberate review objects in the user's Git object database merely to emulate the reference workflow.
+
 Review checkpoints intentionally do **not** create permanent refs or deliberate review objects in the user's
 Git object database. A checkpoint stores the tracked binary-capable diff plus bounded snapshots of untracked
 regular files and symlink targets. Intermediate symlink escapes are re-proven against the workspace root
