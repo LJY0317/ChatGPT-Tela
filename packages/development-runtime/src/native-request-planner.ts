@@ -466,8 +466,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
           provider_projection: false,
           retained_delta: true,
           ...(pressure ? {
-            epoch_estimated_input_tokens: pressure.estimatedEpochInputTokens,
-            epoch_rollover_token_limit: pressure.effectiveRolloverTokenLimit,
+            epoch_input_estimate: pressure.estimatedEpochInputTokens,
+            epoch_rollover_limit: pressure.effectiveRolloverTokenLimit,
             physical_rollover: false,
           } : {}),
         }),
@@ -590,8 +590,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: {
         retained_delta: false,
         physical_rollover: pressure?.shouldRollover === true,
         ...(pressure ? {
-          previous_epoch_estimated_input_tokens: pressure.estimatedEpochInputTokens,
-          previous_epoch_rollover_token_limit: pressure.effectiveRolloverTokenLimit,
+          previous_epoch_input_estimate: pressure.estimatedEpochInputTokens,
+          previous_epoch_rollover_limit: pressure.effectiveRolloverTokenLimit,
         } : {}),
         projection_original_bytes: providerProjection.stats.originalRevisionBytes,
         projection_projected_bytes: providerProjection.stats.projectedRevisionBytes,

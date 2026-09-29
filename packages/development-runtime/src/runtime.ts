@@ -169,8 +169,8 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           acquired = await browserEpochs.acquire(plan.nativeTaskId, plan.webEpochId);
           emitDiagnosticEvent("chatgpt_tela_work", "web_turn_plan", {
             context_mode: plan.physicalContext.mode,
-            logical_tokens: plan.physicalContext.logicalTokens,
-            transfer_tokens: plan.physicalContext.transferTokens,
+            logical_estimate: plan.physicalContext.logicalTokens,
+            transfer_estimate: plan.physicalContext.transferTokens,
             retained_surface: acquired.reused,
             ...(plan.diagnostics ?? {}),
           });

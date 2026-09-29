@@ -71,6 +71,7 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   failConnectorSelection = false;
   recoverContextPreload = false;
   autoContextPreload = false;
+  normalizeAttachmentLabelAfterAttach = false;
   attachedFiles: string[] = [];
   contextAcknowledgement: string | undefined;
   connectorCatalogUnavailable = false;
@@ -180,7 +181,7 @@ class FixtureDriver implements ChatGptSurfaceDriver {
       ...this.current,
       revision: `${this.current.revision}:files`,
       composers: this.current.composers.map(composer => composer.key === composerKey
-        ? { ...composer, attachmentNames: files.map(file => file.name) }
+        ? { ...composer, attachmentNames: this.normalizeAttachmentLabelAfterAttach ? ["attachment"] : files.map(file => file.name) }
         : composer),
       sendControls: this.current.sendControls.map(control => control.composerKey === composerKey
         ? { ...control, enabled: true }
@@ -329,6 +330,35 @@ describe("ChatGPT semantic provider", () => {
       expect(driver.contextAcknowledgement).toMatch(/^TELA_CONTEXT_ACK ctxr_[a-f0-9]{32}$/);
       expect(driver.activated).toHaveLength(1);
       expect(driver.current.composers[0]?.attachmentNames).toEqual([]);
+    } finally {
+      await host.release(lease.leaseId);
+      await host.close();
+    }
+  });
+
+  test("context attachment preload trusts a driver-proven upload when the settled UI normalizes the filename label", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.autoContextPreload = true;
+    driver.normalizeAttachmentLabelAfterAttach = true;
+    const { host, lease } = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ connectorDraftPersistenceSettleMs: 0 });
+    const attachment = createChatGptContextAttachment({
+      headRevisionId: "r1",
+      activeRequestRevisionId: "r1",
+      mode: "full",
+      logicalTokens: 4,
+      transferTokens: 4,
+      segments: [{ type: "revision", revisionId: "r1", kind: "user", content: "hello" }],
+    });
+    try {
+      const result = await provider.preloadContextAttachment(lease, {
+        nativeTaskId: "task-1",
+        webEpochId: "epoch-1",
+        attachment,
+      });
+      expect(result.state).toBe("proven");
+      expect(driver.attachedFiles).toEqual([attachment.name]);
+      expect(driver.activated).toHaveLength(1);
     } finally {
       await host.release(lease.leaseId);
       await host.close();
