@@ -26,6 +26,7 @@ Status vocabulary:
 | Downstream lesson | Tela status | Tela contract |
 | --- | --- | --- |
 | Separate durable Native logical context from disposable Web physical context | **absorbed** | `RevisionLineage`, `WebPhysicalContext.logicalTokens`, `transferTokens`; Web projection can never replace Native history. |
+| Use Temporary Chat for disposable Work browser tasks | **absorbed** | every product Work surface starts at the Temporary Chat URL; the first send and any context preload recheck that surface immediately before activation. A proven surface may continue after ChatGPT promotes its URL to `/c/...`. Profile 2 completed a live Web turn with this guard active; direct history-list inspection remains pending. |
 | Keep a task/model/effort Web conversation across sequential Native turns | **absorbed** | one retained browser surface per exact Native task/Web epoch; successful turns leave it idle for reuse. |
 | Send only the canonical suffix on retained continuation | **absorbed** | `retained-delta` requires the prior committed Native input head and exact previous Web-answer fingerprint in the current canonical lineage. |
 | Advance retained state only after a proven completed Web turn | **absorbed** | planner settlement is transactional; failed/ambiguous turns do not move the committed retained anchor. |
@@ -42,7 +43,7 @@ Status vocabulary:
 
 | Downstream lesson | Tela status | Tela contract |
 | --- | --- | --- |
-| Preserve every Native model and add explicit Web-backed choices | **partial** | The default Desktop path is live-proven. Profile 2+ uses Plura's authenticated model-list overlay contract and preserves Native rows on callback failure. A source-build Profile 2 canary selected/restored a Web family and its app-server `model/list` contained 3 Web rows among 10 total rows. Installed Plura still lacks this contract; Profile 2 Native passthrough proof remains. |
+| Preserve every Native model and add explicit Web-backed choices | **partial** | The default Desktop path is live-proven. Profile 2+ uses Plura's authenticated model-list overlay contract and preserves Native rows on callback failure. A source-build Profile 2 canary selected/restored a Web family, observed 3 Web rows among 10 `model/list` rows, and completed both Native passthrough and Web turns. Installed Plura still lacks this contract. |
 | Discover current ChatGPT model families from the authenticated browser | **absorbed** | the hidden authenticated browser discovers live family rows and effort availability; no GPT-version allowlist or account-plan guess exists in product constants. Live canaries proved three current families on Profile 1 and eight on Profile 2, confirming that account-local browser observation—not one global catalog—is the authority. |
 | Give dynamic model families stable opaque route identities | **absorbed** | NFKC/whitespace/case-normalized observed family semantics derive an opaque SHA-256 family key; display labels are not authority. |
 | Verify selected Web family/effort immediately before Send | **absorbed** | the runtime preparation hook executes immediately before the consequential submit boundary; exact family + effort readback must converge within a fixed bound or the message is not sent. Private non-submit live canaries proved select/readback/restore on both Profile 1 and Profile 2. Hidden/offscreen family activation uses bounded DOM/pointer fallbacks only with semantic checked-row readback. |
@@ -112,7 +113,7 @@ Status vocabulary:
 1. retained Web epoch + suffix-only continuation (**absorbed**);
 2. deterministic fresh provider projection + physical pressure telemetry (**absorbed**);
 3. browser semantic model-family/effort discovery (**absorbed**, Profile 1 live-proven);
-4. composite Native + explicit Tela Web `model/list` surface and routing (**partial**: default Desktop live-proven; Profile 2 source-build model selection and list overlay proven, installed Plura update and Native passthrough proof pending);
+4. composite Native + explicit Tela Web `model/list` surface and routing (**partial**: default Desktop and Profile 2 source-build Native/Web turns proven; installed Plura update pending);
 5. independent physical-pressure epoch rollover + fresh hard-fit planner (**absorbed**);
 6. receipt-verified large-context/file transport (**absorbed**) and multipart transport;
 7. retained compaction proof/canary (**absorbed for retained live reuse; compaction-specific proof remains**), richer incident diagnostics, approval/subagent/skill audits;
