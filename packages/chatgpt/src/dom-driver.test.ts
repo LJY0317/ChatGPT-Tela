@@ -243,6 +243,10 @@ describe("current ChatGPT DOM surface driver", () => {
     const driver = new ChatGptDomSurfaceDriver(page);
     const snapshot = await driver.observe();
 
+    // ChatGPT Work also renders a non-attachment role=group utility bar inside the form.
+    expect(page.lastObserveSource).toContain('[data-composer-attachments] [role="group"]');
+    expect(page.lastObserveSource).not.toContain("querySelectorAll('[role=\"group\"], .composer-attachment-surface')");
+
     expect(snapshot.composers[0]).toEqual({
       key: "composer:primary",
       visible: true,

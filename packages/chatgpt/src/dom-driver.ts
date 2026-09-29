@@ -378,7 +378,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
       const normalized = String(value || "").replace(/\s+/g, " ").trim();
       if (normalized && normalized.length <= 240 && !/[\r\n]/.test(normalized)) result.add(normalized);
     };
-    for (const candidate of form.querySelectorAll('[role="group"], .composer-attachment-surface')) {
+    for (const candidate of form.querySelectorAll('[data-composer-attachments] [role="group"], .composer-attachment-surface')) {
       if (!(candidate instanceof HTMLElement) || !visible(candidate)) continue;
       add(candidate.getAttribute("aria-label"));
       const labelledBy = candidate.getAttribute("aria-labelledby");
@@ -606,7 +606,7 @@ const CLASSIFY_CONTEXT_PRELOAD_ARTIFACT = String.raw`function (argument) {
       const normalized = String(value || "").replace(/\s+/g, " ").trim();
       if (normalized && normalized.length <= 240 && !/[\r\n]/.test(normalized)) result.add(normalized);
     };
-    for (const candidate of form.querySelectorAll('[role="group"], .composer-attachment-surface')) {
+    for (const candidate of form.querySelectorAll('[data-composer-attachments] [role="group"], .composer-attachment-surface')) {
       if (!(candidate instanceof HTMLElement) || !visible(candidate)) continue;
       add(candidate.getAttribute("aria-label"));
       const labelledBy = candidate.getAttribute("aria-labelledby");

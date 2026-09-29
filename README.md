@@ -758,8 +758,9 @@ rollover intentionally opened a fresh Web epoch). The command reads no prompt, t
 file content, workspace path, or browser transcript.
 
 It does not send a ChatGPT message or create Native task authority. The single-profile/default Desktop path is
-the current live-proven composite catalog path; optional Profile 2+ targets still need the corresponding Plura
-app-server catalog projection before they expose the same `(Web)` rows. The browser selection boundary itself
+live-proven. A source-build Plura Profile 2 canary also proved the app-server catalog projection: 3 Web rows
+appeared beside Native rows in a 10-row `model/list` result. The installed Plura version still needs this
+contract before normal Profile 2 sessions expose those rows. The browser selection boundary itself
 is live-proven on both Profile 1 and Profile 2; the latter currently exposes a different live family catalog,
 which is why Tela treats account/browser discovery as authority rather than assuming one global model list.
 
