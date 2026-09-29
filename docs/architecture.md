@@ -856,6 +856,9 @@ The first Tela Chat slice is now implemented and intentionally smaller than the 
 ChatGPT unified gateway
   -> Tela Chat private backend
   -> open one locally approved user-owned workspace
+  -> load bounded root project instructions and advertise nested instruction files
+  -> bounded directory listing / recursive text search
+  -> discover project/standard Agent Skills and read them on demand
   -> bounded read/read-many
   -> apply one patch
   -> start one resumable process operation
@@ -871,6 +874,12 @@ rollback-aware replacement. Process operations reserve an explicit operation id 
 retry cannot duplicate execution; the durable registry intentionally stores no command, output, environment,
 or filesystem path payload. A restart reports unresolved prior operations as `unknown` with no recovered I/O
 rather than attaching to an unproven PID.
+
+Workspace open also returns bounded root-level `AGENTS.md` / `CLAUDE.md` instruction content plus a bounded
+list of nested instruction files. Nested files are never silently injected later: the caller must read the
+applicable file before working under that subtree. Instruction discovery skips dependency/build trees,
+rejects instruction-shaped paths that cannot be proven inside the workspace, and reports an incomplete scan
+instead of pretending an enumeration bound or unreadable subtree contains no instructions.
 
 `show_changes` is Git-backed, disables external diff/textconv execution, and returns tracked diff plus
 untracked paths for only the selected workspace. It also writes a bounded self-contained historical review

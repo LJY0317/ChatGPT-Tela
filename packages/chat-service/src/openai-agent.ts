@@ -108,6 +108,74 @@ function tools(writeMode: ChatAgentRunInput["writeMode"]): readonly Record<strin
   const definitions: Record<string, unknown>[] = [
     {
       type: "function",
+      name: "workspace_instructions",
+      description: "Inspect root project instructions and the bounded list of nested instruction files for this authorized workspace.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "list_directory",
+      description: "List one bounded relative directory inside the authorized workspace.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: ["string", "null"] },
+          limit: { type: ["integer", "null"], minimum: 1, maximum: 400 },
+        },
+        required: ["path", "limit"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "search_text",
+      description: "Search bounded text recursively inside the authorized workspace without shell execution.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          path: { type: ["string", "null"] },
+          case_sensitive: { type: "boolean" },
+          max_results: { type: ["integer", "null"], minimum: 1, maximum: 200 },
+        },
+        required: ["query", "path", "case_sensitive", "max_results"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "list_skills",
+      description: "List standard/project skills available to this workspace. Use when a task may match a reusable workflow.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: ["string", "null"] } },
+        required: ["query"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
+      name: "read_skill",
+      description: "Read bounded lines from one discovered skill or its supporting resource file.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          path: { type: ["string", "null"] },
+          offset: { type: ["integer", "null"], minimum: 1 },
+          limit: { type: ["integer", "null"], minimum: 1, maximum: 400 },
+        },
+        required: ["name", "path", "offset", "limit"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+    {
+      type: "function",
       name: "read",
       description: "Read bounded lines from one relative file inside the authorized workspace.",
       parameters: {
@@ -188,6 +256,8 @@ function toolResult(value: unknown): string {
 function agentInstructions(writeMode: ChatAgentRunInput["writeMode"]): string {
   const common = [
     "Work only through the provided Tela workspace tools. Paths are relative to one authorized workspace; do not invent access outside it.",
+    "Begin by inspecting workspace_instructions. Follow loaded root instructions, and before working under a subtree listed there, read the applicable nested instruction file.",
+    "Use list_directory and search_text to locate relevant code instead of guessing paths. When a task matches a reusable workflow, inspect list_skills and read the matching skill before proceeding.",
     "Use read_many only for already-known independent paths. When one result determines what to inspect next, read sequentially.",
     "Treat actual tool results as evidence. After a deterministic failure, update the working hypothesis or observable state before repeating the same call.",
   ];
@@ -211,6 +281,46 @@ async function invokeTool(
 ): Promise<unknown> {
   const args = call.arguments;
   switch (call.name) {
+    case "workspace_instructions":
+      return tools_.workspaceInstructions(input.workspaceId);
+    case "list_directory": {
+      const limit = integer(args.limit, "list_directory.limit", 1, 400);
+      const path = args.path === undefined || args.path === null ? undefined : relativePath(args.path, "list_directory.path");
+      return tools_.listDirectory({
+        workspaceId: input.workspaceId,
+        ...(path === undefined ? {} : { path }),
+        ...(limit === undefined ? {} : { limit }),
+      });
+    }
+    case "search_text": {
+      const path = args.path === undefined || args.path === null ? undefined : relativePath(args.path, "search_text.path");
+      const maxResults = integer(args.max_results, "search_text.max_results", 1, 200);
+      if (typeof args.case_sensitive !== "boolean") throw new Error("search_text.case_sensitive must be a boolean");
+      return tools_.searchText({
+        workspaceId: input.workspaceId,
+        query: boundedText(args.query, "search_text.query", 4 * 1024),
+        ...(path === undefined ? {} : { path }),
+        caseSensitive: args.case_sensitive,
+        ...(maxResults === undefined ? {} : { maxResults }),
+      });
+    }
+    case "list_skills":
+      return tools_.listSkills(
+        input.workspaceId,
+        args.query === undefined || args.query === null ? "" : boundedText(args.query, "list_skills.query", 2 * 1024),
+      );
+    case "read_skill": {
+      const path = args.path === undefined || args.path === null ? undefined : relativePath(args.path, "read_skill.path");
+      const offset = integer(args.offset, "read_skill.offset", 1, Number.MAX_SAFE_INTEGER);
+      const limit = integer(args.limit, "read_skill.limit", 1, 400);
+      return tools_.readSkill({
+        workspaceId: input.workspaceId,
+        name: boundedText(args.name, "read_skill.name", 128),
+        ...(path === undefined ? {} : { path }),
+        ...(offset === undefined ? {} : { offset }),
+        ...(limit === undefined ? {} : { limit }),
+      });
+    }
     case "read": {
       const offset = integer(args.offset, "read.offset", 1, Number.MAX_SAFE_INTEGER);
       const limit = integer(args.limit, "read.limit", 1, 400);

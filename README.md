@@ -94,6 +94,13 @@ use. This dogfooding target is stricter than merely exposing low-level tools:
   development cannot be completed comfortably through those surfaces, that friction is treated as product
   work rather than as an acceptable permanent dependency on a separate developer-only control path.
 
+The long-term assimilation gate is stronger than feature sampling. The maintainer's DevSpace local patches,
+CodexGPTWeb local patches, Permity workflow, and LJY's Menu Bar workflow remain available as reference/fallback
+systems while Tela is pre-release, but Tela is only considered complete when the user could remove those
+reference installations without losing the workflows they still rely on. Reaching that gate does **not** mean
+Tela will delete or uninstall those projects automatically; retirement is a human decision after parity and
+dogfood evidence. See [docs/legacy-workflow-assimilation.md](docs/legacy-workflow-assimilation.md).
+
 The current pre-alpha already proves substantial pieces of both paths, including live Tela Chat capability
 calls and a real Work/Codex Web -> public connector -> Native tool -> same-turn continuation proof. The target,
 however, is everyday usability comparable to the mature reference workflows rather than a collection of

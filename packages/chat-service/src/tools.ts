@@ -2,14 +2,38 @@ import { join } from "node:path";
 import { ChatAgentManager, type ChatAgentDriver, type ChatAgentWriteMode } from "./agents";
 import { ChatChangeReviewer } from "./changes";
 import { ChatFileTools } from "./files";
+import { ChatExplorationTools } from "./exploration";
 import { ChatIncidentStore } from "./incidents";
 import { ChatPatchTool } from "./patch";
 import { ChatProcessManager } from "./processes";
 import { ChatReviewCheckpointStore } from "./reviews";
+import { ChatSkillCatalog } from "./skills";
 import { ChatWorkspaceRegistry } from "./workspaces";
 import { ChatManagedWorktreeManager } from "./worktrees";
+import { discoverWorkspaceInstructions } from "./workspace-instructions";
 
 export interface ChatAgentWorkspaceTools {
+  workspaceInstructions(workspaceId: string): unknown;
+  listDirectory(input: {
+    readonly workspaceId: string;
+    readonly path?: string;
+    readonly limit?: number;
+  }): unknown;
+  searchText(input: {
+    readonly workspaceId: string;
+    readonly query: string;
+    readonly path?: string;
+    readonly caseSensitive?: boolean;
+    readonly maxResults?: number;
+  }): unknown;
+  listSkills(workspaceId: string, query?: string): unknown;
+  readSkill(input: {
+    readonly workspaceId: string;
+    readonly name: string;
+    readonly path?: string;
+    readonly offset?: number;
+    readonly limit?: number;
+  }): unknown;
   read(input: {
     readonly workspaceId: string;
     readonly path: string;
@@ -28,6 +52,10 @@ export type ChatAgentDriverFactory = (tools: ChatAgentWorkspaceTools) => ChatAge
 
 export const TELA_CHAT_BASE_CAPABILITIES = Object.freeze([
   "open_workspace",
+  "list_directory",
+  "search_text",
+  "list_skills",
+  "read_skill",
   "read",
   "read_many",
   "apply_patch",
@@ -68,6 +96,8 @@ export type TelaChatCapability = typeof TELA_CHAT_CAPABILITIES[number];
 
 export interface ChatToolRuntime {
   readonly workspaces: ChatWorkspaceRegistry;
+  readonly exploration: ChatExplorationTools;
+  readonly skills: ChatSkillCatalog;
   readonly files: ChatFileTools;
   readonly patch: ChatPatchTool;
   readonly processes: ChatProcessManager;
@@ -122,6 +152,7 @@ function capability(value: string, allowed: readonly TelaChatCapability[]): Tela
 export function createChatToolRuntime(input: {
   readonly allowedRoots: readonly string[];
   readonly stateRoot: string;
+  readonly globalSkillRoots?: readonly string[];
   readonly agentDrivers?: readonly ChatAgentDriver[];
   readonly agentDriverFactories?: readonly ChatAgentDriverFactory[];
   readonly ownership?: {
@@ -137,12 +168,22 @@ export function createChatToolRuntime(input: {
     storePath: join(input.stateRoot, "workspaces-v1.json"),
   });
   const files = new ChatFileTools(workspaces);
+  const exploration = new ChatExplorationTools(workspaces);
+  const skills = new ChatSkillCatalog({ workspaces, ...(input.globalSkillRoots ? { globalRoots: input.globalSkillRoots } : {}) });
   const patch = new ChatPatchTool(workspaces);
   const processes = new ChatProcessManager({ workspaces, storePath: join(input.stateRoot, "process-operations-v1.json") });
   const reviews = new ChatReviewCheckpointStore({ root: join(input.stateRoot, "reviews") });
   const incidents = new ChatIncidentStore({ root: join(input.stateRoot, "incidents") });
   const changes = new ChatChangeReviewer(workspaces, reviews);
   const agentWorkspaceTools: ChatAgentWorkspaceTools = Object.freeze({
+    workspaceInstructions: (workspaceId: string) => {
+      const workspace = workspaces.get(workspaceId);
+      return discoverWorkspaceInstructions(workspace.root);
+    },
+    listDirectory: (request: Parameters<ChatAgentWorkspaceTools["listDirectory"]>[0]) => exploration.listDirectory(request),
+    searchText: (request: Parameters<ChatAgentWorkspaceTools["searchText"]>[0]) => exploration.searchText(request),
+    listSkills: (workspaceId: string, query = "") => skills.list(workspaceId, query),
+    readSkill: (request: Parameters<ChatAgentWorkspaceTools["readSkill"]>[0]) => skills.read(request),
     read: (request: Parameters<ChatAgentWorkspaceTools["read"]>[0]) => files.read(request),
     readMany: (request: Parameters<ChatAgentWorkspaceTools["readMany"]>[0]) => files.readMany(request),
     applyPatch: (request: Parameters<ChatAgentWorkspaceTools["applyPatch"]>[0]) => patch.apply(request),
@@ -176,6 +217,8 @@ export function createChatToolRuntime(input: {
   ]);
   return Object.freeze({
     workspaces,
+    exploration,
+    skills,
     files,
     patch,
     processes,
@@ -193,8 +236,39 @@ export function createChatToolRuntime(input: {
       const args = object(inputValue, `${selected} arguments`);
       try {
         switch (selected) {
-        case "open_workspace":
-          return workspaces.open(text(args.path, "workspace path"));
+        case "open_workspace": {
+          const workspace = workspaces.open(text(args.path, "workspace path"));
+          return Object.freeze({ ...workspace, ...discoverWorkspaceInstructions(workspace.root) });
+        }
+        case "list_directory":
+          return exploration.listDirectory({
+            workspaceId: text(args.workspace_id, "workspace_id"),
+            ...(optionalText(args.path, "path") === undefined ? {} : { path: optionalText(args.path, "path")! }),
+            ...(optionalInteger(args.limit, "limit") === undefined ? {} : { limit: optionalInteger(args.limit, "limit")! }),
+          });
+        case "search_text":
+          return exploration.searchText({
+            workspaceId: text(args.workspace_id, "workspace_id"),
+            query: multilineText(args.query, "query", 4 * 1024),
+            ...(optionalText(args.path, "path") === undefined ? {} : { path: optionalText(args.path, "path")! }),
+            ...(args.case_sensitive === undefined ? {} : typeof args.case_sensitive === "boolean"
+              ? { caseSensitive: args.case_sensitive }
+              : (() => { throw new Error("case_sensitive must be a boolean"); })()),
+            ...(optionalInteger(args.max_results, "max_results") === undefined ? {} : { maxResults: optionalInteger(args.max_results, "max_results")! }),
+          });
+        case "list_skills":
+          return skills.list(
+            text(args.workspace_id, "workspace_id"),
+            optionalText(args.query, "query") ?? "",
+          );
+        case "read_skill":
+          return skills.read({
+            workspaceId: text(args.workspace_id, "workspace_id"),
+            name: text(args.name, "name"),
+            ...(optionalText(args.path, "path") === undefined ? {} : { path: optionalText(args.path, "path")! }),
+            ...(optionalInteger(args.offset, "offset") === undefined ? {} : { offset: optionalInteger(args.offset, "offset")! }),
+            ...(optionalInteger(args.limit, "limit") === undefined ? {} : { limit: optionalInteger(args.limit, "limit")! }),
+          });
         case "read":
           return files.read({ workspaceId: text(args.workspace_id, "workspace_id"), path: text(args.path, "path"),
             ...(optionalInteger(args.offset, "offset") === undefined ? {} : { offset: optionalInteger(args.offset, "offset")! }),

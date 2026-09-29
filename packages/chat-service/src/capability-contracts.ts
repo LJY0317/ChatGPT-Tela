@@ -24,14 +24,47 @@ const object = (
 
 const workspaceId = string(512);
 const path = string(16_384);
+const boolean = Object.freeze({ type: "boolean" });
 const operationId = Object.freeze({ type: "string", format: "uuid" });
 const agentId = string(512);
 
 export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] = Object.freeze([
   {
     capability: "open_workspace",
-    description: "Open or reuse one locally approved workspace root. Reuse the returned workspace_id for continued work in the same workspace. The workspace remains user-owned.",
+    description: "Open or reuse one locally approved workspace root. Reuse the returned workspace_id for continued work. Follow returned root instructions; before working under a subtree listed in availableInstructionFiles, read its applicable instruction file. If instructionScanComplete is false, do not assume undiscovered subtrees have no instructions. The workspace remains user-owned.",
     inputSchema: object({ path }, ["path"]),
+  },
+  {
+    capability: "list_directory",
+    description: "List one bounded directory inside an opened workspace without shell execution. Use this for repository exploration before reading specific files.",
+    inputSchema: object({ workspace_id: workspaceId, path, limit: integer(1, 400) }, ["workspace_id"]),
+  },
+  {
+    capability: "search_text",
+    description: "Search bounded text content recursively inside an opened workspace without shell execution. Dependency/build trees and symlink traversal are skipped; scanComplete=false means the bounded search did not cover every candidate file.",
+    inputSchema: object({
+      workspace_id: workspaceId,
+      query: string(4 * 1024),
+      path,
+      case_sensitive: boolean,
+      max_results: integer(1, 200),
+    }, ["workspace_id", "query"]),
+  },
+  {
+    capability: "list_skills",
+    description: "List standard model-invocable skills available from the opened project's .agents/skills and the user's standard ~/.agents/skills roots. Project skills override same-named global skills.",
+    inputSchema: object({ workspace_id: workspaceId, query: string(2_048) }, ["workspace_id"]),
+  },
+  {
+    capability: "read_skill",
+    description: "Read bounded lines from one discovered skill's SKILL.md or a supporting file inside that exact skill directory. Read the matching skill before following its workflow.",
+    inputSchema: object({
+      workspace_id: workspaceId,
+      name: string(128),
+      path,
+      offset: integer(1),
+      limit: integer(1, 400),
+    }, ["workspace_id", "name"]),
   },
   {
     capability: "read",

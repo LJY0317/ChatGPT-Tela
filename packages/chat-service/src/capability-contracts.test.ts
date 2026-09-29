@@ -19,7 +19,8 @@ describe("Tela Chat capability contracts", () => {
 
   test("catalog filters by actual runtime availability before query matching", () => {
     const base = chatCapabilityCatalog(TELA_CHAT_BASE_CAPABILITIES, "agent");
-    expect(base).toEqual([]);
+    expect(base.map(item => item.capability)).not.toContain("start_agent");
+    expect(base.map(item => item.capability)).not.toContain("list_agent_targets");
     const full = chatCapabilityCatalog([
       ...TELA_CHAT_BASE_CAPABILITIES,
       ...TELA_CHAT_MANAGED_WORKTREE_CAPABILITIES,

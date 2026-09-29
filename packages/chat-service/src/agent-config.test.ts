@@ -84,6 +84,11 @@ describe("Tela Chat agent provider config", () => {
     });
     expect(factories).toHaveLength(1);
     const driver = factories[0]!({
+      workspaceInstructions() { return { instructions: [], availableInstructionFiles: [], instructionScanComplete: true }; },
+      listDirectory() { return { path: ".", entries: [], hasMore: false }; },
+      searchText() { return { path: ".", matches: [], scanComplete: true }; },
+      listSkills() { return []; },
+      readSkill() { return {}; },
       read() { return {}; },
       readMany() { return []; },
       applyPatch() { return {}; },
