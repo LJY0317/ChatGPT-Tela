@@ -383,7 +383,10 @@ async function advancedPicker(page: BrowserPageAutomation, signal?: AbortSignal)
       if (!snapshot.advancedPoint) throw new Error("ChatGPT model picker has no unique advanced-family trigger");
       await page.pointerClick(snapshot.advancedPoint, signal);
     }
-    snapshot = await waitFor(page, value => value.view === "advanced" && value.families.length > 0, 3_000, "advanced-families", signal);
+    // Hidden Electron surfaces can mount the picker shell first and populate semantic
+    // family rows after a later React/layout pass. Keep this bounded, but do not treat a
+    // short UI hydration delay as a model-catalog failure.
+    snapshot = await waitFor(page, value => (value.view === "advanced" || value.view === "legacy") && value.families.length > 0, 10_000, "advanced-families", signal);
   }
   if (snapshot.families.length === 0) throw new Error("ChatGPT model picker exposes no model family rows");
   return snapshot;

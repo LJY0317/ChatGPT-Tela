@@ -75,6 +75,8 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   attachedFiles: string[] = [];
   contextAcknowledgement: string | undefined;
   connectorCatalogUnavailable = false;
+  approvalCalls = 0;
+  approveRecognizedCard = false;
 
   constructor(initial: ChatGptSurfaceSnapshot) {
     this.current = structuredClone(initial);
@@ -85,6 +87,13 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   }
 
   async dismissTransientUi(): Promise<void> {}
+
+  async processApprovalCard(): Promise<{ readonly status: "none" | "approved"; readonly reason: string }> {
+    this.approvalCalls += 1;
+    return this.approveRecognizedCard
+      ? { status: "approved", reason: "allow_once" }
+      : { status: "none", reason: "absent" };
+  }
 
   async recoverConnectorArtifact(composerKey: string, connectorName: string): Promise<boolean> {
     const composer = this.current.composers.find(item => item.key === composerKey);
@@ -1125,6 +1134,65 @@ describe("ChatGPT semantic provider", () => {
         },
         evidence: ["assistant completion followed a proven post-tool continuation boundary"],
       });
+    } finally {
+      await surface.host.close();
+    }
+  });
+
+  test("approval delay inspects a one-shot card during an active assistant turn", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.approveRecognizedCard = true;
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({
+      approvalAutomationMode: "recognized_once",
+      approvalAutomationDelayMs: 1,
+    });
+    try {
+      const submitting = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await submitting;
+      if (submitted.state !== "proven") throw new Error("expected proven submit fixture");
+      driver.queued.push({
+        ...driver.current,
+        revision: "approval-assistant-active",
+        turns: [
+          ...driver.current.turns,
+          {
+            key: "assistant-approval",
+            role: "assistant",
+            parentUserTurnKey: "user-turn-1",
+            phase: "thinking",
+          },
+        ],
+      });
+      driver.queued.push({
+        ...driver.current,
+        revision: "approval-complete",
+        turns: [
+          ...driver.current.turns,
+          {
+            key: "assistant-approval",
+            role: "assistant",
+            parentUserTurnKey: "user-turn-1",
+            phase: "complete",
+            text: "approved and finished",
+          },
+        ],
+      });
+      const completed = await provider.waitForTurnEvent(surface.lease, submitted.value);
+      expect(driver.approvalCalls).toBe(1);
+      expect(completed).toEqual({
+        state: "proven",
+        value: {
+          kind: "completed",
+          providerTurnId: "user-turn-1",
+          answer: "approved and finished",
+        },
+        evidence: ["one assistant descendant reached complete state"],
+      });
+      expect(() => new ChatGptSemanticProvider({ approvalAutomationDelayMs: 15_001 }))
+        .toThrow("0-15000ms");
     } finally {
       await surface.host.close();
     }

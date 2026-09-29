@@ -8,6 +8,7 @@ import {
   type ElectronMainRuntimeLike,
 } from "@chatgpt-tela/electron-host";
 import {
+  CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS,
   ChatGptSemanticProvider,
   createChatGptContextAttachment,
   discoverChatGptWebModelFamilies as discoverWebModelFamilies,
@@ -89,6 +90,7 @@ export interface ElectronDevelopmentRuntimeOptions {
   };
   readonly provider?: WebConversationProvider;
   readonly approvalAutomationMode?: import("@chatgpt-tela/chatgpt").ChatGptApprovalAutomationMode;
+  readonly approvalAutomationDelayMs?: number;
   readonly webTurnTimeoutMs?: number;
   readonly accountIdentityObserver?: ChatGptAccountIdentityObserver;
   /** Test/provider seam; production uses the ChatGPT semantic model-picker implementation. */
@@ -146,6 +148,9 @@ export async function startElectronDevelopmentRuntime(
   const provider = input.provider ?? new ChatGptSemanticProvider({
     ...(input.connectorName ? { connectorName: input.connectorName } : {}),
     ...(input.approvalAutomationMode ? { approvalAutomationMode: input.approvalAutomationMode } : {}),
+    ...(input.approvalAutomationDelayMs !== undefined
+      ? { approvalAutomationDelayMs: input.approvalAutomationDelayMs }
+      : {}),
   });
   const checkpointCache = input.context?.checkpointCache;
   const modelFamilyDiscovery = input.modelFamilyDiscovery ?? discoverWebModelFamilies;
@@ -247,7 +252,7 @@ export async function startElectronDevelopmentRuntime(
             kind: "user" as const,
             content: [
               "ChatGPT Tela context attachment live canary. No task execution is requested.",
-              "x".repeat(220_000),
+              "x".repeat(CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS),
             ].join("\n"),
           })]),
         }));

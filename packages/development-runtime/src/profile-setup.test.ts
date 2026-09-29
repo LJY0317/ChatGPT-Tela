@@ -123,6 +123,11 @@ describe("Electron ChatGPT profile setup runtime", () => {
             };
           },
         },
+        accountIdentityObserver: async () => ({
+          accountFingerprint: "a".repeat(64),
+          containerFingerprint: "b".repeat(64),
+          accountStructure: "personal" as const,
+        }),
         electron: {
           async loadRuntime() {
             return {
@@ -137,6 +142,7 @@ describe("Electron ChatGPT profile setup runtime", () => {
     const result = await runtime.probeChatGptContextAttachment();
     expect(result.receiptVerified).toBe(true);
     expect(result.attachmentBytes).toBeGreaterThan(0);
+    expect(result.account.accountFingerprint).toBe("a".repeat(64));
     expect(windows).toHaveLength(1);
     expect(windows[0]?.events).toEqual(["load:https://chatgpt.com/", "destroy"]);
     await runtime.stop();

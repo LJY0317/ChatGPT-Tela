@@ -34,6 +34,7 @@ private struct ProfilesEnvelope: Decodable {
 private struct Preferences: Codable {
   let version: Int
   var approvalAutomation: String
+  var approvalDelay: String?
 }
 
 private struct MenuSnapshot {
@@ -41,6 +42,7 @@ private struct MenuSnapshot {
   let ingress: IngressStatus?
   let profiles: [ProfileStatus]
   let approvalAutomation: String?
+  let approvalDelay: String?
   let approvalError: Bool
   let installedServiceControls: Bool
 }
@@ -170,17 +172,20 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
 
   private func readPreferences() throws -> Preferences {
     guard fileManager.fileExists(atPath: preferencesURL.path) else {
-      return Preferences(version: 1, approvalAutomation: "off")
+      return Preferences(version: 1, approvalAutomation: "off", approvalDelay: "instant")
     }
     let values = try preferencesURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
     guard values.isRegularFile == true, values.isSymbolicLink != true else {
       throw NSError(domain: "ChatGPTTelaMenuBar", code: 5)
     }
     let value = try JSONDecoder().decode(Preferences.self, from: Data(contentsOf: preferencesURL))
-    guard value.version == 1, ["off", "recognized_once"].contains(value.approvalAutomation) else {
+    let delay = value.approvalDelay ?? "instant"
+    guard value.version == 1,
+          ["off", "recognized_once"].contains(value.approvalAutomation),
+          ["instant", "250ms", "500ms", "1s", "2s", "5s", "10s", "15s"].contains(delay) else {
       throw NSError(domain: "ChatGPTTelaMenuBar", code: 6)
     }
-    return value
+    return Preferences(version: 1, approvalAutomation: value.approvalAutomation, approvalDelay: delay)
   }
 
   private func writePreferences(_ value: Preferences) throws {
@@ -219,6 +224,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       ingress: await ingress,
       profiles: profiles,
       approvalAutomation: preferences?.approvalAutomation,
+      approvalDelay: preferences?.approvalDelay ?? "instant",
       approvalError: preferences == nil,
       installedServiceControls: installedServiceControlsAvailable()
     )
@@ -295,6 +301,25 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       approval.state = snapshot.approvalAutomation == "recognized_once" ? .on : .off
       approval.isEnabled = !snapshot.approvalError
       menu.addItem(approval)
+      let selectedDelay = snapshot.approvalDelay ?? "instant"
+      let delayLabels: [(String, String)] = [
+        ("instant", "Instant"), ("250ms", "0.25 seconds"), ("500ms", "0.5 seconds"),
+        ("1s", "1 second"), ("2s", "2 seconds"), ("5s", "5 seconds"),
+        ("10s", "10 seconds"), ("15s", "15 seconds")
+      ]
+      let selectedLabel = delayLabels.first(where: { $0.0 == selectedDelay })?.1 ?? selectedDelay
+      let delayRoot = NSMenuItem(title: "Approval delay: \(selectedLabel)", action: nil, keyEquivalent: "")
+      let delayMenu = NSMenu()
+      for (preset, title) in delayLabels {
+        let item = NSMenuItem(title: title, action: #selector(setApprovalDelay(_:)), keyEquivalent: "")
+        item.representedObject = preset
+        item.state = preset == selectedDelay ? .on : .off
+        item.isEnabled = !snapshot.approvalError
+        delayMenu.addItem(item)
+      }
+      delayRoot.submenu = delayMenu
+      delayRoot.isEnabled = !snapshot.approvalError
+      menu.addItem(delayRoot)
       if snapshot.approvalAutomation == "recognized_once" && snapshot.profiles.contains(where: { $0.controlState == "running" }) {
         addDisabled("Restart active profile(s) to apply approval changes", to: menu)
       }
@@ -368,6 +393,18 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     do {
       var preferences = try readPreferences()
       preferences.approvalAutomation = preferences.approvalAutomation == "recognized_once" ? "off" : "recognized_once"
+      try writePreferences(preferences)
+    } catch {
+      NSSound.beep()
+    }
+    Task { await refreshNow() }
+  }
+
+  @objc private func setApprovalDelay(_ sender: NSMenuItem) {
+    guard let preset = sender.representedObject as? String else { return }
+    do {
+      var preferences = try readPreferences()
+      preferences.approvalDelay = preset
       try writePreferences(preferences)
     } catch {
       NSSound.beep()

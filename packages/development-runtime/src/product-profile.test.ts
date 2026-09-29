@@ -26,6 +26,7 @@ describe("product profile native-target selection", () => {
       expect(config.nativeTarget).toEqual({ kind: "default-desktop", targetId: "default" });
       expect(config.publicMcpAbi).toBe("stable");
       expect(config.approvalAutomationMode).toBe("off");
+      expect(config.approvalAutomationDelayMs).toBe(0);
       expect(JSON.stringify(config)).not.toContain("launcherCli");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -35,10 +36,18 @@ describe("product profile native-target selection", () => {
   test("approval automation is explicit and limited to recognized one-shot cards", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-product-approval-"));
     try {
-      expect(loadProductProfileRuntimeConfig({
+      const enabled = loadProductProfileRuntimeConfig({
         ...common(root),
         CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "recognized_once",
-      }).approvalAutomationMode).toBe("recognized_once");
+        CHATGPT_TELA_APPROVAL_DELAY_MS: "2000",
+      });
+      expect(enabled.approvalAutomationMode).toBe("recognized_once");
+      expect(enabled.approvalAutomationDelayMs).toBe(2_000);
+      expect(() => loadProductProfileRuntimeConfig({
+        ...common(root),
+        CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "recognized_once",
+        CHATGPT_TELA_APPROVAL_DELAY_MS: "15001",
+      })).toThrow("APPROVAL_DELAY_MS");
       expect(() => loadProductProfileRuntimeConfig({
         ...common(root),
         CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "full_access",

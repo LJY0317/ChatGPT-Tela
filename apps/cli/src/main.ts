@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareProfileOwnership } from "./profile-ownership";
 import { summarizeDiagnosticWorkload } from "./diagnostic-workload";
+import { summarizeWorkIncident } from "./work-incident";
 import { summarizeRetentionCanary } from "./retention-canary";
 import { diagnoseDefaultDesktop } from "@chatgpt-tela/default-desktop-target";
 import {
@@ -40,6 +41,7 @@ import {
   resolveProductPreferencesPath,
   writeProductConfig,
   writeProductPreferences,
+  type ProductApprovalDelayPreset,
   type ProductConfig,
 } from "@chatgpt-tela/product-config";
 import {
@@ -108,18 +110,32 @@ function electronExecutable(): string {
 function manageApprovalPreferences(): void {
   const subcommand = process.argv[3] ?? "status";
   const path = resolveProductPreferencesPath();
+  const current = readProductPreferences(path);
   if (subcommand === "status") {
-    console.log(JSON.stringify({ path, ...readProductPreferences(path) }, null, 2));
+    console.log(JSON.stringify({ path, ...current }, null, 2));
+    return;
+  }
+  if (subcommand === "delay") {
+    const preset = process.argv[4] as ProductApprovalDelayPreset | undefined;
+    if (!preset) throw new Error("usage: chatgpt-tela approval delay <instant|250ms|500ms|1s|2s|5s|10s|15s>");
+    writeProductPreferences({ ...current, approvalDelay: preset }, path);
+    console.log(JSON.stringify({
+      path,
+      ...readProductPreferences(path),
+      appliesTo: "new-or-restarted-codex-profiles",
+      persistentApproval: false,
+    }, null, 2));
     return;
   }
   if (subcommand !== "enable" && subcommand !== "disable") {
-    throw new Error("usage: chatgpt-tela approval <status|enable|disable>");
+    throw new Error("usage: chatgpt-tela approval <status|enable|disable|delay PRESET>");
   }
   const approvalAutomation = subcommand === "enable" ? "recognized_once" : "off";
-  writeProductPreferences({ version: 1, approvalAutomation }, path);
+  writeProductPreferences({ ...current, approvalAutomation }, path);
   console.log(JSON.stringify({
     path,
     approvalAutomation,
+    approvalDelay: current.approvalDelay ?? "instant",
     appliesTo: "new-or-restarted-codex-profiles",
     persistentApproval: false,
   }, null, 2));
@@ -814,6 +830,16 @@ async function main(): Promise<void> {
   }
   if (command === "diagnostics") {
     const subcommand = process.argv[3];
+    if (subcommand === "incident" || subcommand === "trace") {
+      const minutesRaw = option("--minutes");
+      const minutes = minutesRaw === undefined ? 15 : Number(minutesRaw);
+      console.log(JSON.stringify(summarizeWorkIncident({
+        paths: diagnosticWorkloadPaths(productPaths),
+        mode: subcommand,
+        minutes,
+      }), null, 2));
+      return;
+    }
     if (subcommand === "workload") {
       const minutesRaw = option("--minutes");
       const minutes = minutesRaw === undefined ? 15 : Number(minutesRaw);
@@ -823,7 +849,7 @@ async function main(): Promise<void> {
       }), null, 2));
       return;
     }
-    if (subcommand !== undefined) throw new Error("usage: chatgpt-tela diagnostics [workload [--minutes <1-120>]]");
+    if (subcommand !== undefined) throw new Error("usage: chatgpt-tela diagnostics [workload|incident|trace] [--minutes <1-120>]");
     console.log(JSON.stringify(diagnosticsSummary(productPaths), null, 2));
     return;
   }
@@ -1010,6 +1036,8 @@ async function main(): Promise<void> {
     + "  doctor\n"
     + "  diagnostics\n"
     + "  diagnostics workload [--minutes <1-120>]\n"
+    + "  diagnostics incident [--minutes <1-120>]\n"
+    + "  diagnostics trace [--minutes <1-120>]\n"
     + "  retention-canary [--minutes <1-120>]\n"
     + "  uninstall (--dry-run | --apply) [--remove-data]\n"
     + "  chat roots\n"

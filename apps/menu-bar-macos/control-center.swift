@@ -44,6 +44,7 @@ private struct ControlCenterBridgePreview: Decodable {
 private struct ControlCenterPreferences: Decodable {
   let version: Int
   let approvalAutomation: String
+  let approvalDelay: String?
 }
 
 private enum ControlCenterPage: String, CaseIterable {
@@ -68,6 +69,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var ingressStatus: ControlCenterIngressStatus?
   private var profiles: [ControlCenterProfileStatus] = []
   private var approvalAutomation = "off"
+  private var approvalDelay = "instant"
   private var bridgeImage: NSImage?
   private var bridgeMessage = "No preview requested yet."
 
@@ -256,6 +258,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       stack.addArrangedSubview(label("Signed install, repair, upgrade, and uninstall lifecycle operations exist. The final consumer updater UI and pinned release trust remain release work."))
     case .settings:
       stack.addArrangedSubview(label("Approval automation: \(approvalAutomation == "recognized_once" ? "Recognized one-shot cards" : "Off")"))
+      stack.addArrangedSubview(label("Approval delay: \(approvalDelay)"))
       stack.addArrangedSubview(label("Additional settings will move here as they become stable product preferences. The menu bar remains the quick-control surface."))
       addRefreshButton()
     case .diagnostics:
@@ -326,6 +329,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
        let preferences = try? JSONDecoder().decode(ControlCenterPreferences.self, from: data),
        preferences.version == 1 {
       approvalAutomation = preferences.approvalAutomation
+      approvalDelay = preferences.approvalDelay ?? "instant"
     }
     renderCurrentPage()
     if selectedPage == .bridge { await loadBridgePreview() }

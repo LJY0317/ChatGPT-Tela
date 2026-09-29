@@ -48,8 +48,9 @@ packaged services read only this product-native config boundary.
 
 The same config root may contain `preferences-v1.json`, which is deliberately smaller than runtime config and
 contains only user-facing behavioral preferences. Its first setting is approval automation (`off` by default,
-or `recognized_once`). It contains no endpoint, browser/account identity, credential, prompt, tool argument,
-or persistent-approval grant. Profile processes read the current preference only when they start/restart.
+or `recognized_once`) plus an optional bounded approval-delay preset from instant through 15 seconds. It
+contains no endpoint, browser/account identity, credential, prompt, tool argument, or persistent-approval
+grant. Profile processes read the current preference only when they start/restart.
 
 Service diagnostics live under the platform-standard Tela logs root. Source supervision writes
 `<service>.log.diagnostics.jsonl`; installed packaged services write `<service>.diagnostics.jsonl`. Both use the

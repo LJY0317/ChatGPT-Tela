@@ -677,10 +677,14 @@ arguments, prompts, and HTML are not persisted or logged.
 bun run cli approval status
 bun run cli approval enable
 bun run cli approval disable
+bun run cli approval delay 500ms
 ```
 
 Changing this preference applies to newly started/restarted Tela Codex profiles. It does not widen Native
 Codex sandbox/tool authority and does not bypass ChatGPT cards that Tela cannot structurally recognize.
+The optional delay is a bounded preset (`instant`, `250ms`, `500ms`, `1s`, `2s`, `5s`, `10s`, or `15s`).
+Tela waits before inspecting the current card, then applies the same structural one-shot proof; it never
+remembers a stale approval target across the delay.
 
 ### macOS menu bar
 
@@ -779,13 +783,17 @@ prints their filesystem paths, or returns event payloads. This makes it safe to 
 check before a user explicitly chooses to inspect a local log.
 
 For UI/performance investigations, `bun run cli diagnostics workload --minutes 15` reads only Tela's already
-privacy-bounded Chat/Codex diagnostic JSONL and returns structural counts plus request/result byte totals. It
+emitted, privacy-bounded Chat/Codex diagnostic JSONL and returns structural counts plus request/result byte totals. It
 does not return prompts, tool arguments, commands, file contents, tool output, paths, or raw event payloads.
 Each diagnostic event now carries an ISO timestamp so this workload view can be aligned with an independent OS
 sampler such as MacLagMonitor. Chat completion events record result byte size and bounded/truncated indicators;
 Codex Native-tool completion events record request/result byte sizes and error state. This is the product-owned
 evidence needed to distinguish "many tool calls" from "a few very large results" without teaching Tela to
 identify external ChatGPT/Codex renderer processes by executable-name regex.
+
+`bun run cli diagnostics incident --minutes 15` shows a bounded timeline around the latest Work/Codex failure.
+`bun run cli diagnostics trace --minutes 15` shows recent structural events on demand. Both views omit prompts,
+tool arguments, paths, and arbitrary diagnostic fields.
 
 For the dedicated source profile used by Tela Codex, run the setup-only profile helper with
 `CHATGPT_TELA_PROFILE_SETUP_REVEAL=1` for the target slot when login, Developer Mode, or the Plugin connection

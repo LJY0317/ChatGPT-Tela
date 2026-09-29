@@ -65,6 +65,7 @@ export async function startCustomMcpHttpExposure(input: {
     readonly authentication?: CustomMcpHttpAuthentication;
     readonly maxRequestBodyBytes?: number;
     readonly maxSessions?: number;
+    readonly sessionIdleTimeoutMs?: number;
   };
   readonly allowUnauthenticatedPublicEndpoint?: boolean;
   readonly signal?: AbortSignal;
@@ -101,6 +102,7 @@ export async function startDevelopmentMcpHttpExposure(input: {
     readonly authentication?: DevelopmentMcpHttpAuthentication;
     readonly maxRequestBodyBytes?: number;
     readonly maxSessions?: number;
+    readonly sessionIdleTimeoutMs?: number;
   };
   readonly allowUnauthenticatedPublicEndpoint?: boolean;
   readonly signal?: AbortSignal;
@@ -131,6 +133,7 @@ export async function startCodexBridgeMcpHttpExposure(input: ({
     readonly authentication?: CodexBridgeMcpHttpAuthentication;
     readonly maxRequestBodyBytes?: number;
     readonly maxSessions?: number;
+    readonly sessionIdleTimeoutMs?: number;
   };
   readonly allowUnauthenticatedPublicEndpoint?: boolean;
   readonly signal?: AbortSignal;
@@ -158,6 +161,7 @@ async function startMcpHttpExposure(input: {
     readonly authentication?: McpHttpAuthentication;
     readonly maxRequestBodyBytes?: number;
     readonly maxSessions?: number;
+    readonly sessionIdleTimeoutMs?: number;
   }) => Promise<McpHttpServer>;
   readonly local?: {
     readonly hostname?: string;
@@ -166,6 +170,7 @@ async function startMcpHttpExposure(input: {
     readonly authentication?: McpHttpAuthentication;
     readonly maxRequestBodyBytes?: number;
     readonly maxSessions?: number;
+    readonly sessionIdleTimeoutMs?: number;
   };
   readonly allowUnauthenticatedPublicEndpoint?: boolean;
   readonly signal?: AbortSignal;
@@ -179,6 +184,9 @@ async function startMcpHttpExposure(input: {
       ? { maxRequestBodyBytes: input.local.maxRequestBodyBytes }
       : {}),
     ...(input.local?.maxSessions !== undefined ? { maxSessions: input.local.maxSessions } : {}),
+    ...(input.local?.sessionIdleTimeoutMs !== undefined
+      ? { sessionIdleTimeoutMs: input.local.sessionIdleTimeoutMs }
+      : {}),
   });
   let exposure: McpExposureProvider | undefined;
   try {

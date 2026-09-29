@@ -90,7 +90,12 @@ export interface ChatGptSurfaceDriver {
   replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;
   clearComposerText(composerKey: string, signal?: AbortSignal): Promise<void>;
   appendComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;
-  /** Install memory-backed files and prove the product rendered every exact filename as accepted. */
+  /**
+   * Install the exact memory-backed files on the proven browser input and do not return until the
+   * composer structurally accepts the resulting attachment set. ChatGPT may normalize visible chip
+   * labels, so exact file identity belongs to the input readback and any higher-level content proof,
+   * not to presentation text alone.
+   */
   attachFiles?(
     composerKey: string,
     files: readonly BrowserMemoryFile[],

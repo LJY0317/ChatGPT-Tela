@@ -23,16 +23,15 @@ async function main(): Promise<void> {
 
   try {
     if (config.runContextCanary) {
-      await runtime.recoverChatGptStartupArtifact();
-      const observed = await runtime.probeChatGptProfile();
-      bindChatGptTelaAccount(profile, observed.account.accountFingerprint);
       const canary = await runtime.probeChatGptContextAttachment(AbortSignal.timeout(150_000));
+      bindChatGptTelaAccount(profile, canary.account.accountFingerprint);
       process.stdout.write(`${JSON.stringify({
         stage: "profile-setup-context-canary",
         slot: config.slot,
         profileId: config.profileId,
         accountBinding: "verified",
-        ...canary,
+        attachmentBytes: canary.attachmentBytes,
+        receiptVerified: canary.receiptVerified,
       }, null, 2)}\n`);
       await runtime.stop();
       app.quit();
@@ -66,6 +65,19 @@ async function main(): Promise<void> {
       return;
     }
   } catch (error) {
+    if (config.runContextCanary) {
+      try {
+        await runtime.stop();
+      } catch (stopError) {
+        app.quit();
+        throw new AggregateError(
+          [error, stopError],
+          "setup-only context canary failed and runtime cleanup was incomplete",
+        );
+      }
+      app.quit();
+      throw error;
+    }
     try {
       if (!setupSurface) setupSurface = await runtime.openProfileSetupSurface({ reveal: false });
       await setupSurface.reveal();

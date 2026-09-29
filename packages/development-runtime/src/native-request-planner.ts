@@ -296,7 +296,16 @@ export function projectNativeRequestContext(
   if (typeof body.input === "string") {
     append("user", body.input);
   } else if (Array.isArray(body.input)) {
+    let awaitingCompactionSummary = false;
     for (const [index, raw] of body.input.entries()) {
+      if (awaitingCompactionSummary) {
+        const summary = record(raw);
+        if (!summary || (summary.type !== undefined && summary.type !== "message") || summary.role !== "user"
+          || !textFromContent(summary.content, `input[${index}].content`).trim()) {
+          throw new Error("Native local compaction marker requires a following readable user summary");
+        }
+        awaitingCompactionSummary = false;
+      }
       if (typeof raw === "string") {
         append("user", raw);
         continue;
@@ -323,11 +332,24 @@ export function projectNativeRequestContext(
         continue;
       }
 
+      // Native local compaction may place a marker immediately before its canonical readable
+      // summary message. The marker carries no model-visible content; the following message does.
+      if (type === "context_compaction" && item.encrypted_content === undefined) {
+        awaitingCompactionSummary = true;
+        continue;
+      }
+      if (type === "compaction" || type === "compaction_summary" || type === "context_compaction") {
+        throw new Error("Native compaction content is opaque to the Tela Web provider; a readable Native summary is required");
+      }
+
       // Native reasoning payloads can contain opaque/encrypted model state. They are intentionally
       // not copied into the Web prompt and are never treated as user-visible logical context.
       if (type === "reasoning" || type === "additional_tools") continue;
 
       throw new Error(`unsupported Native request input type at index ${index}: ${type ?? "unknown"}`);
+    }
+    if (awaitingCompactionSummary) {
+      throw new Error("Native local compaction marker requires a following readable user summary");
     }
   } else if (body.input !== undefined) {
     throw new Error("Native request input must be a string or array");

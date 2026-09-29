@@ -515,7 +515,9 @@ Approval automation is a separate opt-in policy boundary. Default mode is `off`.
 `recognized_once`: one structurally recognized tool-approval card with one deny choice and one one-shot allow
 choice may be activated. Persistent `Always allow`, unknown layouts, multiple cards, or ambiguous controls are
 never auto-approved. Approval-card text, tool arguments, prompt content, or raw HTML are not exported from the
-renderer for policy decisions or diagnostics.
+renderer for policy decisions or diagnostics. The user may choose one bounded delay preset from instant
+through 15 seconds. Tela waits first and only then inspects the **current** card from scratch, so a stale card
+target is never retained across the delay.
 
 An accepted provider turn identity is also distinct from ChatGPT's renderer-local `data-turn-key`.
 ChatGPT may replace a provisional key when the server-hydrated turn arrives. Tela keeps its accepted

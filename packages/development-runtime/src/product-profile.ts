@@ -13,6 +13,7 @@ import {
   type DefaultDesktopTargetRuntime,
 } from "@chatgpt-tela/default-desktop-target";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { CHATGPT_TEMPORARY_CHAT_URL } from "@chatgpt-tela/chatgpt";
 import {
   CHATGPT_TELA_DISPLAY_NAME,
   startCodexBridgeMcpHttpServer,
@@ -80,6 +81,7 @@ export interface ProductProfileRuntimeConfig {
   readonly uiToken: string;
   readonly publicMcpAbi: ProductProfilePublicMcpAbi;
   readonly approvalAutomationMode: import("@chatgpt-tela/chatgpt").ChatGptApprovalAutomationMode;
+  readonly approvalAutomationDelayMs: number;
   readonly webTurnTimeoutMs: number;
 }
 
@@ -143,6 +145,15 @@ function positiveInteger(value: string | undefined, key: string, fallback: numbe
   return parsed;
 }
 
+function boundedNonnegativeInteger(value: string | undefined, key: string, fallback: number, maximum: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > maximum) {
+    throw new Error(`${key} must be an integer from 0 to ${maximum}`);
+  }
+  return parsed;
+}
+
 export function loadProductProfileRuntimeConfig(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): ProductProfileRuntimeConfig {
@@ -201,6 +212,12 @@ export function loadProductProfileRuntimeConfig(
     uiToken,
     publicMcpAbi,
     approvalAutomationMode,
+    approvalAutomationDelayMs: boundedNonnegativeInteger(
+      optional(env, "CHATGPT_TELA_APPROVAL_DELAY_MS"),
+      "CHATGPT_TELA_APPROVAL_DELAY_MS",
+      0,
+      15_000,
+    ),
     webTurnTimeoutMs: positiveInteger(
       optional(env, "CHATGPT_TELA_PRODUCT_WEB_TURN_TIMEOUT_MS"),
       "CHATGPT_TELA_PRODUCT_WEB_TURN_TIMEOUT_MS",
@@ -249,8 +266,10 @@ export async function startProductProfileRuntime(
     startupStage("browser_runtime_starting");
     runtime = await startElectronDevelopmentRuntime({
       profileId: config.browserProfile.profileId,
+      chatGptUrl: CHATGPT_TEMPORARY_CHAT_URL,
       connectorName: publicIdentity.connectorName,
       approvalAutomationMode: config.approvalAutomationMode,
+      approvalAutomationDelayMs: config.approvalAutomationDelayMs,
       currentTurnSource: source,
       turns,
       mcp: { kind: "external", abi: publicIdentity.webContract },

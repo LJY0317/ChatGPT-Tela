@@ -152,6 +152,58 @@ describe("development MCP Streamable HTTP server", () => {
       await server.stop();
     }
   });
+
+  test("reclaims the oldest idle MCP session instead of permanently exhausting capacity", async () => {
+    const server = await startDevelopmentMcpHttpServer({
+      turns: new ActiveTurnRegistry(),
+      maxSessions: 1,
+      sessionIdleTimeoutMs: 60_000,
+    });
+    const firstTransport = new StreamableHTTPClientTransport(server.endpointUrl, {
+      requestInit: { headers: { authorization: `Bearer ${server.bearerToken}` } },
+    });
+    const first = new Client({ name: "chatgpt-tela-capacity-first", version: "0.0.0" }, { capabilities: {} });
+    const secondTransport = new StreamableHTTPClientTransport(server.endpointUrl, {
+      requestInit: { headers: { authorization: `Bearer ${server.bearerToken}` } },
+    });
+    const second = new Client({ name: "chatgpt-tela-capacity-second", version: "0.0.0" }, { capabilities: {} });
+    try {
+      await first.connect(firstTransport as unknown as Transport);
+      expect(server.activeSessionCount).toBe(1);
+
+      await second.connect(secondTransport as unknown as Transport);
+      expect(server.activeSessionCount).toBe(1);
+      expect((await second.listTools()).tools.length).toBe(2);
+      await expect(first.listTools()).rejects.toThrow();
+    } finally {
+      await first.close().catch(() => {});
+      await second.close().catch(() => {});
+      await server.stop();
+    }
+  });
+
+  test("expires an abandoned idle MCP session without polling", async () => {
+    const server = await startDevelopmentMcpHttpServer({
+      turns: new ActiveTurnRegistry(),
+      maxSessions: 1,
+      sessionIdleTimeoutMs: 20,
+    });
+    const transport = new StreamableHTTPClientTransport(server.endpointUrl, {
+      requestInit: { headers: { authorization: `Bearer ${server.bearerToken}` } },
+    });
+    const client = new Client({ name: "chatgpt-tela-idle-expiry", version: "0.0.0" }, { capabilities: {} });
+    try {
+      await client.connect(transport as unknown as Transport);
+      expect(server.activeSessionCount).toBe(1);
+      for (let index = 0; index < 50 && server.activeSessionCount !== 0; index += 1) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      expect(server.activeSessionCount).toBe(0);
+    } finally {
+      await client.close().catch(() => {});
+      await server.stop();
+    }
+  });
 });
 
 describe("private Codex bridge Streamable HTTP server", () => {

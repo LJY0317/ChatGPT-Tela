@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  approvalDelayMilliseconds,
   DEFAULT_PRODUCT_PREFERENCES,
   parseProductPreferences,
   readProductPreferences,
@@ -23,13 +24,15 @@ describe("product preferences", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-preferences-write-"));
     try {
       const path = join(root, "preferences-v1.json");
-      writeProductPreferences({ version: 1, approvalAutomation: "recognized_once" }, path);
-      expect(readProductPreferences(path)).toEqual({ version: 1, approvalAutomation: "recognized_once" });
+      writeProductPreferences({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "2s" }, path);
+      expect(readProductPreferences(path)).toEqual({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "2s" });
+      expect(approvalDelayMilliseconds("2s")).toBe(2_000);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   test("unknown fields and persistent/full-access modes fail closed", () => {
     expect(() => parseProductPreferences({ version: 1, approvalAutomation: "always" })).toThrow("approval automation");
+    expect(() => parseProductPreferences({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "30s" })).toThrow("approval delay");
     expect(() => parseProductPreferences({ version: 1, approvalAutomation: "off", secret: "x" })).toThrow("unknown fields");
   });
 

@@ -55,6 +55,8 @@ export interface ChatGptSemanticProviderOptions {
   readonly connectorDraftPersistenceSettleMs?: number;
   /** Optional local approval policy. Disabled by default and never selects persistent Always allow. */
   readonly approvalAutomationMode?: ChatGptApprovalAutomationMode;
+  /** Optional bounded delay before inspecting the current one-shot approval card. */
+  readonly approvalAutomationDelayMs?: number;
 }
 
 export interface ChatGptConnectorObservation {
@@ -480,6 +482,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   readonly #connectorName: string | undefined;
   readonly #connectorDraftPersistenceSettleMs: number;
   readonly #approvalAutomationMode: ChatGptApprovalAutomationMode;
+  readonly #approvalAutomationDelayMs: number;
 
   constructor(options: ChatGptSemanticProviderOptions = {}) {
     const connectorName = options.connectorName?.trim();
@@ -495,6 +498,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     this.#connectorName = connectorName;
     this.#connectorDraftPersistenceSettleMs = settleMs;
     this.#approvalAutomationMode = options.approvalAutomationMode ?? "off";
+    const approvalDelayMs = options.approvalAutomationDelayMs ?? 0;
+    if (!Number.isSafeInteger(approvalDelayMs) || approvalDelayMs < 0 || approvalDelayMs > 15_000) {
+      throw new Error("ChatGPT approval automation delay must be 0-15000ms");
+    }
+    this.#approvalAutomationDelayMs = approvalDelayMs;
   }
 
   async #settleConnectorDraftPersistence(
@@ -1253,9 +1261,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       const assistant = assistants[0];
       if (!assistant) continue;
-      if (assistant.phase === "tool-wait"
+      if (assistant.phase !== "complete"
+        && assistant.phase !== "failed"
         && this.#approvalAutomationMode !== "off"
         && driver.processApprovalCard) {
+        await waitForDuration(this.#approvalAutomationDelayMs, signal);
         const approval = await driver.processApprovalCard(this.#approvalAutomationMode, signal);
         if (approval.status === "approved") continue;
       }

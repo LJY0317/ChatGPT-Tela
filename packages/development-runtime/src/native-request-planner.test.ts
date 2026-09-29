@@ -64,6 +64,47 @@ function scratch(): string {
 }
 
 describe("Native request development Web planner", () => {
+  test("continues from a Native local-compaction summary without projecting the marker", () => {
+    const projected = projectNativeRequestContext("thread-1", {
+      input: [
+        { type: "context_compaction" },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "Native compacted summary" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "Continue the task" }] },
+      ],
+    });
+    expect(projected.revisions.map(item => item.content)).toEqual([
+      "Native compacted summary", "Continue the task",
+    ]);
+    expect(projected.revisions.map(item => item.revision.kind)).toEqual(["user", "user"]);
+    expect(() => projectNativeRequestContext("thread-1", {
+      input: [{ type: "compaction", encrypted_content: "opaque-native-blob" }],
+    })).toThrow("readable Native summary is required");
+    expect(() => projectNativeRequestContext("thread-1", {
+      input: [{ type: "context_compaction" }, { type: "message", role: "user", content: "" }],
+    })).toThrow("following readable user summary");
+  });
+
+  test("Native compaction retires the prior Web epoch and rebuilds from the new canonical summary", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const turn = registered();
+    const first = await planner(turn, {
+      input: [{ type: "message", role: "user", content: "Original task" }],
+    });
+    first.settle?.({ status: "completed", answer: "First answer" });
+    const afterCompaction = await planner(turn, {
+      input: [
+        { type: "context_compaction" },
+        { type: "message", role: "user", content: "Native summary of the original task" },
+        { type: "message", role: "user", content: "Continue after compaction" },
+      ],
+    });
+    expect(afterCompaction.webEpochId).not.toBe(first.webEpochId);
+    expect(afterCompaction.physicalContext.mode).toBe("full");
+    expect(afterCompaction.physicalContext.segments.map(segment => segment.content)).toEqual([
+      "Native summary of the original task", "Continue after compaction",
+    ]);
+    afterCompaction.settle?.({ status: "failed" });
+  });
   test("projects request instructions/input through the logical -> physical context boundary", async () => {
     const planner = createNativeRequestDevelopmentWebTurnPlanner();
     const turn = registered();

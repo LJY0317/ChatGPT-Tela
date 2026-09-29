@@ -4,11 +4,13 @@ import {
   type ElectronMainRuntimeLike,
 } from "@chatgpt-tela/electron-host";
 import {
+  CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS,
   type ChatGptAccountIdentity,
   type ChatGptConnectorProbe,
   ChatGptSemanticProvider,
   type ChatGptCapabilities,
   createChatGptContextAttachment,
+  observeChatGptAccountIdentity,
   requireProven,
   type WebConversationProvider,
 } from "@chatgpt-tela/chatgpt";
@@ -43,6 +45,7 @@ export interface ElectronProfileSetupRuntime {
   probeChatGptContextAttachment(signal?: AbortSignal): Promise<{
     readonly attachmentBytes: number;
     readonly receiptVerified: true;
+    readonly account: ChatGptAccountIdentity;
   }>;
   openProfileSetupSurface(options?: { readonly reveal?: boolean }): Promise<ElectronProfileSetupSurface>;
   stop(): Promise<void>;
@@ -126,10 +129,11 @@ export async function startElectronProfileSetupRuntime(
     ...(options.electron?.loadRuntime ? { loadRuntime: options.electron.loadRuntime } : {}),
   });
   const provider = options.provider ?? new ChatGptSemanticProvider();
+  const accountIdentityObserver = options.accountIdentityObserver ?? observeChatGptAccountIdentity;
   const control = createChatGptProfileControl({
     browserHost,
     provider,
-    ...(options.accountIdentityObserver ? { accountIdentityObserver: options.accountIdentityObserver } : {}),
+    accountIdentityObserver,
   });
   let stopping: Promise<void> | undefined;
   return Object.freeze({
@@ -146,6 +150,14 @@ export async function startElectronProfileSetupRuntime(
       const taskId = `profile-setup-context-canary:${config.profileId}`;
       const surface = await browserHost.acquire({ taskId, epochId });
       try {
+        if (provider.recoverConnectorProbeArtifact) {
+          await provider.recoverConnectorProbeArtifact(surface, signal);
+        }
+        const capabilities = requireProven(await provider.observeCapabilities(surface, signal));
+        if (!capabilities.observed.has("composer") || !capabilities.observed.has("send")) {
+          throw new Error("setup-only context attachment canary is missing composer/send capability");
+        }
+        const account = await accountIdentityObserver(surface, signal);
         const attachment = createChatGptContextAttachment(Object.freeze({
           headRevisionId: "context-canary-r1",
           activeRequestRevisionId: "context-canary-r1",
@@ -156,7 +168,10 @@ export async function startElectronProfileSetupRuntime(
             type: "revision" as const,
             revisionId: "context-canary-r1",
             kind: "user" as const,
-            content: "ChatGPT Tela setup-only context attachment canary. No Native task execution is requested.",
+            content: [
+              "ChatGPT Tela setup-only context attachment canary. No Native task execution is requested.",
+              "x".repeat(CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS),
+            ].join("\n"),
           })]),
         }));
         const result = requireProven(await preload.call(provider as WebConversationProvider, surface, {
@@ -174,6 +189,7 @@ export async function startElectronProfileSetupRuntime(
         return Object.freeze({
           attachmentBytes: Buffer.byteLength(attachment.contextJson, "utf8"),
           receiptVerified: true as const,
+          account,
         });
       } finally {
         await browserHost.release(surface.leaseId);
