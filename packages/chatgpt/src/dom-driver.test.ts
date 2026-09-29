@@ -63,6 +63,11 @@ class FakePage implements BrowserPageAutomation {
   readonly actions: string[] = [];
   lastObserveSource = "";
   pendingConnectorName: string | undefined;
+  forceMentionFailure = false;
+  addContextMenuOpen = false;
+  addContextHighlightedIndex = 0;
+  addContextTargetIndex = 2;
+  addContextConnectorName: string | undefined;
   #mutationRevision = 0;
 
   async evaluate<Argument, Result>(source: string, argument: Argument): Promise<Result> {
@@ -106,7 +111,27 @@ class FakePage implements BrowserPageAutomation {
       if (this.pendingConnectorName !== input.connectorName) {
         throw new Error("fixture connector query was not typed before lookup");
       }
+      if (this.forceMentionFailure) throw new Error("fixture mention lookup unavailable");
       return { x: 25, y: 40 } as Result;
+    }
+    if (source.includes("ChatGPT add-context control is not unique")) {
+      return { x: 10, y: 20 } as Result;
+    }
+    if (source.includes("ChatGPT add-context menu exposed no recognized connector path")) {
+      const input = argument as { connectorName: string };
+      if (!this.addContextMenuOpen) throw new Error("fixture add-context menu is closed");
+      this.addContextConnectorName = input.connectorName;
+      return {
+        kind: "connector",
+        x: 75,
+        y: 80,
+        rowCount: 3,
+        targetIndex: this.addContextTargetIndex,
+        highlighted: this.addContextHighlightedIndex === this.addContextTargetIndex,
+        highlightedIndex: this.addContextHighlightedIndex,
+        categoryShapes: [],
+        genericAttributeShapes: [],
+      } as Result;
     }
     if (source.includes("ChatGPT connector activation timed out")) {
       const input = argument as { composerKey: string; connectorName: string };
@@ -129,6 +154,10 @@ class FakePage implements BrowserPageAutomation {
 
   async pointerClick(point: { readonly x: number; readonly y: number }): Promise<void> {
     this.actions.push(`pointer:${point.x},${point.y}`);
+    if (point.x === 10 && point.y === 20) {
+      this.addContextMenuOpen = true;
+      return;
+    }
     const connectorName = this.pendingConnectorName;
     if (!connectorName) throw new Error("fixture has no pending connector target");
     this.raw = {
@@ -155,6 +184,27 @@ class FakePage implements BrowserPageAutomation {
 
   async pressKey(keyCode: string): Promise<void> {
     this.actions.push(`key:${keyCode}`);
+    if (keyCode === "Escape") {
+      this.addContextMenuOpen = false;
+      return;
+    }
+    if (this.addContextMenuOpen && keyCode === "ArrowDown") {
+      this.addContextHighlightedIndex = (this.addContextHighlightedIndex + 1) % 3;
+      return;
+    }
+    if (this.addContextMenuOpen && keyCode === "Enter"
+      && this.addContextHighlightedIndex === this.addContextTargetIndex
+      && this.addContextConnectorName) {
+      const connectorName = this.addContextConnectorName;
+      this.raw = {
+        ...this.raw,
+        composers: this.raw.composers.map(composer => composer.key === "composer:primary"
+          ? { ...composer, text: "", connectorNames: [connectorName] }
+          : composer),
+      };
+      this.pendingConnectorName = undefined;
+      this.addContextMenuOpen = false;
+    }
   }
 
   async clearFocusedEditable(): Promise<void> {
@@ -299,6 +349,21 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(snapshot.composers[0]?.connectorFingerprints)
       .toEqual([digest("ChatGPT Tela Development")]);
     expect(snapshot.composers[0]?.textFingerprint).toBe(digest("payload"));
+  });
+
+  test("add-context exact connector uses bounded keyboard highlight before pointer fallback", async () => {
+    const page = new FakePage();
+    page.raw.composers[0]!.text = "";
+    page.forceMentionFailure = true;
+    const driver = new ChatGptDomSurfaceDriver(page);
+
+    await driver.selectConnector("composer:primary", "ChatGPT Tela");
+
+    expect(page.raw.composers[0]?.connectorNames).toEqual(["ChatGPT Tela"]);
+    expect(page.actions).toContain("pointer:10,20");
+    expect(page.actions.filter(action => action === "key:ArrowDown")).toHaveLength(2);
+    expect(page.actions).toContain("key:Enter");
+    expect(page.actions).not.toContain("pointer:75,80");
   });
 
   test("semantic provider can derive its product driver from generic page automation", async () => {

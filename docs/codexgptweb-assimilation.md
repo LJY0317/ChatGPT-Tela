@@ -42,9 +42,9 @@ Status vocabulary:
 | Downstream lesson | Tela status | Tela contract |
 | --- | --- | --- |
 | Preserve every Native model and add explicit Web-backed choices | **partial** | **absorbed/live-proven for the default single-profile Desktop**: Tela augments the exact app-server `model/list` response while preserving Native rows byte-semantically and routes Native ids back to the first-party Codex backend. Profile 2+ still needs the equivalent Plura-owned app-server projection adapter. |
-| Discover current ChatGPT model families from the authenticated browser | **absorbed** | the hidden authenticated browser discovers live family rows and effort availability; no GPT-version allowlist or account-plan guess exists in product constants. Live Profile 1 discovery proved three current families. |
+| Discover current ChatGPT model families from the authenticated browser | **absorbed** | the hidden authenticated browser discovers live family rows and effort availability; no GPT-version allowlist or account-plan guess exists in product constants. Live canaries proved three current families on Profile 1 and eight on Profile 2, confirming that account-local browser observation—not one global catalog—is the authority. |
 | Give dynamic model families stable opaque route identities | **absorbed** | NFKC/whitespace/case-normalized observed family semantics derive an opaque SHA-256 family key; display labels are not authority. |
-| Verify selected Web family/effort immediately before Send | **absorbed** | the runtime preparation hook executes immediately before the consequential submit boundary; exact family + effort readback must converge within a fixed bound or the message is not sent. A private non-submit live canary proves select/readback/restore against the current ChatGPT UI. |
+| Verify selected Web family/effort immediately before Send | **absorbed** | the runtime preparation hook executes immediately before the consequential submit boundary; exact family + effort readback must converge within a fixed bound or the message is not sent. Private non-submit live canaries proved select/readback/restore on both Profile 1 and Profile 2. Hidden/offscreen family activation uses bounded DOM/pointer fallbacks only with semantic checked-row readback. |
 | Reuse retained surface only when exact family/effort ownership is proven | **absorbed** | Web epoch route identity includes model/effort, and every Web submit re-proves browser family/effort even on a retained surface. Cross-model/effort reuse therefore fails closed. |
 | Keep Native and Web switching inside one Codex provider | **absorbed** | the default Desktop provider preserves first-party ChatGPT authorization, uses a separate local Tela capability header, passes Native model requests to the first-party Codex backend, and sends only the synthetic Tela Web namespace to the browser bridge. |
 | Remove bridge-owned response/item ids before switching back to Native | **absorbed** | Tela-owned `resp_tela_*`/`msg_tela_*`/tool ids are structurally scrubbed while opaque first-party ids and semantic item contents are preserved. |
@@ -68,6 +68,7 @@ Status vocabulary:
 | Separate browser DOM mechanics from task authority | **absorbed** | ChatGPT semantic provider / DOM driver cannot create Native authority. |
 | Stable logical turn identity, no resend to repair DOM ambiguity | **absorbed** | exact composer readback + one new user lineage; ambiguous submission is indeterminate and never retried. |
 | Connector identity is protocol identity, not a mutable preference | **absorbed** | frozen public `ChatGPT Tela` connector/ABI identity. |
+| Hidden connector choice must follow the UI's real keyboard owner instead of assuming pointer hit-testing | **absorbed** | when an exact add-context connector row is visible, Tela moves the bounded menu highlight to that exact row, activates with Enter, and accepts it only after the exact selected connector pill appears. Pointer is a fallback, never proof. This downstream-derived path was live-proven on Profile 2 where direct offscreen activation failed. |
 | Fresh setup/readiness surface must not own Native work | **absorbed** | profile-control surfaces are isolated and non-consequential. |
 | Approval automation remains bounded and explicit | **partial** | one-shot approval automation exists; downstream policy/diagnostic edge cases remain an audit item. |
 | User must not interact with Work's hidden bridge browser | **absorbed** | Control Center gets JPEG-only read-only preview; actual Web surface stays hidden/unfocused. |
@@ -80,7 +81,7 @@ Status vocabulary:
 | Distinguish logical input, physical transfer and browser/render pressure | **absorbed** | Work diagnostics separately emit logical tokens, current transfer tokens, estimated retained-epoch input, effective rollover boundary, rollover decisions, and exact prepared browser-message character count without recording message text. |
 | Bounded incident snapshot with structural allowlist | **pending** | keep MacLagMonitor for OS-level Renderer/WindowServer evidence; Tela should own product causal evidence. |
 | On-demand deep trace rather than permanent heavy profiling | **pending** | add a user-triggered/incident-scoped product trace; never a permanent browser profiler. |
-| Isolated development canary using the real product path | **partial** | existing exact-turn canaries remain; `cli model-canary --slot 1` now live-proves model family/effort selection + restoration without submitting a message. A retained-context multi-turn live canary still remains. |
+| Isolated development canary using the real product path | **absorbed** | existing exact-turn canaries remain; `cli model-canary --slot <n>` live-proves that profile's family/effort selection + restoration without submitting a message (live-proven on slots 1 and 2), and `cli retention-canary` passively proves real retained-delta + retained-surface reuse from bounded structural diagnostics without generating any extra ChatGPT turn. |
 | Distinguish public-ingress root causes instead of generic unavailable state | **absorbed** | Gateway/CLI/Control Center separate local MCP, Tailscale backend/login/online state, exact Funnel mapping and public MCP reachability; Tailscale-off is reported as the root cause rather than a generic connector failure. |
 
 ## Product lifecycle and profile isolation
@@ -113,7 +114,7 @@ Status vocabulary:
 4. composite Native + explicit Tela Web `model/list` surface and routing (**partial**: default Desktop absorbed; Profile 2+ adapter pending);
 5. independent physical-pressure epoch rollover + fresh hard-fit planner (**absorbed**);
 6. receipt-verified large-context/file and multipart transports;
-7. retained compaction proof/canary, richer incident diagnostics, approval/subagent/skill audits;
+7. retained compaction proof/canary (**absorbed for retained live reuse; compaction-specific proof remains**), richer incident diagnostics, approval/subagent/skill audits;
 8. final parity audit against both the downstream snapshot and then-current upstream before the old
    project is considered replaceable.
 

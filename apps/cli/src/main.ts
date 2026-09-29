@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareProfileOwnership } from "./profile-ownership";
 import { summarizeDiagnosticWorkload } from "./diagnostic-workload";
+import { summarizeRetentionCanary } from "./retention-canary";
 import { diagnoseDefaultDesktop } from "@chatgpt-tela/default-desktop-target";
 import {
   probePublicMcp,
@@ -824,6 +825,15 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(diagnosticsSummary(productPaths), null, 2));
     return;
   }
+  if (command === "retention-canary") {
+    const minutesRaw = option("--minutes");
+    const minutes = minutesRaw === undefined ? 15 : Number(minutesRaw);
+    console.log(JSON.stringify(summarizeRetentionCanary({
+      paths: diagnosticWorkloadPaths(productPaths),
+      minutes,
+    }), null, 2));
+    return;
+  }
   if (command === "uninstall") {
     const dryRun = flag("--dry-run");
     const apply = flag("--apply");
@@ -980,6 +990,7 @@ async function main(): Promise<void> {
     + "  doctor\n"
     + "  diagnostics\n"
     + "  diagnostics workload [--minutes <1-120>]\n"
+    + "  retention-canary [--minutes <1-120>]\n"
     + "  uninstall (--dry-run | --apply) [--remove-data]\n"
     + "  chat roots\n"
     + "  chat allow-root --path <workspace-root>\n"

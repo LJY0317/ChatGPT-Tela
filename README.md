@@ -729,9 +729,31 @@ The local non-submit model-picker canary exercises that UI boundary and restores
 bun run cli model-canary --slot 1
 ```
 
+The same browser-semantic canary can be run for an explicitly configured extra account, for example
+`bun run cli model-canary --slot 2`. That proves the authenticated Profile 2 browser can discover,
+select, read back, and restore its own current family/effort choices without sending a message. It
+does **not** imply that Profile 2's Plura-owned Codex app-server already projects `(Web)` rows into its
+Native model picker; that separate adapter remains pending.
+
+Retained Web-context reuse has a separate **passive** live canary. It never opens a browser or sends
+an extra prompt. Use Tela Work normally for at least two turns in the same task, then inspect the
+recent structural diagnostics:
+
+```bash
+bun run cli retention-canary --minutes 15
+```
+
+`status: "pass"` means a real product turn was observed with both `retained-delta` context and the
+same retained browser surface. `status: "not-observed"` is not a failure; it means the selected time
+window did not contain that proof (for example only a first turn was run, or a physical-pressure
+rollover intentionally opened a fresh Web epoch). The command reads no prompt, tool argument/result,
+file content, workspace path, or browser transcript.
+
 It does not send a ChatGPT message or create Native task authority. The single-profile/default Desktop path is
 the current live-proven composite catalog path; optional Profile 2+ targets still need the corresponding Plura
-app-server catalog projection before they expose the same `(Web)` rows.
+app-server catalog projection before they expose the same `(Web)` rows. The browser selection boundary itself
+is live-proven on both Profile 1 and Profile 2; the latter currently exposes a different live family catalog,
+which is why Tela treats account/browser discovery as authority rather than assuming one global model list.
 
 The current status icon uses an SF Symbol as a placeholder. Its image and future per-menu-item icons are UI
 assets, not protocol/authority identifiers, so they can be replaced later with custom artwork without changing

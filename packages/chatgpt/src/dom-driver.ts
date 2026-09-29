@@ -1317,10 +1317,60 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
         category_shapes: first.categoryShapes.join("|"),
         generic_attribute_shapes: first.genericAttributeShapes.join("|"),
       });
+      if (first.kind === "connector") {
+        // Hidden/offscreen Chromium surfaces can expose the exact connector row while refusing a
+        // compositor pointer activation. The downstream bridge proved that ChatGPT's menu keyboard
+        // owner remains reliable here: move the real highlight onto the exact row, press Enter, and
+        // accept the action only after the exact selected-connector pill appears in the composer.
+        // This loop is bounded by the currently visible row count and never guesses a row by text
+        // after activation.
+        let observed = first;
+        for (let step = 0; step <= first.rowCount; step += 1) {
+          if (observed.highlighted) {
+            this.#diagnostic("add_context_connector_keyboard_ready", {
+              step,
+              target_index: observed.targetIndex,
+              highlighted_index: observed.highlightedIndex,
+            });
+            await this.page.pressKey("Enter", signal);
+            this.#diagnostic("add_context_connector_keyboard_activated", { step });
+            await this.page.evaluate(PROVE_CONNECTOR_SELECTION, { composerKey, connectorName }, signal);
+            this.#diagnostic("add_context_selection_proven");
+            return;
+          }
+          if (step === first.rowCount) break;
+          await this.page.pressKey("ArrowDown", signal);
+          await this.#settleUi(signal);
+          observed = await this.page.evaluate<
+            { readonly connectorName: string },
+            {
+              readonly kind: "connector" | "more" | "apps";
+              readonly x: number;
+              readonly y: number;
+              readonly rowCount: number;
+              readonly targetIndex: number;
+              readonly highlighted: boolean;
+              readonly highlightedIndex: number;
+              readonly categoryShapes: readonly string[];
+              readonly genericAttributeShapes: readonly string[];
+            }
+          >(LOCATE_ADD_CONTEXT_TARGET, { connectorName }, signal);
+          if (observed.kind !== "connector") break;
+        }
+        this.#diagnostic("add_context_connector_keyboard_unavailable", {
+          target_index: observed.targetIndex,
+          highlighted_index: observed.highlightedIndex,
+        });
+        await this.page.pointerClick({ x: observed.x, y: observed.y }, signal);
+        this.#diagnostic("add_context_connector_pointer_fallback");
+        await this.page.evaluate(PROVE_CONNECTOR_SELECTION, { composerKey, connectorName }, signal);
+        this.#diagnostic("add_context_selection_proven");
+        return;
+      }
       await this.page.pointerClick({ x: first.x, y: first.y }, signal);
       this.#diagnostic("add_context_category_clicked", { kind: first.kind });
       await this.#settleUi(signal);
-      if (first.kind !== "connector") {
+      {
         type IntegrationInspection = {
           readonly exactCount: number;
           readonly containedCount: number;

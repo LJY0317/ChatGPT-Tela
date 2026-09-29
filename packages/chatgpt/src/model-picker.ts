@@ -419,35 +419,71 @@ async function selectFamily(
   familyKey: string,
   signal?: AbortSignal,
 ): Promise<PickerSnapshot> {
-  let snapshot = await advancedPicker(page, signal);
-  const current = families(snapshot);
-  const target = current.find(row => row.key === familyKey);
-  if (!target) throw new Error("selected ChatGPT Web model family is no longer present");
-  if (!target.checked) {
-    // Power-family rows intentionally use an exact DOM activation. This is non-consequential and
-    // avoids offscreen hit-testing; the selected row is accepted only after semantic checked
-    // readback. A current Power picker may return to its simple view as part of this commit.
-    await activateTarget(page, { target: "family", method: "click", label: target.label }, signal);
-    const committed = await waitForOptional(page, value => {
-      try {
-        const rows = families(value);
-        return rows.some(row => row.key === familyKey && row.checked);
-      } catch {
-        return false;
-      }
-    }, 1_500, signal);
-    if (committed) return committed;
+  const checked = (value: PickerSnapshot): boolean => {
+    try {
+      return families(value).some(row => row.key === familyKey && row.checked);
+    } catch {
+      return false;
+    }
+  };
+  const verifyAfterActivation = async (): Promise<PickerSnapshot | undefined> => {
+    const immediate = await waitForOptional(page, checked, 1_250, signal);
+    if (immediate) return immediate;
+    // A successful family commit may collapse the advanced menu. Re-open it and require the same
+    // semantic row to be checked; a menu transition by itself is never proof of selection.
+    const reopened = await advancedPicker(page, signal);
+    return checked(reopened) ? reopened : undefined;
+  };
 
-    // Some Power renders unmount their advanced rows immediately after a family commit. Re-open
-    // that exact family view and verify the checked row instead of treating the view transition as
-    // proof of selection.
+  let snapshot = await advancedPicker(page, signal);
+  let target = families(snapshot).find(row => row.key === familyKey);
+  if (!target) throw new Error("selected ChatGPT Web model family is no longer present");
+  if (target.checked) return snapshot;
+
+  // Hidden/offscreen Electron surfaces can differ by account/profile in which synthetic activation
+  // React accepts. Keep this non-consequential and bounded: exact DOM click first, then the full
+  // pointer sequence already used by the effort control, then one trusted compositor click. Every
+  // attempt requires semantic `aria-checked` readback before it is accepted.
+  for (const [attempt, method] of (["click", "pointer-sequence"] as const).entries()) {
     snapshot = await advancedPicker(page, signal);
-    const verified = families(snapshot).find(row => row.key === familyKey);
-    if (!verified?.checked) {
-      throw new Error("ChatGPT model picker did not commit the selected family row");
+    target = families(snapshot).find(row => row.key === familyKey);
+    if (!target) throw new Error("selected ChatGPT Web model family disappeared during selection");
+    if (target.checked) return snapshot;
+    emitDiagnosticEvent("chatgpt_tela_work", "web_model_family_selection_start", {
+      attempt,
+      method,
+    });
+    await activateTarget(page, { target: "family", method, label: target.label }, signal);
+    const committed = await verifyAfterActivation();
+    if (committed) {
+      emitDiagnosticEvent("chatgpt_tela_work", "web_model_family_selection_complete", {
+        attempt,
+        method,
+      });
+      return committed;
     }
   }
-  return snapshot;
+
+  snapshot = await advancedPicker(page, signal);
+  target = families(snapshot).find(row => row.key === familyKey);
+  if (!target) throw new Error("selected ChatGPT Web model family disappeared before trusted-pointer fallback");
+  if (target.checked) return snapshot;
+  if (target.point) {
+    emitDiagnosticEvent("chatgpt_tela_work", "web_model_family_selection_start", {
+      attempt: 2,
+      method: "trusted-pointer",
+    });
+    await page.pointerClick(target.point, signal);
+    const committed = await verifyAfterActivation();
+    if (committed) {
+      emitDiagnosticEvent("chatgpt_tela_work", "web_model_family_selection_complete", {
+        attempt: 2,
+        method: "trusted-pointer",
+      });
+      return committed;
+    }
+  }
+  throw new Error("ChatGPT model picker did not commit the selected family row after bounded activation fallbacks");
 }
 
 async function setEffort(
