@@ -28,6 +28,27 @@ async function requestModel(request: Request): Promise<string | undefined> {
   }
 }
 
+async function isRemoteCompactionV2(request: Request): Promise<boolean> {
+  if (request.method !== "POST") return false;
+  try {
+    const parsed = record(await request.clone().json());
+    const input = parsed?.input;
+    return Array.isArray(input) && record(input.at(-1))?.type === "compaction_trigger";
+  } catch {
+    return false;
+  }
+}
+
+function unavailableWebCompaction(): Response {
+  emitDiagnosticEvent("chatgpt_tela_work", "web_remote_compaction_unavailable");
+  return Response.json({
+    error: {
+      type: "unsupported_feature",
+      message: "Tela Web remote compaction is not yet available for this model",
+    },
+  }, { status: 501 });
+}
+
 function endpointFor(pathname: string): NativeCodexEndpoint | undefined {
   if (pathname === "/v1/models") return "models";
   if (pathname === "/v1/responses") return "responses";
@@ -136,19 +157,16 @@ export function createDefaultProfileCompositeProviderRouter(input: {
       if (!endpoint) return undefined;
       if (endpoint === "responses") {
         const model = await requestModel(request);
-        if (model && parseChatGptWebModelId(model)) return undefined;
+        if (model && parseChatGptWebModelId(model)) {
+          if (await isRemoteCompactionV2(request)) return unavailableWebCompaction();
+          return undefined;
+        }
         return native(request, endpoint);
       }
       if (endpoint === "responses/compact") {
         const model = await requestModel(request);
         if (model && parseChatGptWebModelId(model)) {
-          emitDiagnosticEvent("chatgpt_tela_work", "web_remote_compaction_unavailable");
-          return Response.json({
-            error: {
-              type: "unsupported_feature",
-              message: "Tela Web remote compaction is not yet available for this model",
-            },
-          }, { status: 501 });
+          return unavailableWebCompaction();
         }
         return native(request, endpoint);
       }
