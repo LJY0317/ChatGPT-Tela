@@ -61,6 +61,7 @@ const INSPECT_APPROVAL_CARD = String.raw`function () {
     allowCount: 0,
     allowOnceCount: 0,
     alwaysAllowCount: 0,
+    unknownCount: 0,
     allowPoint: null,
     allowOncePoint: null,
   };
@@ -83,6 +84,7 @@ const INSPECT_APPROVAL_CARD = String.raw`function () {
       result.allowCount += 1;
       if (result.allowCount === 1) result.allowPoint = point(button);
     } else if (label === "Always allow") result.alwaysAllowCount += 1;
+    else result.unknownCount += 1;
   }
   return result;
 }`;
@@ -273,6 +275,65 @@ const CLEAR_CONTEXT_UPLOAD_INPUT_MARKER = String.raw`function () {
   document.querySelectorAll('[data-chatgpt-tela-memory-upload="context"]').forEach(element => {
     element.removeAttribute('data-chatgpt-tela-memory-upload');
   });
+}`;
+
+const OBSERVE_EXPECTED_ATTACHMENT_IDENTITY = String.raw`function (argument) {
+  const composerSelector = ${COMPOSER_SELECTOR_SOURCE};
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const composers = [...document.querySelectorAll(composerSelector)].filter(visible);
+  if (composers.length !== 1) {
+    return { composerCount: composers.length, matchedCount: 0, fileInputMatchCount: 0, visibleOutsideComposerMatchCount: 0, attachmentRootCount: 0, outsideGroupCount: 0, progressCount: 0 };
+  }
+  const composer = composers[0];
+  const form = composer.closest('form[data-chatgpt-composer], form');
+  if (!(form instanceof HTMLElement)) {
+    return { composerCount: 1, matchedCount: 0, fileInputMatchCount: 0, visibleOutsideComposerMatchCount: 0, attachmentRootCount: 0, outsideGroupCount: 0, progressCount: 0 };
+  }
+  const expected = Array.isArray(argument.names) ? argument.names.filter(name => typeof name === "string" && name.length > 0) : [];
+  const matched = new Set();
+  let fileInputMatchCount = 0;
+  for (const input of form.querySelectorAll('input[type="file"]')) {
+    if (!(input instanceof HTMLInputElement) || !input.files) continue;
+    for (const file of input.files) {
+      if (expected.includes(file.name)) {
+        matched.add(file.name);
+        fileInputMatchCount += 1;
+      }
+    }
+  }
+  let visibleOutsideComposerMatchCount = 0;
+  const outside = element => element instanceof HTMLElement
+    && visible(element)
+    && element !== composer
+    && !composer.contains(element)
+    && !element.contains(composer);
+  const attachmentRootCount = [...form.querySelectorAll('[data-composer-attachments], .composer-attachment-surface')]
+    .filter(outside).length;
+  const outsideGroupCount = [...form.querySelectorAll('[role="group"]')].filter(outside).length;
+  const progressCount = [...form.querySelectorAll('[role="progressbar"], [aria-busy="true"]')].filter(outside).length;
+  const attributes = ["aria-label", "title", "data-file-name", "data-filename", "data-name"];
+  for (const element of form.querySelectorAll('*')) {
+    if (!outside(element)) continue;
+    const values = [element.textContent || "", ...attributes.map(name => element.getAttribute(name) || "")];
+    for (const name of expected) {
+      if (!values.some(value => value.includes(name))) continue;
+      matched.add(name);
+      visibleOutsideComposerMatchCount += 1;
+    }
+  }
+  return {
+    composerCount: 1,
+    matchedCount: matched.size,
+    fileInputMatchCount,
+    visibleOutsideComposerMatchCount,
+    attachmentRootCount,
+    outsideGroupCount,
+    progressCount,
+  };
 }`;
 
 const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
@@ -1528,6 +1589,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       readonly allowCount: number;
       readonly allowOnceCount: number;
       readonly alwaysAllowCount: number;
+      readonly unknownCount: number;
       readonly allowPoint: { readonly x: number; readonly y: number } | null;
       readonly allowOncePoint: { readonly x: number; readonly y: number } | null;
     }>(INSPECT_APPROVAL_CARD, undefined, signal);
@@ -1540,6 +1602,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       allow_count: observed.allowCount,
       allow_once_count: observed.allowOnceCount,
       always_allow_count: observed.alwaysAllowCount,
+      unknown_count: observed.unknownCount,
     });
     if (decision.action !== "approve_once") {
       return Object.freeze({ status: "none" as const, reason: decision.reason });
@@ -1733,12 +1796,115 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       }
     }
     let snapshot = await this.observe(signal);
+    const observeExpectedIdentity = () => this.page.evaluate<
+      { readonly names: readonly string[] },
+      {
+        readonly composerCount: number;
+        readonly matchedCount: number;
+        readonly fileInputMatchCount: number;
+        readonly visibleOutsideComposerMatchCount: number;
+        readonly attachmentRootCount: number;
+        readonly outsideGroupCount: number;
+        readonly progressCount: number;
+      }
+    >(OBSERVE_EXPECTED_ATTACHMENT_IDENTITY, { names: files.map(file => file.name) }, signal);
+    const firstComposer = snapshot.composers.find(item => item.key === composerKey);
+    const firstSends = snapshot.sendControls.filter(control => control.composerKey === composerKey && control.visible);
+    const firstIdentity = await observeExpectedIdentity();
+    let exactIdentityObserved = firstIdentity.matchedCount === files.length;
+    emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_post_upload", {
+      composer_present: firstComposer !== undefined,
+      composer_length: firstComposer?.textLength ?? -1,
+      connector_count: firstComposer?.connectorFingerprints.length ?? -1,
+      attachment_count: firstComposer?.attachmentNames.length ?? -1,
+      expected_attachment_count: firstComposer
+        ? files.filter(file => firstComposer.attachmentNames.includes(file.name)).length
+        : -1,
+      expected_attachment_visible: Boolean(firstComposer && files.every(file => firstComposer.attachmentNames.includes(file.name))),
+      identity_match_count: firstIdentity.matchedCount,
+      file_input_match_count: firstIdentity.fileInputMatchCount,
+      outside_match_count: firstIdentity.visibleOutsideComposerMatchCount,
+      attachment_root_count: firstIdentity.attachmentRootCount,
+      outside_group_count: firstIdentity.outsideGroupCount,
+      progress_count: firstIdentity.progressCount,
+      send_count: firstSends.length,
+      send_enabled: firstSends.length === 1 && firstSends[0]!.enabled,
+    });
+    let lastWaitState = "";
     for (;;) {
       const current = snapshot.composers.find(item => item.key === composerKey);
-      const accepted = current && files.every(file => current.attachmentNames.includes(file.name));
+      const exactIdentityVisible = Boolean(current && files.every(file => current.attachmentNames.includes(file.name)));
       const sends = snapshot.sendControls.filter(control => control.composerKey === composerKey && control.visible);
-      if (accepted && sends.length === 1 && sends[0]!.enabled) return;
-      snapshot = await this.waitForChange(snapshot.revision, signal);
+      const identity = await observeExpectedIdentity();
+      exactIdentityObserved ||= exactIdentityVisible || identity.matchedCount === files.length;
+      // ChatGPT's current attachment renderer exposes the exact filename while upload is in
+      // progress, then may collapse the settled chip to a generic attachment label. Preserve the
+      // exact observation as causal identity proof and require the same composer to retain an
+      // attachment surface after progress settles and Send becomes enabled. The preload receipt
+      // subsequently proves the actual uploaded bytes before any real Work turn is authorized.
+      const settled = Boolean(current)
+        && exactIdentityObserved
+        && current!.attachmentNames.length > 0
+        && identity.progressCount === 0
+        && sends.length === 1
+        && sends[0]!.enabled;
+      if (settled) return;
+      const waitState = [
+        current ? "composer" : "missing",
+        current?.textLength ?? -1,
+        current?.connectorFingerprints.length ?? -1,
+        current?.attachmentNames.length ?? -1,
+        exactIdentityVisible ? 1 : 0,
+        exactIdentityObserved ? 1 : 0,
+        identity.matchedCount,
+        identity.fileInputMatchCount,
+        identity.visibleOutsideComposerMatchCount,
+        identity.attachmentRootCount,
+        identity.outsideGroupCount,
+        identity.progressCount,
+        sends.length,
+        sends.length === 1 && sends[0]!.enabled ? 1 : 0,
+      ].join(":");
+      if (waitState !== lastWaitState) {
+        lastWaitState = waitState;
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_wait_state", {
+          composer_present: current !== undefined,
+          composer_length: current?.textLength ?? -1,
+          connector_count: current?.connectorFingerprints.length ?? -1,
+          attachment_count: current?.attachmentNames.length ?? -1,
+          expected_attachment_visible: exactIdentityVisible,
+          expected_attachment_observed: exactIdentityObserved,
+          identity_match_count: identity.matchedCount,
+          file_input_match_count: identity.fileInputMatchCount,
+          outside_match_count: identity.visibleOutsideComposerMatchCount,
+          attachment_root_count: identity.attachmentRootCount,
+          outside_group_count: identity.outsideGroupCount,
+          progress_count: identity.progressCount,
+          send_count: sends.length,
+          send_enabled: sends.length === 1 && sends[0]!.enabled,
+        });
+      }
+      try {
+        snapshot = await this.waitForChange(snapshot.revision, signal);
+      } catch (error) {
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_wait_failed", {
+          composer_present: current !== undefined,
+          composer_length: current?.textLength ?? -1,
+          connector_count: current?.connectorFingerprints.length ?? -1,
+          attachment_count: current?.attachmentNames.length ?? -1,
+          expected_attachment_visible: exactIdentityVisible,
+          expected_attachment_observed: exactIdentityObserved,
+          identity_match_count: identity.matchedCount,
+          file_input_match_count: identity.fileInputMatchCount,
+          outside_match_count: identity.visibleOutsideComposerMatchCount,
+          attachment_root_count: identity.attachmentRootCount,
+          outside_group_count: identity.outsideGroupCount,
+          progress_count: identity.progressCount,
+          send_count: sends.length,
+          send_enabled: sends.length === 1 && sends[0]!.enabled,
+        });
+        throw error;
+      }
     }
   }
 

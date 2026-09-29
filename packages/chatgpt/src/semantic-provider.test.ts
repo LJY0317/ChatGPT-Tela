@@ -5,6 +5,7 @@ import { ControlledBrowserHost, type BrowserMemoryFile } from "@chatgpt-tela/bro
 import { createChatGptContextAttachment } from "./context-attachment";
 import {
   CHATGPT_SURFACE_DRIVER,
+  ChatGptConnectorCatalogUnavailableError,
   type ChatGptSurfaceDriver,
   type ChatGptSurfaceSnapshot,
 } from "./surface";
@@ -70,8 +71,10 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   failConnectorSelection = false;
   recoverContextPreload = false;
   autoContextPreload = false;
+  normalizeAttachmentLabelAfterAttach = false;
   attachedFiles: string[] = [];
   contextAcknowledgement: string | undefined;
+  connectorCatalogUnavailable = false;
 
   constructor(initial: ChatGptSurfaceSnapshot) {
     this.current = structuredClone(initial);
@@ -178,7 +181,7 @@ class FixtureDriver implements ChatGptSurfaceDriver {
       ...this.current,
       revision: `${this.current.revision}:files`,
       composers: this.current.composers.map(composer => composer.key === composerKey
-        ? { ...composer, attachmentNames: files.map(file => file.name) }
+        ? { ...composer, attachmentNames: this.normalizeAttachmentLabelAfterAttach ? ["attachment"] : files.map(file => file.name) }
         : composer),
       sendControls: this.current.sendControls.map(control => control.composerKey === composerKey
         ? { ...control, enabled: true }
@@ -188,6 +191,9 @@ class FixtureDriver implements ChatGptSurfaceDriver {
 
   async selectConnector(composerKey: string, connectorName: string): Promise<void> {
     this.connectorSelections.push(connectorName);
+    if (this.connectorCatalogUnavailable) {
+      throw new ChatGptConnectorCatalogUnavailableError();
+    }
     if (this.failConnectorSelection) {
       const mention = `@${connectorName}`;
       this.current = {
@@ -324,6 +330,35 @@ describe("ChatGPT semantic provider", () => {
       expect(driver.contextAcknowledgement).toMatch(/^TELA_CONTEXT_ACK ctxr_[a-f0-9]{32}$/);
       expect(driver.activated).toHaveLength(1);
       expect(driver.current.composers[0]?.attachmentNames).toEqual([]);
+    } finally {
+      await host.release(lease.leaseId);
+      await host.close();
+    }
+  });
+
+  test("context attachment preload trusts a driver-proven upload when the settled UI normalizes the filename label", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.autoContextPreload = true;
+    driver.normalizeAttachmentLabelAfterAttach = true;
+    const { host, lease } = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ connectorDraftPersistenceSettleMs: 0 });
+    const attachment = createChatGptContextAttachment({
+      headRevisionId: "r1",
+      activeRequestRevisionId: "r1",
+      mode: "full",
+      logicalTokens: 4,
+      transferTokens: 4,
+      segments: [{ type: "revision", revisionId: "r1", kind: "user", content: "hello" }],
+    });
+    try {
+      const result = await provider.preloadContextAttachment(lease, {
+        nativeTaskId: "task-1",
+        webEpochId: "epoch-1",
+        attachment,
+      });
+      expect(result.state).toBe("proven");
+      expect(driver.attachedFiles).toEqual([attachment.name]);
+      expect(driver.activated).toHaveLength(1);
     } finally {
       await host.release(lease.leaseId);
       await host.close();
@@ -770,6 +805,27 @@ describe("ChatGPT semantic provider", () => {
       await expect(new ChatGptSemanticProvider({ connectorName: "ChatGPT Tela Development" })
         .submitTurn(surface.lease, toolRequest()))
         .rejects.toThrow("fixture connector selection failed");
+      expect(driver.activated).toEqual([]);
+      expect(driver.current.composers[0]?.textLength).toBe(0);
+      expect(driver.current.composers[0]?.connectorFingerprints).toEqual([]);
+    } finally {
+      await surface.host.close();
+    }
+  });
+
+  test("missing configured connector fails closed instead of submitting through automatic app routing", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.connectorCatalogUnavailable = true;
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({
+      connectorName: "ChatGPT Tela",
+      connectorDraftPersistenceSettleMs: 0,
+    });
+    try {
+      await expect(provider.probeConnector(surface.lease))
+        .rejects.toThrow("integration catalog does not expose the configured connector");
+      await expect(provider.submitTurn(surface.lease, toolRequest()))
+        .rejects.toThrow("integration catalog does not expose the configured connector");
       expect(driver.activated).toEqual([]);
       expect(driver.current.composers[0]?.textLength).toBe(0);
       expect(driver.current.composers[0]?.connectorFingerprints).toEqual([]);

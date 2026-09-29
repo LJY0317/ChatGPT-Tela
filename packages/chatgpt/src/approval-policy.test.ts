@@ -8,6 +8,7 @@ describe("ChatGPT approval automation policy", () => {
     allowCount: 0,
     allowOnceCount: 1,
     alwaysAllowCount: 1,
+    unknownCount: 0,
   } as const;
 
   test("defaults to no automatic action", () => {
@@ -32,6 +33,13 @@ describe("ChatGPT approval automation policy", () => {
       allowCount: 1,
       allowOnceCount: 0,
       alwaysAllowCount: 0,
+      unknownCount: 0,
     })).toEqual({ action: "none", reason: "unrecognized" });
+    expect(decideChatGptApproval("recognized_once", { ...observed, allowCount: 1 })).toEqual({
+      action: "none", reason: "ambiguous",
+    });
+    expect(decideChatGptApproval("recognized_once", { ...observed, unknownCount: 1 })).toEqual({
+      action: "none", reason: "ambiguous",
+    });
   });
 });

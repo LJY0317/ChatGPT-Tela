@@ -6,6 +6,7 @@ export interface ChatGptApprovalCardObservation {
   readonly allowCount: number;
   readonly allowOnceCount: number;
   readonly alwaysAllowCount: number;
+  readonly unknownCount: number;
 }
 
 export type ChatGptApprovalDecision =
@@ -23,7 +24,9 @@ export function decideChatGptApproval(
   if (mode === "off") return Object.freeze({ action: "none", reason: "disabled" });
   if (observed.cardCount === 0) return Object.freeze({ action: "none", reason: "absent" });
   if (observed.cardCount !== 1 || observed.denyCount !== 1
-    || observed.allowCount > 1 || observed.allowOnceCount > 1 || observed.alwaysAllowCount > 1) {
+    || observed.allowCount > 1 || observed.allowOnceCount > 1
+    || (observed.allowCount > 0 && observed.allowOnceCount > 0)
+    || observed.alwaysAllowCount > 1 || observed.unknownCount !== 0) {
     return Object.freeze({ action: "none", reason: "ambiguous" });
   }
   if (observed.allowOnceCount === 1) {

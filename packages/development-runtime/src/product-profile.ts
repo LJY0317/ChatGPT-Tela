@@ -40,6 +40,7 @@ import {
 } from "./electron";
 import type { NativeCodexFetch } from "./native-passthrough";
 import { augmentCodexAppServerModelList } from "./app-server-model-list";
+import { startModelListOverlayServer, type ModelListOverlayServer } from "./model-list-overlay-server";
 
 const DEFAULT_WEB_TURN_TIMEOUT_MS = 120_000;
 export const PRODUCT_RESPONSES_ENV_KEY = "CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN";
@@ -89,6 +90,7 @@ export interface ProductProfileRoutedTarget {
     readonly state: string;
     readonly endpoint: string;
     readonly responsesRouteFingerprint: string;
+    readonly modelListOverlayFingerprint?: string;
     readonly desktopProcessId?: number;
   };
   readonly currentTurnSource: CanonicalCurrentTurnSource;
@@ -234,22 +236,20 @@ export async function startProductProfileRuntime(
   let internalMcp: CodexBridgeMcpHttpServer | undefined;
   let routedTarget: ProductProfileRoutedTarget | undefined;
   let defaultDesktopTarget: DefaultDesktopTargetRuntime | undefined;
-  const compositeRouter: DefaultProfileCompositeProviderRouter | undefined = config.nativeTarget.kind === "default-desktop"
-    ? createDefaultProfileCompositeProviderRouter({
+  let modelListOverlay: ModelListOverlayServer | undefined;
+  const compositeRouter: DefaultProfileCompositeProviderRouter = createDefaultProfileCompositeProviderRouter({
         runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
         ...(options.defaultDesktopNativeFetch ? { fetchUpstream: options.defaultDesktopNativeFetch } : {}),
         async discoverWebModelFamilies(signal) {
-          if (!runtime) throw new Error("default profile Web model discovery ran before the browser runtime was ready");
+          if (!runtime) throw new Error("Web model discovery ran before the browser runtime was ready");
           return runtime.discoverChatGptWebModelFamilies(signal);
         },
-      })
-    : undefined;
+      });
   try {
     startupStage("browser_runtime_starting");
     runtime = await startElectronDevelopmentRuntime({
       profileId: config.browserProfile.profileId,
       connectorName: publicIdentity.connectorName,
-      connectorRoutingMode: config.publicMcpAbi === "stable" ? "automatic-fallback" : "explicit",
       approvalAutomationMode: config.approvalAutomationMode,
       currentTurnSource: source,
       turns,
@@ -263,13 +263,11 @@ export async function startProductProfileRuntime(
       responses: {
         port: 0,
         runtimeToken: config.responsesToken,
-        ...(compositeRouter ? {
-          authentication: {
-            kind: "header" as const,
-            name: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
-          },
-          requestRouter: request => compositeRouter.route(request),
-        } : {}),
+      authentication: {
+        kind: "header" as const,
+        name: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
+      },
+      requestRouter: request => compositeRouter.route(request),
       },
       ...(options.modelFamilyDiscovery ? { modelFamilyDiscovery: options.modelFamilyDiscovery } : {}),
       electron: {
@@ -316,18 +314,26 @@ export async function startProductProfileRuntime(
     await runtime.probeChatGptReadiness(options.signal);
     startupStage("fresh_readiness_proof_complete");
     connectorProbeState.clear();
-    if (compositeRouter) {
-      startupStage("web_model_catalog_discovery_starting");
-      const families = await compositeRouter.refreshWebModelFamilies(options.signal);
-      startupStage("web_model_catalog_discovery_complete", { family_count: families.length });
-    }
+    startupStage("web_model_catalog_discovery_starting");
+    const families = await compositeRouter.refreshWebModelFamilies(options.signal);
+    startupStage("web_model_catalog_discovery_complete", { family_count: families.length });
     if (config.nativeTarget.kind === "multi-profile") {
+      modelListOverlay = await startModelListOverlayServer({
+        token: config.responsesToken,
+        families: () => compositeRouter.cachedWebModelFamilies,
+      });
       startupStage("native_target_starting");
       routedTarget = await client!.launchRoutedTarget({
         targetId: config.nativeTarget.targetId,
         responsesBaseUrl: runtime.responses.baseUrl,
         responsesEnvKey: PRODUCT_RESPONSES_ENV_KEY,
         responsesToken: config.responsesToken,
+        runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
+        modelListOverlay: {
+          url: modelListOverlay.url,
+          envKey: PRODUCT_RESPONSES_ENV_KEY,
+          token: config.responsesToken,
+        },
         ...(options.signal ? { signal: options.signal } : {}),
       });
       startupStage("native_target_ready");
@@ -347,7 +353,7 @@ export async function startProductProfileRuntime(
         environment: process.env,
         augmentModelList: result => augmentCodexAppServerModelList(
           result,
-          compositeRouter!.cachedWebModelFamilies,
+          compositeRouter.cachedWebModelFamilies,
         ),
       });
       startupStage("native_target_ready");
@@ -369,6 +375,7 @@ export async function startProductProfileRuntime(
   } catch (error) {
     const cleanup: Promise<unknown>[] = [];
     if (defaultDesktopTarget) cleanup.push(defaultDesktopTarget.stop().catch(() => undefined));
+    if (modelListOverlay) cleanup.push(modelListOverlay.close().catch(() => undefined));
     if (routedTarget && config.nativeTarget.kind === "multi-profile") {
       cleanup.push(client!.quitTarget(config.nativeTarget.targetId, options.signal).catch(() => undefined));
     }
@@ -392,7 +399,8 @@ export async function startProductProfileRuntime(
         } else {
           const session = await client!.targetSession(config.nativeTarget.targetId, options.signal);
           const ownsTargetRoute = session.state === "ready"
-            && session.responsesRouteFingerprint === routedTarget!.session.responsesRouteFingerprint;
+            && session.responsesRouteFingerprint === routedTarget!.session.responsesRouteFingerprint
+            && session.modelListOverlayFingerprint === routedTarget!.session.modelListOverlayFingerprint;
           if (ownsTargetRoute) {
             const stopped = await client!.quitTarget(config.nativeTarget.targetId, options.signal);
             if (stopped.state === "ready") throw new Error("product target remained ready after normal quit");
@@ -400,7 +408,10 @@ export async function startProductProfileRuntime(
         }
         // If route ownership was lost, preserve the now-unrelated target but still tear down this
         // child's Responses/browser/MCP resources. Stale product providers must not become immortal.
-        const results = await Promise.allSettled([internalMcp!.stop(), runtime!.stop()]);
+        const results = await Promise.allSettled([
+          internalMcp!.stop(), runtime!.stop(),
+          ...(modelListOverlay ? [modelListOverlay.close()] : []),
+        ]);
         const failures = results
           .filter((result): result is PromiseRejectedResult => result.status === "rejected")
           .map(result => result.reason);

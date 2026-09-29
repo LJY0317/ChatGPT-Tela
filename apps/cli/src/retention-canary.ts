@@ -8,12 +8,12 @@ interface DiagnosticEvent {
   readonly retained_surface?: unknown;
   readonly retained_delta?: unknown;
   readonly physical_rollover?: unknown;
-  readonly logical_tokens?: unknown;
-  readonly transfer_tokens?: unknown;
-  readonly epoch_estimated_input_tokens?: unknown;
-  readonly epoch_rollover_token_limit?: unknown;
-  readonly previous_epoch_estimated_input_tokens?: unknown;
-  readonly previous_epoch_rollover_token_limit?: unknown;
+  readonly logical_estimate?: unknown;
+  readonly transfer_estimate?: unknown;
+  readonly epoch_input_estimate?: unknown;
+  readonly epoch_rollover_limit?: unknown;
+  readonly previous_epoch_input_estimate?: unknown;
+  readonly previous_epoch_rollover_limit?: unknown;
 }
 
 function eventTime(value: unknown): number | undefined {
@@ -89,8 +89,8 @@ export function summarizeRetentionCanary(input: {
       if (item.event !== "chatgpt_tela_work" || item.stage !== "web_turn_plan") continue;
       workPlans += 1;
       latestMs = Math.max(latestMs, ts);
-      const logical = safeInteger(item.logical_tokens);
-      const transfer = safeInteger(item.transfer_tokens);
+      const logical = safeInteger(item.logical_estimate);
+      const transfer = safeInteger(item.transfer_estimate);
       if (logical !== undefined) maxLogicalTokens = Math.max(maxLogicalTokens, logical);
       if (transfer !== undefined) maxTransferTokens = Math.max(maxTransferTokens, transfer);
       const retainedDelta = item.context_mode === "retained-delta" || item.retained_delta === true;
@@ -112,10 +112,10 @@ export function summarizeRetentionCanary(input: {
       }
       if (item.physical_rollover === true) {
         physicalRollovers += 1;
-        const estimated = safeInteger(item.previous_epoch_estimated_input_tokens)
-          ?? safeInteger(item.epoch_estimated_input_tokens);
-        const limit = safeInteger(item.previous_epoch_rollover_token_limit)
-          ?? safeInteger(item.epoch_rollover_token_limit);
+        const estimated = safeInteger(item.previous_epoch_input_estimate)
+          ?? safeInteger(item.epoch_input_estimate);
+        const limit = safeInteger(item.previous_epoch_rollover_limit)
+          ?? safeInteger(item.epoch_rollover_limit);
         if (estimated !== undefined && limit !== undefined) {
           latestRolloverPressure = Object.freeze({ estimatedTokens: estimated, rolloverLimitTokens: limit });
         }

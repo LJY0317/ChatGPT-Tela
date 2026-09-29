@@ -728,9 +728,9 @@ bun run cli model-canary --slot 1
 
 The same browser-semantic canary can be run for an explicitly configured extra account, for example
 `bun run cli model-canary --slot 2`. That proves the authenticated Profile 2 browser can discover,
-select, read back, and restore its own current family/effort choices without sending a message. It
-does **not** imply that Profile 2's Plura-owned Codex app-server already projects `(Web)` rows into its
-Native model picker; that separate adapter remains pending.
+select, read back, and restore its own current family/effort choices without sending a message. With
+a Plura Desktop version that advertises the model-list overlay contract, Tela also projects those
+Profile 2 `(Web)` rows into its Plura-owned Native model picker.
 
 Retained Web-context reuse has a separate **passive** live canary. It never opens a browser or sends
 an extra prompt. Use Tela Work normally for at least two turns in the same task, then inspect the
