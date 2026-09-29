@@ -14,7 +14,6 @@ import {
   type ServiceStatus,
 } from "@chatgpt-tela/service-protocol";
 import {
-  CompositeNativeTargetAdapter,
   DefaultDesktopNativeTargetAdapter,
   MultiProfileNativeTargetAdapter,
   type CodexNativeTarget,
@@ -284,12 +283,15 @@ export async function startCodexService(input: {
   readonly signal?: AbortSignal;
 }): Promise<CodexService> {
   const instanceId = randomUUID();
-  const targets = input.nativeTargetAdapter ?? new CompositeNativeTargetAdapter({
-    defaultDesktop: new DefaultDesktopNativeTargetAdapter(input.environment ? { environment: input.environment } : {}),
-    ...(input.config.multiProfile
-      ? { multiProfile: new MultiProfileNativeTargetAdapter({ launcherCli: input.config.multiProfile.launcherCli }) }
-      : {}),
-  });
+  // A configured Multi-Profile provider is the single lifecycle owner for every
+  // Desktop slot, including the canonical default target. Running the built-in
+  // default owner beside Plura Desktop would create two supervisors for the same
+  // ChatGPT user-data directory and make each runtime invalidate the other's
+  // session. Without a configured provider, keep the mainstream single-profile
+  // path completely independent of Multi-Profile.
+  const targets = input.nativeTargetAdapter ?? (input.config.multiProfile
+    ? new MultiProfileNativeTargetAdapter({ launcherCli: input.config.multiProfile.launcherCli })
+    : new DefaultDesktopNativeTargetAdapter(input.environment ? { environment: input.environment } : {}));
   const routedBridge = new RoutedCodexTurnBridge();
   const owned = new Map<number, OwnedProfile>();
   let closing: Promise<void> | undefined;
