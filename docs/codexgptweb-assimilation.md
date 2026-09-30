@@ -61,7 +61,7 @@ Status vocabulary:
 | One outstanding Native tool boundary at a time; no duplicate side effects | **absorbed** | two-phase Native delivery, used call-id set, continuation proof and no automatic resubmit. |
 | Keep tool calls/results inside the same Web response | **absorbed** | exact Native result is released only after the Web continuation boundary is armed. |
 | Recover cwd/workspace/sandbox only from canonical Native authority | **absorbed** | request metadata is not filesystem authority; app-server/rollout evidence owns it. |
-| Native V2 subagents without a parallel legacy protocol | **partial** | runtime inventory can expose current Native agent tools; product-level subagent dogfood and nested-agent tests remain to be expanded. |
+| Native V2 subagents without a parallel legacy protocol | **partial** | runtime inventory exposes current Native agent tools. Concurrent root/child/grandchild gateway tests prove separate tool authority, same-call-id result isolation and independent retirement; live product subagent dogfood remains. |
 
 ## Browser correctness and security
 
