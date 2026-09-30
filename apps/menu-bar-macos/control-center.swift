@@ -150,9 +150,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       button.alignment = .left
       button.font = .systemFont(ofSize: 16, weight: .medium)
       button.identifier = NSUserInterfaceItemIdentifier(page.rawValue)
+      stack.addArrangedSubview(button)
       button.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
       button.heightAnchor.constraint(greaterThanOrEqualToConstant: 36).isActive = true
-      stack.addArrangedSubview(button)
       navigationButtons[page] = button
     }
     updateNavigation()
@@ -250,8 +250,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     name.setContentHuggingPriority(.defaultLow, for: .horizontal)
     row.addArrangedSubview(name)
     row.addArrangedSubview(state)
-    row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
     stack.addArrangedSubview(row)
+    row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
   }
 
   private var connectorReady: Bool {
@@ -321,9 +321,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         imageView.wantsLayer = true
         imageView.layer?.borderWidth = 1
         imageView.layer?.cornerRadius = 8
+        stack.addArrangedSubview(imageView)
         imageView.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         imageView.heightAnchor.constraint(equalToConstant: 360).isActive = true
-        stack.addArrangedSubview(imageView)
       }
       stack.addArrangedSubview(NSButton(title: "View current snapshot", target: self, action: #selector(refreshBridgePreview)))
       addRefreshButton("Refresh Work status")
