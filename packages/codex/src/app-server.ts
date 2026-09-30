@@ -109,7 +109,7 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
     try {
       const readResponse = record(await rpc.request("thread/read", {
         threadId: expectedThreadId,
-        includeTurns: false,
+        includeTurns: true,
       }));
       const thread = readResponse ? record(readResponse.thread) : undefined;
       if (!thread) throw new Error("Codex app-server thread/read response is invalid");
@@ -119,16 +119,13 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
       const status = record(thread.status);
       if (status?.type !== "active") return undefined;
 
-      const turnsResponse = record(await rpc.request("thread/turns/list", {
-        threadId: expectedThreadId,
-        limit: 2,
-        sortDirection: "desc",
-        itemsView: "notLoaded",
-      }));
-      if (!turnsResponse || !Array.isArray(turnsResponse.data)) {
-        throw new Error("Codex app-server thread/turns/list response is invalid");
+      // thread/read is the established public API on shipped Desktop runtimes. The newer
+      // thread/turns/list method can be advertised while still returning "not supported yet".
+      // Keep one authority path: the same snapshot supplies environment, lineage and turns.
+      if (!Array.isArray(thread.turns)) {
+        throw new Error("Codex app-server thread/read omitted requested turns");
       }
-      const turns = turnsResponse.data.map(value => record(value));
+      const turns = thread.turns.map(value => record(value));
       if (turns.some(value => !value)) {
         throw new Error("Codex app-server returned an invalid turn entry");
       }
@@ -139,7 +136,7 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
       if (inProgress.length > 1) {
         throw new Error("Codex app-server reported multiple in-progress turns for one thread");
       }
-      if (turns[0] !== inProgress[0]) {
+      if (turns.at(-1) !== inProgress[0]) {
         throw new Error("Codex app-server current turn is not the newest turn");
       }
 

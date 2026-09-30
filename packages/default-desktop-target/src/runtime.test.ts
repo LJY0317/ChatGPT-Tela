@@ -57,6 +57,7 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       expect(runtime.proxyEndpoint).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/$/);
       expect(runtime.responsesRouteFingerprint).toBe(route.fingerprint);
       const log = JSON.parse(readFileSync(logPath, "utf8")) as { args: string[]; secret: string | null };
+      expect(log.args[0]).toBe("app-server");
       expect(log.secret).toBe("r".repeat(48));
       expect(log.args.join(" ")).not.toContain("r".repeat(48));
       expect(log.args).toContain("ws://127.0.0.1:0");

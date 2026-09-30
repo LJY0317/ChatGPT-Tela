@@ -163,9 +163,9 @@ export async function startDefaultDesktopTargetRuntime(input: {
   }
   backendEnvironment.OPENAI_ORGANIZATION = input.credential;
   const backend = spawn(input.installation.codexExecutable, [
+    "app-server",
     ...defaultDesktopCodexConfigArguments(input.route),
     "-c", "features.code_mode_host=true",
-    "app-server",
     "--analytics-default-enabled",
     "-c", "plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.enabled=true",
     "--listen", "ws://127.0.0.1:0",

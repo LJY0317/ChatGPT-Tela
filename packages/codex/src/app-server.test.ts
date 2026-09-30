@@ -31,6 +31,7 @@ function activeThread(overrides: Record<string, unknown> = {}): Record<string, u
     status: { type: "active", activeFlags: [] },
     parentThreadId: null,
     source: "cli",
+    turns: [],
     environments: [{
       environmentId: "env-1",
       cwd: resolve(workspace, "project"),
@@ -40,15 +41,15 @@ function activeThread(overrides: Record<string, unknown> = {}): Record<string, u
   };
 }
 
-function turns(...values: Array<Record<string, unknown>>): Record<string, unknown> {
-  return { data: values, nextCursor: null, backwardsCursor: null };
-}
-
 describe("Codex app-server current-turn authority", () => {
   test("binds one active newest turn using only public app-server thread/environment state", async () => {
     const rpc = new FixtureRpc({
       "thread/read": {
         thread: activeThread({
+          turns: [
+            { id: "turn-old", status: "completed", items: [] },
+            { id: "turn-current", status: "inProgress", items: [] },
+          ],
           parentThreadId: "parent-1",
           source: {
             subAgent: {
@@ -60,10 +61,6 @@ describe("Codex app-server current-turn authority", () => {
           },
         }),
       },
-      "thread/turns/list": turns(
-        { id: "turn-current", status: "inProgress", items: [] },
-        { id: "turn-old", status: "completed", items: [] },
-      ),
     });
     const source = new AppServerCurrentTurnSource(async () => rpc);
 
@@ -81,25 +78,28 @@ describe("Codex app-server current-turn authority", () => {
     expect(rpc.calls).toEqual([
       {
         method: "thread/read",
-        params: { threadId: "thread-1", includeTurns: false },
-      },
-      {
-        method: "thread/turns/list",
-        params: {
-          threadId: "thread-1",
-          limit: 2,
-          sortDirection: "desc",
-          itemsView: "notLoaded",
-        },
+        params: { threadId: "thread-1", includeTurns: true },
       },
     ]);
     expect(rpc.closed).toBe(1);
   });
 
+  test("rejects missing or ambiguous turns without consulting an unsupported listing API", async () => {
+    for (const entries of [undefined, [null], [
+      { id: "turn-a", status: "inProgress", items: [] },
+      { id: "turn-b", status: "inProgress", items: [] },
+    ]]) {
+      const rpc = new FixtureRpc({ "thread/read": { thread: activeThread({ turns: entries }) } });
+      await expect(new AppServerCurrentTurnSource(async () => rpc).currentTurn("thread-1"))
+        .rejects.toThrow();
+      expect(rpc.calls.map(call => call.method)).toEqual(["thread/read"]);
+      expect(rpc.closed).toBe(1);
+    }
+  });
+
   test("falls back conservatively to the public thread cwd when environments are unavailable", async () => {
     const rpc = new FixtureRpc({
-      "thread/read": { thread: activeThread({ environments: null, cwd: resolve("/plain") }) },
-      "thread/turns/list": turns({ id: "turn-1", status: "inProgress", items: [] }),
+      "thread/read": { thread: activeThread({ environments: null, cwd: resolve("/plain"), turns: [{ id: "turn-1", status: "inProgress", items: [] }] }) },
     });
     const source = new AppServerCurrentTurnSource(async () => rpc);
 
@@ -122,11 +122,10 @@ describe("Codex app-server current-turn authority", () => {
 
   test("fails closed when current-turn ordering or lineage is ambiguous", async () => {
     const staleNewest = new FixtureRpc({
-      "thread/read": { thread: activeThread() },
-      "thread/turns/list": turns(
-        { id: "turn-completed", status: "completed", items: [] },
+      "thread/read": { thread: activeThread({ turns: [
         { id: "turn-running", status: "inProgress", items: [] },
-      ),
+        { id: "turn-completed", status: "completed", items: [] },
+      ] }) },
     });
     await expect(new AppServerCurrentTurnSource(async () => staleNewest).currentTurn("thread-1"))
       .rejects.toThrow("not the newest turn");
@@ -134,6 +133,7 @@ describe("Codex app-server current-turn authority", () => {
     const conflictingOwner = new FixtureRpc({
       "thread/read": {
         thread: activeThread({
+          turns: [{ id: "turn-1", status: "inProgress", items: [] }],
           parentThreadId: "parent-a",
           source: {
             subAgent: {
@@ -145,7 +145,6 @@ describe("Codex app-server current-turn authority", () => {
           },
         }),
       },
-      "thread/turns/list": turns({ id: "turn-1", status: "inProgress", items: [] }),
     });
     await expect(new AppServerCurrentTurnSource(async () => conflictingOwner).currentTurn("thread-1"))
       .rejects.toThrow("lineage is internally inconsistent");
