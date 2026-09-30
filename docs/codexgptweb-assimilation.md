@@ -97,6 +97,18 @@ Status vocabulary:
 | Transactional install/update/repair/uninstall | **absorbed** | signed package trust, ownership manifest, resumable upgrade/repair and shared uninstall runtime. |
 | Cross-platform packaging/verification | **absorbed** | macOS/Windows/Linux CI and signed-package smoke are release gates. |
 
+## Remote compaction portability constraint
+
+Current Codex remote v2 requires exactly one `compaction` output item. The downstream proxy wraps
+its readable Web summary in a transparent custom envelope in `encrypted_content`, then decodes it
+on future routed requests. This proves routed continuation, but an ordinary Native runtime cannot
+interpret that bridge-owned envelope. Tela must preserve Native-only resumption and must not turn
+an opaque first-party compaction record into a placeholder that loses earlier context. Returning a
+normal summary message alone also fails the current v2 contract. A compatible Native-owned summary
+path remains a prerequisite; the explicit unsupported response remains until it is proven. The
+[official compaction contract](https://developers.openai.com/api/docs/guides/compaction) describes
+the first-party item as opaque encrypted continuation state, not a readable summary container.
+
 ## Features deliberately not copied as-is
 
 - **A second Codex Native2/Zero Risk connector stack** — Tela already has one stable public connector
