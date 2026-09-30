@@ -718,7 +718,7 @@ a bounded JPEG snapshot to the Control Center. With zero or multiple surfaces th
 of guessing which work belongs to the user. The preview is on-demand rather than idle polling, so inspecting
 Tela cannot perturb the Native/Web turn it is observing.
 
-Settings reports **Public connector** health separately from Gateway/Chat/Codex process
+Settings reports **ChatGPT connector** health separately from Tela connection/Chat/Work process
 health. For managed Tailscale Funnel, Tela distinguishes a stopped/unreachable Tailscale backend, sign-in or
 offline state, missing/drifted Funnel mapping, unavailable local Gateway MCP listener, and an end-to-end public
 MCP failure. `bun run cli status`, `bun run cli doctor`, and `bun run cli ingress status` expose the same causal
