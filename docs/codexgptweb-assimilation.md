@@ -72,7 +72,7 @@ Status vocabulary:
 | Connector identity is protocol identity, not a mutable preference | **absorbed** | frozen public `ChatGPT Tela` connector/ABI identity. |
 | Hidden connector choice must follow the UI's real keyboard owner instead of assuming pointer hit-testing | **absorbed** | when an exact add-context connector row is visible, Tela moves the bounded menu highlight to that exact row, activates with Enter, and accepts it only after the exact selected connector pill appears. Pointer is a fallback, never proof. This downstream-derived path was live-proven on Profile 2 where direct offscreen activation failed. |
 | Fresh setup/readiness surface must not own Native work | **absorbed** | profile-control surfaces are isolated and non-consequential. |
-| Approval automation remains bounded and explicit | **partial** | one-shot approval automation exists; downstream policy/diagnostic edge cases remain an audit item. |
+| Approval automation remains bounded and explicit | **partial** | one-shot automation is opt-in; delay applies only to a recognized card, rechecks unchanged renderer-local evidence, and never repeats an uncertain activation. Focused tests cover absent/changed/ambiguous/disabled cards and cancellation; live approval-card dogfood remains. |
 | User must not interact with Work's hidden bridge browser | **absorbed** | Control Center gets JPEG-only read-only preview; actual Web surface stays hidden/unfocused. |
 
 ## Diagnostics and operability

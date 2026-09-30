@@ -1289,8 +1289,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         && assistant.phase !== "failed"
         && this.#approvalAutomationMode !== "off"
         && driver.processApprovalCard) {
-        await waitForDuration(this.#approvalAutomationDelayMs, signal);
-        const approval = await driver.processApprovalCard(this.#approvalAutomationMode, signal);
+        const approval = await driver.processApprovalCard(
+          this.#approvalAutomationMode, signal, this.#approvalAutomationDelayMs,
+        );
         if (approval.status === "approved") continue;
       }
       const boundary = tracked.continuationBoundary;

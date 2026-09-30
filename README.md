@@ -670,7 +670,7 @@ multi-profile setup.
 
 ChatGPT Tela can optionally auto-activate a **recognized one-shot approval card** in the dedicated Codex/Web
 surface. It is off by default and never chooses a persistent **Always allow** action. Unknown/ambiguous cards
-remain manual. The renderer exports only structural counts/coordinates to this policy; card text, tool
+remain manual. The renderer exports only structural counts, coordinates, and disposable card identities to this policy; card text, tool
 arguments, prompts, and HTML are not persisted or logged.
 
 ```sh
@@ -683,8 +683,9 @@ bun run cli approval delay 500ms
 Changing this preference applies to newly started/restarted Tela Codex profiles. It does not widen Native
 Codex sandbox/tool authority and does not bypass ChatGPT cards that Tela cannot structurally recognize.
 The optional delay is a bounded preset (`instant`, `250ms`, `500ms`, `1s`, `2s`, `5s`, `10s`, or `15s`).
-Tela waits before inspecting the current card, then applies the same structural one-shot proof; it never
-remembers a stale approval target across the delay.
+The delay applies only after a one-shot card is recognized. Tela rechecks that same unchanged card after
+waiting and uses its current button position. An absent card does not delay normal responses; a changed,
+disabled, or previously activated card is never clicked automatically.
 
 ### macOS menu bar
 

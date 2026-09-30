@@ -86,6 +86,7 @@ export interface ChatGptSurfaceDriver {
   processApprovalCard?(
     mode: ChatGptApprovalAutomationMode,
     signal?: AbortSignal,
+    delayMs?: number,
   ): Promise<{ readonly status: "none" | "approved"; readonly reason: string }>;
   replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;
   clearComposerText(composerKey: string, signal?: AbortSignal): Promise<void>;

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { setTimeout as waitForDelay } from "node:timers/promises";
 import type { BrowserPageAutomation } from "@chatgpt-tela/browser-host";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { decideChatGptApproval, type ChatGptApprovalAutomationMode } from "./approval-policy";
@@ -64,6 +65,8 @@ const INSPECT_APPROVAL_CARD = String.raw`function () {
     unknownCount: 0,
     allowPoint: null,
     allowOncePoint: null,
+    cardKey: null,
+    proofKey: null,
   };
   if (cards.length !== 1) return result;
   const point = element => {
@@ -73,19 +76,38 @@ const INSPECT_APPROVAL_CARD = String.raw`function () {
       || bounds.width <= 0 || bounds.height <= 0) return null;
     return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
   };
+  let allowOnceButton = null;
   for (const button of cards[0].querySelectorAll('button,[role="button"]')) {
     if (!visible(button)) continue;
     const label = normalize(button.innerText || button.textContent);
     if (label === "Deny") result.denyCount += 1;
     else if (label === "Allow once") {
       result.allowOnceCount += 1;
-      if (result.allowOnceCount === 1) result.allowOncePoint = point(button);
+      if (result.allowOnceCount === 1) {
+        allowOnceButton = button;
+        if (!button.disabled && button.getAttribute("aria-disabled") !== "true") {
+          result.allowOncePoint = point(button);
+        }
+      }
     } else if (label === "Allow") {
       result.allowCount += 1;
       if (result.allowCount === 1) result.allowPoint = point(button);
     } else if (label === "Always allow") result.alwaysAllowCount += 1;
     else result.unknownCount += 1;
   }
+  // Raw card text and element references remain in the renderer. Only a disposable identity
+  // crosses the boundary, so a delay cannot silently approve a replaced or changed request.
+  const registryKey = Symbol.for("chatgpt-tela.approval-observations.v1");
+  const registry = globalThis[registryKey] ||= { cards: new WeakMap(), prefix: crypto.randomUUID(), next: 0 };
+  const text = cards[0].textContent;
+  let prior = registry.cards.get(cards[0]);
+  if (!prior || prior.text !== text || prior.button !== allowOnceButton) {
+    const key = registry.prefix + ":" + (++registry.next);
+    prior = { text, button: allowOnceButton, cardKey: prior?.cardKey || key, proofKey: key };
+    registry.cards.set(cards[0], prior);
+  }
+  result.cardKey = prior.cardKey;
+  result.proofKey = prior.proofKey;
   return result;
 }`;
 
@@ -1449,6 +1471,7 @@ function turn(raw: RawTurn): ChatGptTurnObservation {
  * before exposing the snapshot to the provider/runtime boundary.
  */
 export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
+  #activatedApprovalCardKey: string | undefined;
   constructor(readonly page: BrowserPageAutomation) {}
 
   #diagnostic(stage: string, fields: Readonly<Record<string, string | number | boolean>> = {}): void {
@@ -1582,8 +1605,12 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
   async processApprovalCard(
     mode: ChatGptApprovalAutomationMode,
     signal?: AbortSignal,
+    delayMs = 0,
   ): Promise<{ readonly status: "none" | "approved"; readonly reason: string }> {
-    const observed = await this.page.evaluate<undefined, {
+    if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 15_000) {
+      throw new Error("ChatGPT approval delay must be 0-15000ms");
+    }
+    type ApprovalObservation = {
       readonly cardCount: number;
       readonly denyCount: number;
       readonly allowCount: number;
@@ -1592,9 +1619,13 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       readonly unknownCount: number;
       readonly allowPoint: { readonly x: number; readonly y: number } | null;
       readonly allowOncePoint: { readonly x: number; readonly y: number } | null;
-    }>(INSPECT_APPROVAL_CARD, undefined, signal);
+      readonly cardKey: string | null;
+      readonly proofKey: string | null;
+    };
+    const inspect = () => this.page.evaluate<undefined, ApprovalObservation>(INSPECT_APPROVAL_CARD, undefined, signal);
+    let observed = await inspect();
     const decision = decideChatGptApproval(mode, observed);
-    this.#diagnostic("approval_policy", {
+    if (observed.cardCount > 0) this.#diagnostic("approval_policy", {
       mode,
       action: decision.action,
       card_count: observed.cardCount,
@@ -1607,11 +1638,33 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     if (decision.action !== "approve_once") {
       return Object.freeze({ status: "none" as const, reason: decision.reason });
     }
+    if (!observed.cardKey || !observed.proofKey || !observed.allowOncePoint) {
+      return Object.freeze({ status: "none" as const, reason: "target_missing" });
+    }
+    if (observed.cardKey === this.#activatedApprovalCardKey) {
+      return Object.freeze({ status: "none" as const, reason: "already_activated" });
+    }
+    if (delayMs > 0) {
+      const cardKey = observed.cardKey;
+      const proofKey = observed.proofKey;
+      await waitForDelay(delayMs, undefined, { signal });
+      observed = await inspect();
+      if (observed.cardKey !== cardKey || observed.proofKey !== proofKey
+        || decideChatGptApproval(mode, observed).action !== "approve_once") {
+        this.#diagnostic("approval_changed_before_activation");
+        return Object.freeze({ status: "none" as const, reason: "card_changed" });
+      }
+    }
     const target = observed.allowOncePoint;
     if (!target) {
       this.#diagnostic("approval_target_missing", { preferred: decision.preferredChoice });
       return Object.freeze({ status: "none" as const, reason: "target_missing" });
     }
+    if (observed.cardKey === this.#activatedApprovalCardKey) {
+      return Object.freeze({ status: "none" as const, reason: "already_activated" });
+    }
+    // An ambiguous activation must never be retried against the same card.
+    this.#activatedApprovalCardKey = observed.cardKey ?? undefined;
     await this.page.pointerClick(target, signal);
     this.#diagnostic("approval_activated", { choice: decision.preferredChoice });
     return Object.freeze({ status: "approved" as const, reason: decision.preferredChoice });

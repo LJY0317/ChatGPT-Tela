@@ -77,6 +77,7 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   contextAcknowledgement: string | undefined;
   connectorCatalogUnavailable = false;
   approvalCalls = 0;
+  approvalDelays: number[] = [];
   approveRecognizedCard = false;
 
   constructor(initial: ChatGptSurfaceSnapshot) {
@@ -89,8 +90,9 @@ class FixtureDriver implements ChatGptSurfaceDriver {
 
   async dismissTransientUi(): Promise<void> {}
 
-  async processApprovalCard(): Promise<{ readonly status: "none" | "approved"; readonly reason: string }> {
+  async processApprovalCard(_mode: unknown, _signal?: AbortSignal, delayMs = 0): Promise<{ readonly status: "none" | "approved"; readonly reason: string }> {
     this.approvalCalls += 1;
+    this.approvalDelays.push(delayMs);
     return this.approveRecognizedCard
       ? { status: "approved", reason: "allow_once" }
       : { status: "none", reason: "absent" };
@@ -1234,7 +1236,7 @@ describe("ChatGPT semantic provider", () => {
     }
   });
 
-  test("approval delay inspects a one-shot card during an active assistant turn", async () => {
+  test("passes approval delay to the card driver during an active assistant turn", async () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.approveRecognizedCard = true;
     const surface = await leaseFor(driver);
@@ -1277,6 +1279,7 @@ describe("ChatGPT semantic provider", () => {
       });
       const completed = await provider.waitForTurnEvent(surface.lease, submitted.value);
       expect(driver.approvalCalls).toBe(1);
+      expect(driver.approvalDelays).toEqual([1]);
       expect(completed).toEqual({
         state: "proven",
         value: {

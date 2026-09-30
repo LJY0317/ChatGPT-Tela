@@ -230,6 +230,101 @@ class FakePage implements BrowserPageAutomation {
 }
 
 describe("current ChatGPT DOM surface driver", () => {
+  const approvalCard = {
+    cardCount: 1, denyCount: 1, allowCount: 0, allowOnceCount: 1,
+    alwaysAllowCount: 1, unknownCount: 0, allowPoint: null,
+    allowOncePoint: { x: 10, y: 20 }, cardKey: "card-1", proofKey: "proof-1",
+  };
+  class ApprovalPage extends FakePage {
+    inspections = 0;
+    observations: Array<Record<string, unknown>> = [];
+    override async pointerClick(point: { readonly x: number; readonly y: number }): Promise<void> {
+      this.actions.push(`pointer:${point.x},${point.y}`);
+    }
+    override async evaluate<Argument, Result>(source: string, argument: Argument): Promise<Result> {
+      if (source.includes('[data-testid="tool-approval-card"]')) {
+        this.inspections += 1;
+        return this.observations.shift() as Result;
+      }
+      return super.evaluate<Argument, Result>(source, argument);
+    }
+  }
+
+  test("approval delay does not wait on an absent or unrecognized card", async () => {
+    for (const card of [
+      { ...approvalCard, cardCount: 0, cardKey: null },
+      { ...approvalCard, unknownCount: 1 },
+    ]) {
+      const page = new ApprovalPage();
+      page.observations = [card];
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(), 50);
+      try {
+        const result = await new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once", abort.signal, 15_000);
+        expect(result.status).toBe("none");
+        expect(page.inspections).toBe(1);
+        expect(page.actions).toEqual([]);
+      } finally { clearTimeout(timer); }
+    }
+  });
+
+  test("delayed approval rechecks the same card and uses its current target", async () => {
+    const page = new ApprovalPage();
+    page.observations = [approvalCard, { ...approvalCard, allowOncePoint: { x: 30, y: 40 } }];
+    const result = await new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once", undefined, 1);
+    expect(result.status).toBe("approved");
+    expect(page.inspections).toBe(2);
+    expect(page.actions).toEqual(["pointer:30,40"]);
+  });
+
+  test("delayed approval never activates a replaced, ambiguous, or disabled card", async () => {
+    for (const changed of [
+      { ...approvalCard, cardKey: "card-2" },
+      { ...approvalCard, proofKey: "proof-2" },
+      { ...approvalCard, cardCount: 2 },
+      { ...approvalCard, unknownCount: 1 },
+      { ...approvalCard, allowOncePoint: null },
+    ]) {
+      const page = new ApprovalPage();
+      page.observations = [approvalCard, changed];
+      const result = await new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once", undefined, 1);
+      expect(result.status).toBe("none");
+      expect(page.actions).toEqual([]);
+    }
+  });
+
+  test("cancelled approval delay cannot click the card", async () => {
+    const page = new ApprovalPage();
+    page.observations = [approvalCard];
+    const abort = new AbortController();
+    const operation = new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once", abort.signal, 15_000);
+    await Promise.resolve();
+    abort.abort();
+    await expect(operation).rejects.toThrow();
+    expect(page.actions).toEqual([]);
+  });
+
+  test("one approval card is activated at most once even if it stays visible", async () => {
+    const page = new ApprovalPage();
+    page.observations = [approvalCard, { ...approvalCard, proofKey: "proof-2" }, { ...approvalCard, cardKey: "card-2" }];
+    const driver = new ChatGptDomSurfaceDriver(page);
+    expect((await driver.processApprovalCard("recognized_once")).status).toBe("approved");
+    expect((await driver.processApprovalCard("recognized_once")).reason).toBe("already_activated");
+    expect((await driver.processApprovalCard("recognized_once")).status).toBe("approved");
+    expect(page.actions).toHaveLength(2);
+  });
+
+  test("an ambiguous activation is not retried for the same approval card", async () => {
+    class FailedActivationPage extends ApprovalPage {
+      override async pointerClick(): Promise<void> { throw new Error("activation indeterminate"); }
+    }
+    const page = new FailedActivationPage();
+    page.observations = [approvalCard, approvalCard];
+    const driver = new ChatGptDomSurfaceDriver(page);
+    await expect(driver.processApprovalCard("recognized_once")).rejects.toThrow("indeterminate");
+    expect((await driver.processApprovalCard("recognized_once")).reason).toBe("already_activated");
+  });
+
   test("recognizes current ChatGPT composer renderer variants without broad page-wide textbox matching", () => {
     expect(CHATGPT_CURRENT_COMPOSER_SELECTOR).toContain('[data-testid="prompt-textarea"]');
     expect(CHATGPT_CURRENT_COMPOSER_SELECTOR).toContain('#prompt-textarea');
