@@ -41,30 +41,26 @@ private struct ControlCenterBridgePreview: Decodable {
   let imageBase64: String?
 }
 
-private struct ControlCenterPreferences: Decodable {
-  let version: Int
-  let approvalAutomation: String
-  let approvalDelay: String?
+private enum ControlCenterPage: String, CaseIterable {
+  case home = "Home"
+  case work = "Work"
+  case settings = "Settings"
 }
 
-private enum ControlCenterPage: String, CaseIterable {
-  case overview = "Overview"
-  case chat = "Chat"
-  case work = "Work / Codex"
-  case profiles = "Profiles"
-  case bridge = "Bridge"
-  case updates = "Updates"
-  case settings = "Settings"
-  case diagnostics = "Diagnostics"
+private final class FlippedDocumentView: NSView {
+  override var isFlipped: Bool { true }
 }
 
 @MainActor
 final class TelaControlCenterController: NSObject, NSWindowDelegate {
+  var onPreferencesChanged: (() -> Void)?
   private let fileManager = FileManager.default
   private let home = FileManager.default.homeDirectoryForCurrentUser
   private var window: NSWindow?
   private var detailStack: NSStackView?
-  private var selectedPage: ControlCenterPage = .overview
+  private var detailScroll: NSScrollView?
+  private var navigationButtons: [ControlCenterPage: NSButton] = [:]
+  private var selectedPage: ControlCenterPage = .home
   private var serviceStates: [String: String] = [:]
   private var ingressStatus: ControlCenterIngressStatus?
   private var profiles: [ControlCenterProfileStatus] = []
@@ -72,6 +68,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var approvalDelay = "instant"
   private var bridgeImage: NSImage?
   private var bridgeMessage = "No preview requested yet."
+  private var selectedPreviewSlot: Int?
+  private var preferenceError = false
 
   private var supportRoot: URL {
     home.appendingPathComponent("Library/Application Support/ChatGPT Tela", isDirectory: true)
@@ -102,13 +100,13 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func buildWindow() {
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 860, height: 620),
+      contentRect: NSRect(x: 0, y: 0, width: 900, height: 650),
       styleMask: [.titled, .closable, .miniaturizable, .resizable],
       backing: .buffered,
       defer: false
     )
     window.title = "ChatGPT Tela"
-    window.minSize = NSSize(width: 720, height: 500)
+    window.minSize = NSSize(width: 760, height: 520)
     window.isReleasedWhenClosed = false
     window.delegate = self
     window.center()
@@ -117,8 +115,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let sidebar = NSViewController()
     sidebar.view = makeSidebar()
     let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
-    sidebarItem.minimumThickness = 170
-    sidebarItem.maximumThickness = 220
+    sidebarItem.minimumThickness = 185
+    sidebarItem.maximumThickness = 230
     sidebarItem.canCollapse = false
     split.addSplitViewItem(sidebarItem)
 
@@ -135,46 +133,74 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let stack = NSStackView()
     stack.orientation = .vertical
     stack.alignment = .leading
-    stack.spacing = 6
+    stack.spacing = 10
     stack.translatesAutoresizingMaskIntoConstraints = false
     container.addSubview(stack)
     NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
-      stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
-      stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 18),
+      stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+      stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+      stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 24),
     ])
+    let heading = label("ChatGPT Tela")
+    heading.font = .systemFont(ofSize: 17, weight: .semibold)
+    stack.addArrangedSubview(heading)
     for page in ControlCenterPage.allCases {
       let button = NSButton(title: page.rawValue, target: self, action: #selector(selectPage(_:)))
-      button.bezelStyle = .inline
+      button.bezelStyle = .rounded
       button.alignment = .left
+      button.font = .systemFont(ofSize: 16, weight: .medium)
       button.identifier = NSUserInterfaceItemIdentifier(page.rawValue)
-      button.widthAnchor.constraint(greaterThanOrEqualToConstant: 145).isActive = true
+      button.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+      button.heightAnchor.constraint(greaterThanOrEqualToConstant: 36).isActive = true
       stack.addArrangedSubview(button)
+      navigationButtons[page] = button
     }
+    updateNavigation()
+    let footer = label("Closing this window keeps Tela running.", style: .caption1)
+    footer.textColor = .secondaryLabelColor
+    footer.translatesAutoresizingMaskIntoConstraints = false
+    container.addSubview(footer)
+    NSLayoutConstraint.activate([
+      footer.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 18),
+      footer.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -18),
+      footer.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -22),
+    ])
     return container
+  }
+
+  private func updateNavigation() {
+    for (page, button) in navigationButtons {
+      button.state = page == selectedPage ? .on : .off
+      button.contentTintColor = page == selectedPage ? .controlAccentColor : .labelColor
+    }
   }
 
   private func makeDetailView() -> NSView {
     let scroll = NSScrollView()
     scroll.hasVerticalScroller = true
     scroll.drawsBackground = false
-    let document = NSView()
+    let document = FlippedDocumentView(frame: NSRect(x: 0, y: 0, width: 650, height: 620))
     document.translatesAutoresizingMaskIntoConstraints = false
     let stack = NSStackView()
     stack.orientation = .vertical
     stack.alignment = .leading
-    stack.spacing = 12
+    stack.spacing = 14
     stack.translatesAutoresizingMaskIntoConstraints = false
     document.addSubview(stack)
     scroll.documentView = document
     NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 28),
-      stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -28),
-      stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 28),
-      stack.bottomAnchor.constraint(lessThanOrEqualTo: document.bottomAnchor, constant: -28),
+      stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 32),
+      stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -32),
+      stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 30),
+      document.bottomAnchor.constraint(greaterThanOrEqualTo: stack.bottomAnchor, constant: 32),
       document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+      document.heightAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.heightAnchor),
     ])
+    let contentHeight = document.bottomAnchor.constraint(equalTo: stack.bottomAnchor, constant: 32)
+    contentHeight.priority = .defaultHigh
+    contentHeight.isActive = true
     detailStack = stack
+    detailScroll = scroll
     return scroll
   }
 
@@ -187,7 +213,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func sectionTitle(_ title: String) -> NSTextField {
     let field = label(title, style: .title1)
-    field.font = NSFont.systemFont(ofSize: 24, weight: .semibold)
+    field.font = NSFont.systemFont(ofSize: 29, weight: .bold)
     return field
   }
 
@@ -200,43 +226,68 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     detailStack?.addArrangedSubview(NSButton(title: title, target: self, action: #selector(refreshPage)))
   }
 
+  private func addSection(_ title: String) {
+    guard let stack = detailStack else { return }
+    let spacer = NSView()
+    spacer.heightAnchor.constraint(equalToConstant: 12).isActive = true
+    stack.addArrangedSubview(spacer)
+    let heading = label(title)
+    heading.font = .systemFont(ofSize: 19, weight: .semibold)
+    stack.addArrangedSubview(heading)
+  }
+
+  private func addStatus(_ title: String, value: String) {
+    guard let stack = detailStack else { return }
+    let row = NSStackView()
+    row.orientation = .horizontal
+    row.alignment = .centerY
+    row.distribution = .fill
+    let name = label(title)
+    name.font = .systemFont(ofSize: 16, weight: .medium)
+    let state = label(value)
+    state.textColor = value == "Available" ? .systemGreen : .secondaryLabelColor
+    state.alignment = .right
+    name.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    row.addArrangedSubview(name)
+    row.addArrangedSubview(state)
+    row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+    stack.addArrangedSubview(row)
+  }
+
+  private var connectorReady: Bool {
+    serviceStates["gateway"] == "Ready" && ingressStatus?.availability == "ready"
+  }
+
+  private func availability(for service: String, needsProfile: Bool = false) -> String {
+    if serviceStates[service] == nil { return "Checking…" }
+    let profileReady = !needsProfile || profiles.contains {
+      $0.controlState == "running" && $0.targetSessionState == "ready"
+    }
+    return connectorReady && serviceStates[service] == "Ready" && profileReady
+      ? "Available" : "Needs attention"
+  }
+
   private func renderCurrentPage() {
     guard let stack = detailStack else { return }
     clearDetail()
     stack.addArrangedSubview(sectionTitle(selectedPage.rawValue))
 
     switch selectedPage {
-    case .overview:
-      stack.addArrangedSubview(label("ChatGPT Tela runs as independent Gateway, Chat, and Codex services. Closing this window leaves them running."))
-      for service in ["gateway", "chat", "codex"] {
-        stack.addArrangedSubview(label("\(service.capitalized): \(serviceStates[service] ?? "Unknown")"))
-      }
-      if serviceStates["gateway"] == "Stopped" {
-        stack.addArrangedSubview(label("Public ingress: Unavailable — Gateway is stopped."))
-      } else if let ingressStatus {
-        stack.addArrangedSubview(label("Public ingress: \(ingressStatus.availability.capitalized)"))
-        if ingressStatus.availability != "ready" {
-          stack.addArrangedSubview(label(ingressStatus.detail))
-        }
-      } else {
-        stack.addArrangedSubview(label("Public ingress: Unknown"))
-      }
-      addRefreshButton()
-    case .chat:
-      stack.addArrangedSubview(label("Tela Chat: \(serviceStates["chat"] ?? "Unknown")"))
-      stack.addArrangedSubview(label("Local workspace, file, process, review, worktree, and configured agent capabilities are served through the private Chat service and public ChatGPT Tela connector."))
-      addRefreshButton()
+    case .home:
+      stack.addArrangedSubview(label("See what is ready to use in ChatGPT. Tela keeps working when you close this window."))
+      addSection("Connections")
+      addStatus("Chat", value: availability(for: "chat"))
+      addStatus("Work / Codex", value: availability(for: "codex", needsProfile: true))
+      stack.addArrangedSubview(label("Chat connects your local workspace. Work / Codex runs Web model turns from your Codex conversations."))
+      addRefreshButton("Check again")
     case .work:
-      stack.addArrangedSubview(label("Tela Codex: \(serviceStates["codex"] ?? "Unknown")"))
-      if profiles.isEmpty { stack.addArrangedSubview(label("No Codex profiles are currently available.")) }
+      stack.addArrangedSubview(label("Manage the ChatGPT profiles used by Work / Codex and view a snapshot of an active Web turn."))
+      addSection("Profiles")
+      if profiles.isEmpty { stack.addArrangedSubview(label("No Work profiles are available right now.")) }
       for profile in profiles {
-        stack.addArrangedSubview(label("\(profile.targetDisplayName) · \(profile.controlState) · session \(profile.targetSessionState)"))
-      }
-      addRefreshButton()
-    case .profiles:
-      if profiles.isEmpty { stack.addArrangedSubview(label("No profiles reported by Tela Codex.")) }
-      for profile in profiles {
-        stack.addArrangedSubview(label("Profile \(profile.slot): \(profile.targetDisplayName)\nTarget: \(profile.targetState) · Session: \(profile.targetSessionState) · Control: \(profile.controlState)"))
+        let state = profile.controlState == "running" && profile.targetSessionState == "ready"
+          ? "Running" : profile.controlState.capitalized
+        stack.addArrangedSubview(label("\(profile.targetDisplayName) · \(state)"))
         let action = profile.controlState == "running" ? "stop" :
           (profile.controlState == "restart-required" ? "restart" : "start")
         let title = action == "stop" ? "Stop Profile \(profile.slot)" :
@@ -245,9 +296,23 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         button.identifier = NSUserInterfaceItemIdentifier("profile:\(profile.slot):\(action)")
         stack.addArrangedSubview(button)
       }
-      addRefreshButton()
-    case .bridge:
-      stack.addArrangedSubview(label("Read-only observation only. This preview never reveals, focuses, clicks, types into, stops, or otherwise manipulates the hidden Work/Codex browser surface."))
+      addSection("Browser activity")
+      stack.addArrangedSubview(label("This snapshot is read-only. It cannot click, type into, or stop the active turn."))
+      let runningProfiles = profiles.filter { $0.controlState == "running" }
+      if runningProfiles.count > 1 {
+        let picker = NSPopUpButton()
+        for profile in runningProfiles {
+          picker.addItem(withTitle: profile.targetDisplayName)
+          picker.lastItem?.representedObject = profile.slot
+        }
+        if let selectedPreviewSlot,
+           let index = runningProfiles.firstIndex(where: { $0.slot == selectedPreviewSlot }) {
+          picker.selectItem(at: index)
+        }
+        picker.target = self
+        picker.action = #selector(selectPreviewProfile(_:))
+        stack.addArrangedSubview(picker)
+      }
       stack.addArrangedSubview(label(bridgeMessage))
       if let bridgeImage {
         let imageView = NSImageView(image: bridgeImage)
@@ -260,24 +325,50 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         imageView.heightAnchor.constraint(equalToConstant: 360).isActive = true
         stack.addArrangedSubview(imageView)
       }
-      stack.addArrangedSubview(NSButton(title: "Refresh Read-only Preview", target: self, action: #selector(refreshBridgePreview)))
-    case .updates:
-      stack.addArrangedSubview(label("Signed install, repair, upgrade, and uninstall lifecycle operations exist. The final consumer updater UI and pinned release trust remain release work."))
+      stack.addArrangedSubview(NSButton(title: "View current snapshot", target: self, action: #selector(refreshBridgePreview)))
+      addRefreshButton("Refresh Work status")
     case .settings:
-      stack.addArrangedSubview(label("Approval automation: \(approvalAutomation == "recognized_once" ? "Recognized one-shot cards" : "Off")"))
-      stack.addArrangedSubview(label("Approval delay: \(approvalDelay)"))
-      stack.addArrangedSubview(label("Additional settings will move here as they become stable product preferences. The menu bar remains the quick-control surface."))
-      addRefreshButton()
-    case .diagnostics:
-      stack.addArrangedSubview(label("Tela diagnostics are privacy-bounded and stored separately from user prompts, tool arguments, and file contents."))
-      if let ingressStatus {
-        stack.addArrangedSubview(label("Public ingress · \(ingressStatus.cause)\n\(ingressStatus.detail)"))
-      } else if serviceStates["gateway"] == "Stopped" {
-        stack.addArrangedSubview(label("Public ingress · local-mcp-unreachable\nGateway is stopped, so the public connector cannot reach Tela."))
+      stack.addArrangedSubview(label("Adjust how Tela handles approvals and inspect connection details."))
+      addSection("Approvals")
+      let approval = NSButton(checkboxWithTitle: "Automatically approve recognized one-time requests", target: self, action: #selector(toggleApproval(_:)))
+      approval.state = approvalAutomation == "recognized_once" ? .on : .off
+      approval.isEnabled = !preferenceError
+      stack.addArrangedSubview(approval)
+      stack.addArrangedSubview(label("Approval delay"))
+      let delays: [(String, String)] = [
+        ("instant", "Instant"), ("250ms", "0.25 seconds"), ("500ms", "0.5 seconds"),
+        ("1s", "1 second"), ("2s", "2 seconds"), ("5s", "5 seconds"),
+        ("10s", "10 seconds"), ("15s", "15 seconds")
+      ]
+      let delayPicker = NSPopUpButton()
+      for (preset, title) in delays {
+        delayPicker.addItem(withTitle: title)
+        delayPicker.lastItem?.representedObject = preset
       }
+      delayPicker.selectItem(at: delays.firstIndex(where: { $0.0 == approvalDelay }) ?? 0)
+      delayPicker.target = self
+      delayPicker.action = #selector(setApprovalDelay(_:))
+      delayPicker.isEnabled = !preferenceError
+      stack.addArrangedSubview(delayPicker)
+      stack.addArrangedSubview(label("Changes take effect after restarting the active Work profile. Restarting interrupts any running turn."))
+      if preferenceError { stack.addArrangedSubview(label("Approval settings could not be read. Check Tela's preferences file.")) }
+      addSection("Connection details")
+      for service in ["gateway", "chat", "codex"] {
+        addStatus(service.capitalized, value: serviceStates[service] ?? "Checking…")
+      }
+      if let ingressStatus {
+        addStatus("ChatGPT connection", value: ingressStatus.availability.capitalized)
+        if ingressStatus.availability != "ready" { stack.addArrangedSubview(label(ingressStatus.detail)) }
+      } else if serviceStates["gateway"] == "Stopped" {
+        stack.addArrangedSubview(label("ChatGPT connection is unavailable while Tela's gateway is stopped."))
+      }
+      addSection("Diagnostics")
+      stack.addArrangedSubview(label("Open Tela's local logs when you need to investigate a problem."))
       let logs = NSButton(title: "Open Logs", target: self, action: #selector(openLogs))
       stack.addArrangedSubview(logs)
-      addRefreshButton()
+      addRefreshButton("Refresh details")
+      addSection("Updates")
+      stack.addArrangedSubview(label("This source preview does not yet have an in-app updater."))
     }
   }
 
@@ -285,12 +376,51 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     guard let raw = sender.identifier?.rawValue,
           let page = ControlCenterPage(rawValue: raw) else { return }
     selectedPage = page
+    updateNavigation()
     renderCurrentPage()
+    detailScroll?.contentView.scroll(to: .zero)
     Task { await refreshCurrentPage() }
   }
 
   @objc private func refreshPage() { Task { await refreshCurrentPage() } }
   @objc private func refreshBridgePreview() { Task { await loadBridgePreview() } }
+
+  @objc private func selectPreviewProfile(_ sender: NSPopUpButton) {
+    selectedPreviewSlot = sender.selectedItem?.representedObject as? Int
+    bridgeImage = nil
+    Task { await loadBridgePreview() }
+  }
+
+  @objc private func toggleApproval(_ sender: NSButton) {
+    do {
+      var preferences = try TelaPreferencesStore.read(at: preferencesURL)
+      preferences.approvalAutomation = sender.state == .on ? "recognized_once" : "off"
+      try TelaPreferencesStore.write(preferences, at: preferencesURL)
+      approvalAutomation = preferences.approvalAutomation
+      preferenceError = false
+      onPreferencesChanged?()
+    } catch {
+      sender.state = approvalAutomation == "recognized_once" ? .on : .off
+      NSSound.beep()
+    }
+  }
+
+  @objc private func setApprovalDelay(_ sender: NSPopUpButton) {
+    guard let preset = sender.selectedItem?.representedObject as? String,
+          TelaPreferencesStore.delays.contains(preset) else { return }
+    do {
+      var preferences = try TelaPreferencesStore.read(at: preferencesURL)
+      preferences.approvalDelay = preset
+      try TelaPreferencesStore.write(preferences, at: preferencesURL)
+      approvalDelay = preset
+      preferenceError = false
+      onPreferencesChanged?()
+    } catch {
+      let prior = sender.itemArray.firstIndex(where: { $0.representedObject as? String == approvalDelay }) ?? 0
+      sender.selectItem(at: prior)
+      NSSound.beep()
+    }
+  }
 
   @objc private func changeProfile(_ sender: NSButton) {
     guard let identifier = sender.identifier?.rawValue else { return }
@@ -304,7 +434,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       alert.messageText = "\(action == "restart" ? "Restart" : "Stop") Profile \(slot)?"
       alert.informativeText = action == "restart"
         ? "The ChatGPT app for this profile will close and reopen. Any running turn will be interrupted."
-        : "The ChatGPT app for this profile will close. Any running turn will be interrupted. You can reopen it from Profiles."
+        : "The ChatGPT app for this profile will close. Any running turn will be interrupted. You can reopen it from Work."
       alert.addButton(withTitle: action == "restart" ? "Restart Profile" : "Stop Profile")
       alert.addButton(withTitle: "Cancel")
       guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -367,14 +497,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     serviceStates = ["gateway": await gateway, "chat": await chat, "codex": await codex]
     ingressStatus = await ingress
     profiles = await loadProfiles()
-    if let data = try? Data(contentsOf: preferencesURL),
-       let preferences = try? JSONDecoder().decode(ControlCenterPreferences.self, from: data),
-       preferences.version == 1 {
+    if let preferences = try? TelaPreferencesStore.read(at: preferencesURL) {
       approvalAutomation = preferences.approvalAutomation
       approvalDelay = preferences.approvalDelay ?? "instant"
+      preferenceError = false
+    } else {
+      preferenceError = true
     }
     renderCurrentPage()
-    if selectedPage == .bridge { await loadBridgePreview() }
   }
 
   private func serviceState(_ service: String) async -> String {
@@ -407,7 +537,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func loadBridgePreview() async {
     bridgeImage = nil
-    guard let profile = profiles.first(where: { $0.controlState == "running" }) else {
+    guard let profile = profiles.first(where: { $0.controlState == "running" && $0.slot == selectedPreviewSlot })
+      ?? profiles.first(where: { $0.controlState == "running" }) else {
       bridgeMessage = "No Tela-owned running profile. A preview is available only while Tela owns the Work/Codex profile."
       renderCurrentPage()
       return

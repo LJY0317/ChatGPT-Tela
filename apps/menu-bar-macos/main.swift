@@ -31,16 +31,46 @@ private struct ProfilesEnvelope: Decodable {
   let profiles: [ProfileStatus]
 }
 
-private struct Preferences: Codable {
+struct TelaPreferences: Codable {
   let version: Int
   var approvalAutomation: String
   var approvalDelay: String?
 }
 
+enum TelaPreferencesStore {
+  static let delays = ["instant", "250ms", "500ms", "1s", "2s", "5s", "10s", "15s"]
+
+  static func read(at url: URL) throws -> TelaPreferences {
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      return TelaPreferences(version: 1, approvalAutomation: "off", approvalDelay: "instant")
+    }
+    let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+    guard values.isRegularFile == true, values.isSymbolicLink != true else {
+      throw NSError(domain: "ChatGPTTelaPreferences", code: 1)
+    }
+    let value = try JSONDecoder().decode(TelaPreferences.self, from: Data(contentsOf: url))
+    guard value.version == 1,
+          ["off", "recognized_once"].contains(value.approvalAutomation),
+          delays.contains(value.approvalDelay ?? "instant") else {
+      throw NSError(domain: "ChatGPTTelaPreferences", code: 2)
+    }
+    return value
+  }
+
+  static func write(_ value: TelaPreferences, at url: URL) throws {
+    let directory = url.deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
+    var payload = try JSONEncoder().encode(value)
+    payload.append(0x0A)
+    try payload.write(to: url, options: .atomic)
+    try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+  }
+}
+
 private struct MenuSnapshot {
   let services: [(String, String)]
   let approvalAutomation: String?
-  let approvalDelay: String?
   let approvalError: Bool
   let installedServiceControls: Bool
 }
@@ -74,6 +104,9 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   }
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
+    controlCenter.onPreferencesChanged = { [weak self] in
+      Task { await self?.refreshNow() }
+    }
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     if let button = statusItem.button {
       if #available(macOS 11.0, *) {
@@ -165,35 +198,6 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     }
   }
 
-  private func readPreferences() throws -> Preferences {
-    guard fileManager.fileExists(atPath: preferencesURL.path) else {
-      return Preferences(version: 1, approvalAutomation: "off", approvalDelay: "instant")
-    }
-    let values = try preferencesURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-    guard values.isRegularFile == true, values.isSymbolicLink != true else {
-      throw NSError(domain: "ChatGPTTelaMenuBar", code: 5)
-    }
-    let value = try JSONDecoder().decode(Preferences.self, from: Data(contentsOf: preferencesURL))
-    let delay = value.approvalDelay ?? "instant"
-    guard value.version == 1,
-          ["off", "recognized_once"].contains(value.approvalAutomation),
-          ["instant", "250ms", "500ms", "1s", "2s", "5s", "10s", "15s"].contains(delay) else {
-      throw NSError(domain: "ChatGPTTelaMenuBar", code: 6)
-    }
-    return Preferences(version: 1, approvalAutomation: value.approvalAutomation, approvalDelay: delay)
-  }
-
-  private func writePreferences(_ value: Preferences) throws {
-    let directory = preferencesURL.deletingLastPathComponent()
-    try fileManager.createDirectory(at: directory, withIntermediateDirectories: true,
-                                    attributes: [.posixPermissions: 0o700])
-    let data = try JSONEncoder().encode(value)
-    var payload = data
-    payload.append(0x0A)
-    try payload.write(to: preferencesURL, options: .atomic)
-    try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: preferencesURL.path)
-  }
-
   private func installedServiceControlsAvailable() -> Bool {
     ["gateway", "chat", "codex"].allSatisfy { service in
       fileManager.fileExists(atPath: home
@@ -222,14 +226,13 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     let connectionReady = gatewayState == "Ready" && ingressStatus?.availability == "ready"
     let chatReady = connectionReady && chatState == "Ready"
     let codexReady = connectionReady && codexState == "Ready" && workProfileReady
-    let preferences = try? readPreferences()
+    let preferences = try? TelaPreferencesStore.read(at: preferencesURL)
     return MenuSnapshot(
       services: [
         ("Chat", chatReady ? "Available" : "Unavailable"),
         ("Work / Codex", codexReady ? "Available" : "Unavailable")
       ],
       approvalAutomation: preferences?.approvalAutomation,
-      approvalDelay: preferences?.approvalDelay ?? "instant",
       approvalError: preferences == nil,
       installedServiceControls: installedServiceControlsAvailable()
     )
@@ -269,25 +272,6 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       approval.state = snapshot.approvalAutomation == "recognized_once" ? .on : .off
       approval.isEnabled = !snapshot.approvalError
       menu.addItem(approval)
-      let selectedDelay = snapshot.approvalDelay ?? "instant"
-      let delayLabels: [(String, String)] = [
-        ("instant", "Instant"), ("250ms", "0.25 seconds"), ("500ms", "0.5 seconds"),
-        ("1s", "1 second"), ("2s", "2 seconds"), ("5s", "5 seconds"),
-        ("10s", "10 seconds"), ("15s", "15 seconds")
-      ]
-      let selectedLabel = delayLabels.first(where: { $0.0 == selectedDelay })?.1 ?? selectedDelay
-      let delayRoot = NSMenuItem(title: "Approval delay: \(selectedLabel)", action: nil, keyEquivalent: "")
-      let delayMenu = NSMenu()
-      for (preset, title) in delayLabels {
-        let item = actionItem(title, action: #selector(setApprovalDelay(_:)))
-        item.representedObject = preset
-        item.state = preset == selectedDelay ? .on : .off
-        item.isEnabled = !snapshot.approvalError
-        delayMenu.addItem(item)
-      }
-      delayRoot.submenu = delayMenu
-      delayRoot.isEnabled = !snapshot.approvalError
-      menu.addItem(delayRoot)
       if snapshot.approvalError {
         addDisabled("Approval preferences are invalid; fix preferences-v1.json", to: menu)
       }
@@ -322,23 +306,20 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     }
   }
 
-  @objc private func toggleApproval() {
+  @objc private func toggleApproval(_ sender: NSMenuItem) {
     do {
-      var preferences = try readPreferences()
+      var preferences = try TelaPreferencesStore.read(at: preferencesURL)
       preferences.approvalAutomation = preferences.approvalAutomation == "recognized_once" ? "off" : "recognized_once"
-      try writePreferences(preferences)
-    } catch {
-      NSSound.beep()
-    }
-    Task { await refreshNow() }
-  }
-
-  @objc private func setApprovalDelay(_ sender: NSMenuItem) {
-    guard let preset = sender.representedObject as? String else { return }
-    do {
-      var preferences = try readPreferences()
-      preferences.approvalDelay = preset
-      try writePreferences(preferences)
+      try TelaPreferencesStore.write(preferences, at: preferencesURL)
+      sender.state = preferences.approvalAutomation == "recognized_once" ? .on : .off
+      if let current = snapshot {
+        snapshot = MenuSnapshot(
+          services: current.services,
+          approvalAutomation: preferences.approvalAutomation,
+          approvalError: false,
+          installedServiceControls: current.installedServiceControls
+        )
+      }
     } catch {
       NSSound.beep()
     }

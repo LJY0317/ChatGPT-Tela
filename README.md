@@ -697,8 +697,9 @@ bun run menu-bar
 
 It refreshes at launch and when opened (no idle polling). The menu shows whether Chat and Work/Codex are
 available through the public connector, opens the Control Center, and controls one-shot approval automation.
-The Control Center provides profile start/stop/restart controls with confirmation before interruption, plus
-refresh, logs, and detailed service/connector diagnostics. The hidden Electron Codex/Web bridge calls
+The Control Center groups status in Home, profile controls and on-demand browser snapshots in Work, and
+approval settings, connection details, logs, and update status in Settings. Profile stop/restart requires
+confirmation before interruption; approval delay is set in Settings. The hidden Electron Codex/Web bridge calls
 `app.dock.hide()` on macOS so it does not create a second Dock-centric launcher UX. Signed macOS payloads include the same menu-bar
 binary and register `com.openai.chatgpt-tela.menu-bar` as a **product-owned** Aqua LaunchAgent with exact
 manifest/marker ownership. Install uses `RunAtLoad=true` and explicitly kickstarts that LaunchAgent after
@@ -706,18 +707,17 @@ registration, so the menu-bar surface appears immediately after a successful ins
 login. Install/uninstall therefore never relies on a name-only login-item guess.
 
 The menu contains **Open ChatGPT Tela…**, which opens a Dock-less AppKit Control Center window. Closing that
-window hides only the UI; the menu-bar process and Gateway/Chat/Codex services continue running. The first
-Control Center slice provides Overview, Chat, Work/Codex, Profiles, Bridge, Updates, Settings, and Diagnostics
-sections backed only by the existing authenticated loopback contracts.
+window hides only the UI; the menu-bar process and Gateway/Chat/Codex services continue running. The three
+scrollable Control Center pages use the existing authenticated loopback contracts.
 
-The Bridge section is intentionally **observation-only**. It never reveals/focuses the hidden Electron window
+The Work browser snapshot is intentionally **observation-only**. It never reveals/focuses the hidden Electron window
 and never sends mouse, keyboard, DOM, navigation, Stop, or other page actions. While exactly one Work/Codex
 browser surface is active, Electron captures that already-rendered surface and the private Codex service relays
 a bounded JPEG snapshot to the Control Center. With zero or multiple surfaces the preview is withheld instead
 of guessing which work belongs to the user. The preview is on-demand rather than idle polling, so inspecting
 Tela cannot perturb the Native/Web turn it is observing.
 
-Overview and Diagnostics also report **Public connector** health separately from Gateway/Chat/Codex process
+Settings reports **Public connector** health separately from Gateway/Chat/Codex process
 health. For managed Tailscale Funnel, Tela distinguishes a stopped/unreachable Tailscale backend, sign-in or
 offline state, missing/drifted Funnel mapping, unavailable local Gateway MCP listener, and an end-to-end public
 MCP failure. `bun run cli status`, `bun run cli doctor`, and `bun run cli ingress status` expose the same causal
