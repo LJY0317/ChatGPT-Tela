@@ -445,12 +445,19 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         guard let descriptor = try readDescriptor("codex") else {
           throw NSError(domain: "ChatGPTTelaControlCenter", code: 7)
         }
-        if action == "restart" {
+        // An unattached profile is restarted by the service's start lifecycle. Calling stop first
+        // would reject it as another owner's ready session before that lifecycle can inspect it.
+        if action == "restart" && profiles.first(where: { $0.slot == slot })?.controlState == "running" {
           _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/stop", method: "POST")
         }
         _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/\(action == "restart" ? "start" : action)", method: "POST")
       } catch {
-        NSSound.beep()
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Couldn't \(action) this profile"
+        alert.informativeText = "Close the ChatGPT app for this profile normally, then try starting it again. If it still fails, check the connection details in Settings."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
       }
       await refreshCurrentPage()
     }
