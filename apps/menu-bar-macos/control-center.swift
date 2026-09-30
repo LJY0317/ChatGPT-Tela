@@ -12,7 +12,7 @@ private struct ControlCenterServiceStatus: Decodable {
   let state: String
 }
 
-private struct ControlCenterIngressStatus: Decodable {
+private struct ControlCenterIngressStatus: Decodable, Equatable {
   let contractVersion: Int
   let availability: String
   let cause: String
@@ -20,7 +20,7 @@ private struct ControlCenterIngressStatus: Decodable {
   let exposureKind: String?
 }
 
-private struct ControlCenterProfileStatus: Decodable {
+private struct ControlCenterProfileStatus: Decodable, Equatable {
   let slot: Int
   let targetDisplayName: String
   let targetState: String
@@ -390,11 +390,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func row(_ title: String, subtitle: String? = nil, control: NSView, in stack: NSStackView) {
-    let row = NSStackView()
-    row.distribution = .fill
-    row.orientation = .horizontal
-    row.alignment = .centerY
-    row.spacing = 18
+    let row = NSView()
     let text = NSStackView()
     text.distribution = .fill
     text.orientation = .vertical
@@ -404,16 +400,27 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     name.font = .systemFont(ofSize: TelaStyle.bodySize, weight: .regular)
     append(name, to: text)
     if let subtitle { append(secondary(subtitle), to: text) }
-    row.addArrangedSubview(text)
-    let spacer = NSView()
-    spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-    spacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
-    row.addArrangedSubview(spacer)
-    row.addArrangedSubview(control)
-    text.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    text.translatesAutoresizingMaskIntoConstraints = false
+    control.translatesAutoresizingMaskIntoConstraints = false
+    row.addSubview(text)
+    row.addSubview(control)
     control.setContentHuggingPriority(.required, for: .horizontal)
     control.setContentCompressionResistancePriority(.required, for: .horizontal)
     append(row, to: stack)
+    // Text receives exactly the space left by the trailing control. Its wrapping measurement
+    // must never compete with a spacer for width during asynchronous status refresh.
+    NSLayoutConstraint.activate([
+      text.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+      text.trailingAnchor.constraint(equalTo: control.leadingAnchor, constant: -TelaStyle.cardInset),
+      control.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+      text.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+      control.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+      row.heightAnchor.constraint(greaterThanOrEqualTo: text.heightAnchor),
+      row.heightAnchor.constraint(greaterThanOrEqualTo: control.heightAnchor),
+    ])
+    let height = row.heightAnchor.constraint(equalTo: text.heightAnchor)
+    height.priority = .defaultLow
+    height.isActive = true
   }
 
   private func divider(in stack: NSStackView) {
@@ -718,6 +725,12 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func refreshCurrentPage() async {
+    let previousServices = serviceStates
+    let previousIngress = ingressStatus
+    let previousProfiles = profiles
+    let previousApproval = approvalAutomation
+    let previousDelay = approvalDelay
+    let previousPreferenceError = preferenceError
     async let gateway = serviceState("gateway")
     async let chat = serviceState("chat")
     async let codex = serviceState("codex")
@@ -732,7 +745,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     } else {
       preferenceError = true
     }
-    renderCurrentPage()
+    if previousServices != serviceStates || previousIngress != ingressStatus
+      || previousProfiles != profiles || previousApproval != approvalAutomation
+      || previousDelay != approvalDelay || previousPreferenceError != preferenceError {
+      renderCurrentPage()
+    }
   }
 
   private func serviceState(_ service: String) async -> String {
