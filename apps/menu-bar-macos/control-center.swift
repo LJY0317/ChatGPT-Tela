@@ -45,6 +45,24 @@ private enum ControlCenterPage: String, CaseIterable {
   case home = "Home"
   case work = "Work"
   case settings = "Settings"
+
+  var symbol: String {
+    switch self {
+    case .home: return "house"
+    case .work: return "terminal"
+    case .settings: return "slider.horizontal.3"
+    }
+  }
+}
+
+private final class TelaCardView: NSView {
+  override var wantsUpdateLayer: Bool { true }
+  override func updateLayer() {
+    layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+    layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
+    layer?.borderWidth = 1
+    layer?.cornerRadius = 12
+  }
 }
 
 private final class FlippedDocumentView: NSView {
@@ -100,13 +118,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func buildWindow() {
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 900, height: 650),
+      contentRect: NSRect(x: 0, y: 0, width: 880, height: 640),
       styleMask: [.titled, .closable, .miniaturizable, .resizable],
       backing: .buffered,
       defer: false
     )
     window.title = "ChatGPT Tela"
     window.minSize = NSSize(width: 760, height: 520)
+    window.backgroundColor = .windowBackgroundColor
     window.isReleasedWhenClosed = false
     window.delegate = self
     window.center()
@@ -115,8 +134,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let sidebar = NSViewController()
     sidebar.view = makeSidebar()
     let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
-    sidebarItem.minimumThickness = 185
-    sidebarItem.maximumThickness = 230
+    sidebarItem.minimumThickness = 190
+    sidebarItem.maximumThickness = 210
     sidebarItem.canCollapse = false
     split.addSplitViewItem(sidebarItem)
 
@@ -129,34 +148,45 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func makeSidebar() -> NSView {
-    let container = NSView()
+    let container = NSVisualEffectView()
+    container.material = .sidebar
+    container.blendingMode = .behindWindow
     let stack = NSStackView()
     stack.orientation = .vertical
     stack.alignment = .leading
-    stack.spacing = 10
+    stack.spacing = 4
     stack.translatesAutoresizingMaskIntoConstraints = false
     container.addSubview(stack)
     NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-      stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
-      stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 24),
+      stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+      stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+      stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 22),
     ])
     let heading = label("ChatGPT Tela")
-    heading.font = .systemFont(ofSize: 17, weight: .semibold)
+    heading.font = .systemFont(ofSize: 14, weight: .semibold)
     stack.addArrangedSubview(heading)
+    stack.setCustomSpacing(20, after: heading)
     for page in ControlCenterPage.allCases {
       let button = NSButton(title: page.rawValue, target: self, action: #selector(selectPage(_:)))
-      button.bezelStyle = .rounded
+      button.setButtonType(.momentaryChange)
+      button.isBordered = false
       button.alignment = .left
-      button.font = .systemFont(ofSize: 16, weight: .medium)
+      button.title = "  " + page.rawValue
+      button.font = .systemFont(ofSize: 13, weight: .medium)
+      button.image = NSImage(systemSymbolName: page.symbol, accessibilityDescription: nil)
+      button.imagePosition = .imageLeading
+      button.imageScaling = .scaleProportionallyDown
+      button.wantsLayer = true
+      button.layer?.cornerRadius = 7
+      button.setAccessibilityLabel(page.rawValue)
       button.identifier = NSUserInterfaceItemIdentifier(page.rawValue)
       stack.addArrangedSubview(button)
       button.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-      button.heightAnchor.constraint(greaterThanOrEqualToConstant: 36).isActive = true
+      button.heightAnchor.constraint(equalToConstant: 34).isActive = true
       navigationButtons[page] = button
     }
     updateNavigation()
-    let footer = label("Closing this window keeps Tela running.", style: .caption1)
+    let footer = label("Tela runs in the background.", style: .caption1)
     footer.textColor = .secondaryLabelColor
     footer.translatesAutoresizingMaskIntoConstraints = false
     container.addSubview(footer)
@@ -170,28 +200,33 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func updateNavigation() {
     for (page, button) in navigationButtons {
-      button.state = page == selectedPage ? .on : .off
-      button.contentTintColor = page == selectedPage ? .controlAccentColor : .labelColor
+      let selected = page == selectedPage
+      button.state = .off
+      button.layer?.backgroundColor = selected
+        ? NSColor.controlAccentColor.withAlphaComponent(0.14).cgColor : NSColor.clear.cgColor
+      button.contentTintColor = selected ? .controlAccentColor : .secondaryLabelColor
+      button.setAccessibilityValue(selected ? "Selected" : "")
     }
   }
 
   private func makeDetailView() -> NSView {
     let scroll = NSScrollView()
     scroll.hasVerticalScroller = true
+    scroll.autohidesScrollers = true
     scroll.drawsBackground = false
     let document = FlippedDocumentView(frame: NSRect(x: 0, y: 0, width: 650, height: 620))
     document.translatesAutoresizingMaskIntoConstraints = false
     let stack = NSStackView()
     stack.orientation = .vertical
     stack.alignment = .leading
-    stack.spacing = 14
+    stack.spacing = 16
     stack.translatesAutoresizingMaskIntoConstraints = false
     document.addSubview(stack)
     scroll.documentView = document
     NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 32),
-      stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -32),
-      stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 30),
+      stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 28),
+      stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -28),
+      stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 26),
       document.bottomAnchor.constraint(greaterThanOrEqualTo: stack.bottomAnchor, constant: 32),
       document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
       document.heightAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.heightAnchor),
@@ -206,14 +241,20 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func label(_ text: String, style: NSFont.TextStyle = .body) -> NSTextField {
     let field = NSTextField(wrappingLabelWithString: text)
-    field.font = NSFont.preferredFont(forTextStyle: style)
+    field.font = .systemFont(ofSize: style == .caption1 ? 11 : 13)
     field.maximumNumberOfLines = 0
     return field
   }
 
   private func sectionTitle(_ title: String) -> NSTextField {
-    let field = label(title, style: .title1)
-    field.font = NSFont.systemFont(ofSize: 29, weight: .bold)
+    let field = label(title)
+    field.font = .systemFont(ofSize: 24, weight: .bold)
+    return field
+  }
+
+  private func secondary(_ text: String) -> NSTextField {
+    let field = label(text)
+    field.textColor = .secondaryLabelColor
     return field
   }
 
@@ -222,36 +263,89 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
   }
 
-  private func addRefreshButton(_ title: String = "Refresh") {
-    detailStack?.addArrangedSubview(NSButton(title: title, target: self, action: #selector(refreshPage)))
+  private func append(_ view: NSView, to stack: NSStackView) {
+    stack.addArrangedSubview(view)
+    view.translatesAutoresizingMaskIntoConstraints = false
+    view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
   }
 
-  private func addSection(_ title: String) {
-    guard let stack = detailStack else { return }
-    let spacer = NSView()
-    spacer.heightAnchor.constraint(equalToConstant: 12).isActive = true
-    stack.addArrangedSubview(spacer)
-    let heading = label(title)
-    heading.font = .systemFont(ofSize: 19, weight: .semibold)
-    stack.addArrangedSubview(heading)
+  private func card(_ title: String? = nil) -> NSStackView {
+    let container = TelaCardView()
+    container.wantsLayer = true
+    let content = NSStackView()
+    content.orientation = .vertical
+    content.alignment = .leading
+    content.spacing = 12
+    content.translatesAutoresizingMaskIntoConstraints = false
+    container.addSubview(content)
+    NSLayoutConstraint.activate([
+      content.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 18),
+      content.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -18),
+      content.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
+      content.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16),
+    ])
+    if let title {
+      let heading = label(title)
+      heading.font = .systemFont(ofSize: 14, weight: .semibold)
+      append(heading, to: content)
+    }
+    if let detailStack { append(container, to: detailStack) }
+    return content
   }
 
-  private func addStatus(_ title: String, value: String) {
-    guard let stack = detailStack else { return }
+  private func actionButton(_ title: String, action: Selector) -> NSButton {
+    let button = NSButton(title: title, target: self, action: action)
+    button.bezelStyle = .rounded
+    button.controlSize = .regular
+    button.font = .systemFont(ofSize: 12, weight: .medium)
+    return button
+  }
+
+  private func row(_ title: String, subtitle: String? = nil, control: NSView, in stack: NSStackView) {
     let row = NSStackView()
     row.orientation = .horizontal
     row.alignment = .centerY
-    row.distribution = .fill
+    row.spacing = 18
+    let text = NSStackView()
+    text.orientation = .vertical
+    text.alignment = .leading
+    text.spacing = 4
     let name = label(title)
-    name.font = .systemFont(ofSize: 16, weight: .medium)
-    let state = label(value)
-    state.textColor = value == "Available" ? .systemGreen : .secondaryLabelColor
-    state.alignment = .right
-    name.setContentHuggingPriority(.defaultLow, for: .horizontal)
-    row.addArrangedSubview(name)
-    row.addArrangedSubview(state)
-    stack.addArrangedSubview(row)
-    row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+    name.font = .systemFont(ofSize: 13, weight: .medium)
+    append(name, to: text)
+    if let subtitle { append(secondary(subtitle), to: text) }
+    row.addArrangedSubview(text)
+    row.addArrangedSubview(control)
+    text.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    control.setContentHuggingPriority(.required, for: .horizontal)
+    control.setContentCompressionResistancePriority(.required, for: .horizontal)
+    append(row, to: stack)
+  }
+
+  private func divider(in stack: NSStackView) {
+    let line = NSBox()
+    line.boxType = .separator
+    append(line, to: stack)
+  }
+
+  private func addStatus(_ title: String, value: String, subtitle: String? = nil, to stack: NSStackView) {
+    let ready = value == "Available" || value == "Ready" || value == "Running"
+    let state = label("● " + value)
+    state.font = .systemFont(ofSize: 11, weight: .medium)
+    state.textColor = ready ? .systemGreen : (value == "Checking…" ? .secondaryLabelColor : .systemOrange)
+    row(title, subtitle: subtitle, control: state, in: stack)
+  }
+
+  private func pageHeader(_ subtitle: String) {
+    guard let stack = detailStack else { return }
+    let header = NSStackView()
+    header.orientation = .vertical
+    header.alignment = .leading
+    header.spacing = 6
+    append(sectionTitle(selectedPage.rawValue), to: header)
+    append(secondary(subtitle), to: header)
+    append(header, to: stack)
+    stack.setCustomSpacing(22, after: header)
   }
 
   private var connectorReady: Bool {
@@ -270,34 +364,38 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private func renderCurrentPage() {
     guard let stack = detailStack else { return }
     clearDetail()
-    stack.addArrangedSubview(sectionTitle(selectedPage.rawValue))
-
     switch selectedPage {
     case .home:
-      stack.addArrangedSubview(label("See what is ready to use in ChatGPT. Tela keeps working when you close this window."))
-      addSection("Connections")
-      addStatus("Chat", value: availability(for: "chat"))
-      addStatus("Work / Codex", value: availability(for: "codex", needsProfile: true))
-      stack.addArrangedSubview(label("Chat connects your local workspace. Work / Codex runs Web model turns from your Codex conversations."))
-      addRefreshButton("Check again")
+      pageHeader("Your ChatGPT connections at a glance.")
+      let connections = card()
+      addStatus("Chat", value: availability(for: "chat"),
+                subtitle: "Use your local workspace in ChatGPT.", to: connections)
+      divider(in: connections)
+      addStatus("Work / Codex", value: availability(for: "codex", needsProfile: true),
+                subtitle: "Use Web models in your Codex conversations.", to: connections)
+      if availability(for: "codex", needsProfile: true) == "Needs attention" {
+        let help = card("Finish connecting Work")
+        append(secondary("Open Work to connect or restart your ChatGPT profile."), to: help)
+        help.addArrangedSubview(actionButton("Open Work", action: #selector(openWork)))
+      }
+      stack.addArrangedSubview(actionButton("Refresh status", action: #selector(refreshPage)))
     case .work:
-      stack.addArrangedSubview(label("Manage the ChatGPT profiles used by Work / Codex and view a snapshot of an active Web turn."))
-      addSection("Profiles")
-      if profiles.isEmpty { stack.addArrangedSubview(label("No Work profiles are available right now.")) }
-      for profile in profiles {
-        let state = profile.controlState == "running" && profile.targetSessionState == "ready"
-          ? "Running" : profile.controlState.capitalized
-        stack.addArrangedSubview(label("\(profile.targetDisplayName) · \(state)"))
+      pageHeader("Connect ChatGPT and check your Web activity.")
+      let profileCard = card(profiles.count > 1 ? "ChatGPT profiles" : "ChatGPT")
+      if profiles.isEmpty { append(secondary("No Work profiles found."), to: profileCard) }
+      for (index, profile) in profiles.enumerated() {
+        if index > 0 { divider(in: profileCard) }
+        let running = profile.controlState == "running" && profile.targetSessionState == "ready"
         let action = profile.controlState == "running" ? "stop" :
           (profile.controlState == "restart-required" ? "restart" : "start")
-        let title = action == "stop" ? "Stop Profile \(profile.slot)" :
-          (action == "restart" ? "Restart Profile \(profile.slot)" : "Start Profile \(profile.slot)")
-        let button = NSButton(title: title, target: self, action: #selector(changeProfile(_:)))
+        let title = action == "stop" ? "Stop" : (action == "restart" ? "Restart" : "Connect")
+        let button = actionButton(title, action: #selector(changeProfile(_:)))
         button.identifier = NSUserInterfaceItemIdentifier("profile:\(profile.slot):\(action)")
-        stack.addArrangedSubview(button)
+        let state = running ? "Connected to Tela" :
+          (action == "restart" ? "Restart to connect with Tela" : "Not connected")
+        row(profile.targetDisplayName, subtitle: state, control: button, in: profileCard)
       }
-      addSection("Browser activity")
-      stack.addArrangedSubview(label("This snapshot is read-only. It cannot click, type into, or stop the active turn."))
+      let preview = card("Web activity")
       let runningProfiles = profiles.filter { $0.controlState == "running" }
       if runningProfiles.count > 1 {
         let picker = NSPopUpButton()
@@ -311,30 +409,47 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         }
         picker.target = self
         picker.action = #selector(selectPreviewProfile(_:))
-        stack.addArrangedSubview(picker)
+        row("Profile", control: picker, in: preview)
       }
-      stack.addArrangedSubview(label(bridgeMessage))
       if let bridgeImage {
         let imageView = NSImageView(image: bridgeImage)
         imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.imageAlignment = .alignCenter
-        imageView.wantsLayer = true
-        imageView.layer?.borderWidth = 1
-        imageView.layer?.cornerRadius = 8
-        stack.addArrangedSubview(imageView)
-        imageView.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        imageView.heightAnchor.constraint(equalToConstant: 360).isActive = true
+        append(imageView, to: preview)
+        imageView.heightAnchor.constraint(equalToConstant: 280).isActive = true
+        append(secondary(bridgeMessage), to: preview)
+      } else {
+        let empty = NSStackView()
+        empty.orientation = .vertical
+        empty.alignment = .centerX
+        empty.spacing = 10
+        let icon = NSImageView(image: NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: nil) ?? NSImage())
+        icon.contentTintColor = .tertiaryLabelColor
+        empty.addArrangedSubview(icon)
+        icon.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        let message = secondary(bridgeMessage == "No preview requested yet." ? "No snapshot yet" : bridgeMessage)
+        message.alignment = .center
+        append(message, to: empty)
+        append(empty, to: preview)
+        empty.heightAnchor.constraint(greaterThanOrEqualToConstant: 92).isActive = true
       }
-      stack.addArrangedSubview(NSButton(title: "View current snapshot", target: self, action: #selector(refreshBridgePreview)))
-      addRefreshButton("Refresh Work status")
+      let actions = NSStackView()
+      actions.orientation = .horizontal
+      actions.spacing = 12
+      actions.addArrangedSubview(actionButton("View snapshot", action: #selector(refreshBridgePreview)))
+      actions.addArrangedSubview(secondary("Read-only · refreshes when requested"))
+      preview.addArrangedSubview(actions)
+      stack.addArrangedSubview(actionButton("Refresh status", action: #selector(refreshPage)))
     case .settings:
-      stack.addArrangedSubview(label("Adjust how Tela handles approvals and inspect connection details."))
-      addSection("Approvals")
-      let approval = NSButton(checkboxWithTitle: "Automatically approve recognized one-time requests", target: self, action: #selector(toggleApproval(_:)))
+      pageHeader("Make Tela work the way you want.")
+      let approvals = card("Approvals")
+      let approval = NSSwitch()
+      approval.target = self
+      approval.action = #selector(toggleApproval(_:))
       approval.state = approvalAutomation == "recognized_once" ? .on : .off
       approval.isEnabled = !preferenceError
-      stack.addArrangedSubview(approval)
-      stack.addArrangedSubview(label("Approval delay"))
+      approval.setAccessibilityLabel("Auto-approve one-time requests")
+      row("Auto-approve one-time requests", subtitle: "Only recognized requests. All other approvals stay manual.", control: approval, in: approvals)
+      divider(in: approvals)
       let delays: [(String, String)] = [
         ("instant", "Instant"), ("250ms", "0.25 seconds"), ("500ms", "0.5 seconds"),
         ("1s", "1 second"), ("2s", "2 seconds"), ("5s", "5 seconds"),
@@ -348,28 +463,36 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       delayPicker.selectItem(at: delays.firstIndex(where: { $0.0 == approvalDelay }) ?? 0)
       delayPicker.target = self
       delayPicker.action = #selector(setApprovalDelay(_:))
-      delayPicker.isEnabled = !preferenceError
-      stack.addArrangedSubview(delayPicker)
-      stack.addArrangedSubview(label("Changes take effect after restarting the active Work profile. Restarting interrupts any running turn."))
-      if preferenceError { stack.addArrangedSubview(label("Approval settings could not be read. Check Tela's preferences file.")) }
-      addSection("Connection details")
-      for service in ["gateway", "chat", "codex"] {
-        addStatus(service.capitalized, value: serviceStates[service] ?? "Checking…")
+      delayPicker.isEnabled = !preferenceError && approvalAutomation == "recognized_once"
+      row("Wait before approving", control: delayPicker, in: approvals)
+      append(secondary("Restart your Work profile to apply changes. This interrupts any active turn."), to: approvals)
+      if preferenceError { append(secondary("Couldn't read approval settings."), to: approvals) }
+      let connections = card("Connection details")
+      for (index, service) in ["gateway", "chat", "codex"].enumerated() {
+        if index > 0 { divider(in: connections) }
+        let titles = ["gateway": "Tela connection", "chat": "Chat", "codex": "Work / Codex"]
+        addStatus(titles[service]!, value: serviceStates[service] ?? "Checking…", to: connections)
       }
-      if let ingressStatus {
-        addStatus("ChatGPT connection", value: ingressStatus.availability.capitalized)
-        if ingressStatus.availability != "ready" { stack.addArrangedSubview(label(ingressStatus.detail)) }
-      } else if serviceStates["gateway"] == "Stopped" {
-        stack.addArrangedSubview(label("ChatGPT connection is unavailable while Tela's gateway is stopped."))
+      divider(in: connections)
+      addStatus("ChatGPT connector", value: ingressStatus?.availability.capitalized ?? "Checking…", to: connections)
+      if let ingressStatus, ingressStatus.availability != "ready" {
+        append(secondary(ingressStatus.detail), to: connections)
       }
-      addSection("Diagnostics")
-      stack.addArrangedSubview(label("Open Tela's local logs when you need to investigate a problem."))
-      let logs = NSButton(title: "Open Logs", target: self, action: #selector(openLogs))
-      stack.addArrangedSubview(logs)
-      addRefreshButton("Refresh details")
-      addSection("Updates")
-      stack.addArrangedSubview(label("This source preview does not yet have an in-app updater."))
+      let support = card("Help & updates")
+      row("Troubleshooting", subtitle: "View local logs to investigate a connection issue.",
+          control: actionButton("Open logs", action: #selector(openLogs)), in: support)
+      divider(in: support)
+      row("Source preview", subtitle: "Updates are installed manually in this version.",
+          control: label("Pre-release"), in: support)
+      stack.addArrangedSubview(actionButton("Refresh details", action: #selector(refreshPage)))
     }
+  }
+
+  @objc private func openWork() {
+    selectedPage = .work
+    updateNavigation()
+    renderCurrentPage()
+    detailScroll?.contentView.scroll(to: .zero)
   }
 
   @objc private func selectPage(_ sender: NSButton) {
@@ -391,7 +514,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     Task { await loadBridgePreview() }
   }
 
-  @objc private func toggleApproval(_ sender: NSButton) {
+  @objc private func toggleApproval(_ sender: NSSwitch) {
     do {
       var preferences = try TelaPreferencesStore.read(at: preferencesURL)
       preferences.approvalAutomation = sender.state == .on ? "recognized_once" : "off"
@@ -399,6 +522,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       approvalAutomation = preferences.approvalAutomation
       preferenceError = false
       onPreferencesChanged?()
+      renderCurrentPage()
     } catch {
       sender.state = approvalAutomation == "recognized_once" ? .on : .off
       NSSound.beep()
