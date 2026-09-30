@@ -55,13 +55,84 @@ private enum ControlCenterPage: String, CaseIterable {
   }
 }
 
+// Tela-owned visual choices, independent of the ChatGPT app's implementation.
+// Prefer native typography; keep intentional geometry and palette in one place.
+private enum TelaStyle {
+  static let bodySize = NSFont.systemFontSize
+  static let captionSize = NSFont.smallSystemFontSize
+  static let titleFont = NSFont.systemFont(ofSize: 21, weight: .semibold)
+  static let actionFont = NSFont.systemFont(ofSize: 12, weight: .regular)
+  static let cardRadius: CGFloat = 10
+  static let controlRadius: CGFloat = 7
+  static let borderWidth: CGFloat = 0.5
+  static let pageInset: CGFloat = 36
+  static let pageVerticalInset: CGFloat = 38
+  static let cardInset: CGFloat = 18
+  static let cardVerticalInset: CGFloat = 16
+  static let contentMaxWidth: CGFloat = 640
+}
+
+private enum TelaAppearance {
+  enum Surface {
+    case page, sidebar, cardBorder, selection, button, pressedButton, buttonBorder
+    var shades: (light: CGFloat, dark: CGFloat) {
+      switch self {
+      case .page: return (1, 0.08)
+      case .sidebar: return (0.975, 0.11)
+      case .cardBorder: return (0.91, 0.22)
+      case .selection: return (0.925, 0.19)
+      case .button: return (1, 0.11)
+      case .pressedButton: return (0.95, 0.19)
+      case .buttonBorder: return (0.90, 0.25)
+      }
+    }
+  }
+
+  static func color(_ surface: Surface, in appearance: NSAppearance) -> NSColor {
+    let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    let shades = surface.shades
+    return NSColor(calibratedWhite: isDark ? shades.dark : shades.light, alpha: 1)
+  }
+}
+
+private final class TelaBackgroundView: NSView {
+  var isSidebar = false
+  override var wantsUpdateLayer: Bool { true }
+  override func updateLayer() {
+    layer?.backgroundColor = TelaAppearance.color(isSidebar ? .sidebar : .page, in: effectiveAppearance).cgColor
+  }
+}
+
 private final class TelaCardView: NSView {
   override var wantsUpdateLayer: Bool { true }
   override func updateLayer() {
-    layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-    layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
-    layer?.borderWidth = 1
-    layer?.cornerRadius = 12
+    layer?.backgroundColor = TelaAppearance.color(.page, in: effectiveAppearance).cgColor
+    layer?.borderColor = TelaAppearance.color(.cardBorder, in: effectiveAppearance).cgColor
+    layer?.borderWidth = TelaStyle.borderWidth
+    layer?.cornerRadius = TelaStyle.cardRadius
+  }
+}
+
+private final class TelaNavigationButton: NSButton {
+  var selected = false { didSet { needsDisplay = true } }
+  override func draw(_ dirtyRect: NSRect) {
+    if selected || isHighlighted {
+      TelaAppearance.color(.selection, in: effectiveAppearance).setFill()
+      NSBezierPath(roundedRect: bounds, xRadius: TelaStyle.controlRadius, yRadius: TelaStyle.controlRadius).fill()
+    }
+    super.draw(dirtyRect)
+  }
+}
+
+private final class TelaActionButton: NSButton {
+  override func draw(_ dirtyRect: NSRect) {
+    let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: TelaStyle.borderWidth, dy: TelaStyle.borderWidth), xRadius: TelaStyle.controlRadius, yRadius: TelaStyle.controlRadius)
+    TelaAppearance.color(isHighlighted ? .pressedButton : .button, in: effectiveAppearance).setFill()
+    shape.fill()
+    TelaAppearance.color(.buttonBorder, in: effectiveAppearance).setStroke()
+    shape.lineWidth = TelaStyle.borderWidth
+    shape.stroke()
+    super.draw(dirtyRect)
   }
 }
 
@@ -124,6 +195,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       defer: false
     )
     window.title = "ChatGPT Tela"
+    window.titleVisibility = .hidden
+    window.titlebarAppearsTransparent = true
     window.minSize = NSSize(width: 760, height: 520)
     window.backgroundColor = .windowBackgroundColor
     window.isReleasedWhenClosed = false
@@ -148,10 +221,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func makeSidebar() -> NSView {
-    let container = NSVisualEffectView()
-    container.material = .sidebar
-    container.blendingMode = .behindWindow
+    let container = TelaBackgroundView()
+    container.isSidebar = true
+    container.wantsLayer = true
     let stack = NSStackView()
+    stack.distribution = .fill
     stack.orientation = .vertical
     stack.alignment = .leading
     stack.spacing = 4
@@ -163,21 +237,22 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 22),
     ])
     let heading = label("ChatGPT Tela")
-    heading.font = .systemFont(ofSize: 14, weight: .semibold)
+    heading.font = .systemFont(ofSize: 14, weight: .medium)
     stack.addArrangedSubview(heading)
     stack.setCustomSpacing(20, after: heading)
     for page in ControlCenterPage.allCases {
-      let button = NSButton(title: page.rawValue, target: self, action: #selector(selectPage(_:)))
+      let button = TelaNavigationButton(title: page.rawValue, target: self, action: #selector(selectPage(_:)))
       button.setButtonType(.momentaryChange)
       button.isBordered = false
       button.alignment = .left
       button.title = "  " + page.rawValue
-      button.font = .systemFont(ofSize: 13, weight: .medium)
-      button.image = NSImage(systemSymbolName: page.symbol, accessibilityDescription: nil)
+      button.font = .systemFont(ofSize: TelaStyle.bodySize, weight: .regular)
+      button.image = NSImage(systemSymbolName: page.symbol, accessibilityDescription: nil)?
+        .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: TelaStyle.bodySize, weight: .regular))
       button.imagePosition = .imageLeading
       button.imageScaling = .scaleProportionallyDown
       button.wantsLayer = true
-      button.layer?.cornerRadius = 7
+      button.layer?.cornerRadius = TelaStyle.controlRadius
       button.setAccessibilityLabel(page.rawValue)
       button.identifier = NSUserInterfaceItemIdentifier(page.rawValue)
       stack.addArrangedSubview(button)
@@ -202,9 +277,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     for (page, button) in navigationButtons {
       let selected = page == selectedPage
       button.state = .off
-      button.layer?.backgroundColor = selected
-        ? NSColor.controlAccentColor.withAlphaComponent(0.14).cgColor : NSColor.clear.cgColor
-      button.contentTintColor = selected ? .controlAccentColor : .secondaryLabelColor
+      (button as? TelaNavigationButton)?.selected = selected
+      button.contentTintColor = .labelColor
       button.setAccessibilityValue(selected ? "Selected" : "")
     }
   }
@@ -213,10 +287,12 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let scroll = NSScrollView()
     scroll.hasVerticalScroller = true
     scroll.autohidesScrollers = true
-    scroll.drawsBackground = false
-    let document = FlippedDocumentView(frame: NSRect(x: 0, y: 0, width: 650, height: 620))
+    scroll.drawsBackground = true
+    scroll.backgroundColor = .textBackgroundColor
+    let document = FlippedDocumentView()
     document.translatesAutoresizingMaskIntoConstraints = false
     let stack = NSStackView()
+    stack.distribution = .fill
     stack.orientation = .vertical
     stack.alignment = .leading
     stack.spacing = 16
@@ -224,16 +300,17 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     document.addSubview(stack)
     scroll.documentView = document
     NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 28),
-      stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -28),
-      stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 26),
-      document.bottomAnchor.constraint(greaterThanOrEqualTo: stack.bottomAnchor, constant: 32),
+      stack.centerXAnchor.constraint(equalTo: document.centerXAnchor),
+      stack.leadingAnchor.constraint(greaterThanOrEqualTo: document.leadingAnchor, constant: TelaStyle.pageInset),
+      stack.trailingAnchor.constraint(lessThanOrEqualTo: document.trailingAnchor, constant: -TelaStyle.pageInset),
+      stack.widthAnchor.constraint(lessThanOrEqualToConstant: TelaStyle.contentMaxWidth),
+      stack.topAnchor.constraint(equalTo: document.topAnchor, constant: TelaStyle.pageVerticalInset),
+      document.bottomAnchor.constraint(equalTo: stack.bottomAnchor, constant: TelaStyle.pageVerticalInset),
       document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
-      document.heightAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.heightAnchor),
     ])
-    let contentHeight = document.bottomAnchor.constraint(equalTo: stack.bottomAnchor, constant: 32)
-    contentHeight.priority = .defaultHigh
-    contentHeight.isActive = true
+    let contentWidth = stack.widthAnchor.constraint(equalTo: document.widthAnchor, constant: -2 * TelaStyle.pageInset)
+    contentWidth.priority = .defaultHigh
+    contentWidth.isActive = true
     detailStack = stack
     detailScroll = scroll
     return scroll
@@ -241,14 +318,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func label(_ text: String, style: NSFont.TextStyle = .body) -> NSTextField {
     let field = NSTextField(wrappingLabelWithString: text)
-    field.font = .systemFont(ofSize: style == .caption1 ? 11 : 13)
+    field.font = .systemFont(ofSize: style == .caption1 ? TelaStyle.captionSize : TelaStyle.bodySize)
     field.maximumNumberOfLines = 0
     return field
   }
 
   private func sectionTitle(_ title: String) -> NSTextField {
     let field = label(title)
-    field.font = .systemFont(ofSize: 24, weight: .bold)
+    field.font = TelaStyle.titleFont
     return field
   }
 
@@ -273,48 +350,65 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let container = TelaCardView()
     container.wantsLayer = true
     let content = NSStackView()
+    content.distribution = .fill
     content.orientation = .vertical
     content.alignment = .leading
-    content.spacing = 12
+    content.spacing = 14
     content.translatesAutoresizingMaskIntoConstraints = false
     container.addSubview(content)
     NSLayoutConstraint.activate([
-      content.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 18),
-      content.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -18),
-      content.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
-      content.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16),
+      content.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: TelaStyle.cardInset),
+      content.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -TelaStyle.cardInset),
+      content.topAnchor.constraint(equalTo: container.topAnchor, constant: TelaStyle.cardVerticalInset),
+      content.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -TelaStyle.cardVerticalInset),
     ])
-    if let title {
-      let heading = label(title)
-      heading.font = .systemFont(ofSize: 14, weight: .semibold)
-      append(heading, to: content)
+    if let detailStack {
+      if let title {
+        let heading = label(title)
+        heading.font = .systemFont(ofSize: TelaStyle.bodySize, weight: .medium)
+        append(heading, to: detailStack)
+        detailStack.setCustomSpacing(10, after: heading)
+      }
+      append(container, to: detailStack)
+      detailStack.setCustomSpacing(24, after: container)
     }
-    if let detailStack { append(container, to: detailStack) }
     return content
   }
 
   private func actionButton(_ title: String, action: Selector) -> NSButton {
-    let button = NSButton(title: title, target: self, action: action)
-    button.bezelStyle = .rounded
-    button.controlSize = .regular
-    button.font = .systemFont(ofSize: 12, weight: .medium)
+    let button = TelaActionButton(title: title, target: self, action: action)
+    button.setButtonType(.momentaryPushIn)
+    button.isBordered = false
+    button.wantsLayer = true
+    button.font = TelaStyle.actionFont
+    button.contentTintColor = .labelColor
+    button.translatesAutoresizingMaskIntoConstraints = false
+    button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+    let width = (title as NSString).size(withAttributes: [.font: button.font!]).width + 24
+    button.widthAnchor.constraint(greaterThanOrEqualToConstant: ceil(width)).isActive = true
     return button
   }
 
   private func row(_ title: String, subtitle: String? = nil, control: NSView, in stack: NSStackView) {
     let row = NSStackView()
+    row.distribution = .fill
     row.orientation = .horizontal
     row.alignment = .centerY
     row.spacing = 18
     let text = NSStackView()
+    text.distribution = .fill
     text.orientation = .vertical
     text.alignment = .leading
     text.spacing = 4
     let name = label(title)
-    name.font = .systemFont(ofSize: 13, weight: .medium)
+    name.font = .systemFont(ofSize: TelaStyle.bodySize, weight: .regular)
     append(name, to: text)
     if let subtitle { append(secondary(subtitle), to: text) }
     row.addArrangedSubview(text)
+    let spacer = NSView()
+    spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+    spacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+    row.addArrangedSubview(spacer)
     row.addArrangedSubview(control)
     text.setContentHuggingPriority(.defaultLow, for: .horizontal)
     control.setContentHuggingPriority(.required, for: .horizontal)
@@ -331,14 +425,15 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private func addStatus(_ title: String, value: String, subtitle: String? = nil, to stack: NSStackView) {
     let ready = value == "Available" || value == "Ready" || value == "Running"
     let state = label("● " + value)
-    state.font = .systemFont(ofSize: 11, weight: .medium)
-    state.textColor = ready ? .systemGreen : (value == "Checking…" ? .secondaryLabelColor : .systemOrange)
+    state.font = .systemFont(ofSize: TelaStyle.captionSize, weight: .medium)
+    state.textColor = ready ? .secondaryLabelColor : (value == "Checking…" ? .secondaryLabelColor : .systemOrange)
     row(title, subtitle: subtitle, control: state, in: stack)
   }
 
   private func pageHeader(_ subtitle: String) {
     guard let stack = detailStack else { return }
     let header = NSStackView()
+    header.distribution = .fill
     header.orientation = .vertical
     header.alignment = .leading
     header.spacing = 6
@@ -419,6 +514,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         append(secondary(bridgeMessage), to: preview)
       } else {
         let empty = NSStackView()
+        empty.distribution = .fill
         empty.orientation = .vertical
         empty.alignment = .centerX
         empty.spacing = 10
@@ -430,9 +526,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         message.alignment = .center
         append(message, to: empty)
         append(empty, to: preview)
-        empty.heightAnchor.constraint(greaterThanOrEqualToConstant: 92).isActive = true
+        empty.heightAnchor.constraint(equalToConstant: 92).isActive = true
       }
       let actions = NSStackView()
+      actions.distribution = .fill
       actions.orientation = .horizontal
       actions.spacing = 12
       actions.addArrangedSubview(actionButton("View snapshot", action: #selector(refreshBridgePreview)))
