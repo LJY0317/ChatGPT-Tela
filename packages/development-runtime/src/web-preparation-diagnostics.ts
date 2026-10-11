@@ -5,6 +5,9 @@ export function classifyWebPreparationFailure(error: unknown): string {
   // wording change must not turn a real historical bootstrap failure into
   // an unclassified 409-like incident in routine telemetry.
   if ((error as Error & { readonly code?: unknown }).code === "native_history_bootstrap_required") {
+    if ((error as Error & { readonly recoveryReason?: unknown }).recoveryReason === "unindexed_history") {
+      return "history_mode_unindexed";
+    }
     return "history_bootstrap_required";
   }
   const exact: Readonly<Record<string, string>> = {

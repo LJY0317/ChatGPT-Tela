@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { connectCodexAppServerWebSocket, type CodexAppServerRpcFactory } from "./app-server";
+import { NativeHistoryBootstrapRequired } from "./compaction-history";
 
 /**
  * Explicit Native-owned final-answer handoff. It is an observed answer to the
@@ -100,6 +101,12 @@ export class AppServerNativeHandoffSource {
       if (metadata?.id !== threadId || record(metadata.status)?.type !== "active") {
         throw new Error("Native handoff requires the active exact thread");
       }
+      // Even limit:2, itemsView:summary may internally replay the entire
+      // Legacy rollout. A user-requested summary does not grant permission
+      // to trigger that hidden unbounded operation.
+      if (metadata.historyMode !== "paginated") {
+        throw new NativeHistoryBootstrapRequired("unindexed_history");
+      }
       const response = record(await rpc.request("thread/turns/list", {
         threadId, sortDirection: "desc", itemsView: "summary", limit: 2,
       }, active));
@@ -122,7 +129,11 @@ export class AppServerNativeHandoffSource {
         threadId, includeTurns: false,
       }, active));
       const updated = record(after?.thread);
-      if (updated?.id !== threadId || record(updated.status)?.type !== "active") {
+      if (updated?.id !== threadId || record(updated.status)?.type !== "active"
+        || updated.historyMode !== "paginated"
+        || JSON.stringify(updated.cwd) !== JSON.stringify(metadata.cwd)
+        || JSON.stringify(updated.environments) !== JSON.stringify(metadata.environments)
+        || JSON.stringify(updated.source) !== JSON.stringify(metadata.source)) {
         throw new Error("Native handoff thread changed during public source read");
       }
       return handoff;
@@ -151,6 +162,9 @@ export class AppServerNativeHandoffSource {
       const metadata = record(before?.thread);
       if (metadata?.id !== threadId || record(metadata.status)?.type !== "active") {
         throw new Error("Native handoff verification requires the active exact thread");
+      }
+      if (metadata.historyMode !== "paginated") {
+        throw new NativeHistoryBootstrapRequired("unindexed_history");
       }
       let cursor: string | undefined;
       let discovered = false;
@@ -203,7 +217,11 @@ export class AppServerNativeHandoffSource {
         threadId, includeTurns: false,
       }, active));
       const fresh = record(after?.thread);
-      if (fresh?.id !== threadId || record(fresh.status)?.type !== "active") {
+      if (fresh?.id !== threadId || record(fresh.status)?.type !== "active"
+        || fresh.historyMode !== "paginated"
+        || JSON.stringify(fresh.cwd) !== JSON.stringify(metadata.cwd)
+        || JSON.stringify(fresh.environments) !== JSON.stringify(metadata.environments)
+        || JSON.stringify(fresh.source) !== JSON.stringify(metadata.source)) {
         throw new Error("Native handoff thread changed during public source verification");
       }
       return verified;

@@ -2,6 +2,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { CanonicalCurrentTurnSource } from "./binding";
 import type { CanonicalCurrentTurnEvidence } from "./rollout";
 import { capturePrivateDiagnosticValue, diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
+import { NativeHistoryBootstrapRequired } from "./history-bootstrap-error";
 
 const CLIENT_NAME = "chatgpt-tela";
 const CLIENT_VERSION = "0.0.0";
@@ -113,7 +114,7 @@ async function readBoundedNewestTurn(
   // Unknown or missing modes are not proof that indexed paging is safe.
   if (thread.historyMode !== "paginated") {
     rejected("unindexed_history");
-    throw new Error("Native indexed current-turn proof unavailable; unindexed history was not paged");
+    throw new NativeHistoryBootstrapRequired("unindexed_history");
   }
   let response: Record<string, unknown> | undefined;
   try {
@@ -229,53 +230,24 @@ export async function interruptLoadedAppServerTurns(
         throw new Error("Codex app-server returned a different loaded thread");
       }
       if (record(statusThread.status)?.type !== "active") continue;
-      // Paginated Native history has an indexed public turn cursor. On that
-      // explicitly advertised storage mode, no lifecycle operation should
-      // hydrate the full (potentially multi-MiB) rollout just to discover the
-      // newest active turn. Do not guess this capability for older Desktop
-      // runtimes: their legacy public turns/list may be unsupported.
-      if (statusThread.historyMode === "paginated") {
-        const bounded = await readBoundedNewestTurn(rpc, threadId, options.signal);
-        if (bounded.thread.historyMode !== "paginated"
-          || record(bounded.thread.status)?.type !== "active"
-          || JSON.stringify(owner(statusThread)) !== JSON.stringify(owner(bounded.thread))
-          || JSON.stringify(environment(statusThread)) !== JSON.stringify(environment(bounded.thread))) {
-          throw new Error("Native paginated lifecycle ownership changed during current-turn proof");
-        }
-        const newest = bounded.newest;
-        if (!newest || newest.status !== "inProgress") continue;
-        active.push(Object.freeze({ threadId, turnId: identifier(newest.id, "active turn id") }));
-        continue;
+      // A shallow Legacy turns/list can still reconstruct the entire rollout
+      // inside the Native app-server. An includeTurns:true compatibility
+      // fallback is worse: it transfers the same unbounded private history.
+      // Interrupt nothing unless the active thread explicitly advertises
+      // indexed Paginated history and its newest turn can be re-proved.
+      if (statusThread.historyMode !== "paginated") {
+        throw new Error("Native lifecycle cannot safely prove an unindexed active turn; no history was read or turn interrupted");
       }
-      if (statusThread.historyMode !== undefined && statusThread.historyMode !== "legacy") {
-        throw new Error("Native lifecycle has an unknown history mode");
+      const bounded = await readBoundedNewestTurn(rpc, threadId, options.signal);
+      if (bounded.thread.historyMode !== "paginated"
+        || record(bounded.thread.status)?.type !== "active"
+        || JSON.stringify(owner(statusThread)) !== JSON.stringify(owner(bounded.thread))
+        || JSON.stringify(environment(statusThread)) !== JSON.stringify(environment(bounded.thread))) {
+        throw new Error("Native paginated lifecycle ownership changed during current-turn proof");
       }
-      // Older official Desktop runtimes require the established public
-      // thread/read snapshot. This compatibility path is intentionally kept
-      // separate from the bounded Paginated contract until it can be retired.
-      const readResponse = record(await rpc.request("thread/read", {
-        threadId, includeTurns: true,
-      }, options.signal));
-      const thread = readResponse ? record(readResponse.thread) : undefined;
-      if (!thread || identifier(thread.id, "thread id") !== threadId) {
-        throw new Error("Codex app-server returned a different loaded thread");
-      }
-      const status = record(thread.status);
-      if (status?.type !== "active") continue;
-      if (!Array.isArray(thread.turns)) {
-        throw new Error("Codex app-server active thread omitted requested turns");
-      }
-      const turns = thread.turns.map(value => record(value));
-      if (turns.some(value => !value)) {
-        throw new Error("Codex app-server active thread returned an invalid turn entry");
-      }
-      const newest = turns.at(-1);
+      const newest = bounded.newest;
       if (!newest || newest.status !== "inProgress") continue;
-      const turnId = identifier(newest.id, "active turn id");
-      if (turns.filter(value => value?.id === turnId).length !== 1) {
-        throw new Error("Codex app-server active turn identity is ambiguous");
-      }
-      active.push(Object.freeze({ threadId, turnId }));
+      active.push(Object.freeze({ threadId, turnId: identifier(newest.id, "active turn id") }));
     }
 
     for (const item of active) {

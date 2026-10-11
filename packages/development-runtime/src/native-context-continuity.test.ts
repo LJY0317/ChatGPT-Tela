@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineNativeTurnAuthority } from "@chatgpt-tela/core";
-import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
+import {
+  AppServerCompactionHistorySource, AppServerNativeHandoffSource,
+  NativeHistoryBootstrapRequired,
+} from "@chatgpt-tela/codex";
 import { createHash } from "node:crypto";
 import { FileContextCheckpointCache } from "./context-cache";
 import { nativeOpaqueCompaction, resolveNativeContextContinuity } from "./native-context-continuity";
@@ -145,6 +148,51 @@ test("an opaque compaction without an authenticated historical provider is never
    .rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
  expect(nativeOpaqueCompaction({input:[{type:'compaction',encrypted_content:'opaque'}]}).count)
    .toBe(1);
+});
+
+test("real public-adapter wiring refuses a cold Legacy handoff before any hidden paging or model call", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-legacy-integration-fixture-"));
+  try {
+    const calls: string[] = [];
+    let closed = 0;
+    let modelCalls = 0;
+    const connect = async () => ({
+      async request(method: string, params: unknown) {
+        calls.push(method);
+        if (method !== "thread/read"
+          || (params as { includeTurns?: boolean }).includeTurns !== false) {
+          throw Error("No Legacy pagination, fork or secondary model call is permitted");
+        }
+        return { thread: {
+          id: "task-1", status: { type: "active" }, historyMode: "legacy",
+        } };
+      },
+      async close() { closed++; },
+    });
+    const publicHistory = new AppServerCompactionHistorySource(connect);
+    const publicHandoff = new AppServerNativeHandoffSource(connect);
+    await expect(resolveNativeContextContinuity(input({
+      options: {
+        historyCheckpointCache: new FileContextCheckpointCache({ directory: root }),
+        compactionAnchor: (thread, current, signal) =>
+          publicHistory.latestAnchor(thread, current, signal),
+        compactionHistory: (thread, current) => publicHistory.project(thread, current),
+        nativeWebHandoff: (thread, current, signal) =>
+          publicHandoff.latest(thread, current, signal),
+        automaticNativeHandoff: async () => {
+          modelCalls++;
+          throw Error("No experimental model-backed fork is allowed");
+        },
+        verifyAutomaticNativeHandoff: async () => false,
+      },
+    }))).rejects.toMatchObject({
+      code: "native_history_bootstrap_required",
+      recoveryReason: "unindexed_history",
+    });
+    expect(calls).toEqual(["thread/read"]);
+    expect(closed).toBe(1);
+    expect(modelCalls).toBe(0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 test("an explicitly requested Native handoff needs no legacy transcript projector",async()=>{
  const answer={

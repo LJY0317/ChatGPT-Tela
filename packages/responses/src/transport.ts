@@ -135,18 +135,26 @@ export async function handleNativeResponsesHttp(
     // replay the already-retired Native turn. No private exception payloads
     // or historical text are returned to the caller.
     if (record(error)?.code === "native_history_bootstrap_required") {
+      // On Legacy, even a shallow public history page could force the Native
+      // engine to replay the whole private rollout. Do not suggest another
+      // explicit handoff turn as if it would make that API safe.
+      const unindexed = record(error)?.recoveryReason === "unindexed_history";
       return Response.json({
         error: {
           type: "tela_context_recovery_required",
-          code: "tela_native_history_checkpoint_required",
+          code: unindexed
+            ? "tela_native_history_indexed_source_required"
+            : "tela_native_history_checkpoint_required",
           retryable: false,
           recovery: {
-            kind: "explicit_native_handoff",
+            kind: unindexed ? "continue_on_native" : "explicit_native_handoff",
             requires_user_action: true,
-            requires_new_native_turn: true,
+            requires_new_native_turn: !unindexed,
             original_history_preserved: true,
           },
-          message: "This Native conversation needs a verified readable checkpoint or an explicit authorized handoff before Web can continue. Original history was preserved, not silently truncated. No Web answer or tool execution was committed by this request.",
+          message: unindexed
+            ? "This Native conversation uses unindexed history that cannot be safely replayed for Web. Continue on Native; a new handoff turn alone cannot establish an indexed source. Web continuation requires a supported independently verified checkpoint or a new public bounded history contract. Original history is preserved, and this request committed no Web answer or tool action."
+            : "This Native conversation needs a verified readable checkpoint or an explicit authorized handoff before Web can continue. Original history was preserved, not silently truncated. No Web answer or tool execution was committed by this request.",
         },
       }, { status: 422 });
     }

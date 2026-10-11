@@ -4,6 +4,8 @@ import {
   type NativeEvidenceKind, type NativeEvidenceReference, type NativeInlineHistoryAsset,
 } from "@chatgpt-tela/core";
 import { connectCodexAppServerWebSocket, type CodexAppServerRpcFactory } from "./app-server";
+import { NativeHistoryBootstrapRequired } from "./history-bootstrap-error";
+export { NativeHistoryBootstrapRequired } from "./history-bootstrap-error";
 
 export interface NativeCompactionHistoryProjection {
   readonly threadId: string;
@@ -34,20 +36,6 @@ export interface NativeHistoricalImageCandidate {
   readonly partIndex: number;
   readonly evidenceId: string;
   readonly path: string;
-}
-
-/**
- * A cold legacy conversation may be longer than any bounded Web bootstrap.
- * This is NOT permission to drop prior evidence or elevate a display summary
- * into Native's model state. An independently verified readable checkpoint or
- * an explicit user-authorized handoff is required before it can resume on Web.
- */
-export class NativeHistoryBootstrapRequired extends Error {
-  readonly code = "native_history_bootstrap_required" as const;
-  constructor() {
-    super("Native readable history requires a verified checkpoint or explicit handoff; no previous evidence was omitted");
-    this.name = "NativeHistoryBootstrapRequired";
-  }
 }
 
 /**
@@ -379,8 +367,8 @@ export class AppServerCompactionHistorySource {
    * original prefix. A matching marker allows a separately authenticated,
    * source-bound *derived* Web checkpoint to be considered.
    *
-   * Only the bounded newest suffix is read. If the marker is out of reach,
-   * the old prefix must not be silently omitted.
+   * Only the indexed Paginated public source is eligible. Legacy's nominally
+   * small turns/list response can replay an unbounded rollout internally.
    */
   async latestAnchor(threadId: string, currentTurnId: string, signal?: AbortSignal):
     Promise<NativeReadableHistoryAnchor> {
@@ -394,80 +382,21 @@ export class AppServerCompactionHistorySource {
       if (metadata?.id !== threadId || record(metadata.status)?.type !== "active") {
         throw new Error("Native compaction anchor requires an active owned thread");
       }
-      if (metadata.historyMode !== undefined
-        && metadata.historyMode !== "legacy" && metadata.historyMode !== "paginated") {
-        throw new Error("Native compaction anchor has an unknown history mode");
+      if (metadata.historyMode !== "paginated") {
+        // A Legacy page limit does not bound internal server-side reconstruction.
+        // Missing/future modes also have no proven indexed read contract.
+        throw new NativeHistoryBootstrapRequired("unindexed_history");
       }
-      let cursor: string | undefined;
-      const cursors = new Set<string>();
-      const turns = new Set<string>();
-      let totalBytes = 0;
-      let newestChecked = false;
-      let found: NativeReadableHistoryAnchor | undefined =
-        metadata.historyMode === "paginated"
-          ? await this.#indexedCompactionAnchor(rpc, threadId, currentTurnId, active)
-          : undefined;
-      for (let page = 0; page < 24 && !found; page += 1) {
-        let response: Record<string, unknown> | undefined;
-        try {
-          response = record(await rpc.request("thread/turns/list", {
-            threadId, itemsView: "full", sortDirection: "desc", limit: 4,
-            ...(cursor ? { cursor } : {}),
-          }, active));
-        } catch {
-          throw new Error("Native public paginated history is unavailable; full history was not fetched");
-        }
-        if (!response || !Array.isArray(response.data) || response.data.length < 1
-          || response.data.length > 4) {
-          throw new Error("Native public compaction anchor page is invalid");
-        }
-        totalBytes += Buffer.byteLength(JSON.stringify(response.data), "utf8");
-        if (totalBytes > 4 * 1024 * 1024) throw new NativeHistoryBootstrapRequired();
-        for (const raw of response.data) {
-          const turn = record(raw);
-          if (!turn || typeof turn.id !== "string" || !turn.id
-            || turns.has(turn.id) || turn.itemsView !== "full" || !Array.isArray(turn.items)) {
-            throw new Error("Native public compaction anchor has incomplete turn evidence");
-          }
-          turns.add(turn.id);
-          if (!newestChecked) {
-            if (turn.id !== currentTurnId || turn.status !== "inProgress") {
-              throw new Error("Native compaction anchor belongs to another current turn");
-            }
-            newestChecked = true;
-          }
-          for (let index = turn.items.length - 1; index >= 0; index -= 1) {
-            const item = record(turn.items[index]);
-            if (!item || typeof item.type !== "string" || typeof item.id !== "string" || !item.id) {
-              throw new Error("Native public compaction anchor item is invalid");
-            }
-            if (item.type === "contextCompaction") {
-              found = Object.freeze({
-                threadId, currentTurnId, compactionTurnId: turn.id,
-                compactionItemId: item.id,
-              });
-              break;
-            }
-          }
-          if (found) break;
-        }
-        if (found) break;
-        if (response.nextCursor === null || response.nextCursor === undefined) {
-          throw new Error("Native compaction history has no readable prefix before a checkpoint");
-        }
-        if (typeof response.nextCursor !== "string" || !response.nextCursor
-          || response.nextCursor.length > 1024 || cursors.has(response.nextCursor)) {
-          throw new Error("Native public compaction anchor cursor is invalid");
-        }
-        cursor = response.nextCursor;
-        cursors.add(cursor);
-      }
-      if (!found) throw new NativeHistoryBootstrapRequired();
+      const found = await this.#indexedCompactionAnchor(rpc, threadId, currentTurnId, active);
       const after = record(await rpc.request("thread/read", {
         threadId, includeTurns: false,
       }, active));
       const current = record(after?.thread);
-      if (current?.id !== threadId || record(current.status)?.type !== "active") {
+      if (current?.id !== threadId || record(current.status)?.type !== "active"
+        || current.historyMode !== "paginated"
+        || JSON.stringify(current.cwd) !== JSON.stringify(metadata.cwd)
+        || JSON.stringify(current.environments) !== JSON.stringify(metadata.environments)
+        || JSON.stringify(current.source) !== JSON.stringify(metadata.source)) {
         throw new Error("Native compaction anchor changed while being verified");
       }
       return found;
@@ -482,6 +411,7 @@ export class AppServerCompactionHistorySource {
    * total Native history length. Native's legacy store may still replay its
    * rollout internally: this boundary cannot solve that server-side cost.
    *
+   * Legacy and absent/unknown mode fail before making a paging request.
    * No partial history is returned. The caller must obtain a verified
    * checkpoint, not silently equate the scanned suffix with the original.
    */
@@ -492,6 +422,9 @@ export class AppServerCompactionHistorySource {
     const thread = record(meta?.thread);
     if (!thread || thread.id !== threadId || record(thread.status)?.type !== "active") {
       throw new Error("Native compaction history requires an active thread");
+    }
+    if (thread.historyMode !== "paginated") {
+      throw new NativeHistoryBootstrapRequired("unindexed_history");
     }
     const limit = 12;
     const maxPageBytes = 4 * 1024 * 1024;
@@ -548,7 +481,11 @@ export class AppServerCompactionHistorySource {
       threadId, includeTurns: false,
     }, signal));
     const same = record(fresh?.thread);
-    if (!same || same.id !== threadId || record(same.status)?.type !== "active") {
+    if (!same || same.id !== threadId || record(same.status)?.type !== "active"
+      || same.historyMode !== "paginated"
+      || JSON.stringify(same.cwd) !== JSON.stringify(thread.cwd)
+      || JSON.stringify(same.environments) !== JSON.stringify(thread.environments)
+      || JSON.stringify(same.source) !== JSON.stringify(thread.source)) {
       throw new Error("Native compaction history changed during paginated reconstruction");
     }
     return { ...same, turns: turns.reverse() };
@@ -558,9 +495,9 @@ export class AppServerCompactionHistorySource {
     const signal = AbortSignal.timeout(30_000);
     const rpc = await this.connect(signal);
     try {
-      // Always use bounded public pagination. The legacy compatibility branch
-      // used to call thread/read(includeTurns:true), which could hydrate tens
-      // of MiB before any byte budget was checked.
+      // Only an advertised indexed Paginated store can guarantee a bounded
+      // Native-side paging cost; Legacy public paging can internally replay
+      // tens of MiB before the response byte budget can be checked.
       const thread = await this.#pagedSnapshot(rpc, threadId, signal);
       if (!thread || thread.id !== threadId || record(thread.status)?.type !== "active"
         || !Array.isArray(thread.turns)) {

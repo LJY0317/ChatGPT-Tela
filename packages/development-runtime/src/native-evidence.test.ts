@@ -33,7 +33,7 @@ function historicalSource(turns: readonly Record<string, unknown>[]) {
     async request(method: string, params: Record<string, unknown>) {
       if (method === "thread/read") {
         if (params.includeTurns !== false) throw Error("unbounded history read forbidden");
-        return { thread: { id: "thread", status: { type: "active" } } };
+        return { thread: { id: "thread", historyMode: "paginated", status: { type: "active" } } };
       }
       if (method === "thread/turns/list") {
         const offset = params.cursor ? Number(params.cursor) : 0;

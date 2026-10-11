@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   AppServerNativeHandoffSource, NATIVE_WEB_HANDOFF_PROMPT,
 } from "./native-handoff";
+import { NativeHistoryBootstrapRequired } from "./compaction-history";
 
 const json = JSON.stringify({
   type: "tela_native_web_handoff_v1",
@@ -24,7 +25,7 @@ function source(options: {
       methods.push({ method, params });
       if (method === "thread/read") {
         if (params.includeTurns !== false) throw new Error("History download forbidden");
-        return { thread: { id: "thread-one", status: { type: "active" } } };
+        return { thread: { id: "thread-one", historyMode: "paginated", status: { type: "active" } } };
       }
       if (method === "thread/turns/list") return { data: [
         { id: options.current ?? "web-turn", status: "inProgress", itemsView: "summary", items: [] },
@@ -115,7 +116,7 @@ describe("explicit Native-owned Web handoff, read-only public contract", () => {
         methods.push({ method, params });
         if (method === "thread/read") {
           if (params.includeTurns !== false) throw Error("Whole history forbidden");
-          return { thread: { id: "thread-one", status: { type: "active" } } };
+          return { thread: { id: "thread-one", historyMode: "paginated", status: { type: "active" } } };
         }
         if (method === "thread/turns/list") {
           const offset = params.cursor ? Number(params.cursor) : 0;
@@ -137,5 +138,59 @@ describe("explicit Native-owned Web handoff, read-only public contract", () => {
     await expect(verifier.verifyRecent("thread-one", "web-turn",
       initial.handoffTurnId, "0".repeat(64))).rejects.toThrow("no matching");
     expect(closed).toBe(2);
+  });
+
+  test("Legacy, missing and unindexed handoff modes cannot replay original history through a shallow page", async () => {
+    for (const historyMode of ["legacy", undefined, "future-unindexed"]) {
+      const calls: string[] = [];
+      let closed = 0;
+      const rpc = {
+        async request(method: string, params: { includeTurns?: boolean }): Promise<unknown> {
+          calls.push(method);
+          if (method !== "thread/read" || params.includeTurns !== false) {
+            throw Error("Native server must not reconstruct a large historical rollout");
+          }
+          return { thread: { id: "thread-one", historyMode, status: { type: "active" } } };
+        },
+        async close() { closed++; },
+      };
+      const reader = new AppServerNativeHandoffSource(async () => rpc);
+      await expect(reader.latest("thread-one", "web-turn"))
+        .rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
+      await expect(reader.verifyRecent("thread-one", "web-turn", "native-handoff-turn", "0".repeat(64)))
+        .rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
+      expect(calls).toEqual(["thread/read", "thread/read"]);
+      expect(closed).toBe(2);
+    }
+  });
+
+  test("handoff proof refuses a Paginated-to-Legacy mode change after an indexed page", async () => {
+    let reads = 0;
+    const methods: string[] = [];
+    const rpc = {
+      async request(method: string): Promise<unknown> {
+        methods.push(method);
+        if (method === "thread/read") {
+          return { thread: { id: "thread-one",
+            historyMode: ++reads === 1 ? "paginated" : "legacy",
+            status: { type: "active" } } };
+        }
+        if (method === "thread/turns/list") return { data: [
+          { id: "web-turn", status: "inProgress", itemsView: "summary", items: [] },
+          { id: "native-handoff-turn", status: "completed", itemsView: "summary",
+            items: [
+              { type: "userMessage", id: "request", content: [
+                { type: "text", text: NATIVE_WEB_HANDOFF_PROMPT },
+              ] },
+              { type: "agentMessage", id: "answer", phase: "finalAnswer", text: json },
+            ] },
+        ] };
+        throw Error("Unexpected RPC");
+      },
+      async close() {},
+    };
+    await expect(new AppServerNativeHandoffSource(async () => rpc).latest("thread-one", "web-turn"))
+      .rejects.toThrow("thread changed");
+    expect(methods).toEqual(["thread/read", "thread/turns/list", "thread/read"]);
   });
 });

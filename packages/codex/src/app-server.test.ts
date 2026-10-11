@@ -492,7 +492,7 @@ describe("Codex app-server lifecycle interruption", () => {
         if (method === "thread/read") {
           const threadId = (params as any).threadId;
           if (threadId === "thread-legacy") return { thread: activeThread({
-            id: threadId, historyMode: "legacy",
+            id: threadId, historyMode: "legacy", status: { type: "idle" },
             turns: [{ id: "legacy-active", status: "inProgress", items: [] }],
           }) };
           if ((params as any).includeTurns !== false) throw Error("Unbounded paginated history");
@@ -531,22 +531,50 @@ describe("Codex app-server lifecycle interruption", () => {
     };
     await expect(interruptLoadedAppServerTurns("ws://127.0.0.1:1", {
       connect: async () => rpc,
-    })).rejects.toThrow("unknown history mode");
+    })).rejects.toThrow("cannot safely prove an unindexed active turn");
     expect(calls.map(call => call.method)).toEqual(["thread/loaded/list", "thread/read"]);
+  });
+
+  test("active Legacy and mode-unknown lifecycle scans refuse hidden whole-history replay and all interrupts", async () => {
+    for (const historyMode of ["legacy", undefined, "new-storage-mode"]) {
+      const calls: Array<{ method: string; params?: unknown }> = [];
+      let closed = 0;
+      const rpc: CodexAppServerRpc = {
+        async request(method, params) {
+          calls.push({ method, params });
+          if (method === "thread/loaded/list") return { data: ["private-active"], nextCursor: null };
+          if (method === "thread/read") {
+            if ((params as { includeTurns?: boolean }).includeTurns !== false) {
+              throw Error("unbounded Native history must not be requested");
+            }
+            return { thread: activeThread({
+              id: "private-active", historyMode, turns: undefined,
+            }) };
+          }
+          throw Error("no turn paging, model call or interruption permitted");
+        },
+        async close() { closed++; },
+      };
+      await expect(interruptLoadedAppServerTurns("ws://127.0.0.1:1", {
+        connect: async () => rpc,
+      })).rejects.toThrow("cannot safely prove an unindexed active turn");
+      expect(calls.map(call => call.method)).toEqual(["thread/loaded/list", "thread/read"]);
+      expect(closed).toBe(1);
+    }
   });
 
   test("interrupts only exact newest in-progress turns from loaded active threads", async () => {
     const calls: Array<{ method: string; params?: unknown }> = [];
     let closed = 0;
     const threads: Record<string, unknown> = {
-      "thread-a": activeThread({ id: "thread-a", turns: [
+      "thread-a": activeThread({ id: "thread-a", historyMode: "paginated", turns: [
         { id: "turn-old", status: "completed", items: [] },
         { id: "turn-a", status: "inProgress", items: [] },
       ] }),
-      "thread-b": activeThread({ id: "thread-b", status: { type: "idle" }, turns: [
+      "thread-b": activeThread({ id: "thread-b", historyMode: "legacy", status: { type: "idle" }, turns: [
         { id: "turn-b", status: "inProgress", items: [] },
       ] }),
-      "thread-c": activeThread({ id: "thread-c", turns: [
+      "thread-c": activeThread({ id: "thread-c", historyMode: "paginated", turns: [
         { id: "turn-c", status: "completed", items: [] },
       ] }),
     };
@@ -555,8 +583,18 @@ describe("Codex app-server lifecycle interruption", () => {
         calls.push({ method, ...(params !== undefined ? { params } : {}) });
         if (method === "thread/loaded/list") return { data: Object.keys(threads), nextCursor: null };
         if (method === "thread/read") {
-          const threadId = (params as { threadId: string }).threadId;
+          const query = params as { threadId: string; includeTurns?: boolean };
+          if (query.includeTurns !== false) throw Error("full Native history must not be read");
+          const threadId = query.threadId;
           return { thread: threads[threadId] };
+        }
+        if (method === "thread/turns/list") {
+          const threadId = (params as { threadId: string }).threadId;
+          return { data: [
+            { id: threadId === "thread-a" ? "turn-a" : "turn-c",
+              status: threadId === "thread-a" ? "inProgress" : "completed",
+              itemsView: "notLoaded", items: [] },
+          ], nextCursor: null };
         }
         if (method === "turn/interrupt") return {};
         throw new Error(`unexpected RPC method: ${method}`);
@@ -574,19 +612,19 @@ describe("Codex app-server lifecycle interruption", () => {
     expect(closed).toBe(1);
   });
 
-  test("fails before interruption when loaded current-turn identity is ambiguous", async () => {
+  test("fails before interruption when the indexed newest-turn identities are duplicated", async () => {
     const calls: string[] = [];
     const rpc: CodexAppServerRpc = {
       async request(method) {
         calls.push(method);
         if (method === "thread/loaded/list") return { data: ["thread-a"], nextCursor: null };
         if (method === "thread/read") return { thread: activeThread({
-          id: "thread-a",
-          turns: [
-            { id: "same", status: "inProgress", items: [] },
-            { id: "same", status: "inProgress", items: [] },
-          ],
+          id: "thread-a", historyMode: "paginated", turns: undefined,
         }) };
+        if (method === "thread/turns/list") return { data: [
+          { id: "same", status: "inProgress", itemsView: "notLoaded", items: [] },
+          { id: "same", status: "completed", itemsView: "notLoaded", items: [] },
+        ], nextCursor: null };
         if (method === "turn/interrupt") return {};
         throw new Error(`unexpected RPC method: ${method}`);
       },
@@ -594,7 +632,7 @@ describe("Codex app-server lifecycle interruption", () => {
     };
     await expect(interruptLoadedAppServerTurns("ws://127.0.0.1:1", {
       connect: async () => rpc,
-    })).rejects.toThrow("ambiguous");
+    })).rejects.toThrow("identity is invalid");
     expect(calls).not.toContain("turn/interrupt");
   });
 });

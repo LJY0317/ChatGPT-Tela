@@ -3,6 +3,8 @@ import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
 import { classifyWebPreparationFailure } from "./web-preparation-diagnostics";
 test("preparation diagnostics classify known boundaries without returning arbitrary exception prose", () => {
   expect(classifyWebPreparationFailure(new NativeHistoryBootstrapRequired())).toBe("history_bootstrap_required");
+  expect(classifyWebPreparationFailure(new NativeHistoryBootstrapRequired("unindexed_history")))
+    .toBe("history_mode_unindexed");
   const futureWording=Object.assign(new Error("private future wording; no original bytes available"), {
     code:"native_history_bootstrap_required",
   });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
+import { AppServerCurrentTurnSource, type CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 import {
   ActiveTurnRegistry,
   NativeResponsesGateway,
@@ -163,6 +163,79 @@ describe("Native Responses HTTP transport", () => {
     expect(retry.error.message).toContain("new, explicitly authorized Native turn");
     expect(nativeReads).toBe(1);
     expect(starts).toBe(1);
+    expect(turns.size).toBe(0);
+  });
+
+  test("unindexed Legacy history returns a nonretryable Native-only recovery, not an impossible replay promise", async () => {
+    const turns = new ActiveTurnRegistry();
+    let starts = 0;
+    const gateway = new NativeResponsesGateway(source, turns, async () => {
+      starts++;
+      throw Object.assign(new Error("PRIVATE original Legacy history may not be exported"), {
+        code: "native_history_bootstrap_required",
+        recoveryReason: "unindexed_history",
+      });
+    });
+    const response = await handleNativeResponsesHttp(post(body([], false)), gateway);
+    expect(response.status).toBe(422);
+    const reply = await response.json() as { error: {
+      code: string; retryable: boolean; message: string;
+      recovery: {
+        kind: string; requires_user_action: boolean;
+        requires_new_native_turn: boolean; original_history_preserved: boolean;
+      };
+    } };
+    expect(reply.error.code).toBe("tela_native_history_indexed_source_required");
+    expect(reply.error.retryable).toBe(false);
+    expect(reply.error.recovery).toEqual({
+      kind: "continue_on_native",
+      requires_user_action: true,
+      requires_new_native_turn: false,
+      original_history_preserved: true,
+    });
+    expect(reply.error.message).toContain("new handoff turn alone cannot");
+    expect(JSON.stringify(reply)).not.toContain("PRIVATE original Legacy history");
+    expect(starts).toBe(1);
+    expect(turns.size).toBe(0);
+  });
+
+  test("real bounded current-turn binding returns Legacy 422 before any tool, history paging or Web launch", async () => {
+    const methods: string[] = [];
+    let closes = 0;
+    let launches = 0;
+    const canonical = new AppServerCurrentTurnSource(async () => ({
+      async request(method: string, params?: unknown) {
+        methods.push(method);
+        if (method !== "thread/read"
+          || (params as { includeTurns?: boolean })?.includeTurns !== false) {
+          throw Error("No unbounded Legacy history read or model launch is permitted");
+        }
+        return { thread: {
+          id: "thread-1", historyMode: "legacy", status: { type: "active" },
+        } };
+      },
+      async close() { closes++; },
+    }), { preferBoundedTurnProof: true });
+    const turns = new ActiveTurnRegistry();
+    const gateway = new NativeResponsesGateway(canonical, turns, async () => {
+      launches++;
+      throw Error("Web must not be launched on unproved Native authority");
+    });
+    const response = await handleNativeResponsesHttp(post(body([], false)), gateway);
+    expect(response.status).toBe(422);
+    const reply = await response.json() as { error: {
+      code: string; retryable: boolean;
+      recovery: { kind: string; original_history_preserved: boolean };
+    } };
+    expect(reply.error.code).toBe("tela_native_history_indexed_source_required");
+    expect(reply.error.retryable).toBe(false);
+    expect(reply.error.recovery).toMatchObject({
+      kind: "continue_on_native",
+      original_history_preserved: true,
+    });
+    expect(methods).toEqual(["thread/read"]);
+    expect(closes).toBe(1);
+    expect(launches).toBe(0);
     expect(turns.size).toBe(0);
   });
   test("cancellation before a tool identity frame keeps delivery replayable; reading it commits fail-closed", async () => {

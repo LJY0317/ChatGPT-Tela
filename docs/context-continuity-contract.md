@@ -1,5 +1,32 @@
 # Native / Web context continuity contract
 
+## 2026-10-11 resumed original-work safety gate: no hidden Legacy replay
+
+The product must not turn a small public page limit into an unbounded
+**server-side** replay of an old Legacy Native rollout. All source-level
+historical compaction/anchor and explicit-handoff public paging now require
+`historyMode:paginated` in a metadata-only `thread/read(includeTurns:false)`
+**before** any `thread/turns/list` or `thread/items/list`, and reprove
+the storage mode and owner/environment metadata afterward. Missing, future
+and Legacy modes return `NativeHistoryBootstrapRequired` with
+`recoveryReason:"unindexed_history"` without paging. The loaded active-turn
+interruption scan similarly rejects an unindexed active thread before
+`thread/read(includeTurns:true)`, pagination, or any partial interrupt.
+Idle unindexed loaded threads remain skippable from metadata alone.
+Both the default Desktop target and the optional multi-profile target now
+configure bounded active-turn ownership proof.
+
+An old 73 MiB Legacy cold Web attempt with no prior verified current-input
+or retained source is therefore **not yet recoverable automatically**.
+The nonretryable 422 `tela_native_history_indexed_source_required`
+returns `recovery.kind:"continue_on_native"`, not a misleading request to
+create an explicit Native handoff that would still need unsafe Legacy paging.
+The source/protocol tests use fixtures only; no installed app/73 MiB private
+thread, historical model/provider attestation, user account, or Native tool
+action was touched. The missing upstream requirements remain a bounded,
+owner-authenticated Legacy source/compaction read and historical executed-model
+provenance with a true pre-execution no-tools fork policy.
+
 ## Automatic cold Native handoff (source-only 2026-10-11 extension)
 
 The normal current input, proven retained Web page, durable Native readable
@@ -18,11 +45,13 @@ compaction fingerprint. Recent public source ancestry is required to reuse
 the cached value after Web restart. The derived summary is lower-priority
 task guidance with explicit original-evidence limitations, not authority.
 
-Where any public fork isolation or exact Native model proof is unsupported,
-no model is started. The original typed HTTP 422 cold-history recovery
-boundary remains. The dedicated fork fixtures were authored but their
-execution was blocked by host safety screening; this is **not a tested or
-installed automatic recovery feature** until that blocker is resolved.
+Where any public fork isolation or exact historical executed Native model
+proof is unsupported, no model is started. The current product-facing
+automatic source defaults to **deny before RPC connect**; only isolated
+synthetic fixtures explicitly opt into unshipped fork behavior. The typed
+HTTP 422 cold-history boundary remains. Synthetic tests do not constitute
+live Native authority, historical model provenance, a verified tool-free
+engine policy, or an installed automatic recovery feature.
 
 ## Legacy compatibility cleanup (2026-10-11)
 
@@ -38,17 +67,18 @@ installed automatic recovery feature** until that blocker is resolved.
   from provider-only trimming of old assistant/tool prose. Their exact
   canonical revision IDs reach Web physical fitting, which refuses to
   silently crop that source-bound content even under memory pressure.
-- Preserved official historyMode=legacy **data** support through bounded
-  public paging. A Legacy Native server may still internally replay its
-  rollout for those pages. This is a source-side limitation, not permission
-  to bulk-transfer old tool outputs.
-- Preserved a separate older official Desktop current-turn proof compatibility
-  path where public thread/turns/list may be unsupported. That authority
-  reader can still use thread/read(includeTurns:true); do not claim all
-  whole-history RPC calls across the entire product have been removed.
-- Preserved a verified user-requested Native handoff even without a history
-  projector; without a validated checkpoint, handoff, or readable source,
-  opaque Native compaction continues to fail closed.
+- Previously permitted Legacy `thread/turns/list` requests are now
+  **blocked before pagination** in compaction source/anchor and explicit
+  handoff readers; their limits did not bound Native-internal rollout work.
+- The `AppServerCurrentTurnSource` class retains an explicit older
+  compatibility mode for non-product adapter callers/tests; both current
+  product target constructors now request bounded proof and fail closed for
+  Legacy/missing/unknown modes. Product lifecycle interruption never
+  invokes the older full-history fallback.
+- A verified user-requested Native handoff remains available through
+  **Paginated public** recent-turn summaries, not unindexed Legacy.
+  Without a validated checkpoint, independently verifiable handoff or
+  readable source, opaque Native compaction continues to fail closed.
 
 These changes do not decode encrypted compaction, grant missing historical
 tool/file evidence, or automatically restore a cold 73 MiB Legacy conversation.
@@ -71,9 +101,9 @@ On each authenticated Native-owned Web request:
    compaction item/turn anchor. The account-scoped cache is only a hint; current Native
    identity must be rechecked.
 4. If unavailable, optionally read a *user-requested* completed Native final-answer
-   handoff. A persisted handoff is accepted only after rereading its public Native answer.
-   A short early handoff probe avoids a giant Legacy compaction-marker scan when no
-   complete source-checkpoint candidate exists.
+   handoff only through a proven indexed Paginated source. A persisted handoff
+   is accepted only after rereading its public Native answer. A Legacy early
+   handoff probe fails before unsafe historical pagination.
 5. Only then try the bounded complete visible Native source. If it is fully readable and
    an ordinary, authorized Web checkpoint producer is available, create one checkpoint
    within the *same* Web source/output budget. Revalidate the public compaction anchor
@@ -118,12 +148,14 @@ without claiming shared underlying model KV cache.
   identities, not Native authority.
 - Restart requires renewed public Native anchor or handoff-answer proof; retained
   browser-state shortcuts do not survive restart.
-- Legacy Native thread paging may still reconstruct the whole historical rollout on
-  the Native server side. Paginated Native `thread/items/list` allows indexed compaction
-  anchor discovery where the public contract explicitly supports it.
+- Legacy Native thread paging may still reconstruct the whole historical
+  rollout on the Native server side, so all historical projection/handoff
+  paths refuse it. Paginated Native `thread/items/list` supports indexed
+  compaction anchor discovery where the public contract explicitly allows it.
 - A cache missing or corrupt on a 73 MiB old Legacy conversation **cannot be made
-  whole** by pretending the encrypted compaction is readable. An explicit bounded
-  handoff or a genuinely supported public source is still required.
+  whole** by pretending the encrypted compaction is readable. An explicit
+  handoff alone does **not** make Legacy public pagination safe. Native
+  continuation or a future bounded public original-source contract is required.
 - Old files/commands/images can only become verified evidence after readback through a
   current authorized Native/public tool path. An evidence reference or summary does not
   itself grant file access or permission to reexecute past commands.

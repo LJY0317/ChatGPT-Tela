@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { AppServerCompactionHistorySource, NativeHistoryBootstrapRequired } from './compaction-history';
 function snapshot() {
- return {thread:{id:'thread',status:{type:'active'},turns:[
+ return {thread:{id:'thread',status:{type:'active'},historyMode:'paginated',turns:[
   {id:'old',status:'completed',items:[{id:'user',type:'userMessage',content:[{type:'text',text:'Remember code'}]},
     {id:'command',type:'commandExecution',command:'fixture',aggregatedOutput:'Observed value'},
     {id:'hidden',type:'reasoning',rawContent:'hidden'}]},
@@ -21,6 +21,8 @@ function pagedSource(value: any, options: { pageSize?: number; unsupported?: boo
  const all=[...value.thread.turns].reverse().map((turn:any)=>({
    ...turn,itemsView:turn.itemsView??'full',
  }));
+ const indexed=[...value.thread.turns].reverse().flatMap((turn:any)=>
+   [...turn.items].reverse().map((item:any)=>({turnId:turn.id,item})));
  const pageSize=options.pageSize??2;
  const rpc={
    async request(method:string,params:any){
@@ -32,9 +34,17 @@ function pagedSource(value: any, options: { pageSize?: number; unsupported?: boo
      }
      if(method==='thread/turns/list'){
        if(options.unsupported)throw Error('thread/turns/list not supported yet');
+       if(params.itemsView==='notLoaded')return {data:[
+         {id:all[0].id,status:all[0].status,itemsView:'notLoaded',items:[]},
+       ],nextCursor:all.length>1?'older':null};
        const offset=params.cursor?Number(params.cursor):0;
        return {data:all.slice(offset,offset+pageSize),
          nextCursor:offset+pageSize<all.length?String(offset+pageSize):null};
+     }
+     if(method==='thread/items/list'){
+       const offset=params.cursor?Number(params.cursor):0;
+       return {data:indexed.slice(offset,offset+params.limit),
+         nextCursor:offset+params.limit<indexed.length?String(offset+params.limit):null};
      }
      throw Error('Unexpected method');
    },
@@ -93,7 +103,7 @@ test('593-turn, 99-compaction Native history stays paginated and never repeats a
    turns.push({id:'past-'+index,status:'completed',items});
  }
  turns.push({id:'current',status:'inProgress',items:[]});
- const f=pagedSource({thread:{id:'thread',status:{type:'active'},turns}},{pageSize:12});
+ const f=pagedSource({thread:{id:'thread',status:{type:'active'},historyMode:'paginated',turns}},{pageSize:12});
  const result=await f.reader.project('thread','current');
  expect(result.compactionItemId).toBe('compact-98');
  const items=JSON.parse(result.content).items;
@@ -109,7 +119,7 @@ test('paged history detects duplicated source cursors before assuming complete e
  let pages=0;
  const rpc={
    async request(method:string,params:any){
-     if(method==='thread/read')return {thread:{id:'thread',status:{type:'active'}}};
+     if(method==='thread/read')return {thread:{id:'thread',status:{type:'active'},historyMode:'paginated'}};
      return {data:[{id:'item-'+(++pages),status:'inProgress',itemsView:'full',items:[]}],
        nextCursor:'unchanging'};
    },
@@ -119,12 +129,15 @@ test('paged history detects duplicated source cursors before assuming complete e
  await expect(f.project('thread','current')).rejects.toThrow('repeated');
  expect(closed).toBe(1);
 });
-test('latest Native compaction anchor is discoverable from a short owned public suffix',async()=>{
+test('latest Native compaction anchor is discoverable from indexed public items only',async()=>{
  const f=pagedSource(snapshot(),{pageSize:2});
  const anchor=await f.reader.latestAnchor('thread','current');
  expect(anchor).toEqual({threadId:'thread',currentTurnId:'current',
    compactionTurnId:'compact',compactionItemId:'checkpoint'});
  expect(f.calls.filter(call=>call.method==='thread/turns/list')).toHaveLength(1);
+ expect(f.calls.filter(call=>call.method==='thread/items/list').length).toBeGreaterThan(0);
+ expect(f.calls.filter(call=>call.method==='thread/turns/list')
+   .every(call=>call.params.itemsView==='notLoaded')).toBe(true);
  expect(f.calls.filter(call=>call.method==='thread/read').map(call=>call.params.includeTurns))
    .toEqual([false,false]);
  expect(f.closed()).toBe(1);
@@ -172,26 +185,25 @@ test('paginated Native history finds an indexed compaction marker without full-t
  expect(closed).toBe(1);
 });
 
-test('legacy Native history keeps bounded public turn paging without attempting unsupported indexed items',async()=>{
+test('Legacy Native anchor discovery fails before replaying even a shallow server-side page',async()=>{
  const old:any=snapshot();
  old.thread.historyMode='legacy';
  const f=pagedSource(old,{pageSize:2});
- const marker=await f.reader.latestAnchor('thread','current');
- expect(marker.compactionItemId).toBe('checkpoint');
+ await expect(f.reader.latestAnchor('thread','current'))
+   .rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
  expect(f.calls.some(call=>call.method==='thread/items/list')).toBe(false);
- expect(f.calls.some(call=>call.method==='thread/turns/list'
-   && call.params.itemsView==='full')).toBe(true);
+ expect(f.calls.map(call=>call.method)).toEqual(['thread/read']);
+ expect(f.closed()).toBe(1);
 });
-test('legacy stored conversations remain supported, but no class constructor can select a full thread read',async()=>{
+test('Legacy visible history reconstruction is disabled before any paging or whole thread read',async()=>{
  const old:any=snapshot();
  old.thread.historyMode='legacy';
  const f=pagedSource(old,{pageSize:2});
- const result=await f.reader.project('thread','current');
- expect(result.compactionItemId).toBe('checkpoint');
- expect(result.content).toContain('Observed value');
+ await expect(f.reader.project('thread','current'))
+   .rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
  expect(f.calls.filter(call=>call.method==='thread/read')
-   .map(call=>call.params.includeTurns)).toEqual([false,false]);
- expect(f.calls.filter(call=>call.method==='thread/turns/list').length).toBe(2);
+   .map(call=>call.params.includeTurns)).toEqual([false]);
+ expect(f.calls.filter(call=>call.method==='thread/turns/list').length).toBe(0);
  expect(f.closed()).toBe(1);
 });
 
@@ -246,7 +258,7 @@ test('unknown Native history modes and malformed indexed pages fail closed witho
    async close(){},
  };
  await expect(new AppServerCompactionHistorySource(async()=>unknown)
-   .latestAnchor('thread','current')).rejects.toThrow('unknown history mode');
+   .latestAnchor('thread','current')).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
 });
 test('foreign or moved Native anchor is never treated as a valid checkpoint source',async()=>{
  const f=pagedSource(snapshot(),{pageSize:2});

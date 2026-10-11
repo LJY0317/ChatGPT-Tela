@@ -495,6 +495,10 @@ export class MultiProfileControlClient {
           readySession.endpoint,
           signal ? { signal } : {},
         ),
+        // An optional Plura-owned profile must follow the same bounded
+        // Native current-turn proof as the default Desktop target. Older
+        // Legacy whole-thread snapshots are not safe on long conversations.
+        { preferBoundedTurnProof: true },
       ),
     });
   }

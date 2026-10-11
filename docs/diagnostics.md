@@ -46,6 +46,14 @@ retry, original exceptions or Native execution:
 | Codex paginated owner proof | `native_current_turn_rejected` | Missing/Legacy indexing, unavailable/invalid page, changed active status, owner or environment **before Web authority is granted**. |
 | Codex automatic handoff | `native_auto_handoff_rejected` | A production attempt was denied **before RPC connect**; `prepare`, `verify_source`, or `verify_recent` only. |
 
+For older/unindexed Native compaction history, the Web preparation failure
+classifier now reports the fixed `history_mode_unindexed` class. This is
+distinct from other `history_bootstrap_required` cases (e.g. an oversized
+but indexed source). The HTTP recovery contract returns nonretryable 422
+`tela_native_history_indexed_source_required` and
+`continue_on_native`; an extra Legacy handoff turn is **not** claimed
+to bypass the hidden server-side history reconstruction.
+
 This is not an always-on process sampler: reservation count breakdowns are
 computed **only on capacity rejection**; no command, request body,
 conversation text, raw workspace/thread/turn identity, path, URL, token or
