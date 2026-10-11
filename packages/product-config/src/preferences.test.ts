@@ -3,11 +3,13 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  approvalDelayMilliseconds,
   DEFAULT_PRODUCT_PREFERENCES,
   parseProductPreferences,
   readProductPreferences,
   resolveProductPreferencesPath,
   writeProductPreferences,
+  setWorkProfileConnection,
 } from "./preferences";
 
 describe("product preferences", () => {
@@ -23,13 +25,15 @@ describe("product preferences", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-preferences-write-"));
     try {
       const path = join(root, "preferences-v1.json");
-      writeProductPreferences({ version: 1, approvalAutomation: "recognized_once" }, path);
-      expect(readProductPreferences(path)).toEqual({ version: 1, approvalAutomation: "recognized_once" });
+      writeProductPreferences({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "2s" }, path);
+      expect(readProductPreferences(path)).toEqual({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "2s" });
+      expect(approvalDelayMilliseconds("2s")).toBe(2_000);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   test("unknown fields and persistent/full-access modes fail closed", () => {
     expect(() => parseProductPreferences({ version: 1, approvalAutomation: "always" })).toThrow("approval automation");
+    expect(() => parseProductPreferences({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "30s" })).toThrow("approval delay");
     expect(() => parseProductPreferences({ version: 1, approvalAutomation: "off", secret: "x" })).toThrow("unknown fields");
   });
 
@@ -50,4 +54,20 @@ describe("product preferences", () => {
     try { expect(() => readProductPreferences(path)).toThrow("unsafe"); }
     finally { rmSync(root, { recursive: true, force: true }); }
   });
+});
+
+test("Work connection choices survive reload without replacing approval settings", () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-work-choice-"));
+  const path = join(root, "preferences-v1.json");
+  try {
+    writeProductPreferences({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "2s" }, path);
+    setWorkProfileConnection("default", true, path);
+    setWorkProfileConnection("local.profile2", true, path);
+    setWorkProfileConnection("default", true, path);
+    expect(readProductPreferences(path).workProfileConnections).toEqual(["default", "local.profile2"]);
+    setWorkProfileConnection("default", false, path);
+    expect(readProductPreferences(path)).toEqual({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "2s", workProfileConnections: ["local.profile2"] });
+    expect(() => setWorkProfileConnection("../invalid", true, path)).toThrow("identities");
+    expect(readProductPreferences(path).workProfileConnections).toEqual(["local.profile2"]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

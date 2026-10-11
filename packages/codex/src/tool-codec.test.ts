@@ -72,4 +72,21 @@ describe("Native Responses tool codec", () => {
       { callId: "call-1", wireName: "future", mode: "structured", arguments: {} },
     )).toThrow("codec is not defined");
   });
+
+  test("public Native MCP tool output preserves rich parts and its error status without re-executing", () => {
+    const content = [
+      { type: "image", mimeType: "image/png", data: "opaque-fixture" },
+      { type: "resource", resource: { mimeType: "application/pdf", blob: "opaque-document" } },
+    ];
+    expect(extractNativeToolResults({ input: [{
+      type: "mcp_tool_call_output", call_id: "confirmed-tool",
+      output: { content, structuredContent: { some: "metadata" }, isError: true },
+    }] })).toEqual([{
+      callId: "confirmed-tool", content, isError: true,
+    }]);
+    expect(() => extractNativeToolResults({ input: [{
+      type: "mcp_tool_call_output", call_id: "confirmed-tool",
+      output: { structuredContent: { only: "metadata" } },
+    }] })).toThrow("no structured content array");
+  });
 });

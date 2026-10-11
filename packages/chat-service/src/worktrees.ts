@@ -599,30 +599,43 @@ export class ChatManagedWorktreeManager {
 
   async remove(id: string): Promise<ManagedChatWorktreeRemoval> {
     let record = this.#record(id);
-    const inspection = await this.inspect(id);
-    if (inspection.state !== "owned-clean" && inspection.state !== "owned-missing-registration") {
-      return Object.freeze({ id, removed: false, preserved: true, detail: inspection.detail });
-    }
-    record = Object.freeze({ ...record, lifecycle: "removing", updatedAt: new Date().toISOString() });
-    this.#set(record);
+    let release: (() => void) | undefined;
     try {
-      await git(record.sourceRoot, ["worktree", "remove", "--force", record.path]);
-    } catch (error) {
-      this.#set(Object.freeze({ ...record, lifecycle: "active", updatedAt: new Date().toISOString() }));
-      throw error;
+      if (this.#workspaces && record.workspaceId !== "pending") {
+        release = this.#workspaces.reserveRemoval(record.workspaceId);
+      }
+    } catch {
+      return Object.freeze({ id, removed: false, preserved: true,
+        detail: "workspace has active or unresolved work, or removal is in progress" });
     }
-    await unregisterOwnedResource({
-      path: this.#ownershipManifestPath,
-      installId: this.#installId,
-      productVersion: this.#productVersion,
-      resourceId: record.resourceId,
-    });
-    if (this.#workspaces && record.workspaceId !== "pending") this.#workspaces.forget(record.workspaceId, "managed");
-    this.#delete(record.id);
-    return Object.freeze({ id, removed: true, preserved: false,
-      detail: inspection.state === "owned-missing-registration"
-        ? "missing managed worktree Git registration removed"
-        : "owned clean managed worktree removed" });
+    try {
+      const inspection = await this.inspect(id);
+      if (inspection.state !== "owned-clean" && inspection.state !== "owned-missing-registration") {
+        return Object.freeze({ id, removed: false, preserved: true, detail: inspection.detail });
+      }
+      record = Object.freeze({ ...record, lifecycle: "removing", updatedAt: new Date().toISOString() });
+      this.#set(record);
+      try {
+        await git(record.sourceRoot, ["worktree", "remove", "--force", record.path]);
+      } catch (error) {
+        this.#set(Object.freeze({ ...record, lifecycle: "active", updatedAt: new Date().toISOString() }));
+        throw error;
+      }
+      await unregisterOwnedResource({
+        path: this.#ownershipManifestPath,
+        installId: this.#installId,
+        productVersion: this.#productVersion,
+        resourceId: record.resourceId,
+      });
+      if (this.#workspaces && record.workspaceId !== "pending") this.#workspaces.forget(record.workspaceId, "managed");
+      this.#delete(record.id);
+      return Object.freeze({ id, removed: true, preserved: false,
+        detail: inspection.state === "owned-missing-registration"
+          ? "missing managed worktree Git registration removed"
+          : "owned clean managed worktree removed" });
+    } finally {
+      release?.();
+    }
   }
 
   async reconcile(): Promise<void> {

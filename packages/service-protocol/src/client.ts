@@ -2,13 +2,25 @@ import type {
   NativeToolInvocation,
   NativeToolResult,
 } from "@chatgpt-tela/core";
+import { diagnosticContext } from "@chatgpt-tela/core";
 import {
   parseChatCapabilityContract,
+  parseCodexTerminalSessionContract,
+  parseCodexAccountCheckContract,
+  type CodexAccountCheckContract,
+  parseCodexAccountDisplayContract,
+  type CodexAccountDisplayContract,
+  parseCodexBridgePreviewContract,
+  parseCodexModelSelectionCanaryContract,
+  parseCodexContextAttachmentCanaryContract,
   parseCodexProfileStatusContract,
   parseCodexToolInventoryResponse,
   parseCodexToolInvokeResponse,
   parseServiceStatus,
   type CodexProfileStatusContract,
+  type CodexBridgePreviewContract,
+  type CodexModelSelectionCanaryContract,
+  type CodexContextAttachmentCanaryContract,
   type ChatCapabilityContract,
   type ServiceRuntimeDescriptor,
   type ServiceStatus,
@@ -40,6 +52,8 @@ export class LocalServiceClient {
       method,
       headers: {
         authorization: `Bearer ${this.descriptor.bearerToken}`,
+        ...(diagnosticContext().request_fingerprint ? { "x-tela-diagnostic-parent": diagnosticContext().request_fingerprint! } : {}),
+        ...(diagnosticContext().scope_fingerprint ? { "x-tela-diagnostic-scope": diagnosticContext().scope_fingerprint! } : {}),
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -100,6 +114,25 @@ export class CodexServiceClient extends LocalServiceClient {
     return Object.freeze(profiles.map(parseCodexProfileStatusContract));
   }
 
+  async reconnectWeb(slot: number, signal?: AbortSignal): Promise<CodexProfileStatusContract> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("invalid profile slot");
+    return parseCodexProfileStatusContract(await this.request(`v1/codex/profiles/${slot}/web-reconnect`, "POST", {}, signal));
+  }
+
+  async accountCheck(slot: number, signal?: AbortSignal): Promise<CodexAccountCheckContract> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("invalid profile slot");
+    const value = parseCodexAccountCheckContract(await this.request(`v1/codex/profiles/${slot}/account-check`, "GET", undefined, signal));
+    if (value.slot !== slot) throw new Error("account observation slot does not match request");
+    return value;
+  }
+
+  async accountDisplay(slot: number, signal?: AbortSignal): Promise<CodexAccountDisplayContract> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("invalid profile slot");
+    const value = parseCodexAccountDisplayContract(await this.request(`v1/codex/profiles/${slot}/account-display`, "GET", undefined, signal));
+    if (value.slot !== slot) throw new Error("account display slot does not match request");
+    return value;
+  }
+
   async startProfile(slot: number, signal?: AbortSignal): Promise<CodexProfileStatusContract> {
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("Codex profile slot must be an integer from 1 to 99");
     return parseCodexProfileStatusContract(await this.request(`v1/codex/profiles/${slot}/start`, "POST", {}, signal));
@@ -109,9 +142,56 @@ export class CodexServiceClient extends LocalServiceClient {
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("Codex profile slot must be an integer from 1 to 99");
     return parseCodexProfileStatusContract(await this.request(`v1/codex/profiles/${slot}/stop`, "POST", {}, signal));
   }
+
+  async terminalSession(slot: number, signal?: AbortSignal) {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("invalid profile slot");
+    const session = parseCodexTerminalSessionContract(await this.request(
+      `v1/codex/profiles/${slot}/terminal-session`, "GET", undefined, signal,
+    ));
+    if (session.slot !== slot) throw new Error("terminal session does not match requested profile");
+    return session;
+  }
+
+  async bridgePreview(slot: number, signal?: AbortSignal, surfaceId?: string): Promise<CodexBridgePreviewContract> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("Codex profile slot must be an integer from 1 to 99");
+    return parseCodexBridgePreviewContract(await this.request(
+      `v1/codex/profiles/${slot}/bridge-preview${surfaceId ? "?surfaceId=" + encodeURIComponent(surfaceId) : ""}`,
+      "GET",
+      undefined,
+      signal,
+    ));
+  }
+
+  async modelSelectionCanary(slot: number, signal?: AbortSignal): Promise<CodexModelSelectionCanaryContract> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("Codex profile slot must be an integer from 1 to 99");
+    return parseCodexModelSelectionCanaryContract(await this.request(
+      `v1/codex/profiles/${slot}/model-selection-canary`,
+      "POST",
+      {},
+      signal,
+    ));
+  }
+
+  async contextAttachmentCanary(slot: number, signal?: AbortSignal): Promise<CodexContextAttachmentCanaryContract> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("Codex profile slot must be an integer from 1 to 99");
+    return parseCodexContextAttachmentCanaryContract(await this.request(
+      `v1/codex/profiles/${slot}/context-attachment-canary`,
+      "POST",
+      {},
+      signal,
+    ));
+  }
 }
 
 export class ChatServiceClient extends LocalServiceClient {
+  async workspacePolicyFingerprint(signal?: AbortSignal): Promise<string | undefined> {
+    const value = await this.request("v1/chat/workspace-policy", "GET", undefined, signal) as Record<string, unknown>;
+    if (value.contractVersion !== 1 || value.service !== "chat") throw new Error("invalid Chat workspace policy");
+    if (value.fingerprint === null) return undefined;
+    if (typeof value.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(value.fingerprint)) throw new Error("invalid Chat workspace policy fingerprint");
+    return value.fingerprint;
+  }
+
   declare readonly descriptor: ServiceRuntimeDescriptor & { readonly service: "chat" };
   readonly service = "chat" as const;
 

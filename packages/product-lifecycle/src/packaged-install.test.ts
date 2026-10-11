@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readOwnershipManifest } from "./ownership";
+import { createOwnershipManifest, writeOwnershipManifest, readOwnershipManifest } from "./ownership";
 import {
   applyPackagedInstall,
   applyPackagedInstallFromPayload,
@@ -44,6 +44,8 @@ class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
 
 class LaunchctlFixtureRunner implements ServiceRegistrationCommandRunner {
   readonly loaded = new Set<string>();
+  readonly running = new Set<string>();
+  readonly paths = new Map<string, string>();
   readonly calls: Array<readonly [string, readonly string[]]> = [];
 
   async run(command: string, arguments_: readonly string[]): Promise<ServiceRegistrationCommandResult> {
@@ -52,13 +54,20 @@ class LaunchctlFixtureRunner implements ServiceRegistrationCommandRunner {
     if (arguments_[0] === "print") {
       const registrationId = (arguments_[1] ?? "").split("/").at(-1) ?? "";
       const present = this.loaded.has(registrationId);
-      return { exitCode: present ? 0 : 1, stdout: present ? "loaded\n" : "", stderr: "" };
+      return { exitCode: present ? 0 : 1, stdout: present ? `service = {\n path = ${this.paths.get(registrationId)}\n state = running\n}\n` : "", stderr: "" };
     }
     if (arguments_[0] === "bootstrap") {
       const definitionPath = arguments_[2] ?? "";
       const registrationId = definitionPath.split("/").at(-1)?.replace(/\.plist$/, "") ?? "";
       if (!registrationId) return { exitCode: 2, stdout: "", stderr: "missing registration" };
       this.loaded.add(registrationId);
+      this.paths.set(registrationId, definitionPath);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    }
+    if (arguments_[0] === "kickstart") {
+      const registrationId = (arguments_[1] ?? "").split("/").at(-1) ?? "";
+      if (!this.loaded.has(registrationId)) return { exitCode: 3, stdout: "", stderr: "not loaded" };
+      this.running.add(registrationId);
       return { exitCode: 0, stdout: "", stderr: "" };
     }
     throw new Error(`unexpected launchctl args ${arguments_.join(" ")}`);
@@ -325,8 +334,62 @@ describe("packaged product install", () => {
       expect(runner.calls.some(([command, args]) => command === "/bin/launchctl"
         && args[0] === "bootstrap"
         && args[2]?.endsWith("com.openai.chatgpt-tela.menu-bar.plist"))).toBe(true);
+      expect(runner.calls.some(([command, args]) => command === "/bin/launchctl"
+        && args[0] === "kickstart"
+        && args[1]?.endsWith("/com.openai.chatgpt-tela.menu-bar"))).toBe(true);
+      expect(runner.running.has("com.openai.chatgpt-tela.menu-bar")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+
+test("first binary install preserves preexisting runtime data ownership across a version change", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-first-package-"));
+  try {
+    const home = join(root, "home"); mkdirSync(home);
+    const spec = fixture(root); const runner = new SystemdFixtureRunner();
+    const options = { spec, platform: "linux" as const, home, environment: {}, runner };
+    const blueprint = createPackagedInstallBlueprint(options);
+    const state = join(home, "chat-state"); mkdirSync(state); writeFileSync(join(state, "user-data"), "keep");
+    const resource = { kind: "directory" as const, id: "chat-state", owner: "chat" as const, path: state, dataClass: "state" as const };
+    const existing = { ...createOwnershipManifest("0.0.0"), resources: [resource] };
+    writeOwnershipManifest(blueprint.paths.installManifest, existing);
+    const planned = await planPackagedInstall(options);
+    expect(readOwnershipManifest(blueprint.paths.installManifest)).toEqual(existing);
+    expect(planned.plan.productVersion).toBe(spec.productVersion);
+    const applied = await applyPackagedInstall({ ...options, planned });
+    expect(applied.apply.failedCount).toBe(0);
+    expect(applied.manifest.installId).toBe(existing.installId);
+    expect(applied.manifest.productVersion).toBe(spec.productVersion);
+    expect(applied.manifest.resources).toContainEqual(resource);
+    expect(readFileSync(join(state, "user-data"), "utf8")).toBe("keep");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a claimed binary installation still requires an explicit version upgrade", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-existing-package-"));
+  try {
+    const home = join(root, "home"); mkdirSync(home); const spec = fixture(root);
+    const options = { spec, platform: "linux" as const, home, environment: {}, runner: new SystemdFixtureRunner() };
+    const blueprint = createPackagedInstallBlueprint(options);
+    writeOwnershipManifest(blueprint.paths.installManifest, { ...createOwnershipManifest("0.0.0"), resources: [blueprint.payload.resource] });
+    await expect(planPackagedInstall(options)).rejects.toThrow("explicit upgrade plan");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a concurrent first binary installation invalidates the bootstrap plan before writes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-package-bootstrap-race-"));
+  try {
+    const home = join(root, "home"); mkdirSync(home); const spec = fixture(root);
+    const options = { spec, platform: "linux" as const, home, environment: {}, runner: new SystemdFixtureRunner() };
+    const blueprint = createPackagedInstallBlueprint(options); const initial = createOwnershipManifest("0.0.0");
+    writeOwnershipManifest(blueprint.paths.installManifest, initial);
+    const planned = await planPackagedInstall(options);
+    const concurrent = { ...initial, resources: [blueprint.payload.resource] };
+    writeOwnershipManifest(blueprint.paths.installManifest, concurrent);
+    await expect(applyPackagedInstall({ ...options, planned })).rejects.toThrow("installation appeared after planning");
+    expect(readOwnershipManifest(blueprint.paths.installManifest)).toEqual(concurrent);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

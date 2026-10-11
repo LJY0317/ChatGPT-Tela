@@ -4,7 +4,10 @@ import { startWebHttpServer, type WebHttpServer } from "@chatgpt-tela/http-host"
 import {
   parseCodexToolInventoryRequest,
   parseCodexToolInvokeRequest,
+  parseCodexAccountCheckContract,
+  parseCodexAccountDisplayContract,
 } from "@chatgpt-tela/service-protocol";
+import { ProfileConnectionError } from "./profile-operation";
 import type { CodexService } from "./controller";
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -33,8 +36,29 @@ function error(status: number, message: string): Response {
   return Response.json({ error: { type: "tela_codex_service_error", message } }, { status });
 }
 
-function slot(pathname: string, action: "start" | "stop"): number | undefined {
+function slot(pathname: string, action: "start" | "stop" | "web-reconnect"): number | undefined {
   const match = new RegExp(`^/v1/codex/profiles/([1-9][0-9]?)/${action}$`).exec(pathname);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) && value >= 1 && value <= 99 ? value : undefined;
+}
+
+function previewSlot(pathname: string): number | undefined {
+  const match = /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/bridge-preview$/.exec(pathname);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) && value >= 1 && value <= 99 ? value : undefined;
+}
+
+function modelCanarySlot(pathname: string): number | undefined {
+  const match = /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/model-selection-canary$/.exec(pathname);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) && value >= 1 && value <= 99 ? value : undefined;
+}
+
+function contextAttachmentCanarySlot(pathname: string): number | undefined {
+  const match = /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/context-attachment-canary$/.exec(pathname);
   if (!match) return undefined;
   const value = Number(match[1]);
   return Number.isSafeInteger(value) && value >= 1 && value <= 99 ? value : undefined;
@@ -52,7 +76,7 @@ export async function startCodexServiceHttpServer(input: {
     hostname: "127.0.0.1",
     port: 0,
     maxRequestBodyBytes: MAX_BODY_BYTES,
-    async fetch(request) {
+    async fetch(request, lifecycle) {
       if (request.headers.has("origin")) return error(403, "browser-origin private service requests are not accepted");
       if (!sameSecret(bearer(request), bearerToken)) return error(401, "invalid Tela Codex service authorization");
       const url = new URL(request.url);
@@ -65,12 +89,128 @@ export async function startCodexServiceHttpServer(input: {
           emitDiagnosticEvent("chatgpt_tela_codex", "profiles_inventory", { count: profiles.length });
           return Response.json({ contractVersion: 1, profiles });
         }
+        const terminalMatch = request.method === "GET"
+          ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/terminal-session$/.exec(url.pathname) : null;
+        if (terminalMatch) {
+          return Response.json(await input.service.terminalSession(Number(terminalMatch[1])), {
+            headers: { "cache-control": "no-store" },
+          });
+        }
+        const accountMatch = request.method === "GET"
+          ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/account-check$/.exec(url.pathname) : null;
+        if (accountMatch && input.service.accountCheck) {
+          return Response.json(parseCodexAccountCheckContract(await input.service.accountCheck(Number(accountMatch[1]))), {
+            headers: { "cache-control": "no-store" },
+          });
+        }
+        const displayMatch = request.method === "GET"
+          ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/account-display$/.exec(url.pathname) : null;
+        if (displayMatch && input.service.accountDisplay) {
+          return Response.json(parseCodexAccountDisplayContract(await input.service.accountDisplay(Number(displayMatch[1]))), {
+            headers: { "cache-control": "no-store" },
+          });
+        }
+        const revealMatch = /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/bridge-reveal$/.exec(url.pathname);
+        if (request.method === "POST" && revealMatch && input.service.revealBridgeSurface) {
+          const body = await request.json().catch(() => undefined);
+          if (typeof body?.surfaceId !== "string" || (body.interactive !== undefined && typeof body.interactive !== "boolean")) return error(400, "invalid surface selection");
+          await input.service.revealBridgeSurface(Number(revealMatch[1]), body.surfaceId, body.interactive === true);
+          return new Response(null, { status: 204 });
+        }
+        const bridgeSlot = request.method === "GET" ? previewSlot(url.pathname) : undefined;
+        if (bridgeSlot !== undefined) {
+          return Response.json(await input.service.bridgePreview(bridgeSlot, url.searchParams.get("surfaceId") ?? undefined), {
+            headers: { "cache-control": "no-store" },
+          });
+        }
+        const canarySlot = request.method === "POST" ? modelCanarySlot(url.pathname) : undefined;
+        if (canarySlot !== undefined) {
+          const startedAt = Date.now();
+          emitDiagnosticEvent("chatgpt_tela_codex", "model_selection_canary_begin", { slot: canarySlot });
+          try {
+            const result = await input.service.modelSelectionCanary(canarySlot);
+            emitDiagnosticEvent("chatgpt_tela_codex", "model_selection_canary_complete", {
+              slot: canarySlot,
+              family_count: result.familyCount,
+              exercised: result.exercised,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
+            return Response.json(result, { headers: { "cache-control": "no-store" } });
+          } catch (cause) {
+            emitDiagnosticEvent("chatgpt_tela_codex", "model_selection_canary_failed", {
+              slot: canarySlot,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
+            throw cause;
+          }
+        }
+        const contextCanarySlot = request.method === "POST" ? contextAttachmentCanarySlot(url.pathname) : undefined;
+        if (contextCanarySlot !== undefined) {
+          const startedAt = Date.now();
+          emitDiagnosticEvent("chatgpt_tela_codex", "context_attachment_canary_begin", { slot: contextCanarySlot });
+          try {
+            const result = await input.service.contextAttachmentCanary(contextCanarySlot);
+            emitDiagnosticEvent("chatgpt_tela_codex", "context_attachment_canary_complete", {
+              slot: contextCanarySlot,
+              attachment_bytes: result.attachmentBytes,
+              receipt_verified: result.receiptVerified,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
+            return Response.json(result, { headers: { "cache-control": "no-store" } });
+          } catch (cause) {
+            emitDiagnosticEvent("chatgpt_tela_codex", "context_attachment_canary_failed", {
+              slot: contextCanarySlot,
+              duration_ms: diagnosticDurationMs(startedAt),
+            });
+            throw cause;
+          }
+        }
+        const reconnectSlot = request.method === "POST" ? slot(url.pathname, "web-reconnect") : undefined;
+        if (reconnectSlot !== undefined) return Response.json(await input.service.reconnectWeb(reconnectSlot));
         const startSlot = request.method === "POST" ? slot(url.pathname, "start") : undefined;
         if (startSlot !== undefined) {
+          const text = await request.text();
+          let options: { expectedDesktopProcessId?: number; requireStopped?: boolean } = {};
+          try {
+            if (text.length > 1024) throw new Error("Too large");
+            if (text) {
+              const value = JSON.parse(text);
+              if (!value || typeof value !== "object" || Array.isArray(value)
+                || Object.keys(value).some(key => !["expectedDesktopProcessId", "requireStopped"].includes(key))
+                || (value.expectedDesktopProcessId !== undefined && (!Number.isSafeInteger(value.expectedDesktopProcessId) || value.expectedDesktopProcessId < 1))
+                || (value.requireStopped !== undefined && typeof value.requireStopped !== "boolean")) throw new Error("Invalid options");
+              options = value;
+            }
+          } catch { return error(400, "Invalid ChatGPT reopen request"); }
+          if (request.headers.get("accept") === "application/x-ndjson") {
+            const encoder = new TextEncoder();
+            const stream = new ReadableStream<Uint8Array>({
+              start(controller) {
+                let disconnected = false;
+                const send = (value: unknown) => {
+                  if (disconnected) return;
+                  try { controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`)); }
+                  catch { disconnected = true; }
+                };
+                const startedAt = Date.now();
+                emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_begin", { slot: startSlot });
+                void input.service.startProfile(startSlot, { ...options, onProgress: phase => send({ phase }) }).then(async profile => {
+                  send({ profile });
+                  if (profile.webState === "preparing") send({ profile: await input.service.waitWebPreparation(startSlot) });
+                  emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_complete", { slot: startSlot, duration_ms: diagnosticDurationMs(startedAt) });
+                }).catch(cause => {
+                  const phase = cause instanceof ProfileConnectionError ? cause.phase : "checking";
+                  send({ error: { phase, message: cause instanceof ProfileConnectionError ? cause.message : "Connection could not be started. Refresh status before trying again." } });
+                  emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_failed", { slot: startSlot, phase, duration_ms: diagnosticDurationMs(startedAt) });
+                }).finally(() => { try { controller.close(); } catch { /* Client disconnected; operation retains its single owner. */ } });
+              },
+            });
+            return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" } });
+          }
           const startedAt = Date.now();
           emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_begin", { slot: startSlot });
           try {
-            const profile = await input.service.startProfile(startSlot);
+            const profile = await input.service.startProfile(startSlot, options);
             emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_complete", {
               slot: startSlot,
               control_state: profile.controlState,
@@ -80,6 +220,7 @@ export async function startCodexServiceHttpServer(input: {
           } catch (cause) {
             emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_failed", {
               slot: startSlot,
+              phase: cause instanceof ProfileConnectionError ? cause.phase : "checking",
               duration_ms: diagnosticDurationMs(startedAt),
             });
             throw cause;
@@ -114,7 +255,7 @@ export async function startCodexServiceHttpServer(input: {
           return Response.json({ result: await input.service.tools.invoke(parsed.turnCapability, parsed.invocation) });
         }
         if (request.method === "POST" && url.pathname === "/v1/shutdown") {
-          queueMicrotask(resolveShutdown);
+          lifecycle.afterResponse(resolveShutdown);
           return Response.json({ status: "shutting-down" });
         }
         return new Response(null, { status: 404 });

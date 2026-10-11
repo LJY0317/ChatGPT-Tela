@@ -1,7 +1,10 @@
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { waitForChatShutdown } from "./shutdown";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import {
   createResolvedChatAgentDriverFactories,
+  chatApprovedRootsFingerprint,
   createChatToolRuntime,
   readChatAgentProvidersConfig,
   readChatApprovedRootsConfig,
@@ -52,6 +55,8 @@ async function main(): Promise<void> {
         allowedRoots: roots.roots,
         stateRoot: paths.serviceState("chat"),
         agentDriverFactories,
+        ...(process.env.CHATGPT_TELA_WORKSPACE_FILES_EXECUTABLE
+          ? { filePublisherExecutable: process.env.CHATGPT_TELA_WORKSPACE_FILES_EXECUTABLE } : {}),
         ownership: {
           installId,
           productVersion,
@@ -60,7 +65,7 @@ async function main(): Promise<void> {
       })
     : undefined;
   await tools?.initialize();
-  const service = await startChatService({ bearerToken: randomBytes(36).toString("base64url"),
+  const service = await startChatService({ workspacePolicyFingerprint:chatApprovedRootsFingerprint(roots), bearerToken: randomBytes(36).toString("base64url"),
     ...(tools ? { tools } : {}) });
   writeServiceRuntimeDescriptor(descriptorPath, {
     version: 1,
@@ -85,16 +90,23 @@ async function main(): Promise<void> {
     }
     return stopping;
   };
-  let resolveSignal!: () => void;
-  const signaled = new Promise<void>(resolvePromise => { resolveSignal = resolvePromise; });
-  const signal = () => resolveSignal();
-  process.once("SIGINT", signal);
-  process.once("SIGTERM", signal);
-  await Promise.race([service.shutdownRequested, signaled]);
-  await stop();
+  await waitForChatShutdown({
+    shutdownRequested: service.shutdownRequested,
+    signals: process,
+    close: stop,
+    refused() { emitDiagnosticEvent("chatgpt_tela_chat", "shutdown_incomplete", { reason_class: "local_shutdown_refused" }); },
+  });
 }
 
-void main().catch(error => {
+const running = process.argv.includes("--tela-operation-owner-v1")
+  ? import("../../../packages/chat-service/src/process-owner-worker").then(module => module.runProcessOwnerWorker())
+  : main();
+void running.catch(error => {
+  if (process.argv.includes("--tela-operation-owner-v1")) {
+    console.error("Tela operation owner failed; inspect its private execution evidence.");
+    process.exitCode = 1;
+    return;
+  }
   console.error(error);
   process.exitCode = 1;
 });

@@ -16,6 +16,25 @@ function fixture(root: string): { source: string; target: string } {
 }
 
 describe("packaged binary payload ownership", () => {
+  test("keeps the existing receipt digest across empty, chunk-sized and trailing bytes", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-payload-stream-"));
+    try {
+      for (const [name, data] of [
+        ["a-empty", Buffer.alloc(0)],
+        ["b-exact", Buffer.alloc(1024 * 1024, 97)],
+        ["c-tail", Buffer.alloc(2 * 1024 * 1024 + 7, 98)],
+        ["d-short", Buffer.from("last")],
+      ] as const) writeFileSync(join(root, name), data, { mode: 0o600 });
+      // Captured from the pre-streaming implementation; existing receipts must remain valid.
+      const digest = "0261f3c62431ebe4cf6db03a9489ce376ca9ceac6b278421eba3630d73b45151";
+      expect(packagedPayloadFingerprint(root)).toBe(digest);
+      const changed = Buffer.alloc(2 * 1024 * 1024 + 7, 98);
+      changed[changed.length - 1] = 99;
+      writeFileSync(join(root, "c-tail"), changed);
+      expect(packagedPayloadFingerprint(root)).not.toBe(digest);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   test("copies, receipts, and verifies one exact marker-owned payload", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-payload-"));
     try {

@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  defaultDesktopLaunchCommand,
   defaultDesktopProcessIds,
   requestDefaultDesktopNormalQuit,
   resolveDefaultDesktopInstallation,
@@ -216,6 +217,29 @@ describe("built-in default Desktop installation resolver", () => {
     }
   });
 
+  test("macOS normal quit addresses only the proved Desktop process id", async () => {
+    const installation: DefaultDesktopInstallation = {
+      platform: "darwin",
+      chatGptExecutable: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+      codexExecutable: "/Applications/ChatGPT.app/Contents/Resources/codex",
+      codexHome: "/tmp/fixture-codex",
+      userDataDir: "/tmp/fixture-data",
+      normalQuitSupported: true,
+    };
+    const calls: Array<{ command: string; arguments_: readonly string[] }> = [];
+    const runner: DefaultDesktopCommandRunner = {
+      async run(command, arguments_) {
+        calls.push({ command, arguments_ });
+        return { stdout: command === "/bin/ps" ? `301 ${installation.chatGptExecutable}\n` : "", stderr: "" };
+      },
+    };
+    await requestDefaultDesktopNormalQuit(installation, 301, { runner });
+    expect(calls.at(-1)?.command).toBe("/usr/bin/osascript");
+    expect(calls.at(-1)?.arguments_.slice(0, 3)).toEqual(["-l", "JavaScript", "-e"]);
+    expect(calls.at(-1)?.arguments_.at(-1)).toContain("runningApplicationWithProcessIdentifier(301)");
+    expect(calls.at(-1)?.arguments_.at(-1)).not.toContain("tell application");
+  });
+
   test("Linux process lifecycle re-proves the exact executable before graceful SIGTERM", async () => {
     const installation: DefaultDesktopInstallation = {
       platform: "linux",
@@ -292,4 +316,11 @@ describe("built-in default Desktop installation resolver", () => {
     })).rejects.toThrow("identity changed");
     expect(killed).toBe(false);
   });
+});
+
+test("macOS uses standard application launch and preserves the separate waiter identity", () => {
+  const installation = { platform: "darwin" as const, chatGptExecutable: "/fixture/ChatGPT.app/Contents/MacOS/ChatGPT", codexExecutable: "/fixture/codex", codexHome: "/fixture/.codex", userDataDir: "/fixture/data", normalQuitSupported: true };
+  expect(defaultDesktopLaunchCommand(installation)).toEqual(["/usr/bin/open", "-W", "-n", "-a", "/fixture/ChatGPT.app", "--args", "--user-data-dir=/fixture/data"]);
+  expect(() => defaultDesktopLaunchCommand({ ...installation, chatGptExecutable: "/fixture/non-app" })).toThrow("application bundle");
+  expect(defaultDesktopLaunchCommand({ ...installation, platform: "linux" })).toEqual([installation.chatGptExecutable, "--user-data-dir=/fixture/data"]);
 });

@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
+import { setTimeout as waitForDelay } from "node:timers/promises";
 import type { BrowserPageAutomation } from "@chatgpt-tela/browser-host";
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { configuredDiagnosticRoot, privateDiagnosticCaptureEnabled, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { decideChatGptApproval, type ChatGptApprovalAutomationMode } from "./approval-policy";
+import { assistantMarkdown } from "./answer-markdown";
+import { assistantBody } from "./answer-body";
+import { userPayload } from "./user-payload";
 import {
   ChatGptConnectorCatalogUnavailableError,
   type ChatGptAssistantPhase,
@@ -19,6 +23,7 @@ interface RawComposer {
   readonly ownedByChatGptForm: boolean;
   readonly text: string;
   readonly connectorNames: readonly string[];
+  readonly attachmentNames: readonly string[];
 }
 
 interface RawSend {
@@ -33,10 +38,16 @@ interface RawTurn {
   readonly key: string;
   readonly role: "user" | "assistant";
   readonly parentUserTurnKey?: string;
+  readonly lineageAnchor?: string;
   readonly contentText?: string;
+  readonly userPayloadReason?: string;
+  readonly bodyProof?: { readonly version: 1; readonly value?: string; readonly reason?: string };
+  readonly plainBodyText?: string;
   readonly phase?: ChatGptAssistantPhase;
   readonly text?: string;
   readonly failureDetail?: string;
+  readonly publicProgress?: readonly string[];
+  readonly progressProbe?: { readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
 }
 
 interface RawSnapshot {
@@ -46,22 +57,30 @@ interface RawSnapshot {
   readonly turns: readonly RawTurn[];
 }
 
-const INSPECT_APPROVAL_CARD = String.raw`function () {
+const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare) {
   const visible = element => element instanceof HTMLElement
     && getComputedStyle(element).display !== "none"
     && getComputedStyle(element).visibility !== "hidden"
     && getComputedStyle(element).opacity !== "0"
     && element.getClientRects().length > 0;
   const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
-  const cards = [...document.querySelectorAll('[data-testid="tool-approval-card"]')].filter(visible);
+  const registryKey = Symbol.for("chatgpt-tela.approval-observations.v1");
+  const registry = globalThis[registryKey] ||= { cards: new WeakMap(), prefix: crypto.randomUUID(), next: 0, receipt: null };
+  const cards = [...document.querySelectorAll('[data-testid="tool-approval-card"], [data-codex-approval-surface="true"]')].filter(visible);
   const result = {
     cardCount: cards.length,
     denyCount: 0,
     allowCount: 0,
     allowOnceCount: 0,
     alwaysAllowCount: 0,
+    unknownCount: 0,
     allowPoint: null,
     allowOncePoint: null,
+    cardKey: null,
+    proofKey: null,
+    targetState: "unprepared",
+    inputReceived: false,
+    receipt: registry.receipt || null,
   };
   if (cards.length !== 1) return result;
   const point = element => {
@@ -71,17 +90,90 @@ const INSPECT_APPROVAL_CARD = String.raw`function () {
       || bounds.width <= 0 || bounds.height <= 0) return null;
     return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
   };
+  let allowOnceButton = null;
+  // Use the control's accessible label, not visual shortcut decorations. A keyboard hint
+  // is presentation, whereas an unknown decision remains an unknown decision.
+  const accessibleText = node => {
+    if (node instanceof HTMLElement && node.getAttribute("aria-hidden") === "true") return "";
+    if (!node.childNodes?.length) return node.textContent || node.innerText || "";
+    return [...node.childNodes].map(accessibleText).join("");
+  };
   for (const button of cards[0].querySelectorAll('button,[role="button"]')) {
     if (!visible(button)) continue;
-    const label = normalize(button.innerText || button.textContent);
+    const label = normalize(button.getAttribute("aria-label") || accessibleText(button));
+    // These explicitly identified disclosure controls do not grant or deny authority.
+    if ((label === "See details" && button.getAttribute("aria-haspopup") === "dialog")
+      || (label === "Approval options" && button.getAttribute("aria-haspopup") === "menu")) continue;
     if (label === "Deny") result.denyCount += 1;
     else if (label === "Allow once") {
       result.allowOnceCount += 1;
-      if (result.allowOnceCount === 1) result.allowOncePoint = point(button);
+      if (result.allowOnceCount === 1) {
+        allowOnceButton = button;
+        if (!button.disabled && button.getAttribute("aria-disabled") !== "true") {
+          result.allowOncePoint = point(button);
+        }
+      }
     } else if (label === "Allow") {
       result.allowCount += 1;
       if (result.allowCount === 1) result.allowPoint = point(button);
     } else if (label === "Always allow") result.alwaysAllowCount += 1;
+    else result.unknownCount += 1;
+  }
+  // Raw card text and element references remain in the renderer. Only a disposable identity
+  // crosses the boundary, so a delay cannot silently approve a replaced or changed request.
+  const text = cards[0].textContent;
+  let prior = registry.cards.get(cards[0]);
+  if (!prior || prior.text !== text || prior.button !== allowOnceButton) {
+    const key = registry.prefix + ":" + (++registry.next);
+    if (prior) Object.assign(prior, { text, button: allowOnceButton, proofKey: key });
+    else prior = { text, button: allowOnceButton, cardKey: key, proofKey: key, inputReceived: false };
+    registry.cards.set(cards[0], prior);
+  }
+  result.cardKey = prior.cardKey;
+  result.proofKey = prior.proofKey;
+  result.inputReceived = prior.inputReceived === true;
+  if (prepare) {
+    result.allowOncePoint = null;
+    result.targetState = "changed";
+    // Only a proven exact one-shot decision may prepare its target. Ordinary
+    // inspection never scrolls or consumes an activation attempt.
+    if (prepare.cardKey !== prior.cardKey || prepare.proofKey !== prior.proofKey
+      || result.denyCount !== 1 || result.allowCount !== 0 || result.allowOnceCount !== 1
+      || result.unknownCount !== 0 || !allowOnceButton || allowOnceButton.disabled
+      || allowOnceButton.getAttribute("aria-disabled") === "true") return result;
+    allowOnceButton.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+    // Trusted input uses the compositor coordinates; let the requested scroll
+    // reach a rendered frame before proving the final hit target.
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const after = await inspectApproval();
+    if (after.cardKey !== prior.cardKey || after.proofKey !== prior.proofKey
+      || after.cardCount !== 1 || after.denyCount !== 1 || after.allowCount !== 0
+      || after.allowOnceCount !== 1 || after.unknownCount !== 0
+      || !allowOnceButton.isConnected || allowOnceButton.disabled
+      || allowOnceButton.getAttribute("aria-disabled") === "true") return result;
+    const target = point(allowOnceButton);
+    result.targetState = "outside_viewport";
+    if (!target || target.x < 0 || target.y < 0
+      || Math.round(target.x) >= innerWidth || Math.round(target.y) >= innerHeight) return result;
+    const hit = document.elementFromPoint(Math.round(target.x), Math.round(target.y));
+    result.targetState = "occluded";
+    if (hit !== allowOnceButton && !allowOnceButton.contains(hit)) return result;
+    // Passive, card-local receipt of actual browser input. No click, authority or polling here.
+    if (prior.receiptButton !== allowOnceButton && typeof allowOnceButton.addEventListener === "function") {
+      prior.receiptButton = allowOnceButton;
+      const preparedProofKey = prior.proofKey;
+      const preparedCardKey = prior.cardKey;
+      const receive = event => {
+        if (!event.isTrusted) return;
+        prior.inputReceived = true;
+        // One disposable receipt survives immediate removal. No element or card text is retained.
+        registry.receipt = { cardKey: preparedCardKey, proofKey: preparedProofKey };
+        allowOnceButton.removeEventListener("click", receive, true);
+      };
+      allowOnceButton.addEventListener("click", receive, { capture: true });
+    }
+    result.targetState = "ready";
+    result.allowOncePoint = target;
   }
   return result;
 }`;
@@ -100,8 +192,243 @@ export const CHATGPT_CURRENT_COMPOSER_SELECTOR = [
 ].join(', ');
 
 const COMPOSER_SELECTOR_SOURCE = JSON.stringify(CHATGPT_CURRENT_COMPOSER_SELECTOR);
+const CHATGPT_MEMORY_UPLOAD_TARGET_SELECTOR = 'input[data-chatgpt-tela-memory-upload="context"]';
+
+const LOCATE_ADD_CONTEXT_CONTROL = String.raw`function () {
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const buttons = [...document.querySelectorAll('button[data-composer-navigation-target="add-context"]')].filter(visible);
+  if (buttons.length !== 1) throw new Error("ChatGPT add-context control is not unique");
+  const rect = buttons[0].getBoundingClientRect();
+  if (![rect.left, rect.top, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) {
+    throw new Error("ChatGPT add-context control has no trusted pointer target");
+  }
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}`;
+
+const FOCUS_ADD_CONTEXT_CONTROL = String.raw`function () {
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const buttons = [...document.querySelectorAll('button[data-composer-navigation-target="add-context"]')].filter(visible);
+  if (buttons.length !== 1) throw new Error("ChatGPT add-context control is not unique");
+  buttons[0].focus({ preventScroll: true });
+  if (document.activeElement !== buttons[0]) throw new Error("ChatGPT add-context control did not become keyboard owner");
+  return true;
+}`;
+
+const ACTIVATE_ADD_CONTEXT_CONTROL = String.raw`function () {
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const buttons = [...document.querySelectorAll('button[data-composer-navigation-target="add-context"]')].filter(visible);
+  if (buttons.length !== 1) throw new Error("ChatGPT add-context control is not unique");
+  buttons[0].click();
+  return true;
+}`;
+
+const OBSERVE_ACTIVE_ADD_CONTEXT_UPLOAD_ACTION = String.raw`function () {
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const normalized = element => ((element.innerText || element.textContent || "").split("\n")[0] || "")
+    .replace(/\s+/g, " ").trim();
+  const rows = [...document.querySelectorAll(
+    'button[data-list-navigation-item="true"], [role="menuitem"], [role="option"]',
+  )].filter(visible);
+  const uploadText = value => /^(?:Upload files?|Upload from computer|Add files?|Attach files?|Add photos?\s*(?:&|and)\s*files?|Upload photos?\s*(?:&|and)\s*files?|파일 업로드|컴퓨터에서 업로드|파일 추가|파일 첨부|사진\s*(?:및|과)\s*파일\s*(?:추가|업로드))$/i.test(value);
+  const genericPattern = /(upload|files?|attach|파일|첨부)/i;
+  const genericAttributeShapes = rows.flatMap((row, index) => {
+    const values = [
+      ["aria-label", row.getAttribute("aria-label")],
+      ["title", row.getAttribute("title")],
+      ["data-testid", row.getAttribute("data-testid")],
+      ["data-value", row.getAttribute("data-value")],
+      ["data-action", row.getAttribute("data-action")],
+    ].filter(([, value]) => typeof value === "string" && genericPattern.test(value));
+    return values.map(([name, value]) => [index, name, value].join(":"));
+  });
+  const semantic = rows.filter(row => {
+    if (uploadText(normalized(row))) return true;
+    return ["aria-label", "title", "data-testid", "data-value", "data-action"]
+      .some(name => genericPattern.test(row.getAttribute(name) || ""));
+  });
+  const highlighted = rows.filter(row => row.getAttribute("data-highlighted") !== null
+    || row.getAttribute("aria-current") === "true"
+    || row.getAttribute("aria-selected") === "true");
+  const target = semantic.length === 1 ? semantic[0] : semantic.length === 0 && highlighted.length === 1 ? highlighted[0] : undefined;
+  const targetKind = semantic.length === 1 ? "semantic" : target ? "highlighted" : "none";
+  if (!target) return {
+    rowCount: rows.length,
+    semanticCount: semantic.length,
+    highlightedCount: highlighted.length,
+    targetKind,
+    genericAttributeShapes,
+  };
+  const rect = target.getBoundingClientRect();
+  if (![rect.left, rect.top, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) {
+    return {
+      rowCount: rows.length,
+      semanticCount: semantic.length,
+      highlightedCount: highlighted.length,
+      targetKind,
+      genericAttributeShapes,
+    };
+  }
+  return {
+    rowCount: rows.length,
+    semanticCount: semantic.length,
+    highlightedCount: highlighted.length,
+    targetKind,
+    targetIndex: rows.indexOf(target),
+    genericAttributeShapes,
+    point: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+  };
+}`;
+
+const PREPARE_CONTEXT_UPLOAD_INPUT = String.raw`function () {
+  const composerSelector = ${COMPOSER_SELECTOR_SOURCE};
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const composers = [...document.querySelectorAll(composerSelector)].filter(visible);
+  if (composers.length !== 1) {
+    return { ready: false, reason: "composer_ambiguous", composerCount: composers.length, fileInputCount: 0, addContextCount: 0 };
+  }
+  const composer = composers[0];
+  const form = composer.closest('form[data-chatgpt-composer], form');
+  if (!(form instanceof HTMLFormElement)) {
+    return { ready: false, reason: "form_missing", composerCount: 1, fileInputCount: 0, addContextCount: 0 };
+  }
+  document.querySelectorAll('[data-chatgpt-tela-memory-upload="context"]').forEach(element => {
+    element.removeAttribute('data-chatgpt-tela-memory-upload');
+  });
+  const inputs = [...document.querySelectorAll('input[type="file"]')]
+    .filter(element => element instanceof HTMLInputElement);
+  const inForm = inputs.filter(input => input.closest('form[data-chatgpt-composer], form') === form);
+  const noAccept = input => !input.hasAttribute('accept') || !(input.getAttribute('accept') || '').trim();
+  const imageOnly = input => {
+    const raw = (input.getAttribute('accept') || '').toLowerCase().trim();
+    if (!raw) return false;
+    const parts = raw.split(',').map(part => part.trim()).filter(Boolean);
+    return parts.length > 0 && parts.every(part => part.startsWith('image/')
+      || ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.heif', '.avif'].includes(part));
+  };
+  const chooseOne = (values, kind) => values.length === 1 ? { input: values[0], kind } : undefined;
+  const candidates = [
+    chooseOne(inForm.filter(input => input.multiple && noAccept(input)), 'composer-generic'),
+    chooseOne(inputs.filter(input => input.multiple && noAccept(input)), 'global-generic'),
+    chooseOne(inForm.filter(input => !imageOnly(input)), 'composer-general'),
+    chooseOne(inputs.filter(input => !imageOnly(input)), 'global-general'),
+  ].filter(Boolean);
+  const unique = candidates.find(candidate => candidate);
+  const addContextCount = [...form.querySelectorAll('button[data-composer-navigation-target="add-context"]')].filter(visible).length;
+  const summary = {
+    composerCount: 1,
+    fileInputCount: inputs.length,
+    formFileInputCount: inForm.length,
+    genericInputCount: inputs.filter(input => input.multiple && noAccept(input)).length,
+    imageOnlyInputCount: inputs.filter(imageOnly).length,
+    addContextCount,
+    inputSummaries: inputs.slice(0, 8).map((input, index) => ({
+      index,
+      inForm: input.closest('form[data-chatgpt-composer], form') === form,
+      multiple: input.multiple,
+      disabled: input.disabled,
+      acceptKind: noAccept(input) ? 'none' : imageOnly(input) ? 'image-only' : 'general',
+      testIdKind: input.getAttribute('data-testid') === 'upload-photos-input' ? 'upload-photos' : input.hasAttribute('data-testid') ? 'other' : 'none',
+      selected: Boolean(unique && unique.input === input),
+    })),
+  };
+  if (!unique) return { ready: false, reason: "generic_input_missing", ...summary };
+  // Refuse a lower-priority candidate when the same semantic tier is ambiguous. The priority list
+  // above may contain the same exact input at multiple tiers, so deduplicate by identity first.
+  const sameTier = candidates.filter(candidate => candidate.kind === unique.kind);
+  if (sameTier.length !== 1) return { ready: false, reason: "generic_input_ambiguous", ...summary };
+  unique.input.setAttribute('data-chatgpt-tela-memory-upload', 'context');
+  return { ready: true, reason: "ready", targetKind: unique.kind, ...summary };
+}`;
+
+const CLEAR_CONTEXT_UPLOAD_INPUT_MARKER = String.raw`function () {
+  document.querySelectorAll('[data-chatgpt-tela-memory-upload="context"]').forEach(element => {
+    element.removeAttribute('data-chatgpt-tela-memory-upload');
+  });
+}`;
+
+const OBSERVE_EXPECTED_ATTACHMENT_IDENTITY = String.raw`function (argument) {
+  const composerSelector = ${COMPOSER_SELECTOR_SOURCE};
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const composers = [...document.querySelectorAll(composerSelector)].filter(visible);
+  if (composers.length !== 1) {
+    return { composerCount: composers.length, matchedCount: 0, fileInputMatchCount: 0, visibleOutsideComposerMatchCount: 0, attachmentRootCount: 0, outsideGroupCount: 0, progressCount: 0 };
+  }
+  const composer = composers[0];
+  const form = composer.closest('form[data-chatgpt-composer], form');
+  if (!(form instanceof HTMLElement)) {
+    return { composerCount: 1, matchedCount: 0, fileInputMatchCount: 0, visibleOutsideComposerMatchCount: 0, attachmentRootCount: 0, outsideGroupCount: 0, progressCount: 0 };
+  }
+  const expected = Array.isArray(argument.names) ? argument.names.filter(name => typeof name === "string" && name.length > 0) : [];
+  const matched = new Set();
+  let fileInputMatchCount = 0;
+  for (const input of form.querySelectorAll('input[type="file"]')) {
+    if (!(input instanceof HTMLInputElement) || !input.files) continue;
+    for (const file of input.files) {
+      if (expected.includes(file.name)) {
+        matched.add(file.name);
+        fileInputMatchCount += 1;
+      }
+    }
+  }
+  let visibleOutsideComposerMatchCount = 0;
+  const outside = element => element instanceof HTMLElement
+    && visible(element)
+    && element !== composer
+    && !composer.contains(element)
+    && !element.contains(composer);
+  const attachmentRootCount = [...form.querySelectorAll('[data-composer-attachments], .composer-attachment-surface')]
+    .filter(outside).length;
+  const outsideGroupCount = [...form.querySelectorAll('[role="group"]')].filter(outside).length;
+  const progressCount = [...form.querySelectorAll('[role="progressbar"], [aria-busy="true"]')].filter(outside).length;
+  const attributes = ["aria-label", "title", "data-file-name", "data-filename", "data-name"];
+  for (const element of form.querySelectorAll('*')) {
+    if (!outside(element)) continue;
+    const values = [element.textContent || "", ...attributes.map(name => element.getAttribute(name) || "")];
+    for (const name of expected) {
+      if (!values.some(value => value.includes(name))) continue;
+      matched.add(name);
+      visibleOutsideComposerMatchCount += 1;
+    }
+  }
+  return {
+    composerCount: 1,
+    matchedCount: matched.size,
+    fileInputMatchCount,
+    visibleOutsideComposerMatchCount,
+    attachmentRootCount,
+    outsideGroupCount,
+    progressCount,
+  };
+}`;
 
 const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
+  const answerMarkdown = ${assistantMarkdown.toString()};
+  const answerBodyProof = ${assistantBody.toString()};
+  const requestPayload = ${userPayload.toString()};
   const visible = element => {
     if (!(element instanceof HTMLElement)) return false;
     const style = getComputedStyle(element);
@@ -134,6 +461,31 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
     )].map(part => part.getAttribute("data-keyword") || part.getAttribute("app-mention-display-name") || "")
       .filter(name => name.length > 0);
   };
+  const attachmentNames = element => {
+    if (!(element instanceof HTMLElement)) return [];
+    const form = element.closest("form[data-chatgpt-composer], form");
+    if (!(form instanceof HTMLElement)) return [];
+    const result = new Set();
+    const add = value => {
+      const normalized = String(value || "").replace(/\s+/g, " ").trim();
+      if (normalized && normalized.length <= 240 && !/[\r\n]/.test(normalized)) result.add(normalized);
+    };
+    for (const candidate of form.querySelectorAll('[data-composer-attachments] [role="group"], .composer-attachment-surface')) {
+      if (!(candidate instanceof HTMLElement) || !visible(candidate)) continue;
+      add(candidate.getAttribute("aria-label"));
+      const labelledBy = candidate.getAttribute("aria-labelledby");
+      if (labelledBy) add(document.getElementById(labelledBy)?.textContent);
+    }
+    for (const root of form.querySelectorAll('[data-composer-attachments]')) {
+      if (!(root instanceof HTMLElement) || !visible(root)) continue;
+      for (const candidate of root.querySelectorAll('[aria-label], span, p')) {
+        if (!(candidate instanceof HTMLElement) || !visible(candidate)) continue;
+        add(candidate.getAttribute("aria-label"));
+        add(candidate.textContent);
+      }
+    }
+    return [...result];
+  };
 
   const composerSelector = ${COMPOSER_SELECTOR_SOURCE};
   const composerElements = [...document.querySelectorAll(composerSelector)];
@@ -144,6 +496,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
     ownedByChatGptForm: element.closest("form[data-chatgpt-composer], form") !== null,
     text: composerText(element),
     connectorNames: connectorNames(element),
+    attachmentNames: attachmentNames(element),
   }));
 
   const sendControls = [];
@@ -171,35 +524,156 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
       .some(visible);
   });
   const turns = [];
-  for (const group of document.querySelectorAll("[data-turn-key]")) {
+  const groups = [...document.querySelectorAll("[data-turn-key]")];
+  // Optimistic renderer keys can disappear during hydration while the public logical
+  // turn anchor remains. Bind only an exact, unique anchor inside its keyed group and
+  // the current document. Duplicate/nested groups expose no such identity capability.
+  const documentKey = document.documentElement?.getAttribute('data-page-load-id');
+  const logicalAnchors = new Map();
+  const anchorCounts = new Map();
+  if (documentKey && documentKey.length <= 256) for (const group of groups) {
+    if (!(group instanceof HTMLElement) || group.querySelectorAll('[data-turn-key]').length) continue;
+    const nodes = [...group.querySelectorAll('[data-content-search-turn-key]')];
+    if (nodes.length !== 1) continue;
+    const key = nodes[0].getAttribute('data-content-search-turn-key');
+    if (!key || key.length > 256) continue;
+    const anchor = JSON.stringify([documentKey, key]);
+    logicalAnchors.set(group, anchor);
+    anchorCounts.set(anchor, (anchorCounts.get(anchor) || 0) + 1);
+  }
+  for (const group of groups) {
     if (!(group instanceof HTMLElement)) continue;
     const rawKey = group.getAttribute("data-turn-key");
     if (!rawKey) continue;
+    const candidateAnchor = logicalAnchors.get(group);
+    const lineageAnchor = candidateAnchor && anchorCounts.get(candidateAnchor) === 1 ? candidateAnchor : undefined;
     const user = group.querySelector("[data-user-message-bubble]");
     if (user) {
+      const payload = requestPayload(user);
       turns.push({
         key: "user:" + rawKey,
         role: "user",
-        contentText: text(user),
+        ...(lineageAnchor ? { lineageAnchor } : {}),
+        ...(payload.value !== undefined ? { contentText: payload.value } : {}),
+        userPayloadReason: payload.reason,
       });
     }
-    const assistant = group.querySelector('[data-conversation-role="assistant"]');
+    // The current renderer identifies assistant bodies directly, without the role wrapper.
+    // Keep the proof inside the keyed turn; generic markdown or user content is not an answer.
+    const answerBody = group.querySelector('[data-markdown-text-style="assistant-message"]')
+      || group.querySelector('[data-message-author-role="assistant"] .markdown');
+    // Observed agent-status shell: one start marker in a dedicated sibling branch,
+    // outside both user and answer bodies. Never treat an arbitrary disclosure as progress.
+    const agentStarts = [...group.querySelectorAll('[data-chatgpt-agent-turn-start]')];
+    const agentShell = agentStarts.length === 1 ? agentStarts[0].parentElement : undefined;
+    const ownedAgentShell = agentShell && group.contains(agentShell)
+      && !agentShell.querySelector('[data-user-message-bubble], [data-markdown-text-style="assistant-message"], [data-turn-key]')
+      ? agentShell : undefined;
+    const progressRoot = group.querySelector('[data-streaming-response-status]') || ownedAgentShell;
+    const progressAnchors = progressRoot ? (progressRoot === ownedAgentShell
+      ? [progressRoot] : [...progressRoot.querySelectorAll('[data-item-anchor]')]) : [];
+    // A display:contents wrapper has no box even when its owned children render.
+    // Visibility belongs to rendered content; hidden ancestors still exclude that subtree.
+    const progressStyles = new WeakMap();
+    const progressAllowedCache = new WeakMap();
+    const progressVisibleCache = new WeakMap();
+    const progressNodeStyle = node => {
+      if (!progressStyles.has(node)) progressStyles.set(node, getComputedStyle(node));
+      return progressStyles.get(node);
+    };
+    const progressAllowed = node => {
+      if (!(node instanceof HTMLElement)) return true;
+      if (progressAllowedCache.has(node)) return progressAllowedCache.get(node);
+      const style = progressNodeStyle(node);
+      const allowed = node.getAttribute('hidden') === null && node.getAttribute('aria-hidden') !== 'true'
+        && style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse'
+        && style.opacity !== '0' && progressAllowed(node.parentElement);
+      progressAllowedCache.set(node, allowed);
+      return allowed;
+    };
+    const progressVisible = node => {
+      if (!(node instanceof HTMLElement)) return false;
+      if (progressVisibleCache.has(node)) return progressVisibleCache.get(node);
+      const shown = progressAllowed(node) && (node.getClientRects().length > 0
+        || progressNodeStyle(node).display === 'contents' && [...node.children].some(progressVisible));
+      progressVisibleCache.set(node, shown);
+      return shown;
+    };
+    // Structural evidence must survive the outer visibility rejection. Do not read prose
+    // here or change extraction eligibility: boxless layout and hidden UI need distinct proof.
+    const progressStyle = progressRoot instanceof HTMLElement ? getComputedStyle(progressRoot) : undefined;
+    const ownedControls = ownedAgentShell ? [...ownedAgentShell.querySelectorAll('button[aria-expanded][aria-labelledby]')] : [];
+    const ownedVisibleControls = ownedControls.filter(progressVisible);
+    const ownedLabels = ownedControls.length === 1 ? [...ownedAgentShell.querySelectorAll('[id]')]
+      .filter(node => node.getAttribute('id') === ownedControls[0].getAttribute('aria-labelledby')) : [];
+    let progressTitleCount = 0;
+    let progressDescriptionCount = 0;
+    let visibleAnchorCount = 0, controlCount = 0, visibleControlCount = 0, localLabelCount = 0, visibleLabelCount = 0;
+    const visibleDescription = (node, title) => {
+      if (node === title) return "";
+      if (node.nodeType === 3) return node.textContent || "";
+      if (!(node instanceof HTMLElement) || !progressVisible(node)
+        || node.getAttribute('aria-hidden') === 'true' || node.getAttribute('hidden') !== null
+        || ['BUTTON', 'SVG', 'SCRIPT', 'STYLE'].includes(node.tagName)) return "";
+      return [...node.childNodes].map(child => visibleDescription(child, title)).join(" ");
+    };
+    const publicProgress = progressRoot ? progressAnchors
+      .filter(progressVisible).map(row => {
+        visibleAnchorCount += 1;
+        let title;
+        if (row === ownedAgentShell) {
+          const candidates = [...row.querySelectorAll('button[aria-expanded][aria-labelledby]')];
+          controlCount += candidates.length;
+          const controls = candidates.filter(progressVisible);
+          visibleControlCount += controls.length;
+          if (controls.length !== 1) return "";
+          const labelId = controls[0].getAttribute('aria-labelledby');
+          const labels = [...row.querySelectorAll('[id]')].filter(node => node.getAttribute('id') === labelId);
+          localLabelCount += labels.length;
+          visibleLabelCount += labels.filter(progressVisible).length;
+          if (labels.length !== 1) return "";
+          title = labels[0];
+        } else title = row.querySelector('button[aria-expanded], [data-markdown-text-tone="tertiary"]');
+        if (!title || !progressVisible(title)) return "";
+        progressTitleCount += 1;
+        const copy = title.cloneNode(true);
+        copy.querySelectorAll('button, svg, [aria-hidden="true"]').forEach(control => control.remove());
+        const titleText = text(copy).replace(/\s+/g, " ").trim();
+        const description = visibleDescription(row, title).replace(/\s+/g, " ").trim();
+        if (description) progressDescriptionCount += 1;
+        return [titleText, description].filter(Boolean).join("\n\n").slice(0, 4096);
+      }).filter(value => value.length > 0 && value.length <= 4096).slice(0, 64) : [];
+    const assistantBody = answerBody || group.querySelector('[data-conversation-role="assistant"]');
+    const assistant = assistantBody || progressRoot;
     if (assistant) {
-      const complete = [...group.querySelectorAll('button[data-testid="copy-turn-action-button"], .turn-action-controls button')]
+      const complete = !!assistantBody && [...group.querySelectorAll('button[data-testid="copy-turn-action-button"], .turn-action-controls button')]
         .some(visible);
       const failure = group.querySelector('[data-message-error], [data-testid="message-error"]');
-      const answer = group.querySelector('[data-markdown-text-style="assistant-message"]')
-        || group.querySelector('[data-message-author-role="assistant"] .markdown')
-        || assistant;
+      const answer = answerBody || assistant;
       turns.push({
         key: "assistant:" + rawKey,
         role: "assistant",
         parentUserTurnKey: "user:" + rawKey,
+        ...(lineageAnchor ? { lineageAnchor } : {}),
         // ChatGPT can expose copy/turn-action controls before generation is finished. The current
         // composer Stop control is the stronger in-progress signal and must dominate those actions.
         phase: failure ? "failed" : stopVisible ? "streaming" : complete ? "complete" : "thinking",
-        text: complete ? text(answer || assistant) : undefined,
+        // Body content and completion authority are independent. Historical action controls
+        // can disappear during a new turn without changing the committed answer body.
+        text: answerBody ? answerMarkdown(answerBody) : complete ? answerMarkdown(answer || assistant) : undefined,
+        // Protocol receipts compare the rendered body, never its Markdown serialization.
+        plainBodyText: answerBody ? text(answerBody) : complete ? text(answer || assistant) : undefined,
+        // Identity uses the same owned body without presentation visibility. Never use page text.
+        bodyProof: answerBody ? answerBodyProof(answerBody) : undefined,
         failureDetail: failure ? text(failure) : undefined,
+        publicProgress,
+        progressProbe: { containerPresent: !!progressRoot, anchorCount: progressAnchors.length, titleCount: progressTitleCount, descriptionCount: progressDescriptionCount, containerVisible: !!progressRoot && visible(progressRoot), markerCount: agentStarts.length, agentShellEligible: !!ownedAgentShell, visibleAnchorCount, controlCount, visibleControlCount, localLabelCount, visibleLabelCount,
+          containerDisplay: progressStyle?.display === "none" ? "none" : progressStyle?.display === "contents" ? "contents" : "other",
+          containerVisibilityHidden: progressStyle?.visibility === "hidden" || progressStyle?.visibility === "collapse",
+          containerOpacityZero: progressStyle?.opacity === "0",
+          containerHasRects: !!progressRoot && progressRoot.getClientRects().length > 0,
+          ownedControlCount: ownedControls.length, ownedVisibleControlCount: ownedVisibleControls.length,
+          ownedLocalLabelCount: ownedLabels.length, ownedVisibleLabelCount: ownedLabels.filter(visible).length },
       });
     }
   }
@@ -318,6 +792,97 @@ const CLASSIFY_CONNECTOR_ARTIFACT = String.raw`function (argument) {
     selectedCount: selected.length,
     selectedExact,
     selectedKnownDevelopment,
+  };
+}`;
+
+const CLASSIFY_CONTEXT_PRELOAD_ARTIFACT = String.raw`function (argument) {
+  const selector = ${COMPOSER_SELECTOR_SOURCE};
+  const pillSelector = '[data-id^="plugin:"][data-keyword], [app-mention-path^="app://"][app-mention-display-name][contenteditable="false"]';
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const composers = [...document.querySelectorAll(selector)].filter(visible);
+  if (composers.length !== 1 || argument.composerKey !== "composer:primary") {
+    return { owned: false, reason: "composer_ambiguous" };
+  }
+  const composer = composers[0];
+  if (composer.querySelectorAll(pillSelector).length !== 0) {
+    return { owned: false, reason: "connector_present" };
+  }
+  const form = composer.closest("form[data-chatgpt-composer], form");
+  if (!(form instanceof HTMLElement)) return { owned: false, reason: "form_missing" };
+  const attachmentNames = () => {
+    const result = new Set();
+    const add = value => {
+      const normalized = String(value || "").replace(/\s+/g, " ").trim();
+      if (normalized && normalized.length <= 240 && !/[\r\n]/.test(normalized)) result.add(normalized);
+    };
+    for (const candidate of form.querySelectorAll('[data-composer-attachments] [role="group"], .composer-attachment-surface')) {
+      if (!(candidate instanceof HTMLElement) || !visible(candidate)) continue;
+      add(candidate.getAttribute("aria-label"));
+      const labelledBy = candidate.getAttribute("aria-labelledby");
+      if (labelledBy) add(document.getElementById(labelledBy)?.textContent);
+    }
+    for (const root of form.querySelectorAll('[data-composer-attachments]')) {
+      if (!(root instanceof HTMLElement) || !visible(root)) continue;
+      for (const candidate of root.querySelectorAll('[aria-label], span, p')) {
+        if (!(candidate instanceof HTMLElement) || !visible(candidate)) continue;
+        add(candidate.getAttribute("aria-label"));
+        add(candidate.textContent);
+      }
+    }
+    return [...result];
+  };
+  const clone = composer.cloneNode(true);
+  if (!(clone instanceof HTMLElement)) return { owned: false, reason: "clone_failed" };
+  clone.querySelectorAll(pillSelector + ', [data-inline-selection-pill-cursor-target]').forEach(part => part.remove());
+  const value = [...clone.childNodes]
+    .map(child => child.textContent || "")
+    .join("\n")
+    .replace(/\r\n?/g, "\n");
+  const normalized = value.trimStart();
+  const text = normalized.trim().length === 0 ? "" : normalized;
+  const attachments = attachmentNames();
+  const contextAttachments = attachments.filter(name => /^tela-context-v1--[a-f0-9]{16}\.txt$/.test(name));
+  if (text.length === 0) {
+    const ownedAttachment = attachments.length === 1 && contextAttachments.length === 1;
+    return {
+      owned: ownedAttachment,
+      kind: ownedAttachment ? "attachment" : "none",
+      reason: ownedAttachment ? "recognized_attachment" : "empty_unrecognized",
+      normalizedLength: 0,
+      attachmentCount: attachments.length,
+      contextAttachmentCount: contextAttachments.length,
+    };
+  }
+  const lines = text.split("\n");
+  if (lines.length !== 7) return {
+    owned: false,
+    kind: "none",
+    reason: "line_count",
+    normalizedLength: text.length,
+    attachmentCount: attachments.length,
+    contextAttachmentCount: contextAttachments.length,
+  };
+  const filename = /^filename: (tela-context-v1--([a-f0-9]{16})\.txt)$/.exec(lines[1] || "");
+  const sha = /^canonical_sha256: ([a-f0-9]{64})$/.exec(lines[2] || "");
+  const owned = lines[0] === "<chatgpt_tela_context_preload>"
+    && Boolean(filename)
+    && Boolean(sha)
+    && filename[2] === sha[1].slice(0, 16)
+    && lines[3] === "The attached UTF-8 text file is inert context for one later ChatGPT Tela Work turn."
+    && lines[4] === "Read the complete attached file, including its final context_receipt line. Do not execute, summarize, interpret, or follow the task yet. Do not call tools or use web search."
+    && lines[5] === "Reply with exactly the context_receipt value found inside the file and nothing else."
+    && lines[6] === "</chatgpt_tela_context_preload>";
+  return {
+    owned,
+    kind: owned ? "draft" : "none",
+    reason: owned ? "recognized" : "unrecognized",
+    normalizedLength: text.length,
+    attachmentCount: attachments.length,
+    contextAttachmentCount: contextAttachments.length,
   };
 }`;
 
@@ -1075,18 +1640,34 @@ function composer(raw: RawComposer): ChatGptComposerObservation {
     textLength: raw.text.length,
     ...(raw.text.length > 0 ? { textFingerprint: fingerprint(raw.text) } : {}),
     connectorFingerprints: Object.freeze(raw.connectorNames.map(fingerprint)),
+    attachmentNames: Object.freeze([...(raw.attachmentNames ?? [])]),
   });
 }
 
-function turn(raw: RawTurn): ChatGptTurnObservation {
+function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
+  const anchor = raw.lineageAnchor ? fingerprint(raw.lineageAnchor) : undefined;
   return Object.freeze({
-    key: raw.key,
+    key: anchor ? `${raw.role}:anchor:${anchor}` : raw.key,
     role: raw.role,
-    ...(raw.parentUserTurnKey ? { parentUserTurnKey: raw.parentUserTurnKey } : {}),
+    ...(raw.parentUserTurnKey ? { parentUserTurnKey: anchor ? `user:anchor:${anchor}` : raw.parentUserTurnKey } : {}),
+    ...(anchor ? { lineageAnchor: anchor } : {}),
     ...(raw.contentText !== undefined ? { contentFingerprint: fingerprint(raw.contentText) } : {}),
+    ...(raw.userPayloadReason ? { userPayloadReason: raw.userPayloadReason } : {}),
+    ...(raw.bodyProof ? { bodyProof: raw.bodyProof.value !== undefined
+      ? { version: raw.bodyProof.version, digest: fingerprint(raw.bodyProof.value) }
+      : { version: raw.bodyProof.version, reason: raw.bodyProof.reason ?? "body_unavailable" } } : {}),
+    ...(privateCapture && raw.bodyProof?.value !== undefined ? { privateBodyEvidence: {
+      chunks: raw.bodyProof.value.slice(0, 65536).match(/[\s\S]{1,8192}/g) ?? [],
+      complete: raw.bodyProof.value.length <= 65536,
+    } } : {}),
+    ...(raw.plainBodyText !== undefined ? {
+      plainBodyFingerprint: fingerprint(raw.plainBodyText.trim()),
+      ...(raw.role === "assistant" ? { plainBodyText: raw.plainBodyText } : {}),
+    } : {}),
     ...(raw.phase ? { phase: raw.phase } : {}),
     ...(raw.text !== undefined ? { text: raw.text } : {}),
     ...(raw.failureDetail ? { failureDetail: raw.failureDetail } : {}),
+    ...(raw.publicProgress?.length ? { publicProgress: Object.freeze(raw.publicProgress.slice(0, 64)) } : {}),
   });
 }
 
@@ -1096,6 +1677,9 @@ function turn(raw: RawTurn): ChatGptTurnObservation {
  * before exposing the snapshot to the provider/runtime boundary.
  */
 export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
+  #activatedApprovalCardKey: string | undefined;
+  #progressProbeTurnKey: string | undefined;
+  readonly #progressProbeStates = new Set<string>();
   constructor(readonly page: BrowserPageAutomation) {}
 
   #diagnostic(stage: string, fields: Readonly<Record<string, string | number | boolean>> = {}): void {
@@ -1119,14 +1703,85 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
   }
 
   async observe(signal?: AbortSignal): Promise<ChatGptSurfaceSnapshot> {
-    const raw = await this.page.evaluate<undefined, RawSnapshot>(OBSERVE_CHATGPT_SURFACE, undefined, signal);
-    const snapshot = {
-      url: raw.url,
-      composers: Object.freeze(raw.composers.map(composer)),
-      sendControls: Object.freeze(raw.sendControls.map((control): ChatGptSendObservation => Object.freeze({ ...control }))),
-      turns: Object.freeze(raw.turns.map(turn)),
-    };
-    return Object.freeze({ revision: semanticRevision(snapshot), ...snapshot });
+    let phase = "surface_read";
+    try {
+      const raw = await this.page.evaluate<undefined, RawSnapshot>(OBSERVE_CHATGPT_SURFACE, undefined, signal);
+      phase = "approval_read";
+      const card = await this.page.evaluate<undefined, {
+        cardCount: number; denyCount: number; allowCount: number; allowOnceCount: number;
+        alwaysAllowCount: number; unknownCount: number; cardKey: string | null; proofKey: string | null;
+        inputReceived?: boolean;
+        receipt?: { cardKey: string; proofKey: string } | null;
+      }>(INSPECT_APPROVAL_CARD, undefined, signal);
+      phase = "snapshot_projection";
+      // Observe only existing reads. Deduplicate bounded structural states, never prose/token
+      // changes. Report streaming exclusions too; a settled-only probe misses their cause.
+      const settled = raw.turns.filter(item => item.role === "assistant").at(-1);
+      if (settled?.progressProbe) {
+        if (this.#progressProbeTurnKey !== settled.key) {
+          this.#progressProbeTurnKey = settled.key;
+          this.#progressProbeStates.clear();
+        }
+        const signature = fingerprint(JSON.stringify([settled.phase, settled.progressProbe]));
+        if (!this.#progressProbeStates.has(signature) && this.#progressProbeStates.size < 32) {
+          this.#progressProbeStates.add(signature);
+          const probe = settled.progressProbe;
+          emitDiagnosticEvent("chatgpt_tela_work", "web_public_progress_extraction", {
+            assistant_phase: settled.phase ?? "unknown",
+            progress_container_present: probe.containerPresent,
+            progress_container_visible: probe.containerVisible,
+            progress_container_display: probe.containerDisplay,
+            progress_container_visibility_hidden: probe.containerVisibilityHidden,
+            progress_container_opacity_zero: probe.containerOpacityZero,
+            progress_container_has_rects: probe.containerHasRects,
+            progress_owned_control_count: probe.ownedControlCount,
+            progress_owned_visible_control_count: probe.ownedVisibleControlCount,
+            progress_owned_local_label_count: probe.ownedLocalLabelCount,
+            progress_owned_visible_label_count: probe.ownedVisibleLabelCount,
+            progress_anchor_count: probe.anchorCount,
+            progress_visible_anchor_count: probe.visibleAnchorCount,
+            progress_marker_count: probe.markerCount,
+            progress_agent_shell_eligible: probe.agentShellEligible,
+            progress_control_count: probe.controlCount,
+            progress_visible_control_count: probe.visibleControlCount,
+            progress_local_label_count: probe.localLabelCount,
+            progress_visible_label_count: probe.visibleLabelCount,
+            progress_description_count: probe.descriptionCount,
+            progress_title_count: probe.titleCount,
+            public_progress_part_count: settled.publicProgress?.length ?? 0,
+          });
+        }
+      }
+      const approval = card.cardCount > 0 ? Object.freeze({
+        cardCount: card.cardCount, denyCount: card.denyCount, allowCount: card.allowCount,
+        allowOnceCount: card.allowOnceCount, alwaysAllowCount: card.alwaysAllowCount,
+        unknownCount: card.unknownCount,
+        revisionFingerprint: fingerprint(JSON.stringify([card.cardKey, card.proofKey])),
+        ...(card.cardCount === 1 && card.cardKey ? { cardFingerprint: diagnosticFingerprint(card.cardKey) } : {}),
+        inputReceived: card.inputReceived === true,
+      }) : undefined;
+      const captureRoot = configuredDiagnosticRoot();
+      const privateCapture = !!captureRoot && privateDiagnosticCaptureEnabled(captureRoot);
+      const snapshot = {
+        ...(approval ? { approval } : {}),
+        ...(card.receipt ? { approvalInputReceipt: Object.freeze({
+          cardFingerprint: diagnosticFingerprint(card.receipt.cardKey),
+          revisionFingerprint: fingerprint(JSON.stringify([card.receipt.cardKey, card.receipt.proofKey])),
+        }) } : {}),
+        url: raw.url,
+        composers: Object.freeze(raw.composers.map(composer)),
+        sendControls: Object.freeze(raw.sendControls.map((control): ChatGptSendObservation => Object.freeze({ ...control }))),
+        turns: Object.freeze(raw.turns.map(item => turn(item, privateCapture))),
+      };
+      return Object.freeze({ revision: semanticRevision(snapshot), ...snapshot });
+    } catch (error) {
+      emitDiagnosticEvent("chatgpt_tela_work", "web_dom_observation_failed", {
+        phase,
+        reason_class: signal?.aborted ? "aborted" : error instanceof TypeError ? "type_error"
+          : error instanceof SyntaxError ? "syntax_error" : "observation_error",
+      });
+      throw error;
+    }
   }
 
   async dismissTransientUi(signal?: AbortSignal): Promise<void> {
@@ -1171,21 +1826,92 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     return true;
   }
 
+  async recoverContextPreloadArtifact(composerKey: string, signal?: AbortSignal): Promise<boolean> {
+    const classification = await this.page.evaluate<
+      { readonly composerKey: string },
+      {
+        readonly owned: boolean;
+        readonly kind?: "draft" | "attachment" | "none";
+        readonly reason: string;
+        readonly normalizedLength?: number;
+        readonly attachmentCount?: number;
+        readonly contextAttachmentCount?: number;
+      }
+    >(CLASSIFY_CONTEXT_PRELOAD_ARTIFACT, { composerKey }, signal);
+    emitDiagnosticEvent("chatgpt_tela_work", classification.owned
+      ? "context_attachment_draft_recovered"
+      : "context_attachment_draft_not_owned", {
+      reason: classification.reason,
+      artifact_kind: classification.kind ?? "unknown",
+      normalized_length: classification.normalizedLength ?? -1,
+      attachment_count: classification.attachmentCount ?? -1,
+      context_attachment_count: classification.contextAttachmentCount ?? -1,
+    });
+    if (!classification.owned) return false;
+    if (classification.kind === "attachment") {
+      await this.page.evaluate(FOCUS_COMPOSER, { composerKey }, signal);
+      await this.page.pressKey("Backspace", signal);
+      await this.#settleUi(signal);
+      const after = await this.page.evaluate<
+        { readonly composerKey: string },
+        {
+          readonly owned: boolean;
+          readonly kind?: "draft" | "attachment" | "none";
+          readonly reason: string;
+          readonly normalizedLength?: number;
+          readonly attachmentCount?: number;
+          readonly contextAttachmentCount?: number;
+        }
+      >(CLASSIFY_CONTEXT_PRELOAD_ARTIFACT, { composerKey }, signal);
+      if ((after.attachmentCount ?? -1) === 0 && (after.normalizedLength ?? -1) === 0) {
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_stale_file_recovered", {
+          removal: "composer_backspace",
+        });
+        return true;
+      }
+      emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_stale_file_recovery_failed", {
+        attachment_count: after.attachmentCount ?? -1,
+        context_attachment_count: after.contextAttachmentCount ?? -1,
+        normalized_length: after.normalizedLength ?? -1,
+      });
+      return false;
+    }
+    await this.page.evaluate(FOCUS_COMPOSER, { composerKey }, signal);
+    await this.page.clearFocusedEditable(signal);
+    return true;
+  }
+
   async processApprovalCard(
     mode: ChatGptApprovalAutomationMode,
     signal?: AbortSignal,
-  ): Promise<{ readonly status: "none" | "approved"; readonly reason: string }> {
-    const observed = await this.page.evaluate<undefined, {
+    delayMs = 0,
+    expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
+  ): ReturnType<NonNullable<ChatGptSurfaceDriver["processApprovalCard"]>> {
+    if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 15_000) {
+      throw new Error("ChatGPT approval delay must be 0-15000ms");
+    }
+    type ApprovalObservation = {
+      readonly targetState?: "unprepared" | "changed" | "outside_viewport" | "occluded" | "ready";
       readonly cardCount: number;
       readonly denyCount: number;
       readonly allowCount: number;
       readonly allowOnceCount: number;
       readonly alwaysAllowCount: number;
+      readonly unknownCount: number;
       readonly allowPoint: { readonly x: number; readonly y: number } | null;
       readonly allowOncePoint: { readonly x: number; readonly y: number } | null;
-    }>(INSPECT_APPROVAL_CARD, undefined, signal);
+      readonly cardKey: string | null;
+      readonly proofKey: string | null;
+    };
+    const inspect = () => this.page.evaluate<undefined, ApprovalObservation>(INSPECT_APPROVAL_CARD, undefined, signal);
+    let observed = await inspect();
+    if (expected && (!observed.cardKey || diagnosticFingerprint(observed.cardKey) !== expected.cardFingerprint
+      || fingerprint(JSON.stringify([observed.cardKey, observed.proofKey])) !== expected.revisionFingerprint)) {
+      this.#diagnostic("approval_changed_before_activation", { reason_class: "observed_card_changed" });
+      return Object.freeze({ status: "none" as const, reason: "card_changed" });
+    }
     const decision = decideChatGptApproval(mode, observed);
-    this.#diagnostic("approval_policy", {
+    if (observed.cardCount > 0) this.#diagnostic("approval_policy", {
       mode,
       action: decision.action,
       card_count: observed.cardCount,
@@ -1193,18 +1919,67 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       allow_count: observed.allowCount,
       allow_once_count: observed.allowOnceCount,
       always_allow_count: observed.alwaysAllowCount,
+      unknown_count: observed.unknownCount,
     });
     if (decision.action !== "approve_once") {
       return Object.freeze({ status: "none" as const, reason: decision.reason });
     }
-    const target = observed.allowOncePoint;
-    if (!target) {
-      this.#diagnostic("approval_target_missing", { preferred: decision.preferredChoice });
+    if (!observed.cardKey || !observed.proofKey || !observed.allowOncePoint) {
       return Object.freeze({ status: "none" as const, reason: "target_missing" });
     }
-    await this.page.pointerClick(target, signal);
-    this.#diagnostic("approval_activated", { choice: decision.preferredChoice });
-    return Object.freeze({ status: "approved" as const, reason: decision.preferredChoice });
+    if (observed.cardKey === this.#activatedApprovalCardKey) {
+      this.#diagnostic("approval_activation_withheld", { reason_class: "already_activated",
+        card_fingerprint: diagnosticFingerprint(observed.cardKey), proof_fingerprint: diagnosticFingerprint(observed.proofKey ?? "") });
+      return Object.freeze({ status: "none" as const, reason: "already_activated" });
+    }
+    if (delayMs > 0) {
+      const cardKey = observed.cardKey;
+      const proofKey = observed.proofKey;
+      await waitForDelay(delayMs, undefined, { signal });
+      observed = await inspect();
+      if (observed.cardKey !== cardKey || observed.proofKey !== proofKey
+        || decideChatGptApproval(mode, observed).action !== "approve_once") {
+        this.#diagnostic("approval_changed_before_activation");
+        return Object.freeze({ status: "none" as const, reason: "card_changed" });
+      }
+    }
+    const prepared = await this.page.evaluate<{ cardKey: string; proofKey: string }, ApprovalObservation>(
+      INSPECT_APPROVAL_CARD, { cardKey: observed.cardKey!, proofKey: observed.proofKey! }, signal,
+    );
+    if (prepared.cardKey !== observed.cardKey || prepared.proofKey !== observed.proofKey
+      || decideChatGptApproval(mode, prepared).action !== "approve_once") {
+      this.#diagnostic("approval_changed_before_activation");
+      return Object.freeze({ status: "none" as const, reason: "card_changed" });
+    }
+    observed = prepared;
+    const target = observed.allowOncePoint;
+    if (!target) {
+      this.#diagnostic("approval_target_missing", { preferred: decision.preferredChoice,
+        reason_class: observed.targetState ?? "target_missing" });
+      return Object.freeze({ status: "none" as const, reason: "target_missing" });
+    }
+    if (observed.cardKey === this.#activatedApprovalCardKey) {
+      this.#diagnostic("approval_activation_withheld", { reason_class: "already_activated",
+        card_fingerprint: diagnosticFingerprint(observed.cardKey), proof_fingerprint: diagnosticFingerprint(observed.proofKey ?? "") });
+      return Object.freeze({ status: "none" as const, reason: "already_activated" });
+    }
+    // An ambiguous activation must never be retried against the same card.
+    this.#activatedApprovalCardKey = observed.cardKey ?? undefined;
+    try {
+      await this.page.pointerClick(target, signal);
+    } catch (error) {
+      this.#diagnostic("approval_dispatch_failed", {
+        reason_class: signal?.aborted ? "owner_cancelled" : "dispatch_indeterminate",
+        card_fingerprint: diagnosticFingerprint(observed.cardKey!),
+        proof_fingerprint: diagnosticFingerprint(observed.proofKey!),
+        automatic_retry: false,
+      });
+      throw error;
+    }
+    this.#diagnostic("approval_activated", { choice: decision.preferredChoice,
+      card_fingerprint: diagnosticFingerprint(observed.cardKey ?? ""), proof_fingerprint: diagnosticFingerprint(observed.proofKey ?? "") });
+    return Object.freeze({ status: "dispatched" as const, reason: decision.preferredChoice,
+      cardFingerprint: diagnosticFingerprint(observed.cardKey!) });
   }
 
   async replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void> {
@@ -1218,6 +1993,284 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
 
   async appendComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void> {
     await this.page.evaluate(APPEND_COMPOSER_TEXT, { composerKey, text }, signal);
+  }
+
+  async attachFiles(
+    composerKey: string,
+    files: readonly import("@chatgpt-tela/browser-host").BrowserMemoryFile[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (composerKey !== "composer:primary") throw new Error("ChatGPT attachment composer is not uniquely addressable");
+    if (!this.page.setFileInputFiles) throw new Error("browser surface does not support memory-backed file input");
+    const before = await this.observe(signal);
+    const composer = before.composers.find(item => item.key === composerKey);
+    if (!composer || !composer.visible || !composer.editable || !composer.ownedByChatGptForm) {
+      throw new Error("ChatGPT attachment composer is not ready");
+    }
+    if (composer.attachmentNames.length !== 0) {
+      throw new Error("ChatGPT attachment preload requires an empty composer attachment surface");
+    }
+    type UploadSurface = {
+      readonly ready: boolean;
+      readonly reason: string;
+      readonly targetKind?: string;
+      readonly composerCount: number;
+      readonly fileInputCount: number;
+      readonly formFileInputCount?: number;
+      readonly genericInputCount?: number;
+      readonly imageOnlyInputCount?: number;
+      readonly addContextCount: number;
+      readonly inputSummaries?: readonly {
+        readonly index: number;
+        readonly inForm: boolean;
+        readonly multiple: boolean;
+        readonly disabled: boolean;
+        readonly acceptKind: string;
+        readonly testIdKind: string;
+        readonly selected: boolean;
+      }[];
+    };
+    let upload = await this.page.evaluate<undefined, UploadSurface>(PREPARE_CONTEXT_UPLOAD_INPUT, undefined, signal);
+    emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_upload_surface", {
+      phase: "initial",
+      ready: upload.ready,
+      reason: upload.reason,
+      target_kind: upload.targetKind ?? "none",
+      file_input_count: upload.fileInputCount,
+      form_file_input_count: upload.formFileInputCount ?? -1,
+      generic_input_count: upload.genericInputCount ?? -1,
+      image_only_input_count: upload.imageOnlyInputCount ?? -1,
+      add_context_count: upload.addContextCount,
+    });
+    for (const item of upload.inputSummaries ?? []) {
+      emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_input_candidate", {
+        phase: "initial",
+        input_index: item.index,
+        in_form: item.inForm,
+        multiple: item.multiple,
+        disabled: item.disabled,
+        accept_kind: item.acceptKind,
+        testid_kind: item.testIdKind,
+        selected: item.selected,
+      });
+    }
+    if (upload.addContextCount === 1) {
+      if (!this.page.setFileChooserFiles) {
+        throw new Error("ChatGPT add-context upload requires browser file chooser interception");
+      }
+      let uploadActionPoint: { readonly x: number; readonly y: number } | undefined;
+      let lastUploadObservation: {
+        readonly rowCount: number;
+        readonly semanticCount: number;
+        readonly highlightedCount: number;
+        readonly targetKind: string;
+        readonly targetIndex?: number;
+        readonly genericAttributeShapes: readonly string[];
+        readonly point?: { readonly x: number; readonly y: number };
+      } | undefined;
+      const observeUploadAction = async (timeoutMs: number): Promise<boolean> => {
+        const deadline = Date.now() + timeoutMs;
+        let revision = await this.page.mutationRevision(signal);
+        for (;;) {
+          const observed = await this.page.evaluate<undefined, NonNullable<typeof lastUploadObservation>>(
+            OBSERVE_ACTIVE_ADD_CONTEXT_UPLOAD_ACTION,
+            undefined,
+            signal,
+          );
+          lastUploadObservation = observed;
+          if (observed.semanticCount > 1) {
+            throw new Error("ChatGPT add-context upload action is ambiguous");
+          }
+          if (observed.point) {
+            uploadActionPoint = observed.point;
+            return true;
+          }
+          const remainingMs = deadline - Date.now();
+          if (remainingMs <= 0) return false;
+          const timeout = AbortSignal.timeout(remainingMs);
+          const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+          try {
+            revision = await this.page.waitForDomMutation(revision, combined);
+          } catch (error) {
+            if (signal?.aborted) throw signal.reason ?? error;
+            return false;
+          }
+        }
+      };
+
+      for (const activation of ["pointer", "keyboard", "dom"] as const) {
+        if (activation !== "pointer") {
+          await this.dismissTransientUi(signal).catch(() => {});
+          await this.#settleUi(signal);
+        }
+        if (activation === "pointer") {
+          const addContextPoint = await this.page.evaluate<undefined, { readonly x: number; readonly y: number }>(
+            LOCATE_ADD_CONTEXT_CONTROL,
+            undefined,
+            signal,
+          );
+          await this.page.pointerClick(addContextPoint, signal);
+        } else if (activation === "keyboard") {
+          await this.page.evaluate(FOCUS_ADD_CONTEXT_CONTROL, undefined, signal);
+          await this.page.pressKey("Enter", signal);
+        } else {
+          await this.page.evaluate(ACTIVATE_ADD_CONTEXT_CONTROL, undefined, signal);
+        }
+        await this.#settleUi(signal);
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_add_context_activation", {
+          activation,
+        });
+        if (await observeUploadAction(2_000)) {
+          emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_add_context_opened", {
+            activation,
+          });
+          break;
+        }
+      }
+      if (!uploadActionPoint) {
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_upload_action_unavailable", {
+          row_count: lastUploadObservation?.rowCount ?? -1,
+          semantic_count: lastUploadObservation?.semanticCount ?? -1,
+          highlighted_count: lastUploadObservation?.highlightedCount ?? -1,
+          target_kind: lastUploadObservation?.targetKind ?? "unknown",
+          target_index: lastUploadObservation?.targetIndex ?? -1,
+          generic_attribute_shapes: lastUploadObservation?.genericAttributeShapes.join("|") ?? "",
+        });
+        throw new Error("ChatGPT add-context upload action did not become uniquely observable");
+      }
+      emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_upload_action_ready", {
+        row_count: lastUploadObservation?.rowCount ?? -1,
+        target_kind: lastUploadObservation?.targetKind ?? "unknown",
+        target_index: lastUploadObservation?.targetIndex ?? -1,
+      });
+      try {
+        await this.page.setFileChooserFiles(uploadActionPoint, files, signal);
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_file_chooser_injected");
+      } catch (error) {
+        await this.dismissTransientUi(signal).catch(() => {});
+        throw error;
+      }
+    } else {
+      if (!upload.ready) {
+        throw new Error("ChatGPT generic memory-backed attachment input is unavailable");
+      }
+      try {
+        await this.page.setFileInputFiles(CHATGPT_MEMORY_UPLOAD_TARGET_SELECTOR, files, signal);
+      } finally {
+        await this.page.evaluate(CLEAR_CONTEXT_UPLOAD_INPUT_MARKER, undefined, signal).catch(() => {});
+      }
+    }
+    let snapshot = await this.observe(signal);
+    const observeExpectedIdentity = () => this.page.evaluate<
+      { readonly names: readonly string[] },
+      {
+        readonly composerCount: number;
+        readonly matchedCount: number;
+        readonly fileInputMatchCount: number;
+        readonly visibleOutsideComposerMatchCount: number;
+        readonly attachmentRootCount: number;
+        readonly outsideGroupCount: number;
+        readonly progressCount: number;
+      }
+    >(OBSERVE_EXPECTED_ATTACHMENT_IDENTITY, { names: files.map(file => file.name) }, signal);
+    const firstComposer = snapshot.composers.find(item => item.key === composerKey);
+    const firstSends = snapshot.sendControls.filter(control => control.composerKey === composerKey && control.visible);
+    const firstIdentity = await observeExpectedIdentity();
+    let exactIdentityObserved = firstIdentity.matchedCount === files.length;
+    emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_post_upload", {
+      composer_present: firstComposer !== undefined,
+      composer_length: firstComposer?.textLength ?? -1,
+      connector_count: firstComposer?.connectorFingerprints.length ?? -1,
+      attachment_count: firstComposer?.attachmentNames.length ?? -1,
+      expected_attachment_count: firstComposer
+        ? files.filter(file => firstComposer.attachmentNames.includes(file.name)).length
+        : -1,
+      expected_attachment_visible: Boolean(firstComposer && files.every(file => firstComposer.attachmentNames.includes(file.name))),
+      identity_match_count: firstIdentity.matchedCount,
+      file_input_match_count: firstIdentity.fileInputMatchCount,
+      outside_match_count: firstIdentity.visibleOutsideComposerMatchCount,
+      attachment_root_count: firstIdentity.attachmentRootCount,
+      outside_group_count: firstIdentity.outsideGroupCount,
+      progress_count: firstIdentity.progressCount,
+      send_count: firstSends.length,
+      send_enabled: firstSends.length === 1 && firstSends[0]!.enabled,
+    });
+    let lastWaitState = "";
+    for (;;) {
+      const current = snapshot.composers.find(item => item.key === composerKey);
+      const exactIdentityVisible = Boolean(current && files.every(file => current.attachmentNames.includes(file.name)));
+      const sends = snapshot.sendControls.filter(control => control.composerKey === composerKey && control.visible);
+      const identity = await observeExpectedIdentity();
+      exactIdentityObserved ||= exactIdentityVisible || identity.matchedCount === files.length;
+      // ChatGPT's current attachment renderer exposes the exact filename while upload is in
+      // progress, then may collapse the settled chip to a generic attachment label. Preserve the
+      // exact observation as causal identity proof and require the same composer to retain an
+      // attachment surface after progress settles and Send becomes enabled. The preload receipt
+      // subsequently proves the actual uploaded bytes before any real Work turn is authorized.
+      const settled = Boolean(current)
+        && exactIdentityObserved
+        && current!.attachmentNames.length > 0
+        && identity.progressCount === 0
+        && sends.length === 1
+        && sends[0]!.enabled;
+      if (settled) return;
+      const waitState = [
+        current ? "composer" : "missing",
+        current?.textLength ?? -1,
+        current?.connectorFingerprints.length ?? -1,
+        current?.attachmentNames.length ?? -1,
+        exactIdentityVisible ? 1 : 0,
+        exactIdentityObserved ? 1 : 0,
+        identity.matchedCount,
+        identity.fileInputMatchCount,
+        identity.visibleOutsideComposerMatchCount,
+        identity.attachmentRootCount,
+        identity.outsideGroupCount,
+        identity.progressCount,
+        sends.length,
+        sends.length === 1 && sends[0]!.enabled ? 1 : 0,
+      ].join(":");
+      if (waitState !== lastWaitState) {
+        lastWaitState = waitState;
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_wait_state", {
+          composer_present: current !== undefined,
+          composer_length: current?.textLength ?? -1,
+          connector_count: current?.connectorFingerprints.length ?? -1,
+          attachment_count: current?.attachmentNames.length ?? -1,
+          expected_attachment_visible: exactIdentityVisible,
+          expected_attachment_observed: exactIdentityObserved,
+          identity_match_count: identity.matchedCount,
+          file_input_match_count: identity.fileInputMatchCount,
+          outside_match_count: identity.visibleOutsideComposerMatchCount,
+          attachment_root_count: identity.attachmentRootCount,
+          outside_group_count: identity.outsideGroupCount,
+          progress_count: identity.progressCount,
+          send_count: sends.length,
+          send_enabled: sends.length === 1 && sends[0]!.enabled,
+        });
+      }
+      try {
+        snapshot = await this.waitForChange(snapshot.revision, signal);
+      } catch (error) {
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_wait_failed", {
+          composer_present: current !== undefined,
+          composer_length: current?.textLength ?? -1,
+          connector_count: current?.connectorFingerprints.length ?? -1,
+          attachment_count: current?.attachmentNames.length ?? -1,
+          expected_attachment_visible: exactIdentityVisible,
+          expected_attachment_observed: exactIdentityObserved,
+          identity_match_count: identity.matchedCount,
+          file_input_match_count: identity.fileInputMatchCount,
+          outside_match_count: identity.visibleOutsideComposerMatchCount,
+          attachment_root_count: identity.attachmentRootCount,
+          outside_group_count: identity.outsideGroupCount,
+          progress_count: identity.progressCount,
+          send_count: sends.length,
+          send_enabled: sends.length === 1 && sends[0]!.enabled,
+        });
+        throw error;
+      }
+    }
   }
 
   async selectConnector(composerKey: string, connectorName: string, signal?: AbortSignal): Promise<void> {
@@ -1317,10 +2370,60 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
         category_shapes: first.categoryShapes.join("|"),
         generic_attribute_shapes: first.genericAttributeShapes.join("|"),
       });
+      if (first.kind === "connector") {
+        // Hidden/offscreen Chromium surfaces can expose the exact connector row while refusing a
+        // compositor pointer activation. The downstream bridge proved that ChatGPT's menu keyboard
+        // owner remains reliable here: move the real highlight onto the exact row, press Enter, and
+        // accept the action only after the exact selected-connector pill appears in the composer.
+        // This loop is bounded by the currently visible row count and never guesses a row by text
+        // after activation.
+        let observed = first;
+        for (let step = 0; step <= first.rowCount; step += 1) {
+          if (observed.highlighted) {
+            this.#diagnostic("add_context_connector_keyboard_ready", {
+              step,
+              target_index: observed.targetIndex,
+              highlighted_index: observed.highlightedIndex,
+            });
+            await this.page.pressKey("Enter", signal);
+            this.#diagnostic("add_context_connector_keyboard_activated", { step });
+            await this.page.evaluate(PROVE_CONNECTOR_SELECTION, { composerKey, connectorName }, signal);
+            this.#diagnostic("add_context_selection_proven");
+            return;
+          }
+          if (step === first.rowCount) break;
+          await this.page.pressKey("ArrowDown", signal);
+          await this.#settleUi(signal);
+          observed = await this.page.evaluate<
+            { readonly connectorName: string },
+            {
+              readonly kind: "connector" | "more" | "apps";
+              readonly x: number;
+              readonly y: number;
+              readonly rowCount: number;
+              readonly targetIndex: number;
+              readonly highlighted: boolean;
+              readonly highlightedIndex: number;
+              readonly categoryShapes: readonly string[];
+              readonly genericAttributeShapes: readonly string[];
+            }
+          >(LOCATE_ADD_CONTEXT_TARGET, { connectorName }, signal);
+          if (observed.kind !== "connector") break;
+        }
+        this.#diagnostic("add_context_connector_keyboard_unavailable", {
+          target_index: observed.targetIndex,
+          highlighted_index: observed.highlightedIndex,
+        });
+        await this.page.pointerClick({ x: observed.x, y: observed.y }, signal);
+        this.#diagnostic("add_context_connector_pointer_fallback");
+        await this.page.evaluate(PROVE_CONNECTOR_SELECTION, { composerKey, connectorName }, signal);
+        this.#diagnostic("add_context_selection_proven");
+        return;
+      }
       await this.page.pointerClick({ x: first.x, y: first.y }, signal);
       this.#diagnostic("add_context_category_clicked", { kind: first.kind });
       await this.#settleUi(signal);
-      if (first.kind !== "connector") {
+      {
         type IntegrationInspection = {
           readonly exactCount: number;
           readonly containedCount: number;

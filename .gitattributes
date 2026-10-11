@@ -1,0 +1,4 @@
+# These files encode upstream code diffs verbatim. A space after an added
+# diff-line prefix can represent patch data; stripping it corrupts the payload.
+# Keep ordinary whitespace checks enabled for all source and documentation.
+patches/codex/*.patch whitespace=-blank-at-eol

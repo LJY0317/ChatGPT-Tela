@@ -93,6 +93,136 @@ describe("Tela Chat first vertical slice", () => {
     }
   });
 
+  test("open_workspace loads bounded root instructions and advertises nested instructions explicitly", async () => {
+    const f = fixture();
+    try {
+      mkdirSync(join(f.root, "packages", "app"), { recursive: true });
+      mkdirSync(join(f.root, "node_modules", "ignored"), { recursive: true });
+      writeFileSync(join(f.root, "AGENTS.md"), "root agent rules\n");
+      writeFileSync(join(f.root, "CLAUDE.md"), "root claude rules\n");
+      writeFileSync(join(f.root, "packages", "AGENTS.md"), "package rules\n");
+      writeFileSync(join(f.root, "packages", "app", "CLAUDE.MD"), "app rules\n");
+      writeFileSync(join(f.root, "node_modules", "ignored", "AGENTS.md"), "dependency rules\n");
+
+      const opened = await f.runtime.call("open_workspace", { path: f.root }) as {
+        instructions: readonly { path: string; content: string }[];
+        availableInstructionFiles: readonly string[];
+        instructionScanComplete: boolean;
+      };
+      expect(opened.instructions).toEqual([
+        { path: "AGENTS.md", content: "root agent rules\n" },
+        { path: "CLAUDE.md", content: "root claude rules\n" },
+      ]);
+      expect(opened.availableInstructionFiles).toEqual([
+        "packages/AGENTS.md",
+        "packages/app/CLAUDE.MD",
+      ]);
+      expect(opened.instructionScanComplete).toBe(true);
+    } finally {
+      await f.runtime.close();
+      rmSync(f.base, { recursive: true, force: true });
+    }
+  });
+
+  test("repository exploration lists directories and searches bounded text without shell access", async () => {
+    const f = fixture();
+    try {
+      mkdirSync(join(f.root, "src"));
+      mkdirSync(join(f.root, "node_modules", "ignored"), { recursive: true });
+      writeFileSync(join(f.root, "src", "alpha.ts"), "export const Needle = 'first';\n");
+      writeFileSync(join(f.root, "src", "beta.ts"), "// needle second\n");
+      writeFileSync(join(f.root, "node_modules", "ignored", "dep.js"), "needle dependency\n");
+      const workspace = await f.runtime.call("open_workspace", { path: f.root }) as { id: string };
+
+      const listed = await f.runtime.call("list_directory", {
+        workspace_id: workspace.id,
+        path: "src",
+      }) as { path: string; entries: readonly { name: string; kind: string }[]; hasMore: boolean };
+      expect(listed).toEqual({
+        path: "src",
+        entries: [
+          { name: "alpha.ts", kind: "file" },
+          { name: "beta.ts", kind: "file" },
+        ],
+        hasMore: false,
+      });
+
+      const searched = await f.runtime.call("search_text", {
+        workspace_id: workspace.id,
+        query: "needle",
+      }) as { matches: readonly { path: string; line: number; preview: string }[]; scanComplete: boolean };
+      expect(searched.matches).toEqual([
+        { path: "src/alpha.ts", line: 1, preview: "export const Needle = 'first';" },
+        { path: "src/beta.ts", line: 1, preview: "// needle second" },
+      ]);
+      expect(searched.scanComplete).toBe(true);
+    } finally {
+      await f.runtime.close();
+      rmSync(f.base, { recursive: true, force: true });
+    }
+  });
+
+  test("read_many reports each path separately without erasing a valid neighbor or exposing host paths",async()=>{
+    const f=fixture();
+    try{
+      const workspace=await f.runtime.call("open_workspace",{path:f.root}) as {id:string};
+      writeFileSync(join(f.root,"binary.dat"),Buffer.from([0,1,2,3]));
+      const results=await f.runtime.call("read_many",{
+        workspace_id:workspace.id,reads:[
+          {path:"README.md",limit:1},
+          {path:"missing-file-sensitive-name.txt"},
+          {path:"../outside.txt"},
+          {path:"binary.dat"},
+          {path:"."},
+          {path:"README.md",offset:2,limit:1},
+        ],
+      }) as ReadonlyArray<{path:string;status:string;content:string;error?:{code:string;message:string}}>;
+      expect(results.map(x=>x.status)).toEqual(["ok","error","error","error","error","ok"]);
+      expect(results[0]?.content).toBe("1: hello");
+      expect(results[1]?.error?.code).toBe("not_found");
+      expect(results[2]?.error?.code).toBe("path_denied");
+      expect(results[3]?.error?.code).toBe("binary");
+      expect(results[4]?.error?.code).toBe("path_denied");
+      expect(results[5]?.content).toBe("2: world");
+      expect(JSON.stringify(results)).not.toContain(f.root);
+      // An invalid workspace is an owner failure, not an item-level bypass.
+      await expect(f.runtime.call("read_many",{
+        workspace_id:"foreign",reads:[{path:"README.md"}],
+      })).rejects.toThrow();
+    }finally{
+      await f.runtime.close();
+      rmSync(f.base,{recursive:true,force:true});
+    }
+  });
+
+  test("read_many accounts for budget-limited files instead of silently omitting requested results",async()=>{
+    const f=fixture();
+    try{
+      const workspace=await f.runtime.call("open_workspace",{path:f.root}) as {id:string};
+      writeFileSync(join(f.root,"giant.txt"),("a".repeat(1600)+"\n").repeat(400));
+      writeFileSync(join(f.root,"many.txt"),Array.from({length:400},(_,i)=>`line ${i}\n`).join(""));
+      const results=await f.runtime.call("read_many",{
+        workspace_id:workspace.id,reads:[
+          {path:"giant.txt",limit:400}, {path:"README.md",limit:1},
+          {path:"many.txt",limit:400},{path:"many.txt",limit:400},
+          {path:"many.txt",limit:400},{path:"README.md",limit:1},
+        ],
+      }) as ReadonlyArray<{status:string;content:string;error?:{code:string}}>;
+      expect(results).toHaveLength(6);
+      expect(results[0]?.status).toBe("skipped");
+      expect(results[0]?.error?.code).toBe("batch_budget_exhausted");
+      expect(results[1]?.status).toBe("ok");
+      expect(results[2]?.status).toBe("ok");
+      expect(results[3]?.status).toBe("ok");
+      expect(results[4]?.status).toBe("ok");
+      expect(results[5]?.status).toBe("skipped");
+      expect(results[5]?.error?.code).toBe("batch_budget_exhausted");
+    }finally{
+      await f.runtime.close();
+      rmSync(f.base,{recursive:true,force:true});
+    }
+  });
+
   test("workspace-scoped failures create bounded privacy-safe incident references without changing the original error", async () => {
     const f = fixture();
     try {

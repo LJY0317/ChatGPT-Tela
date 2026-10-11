@@ -5,7 +5,8 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@chatgpt-tela/browser-host": "workspace:*"
+    "@chatgpt-tela/browser-host": "workspace:*",
+    "@chatgpt-tela/core": "workspace:*"
   },
   "peerDependencies": {
     "electron": "^44.4.5"

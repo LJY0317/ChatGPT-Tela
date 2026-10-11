@@ -1,0 +1,14 @@
+{
+  "name": "@chatgpt-tela/product-uninstall",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@chatgpt-tela/chat-service": "workspace:*",
+    "@chatgpt-tela/credential-store": "workspace:*",
+    "@chatgpt-tela/product-lifecycle": "workspace:*",
+    "@chatgpt-tela/service-supervisor": "workspace:*",
+    "@chatgpt-tela/tailscale-ingress": "workspace:*"
+  }
+}

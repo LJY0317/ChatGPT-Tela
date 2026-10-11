@@ -47,6 +47,69 @@ export interface CodexToolInvokeResponse {
   readonly result: NativeToolResult;
 }
 
+export type CodexWebState = "preparing" | "ready" | "failed" | "closed";
+
+export interface CodexAccountCheckContract {
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly nativeSignIn: "signed-in" | "signed-out" | "unavailable";
+  readonly webBinding: "matching" | "different" | "unbound" | "unavailable";
+  readonly nativeWebContainer: "matching" | "different" | "unavailable";
+  readonly userIdentity: "unverified";
+}
+
+/** Sensitive, ephemeral local UI data. Never include this in inventory, logs or caches. */
+export interface CodexAccountDisplayContract {
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly native: { readonly state: "signed-in" | "signed-out" | "unavailable"; readonly email?: string };
+  readonly web: { readonly state: "signed-in" | "signed-out" | "unavailable"; readonly email?: string };
+  /** Email comparison only, not proof of Desktop UI identity or workspace equality. */
+  readonly comparison: "matching" | "different" | "unavailable";
+}
+
+export function accountDisplayEmail(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 254 || !/^[^\s@\x00-\x1f\x7f]+@[^\s@\x00-\x1f\x7f]+$/.test(value)) return undefined;
+  return value;
+}
+
+export function compareAccountDisplayEmails(native: string | undefined, web: string | undefined): CodexAccountDisplayContract["comparison"] {
+  if (!native || !web) return "unavailable";
+  // Domains are case-insensitive; do not assume the same for local parts.
+  const normalized = (email: string) => email.slice(0, email.lastIndexOf("@") + 1) + email.slice(email.lastIndexOf("@") + 1).toLowerCase();
+  return normalized(native) === normalized(web) ? "matching" : "different";
+}
+
+export function parseCodexAccountDisplayContract(value: unknown): CodexAccountDisplayContract {
+  const item = object(value, "Codex account display");
+  if (item.contractVersion !== 1 || !Number.isSafeInteger(item.slot) || (item.slot as number) < 1 || (item.slot as number) > 99) throw new Error("Invalid Codex account display");
+  const read = (value: unknown): CodexAccountDisplayContract["native"] => {
+    const row = object(value, "Codex account display state");
+    if (!["signed-in", "signed-out", "unavailable"].includes(row.state as string)
+      || (row.email !== undefined && (row.state !== "signed-in" || accountDisplayEmail(row.email) === undefined))) throw new Error("Invalid Codex account display state");
+    return Object.freeze({ state: row.state as CodexAccountDisplayContract["native"]["state"], ...(row.email !== undefined ? { email: row.email as string } : {}) });
+  };
+  const native = read(item.native), web = read(item.web);
+  const comparison = compareAccountDisplayEmails(native.email, web.email);
+  if (item.comparison !== comparison) throw new Error("Invalid Codex account display comparison");
+  return Object.freeze({ contractVersion: 1, slot: item.slot as number, native, web, comparison });
+}
+
+export function parseCodexAccountCheckContract(value: unknown): CodexAccountCheckContract {
+  const item = object(value, "Codex account observation");
+  if (item.contractVersion !== 1 || !Number.isSafeInteger(item.slot)
+    || (item.slot as number) < 1 || (item.slot as number) > 99
+    || !["signed-in", "signed-out", "unavailable"].includes(item.nativeSignIn as string)
+    || !["matching", "different", "unbound", "unavailable"].includes(item.webBinding as string)
+    || !["matching", "different", "unavailable"].includes(item.nativeWebContainer as string)
+    || item.userIdentity !== "unverified") throw new Error("Invalid Codex account observation");
+  return Object.freeze({ contractVersion: 1, slot: item.slot as number,
+    nativeSignIn: item.nativeSignIn as CodexAccountCheckContract["nativeSignIn"],
+    webBinding: item.webBinding as CodexAccountCheckContract["webBinding"],
+    nativeWebContainer: item.nativeWebContainer as CodexAccountCheckContract["nativeWebContainer"],
+    userIdentity: "unverified" });
+}
+
 export interface CodexProfileStatusContract {
   readonly slot: number;
   readonly targetId: string;
@@ -55,7 +118,38 @@ export interface CodexProfileStatusContract {
   readonly targetSessionState: string;
   readonly controlState: "stopped" | "running" | "restart-required" | "orphaned";
   readonly childProcessId?: number;
+  readonly desktopProcessId?: number;
+  readonly connectionInProgress?: boolean;
+  readonly webModelsReady?: boolean;
+  readonly webState?: CodexWebState;
   readonly responsesRouteFingerprint?: string;
+}
+
+export interface CodexBridgePreviewContract {
+  readonly surfaces?: readonly { readonly id: string; readonly label: string }[];
+  readonly selectedSurfaceId?: string;
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly activeSurfaceCount: number;
+  readonly previewAvailable: boolean;
+  readonly imageMimeType?: "image/jpeg";
+  readonly imageBase64?: string;
+}
+
+export interface CodexModelSelectionCanaryContract {
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly familyCount: number;
+  readonly exercised: boolean;
+  readonly testedEffort?: "low" | "medium" | "high" | "xhigh" | "max";
+  readonly restoredEffort: "low" | "medium" | "high" | "xhigh" | "max";
+}
+
+export interface CodexContextAttachmentCanaryContract {
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly attachmentBytes: number;
+  readonly receiptVerified: true;
 }
 
 export interface ChatCapabilityContract {
@@ -76,6 +170,14 @@ export function parseCodexProfileStatusContract(value: unknown): CodexProfileSta
   if (item.childProcessId !== undefined && (!Number.isSafeInteger(item.childProcessId) || (item.childProcessId as number) < 1)) {
     throw new Error("Codex profile child process id is invalid");
   }
+  if (item.desktopProcessId !== undefined && (!Number.isSafeInteger(item.desktopProcessId) || (item.desktopProcessId as number) < 1)) {
+    throw new Error("Codex profile Desktop process id is invalid");
+  }
+  if (item.webState !== undefined && !["preparing", "ready", "failed", "closed"].includes(item.webState as string)) throw new Error("invalid Web connection state");
+  if (item.webModelsReady !== undefined && typeof item.webModelsReady !== "boolean") throw new Error("invalid Web model readiness");
+  if (item.connectionInProgress !== undefined && typeof item.connectionInProgress !== "boolean") {
+    throw new Error("Codex profile connection progress is invalid");
+  }
   const fingerprint = item.responsesRouteFingerprint;
   if (fingerprint !== undefined && (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint))) {
     throw new Error("Codex profile route fingerprint is invalid");
@@ -88,7 +190,113 @@ export function parseCodexProfileStatusContract(value: unknown): CodexProfileSta
     targetSessionState: text(item.targetSessionState, "Codex target session state"),
     controlState,
     ...(item.childProcessId === undefined ? {} : { childProcessId: item.childProcessId as number }),
+    ...(item.desktopProcessId === undefined ? {} : { desktopProcessId: item.desktopProcessId as number }),
+    ...(item.webState === undefined ? {} : { webState: item.webState as CodexWebState }),
+    ...(item.webModelsReady === undefined ? {} : { webModelsReady: item.webModelsReady as boolean }),
+    ...(item.connectionInProgress === undefined ? {} : { connectionInProgress: item.connectionInProgress as boolean }),
     ...(fingerprint === undefined ? {} : { responsesRouteFingerprint: fingerprint }),
+  });
+}
+
+export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePreviewContract {
+  const item = object(value, "Codex bridge preview");
+  if (item.contractVersion !== 1) throw new Error("unsupported Codex bridge preview version");
+  if (!Number.isSafeInteger(item.slot) || (item.slot as number) < 1 || (item.slot as number) > 99) {
+    throw new Error("Codex bridge preview slot is invalid");
+  }
+  if (!Number.isSafeInteger(item.activeSurfaceCount)
+    || (item.activeSurfaceCount as number) < 0
+    || (item.activeSurfaceCount as number) > 128) {
+    throw new Error("Codex bridge preview active surface count is invalid");
+  }
+  if (typeof item.previewAvailable !== "boolean") throw new Error("Codex bridge preview availability is invalid");
+  const surfaces = item.surfaces;
+  if (surfaces !== undefined && (!Array.isArray(surfaces) || surfaces.length !== item.activeSurfaceCount
+    || surfaces.some(row => !row || typeof row.id !== "string" || !/^surface_[A-Za-z0-9_-]{32}$/.test(row.id)
+      || typeof row.label !== "string" || row.label.length > 200)
+    || new Set(surfaces.map(row => row.id)).size !== surfaces.length)) throw new Error("invalid browser surface inventory");
+  const selected = item.selectedSurfaceId;
+  if (selected !== undefined && (typeof selected !== "string" || !Array.isArray(surfaces)
+    || !surfaces.some(row => row.id === selected))) throw new Error("invalid selected browser surface");
+  const imageMimeType = item.imageMimeType;
+  const imageBase64 = item.imageBase64;
+  if (item.previewAvailable) {
+    if ((item.activeSurfaceCount !== 1 && selected === undefined) || imageMimeType !== "image/jpeg" || typeof imageBase64 !== "string"
+      || imageBase64.length < 4 || imageBase64.length > 6 * 1024 * 1024
+      || !/^[A-Za-z0-9+/]+={0,2}$/.test(imageBase64)) {
+      throw new Error("Codex bridge preview image is invalid");
+    }
+  } else if (imageMimeType !== undefined || imageBase64 !== undefined) {
+    throw new Error("unavailable Codex bridge preview must not include image data");
+  }
+  return Object.freeze({
+    contractVersion: 1,
+    slot: item.slot as number,
+    activeSurfaceCount: item.activeSurfaceCount as number,
+    previewAvailable: item.previewAvailable,
+    ...(surfaces ? { surfaces: Object.freeze(surfaces.map(row => Object.freeze({ id: row.id, label: row.label }))) } : {}),
+    ...(selected ? { selectedSurfaceId: selected as string } : {}),
+    ...(item.previewAvailable ? { imageMimeType: "image/jpeg" as const, imageBase64: imageBase64 as string } : {}),
+  });
+}
+
+export function parseCodexModelSelectionCanaryContract(value: unknown): CodexModelSelectionCanaryContract {
+  const item = object(value, "Codex model selection canary");
+  if (item.contractVersion !== 1) throw new Error("unsupported Codex model selection canary version");
+  if (!Number.isSafeInteger(item.slot) || (item.slot as number) < 1 || (item.slot as number) > 99) {
+    throw new Error("Codex model selection canary slot is invalid");
+  }
+  if (!Number.isSafeInteger(item.familyCount) || (item.familyCount as number) < 0 || (item.familyCount as number) > 64) {
+    throw new Error("Codex model selection canary family count is invalid");
+  }
+  if (typeof item.exercised !== "boolean") throw new Error("Codex model selection canary exercised flag is invalid");
+  const efforts = ["low", "medium", "high", "xhigh", "max"] as const;
+  const restoredEffort = item.restoredEffort;
+  if (!efforts.includes(restoredEffort as never)) throw new Error("Codex model selection canary restored effort is invalid");
+  const testedEffort = item.testedEffort;
+  if (testedEffort !== undefined && !efforts.includes(testedEffort as never)) {
+    throw new Error("Codex model selection canary tested effort is invalid");
+  }
+  if (item.exercised && testedEffort === undefined) {
+    throw new Error("exercised Codex model selection canary is missing its tested effort");
+  }
+  if (!item.exercised && testedEffort !== undefined) {
+    throw new Error("non-exercised Codex model selection canary must not report a tested effort");
+  }
+  const base = {
+    contractVersion: 1 as const,
+    slot: item.slot as number,
+    familyCount: item.familyCount as number,
+    exercised: item.exercised,
+    restoredEffort: restoredEffort as CodexModelSelectionCanaryContract["restoredEffort"],
+  };
+  return testedEffort === undefined
+    ? Object.freeze(base)
+    : Object.freeze({
+        ...base,
+        testedEffort: testedEffort as CodexModelSelectionCanaryContract["restoredEffort"],
+      });
+}
+
+export function parseCodexContextAttachmentCanaryContract(value: unknown): CodexContextAttachmentCanaryContract {
+  const item = object(value, "Codex context attachment canary");
+  if (item.contractVersion !== 1) throw new Error("unsupported Codex context attachment canary version");
+  if (!Number.isSafeInteger(item.slot) || (item.slot as number) < 1 || (item.slot as number) > 99) {
+    throw new Error("Codex context attachment canary slot is invalid");
+  }
+  if (!Number.isSafeInteger(item.attachmentBytes)
+    || (item.attachmentBytes as number) < 1
+    || (item.attachmentBytes as number) > 20_000_000) {
+    throw new Error("Codex context attachment canary byte count is invalid");
+  }
+  if (item.receiptVerified !== true) {
+    throw new Error("Codex context attachment canary receipt is not proven");
+  }
+  return Object.freeze({
+    contractVersion: 1 as const,
+    slot: item.slot as number,
+    attachmentBytes: item.attachmentBytes as number,
+    receiptVerified: true as const,
   });
 }
 
@@ -238,4 +446,45 @@ export function parseCodexToolInvokeResponse(value: unknown): CodexToolInvokeRes
       isError: result.isError,
     }),
   });
+}
+
+/** Private, on-demand access to the already owned Native app-server; never public Gateway data. */
+export interface CodexTerminalSessionContract {
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly endpoint: string;
+}
+
+export function parseCodexTerminalSessionContract(value: unknown): CodexTerminalSessionContract {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid terminal session");
+  const item = value as Record<string, unknown>;
+  if (item.contractVersion !== 1 || !Number.isSafeInteger(item.slot)
+    || (item.slot as number) < 1 || (item.slot as number) > 99 || typeof item.endpoint !== "string") {
+    throw new Error("invalid terminal session contract");
+  }
+  const url = new URL(item.endpoint);
+  if (url.protocol !== "ws:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
+    || !url.port || url.username || url.password || url.search || url.hash || !["", "/"].includes(url.pathname)) {
+    throw new Error("terminal session requires a plain loopback WebSocket endpoint");
+  }
+  return Object.freeze({ contractVersion: 1, slot: item.slot as number, endpoint: url.href });
+}
+
+/** Private profile control response. Browser admission is distinct from app-server visibility. */
+export interface CodexWebStateContract {
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly webState: CodexWebState;
+  readonly webModelIds: readonly string[];
+}
+export function parseCodexWebStateContract(value: unknown): CodexWebStateContract {
+  const item = object(value, "Codex Web state");
+  if (item.contractVersion !== 1 || !Number.isSafeInteger(item.slot) || (item.slot as number) < 1 || (item.slot as number) > 99
+    || !["preparing", "ready", "failed", "closed"].includes(item.webState as string)
+    || !Array.isArray(item.webModelIds) || item.webModelIds.length > 128
+    || item.webModelIds.some(id => typeof id !== "string" || id.length > 256 || !id.startsWith("chatgpt-tela-web/"))
+    || new Set(item.webModelIds).size !== item.webModelIds.length
+    || (item.webState === "ready" ? item.webModelIds.length === 0 : item.webModelIds.length !== 0)) throw new Error("invalid Codex Web state");
+  return Object.freeze({ contractVersion: 1, slot: item.slot as number, webState: item.webState as CodexWebState,
+    webModelIds: Object.freeze([...item.webModelIds]) as readonly string[] });
 }

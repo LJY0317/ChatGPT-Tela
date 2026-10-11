@@ -1,0 +1,458 @@
+diff --git a/codex-rs/app-server/tests/common/models_cache.rs b/codex-rs/app-server/tests/common/models_cache.rs
+index 0b14bc0..b98bf46 100644
+--- a/codex-rs/app-server/tests/common/models_cache.rs
++++ b/codex-rs/app-server/tests/common/models_cache.rs
+@@ -12,6 +12,7 @@ use std::path::Path;
+ /// Convert a ModelPreset to ModelInfo for cache storage.
+ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
+     ModelInfo {
++        compaction_mode: None,
+         slug: preset.id.clone(),
+         display_name: preset.display_name.clone(),
+         description: Some(preset.description.clone()),
+diff --git a/codex-rs/codex-api/tests/models_integration.rs b/codex-rs/codex-api/tests/models_integration.rs
+index ed43d8a..f15ef5a 100644
+--- a/codex-rs/codex-api/tests/models_integration.rs
++++ b/codex-rs/codex-api/tests/models_integration.rs
+@@ -108,6 +108,7 @@ async fn models_client_hits_models_endpoint() {
+ 
+     let response = ModelsResponse {
+         models: vec![ModelInfo {
++            compaction_mode: None,
+             slug: "gpt-test".to_string(),
+             display_name: "gpt-test".to_string(),
+             description: Some("desc".to_string()),
+diff --git a/codex-rs/core/src/session/context_window.rs b/codex-rs/core/src/session/context_window.rs
+index edddb25..3d698a2 100644
+--- a/codex-rs/core/src/session/context_window.rs
++++ b/codex-rs/core/src/session/context_window.rs
+@@ -55,7 +55,19 @@ async fn context_window_token_status_with_config(
+     config: &Config,
+     model_info: &ModelInfo,
+ ) -> ContextWindowTokenStatus {
+-    let active_context_tokens = sess.get_total_token_usage().await;
++    let reported_context_tokens = sess.get_total_token_usage().await;
++    // Local-compaction models may omit backend usage (for example browser transports).
++    // Keep context-pressure estimation separate from token usage and billing records.
++    let active_context_tokens = if model_info.prefers_local_compaction() {
++        let history = sess.clone_history().await;
++        let base_instructions = sess.get_base_instructions().await;
++        history
++            .estimate_token_count_with_base_instructions(&base_instructions)
++            .unwrap_or(reported_context_tokens)
++            .max(reported_context_tokens)
++    } else {
++        reported_context_tokens
++    };
+ 
+     // Count either the full active context or only the tokens added after the initial prefix.
+     let (auto_compact_scope_tokens, auto_compact_scope_limit, auto_compact_window_prefill_tokens) =
+diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
+index b88b343..06f2dda 100644
+--- a/codex-rs/core/src/session/turn.rs
++++ b/codex-rs/core/src/session/turn.rs
+@@ -208,7 +208,9 @@ pub(crate) async fn run_turn(
+             .await;
+         // Publish the failure only after prompt hooks finish, so clients cannot react to
+         // an error by steering follow-up input into a turn still preserving its prompt.
+-        let message_prefix = match turn_context.provider.capabilities().remote_compaction {
++        let message_prefix = match turn_context
++            .remote_compaction_support(&turn_context.capture_current_model_info())
++        {
+             RemoteCompactionSupport::V2 => Some("Error running remote compact task".to_string()),
+             RemoteCompactionSupport::Unsupported => None,
+         };
+@@ -1471,7 +1473,7 @@ async fn run_auto_compact(
+         return Ok(());
+     }
+ 
+-    match turn_context.provider.capabilities().remote_compaction {
++    match turn_context.remote_compaction_support(&step_context.settings.model_info) {
+         RemoteCompactionSupport::V2 => {
+             emit_compact_metric(
+                 &sess.services.session_telemetry,
+diff --git a/codex-rs/core/src/session/turn_context.rs b/codex-rs/core/src/session/turn_context.rs
+index 0d7b59d..b26673d 100644
+--- a/codex-rs/core/src/session/turn_context.rs
++++ b/codex-rs/core/src/session/turn_context.rs
+@@ -379,6 +379,17 @@ enum TurnContextBuildMode {
+ }
+ 
+ impl TurnContext {
++    pub(crate) fn remote_compaction_support(
++        &self,
++        model: &ModelInfo,
++    ) -> codex_model_provider::RemoteCompactionSupport {
++        if model.prefers_local_compaction() {
++            codex_model_provider::RemoteCompactionSupport::Unsupported
++        } else {
++            self.provider.capabilities().remote_compaction
++        }
++    }
++
+     /// Captures current model metadata without preparing a step.
+     pub(crate) fn capture_current_model_info(&self) -> Arc<ModelInfo> {
+         Arc::clone(&self.next_step_settings.load().model_info)
+diff --git a/codex-rs/core/src/tasks/compact.rs b/codex-rs/core/src/tasks/compact.rs
+index 14913d9..ce3a0fd 100644
+--- a/codex-rs/core/src/tasks/compact.rs
++++ b/codex-rs/core/src/tasks/compact.rs
+@@ -38,7 +38,7 @@ impl SessionTask for CompactTask {
+             return Ok(None);
+         }
+ 
+-        let result = match ctx.provider.capabilities().remote_compaction {
++        let result = match ctx.remote_compaction_support(&ctx.capture_current_model_info()) {
+             RemoteCompactionSupport::V2 => {
+                 emit_compact_metric(
+                     &session.services.session_telemetry,
+diff --git a/codex-rs/core/tests/suite/auto_review.rs b/codex-rs/core/tests/suite/auto_review.rs
+index 6f5c9fc..f38fc3f 100644
+--- a/codex-rs/core/tests/suite/auto_review.rs
++++ b/codex-rs/core/tests/suite/auto_review.rs
+@@ -599,6 +599,7 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
+ 
+ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> ModelInfo {
+     ModelInfo {
++        compaction_mode: None,
+         slug: slug.to_string(),
+         display_name: format!("{slug} display"),
+         description: Some(format!("{slug} description")),
+diff --git a/codex-rs/core/tests/suite/compact.rs b/codex-rs/core/tests/suite/compact.rs
+index 7455ff7..0490459 100644
+--- a/codex-rs/core/tests/suite/compact.rs
++++ b/codex-rs/core/tests/suite/compact.rs
+@@ -19,6 +19,7 @@ use codex_protocol::config_types::Settings;
+ use codex_protocol::items::TurnItem;
+ use codex_protocol::models::ImageReference;
+ use codex_protocol::models::PermissionProfile;
++use codex_protocol::openai_models::ModelCompactionMode;
+ use codex_protocol::openai_models::ModelInfo;
+ use codex_protocol::openai_models::ModelServiceTier;
+ use codex_protocol::openai_models::ModelsResponse;
+@@ -918,8 +919,77 @@ async fn compact_hooks_respect_matchers_and_post_runs_after_compaction() {
+     assert!(input.get("implementation").is_none());
+ }
+ 
++// Browser transports omit usage. Pressure must still include earlier model output,
++// while provider-default Native behavior and reported usage remain unchanged.
++#[test_case::test_case(Some(ModelCompactionMode::Local); "local_without_usage")]
++#[test_case::test_case(None; "native_without_usage")]
+ #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+-async fn manual_compact_uses_custom_prompt() {
++async fn auto_compact_tracks_history_without_backend_usage(
++    compaction_mode: Option<ModelCompactionMode>,
++) {
++    skip_if_no_network!();
++    let server = start_mock_server().await;
++    let large_reply = "inert fixture text ".repeat(2000);
++    let first = sse(vec![
++        ev_assistant_message("m1", &large_reply),
++        ev_completed("r1"),
++    ]);
++    let summary = sse(vec![
++        ev_assistant_message("m2", AUTO_SUMMARY_TEXT),
++        ev_completed("r2"),
++    ]);
++    let last = sse(vec![
++        ev_assistant_message("m3", FINAL_REPLY),
++        ev_completed("r3"),
++    ]);
++    let local = compaction_mode == Some(ModelCompactionMode::Local);
++    let sequence = if local {
++        vec![first, summary, last]
++    } else {
++        vec![first, last]
++    };
++    let requests = mount_sse_sequence(&server, sequence).await;
++    let provider = openai_model_provider(&server);
++    let mut builder = test_codex()
++        .with_model_info_override("gpt-5.5", move |info| {
++            info.compaction_mode = compaction_mode
++        })
++        .with_config(move |config| {
++            config.model_provider = provider;
++            config.base_instructions = Some("Follow user instructions.".into());
++            config.model_auto_compact_token_limit = Some(5000);
++            set_test_compact_prompt(config);
++        });
++    let codex = builder.build(&server).await.unwrap().codex;
++    for text in ["Reply with fixture data.", "Continue without tools."] {
++        codex
++            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
++                text: text.into(),
++                text_elements: Vec::new(),
++            }]))
++            .await
++            .unwrap();
++        wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
++    }
++    let bodies: Vec<String> = requests
++        .requests()
++        .iter()
++        .map(|request| request.body_json().to_string())
++        .collect();
++    assert_eq!(bodies.len(), if local { 3 } else { 2 });
++    assert_eq!(
++        bodies
++            .iter()
++            .filter(|body| body_contains_text(body, SUMMARIZATION_PROMPT))
++            .count(),
++        usize::from(local)
++    );
++}
++
++#[test_case::test_case(None; "provider_local")]
++#[test_case::test_case(Some(ModelCompactionMode::Local); "model_local")]
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn manual_compact_uses_custom_prompt(compaction_mode: Option<ModelCompactionMode>) {
+     skip_if_no_network!();
+ 
+     let server = start_mock_server().await;
+@@ -935,11 +1005,18 @@ async fn manual_compact_uses_custom_prompt() {
+ 
+     let custom_prompt = "Use this compact prompt instead";
+ 
+-    let model_provider = non_openai_model_provider(&server);
+-    let mut builder = test_codex().with_config(move |config| {
+-        config.model_provider = model_provider;
+-        config.compact_prompt = Some(custom_prompt.to_string());
+-    });
++    let model_provider = match compaction_mode {
++        Some(ModelCompactionMode::Local) => openai_model_provider(&server),
++        Some(ModelCompactionMode::ProviderDefault) | None => non_openai_model_provider(&server),
++    };
++    let mut builder = test_codex()
++        .with_model_info_override("gpt-5.5", move |info| {
++            info.compaction_mode = compaction_mode
++        })
++        .with_config(move |config| {
++            config.model_provider = model_provider;
++            config.compact_prompt = Some(custom_prompt.to_string());
++        });
+     let codex = builder
+         .build(&server)
+         .await
+@@ -1854,10 +1931,12 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
+     assert_eq!(requests_payloads.len(), 7);
+ }
+ 
++#[test_case::test_case(None; "provider_local")]
++#[test_case::test_case(Some(ModelCompactionMode::Local); "model_local")]
+ // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+ #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+ #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
+-async fn auto_compact_runs_after_token_limit_hit() {
++async fn auto_compact_runs_after_token_limit_hit(compaction_mode: Option<ModelCompactionMode>) {
+     skip_if_no_network!();
+ 
+     let server = start_mock_server().await;
+@@ -1884,13 +1963,20 @@ async fn auto_compact_runs_after_token_limit_hit() {
+ 
+     let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
+ 
+-    let model_provider = non_openai_model_provider(&server);
++    let model_provider = match compaction_mode {
++        Some(ModelCompactionMode::Local) => openai_model_provider(&server),
++        Some(ModelCompactionMode::ProviderDefault) | None => non_openai_model_provider(&server),
++    };
+ 
+-    let mut builder = test_codex().with_config(move |config| {
+-        config.model_provider = model_provider;
+-        set_test_compact_prompt(config);
+-        config.model_auto_compact_token_limit = Some(200_000);
+-    });
++    let mut builder = test_codex()
++        .with_model_info_override("gpt-5.5", move |info| {
++            info.compaction_mode = compaction_mode
++        })
++        .with_config(move |config| {
++            config.model_provider = model_provider;
++            set_test_compact_prompt(config);
++            config.model_auto_compact_token_limit = Some(200_000);
++        });
+     let codex = builder.build(&server).await.unwrap().codex;
+ 
+     codex
+diff --git a/codex-rs/core/tests/suite/model_switching.rs b/codex-rs/core/tests/suite/model_switching.rs
+index 2694a94..a447adc 100644
+--- a/codex-rs/core/tests/suite/model_switching.rs
++++ b/codex-rs/core/tests/suite/model_switching.rs
+@@ -110,6 +110,7 @@ fn test_model_info(
+     input_modalities: Vec<InputModality>,
+ ) -> ModelInfo {
+     ModelInfo {
++        compaction_mode: None,
+         slug: slug.to_string(),
+         display_name: display_name.to_string(),
+         description: Some(description.to_string()),
+@@ -1238,6 +1239,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
+         (smaller_context_window * effective_context_window_percent) / 100;
+ 
+     let base_model = ModelInfo {
++        compaction_mode: None,
+         slug: large_model_slug.to_string(),
+         display_name: "Larger Model".to_string(),
+         description: Some("larger context window model".to_string()),
+diff --git a/codex-rs/core/tests/suite/models_cache_ttl.rs b/codex-rs/core/tests/suite/models_cache_ttl.rs
+index 2ffb1b8..bd5fe16 100644
+--- a/codex-rs/core/tests/suite/models_cache_ttl.rs
++++ b/codex-rs/core/tests/suite/models_cache_ttl.rs
+@@ -619,6 +619,7 @@ struct ModelsCache {
+ 
+ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
+     ModelInfo {
++        compaction_mode: None,
+         slug: slug.to_string(),
+         display_name: "Remote Test".to_string(),
+         description: Some("remote model".to_string()),
+diff --git a/codex-rs/core/tests/suite/remote_models.rs b/codex-rs/core/tests/suite/remote_models.rs
+index dad188d..373debd 100644
+--- a/codex-rs/core/tests/suite/remote_models.rs
++++ b/codex-rs/core/tests/suite/remote_models.rs
+@@ -568,6 +568,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
+         .await;
+ 
+     let remote_model = ModelInfo {
++        compaction_mode: None,
+         slug: REMOTE_MODEL_SLUG.to_string(),
+         display_name: "Remote Test".to_string(),
+         description: Some("A remote model that requires the test shell".to_string()),
+@@ -843,6 +844,7 @@ async fn remote_models_apply_legacy_instructions(auth: CodexAuth) -> Result<()>
+ 
+     let remote_instructions = "Use the remote instructions template only.";
+     let remote_model = ModelInfo {
++        compaction_mode: None,
+         slug: model.to_string(),
+         display_name: "Parallel Remote".to_string(),
+         description: Some("A remote model with custom instructions".to_string()),
+@@ -1431,6 +1433,7 @@ fn test_remote_model_with_policy(
+     truncation_policy: TruncationPolicyConfig,
+ ) -> ModelInfo {
+     ModelInfo {
++        compaction_mode: None,
+         slug: slug.to_string(),
+         display_name: format!("{slug} display"),
+         description: Some(format!("{slug} description")),
+diff --git a/codex-rs/core/tests/suite/rmcp_client.rs b/codex-rs/core/tests/suite/rmcp_client.rs
+index 54d31be..4777eb6 100644
+--- a/codex-rs/core/tests/suite/rmcp_client.rs
++++ b/codex-rs/core/tests/suite/rmcp_client.rs
+@@ -3200,6 +3200,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
+         &server,
+         ModelsResponse {
+             models: vec![ModelInfo {
++                compaction_mode: None,
+                 slug: text_only_model_slug.to_string(),
+                 display_name: "RMCP Text Only".to_string(),
+                 description: Some("Test model without image input support".to_string()),
+diff --git a/codex-rs/core/tests/suite/spawn_agent_description.rs b/codex-rs/core/tests/suite/spawn_agent_description.rs
+index bc0eaf7..1f36022 100644
+--- a/codex-rs/core/tests/suite/spawn_agent_description.rs
++++ b/codex-rs/core/tests/suite/spawn_agent_description.rs
+@@ -79,6 +79,7 @@ fn test_model_info(
+     service_tiers: Vec<ModelServiceTier>,
+ ) -> ModelInfo {
+     ModelInfo {
++        compaction_mode: None,
+         slug: slug.to_string(),
+         display_name: display_name.to_string(),
+         description: Some(description.to_string()),
+diff --git a/codex-rs/core/tests/suite/view_image.rs b/codex-rs/core/tests/suite/view_image.rs
+index ea6c401..725f7b8 100644
+--- a/codex-rs/core/tests/suite/view_image.rs
++++ b/codex-rs/core/tests/suite/view_image.rs
+@@ -1608,6 +1608,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
+         .await;
+     let model_slug = "text-only-view-image-test-model";
+     let text_only_model = ModelInfo {
++        compaction_mode: None,
+         slug: model_slug.to_string(),
+         display_name: "Text-only view_image test model".to_string(),
+         description: Some("Remote model for view_image unsupported-path coverage".to_string()),
+diff --git a/codex-rs/models-manager/src/model_info.rs b/codex-rs/models-manager/src/model_info.rs
+index 88ade7c..a5cbae4 100644
+--- a/codex-rs/models-manager/src/model_info.rs
++++ b/codex-rs/models-manager/src/model_info.rs
+@@ -99,6 +99,7 @@ fn is_h1_heading(line: &str) -> bool {
+ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
+     warn!("Unknown model {slug} is used. This will use fallback model metadata.");
+     ModelInfo {
++        compaction_mode: None,
+         slug: slug.to_string(),
+         display_name: slug.to_string(),
+         description: None,
+diff --git a/codex-rs/prompts/src/model_instructions_tests.rs b/codex-rs/prompts/src/model_instructions_tests.rs
+index 540cbab..e58275d 100644
+--- a/codex-rs/prompts/src/model_instructions_tests.rs
++++ b/codex-rs/prompts/src/model_instructions_tests.rs
+@@ -10,6 +10,7 @@ use pretty_assertions::assert_eq;
+ 
+ fn test_model(model_messages: Option<ModelMessages>) -> ModelInfo {
+     ModelInfo {
++        compaction_mode: None,
+         slug: "test-model".to_string(),
+         display_name: "Test Model".to_string(),
+         description: None,
+diff --git a/codex-rs/protocol/src/openai_models.rs b/codex-rs/protocol/src/openai_models.rs
+index cb0c9f0..a4e57fc 100644
+--- a/codex-rs/protocol/src/openai_models.rs
++++ b/codex-rs/protocol/src/openai_models.rs
+@@ -399,9 +399,20 @@ const fn is_true(value: &bool) -> bool {
+     *value
+ }
+ 
++/// Select a portable local summary without changing provider identity or authentication.
++#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
++#[serde(rename_all = "snake_case")]
++pub enum ModelCompactionMode {
++    Local,
++    ProviderDefault,
++}
++
+ /// Model metadata returned by the Codex backend `/models` endpoint.
+ #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+ pub struct ModelInfo {
++    /// Absent preserves the provider default. Local summaries remain ordinary Native history.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub compaction_mode: Option<ModelCompactionMode>,
+     /// Model-owned approval coverage. Absent preserves legacy settings; an empty map disables
+     /// ordinary Guardian review. Keys are computer_use, shell, file_changes, mcp, network,
+     /// and permissions. This does not override mandatory safety or administrator requirements.
+@@ -511,6 +522,10 @@ pub struct ModelInfo {
+ }
+ 
+ impl ModelInfo {
++    pub fn prefers_local_compaction(&self) -> bool {
++        self.compaction_mode == Some(ModelCompactionMode::Local)
++    }
++
+     pub fn resolved_context_window(&self) -> Option<i64> {
+         self.context_window.or(self.max_context_window)
+     }
+@@ -1053,8 +1068,25 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn model_compaction_mode_is_opt_in_and_round_trips() {
++        let mut model = test_model(/*spec*/ None);
++        assert!(!model.prefers_local_compaction());
++        let value = serde_json::to_value(&model).expect("serialize model");
++        assert!(value.get("compaction_mode").is_none());
++        model.compaction_mode = Some(ModelCompactionMode::Local);
++        let encoded = serde_json::to_value(&model).expect("serialize local model");
++        assert_eq!(encoded["compaction_mode"], "local");
++        let decoded: ModelInfo = serde_json::from_value(encoded).expect("decode local model");
++        assert_eq!(decoded, model);
++        assert!(decoded.prefers_local_compaction());
++        model.compaction_mode = Some(ModelCompactionMode::ProviderDefault);
++        assert!(!model.prefers_local_compaction());
++    }
++
+     pub(super) fn test_model(spec: Option<ModelMessages>) -> ModelInfo {
+         ModelInfo {
++            compaction_mode: None,
+             slug: "test-model".to_string(),
+             display_name: "Test Model".to_string(),
+             description: None,

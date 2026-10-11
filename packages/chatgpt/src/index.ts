@@ -1,4 +1,8 @@
 import type { BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import type {
+  ChatGptContextAttachment,
+  ChatGptContextAttachmentReference,
+} from "./context-attachment";
 
 export type ProofState = "proven" | "probable" | "ambiguous";
 
@@ -39,13 +43,18 @@ export type WebPhysicalContextSegment =
       readonly revisionId: string;
       readonly kind: WebContextRevisionKind;
       readonly content: string;
+      /** Canonical, ordered evidence identities bound to this exact logical revision.
+       * The prose body is NOT proof of attachment ownership. */
+      readonly evidence?: readonly import("@chatgpt-tela/core").NativeEvidenceReference[];
     };
 
 export interface WebPhysicalContext {
   readonly headRevisionId: string;
+  /** Exact canonical revision already represented by a retained Web conversation. */
+  readonly baseRevisionId?: string;
   /** Latest active user/steering revision in the canonical Native lineage. */
   readonly activeRequestRevisionId?: string;
-  readonly mode: "full" | "checkpoint-delta";
+  readonly mode: "full" | "checkpoint-delta" | "retained-delta";
   readonly logicalTokens: number;
   readonly transferTokens: number;
   readonly segments: readonly WebPhysicalContextSegment[];
@@ -63,7 +72,23 @@ export interface WebTurnRequest {
   readonly nativeTurnId: string;
   readonly webEpochId: string;
   readonly physicalContext: WebPhysicalContext;
+  readonly contextAttachment?: ChatGptContextAttachmentReference;
+  readonly media?: readonly import("./turn-media").WebTurnMedia[];
   readonly toolBridge?: WebToolBridgeContext;
+}
+
+export interface WebContextAttachmentPreloadRequest {
+  readonly nativeTaskId: string;
+  readonly webEpochId: string;
+  readonly attachment: ChatGptContextAttachment;
+}
+
+export interface WebContextAttachmentPreloadResult {
+  readonly nativeTaskId: string;
+  readonly webEpochId: string;
+  readonly attachmentName: string;
+  readonly attachmentSha256: string;
+  readonly providerOperationId: string;
 }
 
 export interface WebTurnHandle {
@@ -80,13 +105,21 @@ export interface WebTurnState {
 
 export type WebTurnEvent =
   | {
+      readonly kind: "progress";
+      readonly providerTurnId: string;
+      readonly summary: string;
+    }
+  | {
       readonly kind: "continuing";
       readonly providerTurnId: string;
     }
   | {
       readonly kind: "completed";
       readonly providerTurnId: string;
+      /** Markdown for user-facing presentation. Never parse it as a protocol payload. */
       readonly answer: string;
+      /** Unformatted text from the same proven owned body, when the adapter exposes it. */
+      readonly plainAnswer?: string;
     }
   | {
       readonly kind: "failed";
@@ -111,6 +144,7 @@ export interface WebContextCheckpointRequest {
   readonly webEpochId: string;
   readonly sourceRevisionId: string;
   readonly physicalContext: WebPhysicalContext;
+  readonly media?: readonly import("./turn-media").WebTurnMedia[];
 }
 
 export interface WebContextCheckpointResult {
@@ -132,6 +166,7 @@ export interface WebContextCheckpointProvider {
     surface: BrowserSurfaceLease,
     request: WebContextCheckpointRequest,
     signal?: AbortSignal,
+    onProgress?: (summary: string) => void,
   ): Promise<SemanticObservation<WebContextCheckpointResult>>;
 }
 
@@ -141,6 +176,12 @@ export interface WebConversationProvider {
     surface: BrowserSurfaceLease,
     signal?: AbortSignal,
   ): Promise<SemanticObservation<ChatGptCapabilities>>;
+
+  preloadContextAttachment?(
+    surface: BrowserSurfaceLease,
+    request: WebContextAttachmentPreloadRequest,
+    signal?: AbortSignal,
+  ): Promise<SemanticObservation<WebContextAttachmentPreloadResult>>;
 
   submitTurn(
     surface: BrowserSurfaceLease,
@@ -177,4 +218,10 @@ export * from "./surface";
 export * from "./account-identity";
 export * from "./approval-policy";
 export * from "./dom-driver";
+export * from "./session";
 export * from "./semantic-provider";
+export * from "./model-picker";
+export * from "./physical-limits";
+export * from "./context-attachment";
+export * from "./turn-media";
+export * from "./checkpoint-provider";

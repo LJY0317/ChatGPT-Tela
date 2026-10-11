@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
+  lstatSync,
+  realpathSync,
   readFileSync,
   renameSync,
   writeFileSync,
@@ -63,6 +66,26 @@ export function writeChatApprovedRootsConfig(path: string, config: ChatApprovedR
   writeFileSync(temporary, `${JSON.stringify(normalized, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   try { chmodSync(temporary, 0o600); } catch { /* Windows ACLs own permissions there. */ }
   renameSync(temporary, path);
+}
+
+export function chatApprovedRootsFingerprint(config: ChatApprovedRootsConfig): string {
+  return createHash("sha256").update(JSON.stringify([...config.roots].sort())).digest("hex");
+}
+
+/** Explicit local approval; never make a user workspace product-owned. */
+export function manageChatApprovedRoots(path: string, action: "roots" | "allow-root" | "disallow-root", requested?: string): ChatApprovedRootsConfig {
+  const current = readChatApprovedRootsConfig(path);
+  if (action === "roots") return current;
+  if (!requested || !isAbsolute(requested) || /[\u0000\r\n]/.test(requested)) throw new Error("an absolute folder path is required");
+  let root = resolve(requested);
+  if (action === "allow-root") {
+    const stat = lstatSync(root);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("approved folder must be a real directory");
+    root = realpathSync(root);
+  } else if (existsSync(root)) root = realpathSync(root);
+  const next: ChatApprovedRootsConfig = {version:1,roots:action === "allow-root" ? [...new Set([...current.roots, root])] : current.roots.filter(value => value !== root)};
+  writeChatApprovedRootsConfig(path, next);
+  return next;
 }
 
 export function parseChatAgentProvidersConfig(value: unknown): ChatAgentProvidersConfig {

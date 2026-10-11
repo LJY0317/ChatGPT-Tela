@@ -61,13 +61,20 @@ describe("dynamic Tela Chat backend", () => {
       available = false;
       await expect(backend.call("read", {})).rejects.toThrow("Chat backend is unavailable");
       const diagnostics = readFileSync(diagnosticPath, "utf8").trim().split("\n").map(line => JSON.parse(line));
-      expect(diagnostics.map(item => [item.stage, item.service])).toEqual([
+      // The shared diagnostic stream intentionally includes HTTP transport
+      // stages. Test the router's events by event type, not total line count.
+      expect(diagnostics.filter(item => item.event === "chatgpt_tela_gateway")
+        .map(item => [item.stage, item.service])).toEqual([
         ["backend_call_start", "chat"],
         ["backend_call_complete", "chat"],
         ["backend_call_start", "chat"],
         ["backend_call_complete", "chat"],
         ["backend_call_unmounted", "chat"],
       ]);
+      expect(diagnostics.some(item => item.event === "chatgpt_tela_http"
+        && item.stage === "http_response_finished")).toBe(true);
+      expect(readFileSync(diagnosticPath, "utf8")).not.toContain(token);
+      expect(readFileSync(diagnosticPath, "utf8")).not.toContain("chatws_fixture");
     } finally {
       await server.stop();
       if (previousDiagnosticPath === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;

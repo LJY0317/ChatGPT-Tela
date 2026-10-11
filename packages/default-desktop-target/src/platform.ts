@@ -72,16 +72,6 @@ export interface DefaultDesktopInstallation {
   readonly normalQuitSupported: boolean;
 }
 
-function macBundleForExecutable(executable: string): string {
-  const macos = dirname(executable);
-  const contents = dirname(macos);
-  const bundle = dirname(contents);
-  if (macos !== join(contents, "MacOS") || !bundle.endsWith(".app")) {
-    throw new Error("ChatGPT executable is not inside a canonical macOS app bundle");
-  }
-  return bundle;
-}
-
 function commandMatchesExecutable(command: string, executable: string): boolean {
   return command === executable || command.startsWith(`${executable} `);
 }
@@ -143,9 +133,8 @@ export async function requestDefaultDesktopNormalQuit(
     throw new Error("ChatGPT Desktop process identity changed before normal quit");
   }
   if (installation.platform === "darwin") {
-    const bundle = macBundleForExecutable(installation.chatGptExecutable);
-    const escaped = bundle.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-    const result = await runner.run("/usr/bin/osascript", ["-e", `tell application "${escaped}" to quit`]);
+    const script = `ObjC.import("AppKit"); const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(${expectedPid}); if (!app || app.isNil() || !app.terminate) throw new Error("ChatGPT process could not be asked to quit");`;
+    const result = await runner.run("/usr/bin/osascript", ["-l", "JavaScript", "-e", script]);
     if (result.stderr.trim()) {
       throw new Error(`ChatGPT normal quit reported an error: ${result.stderr.trim().slice(0, 240)}`);
     }
@@ -403,4 +392,17 @@ export function resolveDefaultDesktopInstallation(input: {
   }
 
   throw new Error(`built-in default Desktop adapter is unsupported on ${platform}`);
+}
+
+/** Launch through the platform application lifecycle; macOS open is a waiter, not Desktop. */
+export function defaultDesktopLaunchCommand(installation: DefaultDesktopInstallation): readonly string[] {
+  const arguments_ = [`--user-data-dir=${installation.userDataDir}`];
+  if (installation.platform !== "darwin") return [installation.chatGptExecutable, ...arguments_];
+  const executableDirectory = dirname(installation.chatGptExecutable);
+  const contents = dirname(executableDirectory);
+  const bundle = dirname(contents);
+  if (!bundle.endsWith(".app") || executableDirectory !== join(contents, "MacOS") || contents !== join(bundle, "Contents")) {
+    throw new Error("official macOS Desktop executable is outside an application bundle");
+  }
+  return ["/usr/bin/open", "-W", "-n", "-a", bundle, "--args", ...arguments_];
 }

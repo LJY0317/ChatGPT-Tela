@@ -1,3 +1,4 @@
+import { assertLaunchdJobDefinition, launchdJobField } from "./launchd-inspection";
 import type { PackagedInstallBlueprint } from "./packaged-install";
 import {
   applyPackagedRepairFromPayload,
@@ -16,7 +17,14 @@ import {
 } from "./service-registration";
 import type { TelaServiceId } from "./layout";
 
-const DEFAULT_TRANSITION_TIMEOUT_MS = 10_000;
+export interface PackagedServiceControlIdentity {
+  readonly platform: PackagedInstallBlueprint["platform"];
+  readonly services: readonly Pick<PackagedInstallBlueprint["services"][number], "service" | "resource">[];
+}
+
+// Normal Desktop quit plus owned child cleanup can exceed ten seconds.
+// Keep one bounded lifecycle budget for the platform transition.
+const DEFAULT_TRANSITION_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 50;
 
 function sleep(ms: number): Promise<void> {
@@ -28,7 +36,7 @@ function commandFailure(action: string, result: ServiceRegistrationCommandResult
   return new Error(`${action} failed${detail ? `: ${detail.slice(0, 240)}` : ""}`);
 }
 
-function exactRegistrationId(blueprint: PackagedInstallBlueprint, service: TelaServiceId): string {
+function exactRegistrationId(blueprint: PackagedServiceControlIdentity, service: TelaServiceId): string {
   const entry = blueprint.services.find(candidate => candidate.service === service);
   if (!entry) throw new Error(`packaged service blueprint is missing ${service}`);
   if (!entry.resource.identity || entry.resource.identity.platform !== blueprint.platform) {
@@ -38,13 +46,10 @@ function exactRegistrationId(blueprint: PackagedInstallBlueprint, service: TelaS
 }
 
 function parseLaunchdState(stdout: string): "running" | "stopped" {
-  const states = stdout.split(/\r?\n/)
-    .map(line => /^\s*state\s*=\s*(.+?)\s*$/.exec(line)?.[1]?.trim().toLowerCase())
-    .filter((value): value is string => Boolean(value));
-  if (states.length !== 1) throw new Error("launchd service state is ambiguous");
-  if (states[0] === "running") return "running";
-  if (states[0] === "not running" || states[0] === "exited") return "stopped";
-  throw new Error(`launchd service state is unsupported: ${states[0]}`);
+  const state = launchdJobField(stdout, "state").toLowerCase();
+  if (state === "running") return "running";
+  if (state === "not running" || state === "exited") return "stopped";
+  throw new Error(`launchd service state is unsupported: ${state}`);
 }
 
 function parseSystemdState(result: ServiceRegistrationCommandResult): "running" | "stopped" {
@@ -63,18 +68,21 @@ function parseWindowsState(result: ServiceRegistrationCommandResult): "running" 
 }
 
 export class PackagedPlatformServiceController implements PackagedUpgradeServiceController, PackagedRepairServiceController {
-  readonly #blueprint: PackagedInstallBlueprint;
+  readonly #blueprint: PackagedServiceControlIdentity;
   readonly #runner: ServiceRegistrationCommandRunner;
+  readonly #shutdownService: (service: TelaServiceId) => Promise<void>;
   readonly #transitionTimeoutMs: number;
   readonly #userId: number | undefined;
 
   constructor(input: {
-    readonly blueprint: PackagedInstallBlueprint;
+    readonly blueprint: PackagedServiceControlIdentity;
+    readonly shutdownService: (service: TelaServiceId) => Promise<void>;
     readonly runner?: ServiceRegistrationCommandRunner;
     readonly transitionTimeoutMs?: number;
     readonly userId?: number;
   }) {
     this.#blueprint = input.blueprint;
+    this.#shutdownService = input.shutdownService;
     this.#runner = input.runner ?? new SystemServiceRegistrationCommandRunner();
     this.#transitionTimeoutMs = input.transitionTimeoutMs ?? DEFAULT_TRANSITION_TIMEOUT_MS;
     if (!Number.isSafeInteger(this.#transitionTimeoutMs) || this.#transitionTimeoutMs < 100 || this.#transitionTimeoutMs > 60_000) {
@@ -96,6 +104,7 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
     const target = `gui/${this.#userId}/${registrationId}`;
     const result = await this.#runner.run("/bin/launchctl", ["print", target]);
     if (result.exitCode !== 0) throw commandFailure("launchd service status", result);
+    assertLaunchdJobDefinition(result.stdout, this.#blueprint.services.find(entry => entry.service === service)?.resource.identity?.definitionPath);
     return parseLaunchdState(result.stdout);
   }
 
@@ -115,18 +124,9 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
 
   async quiesce(service: TelaServiceId): Promise<void> {
     if (await this.inspect(service) === "stopped") return;
-    const registrationId = exactRegistrationId(this.#blueprint, service);
-    let result: ServiceRegistrationCommandResult;
-    if (this.#blueprint.platform === "linux") {
-      result = await this.#runner.run("systemctl", ["--user", "stop", registrationId]);
-    } else if (this.#blueprint.platform === "win32") {
-      const script = "$t=Get-ScheduledTask -TaskName $args[0] -TaskPath '\\' -ErrorAction Stop; if($t.State.ToString() -eq 'Running'){Stop-ScheduledTask -InputObject $t -ErrorAction Stop}";
-      result = await this.#runner.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script, registrationId]);
-    } else {
-      if (this.#userId === undefined) throw new Error("macOS packaged service control requires a user id");
-      result = await this.#runner.run("/bin/launchctl", ["kill", "SIGTERM", `gui/${this.#userId}/${registrationId}`]);
-    }
-    if (result.exitCode !== 0) throw commandFailure(`normal stop for ${service}`, result);
+    // Service authority, not an OS stop command, decides whether active work may end.
+    // Refusal/unreachable identity is final for this attempt: never escalate or bypass it.
+    await this.#shutdownService(service);
     await this.#waitFor(service, "stopped");
   }
 
@@ -150,6 +150,7 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
 
 export async function applyPackagedUpgradeWithPlatformServices(input: {
   readonly plan: PackagedUpgradePlan;
+  readonly shutdownService: (service: TelaServiceId) => Promise<void>;
   readonly payloadSourcePath: string;
   readonly platform?: NodeJS.Platform;
   readonly home?: string;
@@ -159,6 +160,7 @@ export async function applyPackagedUpgradeWithPlatformServices(input: {
 }): ReturnType<typeof applyPackagedUpgradeFromPayload> {
   const controller = new PackagedPlatformServiceController({
     blueprint: input.plan.targetBlueprint,
+    shutdownService: input.shutdownService,
     ...(input.runner ? { runner: input.runner } : {}),
     ...(input.userId === undefined ? {} : { userId: input.userId }),
   });
@@ -175,6 +177,7 @@ export async function applyPackagedUpgradeWithPlatformServices(input: {
 
 export async function applyPackagedRepairWithPlatformServices(input: {
   readonly plan: PackagedRepairPlan;
+  readonly shutdownService: (service: TelaServiceId) => Promise<void>;
   readonly payloadSourcePath: string;
   readonly platform?: NodeJS.Platform;
   readonly home?: string;
@@ -184,6 +187,7 @@ export async function applyPackagedRepairWithPlatformServices(input: {
 }): ReturnType<typeof applyPackagedRepairFromPayload> {
   const controller = new PackagedPlatformServiceController({
     blueprint: input.plan.blueprint,
+    shutdownService: input.shutdownService,
     ...(input.runner ? { runner: input.runner } : {}),
     ...(input.userId === undefined ? {} : { userId: input.userId }),
   });

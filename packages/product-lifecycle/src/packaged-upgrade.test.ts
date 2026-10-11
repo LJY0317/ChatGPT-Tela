@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { generateKeyPairSync } from "node:crypto";
+import { cancelSignedPackagedUpgrade } from "./packaged-upgrade";
+import { createEd25519PackagedPayloadSigner, writePackagedPayloadSignature } from "./packaged-signature";
+import { assertPackagedLaunchAdmission } from "./packaged-launch-admission";
+import { observeInstalledPackagedPayload } from "./packaged-payload";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +20,7 @@ import { applyPackagedUpgradeWithPlatformServices } from "./packaged-service-con
 import { readOwnershipManifest } from "./ownership";
 import type { ServiceRegistrationCommandResult, ServiceRegistrationCommandRunner } from "./service-registration";
 import type { TelaServiceId } from "./layout";
+import { resolveProductPaths } from "./layout";
 
 class SystemdUpgradeRunner implements ServiceRegistrationCommandRunner {
   readonly loaded = new Set<string>();
@@ -87,6 +93,8 @@ function createPayload(root: string, version: string, content: string, gatewayAr
   const payload = join(root, `payload-${version.replaceAll(".", "-")}-${gatewayArgument}`);
   mkdirSync(payload, { recursive: true });
   writeFileSync(join(payload, "tela"), content, { mode: 0o755 });
+  mkdirSync(join(payload, "native-engine"));
+  writeFileSync(join(payload, "native-engine", "codex"), `engine ${content}`, { mode: 0o755 });
   const manifest = {
     version: 1,
     product: "chatgpt-tela",
@@ -110,6 +118,32 @@ async function installV1(root: string, home: string, runner: SystemdUpgradeRunne
 }
 
 describe("packaged upgrade journal", () => {
+  test("format changes during shutdown are refused before payload replacement and retain the checkpoint", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-upgrade-storage-drain-")), home = join(root, "home");
+    mkdirSync(home); const runner = new SystemdUpgradeRunner();
+    const options = { platform: "linux" as const, home, environment: {}, runner };
+    try {
+      await installV1(root, home, runner);
+      const target = createPayload(root, "2.0.0", "v2\n"), paths = resolveProductPaths(options);
+      mkdirSync(paths.serviceState("chat"), { recursive: true });
+      const store = join(paths.serviceState("chat"), "process-operations-v1.json");
+      writeFileSync(store, JSON.stringify({ version: 1, operations: [] }));
+      const plan = await planPackagedUpgradeFromPayload({ payloadSourcePath: target, ...options });
+      const services = new UpgradeServices(["chat"]);
+      const original = services.quiesce.bind(services);
+      services.quiesce = async service => {
+        await original(service);
+        if (service === "chat") writeFileSync(store, JSON.stringify({ version: 2, nextSessionId: 1024, operations: [] }));
+      };
+      const binary = readFileSync(join(paths.binaryRoot, "tela")), manifest = readFileSync(paths.installManifest);
+      await expect(applyPackagedUpgradeFromPayload({ plan, payloadSourcePath: target, services, ...options })).rejects.toThrow("cannot read");
+      expect(readFileSync(join(paths.binaryRoot, "tela"))).toEqual(binary);
+      expect(readFileSync(paths.installManifest)).toEqual(manifest);
+      expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))?.phase).toBe("quiesced");
+      expect(services.events.filter(event => event.startsWith("start:"))).toEqual([]);
+      expect(JSON.parse(readFileSync(store, "utf8")).nextSessionId).toBe(1024);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("concrete Linux service controller drives quiesce and restore through the upgrade journal", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-upgrade-platform-controller-"));
     const home = join(root, "home");
@@ -123,7 +157,10 @@ describe("packaged upgrade journal", () => {
       const chat = plan.targetBlueprint.services.find(service => service.service === "chat")!.resource.registrationId;
       runner.running.add(gateway);
       runner.running.add(chat);
-      const result = await applyPackagedUpgradeWithPlatformServices({ plan, payloadSourcePath: target,
+      const result = await applyPackagedUpgradeWithPlatformServices({ plan, shutdownService: async service => {
+        const id = plan.targetBlueprint.services.find(entry => entry.service === service)!.resource.registrationId;
+        runner.running.delete(id);
+      }, payloadSourcePath: target,
         platform: "linux", home, environment: {}, runner });
       expect(result.resumedServices).toEqual(["chat", "gateway"]);
       expect(runner.running.has(gateway)).toBe(true);
@@ -157,6 +194,7 @@ describe("packaged upgrade journal", () => {
       const manifest = readOwnershipManifest(plan.targetBlueprint.paths.installManifest)!;
       expect(manifest.productVersion).toBe("2.0.0");
       expect(readFileSync(join(plan.targetBlueprint.paths.binaryRoot, "tela"), "utf8")).toBe("v2\n");
+      expect(readFileSync(join(plan.targetBlueprint.paths.binaryRoot, "native-engine", "codex"), "utf8")).toBe("engine v2\n");
       expect(existsSync(packagedUpgradeJournalPath(plan.targetBlueprint.paths))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -183,7 +221,10 @@ describe("packaged upgrade journal", () => {
       expect(readOwnershipManifest(plan.targetBlueprint.paths.installManifest)?.productVersion).toBe("2.0.0");
 
       services.events.length = 0;
-      const completed = await applyPackagedUpgradeFromPayload({ plan, payloadSourcePath: target, services,
+      const replanned = await planPackagedUpgradeFromPayload({ payloadSourcePath: target, platform: "linux",
+        home, environment: {}, runner });
+      expect(replanned).toMatchObject({ fromVersion: "1.0.0", toVersion: "2.0.0" });
+      const completed = await applyPackagedUpgradeFromPayload({ plan: replanned, payloadSourcePath: target, services,
         platform: "linux", home, environment: {}, runner });
       expect(completed.resumedServices).toEqual(["chat", "codex", "gateway"]);
       expect(services.events).toEqual(["start:gateway"]);
@@ -216,3 +257,98 @@ describe("packaged upgrade journal", () => {
     }
   });
 });
+
+test("isolated upgrade preserves optional provider, official config and external registration", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-upgrade-independent-"));
+  const home = join(root, "home"); mkdirSync(home);
+  const runner = new SystemdUpgradeRunner();
+  try {
+    await installV1(root, home, runner);
+    const target = createPayload(root, "2.0.0", "v2\n");
+    const plan = await planPackagedUpgradeFromPayload({ payloadSourcePath: target, platform: "linux", home, environment: {}, runner });
+    const provider = join(home, "PluraDesktop", "launcher");
+    const official = join(home, ".codex", "config.toml");
+    const integration = join(plan.targetBlueprint.paths.configRoot, "optional-provider-fixture.json");
+    for (const path of [provider, official, integration]) {
+      mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, "preserved-independent-fixture");
+    }
+    runner.loaded.add("plura-fixture.service"); runner.running.add("plura-fixture.service");
+    const services = new UpgradeServices(["codex"]);
+    const result = await applyPackagedUpgradeFromPayload({ plan, payloadSourcePath: target, services,
+      platform: "linux", home, environment: {}, runner });
+    expect(result.toVersion).toBe("2.0.0");
+    for (const path of [provider, official, integration]) expect(readFileSync(path, "utf8")).toBe("preserved-independent-fixture");
+    expect(runner.loaded.has("plura-fixture.service")).toBe(true);
+    expect(runner.running.has("plura-fixture.service")).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const boundary of ["restore", "interrupted", "replacing", "payload-drift", "store-version", "untrusted-key", "old-launcher"] as const) {
+  test(`signed pre-replacement cancellation: ${boundary}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-source-cancel-")), home = join(root, "home");
+    mkdirSync(home); const runner = new SystemdUpgradeRunner();
+    const options = { platform: "linux" as const, home, environment: {}, runner };
+    try {
+      const source = createPayload(root, "1.0.0", "source"), keys = generateKeyPairSync("ed25519");
+      const sourceManifest = JSON.parse(readFileSync(join(source, PACKAGED_PRODUCT_MANIFEST), "utf8"));
+      if (boundary !== "old-launcher") sourceManifest.lifecycle = { transitionLaunch: 1, sourceCancellation: 1 };
+      sourceManifest.launcher = { executable: "tela" };
+      sourceManifest.profileRuntime = { executable: "tela", entrypoint: "tela" };
+      sourceManifest.integrity = { signature: "ed25519-sha256-tree-v1", keyId: "cancel-fixture" };
+      writeFileSync(join(source, PACKAGED_PRODUCT_MANIFEST), JSON.stringify(sourceManifest));
+      writePackagedPayloadSignature({ payloadRoot: source, signer: createEd25519PackagedPayloadSigner({ keyId: "cancel-fixture", privateKey: keys.privateKey }) });
+      const planned = await planPackagedInstallFromPayload({ payloadSourcePath: source, ...options });
+      await applyPackagedInstallFromPayload({ planned, payloadSourcePath: source, ...options });
+      const target = createPayload(root, "2.0.0", "target"), paths = resolveProductPaths(options);
+      const targetManifest = JSON.parse(readFileSync(join(target, PACKAGED_PRODUCT_MANIFEST), "utf8"));
+      Object.assign(targetManifest, { launcher: sourceManifest.launcher, profileRuntime: sourceManifest.profileRuntime, integrity: sourceManifest.integrity });
+      writeFileSync(join(target, PACKAGED_PRODUCT_MANIFEST), JSON.stringify(targetManifest));
+      const plan = await planPackagedUpgradeFromPayload({ payloadSourcePath: target, ...options });
+      const services = new UpgradeServices(["chat", "gateway"]), originalStop = services.quiesce.bind(services);
+      services.quiesce = async service => {
+        if (service === "chat") throw new Error("active owner refuses shutdown");
+        await originalStop(service);
+      };
+      await expect(applyPackagedUpgradeFromPayload({ plan, payloadSourcePath: target, services, ...options })).rejects.toThrow("active owner");
+      const journalPath = packagedUpgradeJournalPath(paths);
+      const originalResume = services.resume.bind(services);
+      services.resume = async service => {
+        const ownership = readOwnershipManifest(paths.installManifest)!;
+        const resource = ownership.resources.find(resource => resource.id === "product-binaries")!;
+        if (resource.kind !== "directory") throw new Error("wrong resource");
+        const observed = observeInstalledPackagedPayload(resource, ownership);
+        if (observed.state !== "owned") throw new Error("wrong receipt");
+        assertPackagedLaunchAdmission({ paths, ownership, receipt: observed.receipt, service });
+        await originalResume(service);
+      };
+      if (boundary === "replacing") writeFileSync(journalPath, JSON.stringify({ ...readPackagedUpgradeJournal(journalPath), phase: "payload-replacing" }));
+      if (boundary === "payload-drift") writeFileSync(join(paths.binaryRoot, "tela"), "changed");
+      if (boundary === "store-version") {
+        mkdirSync(paths.serviceState("chat"), { recursive: true });
+        writeFileSync(join(paths.serviceState("chat"), "process-operations-v1.json"), JSON.stringify({ version: 2, nextSessionId: 1024, operations: [] }));
+      }
+      const journal = readFileSync(journalPath), manifest = readFileSync(paths.installManifest), binary = readFileSync(join(paths.binaryRoot, "tela"));
+      const cancel = () => cancelSignedPackagedUpgrade({ ...options, sourcePayloadPath: source, services, trustedKeys: boundary === "untrusted-key" ? {} : { "cancel-fixture": keys.publicKey } });
+      if (boundary === "restore" || boundary === "interrupted") {
+        if (boundary === "interrupted") {
+          services.failResumeOnce = "gateway";
+          await expect(cancel()).rejects.toThrow("fixture resume failure");
+          expect(readPackagedUpgradeJournal(journalPath)?.phase).toBe("restoring-source");
+          expect(readPackagedUpgradeJournal(journalPath)?.resumedServices).toEqual(["chat"]);
+          await expect(applyPackagedUpgradeFromPayload({ plan, payloadSourcePath: target, services, ...options })).rejects.toThrow("cancellation must finish");
+        }
+        expect((await cancel()).restoredServices).toEqual(["chat", "gateway"]);
+        expect(existsSync(journalPath)).toBe(false);
+        expect(services.events.filter(event => event === "start:chat")).toEqual([]);
+        expect(services.events.filter(event => event === "start:codex")).toEqual([]);
+        expect(services.states.get("gateway")).toBe("running");
+      } else {
+        await expect(cancel()).rejects.toThrow();
+        expect(readFileSync(journalPath)).toEqual(journal);
+        expect(services.events.filter(event => event.startsWith("start:"))).toEqual([]);
+      }
+      expect(readFileSync(paths.installManifest)).toEqual(manifest);
+      expect(readFileSync(join(paths.binaryRoot, "tela"))).toEqual(binary);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}

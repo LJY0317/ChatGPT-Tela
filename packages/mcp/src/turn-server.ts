@@ -1,6 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { traceDiagnosticToolCall } from "@chatgpt-tela/core";
 import type { TurnBridgeBackend } from "./turn-bridge";
+import { nativeToolResultToMcpContent } from "./native-tool-content";
 
 export interface TurnBridgeToolNames {
   readonly inventory: string;
@@ -42,11 +44,12 @@ export function registerTurnBridgeTools(
     description: presentation.inventoryDescription,
     inputSchema: z.object({
       turn_capability: z.string().min(20).max(256),
+      // This schema is part of the frozen connector ABI; guidance belongs in server instructions.
       query: z.string().max(1000).optional().default(""),
     }),
-  }, async ({ turn_capability, query }) => ({
-    content: [{ type: "text", text: await inventoryPayload(bridge, turn_capability, query) }],
-  }));
+  }, async (args, extra) => traceDiagnosticToolCall(names.inventory, args, extra, async () => ({
+    content: [{ type: "text", text: await inventoryPayload(bridge, args.turn_capability, args.query) }],
+  })));
 
   server.registerTool(names.call, {
     title: presentation.callTitle,
@@ -59,7 +62,8 @@ export function registerTurnBridgeTools(
       arguments: z.record(z.string(), z.unknown()).optional(),
       input: z.string().optional(),
     }),
-  }, async ({ turn_capability, call_id, wire_name, mode, arguments: args, input }) => {
+  }, async (request, extra) => traceDiagnosticToolCall(names.call, request, extra, async () => {
+    const { turn_capability, call_id, wire_name, mode, arguments: args, input } = request;
     const invocation = mode === "structured"
       ? {
           callId: call_id,
@@ -74,9 +78,10 @@ export function registerTurnBridgeTools(
           input: input ?? "",
         };
     const result = await bridge.invoke(turn_capability, invocation);
+    const mapped = nativeToolResultToMcpContent(result.content);
     return {
-      content: [{ type: "text", text: jsonText(result.content) }],
+      content: [...mapped.content],
       ...(result.isError ? { isError: true } : {}),
     };
-  });
+  }));
 }

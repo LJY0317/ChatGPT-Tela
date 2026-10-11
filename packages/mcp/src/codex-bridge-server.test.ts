@@ -116,4 +116,45 @@ describe("ChatGPT Tela private Codex bridge MCP server", () => {
       await connection.server.close();
     }
   });
+
+  test("Native MCP embedded PDF survives the exact-turn bridge as a real MCP resource without its private URI",async()=>{
+    const turns=new ActiveTurnRegistry();
+    const registered=turns.register(binding());
+    registered.channel.markSubmitted();
+    registered.channel.markAccepted();
+    const connection=await connected(turns);
+    const pdf=Buffer.from("%PDF-1.4\nPublic test document");
+    const hiddenUri="file:///private/owner/document.pdf?credential=secret";
+    try{
+      const called=connection.client.callTool({
+        name:CHATGPT_TELA_CODEX_TOOL_CALL,
+        arguments:{turn_capability:registered.capability,call_id:"doc-1",
+          wire_name:"exec_command",mode:"structured",arguments:{cmd:["unused"]}},
+      });
+      expect((await nextNativeResponsesToolCall(registered.channel)).call_id).toBe("doc-1");
+      acceptNativeResponsesToolResult(registered.channel,{input:[{
+        type:"mcp_tool_call_output",call_id:"doc-1",output:{content:[
+          {type:"resource",resource:{
+            uri:hiddenUri,mimeType:"application/pdf",blob:pdf.toString("base64"),
+          }},
+          {type:"resource_link",uri:hiddenUri,mimeType:"application/pdf"},
+        ],isError:false},
+      }]});
+      registered.channel.releaseNativeToolResultToWeb("doc-1");
+      const response=await called;
+      const parts=Array.isArray(response.content)?response.content:[];
+      expect(response.isError).not.toBe(true);
+      expect(parts[0]).toMatchObject({
+        type:"resource",resource:{mimeType:"application/pdf",blob:pdf.toString("base64")},
+      });
+      const first=parts[0] as any;
+      expect(first.resource.uri).toMatch(/^tela-native-asset:\/\/sha256\/[a-f0-9]{64}$/);
+      expect(parts[1]?.type).toBe("text");
+      expect(JSON.stringify(response)).not.toContain(hiddenUri);
+      expect(JSON.stringify(response)).not.toContain("credential=secret");
+    }finally{
+      await connection.client.close();
+      await connection.server.close();
+    }
+  });
 });

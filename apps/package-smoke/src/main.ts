@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  CURRENT_PACKAGED_LIFECYCLE,
   readPackagedProductManifest,
   verifyPackagedPayloadSignature,
 } from "@chatgpt-tela/product-lifecycle";
@@ -54,7 +55,7 @@ function ensureElectronDistribution(): void {
 }
 
 function smokeLauncher(path: string): void {
-  const result = spawnSync(path, [], {
+  const result = spawnSync(path, ["--help"], {
     encoding: "utf8",
     windowsHide: true,
     timeout: 5_000,
@@ -62,7 +63,11 @@ function smokeLauncher(path: string): void {
   });
   if (result.error) throw result.error;
   const combined = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-  if (result.status !== 1 || !combined.includes("usage: chatgpt-tela service <gateway|chat|codex>")) {
+  if (result.status !== 0
+    || !combined.includes("chatgpt-tela install")
+    || !combined.includes("chatgpt-tela uninstall")
+    || !combined.includes("chatgpt-tela cancel-upgrade")
+    || !combined.includes("--trusted-public-key")) {
     throw new Error(`packaged launcher did not execute its expected CLI boundary (exit=${result.status ?? -1})`);
   }
 }
@@ -74,6 +79,7 @@ async function main(): Promise<void> {
   const privateKeyPath = join(root, "release-private.pem");
   const keys = generateKeyPairSync("ed25519");
   writeFileSync(privateKeyPath, keys.privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  const workspaceFiles = join(repoRoot, "build", "workspace-files-target", "release", executableName("tela-workspace-files"));
   try {
     const arguments_ = [
       "run",
@@ -82,6 +88,7 @@ async function main(): Promise<void> {
       "--version", "0.0.0-ci-smoke",
       "--signing-key", privateKeyPath,
       "--key-id", KEY_ID,
+      ...(existsSync(workspaceFiles) ? ["--workspace-files", workspaceFiles] : []),
       ...(process.platform === "darwin" ? ["--mac-codesign-identity", "-"] : []),
     ];
     run(process.execPath, arguments_);
@@ -89,6 +96,10 @@ async function main(): Promise<void> {
     const manifest = readPackagedProductManifest(output);
     if (!manifest.launcher || !manifest.profileRuntime || !manifest.integrity) {
       throw new Error("package smoke payload is missing launcher/profile runtime/integrity metadata");
+    }
+    if (manifest.lifecycle?.transitionLaunch !== CURRENT_PACKAGED_LIFECYCLE.transitionLaunch
+      || manifest.lifecycle?.sourceCancellation !== CURRENT_PACKAGED_LIFECYCLE.sourceCancellation) {
+      throw new Error("package smoke payload is missing the current signed lifecycle protocol");
     }
     if (manifest.integrity.keyId !== KEY_ID) throw new Error("package smoke payload uses the wrong signing key id");
     const signature = verifyPackagedPayloadSignature({ payloadRoot: output, trustedKeys: { [KEY_ID]: keys.publicKey } });
@@ -99,12 +110,23 @@ async function main(): Promise<void> {
       regularFile(join(output, "services", executableName(service)), `packaged ${service} service`);
     }
     regularFile(join(output, ...manifest.profileRuntime.entrypoint.split("/")), "packaged profile runtime entrypoint");
+    if (!manifest.profileRuntime.setupEntrypoint) throw new Error("package is missing the login setup entrypoint");
+    regularFile(join(output, ...manifest.profileRuntime.setupEntrypoint.split("/")), "packaged login setup entrypoint");
     regularFile(join(output, ...manifest.profileRuntime.executable.split("/")), "packaged Electron executable");
     if (process.platform === "darwin") {
       if (!manifest.menuBar) throw new Error("macOS package smoke payload is missing menu bar metadata");
       regularFile(join(output, ...manifest.menuBar.executable.split("/")), "packaged menu bar executable");
     } else if (manifest.menuBar) {
       throw new Error("non-macOS package smoke payload unexpectedly contains menu bar metadata");
+    }
+    if (existsSync(workspaceFiles)) {
+      if (!manifest.workspaceFiles || manifest.workspaceFiles.protocolVersion !== 2) throw new Error("package smoke is missing file publisher metadata");
+      const helper = join(output, ...manifest.workspaceFiles.executable.split("/"));
+      regularFile(helper, "packaged file publisher");
+      const probe = spawnSync(helper, ["--protocol-version"], { encoding: "utf8", timeout: 5000, windowsHide: true });
+      if (probe.error || probe.status !== 0 || probe.stdout !== "2\n") throw new Error("packaged file publisher protocol check failed");
+      const exportProbe = spawnSync(helper, ["--export-version"], { encoding: "utf8", timeout: 5000, windowsHide: true });
+      if (exportProbe.error || exportProbe.status !== 0 || exportProbe.stdout !== "1\n") throw new Error("packaged file export protocol check failed");
     }
     smokeLauncher(launcherPath);
 
@@ -116,6 +138,7 @@ async function main(): Promise<void> {
       services: manifest.services,
       profileRuntime: manifest.profileRuntime,
       menuBar: manifest.menuBar,
+      workspaceFiles: manifest.workspaceFiles,
       verified: true,
     }, null, 2));
   } finally {

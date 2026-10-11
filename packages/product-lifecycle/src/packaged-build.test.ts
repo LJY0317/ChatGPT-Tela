@@ -53,8 +53,13 @@ describe("signed packaged payload builder", () => {
           entrypointSourcePath: join(input, "profile-runtime.cjs"),
         },
         menuBarSourcePath: join(input, "menu-bar"),
+        workspaceFilesSourcePath: join(input, "chat"),
+        chatProcessStore: { readVersions: [1, 2], writeVersion: 2 },
+        lifecycle: { transitionLaunch: 1, sourceCancellation: 1 },
         signer,
       });
+      expect(built.manifest.workspaceFiles).toEqual({ executable: `helpers/tela-workspace-files${process.platform === "win32" ? ".exe" : ""}`, protocolVersion: 2 });
+      expect(built.manifest.lifecycle).toEqual({ transitionLaunch: 1, sourceCancellation: 1 });
       expect(built.manifest.launcher?.executable).toBe("chatgpt-tela");
       expect(built.manifest.services.gateway.executable).toBe("services/gateway");
       expect(built.manifest.profileRuntime).toEqual({
@@ -74,6 +79,17 @@ describe("signed packaged payload builder", () => {
         { service: "codex", executableRelativePath: "chatgpt-tela", arguments: ["service", "codex"] },
       ]);
       expect(readPackagedProductManifest(output).integrity?.keyId).toBe("release-fixture");
+      expect(built.manifest.chatProcessStore).toEqual({ readVersions: [1, 2], writeVersion: 2 });
+      const manifestPath = join(output, "chatgpt-tela-package-v1.json"), manifestBytes = readFileSync(manifestPath);
+      writeFileSync(manifestPath, JSON.stringify({ ...built.manifest, chatProcessStore: { readVersions: [1], writeVersion: 1 } }));
+      expect(() => verifyPackagedPayloadSignature({ payloadRoot: output, trustedKeys: { "release-fixture": keys.publicKey } })).toThrow();
+      writeFileSync(manifestPath, manifestBytes);
+      const { lifecycle, ...withoutLifecycle } = built.manifest;
+      writeFileSync(manifestPath, JSON.stringify(withoutLifecycle));
+      expect(() => verifyPackagedPayloadSignature({ payloadRoot: output, trustedKeys: { "release-fixture": keys.publicKey } })).toThrow();
+      writeFileSync(manifestPath, manifestBytes);
+      writeFileSync(join(output, built.manifest.workspaceFiles!.executable), "tampered-helper");
+      expect(() => verifyPackagedPayloadSignature({ payloadRoot: output, trustedKeys: { "release-fixture": keys.publicKey } })).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

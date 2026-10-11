@@ -133,9 +133,15 @@ export async function applyUninstallPlan(input: {
         outcome: "preserved", detail: planned.reason }));
       continue;
     }
-    if (input.blockedOwners?.has(resource.owner)) {
+    // Product resources are shared dependencies, not independently removable service state.
+    // A live/uncertain service must retain its binaries, shared configuration and recovery UI.
+    const sharedProductBlocked = resource.owner === "product"
+      && (["gateway", "chat", "codex"] as const).some(owner => input.blockedOwners?.has(owner));
+    if (input.blockedOwners?.has(resource.owner) || sharedProductBlocked) {
       steps.push(Object.freeze({ resourceId: resource.id, owner: resource.owner, resourceKind: resource.kind,
-        outcome: "preserved", detail: `${resource.owner} service did not stop cleanly; owned resource was preserved` }));
+        outcome: "preserved", detail: sharedProductBlocked
+          ? "a service did not stop cleanly; shared product resource was preserved"
+          : `${resource.owner} service did not stop cleanly; owned resource was preserved` }));
       continue;
     }
     let observed: OwnershipObservation;

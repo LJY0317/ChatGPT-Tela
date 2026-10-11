@@ -15,6 +15,24 @@ function scratch(): string {
 }
 
 describe("persistent derived context checkpoint cache", () => {
+  test("oversized or corrupt cache entries cannot allocate unbounded derived checkpoint state", async () => {
+    const root = scratch();
+    try {
+      const cache = new FileContextCheckpointCache({ directory: root });
+      await expect(cache.put({
+        nativeTaskId: "thread-1", revisionId: "revision",
+        content: "x".repeat(41 * 1024), estimatedTokens: 11000,
+      })).rejects.toThrow("bounded derived-cache limit");
+      expect(await cache.list("thread-1")).toEqual([]);
+      await cache.put({
+        nativeTaskId: "thread-1", revisionId: "small", content: "valid", estimatedTokens: 2,
+      });
+      const [file] = readdirSync(root);
+      if (!file) throw new Error("fixture cache missing");
+      writeFileSync(join(root, file), "x".repeat(600 * 1024));
+      expect(await cache.list("thread-1")).toEqual([]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("survives a new cache instance without storing raw Native task ids in filenames", async () => {
     const root = scratch();
     try {

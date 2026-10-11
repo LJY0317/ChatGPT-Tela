@@ -14,9 +14,12 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import {
   PACKAGED_PRODUCT_MANIFEST,
   parsePackagedProductManifest,
+  parsePackagedNativeEngine,
   type PackagedProductManifest,
   type PackagedProductManifestService,
+  type PackagedNativeEngine,
 } from "./packaged-manifest";
+import { nativeEngineFileSha256, nativeEngineHelperName, verifyNativeEngineArtifact } from "./native-engine";
 import { packagedPayloadFingerprint } from "./packaged-payload";
 import {
   writePackagedPayloadSignature,
@@ -35,6 +38,7 @@ export interface PackagedPayloadBuildProfileRuntimeInput {
   readonly electronBundleSourcePath: string;
   readonly electronExecutableRelativePath: string;
   readonly entrypointSourcePath: string;
+  readonly setupEntrypointSourcePath?: string;
 }
 
 export interface PackagedPayloadBuildInput {
@@ -44,6 +48,10 @@ export interface PackagedPayloadBuildInput {
   readonly services: Readonly<Record<TelaServiceId, PackagedPayloadBuildServiceInput>>;
   readonly profileRuntime: PackagedPayloadBuildProfileRuntimeInput;
   readonly menuBarSourcePath?: string;
+  readonly workspaceFilesSourcePath?: string;
+  readonly chatProcessStore?: PackagedProductManifest["chatProcessStore"];
+  readonly lifecycle?: PackagedProductManifest["lifecycle"];
+  readonly nativeEngine?: Omit<PackagedNativeEngine, "executable"> & { readonly executableSourcePath: string };
   readonly signer: PackagedPayloadSigner;
   readonly finalizeStagedPayload?: (input: {
     readonly outputPath: string;
@@ -188,13 +196,38 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
   const runtimeEntrypointSource = realRegularFile(input.profileRuntime.entrypointSourcePath, "profile runtime entrypoint source");
   const runtimeEntrypoint = "runtime/profile-runtime.cjs";
   copyFile(runtimeEntrypointSource, join(outputPath, ...runtimeEntrypoint.split("/")));
+  const setupEntrypoint = input.profileRuntime.setupEntrypointSourcePath ? "runtime/profile-setup.cjs" : undefined;
+  if (setupEntrypoint) {
+    copyFile(realRegularFile(input.profileRuntime.setupEntrypointSourcePath!, "profile setup entrypoint source"),
+      join(outputPath, ...setupEntrypoint.split("/")));
+  }
 
   const menuBarRelative = input.menuBarSourcePath ? "ui/chatgpt-tela-menu-bar" : undefined;
   if (input.menuBarSourcePath && menuBarRelative) {
     copyFile(realRegularFile(input.menuBarSourcePath, "packaged menu bar source"), join(outputPath, ...menuBarRelative.split("/")));
   }
 
-  const manifest = parsePackagedProductManifest({
+  let nativeEngine: PackagedNativeEngine | undefined;
+  if (input.nativeEngine) {
+    const { executableSourcePath, ...metadata } = input.nativeEngine;
+    const source = realRegularFile(executableSourcePath, "Native engine source");
+    const executable = `native-engine/codex${metadata.platform === "win32" ? ".exe" : ""}`;
+    const helperName = nativeEngineHelperName(metadata.platform);
+    const helperSource = realRegularFile(join(dirname(source), helperName), "Native engine helper source");
+    copyFile(source, join(outputPath, ...executable.split("/")));
+    copyFile(helperSource, join(outputPath, "native-engine", helperName));
+    nativeEngine = parsePackagedNativeEngine({ ...metadata, executable });
+    verifyNativeEngineArtifact({ payloadRoot: outputPath, engine: nativeEngine });
+  }
+
+  let workspaceFiles: PackagedProductManifest["workspaceFiles"];
+  if (input.workspaceFilesSourcePath) {
+    const executable = `helpers/tela-workspace-files${process.platform === "win32" ? ".exe" : ""}`;
+    copyFile(realRegularFile(input.workspaceFilesSourcePath, "file publisher source"), join(outputPath, ...executable.split("/")));
+    workspaceFiles = { executable, protocolVersion: 2 };
+  }
+
+  let manifest = parsePackagedProductManifest({
     version: 1,
     product: "chatgpt-tela",
     productVersion: oneLine(input.productVersion, "product version"),
@@ -202,8 +235,13 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
     profileRuntime: {
       executable: `electron/${electronRelative}`,
       entrypoint: runtimeEntrypoint,
+      ...(setupEntrypoint ? { setupEntrypoint } : {}),
     },
     ...(menuBarRelative ? { menuBar: { executable: menuBarRelative } } : {}),
+    ...(nativeEngine ? { nativeEngine } : {}),
+    ...(workspaceFiles ? { workspaceFiles } : {}),
+    ...(input.chatProcessStore ? { chatProcessStore: input.chatProcessStore } : {}),
+    ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
     integrity: {
       signature: "ed25519-sha256-tree-v1",
       keyId: input.signer.keyId,
@@ -212,6 +250,15 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
   });
   writeFileSync(join(outputPath, PACKAGED_PRODUCT_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
   input.finalizeStagedPayload?.({ outputPath, manifest });
+  // OS code signing may change executable bytes; bind the release signature to the final artifact.
+  if (manifest.nativeEngine) {
+    manifest = parsePackagedProductManifest({ ...manifest, nativeEngine: {
+      ...manifest.nativeEngine,
+      sha256: nativeEngineFileSha256(join(outputPath, ...manifest.nativeEngine.executable.split("/"))),
+    } });
+    writeFileSync(join(outputPath, PACKAGED_PRODUCT_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    verifyNativeEngineArtifact({ payloadRoot: outputPath, engine: manifest.nativeEngine! });
+  }
   const signature = writePackagedPayloadSignature({ payloadRoot: outputPath, signer: input.signer });
   return Object.freeze({
     outputPath,

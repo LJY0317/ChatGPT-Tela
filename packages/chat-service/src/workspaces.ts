@@ -80,6 +80,43 @@ export class ChatWorkspaceRegistry {
   readonly #managedRoots: readonly string[];
   readonly #storePath: string;
   readonly #byId = new Map<string, ChatWorkspace>();
+  readonly #removingRoots = new Set<string>();
+  readonly #uses = new Map<string, number>();
+  readonly #removalGuards = new Set<(workspaceIds: ReadonlySet<string>) => void>();
+
+  /** Durable operation owners provide proof; unknown operations must refuse removal. */
+  registerRemovalGuard(guard: (workspaceIds: ReadonlySet<string>) => void): void {
+    this.#removalGuards.add(guard);
+  }
+
+  /** Reserve before async inspection so execution cannot race destructive cleanup. */
+  reserveRemoval(id: string): () => void {
+    const workspace = this.#byId.get(id);
+    if (!workspace) throw new Error("workspace removal identity is unavailable");
+    const root = workspace.root;
+    if ([...this.#removingRoots].some(other => inside(other, root) || inside(root, other))) {
+      throw new Error("workspace removal is already in progress");
+    }
+    const ids = new Set([...this.#byId.values()]
+      .filter(row => inside(root, row.root) || inside(row.root, root)).map(row => row.id));
+    if ([...ids].some(workspaceId => (this.#uses.get(workspaceId) ?? 0) > 0)) {
+      throw new Error("workspace has an active asynchronous operation");
+    }
+    for (const guard of this.#removalGuards) guard(ids);
+    this.#removingRoots.add(root);
+    return () => { this.#removingRoots.delete(root); };
+  }
+
+  /** Keep one admitted operation alive across awaits without background observation. */
+  async use<T>(id: string, operation: () => Promise<T>): Promise<T> {
+    this.get(id);
+    this.#uses.set(id, (this.#uses.get(id) ?? 0) + 1);
+    try { return await operation(); }
+    finally {
+      const count = (this.#uses.get(id) ?? 1) - 1;
+      if (count === 0) this.#uses.delete(id); else this.#uses.set(id, count);
+    }
+  }
 
   constructor(input: {
     readonly allowedRoots: readonly string[];
@@ -121,6 +158,9 @@ export class ChatWorkspaceRegistry {
   #open(path: string, kind: "user" | "managed"): ChatWorkspace {
     if (typeof path !== "string" || !path.trim() || /[\u0000\r\n]/.test(path)) throw new Error("workspace path is invalid");
     const root = canonicalDirectory(path);
+    if ([...this.#removingRoots].some(removing => inside(removing, root) || inside(root, removing))) {
+      throw new Error("workspace removal is in progress");
+    }
     const roots = kind === "user" ? this.#allowedRoots : this.#managedRoots;
     if (!roots.some(allowed => inside(allowed, root))) {
       throw new Error(kind === "user"
@@ -154,6 +194,9 @@ export class ChatWorkspaceRegistry {
   get(id: string): ChatWorkspace {
     const workspace = this.#byId.get(id);
     if (!workspace) throw new Error(`unknown Tela Chat workspace: ${id}`);
+    if ([...this.#removingRoots].some(root => inside(root, workspace.root) || inside(workspace.root, root))) {
+      throw new Error("workspace removal is in progress");
+    }
     if (!existsSync(workspace.root)) throw new Error("workspace root is no longer available");
     const root = canonicalDirectory(workspace.root);
     if (root !== workspace.root) throw new Error("workspace root identity changed");

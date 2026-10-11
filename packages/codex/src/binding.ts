@@ -3,14 +3,21 @@ import {
   defineNativeTurnAuthority,
   type NativeTurnAuthority,
 } from "@chatgpt-tela/core";
-import { parseNativeTurnClaim, type NativeTurnClaim } from "./request";
+import { parseNativeTurnClaim, parseNativeCompactionClaim, type NativeTurnClaim } from "./request";
 import {
   readCanonicalCurrentTurn,
   type CanonicalCurrentTurnEvidence,
 } from "./rollout";
 
+export interface NativeTurnTerminationWatch {
+  readonly signal: AbortSignal;
+  close(): Promise<void>;
+}
+
 export interface CanonicalCurrentTurnSource {
   currentTurn(threadId: string): Promise<CanonicalCurrentTurnEvidence | undefined>;
+  /** Active-turn scoped public Native lifecycle; transport reconnects are not cancellation. */
+  watchTurn?(threadId: string, turnId: string, signal?: AbortSignal): Promise<NativeTurnTerminationWatch | undefined>;
 }
 
 export interface NativeTurnBinding {
@@ -35,7 +42,7 @@ export class RolloutFileCurrentTurnSource implements CanonicalCurrentTurnSource 
   }
 }
 
-function validateOwner(claim: NativeTurnClaim, evidence: CanonicalCurrentTurnEvidence): void {
+function validateOwner(claim: Omit<NativeTurnClaim, "requestKind">, evidence: CanonicalCurrentTurnEvidence): void {
   if (claim.parentThreadId !== evidence.parentThreadId) {
     throw new Error("native request thread lineage does not match canonical Codex state");
   }
@@ -87,4 +94,15 @@ export async function bindNativeTurnRequest(
     tools,
     canonicalEvidence: evidence,
   });
+}
+
+/** Verify an inert summary request against the same canonical current-turn owner. */
+export async function bindNativeCompactionRequest(body: unknown, source: CanonicalCurrentTurnSource) {
+  const claim = parseNativeCompactionClaim(body);
+  const evidence = await source.currentTurn(claim.threadId);
+  if (!evidence || evidence.threadId !== claim.threadId || evidence.turnId !== claim.turnId) {
+    throw new Error("Native compaction request does not name the canonical current turn");
+  }
+  validateOwner(claim, evidence);
+  return Object.freeze({ claim, evidence });
 }

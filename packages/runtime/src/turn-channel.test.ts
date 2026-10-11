@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   NativeToolInventory,
   defineNativeTurnAuthority,
@@ -52,6 +55,54 @@ function binding(tools: readonly NativeToolDescriptor[] = [tool("exec_command")]
 }
 
 describe("runtime turn channel", () => {
+  test("replays progress between viewers and keeps journal prose out of diagnostics", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "tela-progress-boundary-"));
+    const file = join(scratch, "events.jsonl");
+    const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+    try {
+      const channel = new RuntimeTurnChannel(binding());
+      channel.markSubmitted(); channel.markAccepted();
+      channel.publishProgress("PRIVATE_PROGRESS_BEFORE_VIEWER");
+      const received: string[] = [];
+      channel.subscribeProgress(value => received.push(value));
+      // A later subscriber recovers the turn-owned journal.
+      expect(received).toEqual(["PRIVATE_PROGRESS_BEFORE_VIEWER"]);
+      channel.publishProgress("PRIVATE_PROGRESS_AFTER_VIEWER");
+      expect(received).toEqual(["PRIVATE_PROGRESS_BEFORE_VIEWER", "PRIVATE_PROGRESS_AFTER_VIEWER"]);
+      channel.publishProgress("x".repeat(16385));
+      channel.complete("PRIVATE_FINAL");
+      expect(await channel.waitForFinal()).toBe("PRIVATE_FINAL");
+      const log = readFileSync(file, "utf8");
+      const last = log.trim().split("\n").map(line => JSON.parse(line)).at(-1);
+      expect(last).toMatchObject({ turn_phase: "completed", public_progress_published_count: 2,
+        public_progress_without_viewer_count: 1, public_progress_budget_rejected_count: 1 });
+      expect(log).not.toMatch(/PRIVATE_PROGRESS|PRIVATE_FINAL/);
+    } finally {
+      if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+  test("progress is bounded presentation, isolated from tool/final authority and failing viewers", async () => {
+    const channel = new RuntimeTurnChannel(binding());
+    channel.markSubmitted(); channel.markAccepted();
+    const summaries: string[] = [];
+    channel.subscribeProgress(() => { throw new Error("viewer disconnected"); });
+    const unsubscribe = channel.subscribeProgress(summary => summaries.push(summary));
+    const revision = channel.stateRevision;
+    channel.publishProgress("Checking files");
+    expect(summaries).toEqual(["Checking files"]);
+    expect(channel.stateRevision).toBe(revision);
+    expect(channel.phase).toBe("accepted");
+    channel.publishProgress("x".repeat(16385));
+    expect(summaries).toHaveLength(1);
+    unsubscribe(); channel.publishProgress("No viewer");
+    expect(summaries).toHaveLength(1);
+    channel.complete("final");
+    channel.publishProgress("Too late");
+    expect(await channel.waitForFinal()).toBe("final");
+  });
   test("carries one causal tool round through same-turn continuation to final", async () => {
     const channel = new RuntimeTurnChannel(binding());
     channel.markSubmitted();
@@ -217,4 +268,36 @@ describe("runtime turn channel", () => {
     await expect(waiting).rejects.toMatchObject({ name: "AbortError" });
     expect(channel.state()).toEqual({ revision: 0, phase: "prepared", toolRoundCount: 0 });
   });
+});
+
+test("progress cursor replays only uncommitted events across gaps and settlement", () => {
+  const channel = new RuntimeTurnChannel(binding());
+  channel.markSubmitted(); channel.markAccepted();
+  channel.publishProgress("first"); channel.publishProgress("first");
+  const seen: number[] = [];
+  const stop = channel.subscribeProgress((_summary, sequence) => seen.push(sequence));
+  expect(seen).toEqual([1]);
+  channel.commitProgressTransport(1); stop();
+  channel.publishProgress("gap"); channel.complete("final");
+  channel.subscribeProgress((_summary, sequence) => seen.push(sequence));
+  expect(seen).toEqual([1, 2]);
+  channel.commitProgressTransport(2);
+  channel.subscribeProgress((_summary, sequence) => seen.push(sequence));
+  expect(seen).toEqual([1, 2]);
+  expect(() => channel.commitProgressTransport(3)).toThrow();
+  channel.releaseProgress();
+  channel.subscribeProgress((_summary, sequence) => seen.push(sequence), 0);
+  expect(seen).toEqual([1, 2]);
+});
+
+test("progress replay handles reentrant publication and failing subscribers without losing journal", () => {
+  const channel = new RuntimeTurnChannel(binding());
+  channel.publishProgress("first");
+  const seen: string[] = [];
+  channel.subscribeProgress(summary => { seen.push(summary); if (summary === "first") channel.publishProgress("second"); });
+  expect(seen).toEqual(["first", "second"]);
+  channel.subscribeProgress(() => { throw new Error("closed"); });
+  const replay: string[] = [];
+  channel.subscribeProgress(summary => replay.push(summary));
+  expect(replay).toEqual(seen);
 });

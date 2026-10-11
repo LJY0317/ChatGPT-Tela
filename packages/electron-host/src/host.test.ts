@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { BROWSER_PAGE_AUTOMATION } from "@chatgpt-tela/browser-host";
+import { BROWSER_DOCUMENT_LIFETIME, BROWSER_PAGE_AUTOMATION, BROWSER_READ_ONLY_PREVIEW } from "@chatgpt-tela/browser-host";
 import type { BrowserWindowConstructorOptions } from "electron";
 import { createElectronBrowserHost, type ElectronBrowserWindowLike } from "./host";
 import { createElectronMainProcessBrowserHost } from "./host";
@@ -8,8 +8,15 @@ import type { ElectronWebContentsLike } from "./page-automation";
 
 class FakeWebContents implements ElectronWebContentsLike {
   destroyed = false;
+  readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  on(event: string, listener: (...args: unknown[]) => void) { const items = this.listeners.get(event) ?? new Set(); items.add(listener); this.listeners.set(event, items); }
+  removeListener(event: string, listener: (...args: unknown[]) => void) { this.listeners.get(event)?.delete(listener); }
+  emit(event: string, ...args: unknown[]) { for (const listener of this.listeners.get(event) ?? []) listener(...args); }
   executeJavaScript(): Promise<unknown> { return Promise.resolve(0); }
   sendInputEvent(): void {}
+  async capturePage() {
+    return { toJPEG: () => new Uint8Array([1, 2, 3, 4]) };
+  }
   isDestroyed(): boolean { return this.destroyed; }
 }
 
@@ -38,6 +45,32 @@ class FailingLoadWindow extends FakeWindow {
 }
 
 describe("Electron browser host", () => {
+  test("document lifetime follows main-frame replacement and crash without treating SPA/subframes as replacement", async () => {
+    const window = new FakeWindow();
+    const host = createElectronBrowserHost({ profileId: "document-fixture", createWindow: () => window });
+    const surface = await host.acquire({ taskId: "task", epochId: "epoch" });
+    const lifetime = surface.capability(BROWSER_DOCUMENT_LIFETIME)!;
+    try {
+      const initial = lifetime.current();
+      window.webContents.emit("did-start-navigation", { isMainFrame: false, isSameDocument: false });
+      window.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+      expect(initial.signal.aborted).toBe(false);
+      expect(lifetime.current().generation).toBe(initial.generation);
+      window.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+      expect(initial.signal.aborted).toBe(true);
+      const reloaded = lifetime.current();
+      expect(reloaded.generation).toBe(initial.generation + 1);
+      window.webContents.emit("did-fail-load", {}, -1, "synthetic", "https://example.test/", false);
+      expect(reloaded.signal.aborted).toBe(false);
+      window.webContents.emit("render-process-gone", {}, { reason: "crashed" });
+      expect(reloaded.signal.aborted).toBe(true);
+      const crashed = lifetime.current();
+      await host.release(surface.leaseId);
+      expect(crashed.signal.aborted).toBe(true);
+      expect([...window.webContents.listeners.values()].every(items => items.size === 0)).toBe(true);
+    } finally { await host.close(); }
+  });
+
   test("uses one persistent partition and hardened renderer preferences per profile", async () => {
     const options: BrowserWindowConstructorOptions[] = [];
     const windows: FakeWindow[] = [];
@@ -67,6 +100,9 @@ describe("Electron browser host", () => {
     expect(windows[0]?.events).toEqual(["load:https://chatgpt.com/"]);
 
     expect(first.capability(BROWSER_PAGE_AUTOMATION)).toBeDefined();
+    const observed = host.singleActiveCapability(BROWSER_READ_ONLY_PREVIEW);
+    expect(observed.activeSurfaceCount).toBe(2);
+    expect(observed.capability).toBeUndefined();
     await first.reveal();
     await first.hide();
     await first.navigate("https://chatgpt.com/c/example");
@@ -81,6 +117,27 @@ describe("Electron browser host", () => {
     ]);
 
     await host.release(second.leaseId);
+    await host.close();
+  });
+
+  test("captures one active hidden surface without revealing or focusing it", async () => {
+    const windows: FakeWindow[] = [];
+    const host = createElectronBrowserHost({
+      profileId: "preview-profile",
+      initialUrl: "https://chatgpt.com/",
+      createWindow() {
+        const window = new FakeWindow();
+        windows.push(window);
+        return window;
+      },
+    });
+    const lease = await host.acquire({ taskId: "task", epochId: "epoch" });
+    const before = [...windows[0]!.events];
+    const observed = host.singleActiveCapability(BROWSER_READ_ONLY_PREVIEW);
+    expect(observed.activeSurfaceCount).toBe(1);
+    expect(await observed.capability?.captureJpeg()).toEqual(new Uint8Array([1, 2, 3, 4]));
+    expect(windows[0]!.events).toEqual(before);
+    await host.release(lease.leaseId);
     await host.close();
   });
 
@@ -193,4 +250,53 @@ describe("Electron browser host", () => {
       loadRuntime: async () => runtime,
     })).rejects.toThrow("must be configured before app readiness");
   });
+});
+
+test("owned renderer event listeners detach with the surface and never consume raw navigation data",async()=>{
+  const window=new FakeWindow();
+  const listeners=window.webContents.listeners;
+  const host=createElectronBrowserHost({profileId:"diagnostic-profile",createWindow:()=>window});
+  const lease=await host.acquire({taskId:"task",epochId:"epoch"});expect(listeners.has("did-start-navigation")).toBe(true);
+  window.webContents.emit("did-fail-load",{},-105,"private error","https://private/account");
+  await host.release(lease.leaseId);expect([...listeners.values()].every(items=>items.size===0)).toBe(true);await host.close();
+});
+
+test("user close hides an inspection view without retiring its task document", async () => {
+  const window = new FakeWindow();
+  let closeListener: ((event: { preventDefault(): void }) => void) | undefined;
+  const ownedWindow = Object.assign(window, {
+    on(_event: "close", listener: typeof closeListener) { closeListener = listener; },
+    removeListener() { closeListener = undefined; }, getTitle: () => "Synthetic chat",
+  });
+  const host = createElectronBrowserHost({ profileId: "inspection-fixture", createWindow: () => ownedWindow });
+  const surface = await host.acquire({ taskId: "task", epochId: "epoch" });
+  await host.revealSurface(surface.leaseId);
+  let prevented = false;
+  closeListener!({ preventDefault() { prevented = true; } });
+  expect(prevented).toBe(true); expect(window.destroyed).toBe(false);
+  expect(window.events).toEqual(["show", "hide"]);
+  expect(host.listSurfaces()[0]?.label).toBe("Synthetic chat");
+  expect(surface.capability(BROWSER_DOCUMENT_LIFETIME)!.current().signal.aborted).toBe(false);
+  await host.release(surface.leaseId);
+  expect(window.destroyed).toBe(true); expect(closeListener).toBeUndefined();
+  await host.close();
+});
+
+test("closing manual inspection resets viewing and keeps the owned lease alive", async () => {
+  const window = new FakeWindow(); let listener: ((event: {preventDefault():void}) => void) | undefined;
+  const host = createElectronBrowserHost({profileId:"inspection-reset",createWindow:()=>Object.assign(window, {
+    on(_event: "close", fn: typeof listener) {listener=fn;}, removeListener() {listener=undefined;},
+  })});
+  const surface=await host.acquire({taskId:"task",epochId:"epoch"});
+  const { BROWSER_INSPECTION_INPUT } = await import("@chatgpt-tela/browser-host");
+  const controls=surface.capability(BROWSER_INSPECTION_INPUT)!; controls.setInteractive(true);
+  let blocked=0;
+  window.webContents.emit("before-input-event", {preventDefault(){blocked++;}}, {type:"keyDown",key:"Enter"});
+  expect(blocked).toBe(0);
+  listener!({preventDefault(){}});
+  window.webContents.emit("before-input-event", {preventDefault(){blocked++;}}, {type:"keyDown",key:"Enter"});
+  expect(blocked).toBe(1);
+  expect(surface.capability(BROWSER_DOCUMENT_LIFETIME)!.current().signal.aborted).toBe(false);
+  await host.release(surface.leaseId);
+  expect(()=>controls.setInteractive(true)).toThrow("unavailable"); await host.close();
 });

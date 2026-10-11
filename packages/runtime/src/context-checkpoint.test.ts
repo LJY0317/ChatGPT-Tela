@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
+import { BROWSER_PAGE_AUTOMATION, ControlledBrowserHost } from "@chatgpt-tela/browser-host";
 import type {
   WebContextCheckpointProvider,
   WebContextCheckpointRequest,
 } from "@chatgpt-tela/chatgpt";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runBrowserContextCheckpoint } from "./context-checkpoint";
 
 function request(): WebContextCheckpointRequest {
@@ -114,6 +117,42 @@ describe("browser context checkpoint runner", () => {
     }
   });
 
+  test.each([false, true])("aborted checkpoint captures before release and preserves failure (broken capture=%s)", async broken => {
+    const root = mkdtempSync(join(tmpdir(), "tela-checkpoint-failure-"));
+    const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = join(root, "events.jsonl");
+    const events: string[] = [];
+    const controller = new AbortController();
+    const primary = new Error("checkpoint deadline fixture");
+    const host = new ControlledBrowserHost(async () => ({
+      async navigate() {}, async reveal() {}, async hide() {},
+      async close() { events.push("close"); },
+      capability(cap) {
+        if (cap !== BROWSER_PAGE_AUTOMATION) return undefined;
+        return { async evaluate(_source: string, privateCapture: boolean, signal: AbortSignal) {
+          events.push("capture");
+          expect(controller.signal.aborted).toBe(true);
+          expect(signal.aborted).toBe(false);
+          expect(privateCapture).toBe(false);
+          if (broken) throw Error("diagnostic fixture failed");
+          return { element_count: 1, capture_safe: true };
+        } } as any;
+      },
+    }));
+    try {
+      await expect(runBrowserContextCheckpoint({ browserHost: host, signal: controller.signal,
+        request: { ...request(), webEpochId: `failed-${broken}` },
+        provider: provider({ async createContextCheckpoint() { controller.abort(); throw primary; } }),
+      })).rejects.toBe(primary);
+      expect(events).toEqual(["capture", "close"]);
+      expect(host.activeSurfaceCount).toBe(0);
+    } finally {
+      await host.close();
+      if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   test("rejects a non-full or mis-anchored source before acquiring a browser surface", async () => {
     let acquisitions = 0;
     const host = new ControlledBrowserHost(async () => {

@@ -6,3 +6,4 @@ export * from "./native-gateway";
 export * from "./registry";
 export * from "./turn-channel";
 export * from "./web-turn";
+export * from "./web-epoch-session";

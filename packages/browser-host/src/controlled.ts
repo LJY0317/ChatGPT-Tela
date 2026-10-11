@@ -6,6 +6,7 @@ import type {
 } from "./index";
 
 export interface BrowserSurfaceController {
+  displayName?(): string;
   navigate(url: string): Promise<void>;
   reveal(): Promise<void>;
   hide(): Promise<void>;
@@ -40,7 +41,9 @@ export class ControlledBrowserHost implements BrowserHost {
   readonly #factory: BrowserSurfaceControllerFactory;
   readonly #surfaces = new Map<string, OwnedSurface>();
   readonly #leaseByKey = new Map<string, string>();
+  readonly #creating = new Map<string, Promise<BrowserSurfaceController>>();
   #closed = false;
+  #closing: Promise<void> | undefined;
 
   constructor(factory: BrowserSurfaceControllerFactory) {
     this.#factory = factory;
@@ -52,11 +55,20 @@ export class ControlledBrowserHost implements BrowserHost {
       throw new Error("browser surface task and epoch ids must be non-empty");
     }
     const key = surfaceKey(input.taskId, input.epochId);
-    if (this.#leaseByKey.has(key)) {
+    if (this.#leaseByKey.has(key) || this.#creating.has(key)) {
       throw new Error("browser surface already has an active owner for this task epoch");
     }
 
-    const controller = await this.#factory(input);
+    // Reserve the key before the platform factory starts. Shutdown owns pending creations too.
+    const creation = Promise.resolve().then(() => this.#factory(input));
+    this.#creating.set(key, creation);
+    let controller: BrowserSurfaceController;
+    try {
+      controller = await creation;
+      if (this.#closed) throw new Error("browser host is closed");
+    } finally {
+      this.#creating.delete(key);
+    }
     const id = leaseId();
     this.#surfaces.set(id, { key, controller });
     this.#leaseByKey.set(key, id);
@@ -79,22 +91,62 @@ export class ControlledBrowserHost implements BrowserHost {
     await owned.controller.close();
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
+  close(): Promise<void> {
+    if (this.#closing) return this.#closing;
     this.#closed = true;
     const surfaces = [...this.#surfaces.entries()];
     this.#surfaces.clear();
     this.#leaseByKey.clear();
-    const results = await Promise.allSettled(surfaces.map(([, surface]) => surface.controller.close()));
-    const failures = results
-      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-      .map(result => result.reason);
-    if (failures.length > 0) {
-      throw new AggregateError(failures, `${failures.length} browser surface(s) failed to close`);
-    }
+    const creations = [...this.#creating.values()];
+    this.#closing = (async () => {
+      const results = await Promise.allSettled([
+        ...surfaces.map(([, surface]) => surface.controller.close()),
+        ...creations.map(creation => creation.then(controller => controller.close(), () => {})),
+      ]);
+      const failures = results
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map(result => result.reason);
+      if (failures.length > 0) {
+        throw new AggregateError(failures, `${failures.length} browser surface(s) failed to close`);
+      }
+    })();
+    return this.#closing;
   }
 
   get activeSurfaceCount(): number {
     return this.#surfaces.size;
+  }
+
+  /** Disposable leases select a view; they never grant task authority. */
+  listSurfaces(): readonly { readonly id: string; readonly label: string }[] {
+    return [...this.#surfaces].map(([id, surface], index) => Object.freeze({
+      id, label: surface.controller.displayName?.().trim().slice(0, 200) || `Web session ${index + 1}`,
+    }));
+  }
+
+  selectedCapability<T>(id: string, capability: BrowserSurfaceCapability<T>): T | undefined {
+    const surface = this.#surfaces.get(id);
+    if (!surface) throw new Error("selected browser surface is no longer owned");
+    return surface.controller.capability?.(capability);
+  }
+
+  async revealSurface(id: string): Promise<void> {
+    const surface = this.#surfaces.get(id);
+    if (!surface) throw new Error("selected browser surface is no longer owned");
+    await surface.controller.reveal();
+  }
+
+  singleActiveCapability<T>(capability: BrowserSurfaceCapability<T>): {
+    readonly activeSurfaceCount: number;
+    readonly capability?: T;
+  } {
+    const activeSurfaceCount = this.#surfaces.size;
+    if (activeSurfaceCount !== 1) return Object.freeze({ activeSurfaceCount });
+    const surface = this.#surfaces.values().next().value as OwnedSurface | undefined;
+    const value = surface?.controller.capability?.(capability);
+    return Object.freeze({
+      activeSurfaceCount,
+      ...(value === undefined ? {} : { capability: value }),
+    });
   }
 }

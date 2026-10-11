@@ -1,3 +1,4 @@
+import { assertLaunchdJobDefinition } from "./launchd-inspection";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -215,7 +216,12 @@ async function serviceLoaded(
   if (identity.platform === "darwin") {
     const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
     if (uid === undefined) throw new Error("macOS service inspection requires a user id");
-    return (await runner.run("/bin/launchctl", ["print", `gui/${uid}/${resource.registrationId}`])).exitCode === 0;
+    const result = await runner.run("/bin/launchctl", ["print", `gui/${uid}/${resource.registrationId}`]);
+    if (result.exitCode !== 0) return false;
+    // Registration labels belong to the user session, not HOME. A fixture or
+    // second installation can have the same label but a different loaded job.
+    assertLaunchdJobDefinition(result.stdout, identity.definitionPath);
+    return true;
   }
   if (identity.platform === "linux") {
     const result = await runner.run("systemctl", ["--user", "show", "--property=LoadState", "--value", resource.registrationId]);

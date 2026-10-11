@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -45,7 +45,7 @@ describe("ChatGPT Tela browser profiles", () => {
     }).userDataDir).toBe(join(resolve("/home/test"), "custom-tela", "Canary-Profile2"));
   });
 
-  test("one ChatGPT account fingerprint cannot be bound to two profile slots", () => {
+  test("explicit setup permits account reuse and swaps without changing another slot", () => {
     const root = mkdtempSync(join(tmpdir(), "chatgpt-tela-account-binding-"));
     try {
       const one = resolveChatGptTelaBrowserProfile({ slot: 1, profileRoot: root });
@@ -54,11 +54,27 @@ describe("ChatGPT Tela browser profiles", () => {
       const accountB = "b".repeat(64);
 
       bindChatGptTelaAccount(one, accountA);
-      expect(() => bindChatGptTelaAccount(two, accountA)).toThrow("must use a different account");
+      const initialOne = readFileSync(one.accountBindingPath, "utf8");
+      bindChatGptTelaAccount(two, accountA);
+      expect(assertChatGptTelaAccountBinding(two, accountA).slot).toBe(2);
+      expect(readFileSync(one.accountBindingPath, "utf8")).toBe(initialOne);
       bindChatGptTelaAccount(two, accountB);
       expect(assertChatGptTelaAccountBinding(one, accountA).slot).toBe(1);
       expect(assertChatGptTelaAccountBinding(two, accountB).slot).toBe(2);
       expect(() => assertChatGptTelaAccountBinding(two, accountA)).toThrow("different ChatGPT account");
+      const initialTwo = readFileSync(two.accountBindingPath, "utf8");
+      bindChatGptTelaAccount(one, accountB);
+      expect(readFileSync(two.accountBindingPath, "utf8")).toBe(initialTwo);
+      bindChatGptTelaAccount(two, accountA);
+      expect(assertChatGptTelaAccountBinding(one, accountB).slot).toBe(1);
+      expect(assertChatGptTelaAccountBinding(two, accountA).slot).toBe(2);
+      expect(() => assertChatGptTelaAccountBinding(one, accountA)).toThrow("different ChatGPT account");
+      expect(one.userDataDir).not.toBe(two.userDataDir);
+      // An unrelated corrupt binding must not disable this independently owned slot.
+      writeFileSync(two.accountBindingPath, "invalid synthetic binding");
+      bindChatGptTelaAccount(one, accountB);
+      expect(assertChatGptTelaAccountBinding(one, accountB).slot).toBe(1);
+      expect(readFileSync(two.accountBindingPath, "utf8")).toBe("invalid synthetic binding");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

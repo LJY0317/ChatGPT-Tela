@@ -109,4 +109,68 @@ describe("Tela Chat durable agents", () => {
       rmSync(f.base, { recursive: true, force: true });
     }
   });
+
+  test("failed turn cannot resume from a session id alone, including after restart", async () => {
+    let runs = 0;
+    const driver: ChatAgentDriver = { id: "fixture", async run(_input, callbacks) {
+      runs++;
+      await callbacks.onSessionId("known-session-unproven-result");
+      throw new Error("private provider error and prompt data");
+    } };
+    const f = fixture(driver);
+    try {
+      const started = await f.manager.start({ workspaceId: f.workspace.id, target: "fixture", prompt: "run" });
+      const [failed] = await f.manager.wait({ workspaceId: f.workspace.id, agentIds: [started.id], timeoutMs: 1000 });
+      expect(failed).toMatchObject({ status: "failed", error: { code: "agent_driver_failed" } });
+      expect(readFileSync(f.storePath, "utf8")).not.toContain("private provider error");
+      await expect(f.manager.continue({ workspaceId: f.workspace.id, agentId: started.id, prompt: "retry" }))
+        .rejects.toThrow("no proven completed turn");
+      await f.manager.close();
+      const reopened = new ChatAgentManager({ workspaces: f.workspaces, storePath: f.storePath, drivers: [driver] });
+      try {
+        await expect(reopened.continue({ workspaceId: f.workspace.id, agentId: started.id, prompt: "retry" }))
+          .rejects.toThrow("no proven completed turn");
+        expect(runs).toBe(1);
+      } finally { await reopened.close(); }
+    } finally { await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+  });
+
+  test("synchronous driver failure clears its lifecycle before shutdown", async () => {
+    const driver: ChatAgentDriver = { id: "fixture", run() { throw new Error("immediate failure"); } };
+    const f = fixture(driver);
+    try {
+      const started = await f.manager.start({ workspaceId: f.workspace.id, target: "fixture", prompt: "run" });
+      await f.manager.wait({ workspaceId: f.workspace.id, agentIds: [started.id], timeoutMs: 1000 });
+      expect(f.manager.get(f.workspace.id, started.id).status).toBe("failed");
+      await f.manager.close();
+      const reopened = new ChatAgentManager({ workspaces: f.workspaces, storePath: f.storePath, drivers: [driver] });
+      try { expect(reopened.get(f.workspace.id, started.id).status).toBe("failed"); }
+      finally { await reopened.close(); }
+    } finally { await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+  });
+
+  test("completed session resumes after restart with fresh read-only authority by default", async () => {
+    const seen: Array<{ mode: string; session: string | undefined }> = [];
+    const driver: ChatAgentDriver = { id: "fixture", async run(input, callbacks) {
+      seen.push({ mode: input.writeMode, session: input.providerSessionId });
+      if (!input.providerSessionId) await callbacks.onSessionId("completed-session");
+      return { response: "done", providerSessionId: "completed-session" };
+    } };
+    const f = fixture(driver);
+    try {
+      const started = await f.manager.start({ workspaceId: f.workspace.id, target: "fixture",
+        prompt: "write authorized", writeMode: "workspace_write" });
+      await f.manager.wait({ workspaceId: f.workspace.id, agentIds: [started.id], timeoutMs: 1000 });
+      await f.manager.close();
+      const reopened = new ChatAgentManager({ workspaces: f.workspaces, storePath: f.storePath, drivers: [driver] });
+      try {
+        await reopened.continue({ workspaceId: f.workspace.id, agentId: started.id, prompt: "review only" });
+        expect((await reopened.wait({ workspaceId: f.workspace.id, agentIds: [started.id], timeoutMs: 1000 }))[0]!.status).toBe("idle");
+        expect(seen).toEqual([
+          { mode: "workspace_write", session: undefined },
+          { mode: "read_only", session: "completed-session" },
+        ]);
+      } finally { await reopened.close(); }
+    } finally { await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+  });
 });

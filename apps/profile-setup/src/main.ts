@@ -1,129 +1,85 @@
 import {
-  bindChatGptTelaAccount,
-  loadElectronProfileSetupConfig,
-  resolveChatGptTelaBrowserProfile,
-  startElectronProfileSetupRuntime,
-  type ElectronProfileSetupSurface,
+  bindChatGptTelaAccount, loadElectronProfileSetupConfig,
+  resolveChatGptTelaBrowserProfile, startElectronProfileSetupRuntime,
 } from "@chatgpt-tela/development-runtime";
-import { app } from "electron";
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+import { app, BrowserWindow, dialog, Menu } from "electron";
+import { createSetupCompletion } from "./completion";
 
 async function main(): Promise<void> {
   const config = loadElectronProfileSetupConfig();
   app.setPath("userData", config.browserUserDataDir);
-  const profile = resolveChatGptTelaBrowserProfile({
-    slot: config.slot,
-    profileRoot: config.profileRoot,
-  });
+  const profile = resolveChatGptTelaBrowserProfile({ slot: config.slot, profileRoot: config.profileRoot });
   const runtime = await startElectronProfileSetupRuntime(config);
-  let setupSurface: ElectronProfileSetupSurface | undefined;
-
   try {
-    setupSurface = await runtime.openProfileSetupSurface({ reveal: false });
-    const observed = await setupSurface.probeChatGptProfile();
-    bindChatGptTelaAccount(profile, observed.account.accountFingerprint);
-    if (config.revealWhenReady) {
-      await setupSurface.reveal();
-      process.stdout.write(`${JSON.stringify({
-        stage: "profile-setup",
-        slot: config.slot,
-        profileId: config.profileId,
-        readiness: "proven",
-        accountBinding: "verified",
-        setupBrowser: "visible",
-        next: "Manage ChatGPT Developer Mode/connectors in the visible window, then press Ctrl+C here to verify and close.",
-      }, null, 2)}\n`);
-    } else {
-      process.stdout.write(`${JSON.stringify({
-        stage: "profile-setup",
-        slot: config.slot,
-        profileId: config.profileId,
-        readiness: "proven",
-        accountBinding: "verified",
-        setupBrowser: "not-needed",
-      }, null, 2)}\n`);
+    if (config.runContextCanary) {
+      const canary = await runtime.probeChatGptContextAttachment(AbortSignal.timeout(150_000));
+      bindChatGptTelaAccount(profile, canary.account.accountFingerprint);
+      process.stdout.write(`${JSON.stringify({ stage: "profile-setup-context-canary", slot: config.slot,
+        profileId: config.profileId, accountBinding: "verified", readiness: "proven",
+        attachmentBytes: canary.attachmentBytes, receiptVerified: canary.receiptVerified })}\n`);
       await runtime.stop();
       app.quit();
       return;
     }
-  } catch (error) {
-    try {
-      if (!setupSurface) setupSurface = await runtime.openProfileSetupSurface({ reveal: false });
-      await setupSurface.reveal();
-    } catch (setupError) {
-      await runtime.stop().catch(stopError => {
-        throw new AggregateError(
-          [setupError, stopError],
-          "profile setup surface failed and runtime cleanup was incomplete",
-        );
-      });
-      app.quit();
-      throw setupError;
-    }
-    process.stdout.write(`${JSON.stringify({
-      stage: "profile-setup",
-      slot: config.slot,
-      profileId: config.profileId,
-      readiness: "needs-setup",
-      detail: message(error),
-      setupBrowser: "visible",
-      next: "Complete ChatGPT login, Developer Mode, and connector preparation in the visible window, then press Ctrl+C here to verify and close.",
-    }, null, 2)}\n`);
-  }
-
-  let stopping: Promise<void> | undefined;
-  const stop = (): Promise<void> => {
-    if (stopping) return stopping;
-    stopping = (async () => {
-      let readiness: "proven" | "not-proven" = "not-proven";
-      let detail: string | undefined;
-      try {
-        if (!setupSurface) throw new Error("profile setup surface is unavailable");
-        const observed = await setupSurface.probeChatGptProfile();
-        bindChatGptTelaAccount(profile, observed.account.accountFingerprint);
-        readiness = "proven";
-      } catch (error) {
-        detail = message(error);
-      }
-      process.stdout.write(`${JSON.stringify({
-        stage: "profile-setup-complete",
-        slot: config.slot,
-        profileId: config.profileId,
-        readiness,
-        ...(readiness === "proven" ? { accountBinding: "verified" } : {}),
-        ...(detail ? { detail } : {}),
-      }, null, 2)}\n`);
+    const surface = await runtime.openProfileSetupSurface({ reveal: config.revealWhenReady });
+    const verify = async () => {
+      const observed = await surface.probeChatGptProfile(AbortSignal.timeout(30_000));
+      bindChatGptTelaAccount(profile, observed.account.accountFingerprint);
+    };
+    if (!config.revealWhenReady) {
+      await verify();
+      process.stdout.write(`${JSON.stringify({ stage: "profile-setup", slot: config.slot,
+        profileId: config.profileId, readiness: "proven", accountBinding: "verified", setupBrowser: "not-needed" })}\n`);
       await runtime.stop();
-      if (readiness === "proven") app.quit();
-      else app.exit(2);
-    })().catch(error => {
-      stopping = undefined;
-      throw error;
+      app.quit();
+      return;
+    }
+    // Show login immediately. A human chooses when to prove readiness; no background polling.
+    let exiting = false;
+    const completion = createSetupCompletion({ verify, close: () => runtime.stop(),
+      exit: code => {
+        exiting = true;
+        process.stdout.write(`${JSON.stringify({ stage: "profile-setup-complete", slot: config.slot,
+          profileId: config.profileId, readiness: code === 0 ? "proven" : "cancelled",
+          ...(code === 0 ? { accountBinding: "verified" } : {}) })}\n`);
+        if (code === 0) app.quit();
+        else app.exit(code);
+      },
+      needsLogin: async () => {
+        await dialog.showMessageBox({ type: "info", title: "Finish ChatGPT setup",
+          message: "ChatGPT login couldn't be verified yet",
+          detail: "Complete login in this window, then choose Finish setup again. Your login window will stay open.",
+          buttons: ["Continue setup"] });
+      },
     });
-    return stopping;
-  };
-
-  await new Promise<void>(resolve => {
-    const arm = () => {
-      process.once("SIGINT", shutdown);
-      process.once("SIGTERM", shutdown);
-    };
-    const shutdown = () => {
-      process.removeListener("SIGINT", shutdown);
-      process.removeListener("SIGTERM", shutdown);
-      void stop().then(resolve, error => {
-        console.error(error);
-        arm();
+    const perform = (action: () => Promise<void>) => {
+      void action().catch(() => {
+        // Cleanup failure is not a successful setup. Exit releases the launcher activity lease.
+        exiting = true;
+        app.exit(1);
       });
     };
-    arm();
-  });
+    Menu.setApplicationMenu(Menu.buildFromTemplate([
+      { label: "ChatGPT Tela Setup", submenu: [
+        { label: "Finish setup", accelerator: "CmdOrCtrl+Return", click: () => perform(completion.finish) },
+        { label: "Cancel setup", click: () => perform(completion.cancel) },
+        { type: "separator" }, { role: "quit" },
+      ] },
+      { role: "editMenu" },
+    ]));
+    // Closing this owned browser verifies while its surface still exists. Never intercept other apps.
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.on("close", event => { if (!exiting) { event.preventDefault(); perform(completion.finish); } });
+    }
+    app.on("before-quit", event => { if (!exiting) { event.preventDefault(); perform(completion.cancel); } });
+    process.once("SIGINT", () => perform(completion.finish));
+    process.once("SIGTERM", () => perform(completion.cancel));
+    process.stdout.write(`${JSON.stringify({ stage: "profile-setup", slot: config.slot, setupBrowser: "visible",
+      next: "Sign in, create the ChatGPT Tela Plugin, then choose Finish setup or close this window." })}\n`);
+  } catch (error) {
+    await runtime.stop();
+    throw error;
+  }
 }
 
-void main().catch(error => {
-  console.error(error);
-  app.exit(1);
-});
+void main().catch(() => { app.exit(1); });

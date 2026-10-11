@@ -14,6 +14,18 @@ export interface GatewayStatus {
   readonly backends: readonly GatewayBackendStatus[];
 }
 
+export interface GatewayIngressStatus {
+  readonly contractVersion: 1;
+  readonly availability: "ready" | "unavailable" | "unconfigured";
+  readonly cause: string;
+  readonly detail: string;
+  readonly exposureKind?: string;
+}
+
+export type GatewayIngressStatusResolver = (
+  signal?: AbortSignal,
+) => GatewayIngressStatus | Promise<GatewayIngressStatus>;
+
 export interface GatewayService {
   readonly instanceId: string;
   readonly endpoint: URL;
@@ -48,6 +60,7 @@ function backendClient(
 
 export async function startGatewayService(input: {
   readonly resolveBackend: BackendDescriptorResolver;
+  readonly resolveIngressStatus?: GatewayIngressStatusResolver;
   readonly bearerToken?: string;
   readonly backendTimeoutMs?: number;
 }): Promise<GatewayService> {
@@ -94,7 +107,7 @@ export async function startGatewayService(input: {
     hostname: "127.0.0.1",
     port: 0,
     maxRequestBodyBytes: 16 * 1024,
-    async fetch(request) {
+    async fetch(request, lifecycle) {
       if (request.headers.has("origin")) return new Response(null, { status: 403 });
       const header = request.headers.get("authorization");
       const candidate = header?.startsWith("Bearer ") ? header.slice(7).trim() : undefined;
@@ -106,8 +119,28 @@ export async function startGatewayService(input: {
       if (request.method === "GET" && url.pathname === "/v1/backends") {
         return Response.json(await status(request.signal));
       }
+      if (request.method === "GET" && url.pathname === "/v1/ingress") {
+        if (!input.resolveIngressStatus) {
+          return Response.json({
+            contractVersion: 1,
+            availability: "unconfigured",
+            cause: "ingress-unconfigured",
+            detail: "No public ingress is configured for this Gateway runtime",
+          } satisfies GatewayIngressStatus);
+        }
+        try {
+          return Response.json(await input.resolveIngressStatus(request.signal));
+        } catch {
+          return Response.json({
+            contractVersion: 1,
+            availability: "unavailable",
+            cause: "ingress-status-failed",
+            detail: "Public ingress status could not be determined",
+          } satisfies GatewayIngressStatus);
+        }
+      }
       if (request.method === "POST" && url.pathname === "/v1/shutdown") {
-        queueMicrotask(resolveShutdown);
+        lifecycle.afterResponse(resolveShutdown);
         return Response.json({ status: "shutting-down" });
       }
       return new Response(null, { status: 404 });

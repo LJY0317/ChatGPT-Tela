@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeProductConfig } from "@chatgpt-tela/product-config";
@@ -12,6 +12,8 @@ import {
   packagedUpgradeJournalPath,
   planSignedPackagedInstallFromPayload,
   resolveProductPaths,
+  readOwnershipManifest,
+  observeInstalledPackagedPayload,
   type ServiceRegistrationCommandResult,
   type ServiceRegistrationCommandRunner,
 } from "@chatgpt-tela/product-lifecycle";
@@ -42,7 +44,7 @@ class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
   }
 }
 
-function buildFixture(root: string) {
+function buildFixture(root: string, withFilePublisher = false) {
   const input = join(root, "input");
   const payload = join(root, "payload");
   mkdirSync(join(input, "electron", "bin"), { recursive: true });
@@ -57,6 +59,7 @@ function buildFixture(root: string) {
     outputPath: payload,
     productVersion: "1.2.3",
     launcherSourcePath: join(input, "launcher"),
+    ...(withFilePublisher ? { workspaceFilesSourcePath: join(input, "chat") } : {}),
     services: {
       gateway: { executableSourcePath: join(input, "gateway") },
       chat: { executableSourcePath: join(input, "chat") },
@@ -73,11 +76,70 @@ function buildFixture(root: string) {
 }
 
 describe("packaged service launcher", () => {
+  test("only the recorded service can start at a proven final update or repair checkpoint", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-launch-restoration-")), home = join(root, "home"); mkdirSync(home);
+    const { payload, keys } = buildFixture(root), runner = new SystemdFixtureRunner();
+    const pathOptions = { platform: "linux" as const, home, environment: {} };
+    try {
+      const planned = await planSignedPackagedInstallFromPayload({ payloadSourcePath: payload,
+        trustedKeys: { "launcher-fixture": keys.publicKey }, ...pathOptions, runner });
+      await applySignedPackagedInstallFromPayload({ planned, payloadSourcePath: payload,
+        trustedKeys: { "launcher-fixture": keys.publicKey }, ...pathOptions, runner });
+      const paths = resolveProductPaths(pathOptions), ownership = readOwnershipManifest(paths.installManifest)!;
+      const resource = ownership.resources.find(value => value.kind === "directory" && value.id === "product-binaries")!;
+      if (resource.kind !== "directory") throw new Error("fixture binary resource missing");
+      const observed = observeInstalledPackagedPayload(resource, ownership);
+      if (observed.state !== "owned") throw new Error("fixture payload not owned");
+      const config = { version: 1 as const, publicMcpAbi: "stable" as const, exposure: { kind: "existing-https" as const,
+        publicUrl: "https://example.test/tela", localPort: 18743, authentication: "none" as const,
+        allowUnauthenticatedPublicEndpoint: true as const } };
+      const launch = (service: "chat" | "gateway") => resolvePackagedServiceLaunch({ service, payloadRoot: paths.binaryRoot,
+        pathOptions, productConfig: config });
+      const upgrade = { version: 1, installId: ownership.installId, fromVersion: "1.0.0", toVersion: ownership.productVersion,
+        sourcePayloadFingerprint: "a".repeat(64), targetPayloadFingerprint: observed.receipt.payloadFingerprint,
+        phase: "manifest-updated", resumeServices: ["chat"], quiescedServices: ["gateway", "codex", "chat"], resumedServices: [] };
+      const saveUpgrade = (changes: object = {}) => writeFileSync(packagedUpgradeJournalPath(paths), JSON.stringify({ ...upgrade, ...changes }));
+      for (const phase of ["prepared", "quiescing", "quiesced", "payload-replacing", "payload-installed"]) {
+        saveUpgrade({ phase }); expect(() => launch("chat")).toThrow("transition journal");
+      }
+      saveUpgrade(); expect(launch("chat").service).toBe("chat");
+      expect(() => launch("gateway")).toThrow("transition journal");
+      for (const changes of [{ installId: "foreign" }, { toVersion: "1.2.4" }, { targetPayloadFingerprint: "0".repeat(64) },
+        { quiescedServices: ["chat"] }]) {
+        saveUpgrade(changes); expect(() => launch("chat")).toThrow("transition journal");
+      }
+      const restoring = { phase: "restoring-source", fromVersion: ownership.productVersion,
+        sourcePayloadFingerprint: observed.receipt.payloadFingerprint, quiescedServices: ["gateway"] };
+      saveUpgrade(restoring); expect(launch("chat").service).toBe("chat");
+      expect(() => launch("gateway")).toThrow("transition journal");
+      for (const changes of [{ fromVersion: "0.0.0" }, { sourcePayloadFingerprint: "0".repeat(64) }, { installId: "foreign" }]) {
+        saveUpgrade({ ...restoring, ...changes }); expect(() => launch("chat")).toThrow("transition journal");
+      }
+      saveUpgrade(); writeFileSync(packagedRepairJournalPath(paths), "{}");
+      expect(() => launch("chat")).toThrow("transition journal");
+      rmSync(packagedUpgradeJournalPath(paths));
+      const repair = { version: 1, installId: ownership.installId, productVersion: ownership.productVersion,
+        targetPayloadFingerprint: observed.receipt.payloadFingerprint, phase: "repaired", controlledServices: ["chat"],
+        repairServices: ["chat"], resumeServices: ["chat"], quiescedServices: ["chat"], repairedResources: ["product-binaries"], resumedServices: [] };
+      const saveRepair = (changes: object = {}) => writeFileSync(packagedRepairJournalPath(paths), JSON.stringify({ ...repair, ...changes }));
+      saveRepair(); expect(launch("chat").service).toBe("chat"); expect(() => launch("gateway")).toThrow("transition journal");
+      for (const changes of [{ phase: "repairing" }, { installId: "foreign" }, { productVersion: "1.2.4" },
+        { targetPayloadFingerprint: "0".repeat(64) }, { quiescedServices: [] }, { controlledServices: [] }]) {
+        saveRepair(changes); expect(() => launch("chat")).toThrow("transition journal");
+      }
+      writeFileSync(packagedRepairJournalPath(paths), " ".repeat(16 * 1024 + 1));
+      expect(() => launch("chat")).toThrow("transition journal");
+      rmSync(packagedRepairJournalPath(paths));
+      const foreign = join(root, "foreign-journal"); writeFileSync(foreign, JSON.stringify(repair));
+      symlinkSync(foreign, packagedRepairJournalPath(paths));
+      expect(() => launch("chat")).toThrow("transition journal");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("signed install registers the stable launcher while the launcher resolves the manifest-defined service binary", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-packaged-launcher-"));
     const home = join(root, "home");
     mkdirSync(home);
-    const { payload, keys } = buildFixture(root);
+    const { payload, keys } = buildFixture(root, true);
     const runner = new SystemdFixtureRunner();
     const pathOptions = { platform: "linux" as const, home, environment: {} };
     try {
@@ -129,6 +191,10 @@ describe("packaged service launcher", () => {
       expect(gateway.environment.CHATGPT_TELA_DIAGNOSTIC_FILE)
         .toBe(join(paths.logsRoot, "gateway.diagnostics.jsonl"));
 
+      const chat = resolvePackagedServiceLaunch({ service: "chat", payloadRoot: paths.binaryRoot, pathOptions });
+      expect(chat.environment.CHATGPT_TELA_WORKSPACE_FILES_EXECUTABLE).toBe(join(installedRoot, "helpers", `tela-workspace-files${process.platform === "win32" ? ".exe" : ""}`));
+      expect(gateway.environment.CHATGPT_TELA_WORKSPACE_FILES_EXECUTABLE).toBeUndefined();
+
       const codex = resolvePackagedServiceLaunch({
         service: "codex",
         payloadRoot: paths.binaryRoot,
@@ -141,6 +207,11 @@ describe("packaged service launcher", () => {
       expect(codex.environment.CHATGPT_TELA_PRODUCT_PROFILE_RUNTIME_ENTRYPOINT)
         .toBe(join(installedRoot, "runtime", "profile-runtime.cjs"));
       expect(codex.environment.CHATGPT_TELA_PRODUCT_PUBLIC_MCP_ABI).toBe("stable");
+      mkdirSync(paths.serviceState("chat"), { recursive: true });
+      writeFileSync(join(paths.serviceState("chat"), "process-operations-v1.json"), JSON.stringify({ version: 2, operations: [] }));
+      expect(() => resolvePackagedServiceLaunch({ service: "chat", payloadRoot: paths.binaryRoot, pathOptions })).toThrow("cannot read");
+      expect(() => resolvePackagedServiceLaunch({ service: "codex", payloadRoot: paths.binaryRoot, pathOptions })).not.toThrow();
+      expect(() => resolvePackagedServiceLaunch({ service: "gateway", payloadRoot: paths.binaryRoot, pathOptions })).not.toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

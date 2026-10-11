@@ -192,3 +192,24 @@ describe("product lifecycle ownership", () => {
     expect(removed).toBe(false);
   });
 });
+
+test("each refused service shutdown preserves shared product dependencies without blocking other service resources", async () => {
+  for (const blocked of ["gateway", "chat", "codex"] as const) {
+    let manifest = createOwnershipManifest("fixture-shutdown");
+    for (const owner of ["product", "gateway", "chat", "codex"] as const) {
+      manifest = withOwnedResource(manifest, { kind: "directory", id: `${owner}-resource`, owner,
+        path: join(tmpdir(), `synthetic-${owner}`), dataClass: owner === "product" ? "binary" : "state" });
+    }
+    manifest = withOwnedResource(manifest, { kind: "service-registration", id: "shared-recovery-ui", owner: "product", registrationId: "fixture.menu" });
+    const observer = { observe: async () => "owned" as const };
+    const plan = await planUninstall({ manifest, observer, removeData: true });
+    const removed: string[] = [];
+    const result = await applyUninstallPlan({ manifest, plan, blockedOwners: new Set([blocked]),
+      operator: { ...observer, async remove(resource) { removed.push(resource.id); return { removed: true, detail: "synthetic removal" }; } },
+    });
+    expect(result.steps.find(step => step.resourceId === "product-resource")?.outcome).toBe("preserved");
+    expect(result.steps.find(step => step.resourceId === "shared-recovery-ui")?.outcome).toBe("preserved");
+    expect(result.steps.find(step => step.resourceId === `${blocked}-resource`)?.outcome).toBe("preserved");
+    expect(removed.sort()).toEqual(["gateway", "chat", "codex"].filter(owner => owner !== blocked).map(owner => `${owner}-resource`).sort());
+  }
+});

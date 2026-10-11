@@ -23,6 +23,28 @@ function manifest() {
 }
 
 describe("packaged product manifest", () => {
+  test("lifecycle protocol is explicit, signed-layout-only and refuses unknown versions", () => {
+    const base = manifest();
+    expect(parsePackagedProductManifest(base).lifecycle).toBeUndefined();
+    const signed = { ...base, launcher: { executable: "tela" }, profileRuntime: { executable: "electron", entrypoint: "entry" },
+      integrity: { signature: "ed25519-sha256-tree-v1", keyId: "fixture" } };
+    expect(parsePackagedProductManifest({ ...signed, lifecycle: { transitionLaunch: 1, sourceCancellation: 1 } }).lifecycle)
+      .toEqual({ transitionLaunch: 1, sourceCancellation: 1 });
+    for (const lifecycle of [{ transitionLaunch: 2, sourceCancellation: 1 }, { transitionLaunch: 1 },
+      { transitionLaunch: 1, sourceCancellation: 1, fallback: true }, []]) {
+      expect(() => parsePackagedProductManifest({ ...signed, lifecycle })).toThrow("protocol");
+    }
+    expect(() => parsePackagedProductManifest({ ...base, lifecycle: { transitionLaunch: 1, sourceCancellation: 1 } }))
+      .toThrow("signed launcher");
+  });
+  test("Chat storage compatibility is retained in the package manifest rather than inferred from release names", () => {
+    const base = manifest();
+    expect(parsePackagedProductManifest(base).chatProcessStore).toBeUndefined();
+    expect(parsePackagedProductManifest({ ...base, chatProcessStore: { readVersions: [1, 2], writeVersion: 2 } }).chatProcessStore)
+      .toEqual({ readVersions: [1, 2], writeVersion: 2 });
+    expect(() => parsePackagedProductManifest({ ...base, chatProcessStore: { readVersions: [1], writeVersion: 2 } }))
+      .toThrow("compatibility");
+  });
   test("parses exactly three portable service entrypoints and converts them to install spec", () => {
     const parsed = parsePackagedProductManifest(manifest());
     expect(parsed.productVersion).toBe("1.2.3");

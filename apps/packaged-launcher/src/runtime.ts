@@ -8,11 +8,11 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { readProductConfig, type ProductConfig } from "@chatgpt-tela/product-config";
 import {
   observeInstalledPackagedPayload,
-  packagedRepairJournalPath,
-  packagedUpgradeJournalPath,
   readOwnershipManifest,
   readPackagedProductManifest,
   resolveProductPaths,
+  assertChatProcessStoreCompatible,
+  assertPackagedLaunchAdmission,
   type PackagedProductManifest,
   type ProductPathOptions,
   type TelaServiceId,
@@ -77,6 +77,11 @@ function derivedEnvironment(input: {
       result.CHATGPT_TELA_TAILSCALE_CLI = input.productConfig.exposure.tailscaleCli;
     }
   }
+  if (input.service === "chat") {
+    // Empty explicitly clears stale inherited configuration for packages without this capability.
+    result.CHATGPT_TELA_WORKSPACE_FILES_EXECUTABLE = input.manifest.workspaceFiles
+      ? regularPayloadFile(input.payloadRoot, input.manifest.workspaceFiles.executable, "file publisher executable") : "";
+  }
   if (input.service === "codex") {
     result.CHATGPT_TELA_PRODUCT_PUBLIC_MCP_ABI = input.productConfig.publicMcpAbi;
     if (!input.manifest.profileRuntime) throw new Error("packaged Codex service requires profile runtime metadata");
@@ -97,13 +102,12 @@ function derivedEnvironment(input: {
   return Object.freeze(result);
 }
 
-export function resolvePackagedServiceLaunch(input: {
-  readonly service: TelaServiceId;
+export function verifyInstalledPackage(input: {
   readonly payloadRoot: string;
   readonly launcherExecutablePath?: string;
-  readonly productConfig?: ProductConfig;
   readonly pathOptions?: ProductPathOptions;
-}): ResolvedPackagedServiceLaunch {
+  readonly service?: TelaServiceId;
+}) {
   const payloadRoot = realpathSync(resolve(input.payloadRoot));
   const manifest = readPackagedProductManifest(payloadRoot);
   if (!manifest.launcher || !manifest.profileRuntime || !manifest.integrity) {
@@ -114,9 +118,6 @@ export function resolvePackagedServiceLaunch(input: {
     throw new Error("running launcher executable does not match the installed package manifest");
   }
   const paths = resolveProductPaths(input.pathOptions);
-  if (existsSync(packagedUpgradeJournalPath(paths)) || existsSync(packagedRepairJournalPath(paths))) {
-    throw new Error("packaged service launch is blocked while an install transition journal is incomplete");
-  }
   const ownership = readOwnershipManifest(paths.installManifest);
   if (!ownership) throw new Error("packaged launcher requires an installed ownership manifest");
   if (ownership.productVersion !== manifest.productVersion) throw new Error("installed product version does not match the packaged launcher payload");
@@ -126,6 +127,19 @@ export function resolvePackagedServiceLaunch(input: {
   if (observed.state !== "owned" || observed.receipt.productVersion !== manifest.productVersion) {
     throw new Error("packaged launcher payload ownership/receipt could not be re-proven");
   }
+  assertPackagedLaunchAdmission({ paths, ownership, receipt: observed.receipt, ...(input.service ? { service: input.service } : {}) });
+  return { payloadRoot, manifest, paths, ownership };
+}
+
+export function resolvePackagedServiceLaunch(input: {
+  readonly service: TelaServiceId;
+  readonly payloadRoot: string;
+  readonly launcherExecutablePath?: string;
+  readonly productConfig?: ProductConfig;
+  readonly pathOptions?: ProductPathOptions;
+}): ResolvedPackagedServiceLaunch {
+  const { payloadRoot, manifest, paths, ownership } = verifyInstalledPackage(input);
+  if (input.service === "chat") assertChatProcessStoreCompatible(paths, manifest.chatProcessStore);
   const productConfig = input.productConfig ?? readProductConfig(join(paths.configRoot, "product-v1.json"));
   const entry = manifest.services[input.service];
   const executable = regularPayloadFile(payloadRoot, entry.executable, `packaged ${input.service} executable`);
@@ -157,33 +171,15 @@ export function resolvePackagedMenuBarLaunch(input: {
   if (process.platform !== "darwin" && input.pathOptions?.platform !== "darwin") {
     throw new Error("packaged ChatGPT Tela menu bar is available only on macOS");
   }
-  const payloadRoot = realpathSync(resolve(input.payloadRoot));
-  const manifest = readPackagedProductManifest(payloadRoot);
-  if (!manifest.launcher || !manifest.profileRuntime || !manifest.integrity || !manifest.menuBar) {
-    throw new Error("installed package does not declare the signed macOS menu bar layout");
-  }
-  const expectedLauncher = regularPayloadFile(payloadRoot, manifest.launcher.executable, "packaged launcher executable");
-  if (input.launcherExecutablePath && realpathSync(resolve(input.launcherExecutablePath)) !== expectedLauncher) {
-    throw new Error("running launcher executable does not match the installed package manifest");
-  }
-  const paths = resolveProductPaths(input.pathOptions);
-  if (existsSync(packagedUpgradeJournalPath(paths)) || existsSync(packagedRepairJournalPath(paths))) {
-    throw new Error("packaged menu bar launch is blocked while an install transition journal is incomplete");
-  }
-  const ownership = readOwnershipManifest(paths.installManifest);
-  if (!ownership) throw new Error("packaged launcher requires an installed ownership manifest");
-  if (ownership.productVersion !== manifest.productVersion) throw new Error("installed product version does not match the packaged launcher payload");
-  const resource = binaryResource(ownership);
-  if (realpathSync(resource.path) !== payloadRoot) throw new Error("packaged launcher root does not match the owned binary resource");
-  const observed = observeInstalledPackagedPayload(resource, ownership);
-  if (observed.state !== "owned" || observed.receipt.productVersion !== manifest.productVersion) {
-    throw new Error("packaged launcher payload ownership/receipt could not be re-proven");
-  }
+  const { payloadRoot, manifest } = verifyInstalledPackage(input);
+  if (!manifest.menuBar) throw new Error("installed package does not declare the signed macOS menu bar layout");
   return Object.freeze({
     payloadRoot,
     executable: regularPayloadFile(payloadRoot, manifest.menuBar.executable, "packaged menu bar executable"),
     arguments: Object.freeze([]),
-    environment: Object.freeze({}),
+    environment: Object.freeze({
+      CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE: regularPayloadFile(payloadRoot, manifest.launcher!.executable, "packaged launcher executable"),
+    }),
   });
 }
 

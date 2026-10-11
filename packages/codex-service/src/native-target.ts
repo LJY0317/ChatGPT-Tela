@@ -23,6 +23,7 @@ export interface CodexNativeTarget {
 export interface CodexNativeTargetSession {
   readonly targetId: string;
   readonly state: string;
+  readonly endpoint?: string;
   readonly responsesRouteFingerprint?: string;
   readonly desktopProcessId?: number;
 }
@@ -38,14 +39,14 @@ export interface CodexNativeTargetAdapter {
     readonly session: CodexNativeTargetSession;
   }>;
   session(targetId: string, signal?: AbortSignal): Promise<CodexNativeTargetSession>;
-  quit(targetId: string, signal?: AbortSignal): Promise<CodexNativeTargetSession>;
+  quit(targetId: string, signal?: AbortSignal, expectedDesktopProcessId?: number): Promise<CodexNativeTargetSession>;
   profileRuntimeEnvironment(target: CodexNativeTarget): Readonly<Record<string, string>>;
 }
 
 interface MultiProfileControlContract {
   targets(signal?: AbortSignal): Promise<readonly MultiProfileTarget[]>;
   targetSession(targetId: string, signal?: AbortSignal): Promise<MultiProfileTargetSession>;
-  quitTarget(targetId: string, signal?: AbortSignal): Promise<MultiProfileTargetSession>;
+  quitTarget(targetId: string, signal?: AbortSignal, expectedDesktopProcessId?: number): Promise<MultiProfileTargetSession>;
 }
 
 function slot(value: number): number {
@@ -148,12 +149,15 @@ export class DefaultDesktopNativeTargetAdapter implements CodexNativeTargetAdapt
     return (await this.#snapshot()).session;
   }
 
-  async quit(targetId: string): Promise<CodexNativeTargetSession> {
+  async quit(targetId: string, _signal?: AbortSignal, expectedDesktopProcessId?: number): Promise<CodexNativeTargetSession> {
     const before = await this.session(targetId);
+    if (expectedDesktopProcessId !== undefined && before.desktopProcessId !== expectedDesktopProcessId) {
+      throw new Error("ChatGPT changed since confirmation; current app preserved");
+    }
     if (before.state === "available") return before;
     if (!before.desktopProcessId) throw new Error("default Desktop process identity is unavailable for normal quit");
     await this.#normalQuit(this.#installation(), before.desktopProcessId);
-    const deadline = Date.now() + 15_000;
+    const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
       const current = await this.session(targetId);
       if (current.state === "available") return current;
@@ -192,7 +196,8 @@ export class CompositeNativeTargetAdapter implements CodexNativeTargetAdapter {
     let optionalProfiles: readonly { readonly target: CodexNativeTarget; readonly session: CodexNativeTargetSession }[];
     try {
       optionalProfiles = await this.#multiProfile.profiles(signal);
-    } catch {
+    } catch (error) {
+      if (signal?.aborted) throw error;
       return Object.freeze([primary]);
     }
     const extras = optionalProfiles.filter(item => item.target.slot > 1);
@@ -219,10 +224,10 @@ export class CompositeNativeTargetAdapter implements CodexNativeTargetAdapter {
     return this.#multiProfile.session(targetId, signal);
   }
 
-  quit(targetId: string, signal?: AbortSignal): Promise<CodexNativeTargetSession> {
-    if (targetId === DEFAULT_TARGET_ID) return this.#defaultDesktop.quit(targetId, signal);
+  quit(targetId: string, signal?: AbortSignal, expectedDesktopProcessId?: number): Promise<CodexNativeTargetSession> {
+    if (targetId === DEFAULT_TARGET_ID) return this.#defaultDesktop.quit(targetId, signal, expectedDesktopProcessId);
     if (!this.#multiProfile) throw new Error(`unknown native target without Multi-Profile adapter: ${targetId}`);
-    return this.#multiProfile.quit(targetId, signal);
+    return this.#multiProfile.quit(targetId, signal, expectedDesktopProcessId);
   }
 
   profileRuntimeEnvironment(target: CodexNativeTarget): Readonly<Record<string, string>> {
@@ -238,6 +243,7 @@ function mappedSession(session: MultiProfileTargetSession): CodexNativeTargetSes
   return Object.freeze({
     targetId: session.targetId,
     state: session.state,
+    ...(session.endpoint ? { endpoint: session.endpoint } : {}),
     ...(session.responsesRouteFingerprint
       ? { responsesRouteFingerprint: session.responsesRouteFingerprint }
       : {}),
@@ -298,9 +304,9 @@ export class MultiProfileNativeTargetAdapter implements CodexNativeTargetAdapter
     return mappedSession(await this.#client.targetSession(targetId, signal));
   }
 
-  async quit(targetId: string, signal?: AbortSignal): Promise<CodexNativeTargetSession> {
+  async quit(targetId: string, signal?: AbortSignal, expectedDesktopProcessId?: number): Promise<CodexNativeTargetSession> {
     this.#assertLauncherAvailable();
-    return mappedSession(await this.#client.quitTarget(targetId, signal));
+    return mappedSession(await this.#client.quitTarget(targetId, signal, expectedDesktopProcessId));
   }
 
   profileRuntimeEnvironment(target: CodexNativeTarget): Readonly<Record<string, string>> {

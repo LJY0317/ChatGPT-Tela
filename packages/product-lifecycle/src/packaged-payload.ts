@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
-import {
+import { physicalFs } from "./physical-fs";
+const {
   chmodSync,
   copyFileSync,
+  openSync,
+  readSync,
+  closeSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -13,7 +17,7 @@ import {
   rmSync,
   symlinkSync,
   writeFileSync,
-} from "node:fs";
+} = physicalFs;
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { prepareOwnedDirectory } from "./directory-registration";
 import {
@@ -117,6 +121,7 @@ function walkPayload(root: string, reservedPolicy: "reject" | "skip" = "reject")
 
 export function packagedPayloadFingerprint(root: string, input: { readonly target?: boolean } = {}): string {
   const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
   for (const item of walkPayload(root, input.target === true ? "skip" : "reject")) {
     if (item.relativePath === PACKAGED_PAYLOAD_SIGNATURE) continue;
     hash.update(item.kind === "directory" ? "d\0" : item.kind === "file" ? "f\0" : "l\0");
@@ -124,7 +129,17 @@ export function packagedPayloadFingerprint(root: string, input: { readonly targe
     hash.update("\0");
     hash.update(String(item.mode & 0o111));
     hash.update("\0");
-    if (item.kind === "file") hash.update(createHash("sha256").update(readFileSync(item.absolutePath)).digest());
+    if (item.kind === "file") {
+      const content = createHash("sha256");
+      const fd = openSync(item.absolutePath, "r");
+      try {
+        let length: number;
+        while ((length = readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+          content.update(buffer.subarray(0, length));
+        }
+        hash.update(content.digest());
+      } finally { closeSync(fd); }
+    }
     if (item.kind === "symlink") hash.update(item.linkTarget!);
     hash.update("\0");
   }

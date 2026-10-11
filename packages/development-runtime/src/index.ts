@@ -1,5 +1,10 @@
 export * from "./canary";
 export * from "./canary-preflight";
+export * from "./native-passthrough";
+export * from "./web-model-catalog";
+export * from "./composite-provider-router";
+export * from "./web-epoch-pressure";
+export * from "./app-server-model-list";
 export * from "./browser-profile";
 export * from "./context-cache";
 export * from "./connector-probe-state";
@@ -9,3 +14,4 @@ export * from "./profile-control";
 export * from "./profile-setup";
 export * from "./product-profile";
 export * from "./runtime";
+export * from "./native-first-profile";

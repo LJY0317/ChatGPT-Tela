@@ -37,9 +37,10 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       envKey: "CHATGPT_TELA_RUNTIME_TOKEN",
       credential: "r".repeat(48),
     });
+    let fixtureDesktopPid: number | undefined;
     const runtime = await startDefaultDesktopTargetRuntime({
       installation: {
-        platform: "darwin",
+        platform: "linux",
         chatGptExecutable: chat,
         codexExecutable: codex,
         codexHome: join(home, ".codex"),
@@ -48,20 +49,25 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       },
       route,
       credential: "r".repeat(48),
-      environment: { TELA_FIXTURE_LOG: logPath },
+      environment: { TELA_FIXTURE_LOG: logPath, OPENAI_ORGANIZATION: "r".repeat(48) },
+      // The shebang fixture is a Bun process, unlike the real native executable.
+      processIds: async () => fixtureDesktopPid === undefined ? [] : [fixtureDesktopPid],
       normalQuit: async (_installation, pid) => { process.kill(pid, "SIGTERM"); },
     });
+    fixtureDesktopPid = runtime.desktopPid;
     try {
       expect(runtime.desktopPid).toBeGreaterThan(0);
       expect(runtime.backendPid).toBeGreaterThan(0);
       expect(runtime.proxyEndpoint).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/$/);
       expect(runtime.responsesRouteFingerprint).toBe(route.fingerprint);
       const log = JSON.parse(readFileSync(logPath, "utf8")) as { args: string[]; secret: string | null };
+      expect(log.args[0]).toBe("app-server");
       expect(log.secret).toBe("r".repeat(48));
       expect(log.args.join(" ")).not.toContain("r".repeat(48));
       expect(log.args).toContain("ws://127.0.0.1:0");
     } finally {
       await runtime.stop();
+      expect(() => process.kill(runtime.desktopPid, 0)).toThrow();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -89,7 +95,7 @@ ws.addEventListener("close",()=>process.exit(0),{once:true});setInterval(()=>{},
     let normalQuitCalls = 0;
     const runtime = await startDefaultDesktopTargetRuntime({
       installation: {
-        platform: "darwin",
+        platform: "linux",
         chatGptExecutable: chat,
         codexExecutable: codex,
         codexHome: join(home, ".codex"),
@@ -98,6 +104,7 @@ ws.addEventListener("close",()=>process.exit(0),{once:true});setInterval(()=>{},
       },
       route,
       credential: "r".repeat(48),
+      environment: { ...process.env, OPENAI_ORGANIZATION: "r".repeat(48) },
       processIds: async () => [],
       normalQuit: async () => { normalQuitCalls += 1; },
     });
@@ -113,4 +120,27 @@ ws.addEventListener("close",()=>process.exit(0),{once:true});setInterval(()=>{},
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+test("startup refusal emits a payload-free checking phase without launching processes",async()=>{
+ const events:{stage:string;fields:any}[]=[];
+ await expect(startDefaultDesktopTargetRuntime({
+  installation:{platform:"darwin",chatGptExecutable:"/private/fixture/ChatGPT",codexExecutable:"/private/fixture/codex",codexHome:"/private/fixture/home",userDataDir:"/private/fixture/data",normalQuitSupported:true},
+  route:createDefaultDesktopResponsesRoute({baseUrl:"http://127.0.0.1:18741/v1",envKey:"TEST_KEY",credential:"s".repeat(48)}),credential:"s".repeat(48),
+  processIds:async()=>[999],onDiagnostic:(stage,fields)=>events.push({stage,fields}),
+ })).rejects.toThrow("already running");
+ expect(events.map(e=>e.stage)).toEqual(["desktop_start_phase","desktop_start_failed"]);
+ expect(events[1]!.fields.phase).toBe("checking");expect(events[0]!.fields.operation_fingerprint).toBe(events[1]!.fields.operation_fingerprint);
+ expect(JSON.stringify(events)).not.toContain("private");expect(JSON.stringify(events)).not.toContain("999");expect(JSON.stringify(events)).not.toContain("127.0.0.1");
+});
+
+test("seeded remote mode rejects a missing real catalog before lifecycle observation", async () => {
+  let observations = 0;
+  await expect(startDefaultDesktopTargetRuntime({
+    installation: { platform: "linux", chatGptExecutable: "/fixture/chat", codexExecutable: "/fixture/codex", codexHome: "/fixture/home", userDataDir: "/fixture/data", normalQuitSupported: true },
+    route: createDefaultDesktopResponsesRoute({ baseUrl: "http://127.0.0.1:18741/v1", envKey: "CHATGPT_TELA_RUNTIME_TOKEN", credential: "r".repeat(48) }),
+    credential: "r".repeat(48), catalogMode: "seeded-remote",
+    processIds: async () => { observations++; return []; },
+  })).rejects.toThrow("real initial catalog");
+  expect(observations).toBe(0);
 });

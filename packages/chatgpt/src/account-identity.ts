@@ -49,6 +49,38 @@ const ACCOUNT_IDENTITY_PROBE = `async () => {
   }
 }`;
 
+// Separate from the routing identity probe: only an explicit local UI request returns email.
+const ACCOUNT_DISPLAY_PROBE = `async () => {
+  if (location.origin !== "https://chatgpt.com") throw new Error("ChatGPT account display requires the ChatGPT origin");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch("/api/auth/session", { credentials: "same-origin", cache: "no-store", signal: controller.signal });
+    const url = new URL(response.url);
+    if (url.origin !== "https://chatgpt.com" || url.pathname !== "/api/auth/session") throw new Error("Unexpected account display response");
+    if (response.status === 401) return { state: "signed-out" };
+    if (!response.ok) throw new Error("Account display unavailable");
+    const value = await response.json();
+    if (value && value.user === null) return { state: "signed-out" };
+    if (!value || !value.user || typeof value.user.id !== "string" || !value.user.id) throw new Error("Account display unavailable");
+    const email = value.user.email;
+    return { state: "signed-in", ...(typeof email === "string" ? { email } : {}) };
+  } finally { clearTimeout(timeout); }
+}`;
+
+export async function observeChatGptAccountDisplay(surface: BrowserSurfaceLease, signal?: AbortSignal): Promise<{
+  readonly state: "signed-in" | "signed-out";
+  readonly email?: string;
+}> {
+  const page = surface.capability(BROWSER_PAGE_AUTOMATION);
+  if (!page) throw new Error("browser surface does not expose account display observation");
+  const row = await page.evaluate<null, { state: string; email?: unknown }>(ACCOUNT_DISPLAY_PROBE, null, signal);
+  if (!["signed-in", "signed-out"].includes(row.state)
+    || (row.email !== undefined && (row.state !== "signed-in" || typeof row.email !== "string" || row.email.length > 254
+      || !/^[^\s@\x00-\x1f\x7f]+@[^\s@\x00-\x1f\x7f]+$/.test(row.email)))) throw new Error("Invalid account display observation");
+  return Object.freeze({ state: row.state as "signed-in" | "signed-out", ...(row.email !== undefined ? { email: row.email as string } : {}) });
+}
+
 export async function observeChatGptAccountIdentity(
   surface: BrowserSurfaceLease,
   signal?: AbortSignal,

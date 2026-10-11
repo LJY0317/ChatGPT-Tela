@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { isAbsolute } from "node:path";
 import {
   AppServerCurrentTurnSource,
   connectCodexAppServerWebSocket,
@@ -190,6 +191,9 @@ export interface MultiProfileTarget {
   readonly sessionState: string;
   readonly sharedAppServerSupported: boolean;
   readonly responsesRouteSupported: boolean;
+  readonly modelListOverlaySupported?: boolean;
+  readonly engineOverrideSupported?: boolean;
+  readonly startupModelCatalogSupported?: boolean;
   readonly profileIndex?: number;
 }
 
@@ -198,13 +202,16 @@ export interface MultiProfileTargetSession {
   readonly state: string;
   readonly endpoint?: string;
   readonly responsesRouteFingerprint?: string;
+  readonly modelListOverlayFingerprint?: string;
   readonly desktopProcessId?: number;
+  readonly engineOverrideSha256?: string;
 }
 
 export interface MultiProfileManagedRuntime {
   readonly target: MultiProfileTarget;
   readonly session: Required<Pick<MultiProfileTargetSession,
-    "targetId" | "state" | "endpoint" | "responsesRouteFingerprint">>;
+    "targetId" | "state" | "endpoint" | "responsesRouteFingerprint">>
+    & Pick<MultiProfileTargetSession, "modelListOverlayFingerprint" | "engineOverrideSha256" | "desktopProcessId">;
   readonly currentTurnSource: CanonicalCurrentTurnSource;
 }
 
@@ -240,6 +247,13 @@ function parseTarget(value: unknown): MultiProfileTarget {
     sessionState: stringField(target.sessionState, "target session state"),
     sharedAppServerSupported: booleanField(target.sharedAppServerSupported, "shared app-server support"),
     responsesRouteSupported: booleanField(target.responsesRouteSupported, "Responses route support"),
+    ...(target.startupModelCatalogSupported !== undefined
+      ? { startupModelCatalogSupported: booleanField(target.startupModelCatalogSupported, "startup model catalog support") } : {}),
+    ...(target.engineOverrideSupported !== undefined
+      ? { engineOverrideSupported: booleanField(target.engineOverrideSupported, "engine override support") } : {}),
+    ...(target.modelListOverlaySupported !== undefined
+      ? { modelListOverlaySupported: booleanField(target.modelListOverlaySupported, "model-list overlay support") }
+      : {}),
     ...(profileIndex !== undefined ? { profileIndex: profileIndex as number } : {}),
   });
 }
@@ -254,6 +268,9 @@ function parseSession(value: Record<string, unknown>, expectedTargetId: string):
   const responsesRouteFingerprint = value.responsesRouteFingerprint === undefined
     ? undefined
     : fingerprint(value.responsesRouteFingerprint);
+  const modelListOverlayFingerprint = value.modelListOverlayFingerprint === undefined
+    ? undefined
+    : fingerprint(value.modelListOverlayFingerprint);
   const desktopProcessID = value.desktopProcessID;
   if (desktopProcessID !== undefined
     && (!Number.isSafeInteger(desktopProcessID) || (desktopProcessID as number) < 1)) {
@@ -264,7 +281,9 @@ function parseSession(value: Record<string, unknown>, expectedTargetId: string):
     state,
     ...(endpoint ? { endpoint } : {}),
     ...(responsesRouteFingerprint ? { responsesRouteFingerprint } : {}),
+    ...(modelListOverlayFingerprint ? { modelListOverlayFingerprint } : {}),
     ...(desktopProcessID !== undefined ? { desktopProcessId: desktopProcessID as number } : {}),
+    ...(value.engineOverrideSha256 !== undefined ? { engineOverrideSha256: fingerprint(value.engineOverrideSha256) } : {}),
   });
 }
 
@@ -333,17 +352,29 @@ export class MultiProfileControlClient {
     readonly responsesBaseUrl: URL | string;
     readonly responsesEnvKey: string;
     readonly responsesToken: string;
+    readonly runtimeHeaderName?: string;
+    readonly startupModelCatalog?: boolean;
+    readonly nativeEngine?: { readonly executable: string; readonly sha256: string };
+    readonly modelListOverlay?: {
+      readonly url: string;
+      readonly envKey: string;
+      readonly token: string;
+    };
     readonly signal?: AbortSignal;
   }): Promise<MultiProfileRoutedRuntime> {
     return this.#launchRoutedTarget(input, false);
   }
 
-  async quitTarget(target: string, signal?: AbortSignal): Promise<MultiProfileTargetSession> {
+  async quitTarget(target: string, signal?: AbortSignal, expectedDesktopProcessId?: number): Promise<MultiProfileTargetSession> {
     const expectedTargetId = targetId(target);
+    if (expectedDesktopProcessId !== undefined && (!Number.isSafeInteger(expectedDesktopProcessId) || expectedDesktopProcessId < 1)) {
+      throw new Error("Invalid expected Desktop process id");
+    }
     const result = await this.#run([
       "quit-target",
       "--target",
       expectedTargetId,
+      ...(expectedDesktopProcessId === undefined ? [] : ["--expected-desktop-pid", String(expectedDesktopProcessId)]),
       "--json",
     ], undefined, signal);
     return parseSession(parseJson(result.stdout, "quit-target"), expectedTargetId);
@@ -354,6 +385,14 @@ export class MultiProfileControlClient {
     readonly responsesBaseUrl: URL | string;
     readonly responsesEnvKey: string;
     readonly responsesToken: string;
+    readonly runtimeHeaderName?: string;
+    readonly startupModelCatalog?: boolean;
+    readonly nativeEngine?: { readonly executable: string; readonly sha256: string };
+    readonly modelListOverlay?: {
+      readonly url: string;
+      readonly envKey: string;
+      readonly token: string;
+    };
     readonly signal?: AbortSignal;
   }, requireManaged: boolean): Promise<MultiProfileRoutedRuntime> {
     const expectedTargetId = targetId(input.targetId);
@@ -366,11 +405,41 @@ export class MultiProfileControlClient {
     const matches = targets.filter(target => target.id === expectedTargetId);
     if (matches.length !== 1) throw new Error(`Multi-Profile target is not available: ${expectedTargetId}`);
     const target = matches[0]!;
+    if (input.nativeEngine) {
+      if (target.engineOverrideSupported !== true) throw new Error("Multi-Profile target does not support explicit engine selection");
+      if (!isAbsolute(input.nativeEngine.executable) || /[\u0000\r\n]/.test(input.nativeEngine.executable)) throw new Error("Multi-Profile engine executable path is invalid");
+      fingerprint(input.nativeEngine.sha256);
+    }
     if (requireManaged && !target.managed) {
       throw new Error("stock/default ChatGPT must use ChatGPT Tela's native single-profile path");
     }
     if (!target.sharedAppServerSupported || !target.responsesRouteSupported) {
       throw new Error("Multi-Profile target does not support the required app-server/Responses contract");
+    }
+    if (input.startupModelCatalog && (target.startupModelCatalogSupported !== true || !input.modelListOverlay)) {
+      throw new Error("Update the profile launcher to support startup model catalogs");
+    }
+    if (input.modelListOverlay && target.modelListOverlaySupported !== true) {
+      throw new Error("Multi-Profile target does not support the model-list overlay contract");
+    }
+    if (input.runtimeHeaderName && !/^[A-Za-z][A-Za-z0-9-]{0,127}$/.test(input.runtimeHeaderName)) {
+      throw new Error("Multi-Profile runtime header name is invalid");
+    }
+    const overlay = input.modelListOverlay;
+    let overlayUrl: string | undefined;
+    if (overlay) {
+      const url = new URL(overlay.url);
+      if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
+        || !url.port || !url.pathname || url.pathname === "/" || url.username || url.password
+        || url.search || url.hash) {
+        throw new Error("Multi-Profile model-list overlay must be an exact loopback HTTP URL");
+      }
+      overlayUrl = url.href;
+      environmentKey(overlay.envKey);
+      if (overlay.token.length < 32) throw new Error("Multi-Profile model-list overlay token is too short");
+      if (overlay.envKey === envKey && overlay.token !== input.responsesToken) {
+        throw new Error("Multi-Profile shared runtime environment key has conflicting tokens");
+      }
     }
 
     const result = await this.#run([
@@ -381,11 +450,30 @@ export class MultiProfileControlClient {
       route,
       "--responses-env-key",
       envKey,
+      ...(input.runtimeHeaderName ? ["--responses-runtime-header-name", input.runtimeHeaderName] : []),
+      ...(input.startupModelCatalog ? ["--startup-model-catalog"] : []),
+      ...(overlay ? [
+        "--model-list-overlay-url", overlayUrl!,
+        "--model-list-overlay-env-key", overlay.envKey,
+      ] : []),
       "--json",
-    ], { [envKey]: input.responsesToken }, input.signal);
+    ], {
+      [envKey]: input.responsesToken,
+      // This child owns a new route; a launching Codex turn may carry another route's header.
+      ...(input.runtimeHeaderName === "OpenAI-Organization"
+        ? { OPENAI_ORGANIZATION: input.responsesToken } : {}),
+      ...(overlay ? { [overlay.envKey]: overlay.token } : {}),
+      ...(input.nativeEngine ? { CODEX_EXECUTABLE: input.nativeEngine.executable, CODEX_EXECUTABLE_SHA256: input.nativeEngine.sha256 } : {}),
+    }, input.signal);
     const session = parseSession(parseJson(result.stdout, "launch-target"), expectedTargetId);
     if (session.state !== "ready" || !session.endpoint || !session.responsesRouteFingerprint) {
       throw new Error("Multi-Profile launch did not return a ready routed target session");
+    }
+    if (overlay && !session.modelListOverlayFingerprint) {
+      throw new Error("Multi-Profile launch did not prove model-list overlay ownership");
+    }
+    if (input.nativeEngine && session.engineOverrideSha256 !== input.nativeEngine.sha256) {
+      throw new Error("Multi-Profile launch did not prove the selected engine identity");
     }
 
     const readySession = Object.freeze({
@@ -393,6 +481,11 @@ export class MultiProfileControlClient {
       state: session.state,
       endpoint: session.endpoint,
       responsesRouteFingerprint: session.responsesRouteFingerprint,
+      ...(session.desktopProcessId !== undefined ? { desktopProcessId: session.desktopProcessId } : {}),
+      ...(session.engineOverrideSha256 ? { engineOverrideSha256: session.engineOverrideSha256 } : {}),
+      ...(session.modelListOverlayFingerprint
+        ? { modelListOverlayFingerprint: session.modelListOverlayFingerprint }
+        : {}),
     });
     return Object.freeze({
       target,

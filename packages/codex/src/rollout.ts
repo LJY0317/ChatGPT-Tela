@@ -1,12 +1,23 @@
 import { createReadStream } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import type { NativeSandboxAuthority } from "@chatgpt-tela/core";
+import type { NativeSandboxAuthority, NativeIngressTurnMedia } from "@chatgpt-tela/core";
 
 export type CanonicalCurrentTurnProof =
   | "turn-context"
   | "current-task-inherited-context"
   | "app-server-active-turn";
+
+/** Current Native public goal state. This is observation, not execution authority. */
+export interface NativeThreadGoalObservation {
+  readonly threadId: string;
+  readonly objective: string;
+  readonly status: string;
+  readonly tokenBudget: number | null;
+  readonly tokensUsed: number;
+  readonly timeUsedSeconds: number;
+  readonly updatedAt: number;
+}
 
 export interface CanonicalCurrentTurnEvidence {
   readonly threadId: string;
@@ -18,6 +29,12 @@ export interface CanonicalCurrentTurnEvidence {
   readonly sandbox: NativeSandboxAuthority;
   readonly proof: CanonicalCurrentTurnProof;
   readonly environmentSourceTurnId: string;
+  /** Observed public Native ingress bytes; never a substitute for current-turn authority. */
+  readonly ingressMedia?: NativeIngressTurnMedia;
+  /** Optional, exact-thread read-only public Native goal snapshot. */
+  readonly nativeGoal?: NativeThreadGoalObservation;
+  /** Read-only public goal discovery: absent is distinct from unsupported. */
+  readonly nativeGoalState?: "absent" | "unavailable";
 }
 
 interface RolloutEnvironment {

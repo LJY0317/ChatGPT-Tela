@@ -7,6 +7,7 @@ import {
   startPublicGateway,
   startGatewayService,
   startUnifiedDevelopmentGateway,
+  type GatewayIngressStatus,
 } from "@chatgpt-tela/gateway";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import {
@@ -15,7 +16,9 @@ import {
   writeServiceRuntimeDescriptor,
 } from "@chatgpt-tela/service-protocol";
 import {
+  createTailscaleFunnelLease,
   SystemTailscaleCommandRunner,
+  tailscaleDiagnosisDetail,
   TailscaleFunnelExposure,
   TailscaleFunnelLeaseManager,
 } from "@chatgpt-tela/tailscale-ingress";
@@ -64,6 +67,72 @@ async function main(): Promise<void> {
   const productVersion = process.env.CHATGPT_TELA_PRODUCT_VERSION?.trim() || "0.0.0";
   const paths = resolveProductPaths();
   const descriptorPath = join(paths.serviceRuntime("gateway"), "descriptor.json");
+  const publicConfig = optionalPublicConfig();
+  const managedTailscale = Boolean(publicConfig)
+    && process.env.CHATGPT_TELA_GATEWAY_MANAGE_TAILSCALE_FUNNEL === "1";
+  const tailscaleManager = managedTailscale
+    ? new TailscaleFunnelLeaseManager({
+        runner: new SystemTailscaleCommandRunner(process.env.CHATGPT_TELA_TAILSCALE_CLI?.trim() || "tailscale"),
+        manifestPath: paths.installManifest,
+        installId,
+        productVersion,
+      })
+    : undefined;
+  const tailscaleLease = publicConfig && tailscaleManager
+    ? createTailscaleFunnelLease({
+        publicUrl: publicConfig.publicUrl,
+        localTarget: `http://127.0.0.1:${publicConfig.localPort}/mcp`,
+      })
+    : undefined;
+  const publicProbe = publicConfig?.abi === "unified-development"
+    ? probeUnifiedDevelopmentMcp
+    : probePublicMcp;
+  const resolveIngressStatus = publicConfig
+    ? async (signal?: AbortSignal): Promise<GatewayIngressStatus> => {
+        if (tailscaleManager && tailscaleLease) {
+          const diagnosis = await tailscaleManager.diagnose(tailscaleLease, signal);
+          if (diagnosis.availability !== "ready") {
+            return Object.freeze({
+              contractVersion: 1 as const,
+              availability: "unavailable" as const,
+              cause: diagnosis.cause,
+              detail: tailscaleDiagnosisDetail(diagnosis.cause),
+              exposureKind: "tailscale-funnel",
+            });
+          }
+        }
+
+        const local = await publicProbe(
+          new URL(`http://127.0.0.1:${publicConfig.localPort}/mcp`),
+          signal,
+        );
+        if (!local.ready) {
+          return Object.freeze({
+            contractVersion: 1 as const,
+            availability: "unavailable" as const,
+            cause: "local-mcp-unreachable",
+            detail: "The local Tela Gateway MCP listener is not reachable",
+            exposureKind: tailscaleManager ? "tailscale-funnel" : "existing-https",
+          });
+        }
+        const publicHealth = await publicProbe(new URL(publicConfig.publicUrl), signal);
+        return publicHealth.ready
+          ? Object.freeze({
+              contractVersion: 1 as const,
+              availability: "ready" as const,
+              cause: "ready",
+              detail: "The public ChatGPT Tela MCP endpoint is reachable",
+              exposureKind: tailscaleManager ? "tailscale-funnel" : "existing-https",
+            })
+          : Object.freeze({
+              contractVersion: 1 as const,
+              availability: "unavailable" as const,
+              cause: "public-mcp-unreachable",
+              detail: "Local MCP is ready, but the configured public MCP endpoint is not reachable",
+              exposureKind: tailscaleManager ? "tailscale-funnel" : "existing-https",
+            });
+      }
+    : undefined;
   const resolveBackend = (service: "chat" | "codex") => {
     const path = join(paths.serviceRuntime(service), "descriptor.json");
     const descriptor = readServiceRuntimeDescriptor(path);
@@ -73,48 +142,8 @@ async function main(): Promise<void> {
   };
   const gateway = await startGatewayService({
     resolveBackend,
+    ...(resolveIngressStatus ? { resolveIngressStatus } : {}),
   });
-  let publicMcp: { close(): Promise<void> } | undefined;
-  try {
-    const publicConfig = optionalPublicConfig();
-    if (publicConfig) {
-      const managedTailscale = process.env.CHATGPT_TELA_GATEWAY_MANAGE_TAILSCALE_FUNNEL === "1";
-      const tailscaleManager = managedTailscale
-        ? new TailscaleFunnelLeaseManager({
-            runner: new SystemTailscaleCommandRunner(process.env.CHATGPT_TELA_TAILSCALE_CLI?.trim() || "tailscale"),
-            manifestPath: paths.installManifest,
-            installId,
-            productVersion,
-          })
-        : undefined;
-      const codex = new DynamicCodexTurnBridge(() => resolveBackend("codex"));
-      const exposure = tailscaleManager
-        ? (probe: typeof probePublicMcp) => (local: { readonly endpointUrl: URL }) => new TailscaleFunnelExposure({
-            publicUrl: publicConfig.publicUrl,
-            localTarget: local.endpointUrl,
-            authentication: { kind: "none" },
-            manager: tailscaleManager,
-            probe: (endpoint, signal) => probe(endpoint.url, signal),
-          })
-        : undefined;
-      publicMcp = publicConfig.abi === "stable"
-        ? await startPublicGateway({
-            chat: new DynamicChatBackend(() => resolveBackend("chat")),
-            codex,
-            config: publicConfig,
-            ...(exposure ? { exposure: exposure(probePublicMcp) } : {}),
-          })
-        : await startUnifiedDevelopmentGateway({
-            chat: new DynamicChatBackend(() => resolveBackend("chat")),
-            codex,
-            config: publicConfig,
-            ...(exposure ? { exposure: exposure(probeUnifiedDevelopmentMcp) } : {}),
-          });
-    }
-  } catch (error) {
-    await gateway.close();
-    throw error;
-  }
   writeServiceRuntimeDescriptor(descriptorPath, {
     version: 1,
     service: "gateway",
@@ -125,10 +154,64 @@ async function main(): Promise<void> {
     bearerToken: gateway.bearerToken,
     startedAt: new Date().toISOString(),
   });
+
+  let publicMcp: { close(): Promise<void> } | undefined;
+  const ingressAbort = new AbortController();
+  const waitForRetry = (milliseconds: number): Promise<void> => new Promise(resolvePromise => {
+    if (ingressAbort.signal.aborted) {
+      resolvePromise();
+      return;
+    }
+    const timer = setTimeout(resolvePromise, milliseconds);
+    ingressAbort.signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolvePromise();
+    }, { once: true });
+  });
+  const startPublicMcp = async (): Promise<{ close(): Promise<void> } | undefined> => {
+    if (!publicConfig) return undefined;
+    const codex = new DynamicCodexTurnBridge(() => resolveBackend("codex"));
+    const exposure = tailscaleManager
+      ? (probe: typeof probePublicMcp) => (local: { readonly endpointUrl: URL }) => new TailscaleFunnelExposure({
+          publicUrl: publicConfig.publicUrl,
+          localTarget: local.endpointUrl,
+          authentication: { kind: "none" },
+          manager: tailscaleManager,
+          probe: (endpoint, signal) => probe(endpoint.url, signal),
+        })
+      : undefined;
+    return publicConfig.abi === "stable"
+      ? startPublicGateway({
+          chat: new DynamicChatBackend(() => resolveBackend("chat")),
+          codex,
+          config: publicConfig,
+          ...(exposure ? { exposure: exposure(probePublicMcp) } : {}),
+          signal: ingressAbort.signal,
+        })
+      : startUnifiedDevelopmentGateway({
+          chat: new DynamicChatBackend(() => resolveBackend("chat")),
+          codex,
+          config: publicConfig,
+          ...(exposure ? { exposure: exposure(probeUnifiedDevelopmentMcp) } : {}),
+          signal: ingressAbort.signal,
+        });
+  };
+  const ingressLoop = (async () => {
+    while (publicConfig && !ingressAbort.signal.aborted && !publicMcp) {
+      try {
+        publicMcp = await startPublicMcp();
+      } catch {
+        if (ingressAbort.signal.aborted) break;
+        await waitForRetry(5_000);
+      }
+    }
+  })();
   let stopping: Promise<void> | undefined;
   const stop = () => {
     if (!stopping) {
       stopping = (async () => {
+        ingressAbort.abort();
+        await ingressLoop.catch(() => {});
         const results = await Promise.allSettled([
           ...(publicMcp ? [publicMcp.close()] : []),
           gateway.close(),

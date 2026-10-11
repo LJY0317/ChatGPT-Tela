@@ -11,6 +11,16 @@ export interface RegisteredTurn {
   readonly channel: RuntimeTurnChannel;
 }
 
+/** A negative-only replay denial; never grants Native task or tool authority. */
+export class NativeTurnAlreadyRetired extends Error {
+  readonly code = "tela_native_turn_already_retired";
+
+  constructor() {
+    super("native turn was already retired by this runtime");
+    this.name = "NativeTurnAlreadyRetired";
+  }
+}
+
 function turnKey(binding: NativeTurnBinding): string {
   return `${binding.authority.threadId}\u0000${binding.authority.turnId}`;
 }
@@ -51,7 +61,7 @@ export class ActiveTurnRegistry {
   register(binding: NativeTurnBinding): RegisteredTurn {
     const key = turnKey(binding);
     if (this.#retiredTurns.has(key)) {
-      throw new Error("native turn was already retired by this runtime");
+      throw new NativeTurnAlreadyRetired();
     }
     if (this.#capabilityByTurn.has(key)) {
       throw new Error("native turn already has an active runtime owner");
@@ -67,6 +77,11 @@ export class ActiveTurnRegistry {
     const token = this.#capabilityByTurn.get(`${threadId}\u0000${turnId}`);
     if (!token) return undefined;
     return Object.freeze({ capability: token, channel: this.resolve(token) });
+  }
+
+  /** Only for rejecting a previously canonically proven, retired turn. */
+  isRetired(threadId: string, turnId: string): boolean {
+    return this.#retiredTurns.has(threadId + "\u0000" + turnId);
   }
 
   resolve(token: string): RuntimeTurnChannel {
@@ -86,6 +101,7 @@ export class ActiveTurnRegistry {
   retire(token: string): void {
     const channel = this.resolve(token);
     const key = turnKey(channel.binding);
+    channel.releaseProgress();
     this.#byCapability.delete(token);
     this.#capabilityByTurn.delete(key);
     this.#retiredTurns.delete(key);
@@ -115,6 +131,7 @@ export class ActiveTurnRegistry {
         if (!oldest) break;
         this.#retiredTurns.delete(oldest);
       }
+      channel.releaseProgress();
       void token;
     }
   }

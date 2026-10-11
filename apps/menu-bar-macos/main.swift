@@ -12,43 +12,141 @@ private struct ServiceStatus: Decodable {
   let state: String
 }
 
-private struct ProfileStatus: Decodable {
-  let slot: Int
-  let targetDisplayName: String
-  let targetState: String
-  let targetSessionState: String
-  let controlState: String
+private struct IngressStatus: Decodable {
+  let contractVersion: Int
+  let availability: String
+  let cause: String
+  let detail: String
 }
+
+private typealias ProfileStatus = TelaWorkProfile
 
 private struct ProfilesEnvelope: Decodable {
   let profiles: [ProfileStatus]
 }
 
-private struct Preferences: Codable {
+struct TelaPreferences: Codable {
   let version: Int
   var approvalAutomation: String
+  var approvalDelay: String?
+  var workProfileConnections: [String]?
+}
+
+enum TelaPreferencesStore {
+  static let delays = ["instant", "250ms", "500ms", "1s", "2s", "5s", "10s", "15s"]
+
+  static func read(at url: URL) throws -> TelaPreferences {
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      return TelaPreferences(version: 1, approvalAutomation: "off", approvalDelay: "instant")
+    }
+    let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+    guard values.isRegularFile == true, values.isSymbolicLink != true else {
+      throw NSError(domain: "ChatGPTTelaPreferences", code: 1)
+    }
+    let value = try JSONDecoder().decode(TelaPreferences.self, from: Data(contentsOf: url))
+    guard value.version == 1,
+          ["off", "recognized_once"].contains(value.approvalAutomation),
+          delays.contains(value.approvalDelay ?? "instant") else {
+      throw NSError(domain: "ChatGPTTelaPreferences", code: 2)
+    }
+    return value
+  }
+
+  static func write(_ value: TelaPreferences, at url: URL) throws {
+    let directory = url.deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
+    var payload = try JSONEncoder().encode(value)
+    payload.append(0x0A)
+    try payload.write(to: url, options: .atomic)
+    try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+  }
 }
 
 private struct MenuSnapshot {
   let services: [(String, String)]
-  let profiles: [ProfileStatus]
   let approvalAutomation: String?
   let approvalError: Bool
-  let installedServiceControls: Bool
+  let workInventory: TelaWorkInventory
 }
 
-private func runLaunchctl(_ arguments: [String]) {
-  let task = Process()
-  task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-  task.arguments = arguments
-  try? task.run()
-  task.waitUntilExit()
+// One accessible action owns the row. The switch is a visual state indicator,
+// so clicking it does not require making the menu's window key.
+@MainActor
+private final class TelaMenuToggleRow: NSView {
+  private let label = NSTextField(labelWithString: "")
+  private let detail = NSTextField(labelWithString: "")
+  private let toggle = NSSwitch()
+  private let icon = NSImageView()
+  var action: (() -> Void)?
+  var enabled = true
+
+  init(title: String, image: NSImage?, on: Bool) {
+    super.init(frame: NSRect(x: 0, y: 0, width: 340, height: 48))
+    icon.image = image
+    icon.frame = NSRect(x: 16, y: 14, width: 20, height: 20)
+    label.frame = NSRect(x: 44, y: 25, width: 228, height: 18)
+    detail.frame = NSRect(x: 44, y: 7, width: 228, height: 16)
+    detail.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+    detail.textColor = .secondaryLabelColor
+    label.lineBreakMode = .byTruncatingTail
+    toggle.frame = NSRect(x: 292, y: 12, width: 38, height: 24)
+    addSubview(icon); addSubview(label); addSubview(detail); addSubview(toggle)
+    setAccessibilityElement(true)
+    setAccessibilityRole(.checkBox)
+    update(title: title, on: on, enabled: true)
+  }
+  required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+  func update(title: String, on: Bool, enabled: Bool) {
+    let parts = title.components(separatedBy: " — ")
+    label.stringValue = parts.first ?? title
+    detail.stringValue = parts.dropFirst().joined(separator: " — ")
+    self.enabled = enabled
+    toggle.state = on ? .on : .off
+    toggle.isEnabled = enabled
+    label.textColor = enabled ? .labelColor : .disabledControlTextColor
+    setAccessibilityLabel(title)
+    setAccessibilityValue(on ? 1 : 0)
+    setAccessibilityEnabled(enabled)
+  }
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    bounds.contains(convert(point, from: superview)) ? self : nil
+  }
+  override func mouseUp(with event: NSEvent) {
+    guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+    _ = accessibilityPerformPress()
+  }
+  override func accessibilityPerformPress() -> Bool {
+    guard enabled, let action else { return false }
+    action()
+    return true
+  }
 }
 
 @MainActor
 final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var statusItem: NSStatusItem!
+  private var statusMenu: NSMenu!
+  private var connectionSpinner: NSProgressIndicator?
+  private var connectionProgress: String?
+  private var profileConnectionItems: [Int: NSMenuItem] = [:]
+  private var profileToggleRows: [Int: TelaMenuToggleRow] = [:]
+  private var profileOpenItems: [NSMenuItem] = []
   private var snapshot: MenuSnapshot?
+  private var menuOpen = false
+  private var controlCenterRevealPending = false
+  private var chatGPTIcon: NSImage?
+  private var workInventory: TelaWorkInventory {
+    get { controlCenter.workState.inventory }
+    set { controlCenter.workState.inventory = newValue }
+  }
+  private var refreshing = false
+  private var refreshGeneration = 0
+  private var refreshAgain = false
+  private var noticePolicy = TelaLaunchNoticePolicy()
+  private var pendingLaunchPids = Set<Int>()
+  private var showingLaunchNotice = false
+  private let controlCenter = TelaControlCenterController()
   private let fileManager = FileManager.default
   private let home = FileManager.default.homeDirectoryForCurrentUser
 
@@ -61,12 +159,11 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private var preferencesURL: URL {
     supportRoot.appendingPathComponent("config/preferences-v1.json", isDirectory: false)
   }
-  private var logsURL: URL {
-    home.appendingPathComponent("Library/Logs/ChatGPT Tela", isDirectory: true)
-  }
-
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
+    controlCenter.onPreferencesChanged = { [weak self] in
+      Task { await self?.refreshNow() }
+    }
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     if let button = statusItem.button {
       if #available(macOS 11.0, *) {
@@ -75,19 +172,183 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         button.title = "T"
       }
     }
+    controlCenter.workState.onChange = { [weak self] in
+      guard let self else { return }
+      self.controlCenter.workInventoryDidChange()
+      self.updateConnectionProgress(self.connectionProgress)
+    }
+    controlCenter.onConnectionProgressChanged = { [weak self] message in
+      self?.updateConnectionProgress(message)
+    }
     let menu = NSMenu()
+    menu.autoenablesItems = false
     menu.delegate = self
+    statusMenu = menu
     statusItem.menu = menu
+    controlCenter.onWindowStateChanged = { [weak self] event in self?.recordMenuState(event) }
     rebuildMenu(loading: true)
+    let notifications = NSWorkspace.shared.notificationCenter
+    for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didActivateApplicationNotification,
+                 NSWorkspace.didTerminateApplicationNotification] {
+      notifications.addObserver(self, selector: #selector(workspaceChanged(_:)), name: name, object: nil)
+    }
+    Task { await refreshNow() }
+    Task { await controlCenter.showFirstUseIfNeeded() }
+  }
+
+  private func updateConnectionProgress(_ message: String?) {
+    connectionProgress = message
+    guard let button = statusItem.button else { return }
+    let visibleProgress = message ?? (workInventory.error == nil && workInventory.profiles.contains { $0.connectionInProgress == true || ($0.connected && $0.webState == "preparing") } ? "Connecting ChatGPT…" : nil)
+    button.toolTip = visibleProgress ?? "ChatGPT Tela"
+    button.setAccessibilityLabel(message.map { "Tela: \($0)" } ?? "ChatGPT Tela")
+    if visibleProgress != nil {
+      if connectionSpinner == nil {
+        let spinner = NSProgressIndicator()
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isIndeterminate = true
+        spinner.sizeToFit()
+        spinner.setFrameOrigin(NSPoint(x: (button.bounds.width - spinner.frame.width) / 2,
+                                      y: (button.bounds.height - spinner.frame.height) / 2))
+        spinner.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin, .maxYMargin]
+        button.addSubview(spinner)
+        connectionSpinner = spinner
+      }
+      button.image = nil
+      connectionSpinner?.startAnimation(nil)
+    } else {
+      connectionSpinner?.stopAnimation(nil)
+      connectionSpinner?.removeFromSuperview()
+      connectionSpinner = nil
+      button.image = NSImage(systemSymbolName: "network", accessibilityDescription: "ChatGPT Tela")
+    }
+    updateProfileProgress()
+    // Update existing row contents while tracking; keep the open menu's geometry stable.
+    if !menuOpen { rebuildMenu(loading: snapshot == nil) }
+  }
+
+  @objc private func reconnectWebProfile(_ sender: NSMenuItem) { controlCenter.reconnectWeb(slot: sender.tag) }
+
+  private func updateProfileProgress() {
+    for (slot, item) in profileConnectionItems {
+      if let profile = workInventory.profiles.first(where: { $0.slot == slot }) {
+        let presentation = TelaProfilePresentation(profile: profile, inventoryError: workInventory.error,
+          localProgress: controlCenter.connectionProgressSlot == slot ? connectionProgress : nil)
+        item.title = "Web in \(profile.targetDisplayName) — \(presentation.label)"
+        item.state = profile.connected ? .on : .off
+        profileToggleRows[slot]?.update(title: "Web in \(profile.targetDisplayName) — \(presentation.label)",
+          on: profile.connected, enabled: workInventory.error == nil && !controlCenter.connectionOperationInProgress
+            && profile.connectionInProgress != true)
+      }
+      item.isEnabled = workInventory.error == nil && !controlCenter.connectionOperationInProgress
+        && workInventory.profiles.first(where: { $0.slot == slot })?.connectionInProgress != true
+    }
+    for item in profileOpenItems {
+      let profile = workInventory.profiles.first(where: { $0.slot == item.tag })
+      item.isEnabled = workInventory.error == nil && profile?.connectionInProgress != true
+        && (profile?.connected == true || !controlCenter.connectionOperationInProgress)
+    }
+  }
+
+  func applicationWillTerminate(_ notification: Notification) {
+    NSWorkspace.shared.notificationCenter.removeObserver(self)
+  }
+
+  @objc private func workspaceChanged(_ notification: Notification) {
+    if notification.name == NSWorkspace.didTerminateApplicationNotification,
+       let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+      noticePolicy.ended(pid: Int(app.processIdentifier))
+      pendingLaunchPids.remove(Int(app.processIdentifier))
+    }
+    let live = Set(NSWorkspace.shared.runningApplications.map { Int($0.processIdentifier) })
+    noticePolicy.prune(livePids: live)
+    pendingLaunchPids.formIntersection(live)
+    guard notification.name != NSWorkspace.didTerminateApplicationNotification,
+          let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+          app.activationPolicy == .regular,
+          let preferences = try? TelaPreferencesStore.read(at: preferencesURL),
+          !(preferences.workProfileConnections ?? []).isEmpty else { return }
+    if notification.name == NSWorkspace.didActivateApplicationNotification,
+       !pendingLaunchPids.contains(Int(app.processIdentifier)),
+       !workInventory.profiles.contains(where: { $0.desktopProcessId == Int(app.processIdentifier) }) { return }
+    pendingLaunchPids.insert(Int(app.processIdentifier))
+    Task { await refreshNow() }
+  }
+
+  private func showPendingLaunchNotice() {
+    guard !showingLaunchNotice, !controlCenter.connectionOperationInProgress,
+          snapshot != nil, workInventory.error == nil,
+          let preferences = try? TelaPreferencesStore.read(at: preferencesURL) else { return }
+    let live = Set(NSWorkspace.shared.runningApplications.map { Int($0.processIdentifier) })
+    noticePolicy.prune(livePids: live)
+    pendingLaunchPids.formIntersection(live)
+    for pid in pendingLaunchPids.sorted() {
+      pendingLaunchPids.remove(pid)
+      // Do not steal focus from another app if the user moved on during discovery.
+      guard Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0) == pid else { continue }
+      guard let profile = noticePolicy.notice(pid: pid, profiles: workInventory.profiles,
+          wantedTargets: preferences.workProfileConnections ?? [], inventoryValid: true),
+          let app = NSRunningApplication(processIdentifier: pid_t(pid)), !app.isTerminated else { continue }
+      showingLaunchNotice = true
+      let alert = NSAlert()
+      alert.messageText = "Reopen ChatGPT to use Web models"
+      alert.informativeText = "\(profile.targetDisplayName) opened without its Web connection. Reopen it with Tela to use Web models. Finish any ongoing work first. You can keep using ChatGPT if you choose Later."
+      alert.addButton(withTitle: "Reopen with Tela")
+      alert.addButton(withTitle: "Later")
+      alert.window.level = .floating
+      NSApp.activate(ignoringOtherApps: true)
+      let answer = alert.runModal()
+      showingLaunchNotice = false
+      if answer == .alertFirstButtonReturn {
+        controlCenter.reopenForWeb(slot: profile.slot, expectedDesktopPid: pid)
+      } else {
+        app.activate(options: [])
+      }
+      // Avoid stacking multiple app notices over the same user's action.
+      break
+    }
   }
 
   func menuWillOpen(_ menu: NSMenu) {
-    rebuildMenu(loading: true)
-    Task {
-      let observed = await inspect()
-      snapshot = observed
-      rebuildMenu(loading: false)
+    // A native menu owns tracking. Opening it must not activate unrelated product windows.
+    rebuildMenu(loading: snapshot == nil)
+    menuOpen = true
+    recordMenuState("menu_open")
+    Task { await refreshNow() }
+  }
+
+  func menuDidClose(_ menu: NSMenu) {
+    menuOpen = false
+    // AppKit forbids rebuilding menu structure inside this callback. Defer until tracking ends.
+    DispatchQueue.main.async { [weak self] in
+      guard let self, !self.menuOpen else { return }
+      self.rebuildMenu(loading: self.snapshot == nil)
+      self.recordMenuState("menu_closed")
     }
+  }
+
+  func applicationDidBecomeActive(_ notification: Notification) { recordMenuState("app_active") }
+  func applicationDidResignActive(_ notification: Notification) { recordMenuState("app_inactive") }
+
+  private func recordMenuState(_ event: String) {
+    // Event-driven, bounded, local-only evidence: no window titles, other app identities or content.
+    let directory = home.appendingPathComponent("Library/Logs/ChatGPT Tela", isDirectory: true)
+    let url = directory.appendingPathComponent("menu-ui-events.json")
+    var rows: [[String: Any]] = []
+    if let data = try? Data(contentsOf: url), data.count < 131072,
+       let existing = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] { rows = existing }
+    let now = Date().timeIntervalSince1970
+    rows = rows.filter { ($0["at"] as? Double ?? 0) > now - 86400 }
+    rows.append(["at": now, "event": event, "menuOpen": menuOpen,
+      "appActive": NSApp.isActive, "ownAppFrontmost": NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
+      "window": controlCenter.windowStateEvidence])
+    do {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700])
+      try JSONSerialization.data(withJSONObject: Array(rows.suffix(64))).write(to: url, options: .atomic)
+      try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    } catch { /* Diagnostics cannot alter UI behavior. */ }
   }
 
   private func descriptorURL(_ service: String) -> URL {
@@ -112,19 +373,15 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     return value
   }
 
-  private func request(
-    _ descriptor: ServiceDescriptor,
-    path: String,
-    method: String = "GET"
-  ) async throws -> Data {
+  private func request(_ descriptor: ServiceDescriptor, path: String) async throws -> Data {
     guard let base = URL(string: descriptor.endpoint),
           let url = URL(string: path, relativeTo: base) else {
       throw NSError(domain: "ChatGPTTelaMenuBar", code: 3)
     }
     var request = URLRequest(url: url)
-    request.httpMethod = method
+    request.httpMethod = "GET"
     request.setValue("Bearer \(descriptor.bearerToken)", forHTTPHeaderField: "Authorization")
-    request.timeoutInterval = 3
+    request.timeoutInterval = TelaRequestBudget.seconds(path: path, method: "GET")
     let (data, response) = try await URLSession.shared.data(for: request)
     guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
       throw NSError(domain: "ChatGPTTelaMenuBar", code: 4)
@@ -144,36 +401,18 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     }
   }
 
-  private func readPreferences() throws -> Preferences {
-    guard fileManager.fileExists(atPath: preferencesURL.path) else {
-      return Preferences(version: 1, approvalAutomation: "off")
-    }
-    let values = try preferencesURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-    guard values.isRegularFile == true, values.isSymbolicLink != true else {
-      throw NSError(domain: "ChatGPTTelaMenuBar", code: 5)
-    }
-    let value = try JSONDecoder().decode(Preferences.self, from: Data(contentsOf: preferencesURL))
-    guard value.version == 1, ["off", "recognized_once"].contains(value.approvalAutomation) else {
-      throw NSError(domain: "ChatGPTTelaMenuBar", code: 6)
-    }
-    return value
-  }
-
-  private func writePreferences(_ value: Preferences) throws {
-    let directory = preferencesURL.deletingLastPathComponent()
-    try fileManager.createDirectory(at: directory, withIntermediateDirectories: true,
-                                    attributes: [.posixPermissions: 0o700])
-    let data = try JSONEncoder().encode(value)
-    var payload = data
-    payload.append(0x0A)
-    try payload.write(to: preferencesURL, options: .atomic)
-    try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: preferencesURL.path)
-  }
-
-  private func installedServiceControlsAvailable() -> Bool {
-    ["gateway", "chat", "codex"].allSatisfy { service in
-      fileManager.fileExists(atPath: home
-        .appendingPathComponent("Library/LaunchAgents/com.openai.chatgpt-tela.\(service).plist").path)
+  private func inspectIngress() async -> IngressStatus? {
+    do {
+      guard let descriptor = try readDescriptor("gateway") else { return nil }
+      let data = try await request(descriptor, path: "v1/ingress")
+      let status = try JSONDecoder().decode(IngressStatus.self, from: data)
+      guard status.contractVersion == 1,
+            ["ready", "unavailable", "unconfigured"].contains(status.availability),
+            !status.cause.isEmpty,
+            !status.detail.isEmpty else { return nil }
+      return status
+    } catch {
+      return nil
     }
   }
 
@@ -181,20 +420,30 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     async let gateway = inspectService("gateway")
     async let chat = inspectService("chat")
     async let codex = inspectService("codex")
-    var profiles: [ProfileStatus] = []
-    if let descriptor = try? readDescriptor("codex") {
-      if let data = try? await request(descriptor, path: "v1/codex/profiles"),
-         let envelope = try? JSONDecoder().decode(ProfilesEnvelope.self, from: data) {
-        profiles = envelope.profiles.sorted { $0.slot < $1.slot }
-      }
-    }
-    let preferences = try? readPreferences()
+    async let ingress = inspectIngress()
+    let ticket = controlCenter.workState.beginRead()
+    do {
+      guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "TelaWork", code: 1) }
+      let envelope = try JSONDecoder().decode(ProfilesEnvelope.self, from: await request(descriptor, path: "v1/codex/profiles"))
+      controlCenter.workState.finishRead(ticket, profiles: envelope.profiles)
+    } catch { controlCenter.workState.finishRead(ticket, profiles: nil, error: error) }
+    let workProfileReady = workInventory.error == nil && workInventory.profiles.contains { $0.connected && $0.connectionInProgress != true }
+    let gatewayState = await gateway
+    let chatState = await chat
+    let codexState = await codex
+    let ingressStatus = await ingress
+    let connectionReady = gatewayState == "Ready" && ingressStatus?.availability == "ready"
+    let chatReady = connectionReady && chatState == "Ready"
+    let codexReady = codexState == "Ready" && workProfileReady
+    let preferences = try? TelaPreferencesStore.read(at: preferencesURL)
     return MenuSnapshot(
-      services: [("Gateway", await gateway), ("Chat", await chat), ("Codex", await codex)],
-      profiles: profiles,
+      services: [
+        ("Chat", chatReady ? "Available" : "Unavailable"),
+        ("Work / Codex", codexReady ? "Available" : "Unavailable")
+      ],
       approvalAutomation: preferences?.approvalAutomation,
       approvalError: preferences == nil,
-      installedServiceControls: installedServiceControlsAvailable()
+      workInventory: workInventory
     )
   }
 
@@ -204,148 +453,160 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     menu.addItem(item)
   }
 
+  private func actionItem(_ title: String, action: Selector, keyEquivalent: String = "") -> NSMenuItem {
+    let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+    item.target = self
+    return item
+  }
+
+  private func profileIcon(_ profile: TelaWorkProfile) -> NSImage? {
+    let runningURL = profile.desktopProcessId.flatMap { pid -> URL? in
+      guard pid > 0, pid <= Int(Int32.max) else { return nil }
+      return NSRunningApplication(processIdentifier: pid_t(pid))?.bundleURL
+    }
+    guard let url = runningURL ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") else { return chatGPTIcon }
+    // Display adapter: use the installed app's own menu glyph when available. Never bundle it.
+    if let resource = Bundle(url: url)?.url(forResource: "chatgptTemplate", withExtension: "png"),
+       let image = NSImage(contentsOf: resource) {
+      image.size = NSSize(width: 18, height: 18)
+      if let retinaURL = Bundle(url: url)?.url(forResource: "chatgptTemplate@2x", withExtension: "png"),
+         let data = try? Data(contentsOf: retinaURL), let representation = NSBitmapImageRep(data: data) {
+        representation.size = image.size
+        image.addRepresentation(representation)
+      }
+      image.isTemplate = true
+      chatGPTIcon = image
+      return image
+    }
+    return NSWorkspace.shared.icon(forFile: url.path)
+  }
+
   private func rebuildMenu(loading: Bool) {
-    guard let menu = statusItem.menu else { return }
+    guard let menu = statusMenu else { return }
+    profileToggleRows.removeAll()
+    profileConnectionItems.removeAll(); profileOpenItems.removeAll()
     menu.removeAllItems()
     addDisabled("ChatGPT Tela", to: menu)
+    menu.addItem(actionItem("Open Tela…", action: #selector(openControlCenter), keyEquivalent: "o"))
     menu.addItem(.separator())
     if loading || snapshot == nil {
-      addDisabled("Refreshing status…", to: menu)
+      addDisabled("Chat: Checking…", to: menu)
+      addDisabled("Work / Codex: Checking…", to: menu)
     } else if let snapshot {
       for (name, state) in snapshot.services {
         addDisabled("\(name): \(state)", to: menu)
       }
-      if snapshot.installedServiceControls {
-        menu.addItem(NSMenuItem(title: "Start Background Services", action: #selector(startServices), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Stop Background Services", action: #selector(stopServices), keyEquivalent: ""))
-      }
-      menu.addItem(.separator())
-      if snapshot.profiles.isEmpty {
-        addDisabled("Codex profiles unavailable", to: menu)
-      } else {
-        for profile in snapshot.profiles {
-          addDisabled("\(profile.targetDisplayName): \(profile.controlState)", to: menu)
-          let actionTitle: String
-          let action: Selector
-          if profile.controlState == "running" {
-            actionTitle = "Stop Profile \(profile.slot)"
-            action = #selector(stopProfile(_:))
-          } else if profile.controlState == "restart-required" {
-            actionTitle = "Restart Profile \(profile.slot)"
-            action = #selector(restartProfile(_:))
-          } else {
-            actionTitle = "Start Profile \(profile.slot)"
-            action = #selector(startProfile(_:))
-          }
-          let item = NSMenuItem(title: actionTitle, action: action, keyEquivalent: "")
-          item.representedObject = profile.slot
-          menu.addItem(item)
+      if workInventory.error != nil { addDisabled("Couldn't check ChatGPT apps", to: menu) }
+      for profile in workInventory.profiles {
+        let item = actionItem("Web in \(profile.targetDisplayName) — \(profile.connectionLabel)", action: #selector(toggleWorkProfile(_:)))
+        item.tag = profile.slot
+        item.state = profile.connected ? .on : .off
+        item.image = profileIcon(profile)
+        item.isEnabled = snapshot.workInventory.error == nil && !controlCenter.connectionOperationInProgress
+        profileConnectionItems[profile.slot] = item
+        let row = TelaMenuToggleRow(title: item.title, image: item.image, on: profile.connected)
+        row.action = { [weak self, weak item] in
+          guard let self, let item else { return }
+          self.toggleWorkProfile(item)
+        }
+        item.view = row
+        profileToggleRows[profile.slot] = row
+        menu.addItem(item)
+        addProfileOpen(profile.slot, name: profile.targetDisplayName, to: menu)
+        if profile.canReconnectWeb {
+          let retry = actionItem("Reconnect Web", action: #selector(reconnectWebProfile(_:)))
+          retry.tag = profile.slot
+          retry.isEnabled = !controlCenter.connectionOperationInProgress && workInventory.error == nil
+          menu.addItem(retry)
         }
       }
       menu.addItem(.separator())
-      let approval = NSMenuItem(title: "Auto-approve recognized one-shot cards", action: #selector(toggleApproval), keyEquivalent: "")
+      let approval = actionItem("Auto-approve one-time requests", action: #selector(toggleApproval))
+      approval.toolTip = "Automatically approve only supported one-time requests. Persistent and unknown requests remain manual."
       approval.state = snapshot.approvalAutomation == "recognized_once" ? .on : .off
       approval.isEnabled = !snapshot.approvalError
       menu.addItem(approval)
-      if snapshot.approvalAutomation == "recognized_once" && snapshot.profiles.contains(where: { $0.controlState == "running" }) {
-        addDisabled("Restart active profile(s) to apply approval changes", to: menu)
-      }
       if snapshot.approvalError {
-        addDisabled("Approval preferences are invalid; fix preferences-v1.json", to: menu)
+        addDisabled("Couldn't load approval settings. Open Tela for help.", to: menu)
       }
+    }
+    if workInventory.profiles.isEmpty {
+      addProfileOpen(1, name: "ChatGPT", to: menu)
     }
     menu.addItem(.separator())
-    menu.addItem(NSMenuItem(title: "Open Logs", action: #selector(openLogs), keyEquivalent: ""))
-    menu.addItem(NSMenuItem(title: "Open Diagnostics", action: #selector(openDiagnostics), keyEquivalent: ""))
-    menu.addItem(NSMenuItem(title: "Refresh", action: #selector(refresh), keyEquivalent: "r"))
-    menu.addItem(.separator())
-    menu.addItem(NSMenuItem(title: "Quit Menu Bar", action: #selector(quitMenuBar), keyEquivalent: "q"))
+    menu.addItem(actionItem("Quit Tela Menu", action: #selector(quitMenuBar), keyEquivalent: "q"))
+    updateProfileProgress()
   }
 
-  @objc private func startServices() {
-    let uid = getuid()
-    let operation = Task.detached {
-      for service in ["gateway", "chat", "codex"] {
-        runLaunchctl(["kickstart", "gui/\(uid)/com.openai.chatgpt-tela.\(service)"])
-      }
-    }
-    Task {
-      _ = await operation.value
-      await refreshNow()
-    }
+  private func addProfileOpen(_ slot: Int, name: String, to menu: NSMenu) {
+    let item = actionItem("Open \(name)", action: #selector(openWorkProfile(_:)))
+    item.tag = slot
+    item.isEnabled = workInventory.profiles.first(where: { $0.slot == slot })?.connected == true
+      || !controlCenter.connectionOperationInProgress
+    profileOpenItems.append(item)
+    menu.addItem(item)
   }
 
-  @objc private func stopServices() {
-    let uid = getuid()
-    let operation = Task.detached {
-      for service in ["gateway", "chat", "codex"] {
-        runLaunchctl(["kill", "SIGTERM", "gui/\(uid)/com.openai.chatgpt-tela.\(service)"])
-      }
-    }
-    Task {
-      _ = await operation.value
-      await refreshNow()
-    }
+  @objc private func openWorkProfile(_ sender: NSMenuItem) {
+    statusMenu.cancelTracking()
+    controlCenter.openProfile(slot: sender.tag)
   }
 
-  private func profileAction(slot: Int, action: String) async {
+  @objc private func toggleWorkProfile(_ sender: NSMenuItem) {
+    statusMenu.cancelTracking()
+    controlCenter.connectFromMenu(slot: sender.tag)
+  }
+
+  @objc private func toggleApproval(_ sender: NSMenuItem) {
     do {
-      guard let descriptor = try readDescriptor("codex") else { return }
-      _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/\(action)", method: "POST")
-    } catch {
-      NSSound.beep()
-    }
-    await refreshNow()
-  }
-
-  @objc private func startProfile(_ sender: NSMenuItem) {
-    guard let slot = sender.representedObject as? Int else { return }
-    Task { await profileAction(slot: slot, action: "start") }
-  }
-
-  @objc private func stopProfile(_ sender: NSMenuItem) {
-    guard let slot = sender.representedObject as? Int else { return }
-    Task { await profileAction(slot: slot, action: "stop") }
-  }
-
-  @objc private func restartProfile(_ sender: NSMenuItem) {
-    guard let slot = sender.representedObject as? Int else { return }
-    Task {
-      await profileAction(slot: slot, action: "stop")
-      await profileAction(slot: slot, action: "start")
-    }
-  }
-
-  @objc private func toggleApproval() {
-    do {
-      var preferences = try readPreferences()
+      var preferences = try TelaPreferencesStore.read(at: preferencesURL)
       preferences.approvalAutomation = preferences.approvalAutomation == "recognized_once" ? "off" : "recognized_once"
-      try writePreferences(preferences)
+      try TelaPreferencesStore.write(preferences, at: preferencesURL)
+      sender.state = preferences.approvalAutomation == "recognized_once" ? .on : .off
+      if let current = snapshot {
+        snapshot = MenuSnapshot(
+          services: current.services,
+          approvalAutomation: preferences.approvalAutomation,
+          approvalError: false,
+          workInventory: current.workInventory
+        )
+      }
     } catch {
       NSSound.beep()
     }
     Task { await refreshNow() }
   }
 
-  @objc private func openLogs() {
-    try? fileManager.createDirectory(at: logsURL, withIntermediateDirectories: true,
-                                     attributes: [.posixPermissions: 0o700])
-    NSWorkspace.shared.open(logsURL)
-  }
-
-  @objc private func openDiagnostics() {
-    try? fileManager.createDirectory(at: logsURL, withIntermediateDirectories: true,
-                                     attributes: [.posixPermissions: 0o700])
-    NSWorkspace.shared.open(logsURL)
-  }
-
-  @objc private func refresh() {
-    Task { await refreshNow() }
+  @objc private func openControlCenter() {
+    controlCenterRevealPending = true
+    statusMenu.cancelTracking()
+    // Finish the native menu tracking transaction before ordering another window.
+    // A fixed delay or activation/focus restoration is neither needed nor appropriate.
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.controlCenterRevealPending, !self.menuOpen else { return }
+      self.controlCenterRevealPending = false
+      self.controlCenter.show()
+    }
   }
 
   private func refreshNow() async {
-    snapshot = await inspect()
-    rebuildMenu(loading: false)
+    guard !refreshing else { refreshAgain = true; return }
+    refreshing = true
+    defer {
+      refreshing = false
+      if refreshAgain { refreshAgain = false; Task { await refreshNow() } }
+    }
+    refreshGeneration += 1
+    let generation = refreshGeneration
+    let observed = await inspect()
+    guard generation == refreshGeneration else { return }
+    snapshot = observed
+    if observed.workInventory.error == nil {
+      controlCenter.rememberRunningProfileApps(observed.workInventory.profiles)
+    }
+    updateProfileProgress()
+    if !menuOpen { rebuildMenu(loading: false) }
+    showPendingLaunchNotice()
   }
 
   @objc private func quitMenuBar() {
@@ -357,9 +618,24 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
 struct ChatGPTTelaMenuBarMain {
   @MainActor
   static func main() {
+    if CommandLine.arguments.contains("--maintenance-only") {
+      let app = NSApplication.shared
+      let delegate = TelaMaintenanceController()
+      app.delegate = delegate
+      withExtendedLifetime(delegate) { app.run() }
+      return
+    }
+    let instance = TelaMenuBarInstanceLock()
+    do {
+      guard try instance.acquire() else { return }
+    } catch {
+      // Startup diagnostics never expose user paths or OS error payloads.
+      fputs("Tela menu bar could not acquire its instance lock.\n", stderr)
+      return
+    }
     let app = NSApplication.shared
     let delegate = TelaMenuBarController()
     app.delegate = delegate
-    app.run()
+    withExtendedLifetime(instance) { app.run() }
   }
 }

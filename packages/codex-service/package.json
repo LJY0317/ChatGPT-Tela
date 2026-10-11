@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@chatgpt-tela/codex": "workspace:*",
     "@chatgpt-tela/core": "workspace:*",
     "@chatgpt-tela/default-desktop-target": "workspace:*",
     "@chatgpt-tela/http-host": "workspace:*",

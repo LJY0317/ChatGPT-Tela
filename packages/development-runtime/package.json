@@ -8,6 +8,7 @@
     "./browser-profile": "./src/browser-profile.ts"
   },
   "dependencies": {
+    "@chatgpt-tela/product-lifecycle": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@chatgpt-tela/browser-host": "workspace:*",
     "@chatgpt-tela/chatgpt": "workspace:*",
@@ -18,6 +19,7 @@
     "@chatgpt-tela/local-server": "workspace:*",
     "@chatgpt-tela/mcp": "workspace:*",
     "@chatgpt-tela/runtime": "workspace:*",
-    "@chatgpt-tela/setup": "workspace:*"
+    "@chatgpt-tela/setup": "workspace:*",
+    "@chatgpt-tela/responses": "workspace:*"
   }
 }

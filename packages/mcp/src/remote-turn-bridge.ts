@@ -72,18 +72,35 @@ export async function connectCodexTurnBridge(input: {
     || !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname)) {
     throw new Error("remote turn bridge endpoint must use loopback http://");
   }
-  const transport = new StreamableHTTPClientTransport(endpoint, {
-    requestInit: { headers: { authorization: `Bearer ${input.bearerToken}` } },
-  });
-  const client = new Client({ name: input.clientName ?? "chatgpt-tela-remote-turn-bridge", version: "0.0.0" }, { capabilities: {} });
-  await client.connect(transport as unknown as Transport);
   let closed = false;
+  const active = new Set<Client>();
+  // The server reclaims idle MCP sessions. Each local operation owns a fresh session;
+  // never keep an idle lease or replay a possibly accepted tool invocation.
+  async function withClient<T>(operation: (client: Client) => Promise<T>): Promise<T> {
+    if (closed) throw new Error("remote turn bridge is closed");
+    const transport = new StreamableHTTPClientTransport(endpoint, {
+      requestInit: { headers: { authorization: `Bearer ${input.bearerToken}` } },
+    });
+    const client = new Client({ name: input.clientName ?? "chatgpt-tela-remote-turn-bridge", version: "0.0.0" }, { capabilities: {} });
+    active.add(client);
+    try {
+      await client.connect(transport as unknown as Transport);
+      if (closed) throw new Error("remote turn bridge is closed");
+      return await operation(client);
+    } finally {
+      active.delete(client);
+      await transport.terminateSession().catch(() => {});
+      await client.close().catch(() => {});
+    }
+  }
+  // Verify authentication/readiness before publishing this bridge, then release the lease.
+  await withClient(async () => {});
   return Object.freeze({
     async inventory(capability: string, query = "") {
-      const result = await client.callTool({
+      const result = await withClient(client => client.callTool({
         name: CHATGPT_TELA_CODEX_TOOL_INVENTORY,
         arguments: { turn_capability: capability, query },
-      });
+      }));
       if (result.isError) throw new Error("remote turn bridge rejected Native tool inventory request");
       let parsed: unknown;
       try { parsed = JSON.parse(textContent(result)); }
@@ -107,7 +124,7 @@ export async function connectCodexTurnBridge(input: {
             mode: "freeform" as const,
             input: invocation.input,
           };
-      const result = await client.callTool({ name: CHATGPT_TELA_CODEX_TOOL_CALL, arguments: arguments_ });
+      const result = await withClient(client => client.callTool({ name: CHATGPT_TELA_CODEX_TOOL_CALL, arguments: arguments_ }));
       return Object.freeze({
         callId: invocation.callId,
         content: textContent(result),
@@ -117,7 +134,7 @@ export async function connectCodexTurnBridge(input: {
     async close() {
       if (closed) return;
       closed = true;
-      await client.close();
+      await Promise.allSettled([...active].map(client => client.close()));
     },
   });
 }

@@ -170,11 +170,11 @@ function toolObservations(body: Record<string, unknown>): readonly NativeToolObs
  * as authority. They may become consistency claims later, but only canonical Native state can
  * create filesystem/tool execution authority.
  */
-export function parseNativeTurnClaim(value: unknown): NativeTurnClaim {
+function parseCurrentRequestClaim<K extends "turn" | "compaction">(value: unknown, expectedKind: K): Omit<NativeTurnClaim, "requestKind"> & { readonly requestKind: K } {
   const body = record(value);
   if (!body) throw new Error("native Codex request body must be an object");
   const metadata = turnMetadata(body);
-  if (metadata.request_kind !== "turn") {
+  if (metadata.request_kind !== expectedKind) {
     throw new Error("native Codex request is not a current turn");
   }
 
@@ -187,10 +187,47 @@ export function parseNativeTurnClaim(value: unknown): NativeTurnClaim {
   return Object.freeze({
     threadId,
     turnId,
-    requestKind: "turn" as const,
+    requestKind: expectedKind,
     ...(parentThreadId ? { parentThreadId } : {}),
     ...(agentName ? { agentName } : {}),
     ...(subagentKind ? { subagentKind } : {}),
     toolObservations: toolObservations(body),
   });
+}
+
+export function parseNativeTurnClaim(value: unknown): NativeTurnClaim {
+  return parseCurrentRequestClaim(value, "turn");
+}
+
+/**
+ * Untrusted, metadata-only identity for **negative replay checks**.
+ * This never proves Native ownership or tool authority: a non-retired request
+ * MUST still pass bindNativeTurnRequest's canonical Native current-turn read.
+ * Unlike full claim parsing, it does not scan old input or tool declarations.
+ */
+export function parseNativeTurnReplayIdentity(value: unknown): Readonly<{
+  threadId: string;
+  turnId: string;
+}> {
+  const body = record(value);
+  if (!body) throw new Error("native Codex request body must be an object");
+  const metadata = turnMetadata(body);
+  if (metadata.request_kind !== "turn") {
+    throw new Error("native Codex request is not a current turn");
+  }
+  return Object.freeze({
+    threadId: requiredIdentifier(metadata.thread_id, "thread_id"),
+    turnId: requiredIdentifier(metadata.turn_id, "turn_id"),
+  });
+}
+
+export type NativeCompactionClaim = Omit<NativeTurnClaim, "requestKind"> & { readonly requestKind: "compaction" };
+
+/** Dedicated compaction identity, never accepted by the ordinary tool gateway. */
+export function parseNativeCompactionClaim(value: unknown): NativeCompactionClaim {
+  const claim = parseCurrentRequestClaim(value, "compaction");
+  if (claim.toolObservations.some(observation => observation.tools.length > 0)) {
+    throw new Error("Native local compaction must not advertise executable tools");
+  }
+  return claim;
 }

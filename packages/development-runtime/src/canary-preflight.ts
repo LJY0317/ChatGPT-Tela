@@ -154,6 +154,7 @@ export async function preflightDevelopmentCanary(
       browserUserDataDir: config.browserUserDataDir,
       accountBindingPath: config.browserProfile.accountBindingPath,
       revealWhenReady: false,
+      runContextCanary: false,
     }, {
       ...(options.provider ? { provider: options.provider } : {}),
       ...(options.accountIdentityObserver ? { accountIdentityObserver: options.accountIdentityObserver } : {}),

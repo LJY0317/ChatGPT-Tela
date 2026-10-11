@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 
-export const TELA_DEFAULT_DESKTOP_PROVIDER_ID = "chatgpt_tela_responses";
+export const TELA_DEFAULT_DESKTOP_PROVIDER_ID = "openai";
+export const TELA_DEFAULT_DESKTOP_RUNTIME_HEADER = "OpenAI-Organization";
 
 export interface DefaultDesktopResponsesRoute {
   readonly baseUrl: string;
   readonly envKey: string;
   readonly providerId: string;
+  readonly runtimeHeaderName: string;
+  readonly modelCatalogUrl: string;
   readonly fingerprint: string;
 }
 
@@ -39,31 +42,31 @@ export function createDefaultDesktopResponsesRoute(input: {
   if (input.credential.length < 32) throw new Error("default Desktop Responses credential is too short");
   const baseUrl = normalizedBaseUrl(input.baseUrl);
   const envKey = environmentKey(input.envKey);
+  const runtimeHeaderName = TELA_DEFAULT_DESKTOP_RUNTIME_HEADER;
+  const modelCatalogUrl = `${baseUrl}/models`;
   const credentialHash = createHash("sha256").update(input.credential, "utf8").digest("hex");
   const fingerprint = createHash("sha256").update(JSON.stringify({
     baseUrl,
     credentialHash,
     envKey,
+    runtimeHeaderName,
+    modelCatalogUrl,
     providerId: TELA_DEFAULT_DESKTOP_PROVIDER_ID,
   })).digest("hex");
   return Object.freeze({
     baseUrl,
     envKey,
     providerId: TELA_DEFAULT_DESKTOP_PROVIDER_ID,
+    runtimeHeaderName,
+    modelCatalogUrl,
     fingerprint,
   });
 }
 
 export function defaultDesktopCodexConfigArguments(route: DefaultDesktopResponsesRoute): readonly string[] {
-  const prefix = `model_providers.${route.providerId}`;
   return Object.freeze([
     "-c", `model_provider=${JSON.stringify(route.providerId)}`,
-    "-c", `${prefix}.name=${JSON.stringify("ChatGPT Tela Responses")}`,
-    "-c", `${prefix}.base_url=${JSON.stringify(route.baseUrl)}`,
-    "-c", `${prefix}.wire_api=${JSON.stringify("responses")}`,
-    "-c", `${prefix}.env_key=${JSON.stringify(route.envKey)}`,
-    "-c", `${prefix}.requires_openai_auth=false`,
-    "-c", `${prefix}.supports_websockets=false`,
+    "-c", `openai_base_url=${JSON.stringify(route.baseUrl)}`,
   ]);
 }
 
@@ -76,6 +79,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 export function rewriteDefaultDesktopAppServerRequest(
   message: string,
   route: DefaultDesktopResponsesRoute,
+  options: { readonly permissionProfiles?: boolean } = {},
 ): string {
   let parsed: unknown;
   try { parsed = JSON.parse(message) as unknown; }
@@ -93,21 +97,23 @@ export function rewriteDefaultDesktopAppServerRequest(
   if (existingProviders !== undefined && !record(existingProviders)) {
     throw new Error("routed app-server request has non-object model_providers");
   }
-  const providers = { ...(record(existingProviders) ?? {}) };
-  providers[route.providerId] = {
-    name: "ChatGPT Tela Responses",
-    base_url: route.baseUrl,
-    wire_api: "responses",
-    env_key: route.envKey,
-    requires_openai_auth: false,
-    supports_websockets: false,
-  };
   config.model_provider = route.providerId;
-  config.model_providers = providers;
-  const routedParams = {
+  config.openai_base_url = route.baseUrl;
+  const routedParams: Record<string, unknown> = {
     ...params,
     config,
     modelProvider: route.providerId,
   };
+  // Native cold resume persists profile identity, not legacy sandbox selections. Only these two
+  // policies have an exact built-in representation independent of configured writable roots.
+  // Workspace-write must remain Native-owned: :workspace can drop custom legacy roots.
+  if (options.permissionProfiles && params.permissions == null) {
+    const profile = params.sandbox === "read-only" ? ":read-only"
+      : params.sandbox === "danger-full-access" ? ":danger-full-access" : undefined;
+    if (profile) {
+      delete routedParams.sandbox;
+      routedParams.permissions = profile;
+    }
+  }
   return JSON.stringify({ ...root, params: routedParams });
 }

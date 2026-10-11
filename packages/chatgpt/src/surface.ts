@@ -1,5 +1,6 @@
 import { createBrowserSurfaceCapability } from "@chatgpt-tela/browser-host";
-import type { ChatGptApprovalAutomationMode } from "./approval-policy";
+import type { BrowserMemoryFile } from "@chatgpt-tela/browser-host";
+import type { ChatGptApprovalCardObservation, ChatGptApprovalAutomationMode } from "./approval-policy";
 
 export interface ChatGptComposerObservation {
   readonly key: string;
@@ -10,6 +11,8 @@ export interface ChatGptComposerObservation {
   readonly textFingerprint?: string;
   /** SHA-256/base64url identities of currently selected ChatGPT connector pills. */
   readonly connectorFingerprints: readonly string[];
+  /** Visible filenames from the product-owned composer attachment surface only. */
+  readonly attachmentNames: readonly string[];
 }
 
 export interface ChatGptSendObservation {
@@ -31,14 +34,37 @@ export interface ChatGptTurnObservation {
   readonly key: string;
   readonly role: "user" | "assistant";
   readonly parentUserTurnKey?: string;
+  /** Adapter-proven unique logical turn in the same renderer document; never a position guess. */
+  readonly lineageAnchor?: string;
+  /** Author payload only, never whole-bubble innerText; absent means proof unavailable. */
   readonly contentFingerprint?: string;
+  readonly userPayloadReason?: string;
+  readonly bodyProof?: { readonly version: 1; readonly digest?: string; readonly reason?: string };
+  /** Opt-in bounded diagnostic witness; never authority or public progress. */
+  readonly privateBodyEvidence?: { readonly chunks: readonly string[]; readonly complete: boolean };
+  /** Trimmed, rendered owned body before Markdown conversion; protocol equality only. */
+  readonly plainBodyFingerprint?: string;
+  /** Rendered owned body before Markdown conversion; machine-readable consumers require it. */
+  readonly plainBodyText?: string;
   readonly phase?: ChatGptAssistantPhase;
+  /** Observed owned body, possibly partial; only phase/lineage authorize final delivery. */
   readonly text?: string;
   readonly failureDetail?: string;
+  /** Publicly rendered progress only; hidden/expanded internal reasoning is never read. */
+  readonly publicProgress?: readonly string[];
 }
 
 export interface ChatGptSurfaceSnapshot {
   readonly revision: string;
+  /** Structural approval state; no card text or tool arguments cross this boundary. */
+  readonly approval?: ChatGptApprovalCardObservation & {
+    readonly revisionFingerprint: string;
+    /** Disposable card identity and trusted input receipt; neither proves approval acceptance. */
+    readonly cardFingerprint?: string;
+    readonly inputReceived?: boolean;
+  };
+  /** Last prepared trusted input, independent of the card's continued presence. Not approval authority. */
+  readonly approvalInputReceipt?: { readonly cardFingerprint: string; readonly revisionFingerprint: string };
   readonly url: string;
   readonly composers: readonly ChatGptComposerObservation[];
   readonly sendControls: readonly ChatGptSendObservation[];
@@ -72,16 +98,36 @@ export interface ChatGptSurfaceDriver {
    */
   recoverConnectorArtifact(composerKey: string, connectorName: string, signal?: AbortSignal): Promise<boolean>;
   /**
+   * Clear only an exact Tela-owned inert context-preload draft. Raw draft text stays inside the
+   * renderer for classification; arbitrary/user-authored drafts must return false unchanged.
+   */
+  recoverContextPreloadArtifact?(composerKey: string, signal?: AbortSignal): Promise<boolean>;
+  /**
    * Optionally handle one structurally recognized ChatGPT tool-approval card. The implementation must
    * keep card text/tool arguments inside the renderer and must never activate an unrecognized choice.
+   * Dispatch is not approval receipt. The provider supplies the exact previously observed card proof.
    */
   processApprovalCard?(
     mode: ChatGptApprovalAutomationMode,
     signal?: AbortSignal,
-  ): Promise<{ readonly status: "none" | "approved"; readonly reason: string }>;
+    delayMs?: number,
+    expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
+  ): Promise<{ readonly status: "none"; readonly reason: string }
+    | { readonly status: "dispatched"; readonly reason: "allow_once"; readonly cardFingerprint: string }>;
   replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;
   clearComposerText(composerKey: string, signal?: AbortSignal): Promise<void>;
   appendComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;
+  /**
+   * Install the exact memory-backed files on the proven browser input and do not return until the
+   * composer structurally accepts the resulting attachment set. ChatGPT may normalize visible chip
+   * labels, so exact file identity belongs to the input readback and any higher-level content proof,
+   * not to presentation text alone.
+   */
+  attachFiles?(
+    composerKey: string,
+    files: readonly BrowserMemoryFile[],
+    signal?: AbortSignal,
+  ): Promise<void>;
   selectConnector(composerKey: string, connectorName: string, signal?: AbortSignal): Promise<void>;
   activateSend(controlKey: string, signal?: AbortSignal): Promise<void>;
   waitForChange(afterRevision: string, signal?: AbortSignal): Promise<ChatGptSurfaceSnapshot>;

@@ -108,16 +108,8 @@ export function bindChatGptTelaAccount(
   if (!/^[a-f0-9]{64}$/.test(accountFingerprint)) {
     throw new Error("ChatGPT account fingerprint must be a lowercase SHA-256 hex digest");
   }
-  for (let slot = 1; slot <= 99; slot += 1) {
-    if (slot === profile.slot) continue;
-    const sibling = resolveChatGptTelaBrowserProfile({ slot, profileRoot: profile.profileRoot });
-    const binding = readBinding(sibling.accountBindingPath);
-    if (binding?.accountFingerprint === accountFingerprint) {
-      throw new Error(
-        `ChatGPT account is already bound to ${binding.profileId}; ${profile.profileId} must use a different account`,
-      );
-    }
-  }
+  // A binding belongs to this browser partition, not to a global account registry.
+  // Other slots may intentionally use the same account or be midway through a swap.
   const record: AccountBindingRecord = Object.freeze({
     version: 1,
     slot: profile.slot,

@@ -61,4 +61,33 @@ describe("Tela Gateway service isolation", () => {
       await chat.close();
     }
   });
+
+  test("reports public ingress independently from local Gateway/backend readiness", async () => {
+    const gateway = await startGatewayService({
+      resolveBackend: () => undefined,
+      resolveIngressStatus: () => ({
+        contractVersion: 1,
+        availability: "unavailable",
+        cause: "tailscale-backend-unreachable",
+        detail: "Tailscale is not running or its local backend cannot be reached",
+        exposureKind: "tailscale-funnel",
+      }),
+    });
+    try {
+      const response = await fetch(new URL("v1/ingress", gateway.endpoint), {
+        headers: { authorization: `Bearer ${gateway.bearerToken}` },
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        contractVersion: 1,
+        availability: "unavailable",
+        cause: "tailscale-backend-unreachable",
+        detail: "Tailscale is not running or its local backend cannot be reached",
+        exposureKind: "tailscale-funnel",
+      });
+      expect((await gateway.status()).service.state).toBe("ready");
+    } finally {
+      await gateway.close();
+    }
+  });
 });

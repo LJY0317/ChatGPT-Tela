@@ -18,6 +18,8 @@ import {
   unregisterOwnedResource,
 } from "@chatgpt-tela/product-lifecycle";
 import { ChatWorkspaceRegistry } from "./workspaces";
+import { createChatToolRuntime } from "./tools";
+import { ChatProcessManager } from "./processes";
 import {
   ChatManagedWorktreeManager,
   ChatManagedWorktreeOwnershipObserver,
@@ -307,4 +309,77 @@ describe("Tela Chat managed worktree ownership", () => {
       rmSync(f.base, { recursive: true, force: true });
     }
   });
+});
+
+
+test("public removal preserves live agent work and admits clean terminal cleanup", async () => {
+  const f = fixture();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runtime = createChatToolRuntime({ allowedRoots: [f.source], stateRoot: f.state,
+    ownership: { installId: "install-worktree-test", productVersion: "0.0.0", manifestPath: f.ownershipManifest },
+    agentDrivers: [{ id: "fixture", async run() { await gate; return { response: "done" }; } }],
+  });
+  try {
+    await runtime.initialize();
+    const created = await runtime.worktrees!.create({ sourceWorkspaceId: f.sourceWorkspace.id });
+    const agent = await runtime.agents!.start({ workspaceId: created.workspace.id, target: "fixture", prompt: "fixture" });
+    expect(await runtime.call("remove_worktree", { worktree_id: created.worktree.id })).toMatchObject({ removed: false, preserved: true });
+    expect(existsSync(created.worktree.path)).toBe(true);
+    release();
+    expect((await runtime.agents!.wait({ workspaceId: created.workspace.id, agentIds: [agent.id], timeoutMs: 1000 }))[0]!.status).toBe("idle");
+    expect(await runtime.call("remove_worktree", { worktree_id: created.worktree.id })).toMatchObject({ removed: true, preserved: false });
+  } finally { release(); await runtime.close(); rmSync(f.base, { recursive: true, force: true }); }
+});
+
+test("missing driver and retention cannot discard unresolved agent workspace authority", async () => {
+  const f = fixture();
+  const input = { allowedRoots: [f.source], stateRoot: f.state,
+    ownership: { installId: "install-worktree-test", productVersion: "0.0.0", manifestPath: f.ownershipManifest } };
+  const runtime = createChatToolRuntime({ ...input,
+    agentDrivers: [{ id: "fixture", async run() { return { response: "done" }; } }],
+  });
+  try {
+    await runtime.initialize();
+    const created = await runtime.worktrees!.create({ sourceWorkspaceId: f.sourceWorkspace.id });
+    const agent = await runtime.agents!.start({ workspaceId: created.workspace.id, target: "fixture", prompt: "fixture" });
+    await runtime.agents!.wait({ workspaceId: created.workspace.id, agentIds: [agent.id], timeoutMs: 1000 });
+    await runtime.close();
+    const path = join(f.state, "agents-v1.json");
+    const store = JSON.parse(readFileSync(path, "utf8"));
+    store.agents[0].status = "unknown"; store.agents[0].updatedAt = "2000-01-01T00:00:00.000Z";
+    store.turns[0].status = "unknown"; store.turns[0].updatedAt = "2000-01-01T00:00:00.000Z";
+    writeFileSync(path, JSON.stringify(store));
+    const restarted = createChatToolRuntime(input);
+    try {
+      await restarted.initialize();
+      expect(restarted.capabilities).not.toContain("start_agent");
+      expect(await restarted.call("remove_worktree", { worktree_id: created.worktree.id })).toMatchObject({ removed: false, preserved: true });
+      expect(existsSync(created.worktree.path)).toBe(true);
+      expect(JSON.parse(readFileSync(path, "utf8")).agents).toHaveLength(1);
+    } finally { await restarted.close(); }
+  } finally { await runtime.close(); rmSync(f.base, { recursive: true, force: true }); }
+});
+
+
+test("worktree removal holds exclusion across Git inspection and releases when cleanup refuses", async () => {
+  const f = fixture();
+  const processes = new ChatProcessManager({ workspaces: f.workspaces, storePath: join(f.state, "processes.json") });
+  let resume!: () => void;
+  try {
+    const created = await f.manager.create({ sourceWorkspaceId: f.sourceWorkspace.id });
+    writeFileSync(join(created.worktree.path, "dirty.txt"), "preserve");
+    const inspect = f.manager.inspect.bind(f.manager);
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { resume = resolve; });
+    f.manager.inspect = async (...args) => { entered(); await gate; return inspect(...args); };
+    const removal = f.manager.remove(created.worktree.id);
+    await waiting;
+    try {
+      await expect(processes.exec({ workspaceId: created.workspace.id, command: "true" })).rejects.toThrow("removal is in progress");
+    } finally { resume(); }
+    expect((await removal).preserved).toBe(true);
+    expect(f.workspaces.get(created.workspace.id).root).toBe(created.worktree.path);
+  } finally { resume?.(); await processes.close(); rmSync(f.base, { recursive: true, force: true }); }
 });

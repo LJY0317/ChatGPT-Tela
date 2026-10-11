@@ -1,9 +1,7 @@
 import {
   chmodSync,
   existsSync,
-  lstatSync,
   mkdirSync,
-  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -13,7 +11,8 @@ import {
   createPackagedInstallBlueprint,
   type PackagedInstallBlueprint,
 } from "./packaged-install";
-import { packagedInstallSpecFromPayload } from "./packaged-manifest";
+import { packagedInstallSpecFromPayload, readPackagedProductManifest } from "./packaged-manifest";
+import { assertChatProcessStoreCompatible } from "./chat-process-storage";
 import {
   PackagedPayloadManager,
   type PackagedPayloadRepairObservation,
@@ -29,6 +28,7 @@ import type { OwnershipObservation } from "./uninstall";
 import {
   assertNoConflictingPackagedTransition,
   packagedRepairJournalPath,
+  readPackagedTransitionValue,
 } from "./packaged-transition";
 import {
   verifyPackagedPayloadSignature,
@@ -179,9 +179,7 @@ function parseJournal(value: unknown): PackagedRepairJournal {
 
 export function readPackagedRepairJournal(path: string): PackagedRepairJournal | undefined {
   if (!existsSync(path)) return undefined;
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("packaged repair journal path is unsafe or replaced");
-  return parseJournal(JSON.parse(readFileSync(path, "utf8")) as unknown);
+  return parseJournal(readPackagedTransitionValue(path));
 }
 
 function writeJournal(path: string, journal: PackagedRepairJournal): void {
@@ -230,6 +228,7 @@ export async function planPackagedRepairFromPayload(input: {
   if (manifest.productVersion !== spec.productVersion) {
     throw new Error("packaged repair requires the exact installed product version; use upgrade for a different version");
   }
+  assertChatProcessStoreCompatible(blueprint.paths, readPackagedProductManifest(input.payloadSourcePath).chatProcessStore);
 
   const payloadManager = new PackagedPayloadManager({
     manifestPath: blueprint.paths.installManifest,
@@ -443,6 +442,7 @@ export async function applyPackagedRepairFromPayload(input: {
   }
 
   if (journal.phase === "quiesced" || journal.phase === "repairing") {
+    assertChatProcessStoreCompatible(current.blueprint.paths, readPackagedProductManifest(input.payloadSourcePath).chatProcessStore);
     for (const service of journal.controlledServices) {
       if (await input.services.inspect(service) !== "stopped") throw new Error(`packaged repair lost quiescence: ${service}`);
     }

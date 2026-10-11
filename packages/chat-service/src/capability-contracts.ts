@@ -24,14 +24,63 @@ const object = (
 
 const workspaceId = string(512);
 const path = string(16_384);
+const boolean = Object.freeze({ type: "boolean" });
+const reviewSince = Object.freeze({ type: "string", enum: Object.freeze(["last_shown", "workspace_open"]) });
 const operationId = Object.freeze({ type: "string", format: "uuid" });
 const agentId = string(512);
 
 export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] = Object.freeze([
   {
     capability: "open_workspace",
-    description: "Open or reuse one locally approved workspace root. Reuse the returned workspace_id for continued work in the same workspace. The workspace remains user-owned.",
+    description: "Open or reuse one locally approved workspace root. Reuse the returned workspace_id for continued work. Follow returned root instructions; before working under a subtree listed in availableInstructionFiles, read its applicable instruction file. If instructionScanComplete is false, do not assume undiscovered subtrees have no instructions. A Git workspace also establishes or reuses a private last-shown review baseline when safe. The workspace remains user-owned.",
     inputSchema: object({ path }, ["path"]),
+  },
+  {
+    capability: "export_file",
+    description: "Prepare one existing regular workspace file (up to 2 MiB) for user download. Does not modify files or follow symlinks. The download card receives bytes privately; model output contains only filename, size and digest. Requires an export-capable installed file helper.",
+    inputSchema: object({ workspace_id: workspaceId, path }, ["workspace_id", "path"]),
+  },
+  {
+    capability: "open_file_import",
+    description: "Open a file import card for an already opened workspace. The user selects a file and confirms its destination; existing files are never overwritten.",
+    inputSchema: object({ workspace_id: workspaceId }, ["workspace_id"]),
+  },
+  {
+    capability: "import_file",
+    description: "Publish one binary file (up to 2 MiB) in an opened workspace, without overwriting files or following symlink parents. Prefer open_file_import for user files so bytes do not enter model context. Destination parent folders must already exist.",
+    inputSchema: object({ workspace_id: workspaceId, path: string(4096), data_base64: { type: "string", maxLength: 2796204 } }, ["workspace_id", "path", "data_base64"]),
+  },
+  {
+    capability: "list_directory",
+    description: "List one bounded directory inside an opened workspace without shell execution. Use this for repository exploration before reading specific files.",
+    inputSchema: object({ workspace_id: workspaceId, path, limit: integer(1, 400) }, ["workspace_id"]),
+  },
+  {
+    capability: "search_text",
+    description: "Search bounded text content recursively inside an opened workspace without shell execution. Dependency/build trees and symlink traversal are skipped; scanComplete=false means the bounded search did not cover every candidate file.",
+    inputSchema: object({
+      workspace_id: workspaceId,
+      query: string(4 * 1024),
+      path,
+      case_sensitive: boolean,
+      max_results: integer(1, 200),
+    }, ["workspace_id", "query"]),
+  },
+  {
+    capability: "list_skills",
+    description: "List standard model-invocable skills available from the opened project's .agents/skills and the user's standard ~/.agents/skills roots. Project skills override same-named global skills, including disable-model-invocation. Duplicate names within one root are rejected.",
+    inputSchema: object({ workspace_id: workspaceId, query: string(2_048) }, ["workspace_id"]),
+  },
+  {
+    capability: "read_skill",
+    description: "Read bounded lines from one discovered skill's SKILL.md or a supporting file inside that exact skill directory. Read the matching skill before following its workflow.",
+    inputSchema: object({
+      workspace_id: workspaceId,
+      name: string(128),
+      path,
+      offset: integer(1),
+      limit: integer(1, 400),
+    }, ["workspace_id", "name"]),
   },
   {
     capability: "read",
@@ -78,18 +127,24 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
     }, ["workspace_id", "session_id"]),
   },
   {
+    capability: "list_processes",
+    description: "List saved command reservations in one approved workspace, including after a Chat service restart. Defaults to unresolved records; include_completed includes terminal command records. Use nextAfterSessionId as after_session_id for another bounded page. observation=registry is not a fresh owner probe or proof that all descendants stopped; use process_status for authenticated current owner status. Does not start commands, consume output, send input or clear uncertain records.",
+    inputSchema: object({ workspace_id: workspaceId, after_session_id: integer(0),
+      limit: integer(1, 50), include_completed: boolean }, ["workspace_id"]),
+  },
+  {
     capability: "process_status",
     description: "Inspect one durable Tela Chat process operation without re-running it.",
     inputSchema: object({ workspace_id: workspaceId, operation_id: operationId }, ["workspace_id", "operation_id"]),
   },
   {
     capability: "show_changes",
-    description: "Show current Git-backed changes and create a bounded historical review checkpoint when possible. Use after the final related workspace edit when review is useful.",
-    inputSchema: object({ workspace_id: workspaceId }, ["workspace_id"]),
+    description: "Show current Git-backed changes with a compact summary and create a bounded historical checkpoint. reviewDelta compares against the private last_shown baseline by default or the original workspace_open baseline when requested. A proven comparison advances last_shown unless mark_reviewed=false. Use once after the final related workspace edit when review is useful.",
+    inputSchema: object({ workspace_id: workspaceId, since: reviewSince, mark_reviewed: boolean }, ["workspace_id"]),
   },
   {
     capability: "show_review",
-    description: "Open one immutable bounded Tela Chat review checkpoint by review_ref.",
+    description: "Open one immutable bounded Tela Chat review checkpoint by review_ref, including its compact change summary.",
     inputSchema: object({ workspace_id: workspaceId, review_ref: string(512) }, ["workspace_id", "review_ref"]),
   },
   {
@@ -144,7 +199,7 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "continue_agent",
-    description: "Continue one proven durable agent session in the same opened workspace.",
+    description: "Continue an agent whose previous turn completed successfully in the same opened workspace. Each turn defaults to read_only unless workspace_write is explicitly requested. Failed, stopped or unproven interrupted turns cannot be continued; inspect the workspace before starting another agent.",
     inputSchema: object({
       workspace_id: workspaceId,
       agent_id: agentId,

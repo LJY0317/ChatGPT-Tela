@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   loadProductProfileRuntimeConfig,
+  prepareProductWebDiscovery,
   productPublicMcpIdentity,
 } from "./product-profile";
 
@@ -14,6 +15,7 @@ function common(root: string): Record<string, string> {
     CHATGPT_TELA_PRODUCT_ROUTE_ID: "route1234",
     CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN: "r".repeat(48),
     CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN: "m".repeat(48),
+    CHATGPT_TELA_PRODUCT_UI_TOKEN: "u".repeat(48),
   };
 }
 
@@ -25,6 +27,8 @@ describe("product profile native-target selection", () => {
       expect(config.nativeTarget).toEqual({ kind: "default-desktop", targetId: "default" });
       expect(config.publicMcpAbi).toBe("stable");
       expect(config.approvalAutomationMode).toBe("off");
+      expect(config.approvalAutomationDelayMs).toBe(0);
+      expect(config).not.toHaveProperty("webTurnTimeoutMs");
       expect(JSON.stringify(config)).not.toContain("launcherCli");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -34,10 +38,18 @@ describe("product profile native-target selection", () => {
   test("approval automation is explicit and limited to recognized one-shot cards", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-product-approval-"));
     try {
-      expect(loadProductProfileRuntimeConfig({
+      const enabled = loadProductProfileRuntimeConfig({
         ...common(root),
         CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "recognized_once",
-      }).approvalAutomationMode).toBe("recognized_once");
+        CHATGPT_TELA_APPROVAL_DELAY_MS: "2000",
+      });
+      expect(enabled.approvalAutomationMode).toBe("recognized_once");
+      expect(enabled.approvalAutomationDelayMs).toBe(2_000);
+      expect(() => loadProductProfileRuntimeConfig({
+        ...common(root),
+        CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "recognized_once",
+        CHATGPT_TELA_APPROVAL_DELAY_MS: "15001",
+      })).toThrow("APPROVAL_DELAY_MS");
       expect(() => loadProductProfileRuntimeConfig({
         ...common(root),
         CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "full_access",
@@ -45,6 +57,18 @@ describe("product profile native-target selection", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("only an explicit diagnostic deadline limits the entire product Web task", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-product-deadline-"));
+    try {
+      expect(loadProductProfileRuntimeConfig({ ...common(root),
+        CHATGPT_TELA_PRODUCT_WEB_TURN_TIMEOUT_MS: "1500" }).webTurnTimeoutMs).toBe(1500);
+      for (const value of ["0", "-1", "NaN", "1.5"]) {
+        expect(() => loadProductProfileRuntimeConfig({ ...common(root),
+          CHATGPT_TELA_PRODUCT_WEB_TURN_TIMEOUT_MS: value })).toThrow("positive integer");
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   test("public connector identity is ChatGPT Tela for the stable product ABI", () => {
@@ -119,3 +143,46 @@ describe("product profile native-target selection", () => {
     }
   });
 });
+
+
+import { bindChatGptTelaAccount } from "./browser-profile";
+import { ConnectorProbeState } from "./connector-probe-state";
+import type { ElectronDevelopmentRuntime } from "./electron";
+import type { ChatGptWebPreparationOptions } from "./profile-control";
+
+for (const outcome of ["complete", "account-mismatch", "cleanup-failed"] as const) {
+  test(`single product preparation journal: ${outcome}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-preparation-journal-"));
+    try {
+      const config = loadProductProfileRuntimeConfig(common(root));
+      mkdirSync(config.browserProfile.userDataDir, { recursive: true });
+      bindChatGptTelaAccount(config.browserProfile, "a".repeat(64));
+      const marker = new ConnectorProbeState({ directory: config.browserProfile.userDataDir, connectorName: "Fixture" });
+      const stages: string[] = [];
+      const family = { key: "a".repeat(20), label: "Fixture", availableEfforts: ["medium"] as const };
+      const runtime = {
+        async prepareChatGptWebSession(options: ChatGptWebPreparationOptions) {
+          options.onProfile({ capabilities: { observed: new Set(["composer", "send"]) }, account: {
+            accountFingerprint: outcome === "account-mismatch" ? "b".repeat(64) : "a".repeat(64),
+            accountStructure: "personal", containerFingerprint: "container",
+          } });
+          options.onFamilies?.([family]); options.onConnectorStarting?.();
+          expect(marker.pending()).toBe(true);
+          if (outcome === "cleanup-failed") throw new Error("cleanup failed");
+          options.onConnectorProven?.();
+          return { families: [family] };
+        },
+      } as unknown as ElectronDevelopmentRuntime;
+      const operation = prepareProductWebDiscovery({ runtime, browserProfile: config.browserProfile,
+        connectorName: "Fixture", signal: new AbortController().signal, stage: stage => stages.push(stage) });
+      if (outcome === "complete") {
+        expect((await operation).families).toEqual([family]); expect(marker.pending()).toBe(false);
+        expect(stages.at(-1)).toBe("fresh_readiness_proof_complete");
+      } else {
+        await expect(operation).rejects.toThrow();
+        expect(marker.pending()).toBe(outcome === "cleanup-failed");
+        expect(stages).not.toContain("fresh_readiness_proof_complete");
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}

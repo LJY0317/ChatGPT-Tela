@@ -15,3 +15,6 @@ export * from "./packaged-transition";
 export * from "./packaged-upgrade";
 export * from "./service-registration";
 export * from "./uninstall";
+export * from "./native-engine";
+export * from "./chat-process-storage";
+export * from "./packaged-launch-admission";

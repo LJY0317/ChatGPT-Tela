@@ -3,6 +3,64 @@
 Installation, upgrades, service supervision, and uninstall are one ownership problem. ChatGPT Tela must be
 easy to install without making itself difficult to remove later.
 
+## Acceptance scope
+
+Follow the [agreed implementation priorities](architecture.md#agreed-implementation-priorities).
+A signed package, fake service-manager fixture or backend readiness result does not establish consumer
+release acceptance. Keep source, candidate, installed and actually observed behavior distinct. Login and
+consent remain explicit; first-install interaction cost is measured separately from ordinary startup.
+Work/Codex preparation and Tela Chat recovery are independent completion criteria. DevSpace replacement
+requires its own execution-recovery acceptance, even after a Work/Codex candidate is installed.
+
+## Persistent format compatibility
+
+Source packages declare Chat process-store read/write versions in their signed manifest. Lifecycle
+planning/application, the post-shutdown replacement boundary and Chat startup check the existing
+bounded physical store. Incompatible readers or format downgrades refuse without rewriting state.
+The shared filename remains stable; the JSON header versions the format. Gateway/Codex startup does
+not depend on Chat storage health. Missing metadata describes the original version-1 contract.
+
+The signed fixture gate passed with a real Chat/native owner and fake OS registrations. A format
+change during draining preserves the old payload and quiesced checkpoint; explicit cancellation now has a source gate described below. This is source acceptance, not installed OS restart, arbitrary
+old-installer enforcement or a consumer rollback guarantee. No idle scan or state-content log is added.
+
+## Starting services during a transition
+
+After physical installed-payload, receipt and ownership verification, the source launcher admits only
+recorded resume services at the final upgrade `manifest-updated` or repair `repaired` checkpoint.
+Install identity, version, target fingerprint and quiescence records must match. Earlier phases,
+unrecorded services and general/menu actions remain blocked. Journal reads are bounded to 16 KiB;
+unsafe or malformed records refuse without granting launch authority. Chat storage compatibility still
+applies independently.
+
+The signed coordinator fixture invokes the actual resolver during upgrade and repair restart
+(`build/transition-launch-admission`). OS registration and service payloads are synthetic; repair
+shutdown is synthetic. This is source acceptance, not installed platform restoration or old-launcher
+compatibility. Explicit pre-replacement cancellation now verifies a retained signed source package against the exact
+installed source receipt, version, service definitions and current Chat store. A single
+`restoring-source` journal records progress; already-running services are not started again, and only
+prior running services are restored. Replacement phases cannot be cancelled. Interrupted restoration
+must finish before another upgrade. The packaged source CLI exposes explicit `cancel-upgrade --dry-run|--apply` with a required signed
+source package and external trusted key. A real blocked-input Chat/Native owner survives cancellation
+with its original descriptor/registry and completes exactly once; the stopped synthetic Gateway
+resumes through the actual resolver (`build/upgrade-source-cancel-live`). OS registrations/service
+payloads and Gateway shutdown are synthetic. UI, actual OS restoration and old installed-launcher
+support remain unaccepted; this source change is not installed.
+
+Source cancellation requires a signed lifecycle protocol declaration (`transitionLaunch: 1`,
+`sourceCancellation: 1`) from the exact installed source package. Missing metadata grants no support;
+unsupported versions refuse before the restoration journal changes. The production builder declares
+this protocol for the new launcher, and signature tests bind it to package bytes. Old-source refusal
+and new-source restoration both preserve a real active Native owner (`build/upgrade-launcher-contract`).
+The current installed preview has no such declaration; it was inspected read-only. This does not
+retrofit old launchers. An old installation must finish its verified target upgrade rather than erase
+its checkpoint to start services. A full production-built signed package and compiled fixture coordinator now restore the real compiled
+Chat service while `restoring-source` exists, then complete authenticated shutdown and isolated removal
+(`build/compiled-transition-boundary`). OS registration is fake; initial refusal and the abandoned
+target are synthetic. Native engine was reused; owner activation remains off. The test package and
+fixture binary were removed after recording hashes/metadata. Actual platform registration and production
+CLI cancellation apply remain unproven; this fixture does not establish consumer release acceptance.
+
 ## Product-owned resources
 
 Every persistent resource created by Tela is recorded in one versioned ownership manifest with an install
@@ -21,6 +79,11 @@ instance id. The manifest records identity and intent, not secrets. Product-owne
 
 User project roots are **references**, never Tela-owned resources. Installing Tela inside or against a
 workspace never grants uninstall permission to delete that workspace.
+
+On macOS, registration names belong to the login session. Before changing a loaded service, Tela verifies
+that its actual launchd definition resolves to the expected physical file; matching names and local markers
+alone are insufficient. Lifecycle tests inject a service manager: a temporary home directory does not isolate
+the operating system's service registrations.
 
 Tela Chat keeps a separate locally approved-root configuration. Adding a root grants the Chat service access
 to operate inside that root; it does not add the root itself to the ownership manifest. Removing Tela or
@@ -48,8 +111,9 @@ packaged services read only this product-native config boundary.
 
 The same config root may contain `preferences-v1.json`, which is deliberately smaller than runtime config and
 contains only user-facing behavioral preferences. Its first setting is approval automation (`off` by default,
-or `recognized_once`). It contains no endpoint, browser/account identity, credential, prompt, tool argument,
-or persistent-approval grant. Profile processes read the current preference only when they start/restart.
+or `recognized_once`) plus an optional bounded approval-delay preset from instant through 15 seconds. It
+contains no endpoint, browser/account identity, credential, prompt, tool argument, or persistent-approval
+grant. Profile processes read the current preference only when they start/restart.
 
 Service diagnostics live under the platform-standard Tela logs root. Source supervision writes
 `<service>.log.diagnostics.jsonl`; installed packaged services write `<service>.diagnostics.jsonl`. Both use the
@@ -118,6 +182,28 @@ the installer recreates the link exactly. Absolute, broken/cyclic, or escaping l
 allowance preserves native Electron framework bundle structure without allowing payload traversal outside the
 owned binary root.
 
+First-use bootstrap is part of the installed launcher. The macOS control center uses a receipt-verified,
+read-only `bootstrap-status` query to distinguish missing from configured state; verification/schema failures
+block setup without overwriting data. It opens first-use guidance only for missing configuration. Configuration
+travels over bounded stdin to `configure --stdin --if-missing`, using the same schema/ownership boundary as
+`configure --file`: reserve newly created config/service-state/runtime/log/cache directories and write only
+Tela configuration. Existing settings are never replaced by first-use UI. Development-only unauthenticated
+exposure requires explicit consent; HTTPS routing/Tailscale prerequisites and consumer-release limits remain
+visible rather than being silently provisioned.
+
+`setup [--slot N]` launches the signed package's declared login entrypoint with an install-scoped activity
+lease. It starts no Native route/model turn and rejects connected or orphaned Work profiles. A human finishes
+from the native browser menu or closes the window; proof runs before surface teardown, and an unsuccessful
+proof leaves login available. Cancel releases setup without claiming readiness. The control center waits for
+completion and then offers the existing Work connection lifecycle, which separately proves connector/model
+readiness. Existing unmarked data never gains removal authority. Older packages without setup fail with an
+update instruction. No idle login polling or additional always-hidden browser is introduced.
+
+The integrated acceptance test drives signed install, configure, setup ownership/lease, service-restoring
+upgrade, keep-data uninstall, reinstall and remove-data uninstall in a temporary home. Exact saved config/login
+bytes and external app/config/conversation/project sentinels are checked throughout. Service management and
+login are fixtures: this proves lifecycle composition, not real Windows/Linux or login UI behavior.
+
 The remaining packaging boundary is product distribution UX/trust: a public macOS build needs Developer ID
 signing and notarization instead of the local ad-hoc proof identity, Windows/Linux still need real release
 signing and packaged E2E, and installer/updater UI must surface the existing plan/apply/verify results.
@@ -136,11 +222,13 @@ version commit retries only outstanding service resumes. Ordinary source `start`
 apply refuse to run while the journal exists, so unrelated lifecycle commands cannot execute or remove a
 half-upgraded payload.
 
-The concrete packaged service controller preserves registration identity while quiescing/resuming processes:
-Linux uses `systemctl --user stop/start`, macOS keeps the LaunchAgent bootstrapped and uses normal
-`launchctl kill SIGTERM` / `kickstart`, and Windows uses `Stop-ScheduledTask` / `Start-ScheduledTask` for the
-current-user task. Each transition is followed by bounded state verification; transitional or unrecognized
-states fail closed rather than being interpreted as stopped/running.
+The concrete packaged service controller preserves registration identity. Quiescing uses authenticated
+private service shutdown after proving the install/runtime identity; active-work refusal or missing
+authority stops the transition without OS stop/kill fallback. Bounded platform observation must confirm
+stopped state before payload replacement. Resume uses `systemctl --user start`, macOS `launchctl kickstart`,
+or Windows `Start-ScheduledTask`. Transitional or unrecognized states fail closed. The controller requires
+an explicit shutdown dependency; production uses the owned supervisor, isolated tests a fake contract/OS
+runner. This source change is not installed; actual OS-service/update acceptance remains separate.
 
 Same-version packaged repair is separate from both install and upgrade. Normal install deliberately treats a
 completed payload whose bytes drifted as ownership drift and will not overwrite it. Repair adds one narrower
@@ -158,8 +246,36 @@ services. Repair and upgrade journals are mutually exclusive, and package launch
 start and destructive uninstall apply are blocked while either transition is incomplete.
 
 Signed repair plan/apply entrypoints verify the same Ed25519 package signature boundary as signed
-install/upgrade. The development CLI does not accept arbitrary trusted keys or unsigned payloads for repair;
-the end-user updater/installer must own the trusted release-key set.
+install/upgrade. The packaged launcher exposes a pre-release operator CLI for `install`, `repair`, and
+`upgrade`; every command requires exactly one of `--dry-run`/`--apply` and an explicit
+`--trusted-public-key <pem>`. The key is intentionally external to the package being verified, so replacing a
+payload and its embedded metadata cannot redefine trust. Planning verifies the target signature before it
+observes or reserves install state, and apply verifies the target signature again before mutation. A wrong
+key therefore fails before ownership manifest/service-registration creation.
+
+For the common package-directory flow, the payload defaults to the directory containing the launcher. A
+caller may select another target with `--payload <directory>`. Running a known-good same-version package gives
+repair its trusted source bytes; running the new target package gives upgrade its replacement bytes. This CLI
+is not yet the final consumer trust UX: public release packaging must pin the trusted release key set in the
+signed installer/updater rather than requiring users to supply PEM files manually.
+
+## Natural-language self-maintenance target
+
+The operator CLI is an implementation boundary, not the intended everyday UX. Tela Chat and Tela Work/Codex
+should eventually accept ordinary requests such as "update Tela", "reinstall Tela", "repair this install",
+"remove Tela but keep my data", and "remove Tela completely" and map them to the same lifecycle state
+machines documented here.
+
+The model does not gain permission to improvise installation/removal shell scripts. A maintenance request must
+resolve to a typed lifecycle intent, inspect current ownership/transition state, produce a reviewable plan, and
+then invoke only the corresponding signed lifecycle operation. Destructive data removal remains explicit.
+
+Because a running executable is a poor authority for replacing or deleting itself, the final consumer flow
+uses a signed **external maintenance helper**. The helper is launched from outside the installed binary root,
+inherits only the verified lifecycle plan and pinned release trust, stops exact-owned Tela services, performs
+install/repair/upgrade/uninstall, verifies the resulting ownership/runtime state, restarts Tela when the
+operation requires it, and cleans itself up when finished. This also gives Windows, macOS, and Linux one
+consistent product contract instead of depending on platform-specific self-deletion behavior.
 
 Persistent ChatGPT profile data follows a stricter adoption rule because it may contain login cookies and
 other user-significant state. A fresh product setup may reserve and marker-own only the exact browser profile
@@ -195,6 +311,12 @@ immediately before every destructive resource operation. The normal uninstall se
 6. remove product-owned runtime/cache/log/state/config data selected by uninstall policy;
 7. remove product binaries/helpers last;
 8. verify that no removable owned service, listener, route, helper, worktree, or manifest entry remains.
+
+Source and packaged uninstall use one shared orchestration runtime rather than duplicating ownership policy.
+The packaged launcher exposes `uninstall --dry-run`, `uninstall --apply`, and optional `--remove-data`.
+Packaged apply must run from a separately extracted package copy: if the current executable resolves inside
+the installed Tela binary root, it fails before stopping services or deleting anything. This avoids relying
+on platform-specific self-deletion behavior and keeps the same removal sequence on macOS, Windows, and Linux.
 
 If a backend cannot stop, uninstall reports it separately; a Tela Chat failure must not prevent normal Tela
 Codex cleanup, and vice versa. Forced termination is a bounded fallback only for an exact product-owned pid
@@ -263,6 +385,12 @@ absent. A pre-existing matching route is never auto-adopted into the manifest.
 
 ## Service independence
 
+Packaged Native engines include their matching upstream `codex-code-mode-host` beside `codex`
+(`.exe` on Windows). The engine source supplied to the package builder must include that sibling
+executable. Both files belong to the signed product binary tree and are updated and removed together.
+Engine selection rejects missing, linked or non-executable helpers before launching the engine;
+the installed payload receipt detects helper byte changes as well as engine changes.
+
 Tela Gateway, Tela Chat, and Tela Codex are separately supervised processes. Installation may place them in
 one product bundle/repository, but lifecycle ownership stays independent:
 
@@ -273,3 +401,30 @@ one product bundle/repository, but lifecycle ownership stays independent:
   other backend or in Gateway.
 
 This independence is required both for day-to-day fallback and for reliable uninstall/repair.
+
+
+## macOS maintenance preview
+
+The control center launches `maintenance-open` through its installed launcher. A verified temporary copy
+of only the launcher and native UI runs outside the installation removal boundary. The standalone window
+invokes the existing signed upgrade/repair and ownership uninstall engines; it adds no service authority.
+Damaged installations may stage this helper from an independently trusted signed same-version repair
+package, after the existing repair planner validates it. Missing launchers require an external installer.
+
+`maintenance review` returns a SHA256 review token bound to the observed plan, signature envelope, and
+trusted key bytes, including the complete cancellation journal checkpoint. `maintenance apply` recomputes the plan and rejects changed tokens before mutation.
+The UI shows immediate progress, blocks closing while applying, confirms interruptions, and preserves data
+by default. Tests inject fake OS managers for every lifecycle mutation, including uninstall.
+
+The native maintenance window groups action, signed-package input, and review; its action footer remains
+visible when the content scrolls. Only unfinished upgrades expose cancellation. The signed source package
+must explicitly support cancellation and replacement must not have started. `maintenance-open --operation`
+can validate either the retained source for cancellation or the original update target for resumption;
+repair remains the default. Cancellation never closes an already running service. Synthetic native UI
+review/confirmation and fake-OS lifecycle tests do not prove an installed consumer flow.
+
+Normal close removes the exact hash-checked private temporary snapshot. Unknown files or changed bytes
+are preserved. A crash may leave that snapshot in the OS temporary directory until temporary-directory
+cleanup; no permanent registration is created. Automatic downloads, pinned consumer keys, notarized
+release distribution, and Windows/Linux maintenance UI remain pending. Local ad-hoc preview signing does
+not establish consumer release trust.

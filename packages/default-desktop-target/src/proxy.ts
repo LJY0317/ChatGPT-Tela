@@ -1,3 +1,8 @@
+import { randomBytes } from "node:crypto";
+import {
+  emitDiagnosticEvent, prepareNativeIngressTurnMedia, NativeIngressMediaRegistry,
+  type NativeIngressPendingMedia, type DiagnosticScalar,
+} from "@chatgpt-tela/core";
 import { once } from "node:events";
 import {
   WebSocket,
@@ -9,7 +14,9 @@ import {
   type DefaultDesktopResponsesRoute,
 } from "./route";
 
-const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
+// Match ws default maxPayload rather than impose a smaller limit on Native history replies.
+// Both directions remain bounded; queued requests have their own smaller admission bound.
+const MAX_MESSAGE_BYTES = 100 * 1024 * 1024;
 const MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 const CLOSE_GRACE_MS = 250;
 const CLOSE_HARD_LIMIT_MS = 2_000;
@@ -20,13 +27,55 @@ interface ConnectionState {
   queue: string[];
   queuedBytes: number;
   closed: boolean;
+  onClosed?: () => void;
 }
 
 export interface DefaultDesktopAppServerProxy {
   readonly endpoint: string;
   readonly upstreamEndpoint: string;
   readonly activeConnectionCount: number;
+  /** Ephemeral media is never authority until an exact current Native turn is proved. */
+  readonly ingressMedia: NativeIngressMediaRegistry;
   close(): Promise<void>;
+}
+
+export type DefaultDesktopAppServerModelListAugmenter = (result: unknown) => unknown;
+
+function jsonRpcIdKey(value: unknown): string | undefined {
+  if (typeof value === "string" && value.length > 0 && value.length <= 512) return `s:${value}`;
+  if (typeof value === "number" && Number.isSafeInteger(value)) return `n:${value}`;
+  return undefined;
+}
+
+function modelListRequestId(message: string): string | undefined {
+  let parsed: unknown;
+  try { parsed = JSON.parse(message) as unknown; } catch { return undefined; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const item = parsed as Record<string, unknown>;
+  return item.method === "model/list" ? jsonRpcIdKey(item.id) : undefined;
+}
+
+function augmentModelListResponse(
+  message: string,
+  pending: Set<string>,
+  augmenter: DefaultDesktopAppServerModelListAugmenter | undefined,
+): string {
+  if (!augmenter || pending.size === 0) return message;
+  let parsed: unknown;
+  try { parsed = JSON.parse(message) as unknown; } catch { return message; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return message;
+  const item = parsed as Record<string, unknown>;
+  const key = jsonRpcIdKey(item.id);
+  if (!key || !pending.has(key)) return message;
+  pending.delete(key);
+  if (!("result" in item) || item.error !== undefined) return message;
+  try {
+    return JSON.stringify({ ...item, result: augmenter(item.result) });
+  } catch {
+    // A browser-catalog mismatch must never take Native Codex models away from the Desktop. The
+    // original app-server response remains valid authority; this merely omits optional Tela rows.
+    return message;
+  }
 }
 
 function loopbackWebSocket(value: string): string {
@@ -68,9 +117,13 @@ function protocols(header: string | undefined): readonly string[] {
 export async function startDefaultDesktopAppServerProxy(input: {
   readonly upstreamEndpoint: string;
   readonly route: DefaultDesktopResponsesRoute;
+  readonly augmentModelList?: DefaultDesktopAppServerModelListAugmenter;
+  /** Structural fixture sink; never receives message bodies or native identifiers. */
+  readonly onDiagnostic?: (stage: string, fields: Readonly<Record<string, DiagnosticScalar>>) => void;
 }): Promise<DefaultDesktopAppServerProxy> {
   const upstreamEndpoint = loopbackWebSocket(input.upstreamEndpoint);
   const connections = new Set<ConnectionState>();
+  const ingressMedia = new NativeIngressMediaRegistry();
   let closing = false;
   const server = new WebSocketServer({
     host: "127.0.0.1",
@@ -105,11 +158,58 @@ export async function startDefaultDesktopAppServerProxy(input: {
       queuedBytes: 0,
       closed: false,
     };
+    const pendingModelLists = new Set<string>();
+    const pendingMedia = new Map<string, {
+      readonly media: NativeIngressPendingMedia;
+      readonly generation: number;
+    }>();
+    const pendingCatalog = new Map<string, number>();
+    const pendingHistory = new Map<string, { began: number; fingerprint: string }>();
+    const connectionFingerprint = randomBytes(12).toString("hex");
+    let clientKind = "uninitialized_client";
+    let diagnosticCount = 0;
+    let clientReceivedCount = 0, clientReceivedBytes = 0;
+    let upstreamReceivedCount = 0, upstreamReceivedBytes = 0;
+    let clientWrittenCount = 0, clientWrittenBytes = 0;
+    let transportFailureRecorded = false;
+    const diagnostic = (stage: string, fields: Readonly<Record<string, DiagnosticScalar>> = {}) => {
+      // Bounded per-connection logging, no timer/watcher; never change transport behavior.
+      if (++diagnosticCount > 64 && stage !== "desktop_catalog_connection_closed" && stage !== "desktop_transport_failed") return;
+      try {
+        const structural = { connection_fingerprint: connectionFingerprint, kind: clientKind, ...fields };
+        if (input.onDiagnostic) input.onDiagnostic(stage, structural);
+        else emitDiagnosticEvent("chatgpt_tela_codex", stage, structural);
+      } catch { /* A failed optional sink cannot block Native traffic. */ }
+    };
+    const transportFailure = (direction: "client_to_server" | "server_to_client", category: string, closeCode: number) => {
+      if (state.closed || closing || transportFailureRecorded) return;
+      transportFailureRecorded = true;
+      diagnostic("desktop_transport_failed", { kind: direction, reason_class: category, close_code: closeCode,
+        limit_bytes: MAX_MESSAGE_BYTES, client_received_count: clientReceivedCount,
+        client_received_bytes: clientReceivedBytes, upstream_received_count: upstreamReceivedCount,
+        upstream_received_bytes: upstreamReceivedBytes });
+    };
+    const observeError = (error: Error, direction: "client_to_server" | "server_to_client") => {
+      const code = (error as Error & { code?: string }).code;
+      transportFailure(direction, code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH" ? "message_limit"
+        : code === "WS_ERR_INVALID_UTF8" ? "invalid_text" : "transport_error", 1011);
+    };
+    state.onClosed = () => {
+      diagnostic("desktop_catalog_connection_closed", { pending_count: pendingCatalog.size, count: diagnosticCount, status: "closed",
+        pending_history_count: pendingHistory.size, client_received_count: clientReceivedCount,
+        client_received_bytes: clientReceivedBytes, upstream_received_count: upstreamReceivedCount,
+        upstream_received_bytes: upstreamReceivedBytes, client_written_count: clientWrittenCount,
+        client_written_bytes: clientWrittenBytes, delivery: "socket_write_only" });
+      pendingCatalog.clear(); pendingModelLists.clear(); pendingHistory.clear();
+      pendingMedia.clear();
+    };
+    let permissionProfiles = false;
     connections.add(state);
 
     const closeBoth = (code: number, reason: string) => {
       if (state.closed) return;
       state.closed = true;
+      state.onClosed?.();
       connections.delete(state);
       if (client.readyState < WebSocket.CLOSING) client.close(code, reason);
       if (upstream.readyState < WebSocket.CLOSING) upstream.close(code, reason);
@@ -126,29 +226,167 @@ export async function startDefaultDesktopAppServerProxy(input: {
       state.queuedBytes = 0;
     });
     upstream.on("message", (data, isBinary) => {
-      const message = textMessage(data, isBinary);
+      let message = textMessage(data, isBinary);
+      upstreamReceivedCount++;
+      if (message !== undefined) upstreamReceivedBytes += textBytes(message);
       if (message === undefined) {
+        transportFailure("server_to_client", isBinary ? "unsupported_binary" : "message_limit", isBinary ? 1003 : 1009);
         closeBoth(isBinary ? 1003 : 1009, isBinary ? "text JSON required" : "message too large");
         return;
       }
-      if (client.readyState === WebSocket.OPEN) client.send(message);
+      // Bind exactly one public turn/start submission to the app-server's
+      // acknowledged turn identity. No bytes enter normal diagnostics or a file.
+      try {
+        const parsed = JSON.parse(message);
+        const key = jsonRpcIdKey(parsed?.id);
+        if (key) {
+          const pending = pendingMedia.get(key);
+          if (pending) {
+            pendingMedia.delete(key);
+            if (parsed.error === undefined && parsed.result?.turn?.id) {
+              ingressMedia.accept(pending.media, parsed.result.turn.id,
+                parsed.result.turn.threadId, pending.generation);
+              diagnostic("desktop_native_media_owner_accepted", {
+                reference_count: pending.media.assets.length,
+                unavailable_count: pending.media.unavailable,
+              });
+            }
+          }
+        }
+        if (parsed?.method === "turn/completed"
+          && typeof parsed.params?.threadId === "string"
+          && typeof parsed.params?.turn?.id === "string") {
+          ingressMedia.retire(parsed.params.threadId, parsed.params.turn.id);
+        }
+        if (parsed?.method === "thread/closed" && typeof parsed.params?.threadId === "string") {
+          ingressMedia.retireThread(parsed.params.threadId);
+        }
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          // Upstream transport still owns parsing unrelated JSON payloads.
+        } else {
+          transportFailure("server_to_client", "native_media_owner_unproven", 1008);
+          closeBoth(1008, "Native media owner cannot be established");
+          return;
+        }
+      }
+      message = augmentModelListResponse(message, pendingModelLists, input.augmentModelList);
+      let catalogKey: string | undefined;
+      let catalogFields: Record<string, DiagnosticScalar> = {};
+      let historyFields: Record<string, DiagnosticScalar> | undefined;
+      // Only explicit history reads are inspected. No notification/body/identity logging.
+      if (pendingHistory.size) {
+        try {
+          const value = JSON.parse(message), key = jsonRpcIdKey(value?.id);
+          const history = key ? pendingHistory.get(key) : undefined;
+          if (key && history) {
+            pendingHistory.delete(key);
+            historyFields = { operation_fingerprint: history.fingerprint, method_class: "history_read",
+              duration_ms: Math.max(0, Math.round(performance.now() - history.began)),
+              received_bytes: textBytes(message),
+              count: Array.isArray(value.result?.thread?.turns) ? value.result.thread.turns.length : 0,
+              parsed: value.result?.thread !== undefined,
+              status: value.error !== undefined ? "rpc_error" : value.result?.thread ? "valid" : "invalid",
+              delivery: "socket_write_only" };
+            diagnostic("desktop_history_response", historyFields);
+          }
+        } catch { /* Diagnostics cannot change unrelated traffic. */ }
+      }
+      if (pendingCatalog.size) {
+        try {
+          const value = JSON.parse(message);
+          const key = jsonRpcIdKey(value?.id);
+          if (key && pendingCatalog.has(key)) {
+            catalogKey = key;
+            const began = pendingCatalog.get(key)!; pendingCatalog.delete(key);
+            const rows = Array.isArray(value.result?.data) ? value.result.data : undefined;
+            const web = rows?.filter((row: any) => typeof row?.model === "string" && row.model.startsWith("chatgpt-tela-web/")) ?? [];
+            catalogFields = { duration_ms: Math.max(0, Math.round(performance.now() - began)),
+              count: rows?.length ?? 0, web_model_count: web.length,
+              hidden_web_model_count: web.filter((row: any) => row.hidden === true).length,
+              native_model_count: rows ? rows.length - web.length : 0,
+              status: value.error !== undefined ? "rpc_error" : rows ? "valid" : "invalid" };
+            diagnostic("desktop_catalog_response", catalogFields);
+          }
+        } catch { /* Unrelated bytes remain unchanged. */ }
+      }
+      if (client.readyState === WebSocket.OPEN) {
+        const bytes = textBytes(message);
+        client.send(message, error => {
+          if (error) transportFailure("server_to_client", "socket_write", 1011);
+          else { clientWrittenCount++; clientWrittenBytes += bytes; }
+          if (historyFields) diagnostic(error ? "desktop_history_delivery_failed" : "desktop_history_delivery_complete", historyFields);
+          if (catalogKey) diagnostic(error ? "desktop_catalog_delivery_failed" : "desktop_catalog_delivery_complete", catalogFields);
+        });
+      } else {
+        if (historyFields) diagnostic("desktop_history_delivery_failed", { ...historyFields, status: "client_closed" });
+        if (catalogKey) diagnostic("desktop_catalog_delivery_failed", { ...catalogFields, status: "client_closed" });
+      }
     });
-    upstream.once("error", () => closeBoth(1011, "upstream app-server connection failed"));
+    upstream.once("error", error => {
+      observeError(error, "server_to_client");
+      closeBoth(1011, "upstream app-server connection failed");
+    });
     upstream.once("close", (code, reason) => {
+      if (code !== 1000 && code !== 1001) transportFailure("server_to_client", "peer_closed", code);
       if (!state.closed) closeBoth(code || 1000, reason.toString("utf8") || "upstream closed");
     });
 
     client.on("message", (data, isBinary) => {
       const message = textMessage(data, isBinary);
+      clientReceivedCount++;
+      if (message !== undefined) clientReceivedBytes += textBytes(message);
       if (message === undefined) {
+        transportFailure("client_to_server", isBinary ? "unsupported_binary" : "message_limit", isBinary ? 1003 : 1009);
         closeBoth(isBinary ? 1003 : 1009, isBinary ? "text JSON required" : "message too large");
         return;
       }
       let routed: string;
-      try { routed = rewriteDefaultDesktopAppServerRequest(message, input.route); }
+      try {
+        let handshake: any;
+        try { handshake = JSON.parse(message); } catch { /* Preserve unrelated upstream bytes. */ }
+        if (handshake?.method === "initialize") {
+          permissionProfiles = handshake.params?.capabilities?.experimentalApi === true;
+          clientKind = handshake.params?.clientInfo?.name === "chatgpt-tela" ? "tela_client" : "external_client";
+          diagnostic("desktop_catalog_client_initialized");
+        }
+        if (handshake?.method === "thread/read") {
+          const key = jsonRpcIdKey(handshake.id);
+          if (key && pendingHistory.has(key)) {
+            pendingHistory.delete(key);
+            diagnostic("desktop_history_tracking_ambiguous", { method_class: "history_read" });
+          } else if (key && pendingHistory.size < 128) {
+            const fingerprint = randomBytes(12).toString("hex");
+            pendingHistory.set(key, { began: performance.now(), fingerprint });
+            diagnostic("desktop_history_request", { operation_fingerprint: fingerprint, method_class: "history_read",
+              include_turns: handshake.params?.includeTurns === true, queued: upstream.readyState !== WebSocket.OPEN });
+          } else diagnostic("desktop_history_tracking_saturated", { pending_count: pendingHistory.size });
+        }
+        if (handshake?.method === "turn/start") {
+          const media = prepareNativeIngressTurnMedia(handshake.params);
+          if (media) {
+            const key = jsonRpcIdKey(handshake.id);
+            if (!key || pendingMedia.has(key) || pendingMedia.size >= 8) {
+              throw new Error("Native image ingress cannot bind one exact request");
+            }
+            pendingMedia.set(key, { media, generation: ingressMedia.generation });
+          }
+        }
+        routed = rewriteDefaultDesktopAppServerRequest(message, input.route, { permissionProfiles });
+      }
       catch {
+        transportFailure("client_to_server", "invalid_routed_request", 1008);
         closeBoth(1008, "invalid routed app-server request");
         return;
+      }
+      const modelListId = modelListRequestId(message);
+      if (modelListId) {
+        if (input.augmentModelList && pendingModelLists.size < 128) pendingModelLists.add(modelListId);
+        if (pendingCatalog.size < 128) {
+          pendingCatalog.set(modelListId, performance.now());
+          const value = JSON.parse(message);
+          diagnostic("desktop_catalog_request", { include_hidden: value.params?.includeHidden === true, queued: upstream.readyState !== WebSocket.OPEN });
+        } else diagnostic("desktop_catalog_tracking_saturated", { pending_count: pendingCatalog.size });
       }
       if (upstream.readyState === WebSocket.OPEN) {
         upstream.send(routed);
@@ -156,14 +394,21 @@ export async function startDefaultDesktopAppServerProxy(input: {
       }
       const bytes = textBytes(routed);
       if (state.queuedBytes + bytes > MAX_QUEUED_BYTES) {
+        transportFailure("client_to_server", "startup_queue_limit", 1009);
         closeBoth(1009, "startup queue exceeded limit");
         return;
       }
       state.queue.push(routed);
       state.queuedBytes += bytes;
     });
-    client.once("error", () => closeBoth(1011, "Desktop app-server client failed"));
-    client.once("close", () => closeBoth(1000, "Desktop app-server client closed"));
+    client.once("error", error => {
+      observeError(error, "client_to_server");
+      closeBoth(1011, "Desktop app-server client failed");
+    });
+    client.once("close", code => {
+      if (code !== 1000 && code !== 1001) transportFailure("client_to_server", "peer_closed", code);
+      closeBoth(1000, "Desktop app-server client closed");
+    });
   });
 
   let stopped = false;
@@ -171,14 +416,17 @@ export async function startDefaultDesktopAppServerProxy(input: {
     endpoint: `ws://127.0.0.1:${address.port}/`,
     upstreamEndpoint,
     get activeConnectionCount() { return connections.size; },
+    ingressMedia,
     async close() {
       if (stopped) return;
       stopped = true;
       closing = true;
+      ingressMedia.clear();
       const closingConnections = [...connections];
       const ignoreShutdownError = () => {};
       for (const state of closingConnections) {
         state.closed = true;
+        state.onClosed?.();
         connections.delete(state);
         // `terminate()` may emit more than one error while a WebSocket is still connecting or
         // completing its close handshake. During owned shutdown those errors are expected and

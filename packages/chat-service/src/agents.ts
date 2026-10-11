@@ -278,6 +278,13 @@ export class ChatAgentManager {
       this.#prune();
       this.#save();
     }
+    this.#workspaces.registerRemovalGuard(ids => {
+      for (const agent of this.#agents.values()) {
+        if (ids.has(agent.workspaceId) && !["idle", "stopped"].includes(agent.status)) {
+          throw new Error("workspace has an active or unresolved agent turn");
+        }
+      }
+    });
   }
 
   get targetCount(): number { return this.#drivers.size; }
@@ -301,7 +308,7 @@ export class ChatAgentManager {
   #prune(): void {
     const threshold = Date.now() - TERMINAL_RETENTION_MS;
     const terminalAgents = [...this.#agents.values()]
-      .filter(agent => agent.status !== "running")
+      .filter(agent => agent.status === "idle" || agent.status === "stopped")
       .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
     for (const agent of terminalAgents) {
       if (this.#agents.size <= MAX_AGENTS && Date.parse(agent.updatedAt) > threshold) break;
@@ -311,7 +318,7 @@ export class ChatAgentManager {
     const turns = [...this.#turns.values()].sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
     for (const turn of turns) {
       if (this.#turns.size <= MAX_TURNS && Date.parse(turn.updatedAt) > threshold) break;
-      if (turn.status === "running") continue;
+      if (!["completed", "stopped"].includes(turn.status)) continue;
       this.#turns.delete(turn.id);
     }
   }
@@ -320,7 +327,7 @@ export class ChatAgentManager {
     this.#prune();
     if (this.#agents.size < MAX_AGENTS) return;
     const removable = [...this.#agents.values()]
-      .filter(agent => agent.status !== "running")
+      .filter(agent => agent.status === "idle" || agent.status === "stopped")
       .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
     while (this.#agents.size >= MAX_AGENTS && removable.length > 0) {
       const agent = removable.shift()!;
@@ -333,7 +340,7 @@ export class ChatAgentManager {
     this.#prune();
     if (this.#turns.size < MAX_TURNS) return;
     const removable = [...this.#turns.values()]
-      .filter(turn => turn.status !== "running")
+      .filter(turn => turn.status === "completed" || turn.status === "stopped")
       .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
     while (this.#turns.size >= MAX_TURNS && removable.length > 0) this.#turns.delete(removable.shift()!.id);
   }
@@ -410,8 +417,10 @@ export class ChatAgentManager {
     if (agent.status === "running") throw new Error("Tela Chat agent already has a running turn");
     if (agent.status === "stopped") throw new Error("stopped Tela Chat agent cannot be continued");
     if (agent.status === "unknown") throw new Error("Tela Chat agent continuation is unavailable after an unproven interrupted turn");
-    if (agent.status === "failed" && !agent.providerSessionId) {
-      throw new Error("failed Tela Chat agent has no proven provider continuation identity");
+    if (agent.status === "failed") {
+      // A session id proves identity, not completion of an interrupted provider
+      // request or acknowledgement of local tool results.
+      throw new Error("failed Tela Chat agent has no proven completed turn; inspect its workspace before starting another agent");
     }
     if (!this.#drivers.has(agent.driverId)) throw new Error(`Tela Chat agent target is unavailable: ${agent.driverId}`);
     const prompt = boundedMultiline(input.prompt, "agent prompt", MAX_PROMPT_BYTES);
@@ -450,7 +459,9 @@ export class ChatAgentManager {
     }
     const controller = new AbortController();
     const active: ActiveTurn = { turnId: turn.id, controller, completion: Promise.resolve(), retired: false };
-    const completion = (async () => {
+    // Register the active lifecycle before calling a driver which may throw
+    // synchronously. Its cleanup must always see the same registered turn.
+    const completion = Promise.resolve().then(async () => {
       try {
         const result = await driver.run({
           prompt,
@@ -499,7 +510,7 @@ export class ChatAgentManager {
       } finally {
         if (this.#active.get(agent.id) === active) this.#active.delete(agent.id);
       }
-    })();
+    });
     active.completion = completion;
     this.#active.set(agent.id, active);
   }

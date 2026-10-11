@@ -1,5 +1,9 @@
+import { CHATGPT_TELA_EXPORT_RESOURCE_URI, CHATGPT_TELA_EXPORT_WIDGET_HTML } from "./export-widget";
+import { CHATGPT_FILE_CONNECT_ORIGINS } from "./chatgpt-file-source";
+import { CHATGPT_TELA_IMPORT_RESOURCE_URI, CHATGPT_TELA_IMPORT_WIDGET_HTML } from "./import-widget";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { traceDiagnosticToolCall } from "@chatgpt-tela/core";
 import {
   CHATGPT_TELA_CHAT_CAPABILITY_CALL,
   CHATGPT_TELA_CHAT_CAPABILITY_INVENTORY,
@@ -11,6 +15,11 @@ import {
   type TurnBridgeBackend,
 } from "@chatgpt-tela/mcp";
 import type { ChatCapabilityContract } from "@chatgpt-tela/service-protocol";
+import {
+  CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
+  CHATGPT_TELA_REVIEW_RESOURCE_URI,
+  CHATGPT_TELA_REVIEW_WIDGET_HTML,
+} from "./review-widget";
 
 export interface PublicChatBackend {
   inventory(query?: string): readonly ChatCapabilityContract[] | Promise<readonly ChatCapabilityContract[]>;
@@ -22,7 +31,9 @@ export const CHATGPT_TELA_PUBLIC_INSTRUCTIONS = [
   "Tela Chat and Tela Codex are independent backends behind one Plugin connection. A failure in one does not prove the other is unavailable, and authority must never be silently transferred between them.",
   "For ordinary local project work, use the Tela Chat capability inventory first when the exact capability or schema is not already known. Open a workspace once and reuse its workspace_id. Batch only independent already-known reads. For commands that may mutate state or outlive one response, provide operation_id; after an uncertain response, inspect process_status before starting the command again.",
   "After related edits, use an available change-review capability when it helps verify the final workspace state. Prefer direct workspace capabilities for routine work and delegate to a Tela Chat agent only when separate context or specialization materially helps.",
-  "For work inside the exact active Native Codex turn, use the Codex inventory with only the opaque turn_capability supplied by the active task transport. Discover the current tool inventory instead of assuming names or schemas from another turn.",
+  "For work inside an active Native Codex task, the transport supplies turn_capability: a temporary bearer credential identifying that exact local task for authentication and routing. It expires when the task retires; it is not a command, a permission grant, or evidence that an operation is safe. Native sandbox and approval checks still apply to each tool call. Do not expose this credential in explanations or logs.",
+  "Discover the current Native tool inventory instead of assuming names or schemas from another turn. Describe a requested command by its actual purpose, targets and possible effects, including writes or process changes; do not hide a command behind a reassuring label. An explicit platform denial remains a denial.",
+  "The Codex inventory query is a literal case-insensitive substring filter, not semantic search. Omit it or use an empty string for the complete inventory. An empty filtered result does not mean no tools are available.",
   "Invoke only tools returned for that same turn capability with arguments matching the returned schema, and continue from the current task state rather than repeating completed work after context rollover or a fresh Web conversation.",
   "Treat actual tool results and platform errors as evidence. After a deterministic failure, change the inputs, hypothesis, or observable state before retrying the same action.",
 ].join(" ");
@@ -43,18 +54,44 @@ export function createPublicMcpServer(input: {
     instructions: CHATGPT_TELA_PUBLIC_INSTRUCTIONS,
   });
 
-  const registerTool = server.registerTool.bind(server) as unknown as (
+  const rawRegisterTool = server.registerTool.bind(server) as unknown as (
     name: string,
     config: {
       readonly title: string;
       readonly description: string;
       readonly inputSchema: z.ZodTypeAny;
     },
-    handler: (arguments_: Readonly<Record<string, unknown>>) => Promise<{
+    handler: (arguments_: Readonly<Record<string, unknown>>, extra?: unknown) => Promise<{
       readonly content: readonly { readonly type: "text"; readonly text: string }[];
       readonly isError?: boolean;
+      readonly _meta?: Readonly<Record<string, unknown>>;
     }>,
   ) => void;
+  const registerTool: typeof rawRegisterTool = (name, config, handler) => rawRegisterTool(name, config,
+    (arguments_, extra) => traceDiagnosticToolCall(name, arguments_, extra, () => handler(arguments_, extra)));
+
+  server.registerResource("tela-chat-review", CHATGPT_TELA_REVIEW_RESOURCE_URI, {
+    title: "Tela Chat review",
+    description: "Read-only card for current or saved Tela Chat reviews.",
+    mimeType: CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
+  }, async () => ({
+    contents: [{
+      uri: CHATGPT_TELA_REVIEW_RESOURCE_URI,
+      mimeType: CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
+      text: CHATGPT_TELA_REVIEW_WIDGET_HTML,
+      _meta: { ui: { prefersBorder: true, csp: { connectDomains: [], resourceDomains: [] } } },
+    }],
+  }));
+
+  server.registerResource("tela-chat-import", CHATGPT_TELA_IMPORT_RESOURCE_URI, {
+    title: "Save a file to your workspace", mimeType: CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
+  }, async () => ({ contents: [{ uri: CHATGPT_TELA_IMPORT_RESOURCE_URI, mimeType: CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
+    text: CHATGPT_TELA_IMPORT_WIDGET_HTML, _meta: { ui: { prefersBorder: true, csp: { connectDomains: [...CHATGPT_FILE_CONNECT_ORIGINS], resourceDomains: [] } } } }] }));
+
+  server.registerResource("tela-chat-export", CHATGPT_TELA_EXPORT_RESOURCE_URI, {
+    title: "Download a workspace file", mimeType: CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
+  }, async () => ({ contents: [{ uri: CHATGPT_TELA_EXPORT_RESOURCE_URI, mimeType: CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
+    text: CHATGPT_TELA_EXPORT_WIDGET_HTML, _meta: { ui: { prefersBorder: true, csp: { connectDomains: [], resourceDomains: [] } } } }] }));
 
   registerTool(CHATGPT_TELA_CHAT_CAPABILITY_INVENTORY, {
     title: "Tela Chat capability inventory",
@@ -81,7 +118,19 @@ export function createPublicMcpServer(input: {
       : {};
     try {
       const result = await input.chat.call(capability, arguments_);
-      return { content: [{ type: "text", text: jsonText(result) }] };
+      if (capability === "export_file") {
+        const file = z.object({ name: z.string().min(1).max(4096).regex(/^[^\x00-\x1f\x7f/\\]+$/), bytes: z.number().int().min(0).max(2 * 1024 * 1024),
+          sha256: z.string().regex(/^[a-f0-9]{64}$/), dataBase64: z.string().max(4 * Math.ceil(2 * 1024 * 1024 / 3)) }).strict().safeParse(result);
+        if (!file.success) throw new Error("invalid file download result");
+        return { content: [{ type: "text", text: jsonText({ name: file.data.name, bytes: file.data.bytes, sha256: file.data.sha256, download: "Use the download card." }) }],
+          _meta: { ui: { resourceUri: CHATGPT_TELA_EXPORT_RESOURCE_URI }, "tela/fileExport": file.data } };
+      }
+      return {
+        content: [{ type: "text", text: jsonText(result) }],
+        ...((capability === "show_changes" || capability === "show_review")
+          ? { _meta: { ui: { resourceUri: CHATGPT_TELA_REVIEW_RESOURCE_URI } } }
+          : capability === "open_file_import" ? { _meta: { ui: { resourceUri: CHATGPT_TELA_IMPORT_RESOURCE_URI } } } : {}),
+      };
     } catch (error) {
       return {
         content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],

@@ -1,0 +1,101 @@
+import { expect, test } from "bun:test";
+import { randomBytes, randomUUID } from "node:crypto";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createChatToolRuntime } from "./tools";
+import { ChatWorkspaceRegistry } from "./workspaces";
+import { ProcessExecutionJournal } from "./process-execution-journal";
+import { startProcessOwnerControl } from "./process-owner";
+
+async function fixture() {
+  const root = mkdtempSync(join(tmpdir(), "tela-owner-status-")), stateRoot = join(root, "state");
+  mkdirSync(stateRoot);
+  const registry = new ChatWorkspaceRegistry({ allowedRoots: [root], storePath: join(stateRoot, "workspaces-v1.json") });
+  const workspace = registry.open(root), operationId = randomUUID(), serverInstanceId = randomUUID();
+  const requestKey = randomBytes(32).toString("hex"), requestFingerprint = randomBytes(32).toString("hex");
+  const timestamp = new Date().toISOString(), storePath = join(stateRoot, "process-operations-v1.json");
+  writeFileSync(storePath, JSON.stringify({ version: 1, requestKey, operations: [{ operationId, workspaceId: workspace.id,
+    serverInstanceId, requestFingerprint, sessionId: 1, state: "running", executionMode: "owned-worker-v1", startedAt: timestamp, updatedAt: timestamp }] }), { mode: 0o600 });
+  const journal = new ProcessExecutionJournal({ root: `${storePath}.executions`, key: requestKey });
+  const claim = journal.reserve({ operationId, workspaceId: workspace.id, launchingServerId: serverInstanceId, requestFingerprint });
+  let queries = 0, waits = 0, writes = 0, wrongOwner = false;
+  const control = await startProcessOwnerControl({ binding: { ownerId: claim.ownerId, operationId, workspaceId: workspace.id },
+    secret: randomBytes(32).toString("hex"), authority: {
+      status() { queries++; return { operationId, workspaceId: workspace.id, serverInstanceId: wrongOwner ? randomUUID() : serverInstanceId,
+        sessionId: 1, state: "running", startedAt: timestamp, updatedAt: timestamp, pid: 321,
+        ioAvailable: true, output: "", outputTruncated: false, outputRecovered: false }; },
+      async wait() { waits++; return {}; }, write() { writes++; },
+    } });
+  journal.publishLive(claim, control.descriptor);
+  const runtime = createChatToolRuntime({ allowedRoots: [root], stateRoot });
+  let completed = false;
+  const complete = () => {
+    if (completed) return;
+    journal.publishCompletion(claim, { state: "spawn_failed", endedAt: new Date().toISOString() });
+    completed = true;
+  };
+  return { workspace, operationId, serverInstanceId, runtime, storePath,
+    complete, counts: () => ({ queries, waits, writes }),
+    corruptOwner: () => { wrongOwner = true; }, async close() {
+      complete();
+      await runtime.close(); await control.close(); rmSync(root, { recursive: true, force: true });
+    } };
+}
+
+test("public process status authenticates the current owner on demand without consuming output or input", async () => {
+  const f = await fixture();
+  try {
+    expect(f.runtime.processes.status(f.workspace.id, f.operationId).liveness).toBe("unknown");
+    expect(f.counts().queries).toBe(0);
+    const listed = await f.runtime.call("list_processes", { workspace_id: f.workspace.id }) as { observation: string; processes: { operationId: string; liveness: string }[] };
+    expect(listed.observation).toBe("registry");
+    expect(listed.processes).toHaveLength(1);
+    expect(listed.processes[0]!.operationId).toBe(f.operationId);
+    expect(listed.processes[0]!.liveness).toBe("unknown");
+    expect(f.counts()).toEqual({ queries: 0, waits: 0, writes: 0 });
+    const observed = await f.runtime.call("process_status", { workspace_id: f.workspace.id, operation_id: f.operationId }) as Record<string, unknown>;
+    expect(observed.state).toBe("running"); expect(observed.liveness).toBe("alive"); expect(observed.ioAvailable).toBe(true);
+    expect(observed.serverInstanceId).toBe(f.serverInstanceId); expect(observed.pid).toBe(321);
+    expect(observed).not.toHaveProperty("output"); expect(observed).not.toHaveProperty("secret");
+    expect(f.counts()).toEqual({ queries: 1, waits: 0, writes: 0 });
+    await expect(f.runtime.call("process_status", { workspace_id: "unapproved-workspace", operation_id: f.operationId })).rejects.toThrow();
+    expect(f.counts().queries).toBe(1);
+  } finally { await f.close(); }
+});
+
+test("a signed response from a different launch owner cannot become live process status", async () => {
+  const f = await fixture();
+  try {
+    f.corruptOwner();
+    await expect(f.runtime.call("process_status", { workspace_id: f.workspace.id, operation_id: f.operationId })).rejects.toThrow("snapshot");
+    expect(f.runtime.processes.status(f.workspace.id, f.operationId).liveness).toBe("unknown");
+    expect(f.counts()).toEqual({ queries: 1, waits: 0, writes: 0 });
+  } finally { await f.close(); }
+});
+
+
+test("failed signed completion commit cannot leak a terminal registry state", async () => {
+  const f = await fixture(), backup = `${f.storePath}.saved`;
+  let blocked = false;
+  try {
+    f.complete();
+    const saved = readFileSync(f.storePath, "utf8");
+    renameSync(f.storePath, backup); mkdirSync(f.storePath); blocked = true;
+    expect(() => f.runtime.processes.status(f.workspace.id, f.operationId)).toThrow();
+    const listed = await f.runtime.call("list_processes", { workspace_id: f.workspace.id }) as {
+      processes: { state: string }[];
+    };
+    expect(listed.processes).toHaveLength(1);
+    expect(listed.processes[0]!.state).toBe("unknown");
+    await expect(f.runtime.close()).rejects.toThrow();
+    expect(readFileSync(backup, "utf8")).toBe(saved);
+    expect(f.counts()).toEqual({ queries: 0, waits: 0, writes: 0 });
+    rmSync(f.storePath, { recursive: true }); renameSync(backup, f.storePath); blocked = false;
+    expect(f.runtime.processes.status(f.workspace.id, f.operationId).state).toBe("spawn_failed");
+    await f.runtime.close();
+  } finally {
+    if (blocked) { rmSync(f.storePath, { recursive: true }); renameSync(backup, f.storePath); }
+    await f.close();
+  }
+});

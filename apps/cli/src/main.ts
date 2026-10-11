@@ -1,14 +1,23 @@
+import { diagnosticCenter, diagnosticSourcePaths } from "@chatgpt-tela/core";
 import {
   existsSync,
   lstatSync,
   realpathSync,
-  rmSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareProfileOwnership } from "./profile-ownership";
-import { diagnoseDefaultDesktop } from "@chatgpt-tela/default-desktop-target";
+import { summarizeDiagnosticWorkload } from "./diagnostic-workload";
+import { summarizeWorkIncident } from "./work-incident";
+import { observeDesktopPerformance } from "./desktop-performance";
+import { summarizeRetentionCanary } from "./retention-canary";
+import { workTerminalArguments, runWorkTerminal } from "@chatgpt-tela/codex";
+import { diagnoseDefaultDesktop, resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
+import {
+  probePublicMcp,
+  probeUnifiedDevelopmentMcp,
+} from "@chatgpt-tela/gateway";
 import {
   hasEffectiveProductConfig,
   nativeProductConfigPath,
@@ -16,10 +25,9 @@ import {
 } from "./product-config-selection";
 import { profileSlotFromArguments } from "./profile-selection";
 import {
-  ChatManagedWorktreeManager,
-  ChatManagedWorktreeOwnershipObserver,
   readChatAgentProvidersConfig,
   readChatApprovedRootsConfig,
+  manageChatApprovedRoots,
   writeChatAgentProvidersConfig,
   writeChatApprovedRootsConfig,
 } from "@chatgpt-tela/chat-service";
@@ -37,15 +45,12 @@ import {
   resolveProductPreferencesPath,
   writeProductConfig,
   writeProductPreferences,
+  type ProductApprovalDelayPreset,
   type ProductConfig,
 } from "@chatgpt-tela/product-config";
 import {
   acquireProductActivity,
-  applyUninstallPlan,
   ensureOwnershipManifest,
-  FilesystemOwnershipObserver,
-  observeProductActivity,
-  planUninstall,
   packagedRepairJournalPath,
   packagedUpgradeJournalPath,
   productActivityPath,
@@ -54,11 +59,8 @@ import {
   readOwnershipManifest,
   releaseProductActivity,
   resolveProductPaths,
-  ServiceRegistrationManager,
-  ServiceRegistrationOwnershipObserver,
-  SystemServiceRegistrationCommandRunner,
-  unregisterOwnedResource,
 } from "@chatgpt-tela/product-lifecycle";
+import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import {
   type TelaServiceId,
 } from "@chatgpt-tela/service-protocol";
@@ -70,9 +72,8 @@ import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
 import {
   createTailscaleFunnelLease,
   SystemTailscaleCommandRunner,
+  tailscaleDiagnosisDetail,
   TailscaleFunnelLeaseManager,
-  tailscaleFunnelLeaseFromResource,
-  TailscaleFunnelOwnershipObserver,
 } from "@chatgpt-tela/tailscale-ingress";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -113,18 +114,32 @@ function electronExecutable(): string {
 function manageApprovalPreferences(): void {
   const subcommand = process.argv[3] ?? "status";
   const path = resolveProductPreferencesPath();
+  const current = readProductPreferences(path);
   if (subcommand === "status") {
-    console.log(JSON.stringify({ path, ...readProductPreferences(path) }, null, 2));
+    console.log(JSON.stringify({ path, ...current }, null, 2));
+    return;
+  }
+  if (subcommand === "delay") {
+    const preset = process.argv[4] as ProductApprovalDelayPreset | undefined;
+    if (!preset) throw new Error("usage: chatgpt-tela approval delay <instant|250ms|500ms|1s|2s|5s|10s|15s>");
+    writeProductPreferences({ ...current, approvalDelay: preset }, path);
+    console.log(JSON.stringify({
+      path,
+      ...readProductPreferences(path),
+      appliesTo: "new-or-restarted-codex-profiles",
+      persistentApproval: false,
+    }, null, 2));
     return;
   }
   if (subcommand !== "enable" && subcommand !== "disable") {
-    throw new Error("usage: chatgpt-tela approval <status|enable|disable>");
+    throw new Error("usage: chatgpt-tela approval <status|enable|disable|delay PRESET>");
   }
   const approvalAutomation = subcommand === "enable" ? "recognized_once" : "off";
-  writeProductPreferences({ version: 1, approvalAutomation }, path);
+  writeProductPreferences({ ...current, approvalAutomation }, path);
   console.log(JSON.stringify({
     path,
     approvalAutomation,
+    approvalDelay: current.approvalDelay ?? "instant",
     appliesTo: "new-or-restarted-codex-profiles",
     persistentApproval: false,
   }, null, 2));
@@ -173,6 +188,9 @@ function diagnosticsSummary(productPaths: ReturnType<typeof resolveProductPaths>
     contentRead: false,
     pathsEmitted: false,
     rotation: "current-plus-one-previous",
+    discovery: { guide: "logs/diagnostics/START-HERE.md", index: "logs/diagnostics/INDEX.json",
+      commands: ["diagnostics list", "diagnostics inspect --ref <ref>", "diagnostics record --at <ISO> --symptom <kind>", "diagnostics activity"],
+      privateCapture: "off by default; explicit capture --minutes 15 or --mode until-disabled, stop with --minutes 0; private files stay local" },
     services: Object.freeze({
       gateway: service("gateway"),
       chat: service("chat"),
@@ -180,6 +198,7 @@ function diagnosticsSummary(productPaths: ReturnType<typeof resolveProductPaths>
     }),
   });
 }
+
 
 function packagedTransitionStatus(productPaths: ReturnType<typeof resolveProductPaths>): readonly Record<string, unknown>[] {
   const results: Record<string, unknown>[] = [];
@@ -328,6 +347,94 @@ function publicMcpStatus(
   }
 }
 
+async function diagnoseConfiguredIngress(
+  productPaths: ReturnType<typeof resolveProductPaths>,
+): Promise<Record<string, unknown>> {
+  if (!hasEffectiveProductConfig(productPaths)) {
+    return { state: "unconfigured", cause: "product-unconfigured" };
+  }
+  const config = readEffectiveProductConfig(productPaths);
+  const probe = config.publicMcpAbi === "stable" ? probePublicMcp : probeUnifiedDevelopmentMcp;
+  const probeEndpoint = async (url: URL): Promise<Record<string, unknown>> => {
+    const health = await probe(url, AbortSignal.timeout(4_000));
+    return health.ready
+      ? { state: "ready" }
+      : { state: "unavailable", cause: "public-mcp-unreachable", detail: health.detail ?? "public MCP probe failed" };
+  };
+  const localMcp = await probeEndpoint(new URL(`http://127.0.0.1:${config.exposure.localPort}/mcp`));
+  const normalizedLocalMcp = localMcp.state === "ready"
+    ? localMcp
+    : { ...localMcp, cause: "local-mcp-unreachable" };
+
+  if (config.exposure.kind !== "tailscale-funnel") {
+    if (normalizedLocalMcp.state !== "ready") {
+      return {
+        kind: "existing-https",
+        state: "unavailable",
+        cause: "local-mcp-unreachable",
+        detail: "The configured public route cannot work because the local Tela Gateway MCP listener is not reachable",
+        localMcp: normalizedLocalMcp,
+        publicMcp: { state: "not-probed", blockedBy: "local-mcp-unreachable" },
+      };
+    }
+    const publicMcp = await probeEndpoint(new URL(config.exposure.publicUrl));
+    return {
+      kind: "existing-https",
+      state: publicMcp.state,
+      cause: publicMcp.state === "ready" ? "ready" : "public-mcp-unreachable",
+      localMcp: normalizedLocalMcp,
+      publicMcp,
+    };
+  }
+
+  const manifest = readOwnershipManifest(productPaths.installManifest);
+  const manager = new TailscaleFunnelLeaseManager({
+    runner: new SystemTailscaleCommandRunner(config.exposure.tailscaleCli),
+    manifestPath: productPaths.installManifest,
+    installId: manifest?.installId ?? "diagnostic-unowned-install",
+    productVersion: manifest?.productVersion ?? "0.0.0",
+  });
+  const lease = createTailscaleFunnelLease({
+    publicUrl: config.exposure.publicUrl,
+    localTarget: `http://127.0.0.1:${config.exposure.localPort}/mcp`,
+  });
+  const tailscale = await manager.diagnose(lease);
+  if (tailscale.availability !== "ready") {
+    return {
+      kind: "tailscale-funnel",
+      state: "unavailable",
+      cause: tailscale.cause,
+      detail: tailscaleDiagnosisDetail(tailscale.cause),
+      localMcp: normalizedLocalMcp,
+      tailscale,
+      publicMcp: { state: "not-probed", blockedBy: tailscale.cause },
+    };
+  }
+  if (normalizedLocalMcp.state !== "ready") {
+    return {
+      kind: "tailscale-funnel",
+      state: "unavailable",
+      cause: "local-mcp-unreachable",
+      detail: "Tailscale and the exact Funnel route are ready, but the local Tela Gateway MCP listener is not reachable",
+      localMcp: normalizedLocalMcp,
+      tailscale,
+      publicMcp: { state: "not-probed", blockedBy: "local-mcp-unreachable" },
+    };
+  }
+  const publicMcp = await probeEndpoint(new URL(config.exposure.publicUrl));
+  return {
+    kind: "tailscale-funnel",
+    state: publicMcp.state,
+    cause: publicMcp.state === "ready" ? "ready" : "public-mcp-unreachable",
+    detail: publicMcp.state === "ready"
+      ? "Tailscale is online, the exact Funnel route is present, and the public ChatGPT Tela MCP probe succeeded"
+      : "Tailscale and the Funnel route are ready, but the public ChatGPT Tela MCP endpoint is not reachable",
+    localMcp: normalizedLocalMcp,
+    tailscale,
+    publicMcp,
+  };
+}
+
 async function configure(
   productPaths: ReturnType<typeof resolveProductPaths>,
 ): Promise<void> {
@@ -349,6 +456,7 @@ async function configure(
   }
   const localPort = Number(option("--local-mcp-port") ?? "18743");
   const manageTailscale = flag("--manage-tailscale-funnel");
+  const requestedTailscaleCli = option("--tailscale-cli") ?? "tailscale";
   const publicMcpAbi = option("--mcp-abi") ?? "stable";
   if (publicMcpAbi !== "stable" && publicMcpAbi !== "unified-development") {
     throw new Error("--mcp-abi must be stable or unified-development");
@@ -364,7 +472,9 @@ async function configure(
           localPort,
           authentication: "none",
           allowUnauthenticatedPublicEndpoint: true,
-          tailscaleCli: option("--tailscale-cli") ?? "tailscale",
+          // Service managers often start Gateway with a narrower PATH than this setup shell.
+          // Persist the resolved executable so source and packaged services use the same CLI.
+          tailscaleCli: Bun.which(requestedTailscaleCli) ?? requestedTailscaleCli,
         }
       : {
           kind: "existing-https",
@@ -386,6 +496,7 @@ async function configure(
 async function setupProfile(
   profileSlot: number,
   productPaths: ReturnType<typeof resolveProductPaths>,
+  input: { readonly contextCanary?: boolean } = {},
 ): Promise<void> {
   const manifest = await ensureOwnershipManifest({ path: productPaths.installManifest, productVersion: "0.0.0" });
   const activityPath = productActivityPath(productPaths.runtimeRoot, "profile-setup", String(profileSlot));
@@ -415,7 +526,8 @@ async function setupProfile(
       env: {
         ...process.env,
         CHATGPT_TELA_PROFILE_SETUP_SLOT: String(profileSlot),
-        CHATGPT_TELA_PROFILE_SETUP_REVEAL: "1",
+        CHATGPT_TELA_PROFILE_SETUP_REVEAL: input.contextCanary ? "0" : "1",
+        ...(input.contextCanary ? { CHATGPT_TELA_PROFILE_SETUP_CONTEXT_CANARY: "1" } : {}),
       },
     });
     if (result.error) throw result.error;
@@ -438,16 +550,6 @@ function chatRootsPath(productPaths: ReturnType<typeof resolveProductPaths>): st
 
 function chatAgentProvidersPath(productPaths: ReturnType<typeof resolveProductPaths>): string {
   return join(productPaths.configRoot, "chat", "agent-providers-v1.json");
-}
-
-function canonicalApprovedRoot(value: string): string {
-  const absolute = resolve(value);
-  if (!existsSync(absolute)) throw new Error(`workspace root does not exist: ${absolute}`);
-  const stat = lstatSync(absolute);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new Error("workspace root must be a real directory, not a symlink");
-  }
-  return realpathSync(absolute);
 }
 
 async function manageChatRoots(productPaths: ReturnType<typeof resolveProductPaths>): Promise<void> {
@@ -608,50 +710,12 @@ async function manageChatRoots(productPaths: ReturnType<typeof resolveProductPat
     return;
   }
   const path = chatRootsPath(productPaths);
-  const current = readChatApprovedRootsConfig(path);
-  if (subcommand === "roots") {
-    console.log(JSON.stringify({ path, roots: current.roots }, null, 2));
-    return;
-  }
-  const requested = option("--path");
-  if (!requested) throw new Error(`chat ${subcommand} requires --path <workspace-root>`);
-  if (subcommand === "allow-root") {
-    const root = canonicalApprovedRoot(requested);
-    writeChatApprovedRootsConfig(path, { version: 1, roots: [...current.roots, root] });
-    console.log(JSON.stringify({ allowed: root, path, requiresChatRestart: true }, null, 2));
-    return;
-  }
-  if (subcommand === "disallow-root") {
-    const requestedAbsolute = existsSync(resolve(requested)) ? realpathSync(resolve(requested)) : resolve(requested);
-    writeChatApprovedRootsConfig(path, { version: 1,
-      roots: current.roots.filter(root => root !== requestedAbsolute) });
-    console.log(JSON.stringify({ disallowed: requestedAbsolute, path, requiresChatRestart: true }, null, 2));
+  if (subcommand === "roots" || subcommand === "allow-root" || subcommand === "disallow-root") {
+    const config = manageChatApprovedRoots(path, subcommand, option("--path"));
+    console.log(JSON.stringify({path,roots:config.roots,requiresChatRestart:subcommand !== "roots"},null,2));
     return;
   }
   throw new Error("chat command is unsupported");
-}
-
-function profileSetupActivityBlockers(
-  productPaths: ReturnType<typeof resolveProductPaths>,
-  installId: string,
-): readonly string[] {
-  const blockers: string[] = [];
-  for (let profileSlot = 1; profileSlot <= 99; profileSlot += 1) {
-    const path = productActivityPath(productPaths.runtimeRoot, "profile-setup", String(profileSlot));
-    try {
-      const state = observeProductActivity({
-        path,
-        installId,
-        kind: "profile-setup",
-        scope: String(profileSlot),
-      });
-      if (state === "active") blockers.push(`profile ${profileSlot} setup is active`);
-      else if (state === "drift") blockers.push(`profile ${profileSlot} setup activity ownership is ambiguous`);
-    } catch {
-      blockers.push(`profile ${profileSlot} setup activity state is unreadable or unsafe`);
-    }
-  }
-  return Object.freeze(blockers);
 }
 
 async function manageIngress(
@@ -661,6 +725,10 @@ async function manageIngress(
   const config = readEffectiveProductConfig(productPaths);
   if (config.exposure.kind !== "tailscale-funnel") {
     throw new Error("ingress management requires configure --manage-tailscale-funnel");
+  }
+  if (subcommand === "status") {
+    console.log(JSON.stringify(await diagnoseConfiguredIngress(productPaths), null, 2));
+    return;
   }
   const manifest = await ensureOwnershipManifest({ path: productPaths.installManifest, productVersion: "0.0.0" });
   const manager = new TailscaleFunnelLeaseManager({
@@ -673,10 +741,6 @@ async function manageIngress(
     publicUrl: config.exposure.publicUrl,
     localTarget: `http://127.0.0.1:${config.exposure.localPort}/mcp`,
   });
-  if (subcommand === "status") {
-    console.log(JSON.stringify({ lease, physical: await manager.inspect(lease), ownership: manager.ownership(lease) }, null, 2));
-    return;
-  }
   if (subcommand === "adopt-existing") {
     const physical = await manager.inspect(lease);
     if (physical.state !== "owned") {
@@ -731,6 +795,7 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({
       stage: "pre-alpha",
       defaultDesktop: await diagnoseDefaultDesktop(),
+      ingress: await diagnoseConfiguredIngress(productPaths),
       productConfigured: configured,
       optionalMultiProfileConfigured: configured
         ? Boolean(readEffectiveProductConfig(productPaths).multiProfile)
@@ -741,190 +806,55 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "diagnostics") {
+    const subcommand = process.argv[3];
+    const center = diagnosticCenter(join(productPaths.logsRoot, "diagnostics"), diagnosticSourcePaths(productPaths.logsRoot), subcommand, option);
+    if (center !== undefined) { console.log(JSON.stringify(center, null, 2)); return; }
+    if (subcommand === "desktop") {
+      console.error("Observing for a bounded interval. Reproduce the slow scroll now; no app restart is needed.");
+      console.log(JSON.stringify(await observeDesktopPerformance(Number(option("--seconds") ?? 20)), null, 2));
+      return;
+    }
+    if (subcommand === "incident" || subcommand === "trace") {
+      const minutesRaw = option("--minutes");
+      const minutes = minutesRaw === undefined ? 15 : Number(minutesRaw);
+      console.log(JSON.stringify(summarizeWorkIncident({
+        paths: diagnosticSourcePaths(productPaths.logsRoot),
+        mode: subcommand,
+        minutes,
+      }), null, 2));
+      return;
+    }
+    if (subcommand === "workload") {
+      const minutesRaw = option("--minutes");
+      const minutes = minutesRaw === undefined ? 15 : Number(minutesRaw);
+      console.log(JSON.stringify(summarizeDiagnosticWorkload({
+        paths: diagnosticSourcePaths(productPaths.logsRoot),
+        minutes,
+      }), null, 2));
+      return;
+    }
+    if (subcommand !== undefined) throw new Error("usage: chatgpt-tela diagnostics [list|inspect|record|activity|capture|workload|incident|trace] [--minutes <1-120>] | desktop [--seconds <5-60>]");
     console.log(JSON.stringify(diagnosticsSummary(productPaths), null, 2));
+    return;
+  }
+  if (command === "retention-canary") {
+    const minutesRaw = option("--minutes");
+    const minutes = minutesRaw === undefined ? 15 : Number(minutesRaw);
+    console.log(JSON.stringify(summarizeRetentionCanary({
+      paths: diagnosticSourcePaths(productPaths.logsRoot),
+      minutes,
+    }), null, 2));
     return;
   }
   if (command === "uninstall") {
     const dryRun = flag("--dry-run");
     const apply = flag("--apply");
     if (dryRun === apply) throw new Error("uninstall requires exactly one of --dry-run or --apply");
-    const manifest = readOwnershipManifest(productPaths.installManifest);
-    if (!manifest) {
-      console.log(JSON.stringify({
-        status: "not-installed-by-manifest",
-        installManifest: productPaths.installManifest,
-        destructiveActions: 0,
-      }, null, 2));
-      return;
-    }
-    const upgradeJournal = readPackagedUpgradeJournal(packagedUpgradeJournalPath(productPaths));
-    if (apply && upgradeJournal) {
-      throw new Error(`packaged upgrade ${upgradeJournal.fromVersion} -> ${upgradeJournal.toVersion} is incomplete; resume or repair it before uninstall apply`);
-    }
-    const repairJournal = readPackagedRepairJournal(packagedRepairJournalPath(productPaths));
-    if (apply && repairJournal) {
-      throw new Error(`packaged repair for ${repairJournal.productVersion} is incomplete; resume it before uninstall apply`);
-    }
-    const filesystemObserver = new FilesystemOwnershipObserver();
-    const hasManagedWorktrees = manifest.resources.some(resource => resource.kind === "managed-worktree");
-    const hasTailscaleRoutes = manifest.resources.some(resource => resource.kind === "tailscale-route");
-    const hasServiceRegistrations = manifest.resources.some(resource => resource.kind === "service-registration");
-    const hasCredentials = manifest.resources.some(resource => resource.kind === "credential");
-    const managedWorktreeManager = hasManagedWorktrees
-      ? new ChatManagedWorktreeManager({
-          managedRoot: join(productPaths.serviceState("chat"), "managed-worktrees"),
-          storePath: join(productPaths.serviceState("chat"), "managed-worktrees-v1.json"),
-          ownershipManifestPath: productPaths.installManifest,
-          installId: manifest.installId,
-          productVersion: manifest.productVersion,
-          createManagedRoot: false,
-        })
-      : undefined;
-    const managedWorktreeObserver = managedWorktreeManager
-      ? new ChatManagedWorktreeOwnershipObserver(managedWorktreeManager)
-      : undefined;
-    const tailscaleManager = hasTailscaleRoutes
-      ? new TailscaleFunnelLeaseManager({
-          runner: new SystemTailscaleCommandRunner(process.env.CHATGPT_TELA_TAILSCALE_CLI?.trim() || "tailscale"),
-          manifestPath: productPaths.installManifest,
-          installId: manifest.installId,
-          productVersion: manifest.productVersion,
-        })
-      : undefined;
-    const tailscaleObserver = tailscaleManager
-      ? new TailscaleFunnelOwnershipObserver(tailscaleManager)
-      : undefined;
-    const serviceRegistrationManager = hasServiceRegistrations
-      ? new ServiceRegistrationManager({ runner: new SystemServiceRegistrationCommandRunner() })
-      : undefined;
-    const serviceRegistrationObserver = serviceRegistrationManager
-      ? new ServiceRegistrationOwnershipObserver(serviceRegistrationManager)
-      : undefined;
-    const credentialStore = hasCredentials
-      ? createPlatformCredentialStore({ stateRoot: productPaths.stateRoot })
-      : undefined;
-    const credentialOwnership = credentialStore
-      ? new CredentialOwnershipManager({
-          store: credentialStore,
-          manifestPath: productPaths.installManifest,
-          installId: manifest.installId,
-          productVersion: manifest.productVersion,
-        })
-      : undefined;
-    const activityBlockers = profileSetupActivityBlockers(productPaths, manifest.installId);
-    const codexActivityBlocked = activityBlockers.length > 0;
-    const observer = {
-      observe(resource: Parameters<FilesystemOwnershipObserver["observe"]>[0], currentManifest: typeof manifest) {
-        if (resource.owner === "codex" && codexActivityBlocked) return "dirty" as const;
-        if (resource.kind === "managed-worktree" && managedWorktreeObserver) {
-          return managedWorktreeObserver.observe(resource, currentManifest);
-        }
-        if (resource.kind === "tailscale-route" && tailscaleObserver) {
-          return tailscaleObserver.observe(resource, currentManifest);
-        }
-        if (resource.kind === "service-registration" && serviceRegistrationObserver) {
-          return serviceRegistrationObserver.observe(resource, currentManifest);
-        }
-        if (resource.kind === "credential" && credentialOwnership) {
-          return credentialOwnership.observe(resource, currentManifest);
-        }
-        return filesystemObserver.observe(resource, currentManifest);
-      },
-    };
-
-    const blockedOwners = new Set<"product" | "gateway" | "chat" | "codex">();
-    const shutdownFailures: Array<{ readonly owner: string; readonly detail: string }> = [];
-    if (codexActivityBlocked) {
-      blockedOwners.add("codex");
-      shutdownFailures.push({ owner: "codex-profile-setup", detail: activityBlockers.join("; ") });
-    }
-    if (apply) {
-      const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
-      for (const service of ["gateway", "chat", "codex"] as const) {
-        try {
-          await supervisor.shutdown({ service, descriptorPath: serviceDescriptorPath(productPaths, service) });
-        } catch (error) {
-          blockedOwners.add(service);
-          shutdownFailures.push({ owner: service, detail: error instanceof Error ? error.message : String(error) });
-        }
-      }
-    }
-
-    const plan = await planUninstall({
-      manifest,
-      observer,
+    console.log(JSON.stringify(await runProductUninstall({
+      mode: apply ? "apply" : "dry-run",
       removeData: flag("--remove-data"),
-    });
-    if (dryRun) {
-      console.log(JSON.stringify({ dryRun: true, activityBlockers, ...plan }, null, 2));
-      return;
-    }
-
-    const result = await applyUninstallPlan({
-      manifest,
-      plan,
-      blockedOwners,
-      operator: {
-        observe: observer.observe,
-        async remove(resource, currentManifest) {
-          if (resource.kind === "managed-worktree") {
-            if (!managedWorktreeManager) return { removed: false, detail: "managed worktree lifecycle is unavailable" };
-            const record = managedWorktreeManager.recordForResource(resource.id);
-            if (!record) return { removed: false, detail: "managed worktree resource is not present in the Chat ownership store" };
-            const removed = await managedWorktreeManager.remove(record.id);
-            return { removed: removed.removed, detail: removed.detail };
-          }
-          if (resource.kind === "tailscale-route") {
-            if (!tailscaleManager) return { removed: false, detail: "Tailscale lifecycle is unavailable" };
-            const released = await tailscaleManager.release(tailscaleFunnelLeaseFromResource(resource));
-            return { removed: released.state === "released" || released.state === "already-absent", detail: released.detail };
-          }
-          if (resource.kind === "directory") {
-            if (await filesystemObserver.observe(resource, currentManifest) !== "owned") {
-              return { removed: false, detail: "directory ownership could not be re-proven immediately before removal" };
-            }
-            const absolute = resolve(resource.path);
-            if (dirname(absolute) === absolute) throw new Error("refusing to remove a filesystem root");
-            rmSync(absolute, { recursive: true, force: false });
-            return { removed: true, detail: "exact marker-owned directory removed" };
-          }
-          if (resource.kind === "service-registration") {
-            if (!serviceRegistrationManager) return { removed: false, detail: "service-registration lifecycle is unavailable" };
-            return serviceRegistrationManager.release(resource, currentManifest);
-          }
-          if (resource.kind === "credential") {
-            if (!credentialOwnership) return { removed: false, detail: "credential lifecycle is unavailable" };
-            return credentialOwnership.remove(resource, currentManifest);
-          }
-          return { removed: false, detail: "resource lifecycle is unavailable" };
-        },
-      },
-    });
-
-    for (const step of result.steps) {
-      if (step.outcome !== "removed" && step.outcome !== "already-absent") continue;
-      if (!existsSync(productPaths.installManifest)) continue;
-      await unregisterOwnedResource({
-        path: productPaths.installManifest,
-        installId: manifest.installId,
-        productVersion: manifest.productVersion,
-        resourceId: step.resourceId,
-      });
-    }
-    const remaining = readOwnershipManifest(productPaths.installManifest);
-    const canRemoveManifest = flag("--remove-data")
-      && result.failedCount === 0
-      && result.preservedCount === 0
-      && (remaining?.resources.length ?? 0) === 0;
-    if (canRemoveManifest) rmSync(productPaths.installManifest, { force: true });
-    console.log(JSON.stringify({
-      applied: true,
-      removeData: flag("--remove-data"),
-      activityBlockers,
-      shutdownFailures,
-      ...result,
-      manifestRemoved: canRemoveManifest,
-    }, null, 2));
+      paths: productPaths,
+    }), null, 2));
     return;
   }
   if (command === "chat") {
@@ -941,6 +871,24 @@ async function main(): Promise<void> {
   }
   if (command === "setup") {
     await setupProfile(slot(), productPaths);
+    return;
+  }
+  if (command === "work") {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("work requires an interactive terminal");
+    const manifest = readOwnershipManifest(productPaths.installManifest);
+    if (!manifest) throw new Error("start the Tela profile before opening Work in the terminal");
+    const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
+    const running = await supervisor.current({ service: "codex", descriptorPath: serviceDescriptorPath(productPaths, "codex") });
+    if (!running) throw new Error("start the Tela profile before opening Work in the terminal");
+    const codex = new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
+    const session = await codex.terminalSession(slot(), AbortSignal.timeout(10_000));
+    const installation = resolveDefaultDesktopInstallation({ environment: process.env });
+    const args = workTerminalArguments({ session,
+      ...(option("--thread") ? { threadId: option("--thread")! } : {}),
+      ...(option("--model") ? { model: option("--model")! } : {}),
+      ...(option("--cwd") ? { cwd: resolve(option("--cwd")!) } : {}),
+    });
+    process.exitCode = await runWorkTerminal({ executable: installation.codexExecutable, arguments: args });
     return;
   }
   if (command === "start") {
@@ -1029,10 +977,11 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(profiles, null, 2));
       return;
     }
-    const [gatewayStatus, chatStatus, codexStatus] = await Promise.all([
+    const [gatewayStatus, chatStatus, codexStatus, ingressStatus] = await Promise.all([
       serviceStatus(supervisor, productPaths, "gateway"),
       serviceStatus(supervisor, productPaths, "chat"),
       serviceStatus(supervisor, productPaths, "codex"),
+      diagnoseConfiguredIngress(productPaths),
     ]);
     console.log(JSON.stringify({
       stage: "pre-alpha",
@@ -1041,10 +990,43 @@ async function main(): Promise<void> {
       connectorSetup: "manual-pre-alpha",
       runtime: "split-services",
       services: { gateway: gatewayStatus, chat: chatStatus, codex: codexStatus },
+      ingress: ingressStatus,
       profiles,
       packagedTransitions: packagedTransitionStatus(productPaths),
       configured: hasEffectiveProductConfig(productPaths),
     }, null, 2));
+    return;
+  }
+  if (command === "model-canary") {
+    const profileSlot = slot();
+    const manifest = readOwnershipManifest(productPaths.installManifest);
+    if (!manifest) throw new Error("model-canary requires a running Tela Codex service/profile");
+    const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
+    const running = await supervisor.current({
+      service: "codex",
+      descriptorPath: serviceDescriptorPath(productPaths, "codex"),
+    });
+    if (!running) throw new Error("model-canary requires a running Tela Codex service/profile");
+    const codex = new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
+    console.log(JSON.stringify(await codex.modelSelectionCanary(profileSlot), null, 2));
+    return;
+  }
+  if (command === "context-canary") {
+    const profileSlot = slot();
+    if (flag("--setup-only")) {
+      await setupProfile(profileSlot, productPaths, { contextCanary: true });
+      return;
+    }
+    const manifest = readOwnershipManifest(productPaths.installManifest);
+    if (!manifest) throw new Error("context-canary requires a running Tela Codex service/profile");
+    const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
+    const running = await supervisor.current({
+      service: "codex",
+      descriptorPath: serviceDescriptorPath(productPaths, "codex"),
+    });
+    if (!running) throw new Error("context-canary requires a running Tela Codex service/profile");
+    const codex = new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
+    console.log(JSON.stringify(await codex.contextAttachmentCanary(profileSlot), null, 2));
     return;
   }
   console.log(
@@ -1055,6 +1037,11 @@ async function main(): Promise<void> {
     + "  paths\n"
     + "  doctor\n"
     + "  diagnostics\n"
+    + "  diagnostics workload [--minutes <1-120>]\n"
+    + "  diagnostics incident [--minutes <1-120>]\n"
+    + "  diagnostics trace [--minutes <1-120>]\n"
+    + "  diagnostics desktop [--seconds <5-60>] (macOS)\n"
+    + "  retention-canary [--minutes <1-120>]\n"
     + "  uninstall (--dry-run | --apply) [--remove-data]\n"
     + "  chat roots\n"
     + "  chat allow-root --path <workspace-root>\n"
@@ -1069,8 +1056,11 @@ async function main(): Promise<void> {
     + "  ingress adopt-existing\n"
     + "  setup [--slot <n>]\n"
     + "  start [--slot <n>]\n"
+    + "  work [--slot <n>] [--thread <id>] [--model <id>] [--cwd <path>]\n"
     + "  stop [--slot <n>]\n"
     + "  profiles\n"
+    + "  model-canary [--slot <n>]\n"
+    + "  context-canary [--slot <n>] [--setup-only]\n"
     + "  status\n"
     + "  shutdown",
   );

@@ -11,7 +11,7 @@ export type TurnPhase =
   | "cancelled";
 
 const transitions: Readonly<Record<TurnPhase, readonly TurnPhase[]>> = {
-  prepared: ["submitted", "cancelled"],
+  prepared: ["submitted", "failed-before-acceptance", "cancelled"],
   submitted: ["accepted", "failed-before-acceptance", "cancelled"],
   accepted: ["tool-wait", "continuing", "completed", "indeterminate-after-acceptance", "cancelled"],
   "tool-wait": ["tool-result-delivered", "indeterminate-after-acceptance", "cancelled"],

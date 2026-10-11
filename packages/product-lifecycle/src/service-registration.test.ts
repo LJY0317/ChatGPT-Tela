@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -111,6 +111,51 @@ class LinuxInstallFixtureRunner implements ServiceRegistrationCommandRunner {
 }
 
 describe("service registration ownership", () => {
+  test("macOS refuses a same-label loaded job from another install root and accepts physical aliases", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-launchd-root-proof-"));
+    const manifestPath = join(root, "ownership.json");
+    const definitionPath = join(root, "expected.plist");
+    const foreignPath = join(root, "foreign.plist");
+    const aliasPath = join(root, "alias.plist");
+    const markerPath = join(root, "marker.json");
+    const definition = { platform: "darwin" as const, content: "fixture-definition" };
+    const manifest = createOwnershipManifest("1.2.3");
+    const resource = serviceRegistrationResourceForDefinition({
+      resourceId: "codex-service", owner: "codex", registrationId: "fixture.same-label",
+      markerPath, definitionPath, definition,
+    });
+    let loadedPath = foreignPath;
+    const calls: string[] = [];
+    const runner: ServiceRegistrationCommandRunner = {
+      async run(command, args) {
+        calls.push(`${command} ${args[0]}`);
+        if (args[0] !== "print") throw new Error("fixture must never mutate system services");
+        return { exitCode: 0, stdout: `job = {\n path = ${loadedPath}\n state = running\n coalition = {\n path = ${definitionPath}\n }\n}\n`, stderr: "" };
+      },
+    };
+    try {
+      writeOwnershipManifest(manifestPath, manifest);
+      writeFileSync(definitionPath, definition.content);
+      writeFileSync(foreignPath, definition.content);
+      symlinkSync(definitionPath, aliasPath);
+      await reserveServiceRegistrationOwnership({ manifestPath, installId: manifest.installId,
+        productVersion: manifest.productVersion, resource });
+      const current = readOwnershipManifest(manifestPath)!;
+      const manager = new ServiceRegistrationManager({ platform: "darwin", runner });
+      const installer = new ServiceRegistrationInstaller({ platform: "darwin", runner });
+      expect(await manager.observe(resource, current)).toBe("unknown");
+      expect((await manager.release(resource, current)).removed).toBe(false);
+      await expect(installer.install({ manifestPath, manifest: current, resource, definition })).rejects.toThrow();
+      expect(existsSync(markerPath)).toBe(true);
+      expect(readFileSync(definitionPath, "utf8")).toBe(definition.content);
+      expect(readFileSync(foreignPath, "utf8")).toBe(definition.content);
+      expect(calls.every(call => call.endsWith(" print"))).toBe(true);
+      loadedPath = aliasPath;
+      expect(await manager.observe(resource, current)).toBe("owned");
+      expect(await installer.observeReady(resource, current)).toBe("owned");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   test("packaged Linux install reserves ownership before writing and enables without starting", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-service-install-linux-"));
     const manifestPath = join(root, "ownership-v1.json");

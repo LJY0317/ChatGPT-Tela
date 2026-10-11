@@ -10,6 +10,134 @@ ChatGPT Tela is designed around two premises:
 The product therefore separates public ingress from both execution services, and separately keeps Codex
 correctness independent from web representation, browser lifecycle, MCP transport, and launcher UI.
 
+## Agreed implementation priorities
+
+This plan adopts the revised startup recommendation: complete Work/Codex first-use readiness before
+expanding into the separate Web retention and Tela Chat recovery projects. It specifies acceptance goals;
+it does not assert that the installed product or all platforms already meet them. Release evidence must distinguish candidate
+verification from installed-product acceptance.
+
+### 1. Complete Work/Codex startup and first Web use
+
+An explicit Tela Work/Codex launch starts independent Native and Web preparation together. Return the
+window and Native capability without waiting for Web. Do not defer Web preparation until the first model
+selection, start it before the user's launch request, or retain an empty task page to hide first-use cost.
+Ordinary Native launch without Tela Web connection intent remains outside this preparation path.
+
+One isolated preparation session owns account/binding verification, observed model discovery and menu
+restoration, exact connector proof, cleanup, fresh readiness and final account/document consistency.
+Sequence mutations of the same page; overlap only independent Native work. Preparation grants no Native
+task execution authority. Release its page on success, failure and cancellation; bounded owned recovery
+may require a fresh session. Web failure preserves Native; retry is explicit and does not replay uncertain
+submission or silently select a different model.
+
+Acceptance separates window appearance, Native availability, actual picker visibility, Web request
+admission and first useful Web execution. Catalog API rows or a ready badge alone do not prove picker or
+submission success. Verify first tool use through the normal mounted service/public connector boundary.
+Preserve existing model-switch, canonical compaction, tools and permission guarantees; repeat only tests
+whose ownership boundaries changed. First-time login/consent and ordinary cold/warm startup are distinct.
+
+Compare matched source-bound candidates and successful workloads, with controlled order and cold/warm
+conditions. Measure startup and subsequent idle together: CPU time, wakeups, memory, I/O and energy where
+available, including related browser processes. Stop measurement after the experiment. Failed baselines,
+sampled CPU lower bounds and human reaction time cannot establish battery savings or first paint.
+Reject speed improvements that increase CPU/battery cost; no prewarming, additional residency, periodic
+readiness polling or disabled background throttling. Hidden windows and snapshots are not energy proof.
+
+#### Inspecting concurrent Work Web sessions
+
+The control center lists currently owned Web surfaces on demand, using a disposable lease selection
+and the current browser title (or a numbered session label). A title is a viewing aid, not Native task
+identity or evidence that work completed. Multiple surfaces require explicit selection; a released lease
+never resolves to another surface or a replacement generation. Snapshots are read-only and captured only
+on user request or explicit selection. There is no screenshot timer or idle inventory poller.
+
+An explicit **Open browser** action reveals that same existing page; it does not create a second session,
+change the execution model, or bypass Native tool permissions. This view permits browser interaction.
+Closing its window hides the view; Native-owned retirement remains the only page-destruction authority.
+Showing a browser can increase visible rendering cost, so it is optional and carries no energy-saving claim.
+Titles and images remain local, excluded from routine diagnostics and release artifacts.
+
+Web admission describes proven profile/account/connector/model readiness. A single request's timeout,
+cancellation or reset is not proof that the entire profile lost that readiness. Do not automatically replay
+uncertain submissions. An explicitly closed owned ingress or a proven unavailable model may invalidate admission.
+Native-first Web dispatch calls the same authenticated Responses ingress in process, retaining origin,
+capability, decoding, model and exact-current-turn checks. It does not open a second HTTP connection
+whose response-header deadline would become a task deadline. Public HTTP stays at the external boundary.
+Transport observation must distinguish per-request failure from profile-wide readiness loss.
+Approval activation is not a receipt: a still-visible card remains unresolved. Withheld duplicate decisions
+carry disposable card/proof fingerprints, and expiring private capture may record the blocked surface;
+never approve it again merely because presentation changed.
+
+#### Work response integrity and observation plan
+
+Prioritize these evidenced usability/correctness blockers before claiming replacement readiness:
+
+1. Bind every observation, tool-result handoff and final delivery to the submitted user content and
+   logical conversation route, in addition to the physical lease/generation. SPA navigation is not a
+   renderer hydration proof. Rekeying requires one matching user and one unambiguous assistant lineage;
+   identity loss fails the request without replay, foreign-answer delivery or history edits.
+2. Prepare recognized one-shot approval targets with exact card proof, viewport positioning and hit
+   testing before trusted input. Track dispatch separately from receipt: pending approval, click sent,
+   card still present and resumed tool execution are different observations. Never repeat an uncertain
+   click or treat a security warning as approval. Surface unresolved manual action in the session UI.
+3. Carry only browser-public progress titles/descriptions through an owned incremental response channel.
+   Preserve Native response commit/cancellation semantics; progress cannot commit a final answer or grant
+   tool authority. Do not collect hidden reasoning or add a separate polling loop.
+4. Serialize the proven assistant body as Markdown, preserving semantic styles, lists, links, tables and
+   code. Exclude controls/hidden UI and executable link destinations. Native renders its own presentation;
+   user identity fingerprints remain plain text and independent from answer formatting.
+5. Make observation the default browser UX, with explicit interaction for login/manual approval. Keep
+   scrolling, text selection and copy useful; retain response-identity enforcement even in interaction mode.
+   Changes to viewer input must not disable trusted automation or require continuous capture.
+6. Explain routing/authentication fields and actual command purpose/targets/effects accurately in tool
+   presentation. Preserve Native permissions and approval checks; no obfuscation, misleading low-risk
+   claims or promise of platform approval. Review versioned public MCP ABI before changing descriptions.
+7. Correlate tool call/result, approval receipt, continuation and finalization by exact owned identifiers.
+   Distinguish explicit tool failure from transport failure and model interpretation. Add missing structural
+   evidence only where an incident lacks it; private payload capture remains explicit, expiring and bounded.
+
+Candidate acceptance must include foreign-conversation navigation at tool handoff and buffered final
+delivery, legitimate renderer hydration, concurrent-session isolation, approval occlusion/unreceived input,
+formatted answers and visible progress. Installed acceptance is separate. Image input remains outside this
+repair scope. These goals introduce no prewarming, idle sampler or automatic uncertain-request replay.
+
+### 2. Unify Web page and context lifetime before changing retention
+
+This is a separate correctness project, not a prerequisite for preparation-only optimization. One owned
+transition must bind task/Native lineage, account/model/effort, physical page generation, committed anchor,
+lease/busy state and submission certainty. Delta is valid only on the proven surviving generation.
+Destruction, replacement or failure invalidates its anchor; a fresh page reconstructs from canonical Native
+history or a verified checkpoint. Uncertain submission must not be automatically resent.
+
+Before changing task-page reuse or eviction, test failure/reacquisition, compaction, model changes,
+cancellation and lost responses. Then apply bounded retention and restoration together: no stale delta on
+a fresh page, no busy-page eviction, no unbounded completed pages. Choose retention from measured total
+work-plus-idle cost, rather than assuming zero retained pages is always best.
+
+### 3. Complete Tela Chat execution recovery independently
+
+Use DevSpace as a behavioral acceptance reference, not an imported runtime dependency. Complete request
+identity/argument consistency, durable operation and process-start identity, restart reconciliation,
+result recovery, cancellation versus wait cancellation, owned process-tree termination, and bounded
+completed sessions/output. Preserve unresolved provenance until nonexecution/termination is proved or
+explicitly resolved; capacity exhaustion rejects before spawning. File writes must retain permission,
+conflict and partial-write guarantees. Keep DevSpace available until replacement acceptance passes.
+
+### 4. Complete product lifecycle and reduce integration debt
+
+Verify installation, login, interrupted update/recovery and removal for Tela alone, Plura alone and their
+optional versioned integration. Preserve original apps, default config, Native history and other-product
+ownership. Prefer stable public API and discovered capabilities; retain only necessary versioned patches
+and remove them after equivalent official behavior is proved. Do not copy competitor defaults or declare
+cross-product speed/energy superiority without matching version and execution evidence.
+
+Consumer trust, signing/notarization and OS-specific installation/removal acceptance are separate gates.
+Finish macOS acceptance first while preserving Windows/Linux boundaries and marking their unverified
+behavior. Replace obsolete implementations after verified transition, rather than accumulating permanent
+fallbacks. Expand into another UI/browser engine only when an evidenced bottleneck or contract gap requires
+it; optional UI polish and new providers are outside these major completion criteria.
+
 ## Product service topology
 
 ```text
@@ -106,11 +234,165 @@ Gateway exposure, and Codex packaged profile-runtime paths, then supervises that
 Gateway, Chat, and Codex therefore remain separate executables/processes/failure domains even though they share
 one signed product payload.
 
+The Codex service uses its existing authenticated supervision socket for bounded readiness and lifetime.
+Standard output is diagnostic output, not readiness authority. On macOS, the exact receipt-selected Electron
+bundle launches through LaunchServices (`open -W -n -a`). Its authenticated runtime PID is validated against
+that executable separately from the OS launch waiter. Normal stop closes the lease and waits for app exit;
+parent loss closes the same socket and initiates normal teardown. CLI fixtures and other operating systems
+retain direct execution and exact child-PID binding. This source boundary adds no idle polling or prewarming;
+signed and installed acceptance remains required.
+
 On macOS the dedicated hidden Electron profile runtime is an implementation detail and does not own a Dock
 presence. A small AppKit menu-bar process is the intended local control surface. It refreshes status on demand,
 calls only Tela's private authenticated loopback contracts, and may expose user preferences such as one-shot
 approval automation. Signed installs own its Aqua LaunchAgent separately as a `product` resource; it is never
 counted as a fourth backend service and cannot manufacture workspace, turn, sandbox, or tool authority.
+The LaunchAgent is `RunAtLoad` and install explicitly kickstarts it after exact registration so successful
+installation produces a visible menu-bar surface immediately rather than waiting for the next login.
+
+The same accessory process owns a normal resizable **Control Center** window. Because the application remains
+an AppKit accessory, opening the window does not create a permanent Dock presence; closing the last Control
+Center window hides only that window and leaves the background product running. The menu bar is the quick
+surface while the Control Center is the larger status/settings/recovery surface.
+
+Bridge observation is deliberately weaker than bridge authority. An active Electron Work/Codex surface may
+expose a bounded read-only capture capability to its owner. The product profile runtime serves that snapshot
+over a per-profile authenticated loopback endpoint; Tela Codex proxies only the validated image/status through
+its private service contract; and the Control Center renders it as a non-interactive image. Capturing does not
+show or focus the BrowserWindow and does not inject page input. A snapshot is available only when exactly one
+active task/epoch surface exists for that profile. This prevents the UI from selecting among concurrent work or
+turning a debugging/view surface into a second source of browser authority.
+
+This UI boundary is platform-native rather than macOS-shaped core logic. The corresponding Windows product UI
+belongs in the notification area/system tray; Linux should use an available desktop status-item/tray protocol.
+Those surfaces may differ in lifecycle and presentation while sharing only the private product-control
+contracts. A missing/restarting UI surface must never take Gateway, Chat, or Codex down with it.
+
+Performance diagnosis follows the same ownership boundary. Tela records only product-owned structural load:
+timestamped Chat capability completions, Native tool invocation counts, bounded request/result byte sizes,
+truncation/has-more state, and duration/error metadata. It never records prompts, commands, arguments, file
+contents, or tool-result text for this purpose. OS-wide renderer/GPU/WindowServer CPU and RSS remain the job of
+an independent system monitor. Correlating those two timestamped streams is preferred over hard-coding foreign
+process names or continuous profilers into Tela.
+
+### Native logical context and retained Web epochs
+
+The following describes the retained-context design. The unified physical-generation/anchor ownership
+contract above remains an acceptance target. The source runtime now binds a committed prefix to the
+successful surface lease and document generation, rejects retained-delta on a fresh/mismatched or lost
+document before submission, and invalidates the planner anchor when a turn fails. Electron supplies
+an event-driven lifetime/abort boundary for main-frame reload, load failure, renderer loss and destruction;
+subframes and same-document SPA history do not count as document replacement. Turn cancellation is
+rechecked before submit and before committing a response. Unknown document lifetime cannot commit a
+reusable prefix. Source tests and an isolated local Electron proof cover this boundary; installed
+ChatGPT acceptance remains pending. The semantic adapter additionally checks the exact committed
+assistant key, parent lineage and answer content before retained compose/send and during continuation;
+URL and current-page activity labels are not conversation authority. Coordinated retirement invalidates
+only the matching planner surface anchor before close. A source-only optional idle limit retires the least
+recently completed idle pages, excluding/rechecking busy or acquiring pages; commit precedes idle publication.
+Runtime requires retirement-capable planning before admitting that policy. Tests cover loss of semantic
+prefix and Native reconstruction after capacity retirement. No default limit is enabled until real
+mounted Web acceptance and equivalent work-plus-idle cost measurements choose the product policy.
+Document generation alone is not conversation identity or authorization for eviction.
+
+Native Codex history and a ChatGPT Web conversation deliberately have different lifetimes. Native
+history is canonical; a Web conversation is a replaceable physical projection. A successful Web
+turn may leave its hidden browser surface retained for the next Native turn in the same exact
+task/model/effort Web epoch. That continuation sends only the canonical suffix after the previously
+committed Web answer. The planner may advance that retained anchor only after a proven completed
+Web answer is observed again in the later canonical Native lineage. A branch change, model/effort
+change, missing/mismatched prior answer, ambiguous submission, timeout or provider failure forces a
+fresh physical surface instead of guessing.
+
+`logicalTokens` therefore always describes the complete canonical Native active lineage, while
+`transferTokens` describes only the current physical Web transaction. A retained continuation can
+have a large logical context and a very small transfer. This distinction is observable in privacy-
+safe Work diagnostics and must remain intact when later projection, file transport or multipart
+transport optimizations are added.
+
+Web-epoch rollover is intentionally independent from Native compaction. Tela may eventually retire a
+physical Web conversation because the observed browser/model transport is approaching a physical
+limit without asking Native Codex to rewrite its logical history. Conversely Native compaction is a
+Native authority event and can force a new Web epoch. Physical-pressure rollover remains fail-closed
+and uses a single isolated calibration table inherited from the downstream Web harness. Those limits
+govern disposable Web state only and never define Native history. Pressure is estimated as the fresh
+epoch's physical transfer baseline plus non-negative Native logical growth since that boundary; this
+therefore includes prior assistant output already resident in the retained ChatGPT conversation even
+though later suffix transport does not resend it. If a fresh projection necessarily begins above the
+soft rollover boundary, that epoch owns the remaining verified hard-window headroom rather than
+immediately reconstructing an equally large conversation.
+
+Every prepared browser message also emits only its character count alongside logical/transfer token
+counts. No prompt text is recorded. A later hard-fit planner may use the same isolated calibration to
+reduce only already-designated provider projection budgets before a fresh submit. The current planner
+does exactly that: it binary-searches the provider-only assistant/tool aggregate budgets to preserve
+the maximum settled evidence below the soft rollover boundary. If the irreducible view already starts
+above soft pressure but below the hard context window, it uses only the remaining hard-window
+headroom; if the irreducible view itself exceeds the hard window, the turn fails before browser
+mutation and Native history remains unchanged. The exact final formatted composer message is also
+checked against the effort-specific character limit before model selection or `markSubmitted()`.
+
+Large **fresh** physical contexts may use a receipt-verified memory-backed text attachment instead of
+placing the whole projection in one composer message. This is representation-only: Native history,
+`logicalTokens`, revision identity and compaction authority do not change. Tela builds one deterministic
+`tela-context-v1--<digest>.txt` payload entirely in memory, submits an inert tool-free preload with no
+connector selected, and authorizes the real Work execution message only after ChatGPT returns the exact
+random receipt stored solely at the end of that file. The receipt proves that the uploaded bytes were
+accessed with the expected identity; it is deliberately not treated as proof that every byte was
+semantically understood. The execution message re-presents the exact active Native request while referring
+to the acknowledged context attachment. Retained-delta continuations remain inline because their prior
+physical context is already resident in the retained Web conversation.
+
+Attachment recovery is ownership-bounded. Tela may clear an exact recognized preload draft and may attempt
+to retire a sole exact Tela context-file artifact, but it preserves any unknown pre-existing attachment or
+user draft rather than guessing ownership. A product-path `context-canary` exercises the same hidden browser,
+memory-file, upload, receipt and cleanup boundary without granting Native task authority.
+
+The historical reasons and remaining parity work inherited from CodexGPTWeb experimentation are
+tracked in `docs/codexgptweb-assimilation.md` so removal of the old installation/source checkout does
+not erase the product requirements it uncovered.
+
+Fresh Web epochs also apply a deterministic provider-only projection to settled model/tool evidence.
+System, developer, user and steering authority, the active request, tool-call linkage and tool-search
+registry evidence stay exact. Older assistant prose and settled tool-result payloads may be truncated
+or replaced by explicit omission markers under bounded aggregate budgets. This projection never
+changes Native history, never grants authority and is never applied a second time to an exact retained
+suffix. Diagnostics report only structural counts and before/after byte sizes, not the omitted text.
+
+## Dogfooding and self-maintenance
+
+The product should be capable of developing itself through its public/user-facing execution surfaces:
+
+- **Tela Chat** is the local-work surface and should converge on DevSpace-level ergonomics around workspace
+  discovery, bounded file operations, process execution, review, worktree isolation, and agent delegation.
+- **Tela Work/Codex** is the exact-turn Native/Web composition surface and should converge on the smooth
+  CodexGPTWeb-style experience where Web reasoning transparently uses the current Native Codex authority and
+  tools, consumes their results, and continues the same turn.
+
+This does not merge their authority. Tela Chat still owns only its approved workspace/process/agent state,
+while Native Codex remains canonical for Work/Codex task, turn, sandbox, and Native tool authority. The common
+goal is orchestration quality: a normal user request should select and sequence the existing capabilities
+without exposing internal routing mechanics.
+
+Product self-maintenance follows the same rule. Natural-language requests to update, reinstall, repair, keep
+data while removing Tela, or completely remove Tela are translated into typed lifecycle operations rather
+than arbitrary shell authority. The intended boundary is:
+
+```text
+Chat / Work request
+  -> lifecycle capability
+  -> inspect + non-destructive plan
+  -> explicit destructive scope when required
+  -> signed external maintenance helper
+  -> stop owned services
+  -> install / repair / upgrade / uninstall
+  -> verify
+  -> restart or final cleanup
+```
+
+The external helper is intentional. The running Tela binary should not depend on deleting/replacing itself,
+especially on Windows. Release builds should pin the trusted release-key set in the signed maintenance UX;
+model-generated commands and package-provided keys are not trust roots.
 
 ## Capability names and unstable dependencies
 
@@ -299,16 +581,115 @@ package's bundled Codex executable, ignores `.staging-*`, and accepts exactly on
 with the same hash. Explicit executable overrides stay higher-authority. Real Windows/Linux product E2E
 validation remains unfinished.
 
-The product adapter is composite rather than mutually exclusive: slot 1 is always resolved by the built-in
-default Desktop adapter, while an optional Multi-Profile adapter may contribute only slot 2+. This lets a
-multi-account user keep the same ordinary default path as everyone else instead of switching the entire Tela
-installation into a different runtime mode.
+### Account observation and sign-in ownership
 
-That isolation has a live macOS source proof: slot 1 was started and stopped through the built-in adapter while
-an independently supervised Multi-Profile slot 2 remained `ready` with the same running target. Gateway/Codex
-shutdown for the default slot did not close the Chat backend, and the later whole-product shutdown closed only
-the remaining Tela Chat daemon. This is the intended failure/lifecycle boundary rather than merely a type-level
-separation.
+Web readiness is not proof that Desktop and Web use the same human account. The source-only
+authenticated loopback `GET /v1/account-check` observes Native `account/read` with
+`refreshToken:false` and the owned Web session on demand. Parallel checks coalesce; the temporary
+Web observation lease is released, and no composer input, submission, authentication mutation,
+credential copying, background timer or repeated polling is introduced. The response contains only
+Native sign-in state, Web-to-saved-binding comparison, Native-to-Web container comparison and
+`userIdentity:unverified`. It returns no account identifiers, email, hashes or authentication material.
+Missing Native workspace-routing metadata or unavailable Web state remains unavailable. Equal
+containers may contain different users; Native engine authentication is not independently verified
+Desktop UI authentication. This observation is diagnostic, not a new admission or account-change policy.
+Runtime shutdown cancels outstanding checks. The observation deadline also settles the HTTP response
+if a reader ignores cancellation; readers remain responsible for releasing their owned resources.
+The source-only private Codex service forwards this observation through its authenticated per-slot
+`account-check` route, validates the coarse schema and verifies the owned runtime/Native session before
+and after observation. This is an internal diagnostic boundary; manual account-check controls are not
+part of the intended user flow.
+
+The account lifecycle goal is automatic alignment with Desktop: observe sign-out/account changes,
+retire the old Web task authority, and establish the newly selected account before admitting Web work.
+Users should not need to open the control center to detect mismatches. Native remains independently
+usable. Implement this as one per-profile lifecycle with an account revision: an old revision cannot
+submit tools or deliver answers into a newly authenticated revision. Ordinary account changes should
+be event-driven, with bounded checks at connection/request boundaries where event coverage is incomplete;
+no periodic account polling or background prewarming.
+
+An isolated signed installed-engine fixture with an empty file-backed credential store observed
+`account/updated` after `account/logout`; it changed no Desktop profile. This proves engine notification
+support, not Desktop account-change propagation. A second isolated two-client WebSocket fixture also
+observed the actor's logout notification on a separately initialized observer connection (one event each);
+both stayed signed out, no model request ran, and the fixture process/data were cleaned. This establishes
+cross-client notification delivery in the owned engine, not real Desktop event delivery or website SSO.
+Actual Desktop-to-app-server event propagation must
+be proven before using it as correctness authority. No automatic login/logout is implemented yet. Source now exposes `invalidateWebAccount()` for a proven
+account change: it synchronously revokes admission/display rows and active Web turn capabilities,
+cancels preparation, and joins one owned browser cleanup without stopping Native. Explicit reconnect
+waits for cleanup; whole-profile stop joins it. Synthetic gateway tests prove a held old answer is not
+returned, Native remains available, late preparation is disposed, and concurrent cleanup is single-owner.
+The source profile runtime now connects an event-driven observer to the owned Native app-server after
+publishing Native readiness. It subscribes before reading `account/read` with `refreshToken:false`,
+coalesces event bursts into at most two reads, excludes superseded results, and invokes this method for
+signed-out state, a proven difference in available account comparison fields, or lost observation.
+Initial/repeated same-account notifications do not revoke admission; repeated signed-out state does not
+repeat cleanup. Comparison hashes stay in memory; equal email/container fields do not prove human-user
+identity. No periodic polling or authentication-changing RPC is introduced. Shutdown detaches/closes
+the observer and still attempts profile cleanup if observer cleanup fails.
+
+An isolated real-engine two-client fixture exercised this observer: the second client received logout,
+performed its event-triggered second account read, and avoided duplicate signed-out invalidation.
+A further isolated fixture placed both clients behind the actual default-Desktop proxy: the notification
+and follow-up account read still arrived, and all fixture processes/temporary data were cleaned.
+The profile-runtime entry point also bundles with the observer/invalidation code included; the bundle
+was not executed or installed. Actual Desktop event propagation and installed observer operation are unverified. This does not log the
+website out or sign it in; it is a lifecycle prerequisite, not completion of automatic synchronization.
+
+A short isolated idle comparison recorded no extra account reads during two 15-second observer windows.
+Measured live engine-tree CPU was 0.01s/0.00s with observation versus 0.01s in the stable baseline window.
+The first baseline was excluded because transient startup children exited during measurement. This
+coarse, short single-engine comparison cannot establish battery parity or whole-Desktop cost; host
+CPU/noise and exited-child accounting limit inference. Evidence is `idle-comparison-result.json` under
+the local account-event fixture directory. No sampler/polling was added to the product.
+
+The retained CodexGPTWeb local-patches reference (15285cd) shares one Electron partition across its
+login and task views, verifies sessions on cookie-change hints, and rejects stale authentication probes.
+It provides explicit owned-browser logout and a dedicated-Chrome passkey transfer, but the reviewed
+source contains no official Desktop login/logout synchronization. These are behavioral references,
+not an implementation to copy. Upstream Codex ab021e9 returns a browser-login auth URL with automatic
+browser opening disabled in app-server; the calling host owns where that URL opens. A potential unified
+login must prove both Native authorization and a usable website session in the same owned browser.
+That does not establish a handoff from the existing Desktop login UI. Also, `account/updated` can be an
+initial workspace-routing snapshot, not just a change event. Observe before reading account state and
+use revision ordering; never interpret every notification as sign-out or grant Web identity from its
+coarse auth-mode/plan fields. Reference evidence is local under `build/account-event-isolation`.
+
+An isolated installed-engine browser-login kickoff now confirms that `account/login/start` returns an
+HTTPS authorization URL with PKCE/state and a loopback callback. The attempt was canceled before any
+browser opened or authentication occurred; the engine remained signed out and fixture data/processes
+were removed. This proves URL provision/cancellation only, not website SSO or a Desktop login handoff.
+The installed engine's isolated generated public schema also exposes `useHostedLoginSuccessPage`
+and `appBrand`. Official app-server documentation supports these options. Reviewed upstream source
+persists Native credentials and redirects to a local success page by default; hosted success redirects
+to ChatGPT's open-app page without raw tokens in that hosted URL. The local callback does not establish
+a ChatGPT website cookie. Authorization-host and hosted-page SSO behavior still requires actual sign-in
+in the same owned browser; neither schema presence nor a success redirect proves account alignment.
+
+First investigate a supported shared authentication/session boundary that lets Desktop sign-in also
+establish the owned Web session and lets Desktop sign-out retire that session. Automatic routing
+invalidation is not equivalent to signing out the website, and OAuth credentials for API usage are not
+proof of a ChatGPT website session. Current official authentication documentation describes browser-based
+Desktop sign-in and browser-local ChatGPT web sessions; it does not establish cross-profile website SSO.
+The official Sign in with ChatGPT contract targets API authorization, and returning account hints identify
+an account rather than grant a website session. Do not copy Desktop credentials/cookies or assume
+same-container observations prove the same user. If user authentication is unavoidable, present the
+necessary action in the current Work flow, with automatic detection and recovery; this is an exception
+requiring an established technical limitation, not a replacement for the automatic-lifecycle goal.
+
+Bindings belong to individual browser partitions: explicit setup may reuse or swap accounts without
+reading or changing another slot's binding. See [authentication](https://learn.chatgpt.com/docs/auth),
+[registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) and
+[accounts and sessions](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions).
+
+Desktop lifecycle ownership is mutually exclusive. With no Multi-Profile provider configured, slot 1 is resolved
+by the built-in default Desktop adapter and remains independent of every optional provider. When a Multi-Profile
+provider is explicitly configured, that provider resolves slot 1 and any additional managed slots through one
+public target/session contract. Tela must not run its built-in default supervisor beside the provider: both would
+otherwise own the same default ChatGPT user-data directory and invalidate each other's canonical session. This
+changes only Desktop lifecycle ownership; Tela's Responses/browser/task authority remains in the same product
+runtime.
 
 Product configuration is also independent from browser-profile ownership. The canonical version-1 config is
 stored under the platform-native product `configRoot` as `product-v1.json` and is parsed by the standalone
@@ -331,7 +712,8 @@ repair. If readiness is not yet proven, that same surface is revealed rather tha
 window and immediately creating another BrowserWindow on the same persistent Chromium partition.
 After readiness, ChatGPT Tela reads only a page-local SHA-256 fingerprint derived from the current
 ChatGPT user/account ids; the raw ids never leave the page. The fingerprint is bound to the profile slot,
-and setup fails closed if another slot is already bound to the same account. Canary readiness verifies
+and only explicit verified setup replaces that slot's binding. Other slots may use the same account;
+their browser partitions, bindings and Native turn authorities remain independent. Canary readiness verifies
 the live session against that binding before any routed Native work begins.
 The same composition can also run a non-consequential readiness probe on a temporary hidden surface:
 one ChatGPT-owned composer plus its unique visible send control must be structurally proven. Every live
@@ -390,13 +772,25 @@ Approval automation is a separate opt-in policy boundary. Default mode is `off`.
 `recognized_once`: one structurally recognized tool-approval card with one deny choice and one one-shot allow
 choice may be activated. Persistent `Always allow`, unknown layouts, multiple cards, or ambiguous controls are
 never auto-approved. Approval-card text, tool arguments, prompt content, or raw HTML are not exported from the
-renderer for policy decisions or diagnostics.
+renderer for policy decisions or diagnostics. The user may choose one bounded delay preset from instant
+through 15 seconds. Tela waits first and only then inspects the **current** card from scratch, so a stale card
+target is never retained across the delay.
+Approval-card appearance, replacement, mutation and removal contribute an opaque revision to the
+semantic surface snapshot, so card-only changes wake the observer. Approval processing can run before
+an assistant message exists, after turn-lineage ambiguity checks. Diagnostic transitions contain only
+assistant phase, card count and policy mode; they never include card text or tool arguments.
 
 An accepted provider turn identity is also distinct from ChatGPT's renderer-local `data-turn-key`.
 ChatGPT may replace a provisional key when the server-hydrated turn arrives. Tela keeps its accepted
 provider handle stable and may rebind only the renderer key when exactly one assistant parent lineage is
 new relative to the pre-submit baseline; zero candidates remain pending and multiple candidates fail
 closed as ambiguous. Displayed text or "last message" position is never used to guess across a rekey.
+A same-route renderer frame without user messages is pending identity, not a proved foreign request.
+It cannot authorize an approval, progress projection, tool-result handoff or final answer. Waits use DOM
+mutation events and the Native turn cancellation signal; they do not resubmit or add polling. The next
+frame must prove the exact accepted user fingerprint and parent before work resumes. A route change,
+contradictory user identity or multiple new parent lineages still fails closed. Buffered completions and
+retained-prefix checks follow the same boundary; a loading frame cannot become a committed answer.
 
 The sibling canary preflight is deliberately non-mutating and has a separate secret-free config loader;
 it never requires the live Responses token, public MCP bearer, or Secure Tunnel runtime API key. It may briefly bind the configured loopback
@@ -408,7 +802,7 @@ If the selected profile slot has no verified account binding yet, preflight repo
 opening Electron or creating that slot's browser user-data directory.
 The result is a structured `pass`/`warning`/`blocked` checklist rather than a partial canary lifecycle.
 
-Canary Native selection now has two explicit modes. `stock` is the default and keeps the normal
+Canary Native selection now has two explicit modes. `stock` is the default and keeps the isolated canary's normal
 single official ChatGPT Desktop / default Codex path independent of every multi-profile component.
 `multi-profile` requires an explicit public control-CLI path plus target id and does not accept a
 `CODEX_HOME` mutation lease. ChatGPT Tela starts its authenticated Responses endpoint first, then asks
@@ -593,12 +987,26 @@ Tailscale Serve alone is not a public ChatGPT endpoint; Funnel is the product pu
 only its exact configured route lease, not the Tailnet, Tailscale installation, device login, hostname, or
 unrelated routes. Install/uninstall must preserve any route whose current ownership no longer matches Tela.
 
+Public ingress health is intentionally separate from private Gateway health. The private Gateway may remain
+ready while the ChatGPT connector is unreachable. For managed Funnel, support/status checks diagnose the chain
+in causal order: Tailscale CLI/local backend and login/online state, exact Funnel lease mapping, the local
+Gateway MCP listener, then the public MCP endpoint. A stopped/unreachable Tailscale backend is therefore
+reported explicitly rather than collapsing into a generic `UNAVAILABLE` result. The Gateway daemon registers
+its private descriptor before public exposure succeeds and retries public exposure in the background, so a
+temporarily stopped Tailscale app does not remove the diagnostic/control plane and can recover after Tailscale
+returns without treating Chat/Codex backend processes as failed.
+
 For HTTPS-based exposure, ChatGPT Tela now has a loopback Streamable HTTP MCP server with bounded stateful MCP
 sessions. Each remote MCP session owns one SDK transport/server pair but shares the single
 `ActiveTurnRegistry`, so HTTP session state never becomes tool or filesystem authority. The local
 listener uses a generated bearer token by default, rejects browser-origin requests, and has bounded
 request/session resources. An explicit `none` mode exists only for an exposure layer that terminates
 authentication itself.
+
+The private service-to-profile turn bridge opens one authenticated MCP session per operation and
+explicitly terminates it afterward. Server idle reclamation cannot invalidate a stored client lease;
+there is no keepalive or automatic replay of a possibly accepted Native tool call. Startup cancellation
+also remains separate from normal cleanup of already-owned profile resources.
 
 The existing Codex development runtime accepts either a direct MCP transport or an HTTP-exposure configuration. The
 latter starts the local MCP listener, asks a replaceable exposure provider for either a verified HTTPS
@@ -673,6 +1081,40 @@ Long-running components prefer events, demand-start, single-flight work, and coa
 CPU, wakeups, I/O, and battery cost are correctness-adjacent design constraints for the desktop
 runtime.
 
+### Native and explicit Web model routing
+
+The product profile starts an independent authenticated Responses transport and private turn bridge,
+then launches its owned Native target. Native model discovery retains the official engine's cache and refresh
+path. A composite provider router augments official model responses with admitted browser-discovered Web
+families. The Web identity uses an opaque key derived from observed family semantics. Browser preparation
+runs independently of Native readiness; account binding, connector and fresh-surface proofs grant Web
+execution admission. The authenticated profile control endpoint exposes preparation state separately from
+the engine's dynamic `model/list` visibility.
+
+The menu and control center receive Native readiness before waiting for Web preparation on the same bounded
+connection stream. Inventory reads are on demand and coalesced. Explicit Web reconnection checks active
+request/turn ownership, revokes admission, disposes only the old owned browser and runs the same preparation
+proof. Native stays available throughout. A transport failure revokes Web admission without resending an
+uncertain turn. Snapshot capture remains on demand and unavailable while there is no admitted browser.
+
+One Codex provider owns both routes because current Codex threads can change model without changing
+`model_provider`. First-party ChatGPT authorization therefore remains on the provider request while Tela's
+loopback authorization travels in a separate environment-backed header. Native model ids are forwarded to
+the first-party Codex backend; only the `chatgpt-tela-web/family/*` namespace enters the ChatGPT Web bridge.
+When a mixed thread returns to Native, only visibly Tela-owned response/item ids are removed before forwarding;
+opaque first-party ids and semantic history are never guessed or rewritten.
+
+For a Web model, family and effort are independent browser controls. Tela selects them on the owned surface
+immediately before the submit boundary and accepts the selection only after exact semantic readback. The
+current Power picker may require a bounded non-submit convergence because an offscreen synthetic tick event
+can move the effort while temporarily changing the selected family; Tela re-proves both controls together and
+fails closed if they do not converge. `cli model-canary --slot 1` exercises this selection/readback/restoration
+path on a disposable surface without sending a ChatGPT message. The default Profile 1 path is live-proven;
+Plura-owned extra profiles use the optional versioned public launch/quit contract with the same composite
+Responses route. The launched route fingerprint and Desktop PID establish ownership. Dynamic models use
+the engine's official catalog path for both target types. Native-ready, Web-admitted and visible-model states
+have separate proofs; actual Desktop picker behavior and first-window latency require product acceptance.
+
 ## Vertical slices
 
 The proven Tela Codex slice is:
@@ -695,6 +1137,9 @@ The first Tela Chat slice is now implemented and intentionally smaller than the 
 ChatGPT unified gateway
   -> Tela Chat private backend
   -> open one locally approved user-owned workspace
+  -> load bounded root project instructions and advertise nested instruction files
+  -> bounded directory listing / recursive text search
+  -> discover project/standard Agent Skills and read them on demand
   -> bounded read/read-many
   -> apply one patch
   -> start one resumable process operation
@@ -710,11 +1155,258 @@ rollback-aware replacement. Process operations reserve an explicit operation id 
 retry cannot duplicate execution; the durable registry intentionally stores no command, output, environment,
 or filesystem path payload. A restart reports unresolved prior operations as `unknown` with no recovered I/O
 rather than attaching to an unproven PID.
+Unresolved reservations are never age-pruned to make capacity: only proven terminal records can be
+reclaimed, and operation replay is restricted to its original workspace. A private per-store HMAC binds
+the reserved workspace, resolved working directory and exact command; wait duration is observational and
+does not change execution identity. Replays with changed arguments fail before spawn. Preexisting records
+without identity proof remain queryable but cannot authorize execution replay. No command/path payload or
+request digest is exposed through status or diagnostics. Completed output is retained separately under private
+Chat state, up to 512 KiB per operation and 256 reserved operations (128 MiB raw output). One signed output
+file is written on completion, without periodic flushing or rewriting all prior output. An identical request
+after restart verifies the result and returns `outputRecovered`; it never restarts the command. Corrupt or
+missing output fails recovery. Storage failure preserves an unresolved reservation. Capacity reclamation
+verifies and removes expired terminal results; unresolved records are preserved. Outputs may be sensitive:
+they are not diagnostic logs or package/Git inputs and follow Chat state preservation/removal policy.
+Mid-execution restart reconciliation, owned process identity/termination and power-loss durability remain
+unproven; this completed-result boundary does not authorize attaching to prior PIDs.
+Restart observation preserves the original launching server identity, PID and start timestamp when marking
+an unfinished operation unknown. It does not claim the new server owns the old process. Duplicate operation
+or session identities, more than 256 records, and a registry exceeding 1 MiB are rejected before rewriting
+prior evidence; private state reads are bounded and reject symlink/file replacement.
+
+Active-owner control is a source candidate; ordinary new executions do not yet launch it. One operation-scoped
+loopback endpoint binds owner, workspace and operation; directional HMAC authenticates requests/responses
+without sending the key to a potentially reused port. Observation disconnect cancels only that wait.
+Stdin reserves request identity before writing and rejects ambiguous retransmission; explicit execution
+cancellation is a distinct, single-attempt adapter callback, unavailable without proven owned-tree support.
+Requests, responses, concurrency and accepted input identities are bounded; no polling or new permanent
+service is introduced. A real isolated worker survived manager death and accepted authenticated input once;
+installed lifecycle reconciliation, OS-owned-tree implementation and resource admission remain incomplete.
+The source execution journal claims each admitted operation exclusively before command spawn, recording
+original launching server, owner, workspace and request proof. Live descriptors and terminal receipts are
+signed, phase-separated, immutable and limited to 4 KiB each. Conflicting, corrupted or incomplete claims
+remain uncertainty and never authorize replacement execution. Only matching claims can publish or recover
+live/terminal authority. The registry remains capacity authority; the journal has no independent expiry,
+automatic retry, PID adoption or permanent service. Manager recovery now recognizes explicitly reserved
+owner-worker executions: same-request replay observes the signed live owner, input requires matching scope
+and fresh worker approval, and signed completion reconciles the registry before authenticated output recovery.
+Source publication now synchronizes reservation, immutable journal and result bytes before granting the
+next transition. POSIX parent entries are synchronized after publication/removal; registry replacement uses
+one exclusive pending slot. Failed retirement commits retain in-memory replay authority, and incomplete
+pending evidence is not overwritten. This does not prove ancestor-directory or hardware power-loss
+durability, Windows directory synchronization, complete-tree lifetime, or resource admission. It is uninstalled.
+Public `process_status` now requests an authenticated owner snapshot on demand for unfinished worker
+executions. It reports current liveness/I/O without consuming output or changing execution, preserves the
+original launch identity, and rejects mismatched snapshots. Saved PID metadata alone still proves no liveness;
+the synchronous local status reader remains conservative. No periodic status polling is introduced.
+Public `list_processes` is bounded workspace-scoped registry discovery (25 by default, maximum50),
+with a monotonic session cursor and explicit completed-record inclusion. It never probes owners,
+consumes output, exposes command/auth/result contents or replays execution. Saved unknown records
+remain unknown; current owner observation uses `process_status`. Command terminal state still proves
+neither full descendant termination nor OS execution-scope release. This source capability is uninstalled.
+
+Direct executions retain their existing path. An internal candidate admission can now start a worker from
+a caller-verified executable after registry reservation; readiness is bounded and uncertain startup never
+falls back to direct execution or replay. Normal shutdown refuses unresolved worker reservations, preserving
+the work and evidence. Candidate admission currently covers user workspaces only; managed workspaces,
+owned cleanup, package admission and cancellation remain before enabling it in the normal daemon.
+The existing compiled Chat executable now has a private operation-owner role, verified in an isolated
+copied-executable fixture without source-checkout dependencies. It reads the private reservation and fresh
+folder approval, claims before spawning, retains bounded signed output and exits with the command. Workspace
+identity remains opaque rather than being mistaken for an operation UUID. Terminal observations drain before
+the owner's transport closes. This role is not launched for normal new execution or installed; recovery is
+verified with an isolated copied executable and reopened manager, not installed service lifecycle. It does not establish
+service-update/removal safety, owned-tree cancellation or CPU/battery equivalence.
+Resource admission for the per-operation Bun role is withheld. An isolated closed-cohort comparison
+measured 0.11–0.14 CPU seconds and about 68 MiB peak RSS for a fixed short command; a 24-module
+minimal entry retained the same recovery contract but still measured 0.09–0.13 CPU seconds/about
+64 MiB. Direct command CPU was below the timer's precision with about 2.3 MiB peak RSS. These are
+scoped helper/command costs, not full product or battery measurements. A native execution/output floor
+matched direct RSS, but lacks authentication/recovery and is not an equivalent candidate. Next implement
+and verify a lean native owner against the existing signed journal/IPC/request/output contract before
+product admission. Retain the Bun role as a behavioral oracle while that replacement is unverified;
+do not add a production fallback, permanent executor, prewarming or status poller to hide the cost.
+The native owner foundation now implements bounded no-follow state reads, fresh approved directory identity,
+exact request HMAC and exclusive private phase-signed claims. Node/Rust synthetic crypto vectors and a
+copied standalone executable verify the same request/claim contract and refusal on duplicate/incomplete
+claim, changed command, revoked approval, replaced directory, symlink state and ambiguous registry.
+Its POSIX execution foundation now pins the approved working directory for child exec, owns both output
+pipes, retains an exact bounded 512 KiB tail and publishes signed terminal results without overwriting
+uncertain evidence. An isolated copied completion harness survived its requesting launcher's SIGKILL;
+the real Chat manager recovered its exact completed output with original ownership and one execution.
+Large-output, signal and conflicting-result cases passed. This is completion recovery, not live reconnection.
+The source native worker now also implements the same operation-scoped signed loopback HTTP contract,
+using one event loop with bounded active peers and nonblocking serialized stdin. Fresh folder approval is
+checked after queued writes obtain authority. Request identities are reserved before input; disconnected
+partial input is never replayed. Disconnecting a wait abandons observation, preserving execution and
+unread output; admitted terminal responses drain before the endpoint closes. Real manager launch and
+SIGKILL/reopen, signed live status/input, queued approval revocation, pipe saturation and completed-output
+recovery passed with a copied signed executable. This is source-only: the normal daemon does not select
+this binary and it is not packaged. Owned-tree cancellation remains explicitly unavailable. Cleanup/package
+lifecycle, Windows support and full resource comparisons remain before admission. No native resource or
+replacement acceptance is inferred from the earlier execution-only floor. Pipe readers block on OS I/O;
+no polling, prewarming or permanent executor was added. Active peer deadlines bound only the IPC request,
+never command lifetime.
+The private Chat service checks shutdown admissibility before tearing down any transport or peer
+subsystem. A synchronous process-owner gate refuses unresolved workers; admitted capability calls remain
+counted until both execution and response delivery/disconnection finish. Disconnecting a caller alone
+never releases a still-running capability. Shutdown refusal leaves the private endpoint and daemon signal
+handling available; admission blocks new calls. Teardown failure remains stopping rather than advertising
+a partially closed runtime as ready. Explicit requests coalesce, and refusal waits for another explicit
+request without timer/retry/escalation. The internal runtime accepts a caller-verified candidate owner
+configuration for isolation proofs, but the normal daemon does not set it. A real native operation
+survived HTTP/signal shutdown refusal, accepted signed input and exact terminal output, then allowed
+normal supervisor shutdown/descriptor removal. This is a service-boundary proof, not installed
+updater/remover or full process-tree cancellation acceptance.
+
+Update, repair and service controls use authenticated runtime shutdown authority before platform
+quiescence. The controller requires an explicit shutdown contract; production binds the install-scoped
+supervisor and refuses missing/unreachable/foreign identity. No systemctl stop, launchctl kill or
+Stop-ScheduledTask fallback remains. Platform start and bounded state verification remain. A signed
+synthetic package fixture with a real Chat/native operation proved refusal preserved old payload,
+manifest, registry and quiescing journal; signed input completed once, then the same explicit upgrade
+resumed. OS registrations/service package executables were synthetic, not actual OS-service or packaged
+native-owner admission.
+
+Uninstall treats product-owned resources as shared dependencies: if any service refuses normal shutdown,
+preserve its own resources and all product-owned binaries/configuration/recovery UI. Other cleanly
+stopped service resources remain independently removable. A real-native fixture exercised the actual
+source remover with an injected fake OS runner: remove-data refusal preserved exact Chat registry,
+approval and binary bytes and its descriptor. Existing signed input then completed the command once;
+a later explicit uninstall removed owned product resources while preserving the user workspace. No OS
+registration changed. This does not establish packaged updater, launchd termination or managed workspace
+execution admission.
+
+Terminal capacity reclamation now uses one bounded authenticated retirement intent (16 KiB maximum,
+at most four exact result/journal artifacts). The manager authenticates terminal evidence and binds the
+intent to the SHA256 of those same bytes and artifact-directory identity. Registry removal is persisted
+before artifact unlink; restart resumes only that signed intent, accepting already-removed planned files
+but refusing changed bytes, roots or records. Unknown/inflight reservations are never reclaimed. The
+registry persists a monotonic session high-water mark so removing the newest terminal row cannot cause
+session identity reuse after restart. The source candidate now writes explicit store version 2, requiring
+the key and counter; it transitions existing version-1 records without changing the store pathname.
+A real already-live prior Native owner continued through its original signed endpoint after transition.
+Prior Native readers reject version 2 before a claim. This preserves evidence, but an incompatible
+rollback would leave its old service unavailable. The signed source package now declares read/write
+format compatibility, checked at install/upgrade/repair planning and application, after shutdown drains,
+and at Chat launch. A reader must also avoid writing a lower format. Unknown/corrupt state refuses;
+Gateway/Codex launch stays independent. A real owner survived incompatible signed targets and stale
+plans; compatible explicit upgrade succeeded after exact completion (`build/chat-store-package-compatibility`).
+A late format change keeps the old payload and quiesced checkpoint; source cancellation now has a signed pre-replacement fixture gate;
+Packaged CLI/dry-run and actual live-owner preservation now pass (`build/upgrade-source-cancel-live`);
+UI and actual OS restart gates remain. The signed lifecycle protocol now gates source cancellation;
+undeclared old launchers refuse before mutation and preserve the active owner, while declared sources
+restore through the normal resolver (`build/upgrade-launcher-contract`). This is explicit capability
+admission, not a retrofit or old-launcher restoration promise. Production-built compiled launcher/Chat
+and a compiled fixture coordinator now pass source restoration, authenticated shutdown and removal
+with fake OS registration (`build/compiled-transition-boundary`); no Native engine rebuild or owner
+activation. Heavy reproducible test payloads were cleaned. Actual OS/consumer UI acceptance remains. Final target restoration admits only the recorded resume service
+at `manifest-updated` or `repaired`, after physical receipt/ownership proof and matching install,
+version, fingerprint and quiescence records. Source cancellation permits recorded services at `restoring-source` with the exact source version
+and fingerprint; no duplicate running service is started. Other phases and general actions stay blocked. The signed
+fixture coordinator invokes the actual resolver at both checkpoints (`build/transition-launch-admission`);
+fake OS registrations and service payloads do not prove platform restoration or old-launcher compatibility.
+Evidence: `build/chat-owner-store-version`; the normal daemon owner remains disabled. This runs at bounded admission/capacity checks, without scans or
+idle timers. A real manager/native completion fixture with an isolated filesystem gate was killed after
+registry commit and before unlink; reopening finished four-artifact cleanup and preserved 255 unknown
+reservations plus the next session identity. Partial deletion and authenticated-byte replacement tests
+also passed. This is process-interruption recovery, not power-loss/fsync durability, concurrent namespace
+replacement safety, old-version rollback compatibility or installed update/removal admission.
+
+The first same-contract native/Bun resource gate now passed its scoped comparison: eight synthetic ABBA
+live-input/terminal-result runs measured native owner+waited-shell CPU 0–0.01 seconds/about 3 MiB max RSS,
+versus the fresh 24-module Bun reference at 0.12–0.18 seconds/about 70 MiB. A separate waited controller
+cohort also used less CPU. A two-second blocked-input dwell showed no measured native CPU growth; timer
+rounding is not zero CPU, wakeup or battery evidence. This supports continuing the native implementation,
+not enabling it by default. Whole-product/current-direct-path energy equivalence, large/concurrent work,
+cancellation and lifecycle ownership still require their own gates. Reuse `build/native-owner-resource`
+rather than repeat the unchanged short comparison or cite an execution-only floor as equivalent behavior.
+
+The macOS tree-cancellation gate remains unaccepted: owned synthetic process-group termination
+left a setsid descendant running until explicit pipe release (`build/chat-owner-cancel-boundary`).
+The current SDK declares NOTE_TRACK/NOTE_CHILD unsupported. Group signaling and PID snapshots
+do not prove complete arbitrary-shell containment. Keep cancel unavailable and owner activation off
+until a platform lifetime boundary or explicitly constrained execution capability is proved. Do not
+substitute idle scans or repeated signals. This does not rule out every macOS cancellation design. Normal
+root exit and output EOF likewise do not prove that descendants stopped: both direct and signed Native
+completion admitted shutdown/workspace removal reservation with an independently blocked setsid child
+(`build/completed-command-descendant-boundary`). Command result and OS execution-scope lifetime must
+remain separate authority. No existing terminal flag may be reinterpreted as complete-tree proof;
+scope release for removal/shutdown needs a supported platform boundary covering normal exit and cancel.
+
+
+Normal Chat shutdown is not execution cancellation. Both direct and owned unresolved operations
+refuse shutdown before any peer transport or recovery subsystem closes. Do not replace that gate with
+root-process TERM/KILL: a direct-path fixture left a setsid descendant alive after close returned
+(`build/direct-shutdown-boundary`). Completion permits normal closure; saved unknown direct operations
+retain the refusal because no valid restart reconciliation exists yet. This source fix is not installed
+and does not prove arbitrary-shell cancellation or complete direct-process recovery.
+
+Process state becomes committed only after registry persistence succeeds. A failed update restores the
+prior in-memory record; direct child callbacks contain storage errors and retain uncertainty instead of
+publishing completion or crashing the service. Known child output waiting is separate from stdin
+availability. Signed completion reconciliation also requires a successful registry commit before
+shutdown admission. The private completion-storage fixture and restart tests cover this boundary
+(`build/process-completion-storage-boundary`); they do not resolve unknown direct records or prove
+power-loss durability or descendant containment. This change remains source-only.
+
+Workspace open also returns bounded root-level `AGENTS.md` / `CLAUDE.md` instruction content plus a bounded
+list of nested instruction files. Nested files are never silently injected later: the caller must read the
+applicable file before working under that subtree. Instruction discovery skips dependency/build trees,
+rejects instruction-shaped paths that cannot be proven inside the workspace, and reports an incomplete scan
+instead of pretending an enumeration bound or unreadable subtree contains no instructions.
 
 `show_changes` is Git-backed, disables external diff/textconv execution, and returns tracked diff plus
 untracked paths for only the selected workspace. It also writes a bounded self-contained historical review
 artifact under Tela Chat state. `show_review` reads only that retained artifact, so later working-tree edits
 or a service restart cannot silently change what an old review reference means.
+
+Current and historical review results also expose a compact file/addition/removal summary. When a historical
+checkpoint has captured text/symlink untracked content, that summary includes it; binary untracked content or
+a live checkpoint-capture failure marks the summary incomplete rather than inventing line counts. Turn-oriented
+`last_shown` review is implemented through a private persisted checkpoint pointer. To compare two self-contained
+checkpoints, Tela reconstructs each snapshot into a short-lived product-owned Git object/index directory that
+uses the user's repository objects only as read-only alternates, diffs the two private commits, then deletes the
+temporary object store. The user's Git object database and refs remain byte/object-count neutral. A successful
+comparison advances the private baseline; an unavailable comparison preserves the old baseline instead of
+silently skipping unreviewed work. `show_changes` can also compare against the pinned workspace-open checkpoint
+without advancing `last_shown`, or can explicitly mark that comparison reviewed. Open and last-shown checkpoints
+are protected from ordinary count-based review pruning while still remaining subject to the global 30-day
+retention horizon. Richer host review UI remains separate product work.
+
+The public frozen Chat capability call can attach UI **per result** without adding a fifth model-visible MCP
+tool. `show_changes` responses carry `_meta.ui.resourceUri` pointing to a registered, self-contained MCP Apps
+review resource; other dynamic Chat capabilities do not. The widget renders only the already-returned review
+envelope, performs no network requests, and inserts paths/patches with `textContent`. The four public tool names,
+descriptions, and input schemas therefore keep the same frozen fingerprint. This is covered by MCP client
+resource/result tests, while a real ChatGPT rendering canary remains required before the UI is called live-proven.
+
+The same selective-result mechanism now serves an optional local file-import card. `open_file_import` returns
+only the workspace id and size budget; user-selected local bytes go through the existing generic capability
+call to `import_file`. The card has no remote network permission. A dedicated on-demand Rust helper pins the
+registry-proven directory identity, opens each existing parent without following symlinks, writes/syncs a
+private destination-filesystem staging file, and atomically hard-links it to a new final name. Existing files
+are never replaced; helper errors expose only error kinds. A single import at a time and 2 MiB budget bound
+process/memory work; runtime shutdown waits for the bounded active operation. No Codex engine change is
+involved. The helper is optional signed-payload metadata and only the receipt-proven launcher supplies Chat's
+executable path. Without it, the import capabilities are absent.
+
+macOS binary and authenticated HTTP tests, parent symlink-swap races, package signature tamper tests and
+frozen MCP fingerprint tests are proven. Windows/Linux execution, actual ChatGPT card rendering/library
+selection remain release gates. Normal completion removes the staging directory;
+post-publication cleanup failure is explicitly reported as a successful publication requiring cleanup.
+Timeout/invalid-response outcomes are uncertain, never automatically retried. Protocol 2 records a private
+per-workspace intent before allocating scratch, checkpoints its parent/stage directory identity, then waits
+for the caller's release before creating content. Opening the import card or saving triggers recovery through
+those records, never through a workspace prefix scan. Recovery clears only the proven private stage cache;
+unexpected entries, replaced directories or incomplete identity proof are preserved and block new allocation.
+Journal reads are bounded (16 records, 8 KiB each), and no recurring cleanup task is added. Actual helper
+SIGKILL at the durable checkpoint plus empty/partial/published recovery fixtures and replaced-stage refusal
+are proven on macOS. Power-loss recovery is not claimed.
+Imported final files are user workspace content and never uninstall targets. The uninstall planner and its
+pre-removal observation preserve Chat recovery state and ownership/configuration when journals are pending
+or unsafe; the result includes a consumer recovery notice. This prevents saved-data removal from destroying
+the proof needed to clean scratch later.
 
 Review checkpoints intentionally do **not** create permanent refs or deliberate review objects in the user's
 Git object database. A checkpoint stores the tracked binary-capable diff plus bounded snapshots of untracked
@@ -731,8 +1423,15 @@ and install-manifest intent. After `git worktree add`, Tela writes an ownership 
 Git administrative directory and registers the worktree as a managed workspace. Startup reconciliation can
 finish an interrupted manifest registration without guessing ownership.
 
-Managed-worktree deletion is not equivalent to `git worktree remove --force` on an arbitrary path. Tela
-re-proves all of these conditions immediately before removal:
+Managed-worktree deletion is not equivalent to `git worktree remove --force` on an arbitrary path.
+The workspace registry reserves removal before asynchronous inspection and retains exclusion until
+cleanup returns or fails. Overlapping workspace access cannot start during that reservation. Durable
+process and agent managers refuse removal for running or unresolved work; missing agent drivers and
+terminal-retention limits must not discard unresolved authority. Async file import/export and review
+operations hold bounded, on-demand use leases across awaits. There is no idle watcher or PID adoption.
+Transient leases do not constitute crash-recovery authority for external processes.
+
+With admission held, Tela re-proves all of these conditions immediately before removal:
 
 - the recorded path is still a real directory inside the Tela-managed worktree root;
 - the source repository still exists and has the same canonical Git-common-directory identity;
@@ -782,3 +1481,18 @@ environment value leaves Chat healthy but advertises no agent lifecycle capabili
 Parity then grows from behavioral requirements rather than copied source: richer review summaries/baselines,
 additional provider adapters, sandboxed process authority for agents, and explicit artifacts. The existing DevSpace local patches remain a reference
 oracle until the new service proves those behaviors.
+
+## Independent profile products
+
+Tela works with the ordinary official ChatGPT profile without a multi-profile provider.
+Plura Desktop manages isolated ChatGPT profiles without Tela. When both are present, Tela
+uses the public optional provider contract only for additional profiles; the default
+profile remains on Tela's built-in adapter. Provider absence or failure must not block
+that default profile. No provider's package or user data is owned by the other product.
+Before removing an integration in use, disconnect its exact owned runtime normally.
+
+Desktop process ownership and Web model readiness are separate states. Readiness requires
+an effective startup catalog and visible Web model rows. Inventory checks verify these
+on demand and coalesce overlapping checks; they do not run an idle polling service.
+The menu and Control Center share one inventory and profile presentation, excluding
+superseded reads so older results cannot overwrite an in-progress connection.

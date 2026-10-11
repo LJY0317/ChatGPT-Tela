@@ -7,10 +7,12 @@ import type {
   ChatGptConnectorObservation,
   ChatGptConnectorProbe,
   WebConversationProvider,
+  ChatGptWebModelFamily,
 } from "@chatgpt-tela/chatgpt";
 import {
   ChatGptConnectorCatalogUnavailableError,
   observeChatGptAccountIdentity,
+  observeChatGptAccountDisplay,
 } from "@chatgpt-tela/chatgpt";
 
 export interface ChatGptProfileObservation {
@@ -31,7 +33,22 @@ export interface ElectronProfileSetupSurface {
   close(): Promise<void>;
 }
 
+export interface ChatGptWebPreparationOptions {
+  readonly signal?: AbortSignal;
+  readonly onProfile: (profile: ChatGptProfileObservation) => void;
+  readonly onFamilies?: (families: readonly ChatGptWebModelFamily[]) => void;
+  readonly onConnectorStarting?: () => void;
+  readonly onConnectorProven?: () => void;
+}
+
 export interface ChatGptProfileControl {
+  probeChatGptAccount(signal?: AbortSignal): Promise<ChatGptAccountIdentity>;
+  probeChatGptAccountDisplay(signal?: AbortSignal): ReturnType<typeof observeChatGptAccountDisplay>;
+  prepareChatGptWebSession(options: ChatGptWebPreparationOptions): Promise<{
+    readonly families: readonly ChatGptWebModelFamily[];
+    readonly connector: ChatGptConnectorObservation;
+    readonly capabilities: ChatGptCapabilities;
+  }>;
   probeChatGptReadiness(signal?: AbortSignal): Promise<ChatGptCapabilities>;
   probeChatGptProfile(signal?: AbortSignal): Promise<ChatGptProfileObservation>;
   recoverChatGptConnectorProbeArtifact(
@@ -39,6 +56,10 @@ export interface ChatGptProfileControl {
     options?: { readonly allowUnknownSelectedConnector?: boolean },
   ): Promise<boolean>;
   probeChatGptConnector(signal?: AbortSignal): Promise<ChatGptConnectorObservation>;
+  probeChatGptConnection(signal?: AbortSignal, onConnectorProven?: () => void): Promise<{
+    readonly connector: ChatGptConnectorObservation;
+    readonly capabilities: ChatGptCapabilities;
+  }>;
   openProfileSetupSurface(options?: { readonly reveal?: boolean }): Promise<ElectronProfileSetupSurface>;
   close(): Promise<void>;
 }
@@ -82,6 +103,7 @@ export function createChatGptProfileControl(input: {
   readonly browserHost: BrowserHost;
   readonly provider: Pick<WebConversationProvider, "observeCapabilities"> & Partial<ChatGptConnectorProbe>;
   readonly accountIdentityObserver?: ChatGptAccountIdentityObserver;
+  readonly modelFamilyDiscovery?: (surface: BrowserSurfaceLease, signal?: AbortSignal) => Promise<readonly ChatGptWebModelFamily[]>;
 }): ChatGptProfileControl {
   const setupLeases = new Set<string>();
   let closed = false;
@@ -92,7 +114,102 @@ export function createChatGptProfileControl(input: {
   };
   const accountIdentityObserver = input.accountIdentityObserver ?? observeChatGptAccountIdentity;
 
+  async function withConnectorSurface<T>(
+    signal: AbortSignal | undefined,
+    finish: (surface: BrowserSurfaceLease, connector: ChatGptConnectorObservation) => Promise<T>,
+  ): Promise<T> {
+    requireOpen();
+    if (!input.provider.probeConnector) {
+      throw new Error("ChatGPT provider does not support connector preflight");
+    }
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const lease = await input.browserHost.acquire({
+        taskId: "chatgpt-tela-connector-readiness",
+        epochId: `connector-${randomUUID()}`,
+      });
+      try {
+        const connector = await input.provider.probeConnector(lease, signal);
+        signal?.throwIfAborted();
+        return await finish(lease, connector);
+      } catch (error) {
+        if (!(error instanceof ChatGptConnectorCatalogUnavailableError) || attempt >= 2) throw error;
+        emitDiagnosticEvent("chatgpt_tela_connector", "catalog_refresh", { attempt });
+      } finally {
+        await input.browserHost.release(lease.leaseId);
+      }
+    }
+    throw new Error("ChatGPT connector catalog refresh exhausted unexpectedly");
+  }
+
   return Object.freeze({
+    async prepareChatGptWebSession(options: ChatGptWebPreparationOptions) {
+      requireOpen();
+      if (!input.provider.probeConnector || !input.modelFamilyDiscovery) {
+        throw new Error("ChatGPT provider does not support Web preparation");
+      }
+      const { signal } = options;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        signal?.throwIfAborted();
+        const surface = await input.browserHost.acquire({
+          taskId: "chatgpt-tela-web-preparation", epochId: `preparation-${randomUUID()}`,
+        });
+        try {
+          signal?.throwIfAborted();
+          const profile = await proveProfile(surface, input.provider, accountIdentityObserver, signal);
+          signal?.throwIfAborted();
+          options.onProfile(profile);
+          signal?.throwIfAborted();
+          const families = Object.freeze([...(await input.modelFamilyDiscovery(surface, signal))]);
+          signal?.throwIfAborted();
+          if (!families.length) throw new Error("Web model discovery is incomplete");
+          options.onFamilies?.(families);
+          signal?.throwIfAborted();
+          options.onConnectorStarting?.();
+          signal?.throwIfAborted();
+          const connector = await input.provider.probeConnector(surface, signal);
+          signal?.throwIfAborted();
+          options.onConnectorProven?.();
+          // Connector proof settles its own draft before returning; the same document must
+          // still be ready and belong to the account validated at the start of this lease.
+          const capabilities = await proveReadiness(surface, input.provider, signal);
+          const finalAccount = await accountIdentityObserver(surface, signal);
+          signal?.throwIfAborted();
+          requireOpen();
+          if (finalAccount.accountFingerprint !== profile.account.accountFingerprint
+            || finalAccount.containerFingerprint !== profile.account.containerFingerprint
+            || finalAccount.accountStructure !== profile.account.accountStructure) {
+            throw new Error("ChatGPT account changed during Web preparation");
+          }
+          return Object.freeze({ families, connector, capabilities });
+        } catch (error) {
+          if (!(error instanceof ChatGptConnectorCatalogUnavailableError) || attempt >= 2 || signal?.aborted) throw error;
+          emitDiagnosticEvent("chatgpt_tela_connector", "catalog_refresh", { attempt });
+        } finally {
+          await input.browserHost.release(surface.leaseId);
+        }
+      }
+      throw new Error("ChatGPT Web preparation exhausted unexpectedly");
+    },
+    async probeChatGptAccount(signal?: AbortSignal) {
+      requireOpen();
+      signal?.throwIfAborted();
+      const lease = await input.browserHost.acquire({
+        taskId: "chatgpt-tela-account-observation", epochId: `account-${randomUUID()}`,
+      });
+      try {
+        signal?.throwIfAborted();
+        return await accountIdentityObserver(lease, signal);
+      } finally {
+        await input.browserHost.release(lease.leaseId);
+      }
+    },
+    async probeChatGptAccountDisplay(signal?: AbortSignal) {
+      requireOpen();
+      signal?.throwIfAborted();
+      const lease = await input.browserHost.acquire({ taskId: "chatgpt-tela-account-display", epochId: `display-${randomUUID()}` });
+      try { return await observeChatGptAccountDisplay(lease, signal); }
+      finally { await input.browserHost.release(lease.leaseId); }
+    },
     async probeChatGptReadiness(signal?: AbortSignal) {
       requireOpen();
       const lease = await input.browserHost.acquire({
@@ -117,26 +234,18 @@ export function createChatGptProfileControl(input: {
         await input.browserHost.release(lease.leaseId);
       }
     },
-    async probeChatGptConnector(signal?: AbortSignal) {
-      requireOpen();
-      if (!input.provider.probeConnector) {
-        throw new Error("ChatGPT provider does not support connector preflight");
-      }
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
-        const lease = await input.browserHost.acquire({
-          taskId: "chatgpt-tela-connector-readiness",
-          epochId: `connector-${randomUUID()}`,
-        });
-        try {
-          return await input.provider.probeConnector(lease, signal);
-        } catch (error) {
-          if (!(error instanceof ChatGptConnectorCatalogUnavailableError) || attempt >= 2) throw error;
-          emitDiagnosticEvent("chatgpt_tela_connector", "catalog_refresh", { attempt });
-        } finally {
-          await input.browserHost.release(lease.leaseId);
-        }
-      }
-      throw new Error("ChatGPT connector catalog refresh exhausted unexpectedly");
+    probeChatGptConnector(signal?: AbortSignal) {
+      return withConnectorSurface(signal, async (_surface, connector) => connector);
+    },
+    probeChatGptConnection(signal?: AbortSignal, onConnectorProven?: () => void) {
+      return withConnectorSurface(signal, async (surface, connector) => {
+        // probeConnector settles removal of its own draft/pill before resolving. Recheck the
+        // clean isolated surface rather than create another page with the same ownership.
+        onConnectorProven?.();
+        const capabilities = await proveReadiness(surface, input.provider, signal);
+        signal?.throwIfAborted();
+        return Object.freeze({ connector, capabilities });
+      });
     },
     async recoverChatGptConnectorProbeArtifact(
       signal?: AbortSignal,

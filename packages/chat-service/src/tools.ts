@@ -1,15 +1,42 @@
 import { join } from "node:path";
+import { CHAT_PROCESS_STORE_FILENAME } from "@chatgpt-tela/product-lifecycle/chat-process-storage";
 import { ChatAgentManager, type ChatAgentDriver, type ChatAgentWriteMode } from "./agents";
 import { ChatChangeReviewer } from "./changes";
+import { ChatFileImporter, CHAT_IMPORT_MAX_BYTES } from "./imports";
+import { ChatFileExporter } from "./exports";
 import { ChatFileTools } from "./files";
+import { ChatExplorationTools } from "./exploration";
 import { ChatIncidentStore } from "./incidents";
 import { ChatPatchTool } from "./patch";
-import { ChatProcessManager } from "./processes";
+import { ChatProcessManager, type OwnedProcessWorkerConfig } from "./processes";
 import { ChatReviewCheckpointStore } from "./reviews";
+import { ChatSkillCatalog } from "./skills";
 import { ChatWorkspaceRegistry } from "./workspaces";
 import { ChatManagedWorktreeManager } from "./worktrees";
+import { discoverWorkspaceInstructions } from "./workspace-instructions";
 
 export interface ChatAgentWorkspaceTools {
+  workspaceInstructions(workspaceId: string): unknown;
+  listDirectory(input: {
+    readonly workspaceId: string;
+    readonly path?: string;
+    readonly limit?: number;
+  }): unknown;
+  searchText(input: {
+    readonly workspaceId: string;
+    readonly query: string;
+    readonly path?: string;
+    readonly caseSensitive?: boolean;
+    readonly maxResults?: number;
+  }): unknown;
+  listSkills(workspaceId: string, query?: string): unknown;
+  readSkill(input: {
+    readonly workspaceId: string;
+    readonly name: string;
+    readonly path?: string;
+    readonly offset?: number;
+    readonly limit?: number;
+  }): unknown;
   read(input: {
     readonly workspaceId: string;
     readonly path: string;
@@ -28,11 +55,16 @@ export type ChatAgentDriverFactory = (tools: ChatAgentWorkspaceTools) => ChatAge
 
 export const TELA_CHAT_BASE_CAPABILITIES = Object.freeze([
   "open_workspace",
+  "list_directory",
+  "search_text",
+  "list_skills",
+  "read_skill",
   "read",
   "read_many",
   "apply_patch",
   "exec_command",
   "write_stdin",
+  "list_processes",
   "process_status",
   "show_changes",
   "show_review",
@@ -58,8 +90,12 @@ export const TELA_CHAT_AGENT_CAPABILITIES = Object.freeze([
   "stop_agent",
 ] as const);
 
+export const TELA_CHAT_FILE_IMPORT_CAPABILITIES = Object.freeze(["open_file_import", "import_file"] as const);
+
 export const TELA_CHAT_CAPABILITIES = Object.freeze([
   ...TELA_CHAT_BASE_CAPABILITIES,
+  "export_file",
+  ...TELA_CHAT_FILE_IMPORT_CAPABILITIES,
   ...TELA_CHAT_MANAGED_WORKTREE_CAPABILITIES,
   ...TELA_CHAT_AGENT_CAPABILITIES,
 ] as const);
@@ -68,6 +104,8 @@ export type TelaChatCapability = typeof TELA_CHAT_CAPABILITIES[number];
 
 export interface ChatToolRuntime {
   readonly workspaces: ChatWorkspaceRegistry;
+  readonly exploration: ChatExplorationTools;
+  readonly skills: ChatSkillCatalog;
   readonly files: ChatFileTools;
   readonly patch: ChatPatchTool;
   readonly processes: ChatProcessManager;
@@ -79,6 +117,7 @@ export interface ChatToolRuntime {
   readonly capabilities: readonly TelaChatCapability[];
   initialize(): Promise<void>;
   call(capability: TelaChatCapability, arguments_: unknown): Promise<unknown>;
+  assertCanClose(): void;
   close(): Promise<void>;
 }
 
@@ -108,6 +147,18 @@ function optionalInteger(value: unknown, field: string): number | undefined {
   return value as number;
 }
 
+function optionalBoolean(value: unknown, field: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
+  return value;
+}
+
+function reviewSince(value: unknown): "last_shown" | "workspace_open" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "last_shown" || value === "workspace_open") return value;
+  throw new Error("since must be last_shown or workspace_open");
+}
+
 function agentWriteMode(value: unknown): ChatAgentWriteMode | undefined {
   if (value === undefined) return undefined;
   if (value === "read_only" || value === "workspace_write") return value;
@@ -122,6 +173,10 @@ function capability(value: string, allowed: readonly TelaChatCapability[]): Tela
 export function createChatToolRuntime(input: {
   readonly allowedRoots: readonly string[];
   readonly stateRoot: string;
+  readonly globalSkillRoots?: readonly string[];
+  readonly filePublisherExecutable?: string;
+  /** Internal candidate admission only; the caller verifies the executable before selecting it. */
+  readonly ownerWorker?: OwnedProcessWorkerConfig;
   readonly agentDrivers?: readonly ChatAgentDriver[];
   readonly agentDriverFactories?: readonly ChatAgentDriverFactory[];
   readonly ownership?: {
@@ -137,12 +192,25 @@ export function createChatToolRuntime(input: {
     storePath: join(input.stateRoot, "workspaces-v1.json"),
   });
   const files = new ChatFileTools(workspaces);
+  const exporter = input.filePublisherExecutable ? new ChatFileExporter(workspaces, input.filePublisherExecutable) : undefined;
+  const importer = input.filePublisherExecutable ? new ChatFileImporter(workspaces, input.filePublisherExecutable, join(input.stateRoot, "imports-v2")) : undefined;
+  const exploration = new ChatExplorationTools(workspaces);
+  const skills = new ChatSkillCatalog({ workspaces, ...(input.globalSkillRoots ? { globalRoots: input.globalSkillRoots } : {}) });
   const patch = new ChatPatchTool(workspaces);
-  const processes = new ChatProcessManager({ workspaces, storePath: join(input.stateRoot, "process-operations-v1.json") });
+  const processes = new ChatProcessManager({ workspaces, storePath: join(input.stateRoot, CHAT_PROCESS_STORE_FILENAME),
+    ...(input.ownerWorker ? { ownerWorker: input.ownerWorker } : {}) });
   const reviews = new ChatReviewCheckpointStore({ root: join(input.stateRoot, "reviews") });
   const incidents = new ChatIncidentStore({ root: join(input.stateRoot, "incidents") });
-  const changes = new ChatChangeReviewer(workspaces, reviews);
+  const changes = new ChatChangeReviewer(workspaces, reviews, join(input.stateRoot, "review-comparisons"));
   const agentWorkspaceTools: ChatAgentWorkspaceTools = Object.freeze({
+    workspaceInstructions: (workspaceId: string) => {
+      const workspace = workspaces.get(workspaceId);
+      return discoverWorkspaceInstructions(workspace.root);
+    },
+    listDirectory: (request: Parameters<ChatAgentWorkspaceTools["listDirectory"]>[0]) => exploration.listDirectory(request),
+    searchText: (request: Parameters<ChatAgentWorkspaceTools["searchText"]>[0]) => exploration.searchText(request),
+    listSkills: (workspaceId: string, query = "") => skills.list(workspaceId, query),
+    readSkill: (request: Parameters<ChatAgentWorkspaceTools["readSkill"]>[0]) => skills.read(request),
     read: (request: Parameters<ChatAgentWorkspaceTools["read"]>[0]) => files.read(request),
     readMany: (request: Parameters<ChatAgentWorkspaceTools["readMany"]>[0]) => files.readMany(request),
     applyPatch: (request: Parameters<ChatAgentWorkspaceTools["applyPatch"]>[0]) => patch.apply(request),
@@ -152,13 +220,13 @@ export function createChatToolRuntime(input: {
     ...(input.agentDrivers ?? []),
     ...(input.agentDriverFactories ?? []).map(factory => factory(agentWorkspaceTools)),
   ]);
-  const agents = agentDrivers.length > 0
-    ? new ChatAgentManager({
-        workspaces,
-        storePath: join(input.stateRoot, "agents-v1.json"),
-        drivers: agentDrivers,
-      })
-    : undefined;
+  // Load durable authority even when a previously configured driver is unavailable.
+  const agentState = new ChatAgentManager({
+    workspaces,
+    storePath: join(input.stateRoot, "agents-v1.json"),
+    drivers: agentDrivers,
+  });
+  const agents = agentState.targetCount > 0 ? agentState : undefined;
   const worktrees = input.ownership
     ? new ChatManagedWorktreeManager({
         workspaces,
@@ -169,13 +237,17 @@ export function createChatToolRuntime(input: {
         productVersion: input.ownership.productVersion,
       })
     : undefined;
-  const capabilities: readonly TelaChatCapability[] = Object.freeze([
+  const capabilities = (): readonly TelaChatCapability[] => Object.freeze([
+    ...(exporter?.supported ? ["export_file" as const] : []),
     ...TELA_CHAT_BASE_CAPABILITIES,
+    ...(importer ? TELA_CHAT_FILE_IMPORT_CAPABILITIES : []),
     ...(worktrees ? TELA_CHAT_MANAGED_WORKTREE_CAPABILITIES : []),
     ...(agents ? TELA_CHAT_AGENT_CAPABILITIES : []),
   ]);
   return Object.freeze({
     workspaces,
+    exploration,
+    skills,
     files,
     patch,
     processes,
@@ -184,17 +256,61 @@ export function createChatToolRuntime(input: {
     incidents,
     ...(worktrees ? { worktrees } : {}),
     ...(agents ? { agents } : {}),
-    capabilities,
+    get capabilities() { return capabilities(); },
     async initialize() {
+      await importer?.initialize();
+      await exporter?.initialize();
       await worktrees?.reconcile();
     },
     async call(name: TelaChatCapability, inputValue: unknown) {
-      const selected = capability(name, capabilities);
+      const selected = capability(name, capabilities());
       const args = object(inputValue, `${selected} arguments`);
       try {
         switch (selected) {
-        case "open_workspace":
-          return workspaces.open(text(args.path, "workspace path"));
+        case "open_workspace": {
+          const workspace = workspaces.open(text(args.path, "workspace path"));
+          const reviewBaseline = await changes.initializeWorkspace(workspace.id);
+          return Object.freeze({ ...workspace, ...discoverWorkspaceInstructions(workspace.root), reviewBaseline });
+        }
+        case "export_file":
+          return await exporter!.read(text(args.workspace_id, "workspace_id"), text(args.path, "path"));
+        case "open_file_import": {
+          const workspace = workspaces.get(text(args.workspace_id, "workspace_id"));
+          await importer!.recover(workspace.id);
+          return Object.freeze({ workspace_id: workspace.id, maxBytes: CHAT_IMPORT_MAX_BYTES });
+        }
+        case "import_file":
+          return await importer!.publish({ workspaceId: text(args.workspace_id, "workspace_id"), path: text(args.path, "path"),
+            dataBase64: typeof args.data_base64 === "string" ? args.data_base64 : (() => { throw new Error("data_base64 must be a string"); })() });
+        case "list_directory":
+          return exploration.listDirectory({
+            workspaceId: text(args.workspace_id, "workspace_id"),
+            ...(optionalText(args.path, "path") === undefined ? {} : { path: optionalText(args.path, "path")! }),
+            ...(optionalInteger(args.limit, "limit") === undefined ? {} : { limit: optionalInteger(args.limit, "limit")! }),
+          });
+        case "search_text":
+          return exploration.searchText({
+            workspaceId: text(args.workspace_id, "workspace_id"),
+            query: multilineText(args.query, "query", 4 * 1024),
+            ...(optionalText(args.path, "path") === undefined ? {} : { path: optionalText(args.path, "path")! }),
+            ...(args.case_sensitive === undefined ? {} : typeof args.case_sensitive === "boolean"
+              ? { caseSensitive: args.case_sensitive }
+              : (() => { throw new Error("case_sensitive must be a boolean"); })()),
+            ...(optionalInteger(args.max_results, "max_results") === undefined ? {} : { maxResults: optionalInteger(args.max_results, "max_results")! }),
+          });
+        case "list_skills":
+          return skills.list(
+            text(args.workspace_id, "workspace_id"),
+            optionalText(args.query, "query") ?? "",
+          );
+        case "read_skill":
+          return skills.read({
+            workspaceId: text(args.workspace_id, "workspace_id"),
+            name: text(args.name, "name"),
+            ...(optionalText(args.path, "path") === undefined ? {} : { path: optionalText(args.path, "path")! }),
+            ...(optionalInteger(args.offset, "offset") === undefined ? {} : { offset: optionalInteger(args.offset, "offset")! }),
+            ...(optionalInteger(args.limit, "limit") === undefined ? {} : { limit: optionalInteger(args.limit, "limit")! }),
+          });
         case "read":
           return files.read({ workspaceId: text(args.workspace_id, "workspace_id"), path: text(args.path, "path"),
             ...(optionalInteger(args.offset, "offset") === undefined ? {} : { offset: optionalInteger(args.offset, "offset")! }),
@@ -212,7 +328,7 @@ export function createChatToolRuntime(input: {
         case "apply_patch":
           return patch.apply({ workspaceId: text(args.workspace_id, "workspace_id"), patch: multilineText(args.patch, "patch", 2 * 1024 * 1024) });
         case "exec_command":
-          return processes.exec({ workspaceId: text(args.workspace_id, "workspace_id"), command: text(args.cmd, "cmd"),
+          return processes.exec({ workspaceId: text(args.workspace_id, "workspace_id"), command: multilineText(args.cmd, "cmd", 64 * 1024),
             ...(optionalText(args.working_directory, "working_directory") === undefined ? {} : { workingDirectory: optionalText(args.working_directory, "working_directory")! }),
             ...(optionalText(args.operation_id, "operation_id") === undefined ? {} : { operationId: optionalText(args.operation_id, "operation_id")! }),
             ...(optionalInteger(args.yield_time_ms, "yield_time_ms") === undefined ? {} : { yieldTimeMs: optionalInteger(args.yield_time_ms, "yield_time_ms")! }) });
@@ -220,10 +336,21 @@ export function createChatToolRuntime(input: {
           return processes.writeStdin({ workspaceId: text(args.workspace_id, "workspace_id"), sessionId: optionalInteger(args.session_id, "session_id")!,
             ...(args.chars === undefined ? {} : { chars: typeof args.chars === "string" ? args.chars : (() => { throw new Error("chars must be a string"); })() }),
             ...(optionalInteger(args.yield_time_ms, "yield_time_ms") === undefined ? {} : { yieldTimeMs: optionalInteger(args.yield_time_ms, "yield_time_ms")! }) });
+        case "list_processes":
+          return processes.list({ workspaceId: text(args.workspace_id, "workspace_id"),
+            ...(optionalInteger(args.after_session_id, "after_session_id") === undefined ? {} : { afterSessionId: optionalInteger(args.after_session_id, "after_session_id")! }),
+            ...(optionalInteger(args.limit, "limit") === undefined ? {} : { limit: optionalInteger(args.limit, "limit")! }),
+            ...(optionalBoolean(args.include_completed, "include_completed") === undefined ? {} : { includeCompleted: optionalBoolean(args.include_completed, "include_completed")! }) });
         case "process_status":
-          return processes.status(text(args.workspace_id, "workspace_id"), text(args.operation_id, "operation_id"));
-        case "show_changes":
-          return changes.show(text(args.workspace_id, "workspace_id"));
+          return processes.inspect(text(args.workspace_id, "workspace_id"), text(args.operation_id, "operation_id"));
+        case "show_changes": {
+          const since = reviewSince(args.since);
+          const markReviewed = optionalBoolean(args.mark_reviewed, "mark_reviewed");
+          return changes.show(text(args.workspace_id, "workspace_id"), {
+            ...(since === undefined ? {} : { since }),
+            ...(markReviewed === undefined ? {} : { markReviewed }),
+          });
+        }
         case "show_review":
           return changes.showReview(text(args.workspace_id, "workspace_id"), text(args.review_ref, "review_ref"));
         case "list_reviews":
@@ -294,10 +421,15 @@ export function createChatToolRuntime(input: {
         throw error;
       }
     },
+    assertCanClose() { processes.assertCanClose(); },
     async close() {
+      // Refuse before closing any peer subsystem; recovery must remain usable.
+      processes.assertCanClose();
       const results = await Promise.allSettled([
         processes.close(),
-        ...(agents ? [agents.close()] : []),
+        ...(importer ? [importer.close()] : []),
+        ...(exporter ? [exporter.close()] : []),
+        agentState.close(),
       ]);
       const failures = results
         .filter((result): result is PromiseRejectedResult => result.status === "rejected")

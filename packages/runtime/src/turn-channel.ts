@@ -1,5 +1,7 @@
 import {
   transitionTurn,
+  diagnosticFingerprint,
+  emitDiagnosticEvent,
   type NativeToolCatalogEntry,
   type NativeToolInvocation,
   type NativeToolResult,
@@ -109,6 +111,84 @@ export class RuntimeTurnChannel {
   #settled = false;
   #toolRoundCount = 0;
   #stateRevision = 0;
+  readonly #progressListeners = new Set<(summary: string, sequence: number) => void>();
+  readonly #progressJournal: { sequence: number; summary: string }[] = [];
+  #progressTransportCursor = 0;
+  #progressChars = 0;
+  #progressPublished = 0;
+  #progressWithoutViewer = 0;
+  #progressBudgetRejected = 0;
+
+  /** Presentation only: no phase change, tool authority, final commit or retained payload log. */
+  publishProgress(summary: string): void {
+    if (this.#settled || !summary.trim()) return;
+    if (summary.length > 16384 || this.#progressChars + summary.length > 65536) {
+      this.#progressBudgetRejected += 1;
+      return;
+    }
+    if (this.#progressJournal.at(-1)?.summary === summary) return;
+    if (this.#progressJournal.length >= 4096) { this.#progressBudgetRejected += 1; return; }
+    this.#progressChars += summary.length;
+    this.#progressPublished += 1;
+    const entry = { sequence: this.#progressPublished, summary };
+    this.#progressJournal.push(entry);
+    if (!this.#progressListeners.size) this.#progressWithoutViewer += 1;
+    for (const listener of this.#progressListeners) {
+      try { listener(summary, entry.sequence); } catch { this.#progressListeners.delete(listener); }
+    }
+  }
+
+  /** In-memory, turn-owned replay. Cursor acknowledges the local transport boundary, not Desktop display. */
+  get progressTransportCursor(): number { return this.#progressTransportCursor; }
+
+  commitProgressTransport(sequence: number): void {
+    if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > this.#progressPublished) {
+      throw new Error("invalid progress transport cursor");
+    }
+    this.#progressTransportCursor = Math.max(this.#progressTransportCursor, sequence);
+    emitDiagnosticEvent("chatgpt_tela_work", "public_progress_transport_commit", {
+      scope_fingerprint: diagnosticFingerprint(this.#binding.authority.threadId),
+      turn_fingerprint: diagnosticFingerprint(this.#binding.authority.turnId),
+      progress_cursor: this.#progressTransportCursor,
+      delivery: "local_transport_boundary",
+    });
+  }
+
+  releaseProgress(): void {
+    this.#progressListeners.clear();
+    this.#progressJournal.length = 0;
+  }
+
+  subscribeProgress(listener: (summary: string, sequence: number) => void,
+    afterSequence = this.#progressTransportCursor): () => void {
+    if (!Number.isSafeInteger(afterSequence) || afterSequence < 0 || afterSequence > this.#progressPublished) {
+      throw new Error("invalid progress replay cursor");
+    }
+    let index = this.#progressJournal.findIndex(entry => entry.sequence > afterSequence);
+    if (index < 0) index = this.#progressJournal.length;
+    const replayCount = this.#progressJournal.length - index;
+    if (replayCount) emitDiagnosticEvent("chatgpt_tela_work", "public_progress_replay", {
+      scope_fingerprint: diagnosticFingerprint(this.#binding.authority.threadId),
+      turn_fingerprint: diagnosticFingerprint(this.#binding.authority.turnId),
+      progress_cursor: afterSequence, count: replayCount, delivery: "subscriber_attempt",
+    });
+    let delivering = false;
+    const deliver = () => {
+      if (delivering) return;
+      delivering = true;
+      try {
+        while (index < this.#progressJournal.length) {
+          const entry = this.#progressJournal[index]!;
+          listener(entry.summary, entry.sequence);
+          index += 1;
+        }
+      } finally { delivering = false; }
+    };
+    if (!this.#settled) this.#progressListeners.add(deliver);
+    try { deliver(); }
+    catch { this.#progressListeners.delete(deliver); }
+    return () => { this.#progressListeners.delete(deliver); };
+  }
 
   constructor(binding: NativeTurnBinding) {
     this.#binding = binding;
@@ -324,6 +404,12 @@ export class RuntimeTurnChannel {
     this.#fail(error);
   }
 
+  failBeforeAcceptance(reason: unknown): void {
+    const error = errorOf(reason);
+    this.#move("failed-before-acceptance");
+    this.#fail(error);
+  }
+
   cancel(reason: unknown = new Error("turn cancelled")): void {
     const error = errorOf(reason);
     this.#move("cancelled");
@@ -351,6 +437,15 @@ export class RuntimeTurnChannel {
   #touchState(): void {
     this.#stateRevision += 1;
     const snapshot = this.state();
+    emitDiagnosticEvent("chatgpt_tela_work", "native_turn_state", {
+      scope_fingerprint: diagnosticFingerprint(this.#binding.authority.threadId),
+      turn_fingerprint: diagnosticFingerprint(this.#binding.authority.turnId),
+      turn_phase: snapshot.phase, revision: snapshot.revision, tool_round_count: snapshot.toolRoundCount,
+      tool_pending: snapshot.outstandingToolCallId !== undefined, native_result_ready: snapshot.nativeResultReady === true,
+      public_progress_published_count: this.#progressPublished,
+      public_progress_without_viewer_count: this.#progressWithoutViewer,
+      public_progress_budget_rejected_count: this.#progressBudgetRejected,
+    });
     for (const waiter of [...this.#stateWaiters]) {
       if (this.#stateRevision <= waiter.afterRevision) continue;
       this.#stateWaiters.delete(waiter);
@@ -362,6 +457,7 @@ export class RuntimeTurnChannel {
   #settleFinal(result: { answer: string } | { error: Error }): void {
     if (this.#settled) throw new Error("turn final outcome is already settled");
     this.#settled = true;
+    this.#progressListeners.clear();
     if ("answer" in result) this.#resolveFinal(result.answer);
     else this.#rejectFinal(result.error);
     const waiter = this.#toolWaiter;

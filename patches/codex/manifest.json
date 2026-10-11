@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "upstreamRepository": "https://github.com/openai/codex",
+  "upstreamTag": "rust-v0.159.0",
+  "upstreamCommit": "687a119f0fcaace47e1f1abcc77cec6c813fd6da",
+  "rustToolchain": "1.95.0",
+  "patchFile": "model-compaction-mode.patch",
+  "patchSha256": "5494da76e31975443137b2eea43f62d1530a5af0a3415a49ca3973979abb63c9",
+  "status": "experimental-web-verified",
+  "capability": {
+    "modelCatalogField": "compaction_mode",
+    "localValue": "local",
+    "omittedValue": "provider-default"
+  },
+  "verification": {
+    "focusedEngineTests": 44,
+    "protocolAndModelTests": 423,
+    "telaBoundaryTests": 18,
+    "mockOfficialColdResume": true,
+    "realWebSummary": true,
+    "workspaceSuite": false,
+    "deployed": true,
+    "realWebRecall": true,
+    "officialColdResumeAfterWebSummary": true,
+    "nativeResponsesMocked": true,
+    "deploymentScope": "local-macos-arm64-profile-preview",
+    "consumerRelease": false,
+    "liveWebRepeatedCompaction": true,
+    "automaticPressureWithoutBackendUsageTests": 2,
+    "automaticCompactionRegressionTests": 15,
+    "realAutomaticWebCompaction": true
+  },
+  "installedPreview": {
+    "productVersion": "0.0.0-web-compaction-preview.4",
+    "patchSha256": "5494da76e31975443137b2eea43f62d1530a5af0a3415a49ca3973979abb63c9",
+    "automaticWebCompactionVerified": true
+  }
+}

@@ -100,6 +100,18 @@ export function extractNativeToolResults(value: unknown): readonly NativeToolRes
       }));
       continue;
     }
+    if (item.type === "mcp_tool_call_output") {
+      const output = record(item.output);
+      if (!Array.isArray(output?.content)) {
+        throw new Error("Native MCP tool result has no structured content array");
+      }
+      results.push(Object.freeze({
+        callId: item.call_id,
+        content: Object.freeze([...output.content]),
+        isError: output.isError === true || output.is_error === true,
+      }));
+      continue;
+    }
     if (item.type !== "function_call_output" && item.type !== "custom_tool_call_output") continue;
     results.push(Object.freeze({
       callId: item.call_id,

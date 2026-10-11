@@ -26,38 +26,54 @@ describe("privacy-safe diagnostic events", () => {
   });
 
   test("sensitive field names are rejected without throwing to callers", () => {
-    const original = process.stderr.write;
-    const writes: string[] = [];
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      writes.push(String(chunk));
-      return true;
-    }) as typeof process.stderr.write;
+    const directory = mkdtempSync(join(tmpdir(), "chatgpt-tela-diagnostics-filter-"));
+    const path = join(directory, "diagnostics.jsonl");
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = path;
     try {
       emitDiagnosticEvent("chatgpt_tela_test", "safe_stage", { status: "ready", count: 2 });
       emitDiagnosticEvent("chatgpt_tela_test", "unsafe_stage", { prompt: "do not log me" });
       emitDiagnosticEvent("chatgpt_tela_test", "unsafe_stage", { local_path: "/private/user/path" });
     } finally {
-      process.stderr.write = original;
+      // afterEach restores the environment; remove the fixture after reading below.
     }
+    const writes = readFileSync(path, "utf8").trim().split("\n");
     expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0]!) as { ts?: string }).toMatchObject({
+      ts: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    });
     expect(writes[0]).toContain('"status":"ready"');
     expect(writes[0]).not.toContain("do not log me");
     expect(writes[0]).not.toContain("/private/user/path");
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  test("request lineage failure retains structural proof without payload", () => {
+    const directory = mkdtempSync(join(tmpdir(), "tela-lineage-diagnostics-"));
+    const path = join(directory, "diagnostics.jsonl");
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = path;
+    try {
+      emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rejected", {
+        reason_class: "unproven_rekey", parent_user_present: false,
+        parent_fingerprint_matches: false, matching_user_count: 1,
+        user_count: 1, prior_user_present: true, new_lineage_count: 1,
+      });
+      expect(JSON.parse(readFileSync(path, "utf8").trim())).toMatchObject({
+        stage: "web_turn_identity_rejected", parent_user_present: false,
+        parent_fingerprint_matches: false, matching_user_count: 1,
+      });
+    } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
   test("configured JSONL sink receives only normalized safe events", () => {
     const directory = mkdtempSync(join(tmpdir(), "chatgpt-tela-diagnostics-"));
     const path = join(directory, "diagnostics.jsonl");
     process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = path;
-    const original = process.stderr.write;
-    process.stderr.write = (() => true) as typeof process.stderr.write;
-    try {
-      emitDiagnosticEvent("chatgpt_tela_test", "persisted", { status: "ready", count: 3 });
-      emitDiagnosticEvent("chatgpt_tela_test", "blocked", { secret: "never-write" });
-    } finally {
-      process.stderr.write = original;
-    }
+    emitDiagnosticEvent("chatgpt_tela_test", "persisted", { status: "ready", count: 3 });
+    emitDiagnosticEvent("chatgpt_tela_test", "blocked", { secret: "never-write" });
     const stored = readFileSync(path, "utf8");
+    expect(JSON.parse(stored.trim()) as { ts?: string }).toMatchObject({
+      ts: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    });
     expect(stored).toContain('"stage":"persisted"');
     expect(stored).toContain('"count":3');
     expect(stored).not.toContain("never-write");

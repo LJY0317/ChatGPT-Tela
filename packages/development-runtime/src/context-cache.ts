@@ -12,6 +12,10 @@ import type { ContextCheckpoint } from "@chatgpt-tela/core";
 
 const SCHEMA_VERSION = 1 as const;
 const DEFAULT_MAX_CHECKPOINTS_PER_TASK = 8;
+// Model summaries are capped at 32 KiB; the typed source/provenance envelope
+// needs some room without permitting arbitrarily large cache blobs.
+const MAX_CHECKPOINT_CONTENT_BYTES = 40 * 1024;
+const MAX_CHECKPOINT_CACHE_FILE_BYTES = 512 * 1024;
 
 export interface CachedContextCheckpoint {
   readonly checkpoint: ContextCheckpoint;
@@ -78,6 +82,9 @@ function checkpointIdentity(revisionId: string, content: string, estimatedTokens
 } {
   const revision = validId(revisionId, "checkpoint revision id");
   const tokens = validTokens(estimatedTokens);
+  if (Buffer.byteLength(content, "utf8") > MAX_CHECKPOINT_CONTENT_BYTES) {
+    throw new Error("checkpoint content exceeds its bounded derived-cache limit");
+  }
   const contentHash = hashHex(content);
   const id = `checkpoint_${hashBase64Url(
     `chatgpt-tela-checkpoint-v1\0${revision}\0${contentHash}\0${tokens}`,
@@ -202,7 +209,8 @@ export class FileContextCheckpointCache implements ContextCheckpointCache {
     const path = this.#path(fingerprint);
     try {
       const stat = await lstat(path);
-      if (!stat.isFile() || stat.isSymbolicLink()) return empty;
+      if (!stat.isFile() || stat.isSymbolicLink()
+        || stat.size > MAX_CHECKPOINT_CACHE_FILE_BYTES) return empty;
       const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return empty;
       const value = parsed as Record<string, unknown>;
@@ -235,6 +243,9 @@ export class FileContextCheckpointCache implements ContextCheckpointCache {
     const path = this.#path(value.taskFingerprint);
     const temporary = `${path}.tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
     const content = `${JSON.stringify(value)}\n`;
+    if (Buffer.byteLength(content, "utf8") > MAX_CHECKPOINT_CACHE_FILE_BYTES) {
+      throw new Error("checkpoint cache exceeds its bounded on-disk limit");
+    }
     try {
       await writeFile(temporary, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
       try {

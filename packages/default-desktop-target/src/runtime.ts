@@ -1,13 +1,22 @@
-import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
-import { dirname } from "node:path";
+import { randomBytes } from "node:crypto";
+import { emitDiagnosticEvent, type DiagnosticScalar, type NativeIngressMediaRegistry } from "@chatgpt-tela/core";
+import { execFile, spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
+import { dirname, join } from "node:path";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import {
+  defaultDesktopLaunchCommand,
   defaultDesktopProcessIds,
   requestDefaultDesktopNormalQuit,
   type DefaultDesktopInstallation,
 } from "./platform";
-import { startDefaultDesktopAppServerProxy, type DefaultDesktopAppServerProxy } from "./proxy";
+import {
+  startDefaultDesktopAppServerProxy,
+  type DefaultDesktopAppServerModelListAugmenter,
+  type DefaultDesktopAppServerProxy,
+} from "./proxy";
 import {
   defaultDesktopCodexConfigArguments,
   type DefaultDesktopResponsesRoute,
@@ -26,6 +35,7 @@ export interface DefaultDesktopTargetRuntime {
   readonly appServerEndpoint: string;
   readonly proxyEndpoint: string;
   readonly responsesRouteFingerprint: string;
+  readonly ingressMedia: NativeIngressMediaRegistry;
   stop(): Promise<void>;
 }
 
@@ -128,6 +138,33 @@ async function waitForProxyClient(proxy: DefaultDesktopAppServerProxy, desktop: 
   throw new Error("ChatGPT Desktop did not connect to the owned app-server proxy before startup timeout");
 }
 
+/** Read account-specific Native metadata without blocking browser startup or launching Desktop. */
+export function readDefaultDesktopNativeCatalog(input: {
+  readonly installation: DefaultDesktopInstallation;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+  readonly signal?: AbortSignal;
+}): Promise<unknown> {
+  const environment: NodeJS.ProcessEnv = { ...process.env, ...(input.environment ?? {}), CODEX_HOME: input.installation.codexHome };
+  // The Web route capability must never become a Native discovery account header.
+  delete environment.OPENAI_ORGANIZATION;
+  return new Promise((resolve, reject) => {
+    execFile(input.installation.codexExecutable, ["debug", "models"], {
+      env: environment, timeout: 20_000, maxBuffer: 16 * 1024 * 1024,
+      ...(input.signal ? { signal: input.signal } : {}),
+      encoding: "utf8", windowsHide: true,
+    }, (error, stdout) => {
+      if (error) {
+        reject(new Error(error.name === "AbortError"
+          ? "Native model catalog discovery was cancelled"
+          : "Native model catalog discovery failed"));
+        return;
+      }
+      try { resolve(JSON.parse(stdout)); }
+      catch { reject(new Error("Native model catalog discovery returned invalid JSON")); }
+    });
+  });
+}
+
 export async function startDefaultDesktopTargetRuntime(input: {
   readonly installation: DefaultDesktopInstallation;
   readonly route: DefaultDesktopResponsesRoute;
@@ -135,7 +172,33 @@ export async function startDefaultDesktopTargetRuntime(input: {
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly normalQuit?: (installation: DefaultDesktopInstallation, pid: number) => Promise<void>;
   readonly processIds?: (installation: DefaultDesktopInstallation) => Promise<readonly number[]>;
+  readonly augmentModelList?: DefaultDesktopAppServerModelListAugmenter;
+  readonly augmentNativeCatalog?: (catalog: unknown) => unknown;
+  /** Seeded remote mode requires a verified owned engine capability at the product boundary. */
+  readonly catalogMode?: "static" | "seeded-remote";
+  /** Same-launch read-only preparation; never a persistent correctness cache. */
+  readonly nativeCatalog?: Promise<unknown>;
+  /** Prepare the backend in parallel, but admit Desktop only after caller proofs complete. */
+  readonly beforeDesktopLaunch?: () => Promise<void>;
+  readonly onDiagnostic?: (stage: string, fields: Readonly<Record<string, DiagnosticScalar>>) => void;
 }): Promise<DefaultDesktopTargetRuntime> {
+  const started = performance.now();
+  const fingerprint = randomBytes(12).toString("hex");
+  let phase = "checking";
+  const diagnostic = (stage: string, fields: Readonly<Record<string, DiagnosticScalar>> = {}) => {
+    try {
+      const structural = { operation_fingerprint: fingerprint, phase, platform: input.installation.platform,
+        duration_ms: Math.max(0, Math.round(performance.now() - started)), ...fields };
+      if (input.onDiagnostic) input.onDiagnostic(stage, structural);
+      else emitDiagnosticEvent("chatgpt_tela_codex", stage, structural);
+    } catch { /* Diagnostics cannot alter startup, rollback, or stop. */ }
+  };
+  const step = (next: string) => { phase = next; diagnostic("desktop_start_phase"); };
+  try {
+  step("checking");
+  if (input.catalogMode === "seeded-remote" && !input.augmentNativeCatalog) {
+    throw new Error("seeded remote discovery requires a real initial catalog");
+  }
   if (!input.installation.normalQuitSupported && !input.normalQuit) {
     throw new Error(`built-in default Desktop runtime requires a normal quit lifecycle on ${input.installation.platform}`);
   }
@@ -152,10 +215,31 @@ export async function startDefaultDesktopTargetRuntime(input: {
     CODEX_HOME: input.installation.codexHome,
     [input.route.envKey]: input.credential,
   };
+  const inheritedOrganization = backendEnvironment.OPENAI_ORGANIZATION;
+  if (inheritedOrganization && inheritedOrganization !== input.credential) {
+    throw new Error("default Desktop Responses route cannot replace an existing OPENAI_ORGANIZATION value");
+  }
+  backendEnvironment.OPENAI_ORGANIZATION = input.credential;
+  let catalogDirectory: string | undefined;
+  let catalogArguments: string[] = [];
+  if (input.augmentNativeCatalog) {
+    step("catalog");
+    const catalog = await (input.nativeCatalog ?? readDefaultDesktopNativeCatalog({
+      installation: input.installation, environment: backendEnvironment,
+    }));
+    const augmented = input.augmentNativeCatalog(catalog);
+    catalogDirectory = mkdtempSync(join(tmpdir(), "tela-model-catalog-"));
+    const path = join(catalogDirectory, "models.json");
+    writeFileSync(path, JSON.stringify(augmented), { mode: 0o600 });
+    catalogArguments = ["-c", `model_catalog_json=${JSON.stringify(path)}`];
+    if (input.catalogMode === "seeded-remote") catalogArguments.push("-c", "features.tela_seeded_model_catalog=true");
+  }
+  step("backend");
   const backend = spawn(input.installation.codexExecutable, [
-    ...defaultDesktopCodexConfigArguments(input.route),
-    "-c", "features.code_mode_host=true",
     "app-server",
+    ...defaultDesktopCodexConfigArguments(input.route),
+    ...catalogArguments,
+    "-c", "features.code_mode_host=true",
     "--analytics-default-enabled",
     "-c", "plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.enabled=true",
     "--listen", "ws://127.0.0.1:0",
@@ -168,12 +252,23 @@ export async function startDefaultDesktopTargetRuntime(input: {
 
   let proxy: DefaultDesktopAppServerProxy | undefined;
   let desktop: ChildProcess | undefined;
+  let desktopPid: number | undefined;
   try {
     const appServerEndpoint = await waitForAppServerEndpoint(backend);
     backend.stderr.resume();
+    step("handshake");
     const rpc = await connectCodexAppServerWebSocket(appServerEndpoint);
     await rpc.close();
-    proxy = await startDefaultDesktopAppServerProxy({ upstreamEndpoint: appServerEndpoint, route: input.route });
+    step("proxy");
+    proxy = await startDefaultDesktopAppServerProxy({
+      upstreamEndpoint: appServerEndpoint,
+      route: input.route,
+      ...(input.onDiagnostic ? { onDiagnostic: input.onDiagnostic } : {}),
+      ...(input.augmentModelList ? { augmentModelList: input.augmentModelList } : {}),
+    });
+
+    step("admission");
+    await input.beforeDesktopLaunch?.();
 
     const desktopEnvironment: NodeJS.ProcessEnv = {
       ...process.env,
@@ -183,28 +278,47 @@ export async function startDefaultDesktopTargetRuntime(input: {
       CODEX_APP_SERVER_WS_URL: proxy.endpoint,
     };
     delete desktopEnvironment[input.route.envKey];
-    desktop = spawn(input.installation.chatGptExecutable, [
-      `--user-data-dir=${input.installation.userDataDir}`,
-    ], {
+    const [desktopCommand, ...desktopArguments] = defaultDesktopLaunchCommand(input.installation);
+    step("launching");
+    desktop = spawn(desktopCommand!, desktopArguments, {
       cwd: dirname(input.installation.codexHome),
       env: desktopEnvironment,
       stdio: "ignore",
       windowsHide: true,
     });
     if (!desktop.pid) throw new Error("ChatGPT Desktop did not expose a process id");
+    step("connecting");
     await waitForProxyClient(proxy, desktop);
+    step("identity");
+    if (input.installation.platform === "darwin") {
+      const deadline = Date.now() + START_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        if (!alive(desktop)) throw new Error("macOS application launcher exited before Desktop identity was established");
+        const pids = await processIds(input.installation);
+        if (pids.length > 1) throw new Error("macOS Desktop process identity is ambiguous");
+        if (pids[0]) { desktopPid = pids[0]; break; }
+        await sleep(50);
+      }
+      if (!desktopPid) throw new Error("macOS Desktop process identity was not established");
+    } else { desktopPid = desktop.pid; }
 
+    step("ready");
+    diagnostic("desktop_start_complete");
     const normalQuit = input.normalQuit ?? requestDefaultDesktopNormalQuit;
     let stopping: Promise<void> | undefined;
     return Object.freeze({
       installation: input.installation,
-      desktopPid: desktop.pid,
+      desktopPid: desktopPid!,
       backendPid: backend.pid!,
       appServerEndpoint,
       proxyEndpoint: proxy.endpoint,
       responsesRouteFingerprint: input.route.fingerprint,
+      ingressMedia: proxy.ingressMedia,
       stop() {
         if (stopping) return stopping;
+        const stopStarted = performance.now();
+        let stopPhase = "ownership";
+        diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: 0 });
         stopping = (async () => {
           if (desktop && alive(desktop)) {
             // Re-prove that the exact Desktop pid spawned by this runtime still exists as the
@@ -212,20 +326,28 @@ export async function startDefaultDesktopTargetRuntime(input: {
             // already replaced that process, preserve the replacement and tear down only Tela's
             // proxy/backend resources. This also handles an unreaped stale ChildProcess handle.
             const currentDesktopPids = await processIds(input.installation);
-            if (currentDesktopPids.includes(desktop.pid!)) {
-              await normalQuit(input.installation, desktop.pid!);
+            if (currentDesktopPids.includes(desktopPid!)) {
+              stopPhase = "normal_quit";
+              diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: Math.round(performance.now() - stopStarted) });
+              await normalQuit(input.installation, desktopPid!);
               if (!await waitForExit(desktop, STOP_TIMEOUT_MS)) {
                 // Discovery still proves this exact pid as the configured Desktop child, so the
                 // bounded fallback cannot target an unrelated replacement process.
+                if (input.installation.platform === "darwin") throw new Error("ChatGPT did not close after normal quit; owned app preserved");
                 desktop.kill("SIGTERM");
                 if (!await waitForExit(desktop, 2_000)) desktop.kill("SIGKILL");
                 await waitForExit(desktop, 1_000);
               }
             }
           }
+          stopPhase = "transport_cleanup";
+          diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: Math.round(performance.now() - stopStarted) });
           await proxy!.close();
           await terminateOwned(backend);
+          if (catalogDirectory) rmSync(catalogDirectory, { recursive: true, force: true });
+          diagnostic("desktop_stop_complete", { phase: "closed", duration_ms: Math.round(performance.now() - stopStarted) });
         })().catch(error => {
+          diagnostic("desktop_stop_failed", { phase: stopPhase, duration_ms: Math.round(performance.now() - stopStarted) });
           stopping = undefined;
           throw error;
         });
@@ -233,11 +355,12 @@ export async function startDefaultDesktopTargetRuntime(input: {
       },
     });
   } catch (error) {
+    diagnostic("desktop_rollback_begin");
     const failures: unknown[] = [error];
     if (desktop && alive(desktop)) {
       try {
         const normalQuit = input.normalQuit ?? requestDefaultDesktopNormalQuit;
-        await normalQuit(input.installation, desktop.pid!);
+        if (desktopPid !== undefined) await normalQuit(input.installation, desktopPid);
         if (!await waitForExit(desktop, 2_000)) await terminateOwned(desktop);
       } catch (quitError) {
         failures.push(quitError);
@@ -246,7 +369,13 @@ export async function startDefaultDesktopTargetRuntime(input: {
     }
     if (proxy) await proxy.close().catch(cleanupError => failures.push(cleanupError));
     await terminateOwned(backend).catch(cleanupError => failures.push(cleanupError));
+    if (catalogDirectory) rmSync(catalogDirectory, { recursive: true, force: true });
+    diagnostic(failures.length > 1 ? "desktop_rollback_failed" : "desktop_rollback_complete", { count: failures.length - 1 });
     if (failures.length > 1) throw new AggregateError(failures, "default Desktop startup rollback was incomplete");
+    throw error;
+  }
+  } catch (error) {
+    diagnostic("desktop_start_failed");
     throw error;
   }
 }

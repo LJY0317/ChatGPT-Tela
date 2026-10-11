@@ -1,16 +1,15 @@
 import {
   chmodSync,
   existsSync,
-  lstatSync,
   mkdirSync,
-  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { createPackagedInstallBlueprint, type PackagedInstallBlueprint } from "./packaged-install";
-import { packagedInstallSpecFromPayload } from "./packaged-manifest";
+import { packagedInstallSpecFromPayload, readPackagedProductManifest } from "./packaged-manifest";
+import { assertChatProcessStoreCompatible } from "./chat-process-storage";
 import {
   beginPackagedPayloadReplacement,
   observeInstalledPackagedPayload,
@@ -20,9 +19,9 @@ import {
 import { mutateOwnershipManifest } from "./ownership-store";
 import { readOwnershipManifest, type OwnershipManifest } from "./ownership";
 import { ServiceRegistrationInstaller, SystemServiceRegistrationCommandRunner, type ServiceRegistrationCommandRunner } from "./service-registration";
-import type { TelaServiceId } from "./layout";
+import { resolveProductPaths, type TelaServiceId } from "./layout";
 import { verifyPackagedPayloadSignature, type PackagedPayloadTrustedKeys } from "./packaged-signature";
-import { assertNoConflictingPackagedTransition, packagedUpgradeJournalPath } from "./packaged-transition";
+import { assertNoConflictingPackagedTransition, packagedUpgradeJournalPath, readPackagedTransitionValue } from "./packaged-transition";
 
 const QUIESCE_ORDER = Object.freeze(["gateway", "codex", "chat"] as const);
 const RESUME_ORDER = Object.freeze(["chat", "codex", "gateway"] as const);
@@ -48,7 +47,8 @@ export type PackagedUpgradePhase =
   | "quiesced"
   | "payload-replacing"
   | "payload-installed"
-  | "manifest-updated";
+  | "manifest-updated"
+  | "restoring-source";
 
 export interface PackagedUpgradeJournal {
   readonly version: 1;
@@ -89,7 +89,7 @@ function fingerprint(value: unknown, field: string): string {
 function parseJournal(value: unknown): PackagedUpgradeJournal {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("packaged upgrade journal is invalid");
   const item = value as Record<string, unknown>;
-  const phases: readonly PackagedUpgradePhase[] = ["prepared", "quiescing", "quiesced", "payload-replacing", "payload-installed", "manifest-updated"];
+  const phases: readonly PackagedUpgradePhase[] = ["prepared", "quiescing", "quiesced", "payload-replacing", "payload-installed", "manifest-updated", "restoring-source"];
   if (item.version !== 1 || !phases.includes(item.phase as PackagedUpgradePhase)) throw new Error("packaged upgrade journal version/phase is unsupported");
   return Object.freeze({
     version: 1,
@@ -107,9 +107,7 @@ function parseJournal(value: unknown): PackagedUpgradeJournal {
 
 export function readPackagedUpgradeJournal(path: string): PackagedUpgradeJournal | undefined {
   if (!existsSync(path)) return undefined;
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("packaged upgrade journal path is unsafe or replaced");
-  return parseJournal(JSON.parse(readFileSync(path, "utf8")) as unknown);
+  return parseJournal(readPackagedTransitionValue(path));
 }
 
 function writeJournal(path: string, journal: PackagedUpgradeJournal): void {
@@ -149,6 +147,21 @@ function assertStableServiceDefinitions(manifest: OwnershipManifest, blueprint: 
   }
 }
 
+async function assertStableServiceRegistrations(input: {
+  readonly manifest: OwnershipManifest;
+  readonly blueprint: PackagedInstallBlueprint;
+  readonly runner?: ServiceRegistrationCommandRunner;
+}): Promise<void> {
+  const installer = new ServiceRegistrationInstaller({
+    platform: input.blueprint.platform,
+    runner: input.runner ?? new SystemServiceRegistrationCommandRunner(),
+  });
+  for (const service of input.blueprint.services) {
+    const state = await installer.observeReady(service.resource, input.manifest);
+    if (state !== "owned") throw new Error(`packaged upgrade service registration is not exact-owned: ${service.service} (${state})`);
+  }
+}
+
 export async function planPackagedUpgradeFromPayload(input: {
   readonly payloadSourcePath: string;
   readonly platform?: NodeJS.Platform;
@@ -166,6 +179,39 @@ export async function planPackagedUpgradeFromPayload(input: {
   assertNoConflictingPackagedTransition(blueprint.paths, "upgrade");
   const manifest = readOwnershipManifest(blueprint.paths.installManifest);
   if (!manifest) throw new Error("packaged upgrade requires an existing owned install manifest");
+  assertChatProcessStoreCompatible(blueprint.paths, readPackagedProductManifest(input.payloadSourcePath).chatProcessStore);
+  const journal = readPackagedUpgradeJournal(packagedUpgradeJournalPath(blueprint.paths));
+  if (journal) {
+    if (journal.phase === "restoring-source") throw new Error("packaged upgrade cancellation must finish before another upgrade");
+    if (journal.installId !== manifest.installId
+      || journal.toVersion !== spec.productVersion
+      || journal.targetPayloadFingerprint !== blueprint.payloadFingerprint) {
+      throw new Error("a different packaged upgrade journal already owns this install");
+    }
+    if (manifest.productVersion !== journal.fromVersion && manifest.productVersion !== journal.toVersion) {
+      throw new Error("packaged upgrade manifest version changed outside the active transition");
+    }
+    assertStableServiceDefinitions(manifest, blueprint);
+    await assertStableServiceRegistrations({
+      manifest,
+      blueprint,
+      ...(input.runner ? { runner: input.runner } : {}),
+    });
+    return Object.freeze({
+      installId: journal.installId,
+      fromVersion: journal.fromVersion,
+      toVersion: journal.toVersion,
+      sourcePayload: Object.freeze({
+        version: 1 as const,
+        installId: journal.installId,
+        resourceId: blueprint.payload.resource.id,
+        productVersion: journal.fromVersion,
+        payloadFingerprint: journal.sourcePayloadFingerprint,
+      }),
+      targetPayloadFingerprint: journal.targetPayloadFingerprint,
+      targetBlueprint: blueprint,
+    });
+  }
   if (manifest.productVersion === spec.productVersion) throw new Error("target package version already matches the installed version; use repair instead of upgrade");
   if (!exactResource(manifest, blueprint.payload.resource.id, blueprint.payload.resource)) {
     throw new Error("packaged upgrade binary resource identity does not match the installed manifest");
@@ -175,14 +221,7 @@ export async function planPackagedUpgradeFromPayload(input: {
     throw new Error("installed packaged payload cannot be proven exact for the current product version");
   }
   assertStableServiceDefinitions(manifest, blueprint);
-  const installer = new ServiceRegistrationInstaller({
-    platform: blueprint.platform,
-    runner: input.runner ?? new SystemServiceRegistrationCommandRunner(),
-  });
-  for (const service of blueprint.services) {
-    const state = await installer.observeReady(service.resource, manifest);
-    if (state !== "owned") throw new Error(`packaged upgrade service registration is not exact-owned: ${service.service} (${state})`);
-  }
+  await assertStableServiceRegistrations({ manifest, blueprint, ...(input.runner ? { runner: input.runner } : {}) });
   return Object.freeze({
     installId: manifest.installId,
     fromVersion: manifest.productVersion,
@@ -240,9 +279,13 @@ export async function applyPackagedUpgradeFromPayload(input: {
   }
   assertStableServiceDefinitions(manifest, blueprint);
 
+  const targetStorage = readPackagedProductManifest(input.payloadSourcePath).chatProcessStore;
+  assertChatProcessStoreCompatible(blueprint.paths, targetStorage);
+
   const journalPath = packagedUpgradeJournalPath(blueprint.paths);
   let journal = readPackagedUpgradeJournal(journalPath);
   if (journal && !sameUpgrade(journal, input.plan)) throw new Error("a different packaged upgrade journal already owns this install");
+  if (journal?.phase === "restoring-source") throw new Error("packaged upgrade cancellation must finish before another upgrade");
   if (!journal) {
     if (manifest.productVersion !== input.plan.fromVersion) throw new Error("upgrade journal is missing after product version already changed");
     journal = initialJournal(input.plan);
@@ -274,6 +317,8 @@ export async function applyPackagedUpgradeFromPayload(input: {
         throw new Error(`packaged upgrade lost quiescence before binary replacement: ${service}`);
       }
     }
+    // A final admitted request can change the format while shutdown drains.
+    assertChatProcessStoreCompatible(blueprint.paths, targetStorage);
     const target = new PackagedPayloadManager({ manifestPath, installId: manifest.installId, spec: blueprint.payload });
     const targetState = target.observe(manifest);
     if (targetState !== "owned") {
@@ -376,4 +421,87 @@ export async function applySignedPackagedUpgradeFromPayload(input: {
 }): ReturnType<typeof applyPackagedUpgradeFromPayload> {
   verifyPackagedPayloadSignature({ payloadRoot: input.payloadSourcePath, trustedKeys: input.trustedKeys });
   return applyPackagedUpgradeFromPayload(input);
+}
+
+/** Read-only source restoration review; installed files are never replaced. */
+export async function planSignedPackagedUpgradeCancellation(input: {
+  readonly sourcePayloadPath: string;
+  readonly trustedKeys: PackagedPayloadTrustedKeys;
+  readonly platform?: NodeJS.Platform;
+  readonly home?: string;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+  readonly runner?: ServiceRegistrationCommandRunner;
+}): Promise<{ readonly journal: PackagedUpgradeJournal; readonly blueprint: PackagedInstallBlueprint }> {
+  // Resolve the installed source, independently of the abandoned target package.
+  const paths = resolveProductPaths(input);
+  assertNoConflictingPackagedTransition(paths, "upgrade");
+  const journalPath = packagedUpgradeJournalPath(paths);
+  const journal = readPackagedUpgradeJournal(journalPath);
+  if (!journal) throw new Error("no packaged upgrade exists to cancel");
+  if (!["prepared", "quiescing", "quiesced", "restoring-source"].includes(journal.phase)) {
+    throw new Error("packaged upgrade cannot be cancelled after payload replacement begins");
+  }
+  const sourceJournal = journal;
+  if (sourceJournal.resumedServices.some(service => !sourceJournal.resumeServices.includes(service))) {
+    throw new Error("packaged upgrade cancellation resume records are inconsistent");
+  }
+  const proveSource = async () => {
+    const manifest = readOwnershipManifest(paths.installManifest);
+    if (!manifest || manifest.installId !== sourceJournal.installId || manifest.productVersion !== sourceJournal.fromVersion) {
+      throw new Error("packaged upgrade cancellation source identity changed");
+    }
+    const resources = manifest.resources.filter(resource => resource.id === "product-binaries" && resource.kind === "directory" && resource.dataClass === "binary");
+    if (resources.length !== 1 || resources[0]!.kind !== "directory") throw new Error("packaged upgrade cancellation requires one owned payload");
+    const resource = resources[0]!;
+    const installed = observeInstalledPackagedPayload(resource, manifest);
+    if (installed.state !== "owned" || installed.receipt.productVersion !== sourceJournal.fromVersion
+      || installed.receipt.payloadFingerprint !== sourceJournal.sourcePayloadFingerprint) {
+      throw new Error("packaged upgrade cancellation source payload drifted");
+    }
+    verifyPackagedPayloadSignature({ payloadRoot: input.sourcePayloadPath, trustedKeys: input.trustedKeys });
+    const source = readPackagedProductManifest(input.sourcePayloadPath);
+    if (source.lifecycle?.transitionLaunch !== 1 || source.lifecycle.sourceCancellation !== 1) {
+      throw new Error("installed source launcher does not declare upgrade cancellation support; resume the signed target upgrade instead");
+    }
+    assertChatProcessStoreCompatible(paths, source.chatProcessStore);
+    const blueprint = createPackagedInstallBlueprint({ spec: packagedInstallSpecFromPayload(input.sourcePayloadPath),
+      ...(input.platform ? { platform: input.platform } : {}), ...(input.home ? { home: input.home } : {}),
+      ...(input.environment ? { environment: input.environment } : {}) });
+    if (blueprint.payloadFingerprint !== sourceJournal.sourcePayloadFingerprint || source.productVersion !== sourceJournal.fromVersion) {
+      throw new Error("packaged upgrade cancellation source package does not match its checkpoint");
+    }
+    assertStableServiceDefinitions(manifest, blueprint);
+    await assertStableServiceRegistrations({ manifest, blueprint, ...(input.runner ? { runner: input.runner } : {}) });
+    return blueprint;
+  };
+  const blueprint = await proveSource();
+  return Object.freeze({ journal, blueprint });
+}
+
+/** Explicit pre-replacement cancellation, with one durable restoration checkpoint. */
+export async function cancelSignedPackagedUpgrade(input: Parameters<typeof planSignedPackagedUpgradeCancellation>[0] & {
+  readonly services: PackagedUpgradeServiceController;
+}): Promise<{ readonly restoredServices: readonly TelaServiceId[] }> {
+  const reviewed = await planSignedPackagedUpgradeCancellation(input);
+  const journalPath = packagedUpgradeJournalPath(reviewed.blueprint.paths);
+  let journal = reviewed.journal;
+  if (journal.phase !== "restoring-source") journal = updateJournal(journalPath, journal, { phase: "restoring-source", resumedServices: [] });
+  const proveSource = async () => {
+    const current = await planSignedPackagedUpgradeCancellation(input);
+    if (current.journal.phase !== "restoring-source" || JSON.stringify(current.journal) !== JSON.stringify(journal)) {
+      throw new Error("packaged upgrade cancellation checkpoint changed during restoration");
+    }
+  };
+  const restored = [...journal.resumedServices];
+  for (const service of RESUME_ORDER) {
+    if (!journal.resumeServices.includes(service) || restored.includes(service)) continue;
+    await proveSource();
+    // A failed shutdown may have left this service alive. Never duplicate it.
+    if (await input.services.inspect(service) === "stopped") await input.services.resume(service);
+    restored.push(service);
+    journal = updateJournal(journalPath, journal, { resumedServices: Object.freeze([...restored]) });
+  }
+  await proveSource();
+  rmSync(journalPath, { force: false });
+  return Object.freeze({ restoredServices: Object.freeze(restored) });
 }

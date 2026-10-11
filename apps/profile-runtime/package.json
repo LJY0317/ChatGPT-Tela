@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@chatgpt-tela/development-runtime": "workspace:*"
+    "@chatgpt-tela/development-runtime": "workspace:*",
+    "@chatgpt-tela/http-host": "workspace:*",
+    "@chatgpt-tela/codex": "workspace:*",
+    "@chatgpt-tela/core": "workspace:*",
+    "@chatgpt-tela/chatgpt": "workspace:*",
+    "@chatgpt-tela/service-protocol": "workspace:*"
   }
 }

@@ -67,14 +67,21 @@ describe("dynamic Codex turn bridge", () => {
         input: "printf ok",
       })).content).toBe("ok");
       const diagnostics = readFileSync(diagnosticPath, "utf8").trim().split("\n").map(line => JSON.parse(line));
-      expect(diagnostics.map(item => [item.stage, item.service])).toEqual([
+      // The same isolated diagnostic sink now contains both routing and
+      // private HTTP lifecycle events. Verify the Gateway contract without
+      // mistaking additional payload-free HTTP evidence for a routing failure.
+      expect(diagnostics.filter(item => item.event === "chatgpt_tela_gateway")
+        .map(item => [item.stage, item.service])).toEqual([
         ["backend_call_start", "codex"],
         ["backend_call_complete", "codex"],
         ["backend_call_start", "codex"],
         ["backend_call_complete", "codex"],
       ]);
+      expect(diagnostics.some(item => item.event === "chatgpt_tela_http"
+        && item.stage === "http_response_finished")).toBe(true);
       expect(readFileSync(diagnosticPath, "utf8")).not.toContain("turnr_ProfileA1_opaque");
       expect(readFileSync(diagnosticPath, "utf8")).not.toContain("printf ok");
+      expect(readFileSync(diagnosticPath, "utf8")).not.toContain(token);
     } finally {
       await server.stop();
       if (previousDiagnosticPath === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;

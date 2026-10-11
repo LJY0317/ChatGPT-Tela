@@ -82,18 +82,23 @@ export function encodeNativeResponsesOutcome(input: {
   readonly outcome: NativeGatewayOutcome;
   readonly model: string;
   readonly createdAt?: number;
+  readonly responseId?: string;
+  readonly precedingOutput?: readonly ResponseOutputItem[];
 }): EncodedNativeResponsesOutcome {
   if (!input.model.trim()) throw new Error("Native Responses model must be non-empty");
   const key = deliveryKey(input.outcome);
-  const responseId = stableId("resp", key);
+  // Keep bridge-owned identities visibly distinct from first-party Responses ids. Native
+  // passthrough can then remove only Tela artifacts when a thread switches back to a native model
+  // without guessing whether an opaque `resp_*`/`msg_*` id came from OpenAI or from this bridge.
+  const responseId = input.responseId ?? stableId("resp_tela", key);
   const outputItemId = stableId(
     input.outcome.type === "final"
-      ? "msg"
+      ? "msg_tela"
       : input.outcome.item.type === "function_call"
-        ? "fc"
+        ? "fc_tela"
         : input.outcome.item.type === "custom_tool_call"
-          ? "ctc"
-          : "tsc",
+          ? "ctc_tela"
+          : "tsc_tela",
     key,
   );
   const outputItem = input.outcome.type === "tool-call"
@@ -109,7 +114,7 @@ export function encodeNativeResponsesOutcome(input: {
     created_at: createdAt,
     status: "completed" as const,
     model: input.model,
-    output: Object.freeze([outputItem]),
+    output: Object.freeze([...(input.precedingOutput ?? []), outputItem]),
     usage: null,
   });
   return Object.freeze({ response, outputItem, responseId, outputItemId });
@@ -150,41 +155,43 @@ export interface NativeResponsesSsePlan {
 export function nativeResponsesSsePlan(
   outcome: NativeGatewayOutcome,
   encoded: EncodedNativeResponsesOutcome,
+  options: { readonly sequenceStart?: number; readonly includeCreated?: boolean } = {},
 ): NativeResponsesSsePlan {
-  let sequence = 0;
+  let sequence = options.sequenceStart ?? 0;
+  const outputIndex = encoded.response.output.length - 1;
   const event = (name: string, payload: Readonly<Record<string, unknown>>) => (
     sse(name, { sequence_number: sequence++, ...payload })
   );
-  const frames: string[] = [event("response.created", { response: inProgressResponse(encoded) })];
+  const frames: string[] = options.includeCreated === false ? [] : [event("response.created", { response: inProgressResponse(encoded) })];
 
   if (outcome.type === "tool-call") {
     frames.push(event("response.output_item.added", {
-      output_index: 0,
+      output_index: outputIndex,
       item: inProgressItem(encoded),
     }));
     const item = outcome.item;
     if (item.type === "function_call") {
       frames.push(event("response.function_call_arguments.done", {
         item_id: encoded.outputItemId,
-        output_index: 0,
+        output_index: outputIndex,
         arguments: item.arguments,
       }));
     } else if (item.type === "custom_tool_call") {
       frames.push(event("response.custom_tool_call_input.done", {
         item_id: encoded.outputItemId,
-        output_index: 0,
+        output_index: outputIndex,
         input: item.input,
       }));
     }
     frames.push(event("response.output_item.done", {
-      output_index: 0,
+      output_index: outputIndex,
       item: encoded.outputItem,
     }));
     frames.push(event("response.completed", { response: encoded.response }));
     frames.push("data: [DONE]\n\n");
     // output_item.added is the first frame that exposes the exact call identity. Once handed to the
     // transport, a retry must not cause the same local tool to execute again.
-    return Object.freeze({ frames: Object.freeze(frames), commitAfterFrame: 1 });
+    return Object.freeze({ frames: Object.freeze(frames), commitAfterFrame: options.includeCreated === false ? 0 : 1 });
   }
 
   const contentPart = Object.freeze({ type: "output_text", text: "", annotations: Object.freeze([]) });
@@ -194,37 +201,37 @@ export function nativeResponsesSsePlan(
     annotations: Object.freeze([]),
   });
   frames.push(event("response.output_item.added", {
-    output_index: 0,
+    output_index: outputIndex,
     item: inProgressItem(encoded),
   }));
   frames.push(event("response.content_part.added", {
     item_id: encoded.outputItemId,
-    output_index: 0,
+    output_index: outputIndex,
     content_index: 0,
     part: contentPart,
   }));
   if (outcome.answer.length > 0) {
     frames.push(event("response.output_text.delta", {
       item_id: encoded.outputItemId,
-      output_index: 0,
+      output_index: outputIndex,
       content_index: 0,
       delta: outcome.answer,
     }));
   }
   frames.push(event("response.output_text.done", {
     item_id: encoded.outputItemId,
-    output_index: 0,
+    output_index: outputIndex,
     content_index: 0,
     text: outcome.answer,
   }));
   frames.push(event("response.content_part.done", {
     item_id: encoded.outputItemId,
-    output_index: 0,
+    output_index: outputIndex,
     content_index: 0,
     part: donePart,
   }));
   frames.push(event("response.output_item.done", {
-    output_index: 0,
+    output_index: outputIndex,
     item: encoded.outputItem,
   }));
   frames.push(event("response.completed", { response: encoded.response }));

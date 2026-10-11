@@ -1,9 +1,10 @@
 import { join } from "node:path";
 import {
+  restorableWorkProfiles,
   startCodexService,
   startCodexServiceHttpServer,
 } from "@chatgpt-tela/codex-service";
-import { readProductPreferences } from "@chatgpt-tela/product-config";
+import { approvalDelayMilliseconds, readProductPreferences, setWorkProfileConnection } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import {
   removeServiceRuntimeDescriptor,
@@ -23,15 +24,22 @@ async function main(): Promise<void> {
   const installId = required("CHATGPT_TELA_INSTALL_ID");
   const paths = resolveProductPaths();
   const descriptorPath = join(paths.serviceRuntime("codex"), "descriptor.json");
+  const lifecycle = new AbortController();
   const service = await startCodexService({
+    signal: lifecycle.signal,
     config: multiProfileLauncher
       ? { multiProfile: { launcherCli: multiProfileLauncher } }
       : {},
     profileRuntimeCommand: [runtimeExecutable, runtimeEntrypoint],
     environment: process.env,
-    profileRuntimeEnvironment: () => ({
-      CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: readProductPreferences().approvalAutomation,
-    }),
+    onProfileConnectionChanged: setWorkProfileConnection,
+    profileRuntimeEnvironment: () => {
+      const preferences = readProductPreferences();
+      return {
+        CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: preferences.approvalAutomation,
+        CHATGPT_TELA_APPROVAL_DELAY_MS: String(approvalDelayMilliseconds(preferences.approvalDelay)),
+      };
+    },
   });
   const http = await startCodexServiceHttpServer({ service });
   writeServiceRuntimeDescriptor(descriptorPath, {
@@ -45,11 +53,25 @@ async function main(): Promise<void> {
     startedAt: new Date().toISOString(),
   });
 
+  // One startup attempt, no polling and no interruption of already-running apps.
+  const restoration = (async () => {
+    const identities = readProductPreferences().workProfileConnections ?? [];
+    if (identities.length === 0) return;
+    for (const slot of restorableWorkProfiles(await service.profiles(), identities)) {
+      if (lifecycle.signal.aborted) return;
+      // Recheck immediately before starting; the app may have opened during discovery.
+      if (!restorableWorkProfiles(await service.profiles(), identities).includes(slot)) continue;
+      try { await service.startProfile(slot, { requireStopped: true }); }
+      catch { console.error("Tela Work saved connection needs attention."); }
+    }
+  })().catch(() => console.error("Tela Work connection restoration needs attention."));
+
   let stopping: Promise<void> | undefined;
   const stop = () => {
+    lifecycle.abort();
     if (!stopping) {
       stopping = (async () => {
-        const results = await Promise.allSettled([http.close(), service.close()]);
+        const results = await Promise.allSettled([http.close(), restoration.then(() => service.close())]);
         const failures = results
           .filter((result): result is PromiseRejectedResult => result.status === "rejected")
           .map(result => result.reason);
@@ -64,7 +86,7 @@ async function main(): Promise<void> {
   };
   let resolveSignal!: () => void;
   const signaled = new Promise<void>(resolvePromise => { resolveSignal = resolvePromise; });
-  const signal = () => resolveSignal();
+  const signal = () => { lifecycle.abort(); resolveSignal(); };
   process.once("SIGINT", signal);
   process.once("SIGTERM", signal);
   await Promise.race([http.shutdownRequested, signaled]);

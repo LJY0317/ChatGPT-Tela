@@ -6,7 +6,8 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@chatgpt-tela/codex": "workspace:*",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "@chatgpt-tela/core": "workspace:*"
   },
   "devDependencies": {
     "@types/ws": "^8.5.13"

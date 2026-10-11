@@ -8,6 +8,7 @@
     "@chatgpt-tela/core": "workspace:*",
     "@chatgpt-tela/http-host": "workspace:*",
     "@chatgpt-tela/product-lifecycle": "workspace:*",
-    "@chatgpt-tela/service-protocol": "workspace:*"
+    "@chatgpt-tela/service-protocol": "workspace:*",
+    "yaml": "^2.9.1"
   }
 }

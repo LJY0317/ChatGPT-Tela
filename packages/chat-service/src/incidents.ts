@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { DIAGNOSTIC_FAILURE_CLASSES, diagnosticFailureClass, type DiagnosticFailureClass } from "@chatgpt-tela/core";
 
 const MAX_INCIDENTS_PER_WORKSPACE = 32;
 const MAX_INCIDENTS_TOTAL = 128;
@@ -23,6 +24,7 @@ export interface ChatIncidentRecord {
   readonly observedAt: string;
   readonly capability: string;
   readonly category: "failed" | "aborted";
+  readonly reasonClass?: DiagnosticFailureClass;
   readonly workspaceFingerprint: string;
 }
 
@@ -31,6 +33,7 @@ export interface ChatIncidentSummary {
   readonly observedAt: string;
   readonly capability: string;
   readonly category: "failed" | "aborted";
+  readonly reasonClass?: DiagnosticFailureClass;
 }
 
 function text(value: unknown, field: string): string {
@@ -58,6 +61,11 @@ export function parseChatIncidentRecord(value: unknown): ChatIncidentRecord {
   if (!Number.isFinite(Date.parse(observedAt))) throw new Error("incident observedAt is invalid");
   const category = item.category;
   if (category !== "failed" && category !== "aborted") throw new Error("incident category is invalid");
+  const reasonClass = item.reasonClass;
+  if (reasonClass !== undefined
+    && !DIAGNOSTIC_FAILURE_CLASSES.includes(reasonClass as DiagnosticFailureClass)) {
+    throw new Error("incident reason class is invalid");
+  }
   const workspaceFingerprint = text(item.workspaceFingerprint, "incident workspace fingerprint");
   if (!/^[a-f0-9]{24}$/.test(workspaceFingerprint)) throw new Error("incident workspace fingerprint is invalid");
   return Object.freeze({
@@ -66,6 +74,7 @@ export function parseChatIncidentRecord(value: unknown): ChatIncidentRecord {
     observedAt,
     capability: text(item.capability, "incident capability"),
     category,
+    ...(reasonClass === undefined ? {} : { reasonClass: reasonClass as DiagnosticFailureClass }),
     workspaceFingerprint,
   });
 }
@@ -76,6 +85,7 @@ function summary(record: ChatIncidentRecord): ChatIncidentSummary {
     observedAt: record.observedAt,
     capability: record.capability,
     category: record.category,
+    ...(record.reasonClass === undefined ? {} : { reasonClass: record.reasonClass }),
   });
 }
 
@@ -103,6 +113,7 @@ export class ChatIncidentStore {
       observedAt: new Date().toISOString(),
       capability: text(input.capability, "incident capability"),
       category: input.error instanceof Error && input.error.name === "AbortError" ? "aborted" : "failed",
+      reasonClass: diagnosticFailureClass(input.error),
       workspaceFingerprint: chatWorkspaceFingerprint(input.workspaceId),
     });
     const serialized = `${JSON.stringify(record, null, 2)}\n`;

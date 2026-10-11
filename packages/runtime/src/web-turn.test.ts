@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import type {
+  ChatGptContextAttachment,
   SemanticObservation,
   WebConversationProvider,
   WebTurnEvent,
   WebTurnHandle,
 } from "@chatgpt-tela/chatgpt";
+import { createChatGptContextAttachment } from "@chatgpt-tela/chatgpt";
 import {
   NativeToolInventory,
   defineNativeTurnAuthority,
@@ -171,6 +176,144 @@ function provider(events: EventQueue, submitState: "proven" | "probable" = "prov
 }
 
 describe("browser turn runner", () => {
+  test("primary exception is recorded before secondary observation without exposing its prose", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "tela-primary-exception-"));
+    const file = join(directory, "events.jsonl");
+    const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+    const failure = new Error("private exception /private/file@example.invalid");
+    try {
+      const fixture = provider(new EventQueue()); const channel = new RuntimeTurnChannel(binding());
+      const wrapped: WebConversationProvider = { ...fixture,
+        async waitForTurnEvent() { throw failure; },
+        async observeTurn() { throw new Error("secondary observation failure"); },
+      };
+      await expect(runBrowserTurn({ browserHost: browserHost([]), provider: wrapped, channel,
+        nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext })).rejects.toBe(failure);
+      const text = readFileSync(file, "utf8");
+      const events = text.trim().split("\n").map(line => JSON.parse(line));
+      const primary = events.findIndex(event => event.stage === "web_execution_exception");
+      const secondary = events.findIndex(event => event.stage === "web_failure_state_unavailable");
+      expect(primary).toBeGreaterThanOrEqual(0); expect(secondary).toBeGreaterThan(primary);
+      expect(events[primary]).toMatchObject({ boundary: "event_wait", accepted: true,
+        reason_class: "unclassified", owner_aborted: false, tool_round_count: 0 });
+      expect(text).not.toContain(failure.message);
+      await Bun.sleep(0);
+    } finally {
+      if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  test.each(["success", "throws", "ignores-abort"] as const)("failure observation %s preserves original error and releases the surface", async mode => {
+    const fixture = provider(new EventQueue()); const released: string[] = [];
+    const failure = new Error("synthetic original provider failure"); let observations = 0, submissions = 0;
+    const channel = new RuntimeTurnChannel(binding());
+    const wrapped: WebConversationProvider = { ...fixture,
+      async submitTurn(...args) { submissions++; return fixture.submitTurn(...args); },
+      async waitForTurnEvent() { throw failure; },
+      async observeTurn(...args) {
+        observations++;
+        expect(released).toHaveLength(0);
+        expect(args[2]?.aborted).toBe(false);
+        if (mode === "throws") throw Error("synthetic diagnostic failure");
+        if (mode === "ignores-abort") return new Promise(() => {});
+        return fixture.observeTurn(...args);
+      },
+    };
+    const run = runBrowserTurn({ browserHost: browserHost(released), provider: wrapped, channel,
+      nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext });
+    await expect(run).rejects.toBe(failure);
+    expect(observations).toBe(1); expect(submissions).toBe(1);
+    expect(released).toEqual(["surface-1"]);
+    expect(channel.phase).toBe("indeterminate-after-acceptance");
+  });
+  test("receipt-proven context preload completes before the real Native execution submit", async () => {
+    const events = new EventQueue();
+    events.push({ kind: "completed", providerTurnId: "web-turn-1", answer: "done" });
+    const order: string[] = [];
+    const fixture = provider(events);
+    const attachment = createChatGptContextAttachment({
+      ...physicalContext,
+      activeRequestRevisionId: "r1",
+    });
+    const wrapped: WebConversationProvider = {
+      ...fixture,
+      async preloadContextAttachment(_surface, request) {
+        order.push("preload");
+        return {
+          state: "proven",
+          value: {
+            nativeTaskId: request.nativeTaskId,
+            webEpochId: request.webEpochId,
+            attachmentName: request.attachment.name,
+            attachmentSha256: request.attachment.sha256,
+            providerOperationId: "preload-1",
+          },
+          evidence: ["fixture"],
+        };
+      },
+      async submitTurn(...args) {
+        order.push("submit");
+        return fixture.submitTurn(...args);
+      },
+    };
+    const result = await runBrowserTurn({
+      browserHost: browserHost([]),
+      provider: wrapped,
+      channel: new RuntimeTurnChannel(binding()),
+      nativeTaskId: "task-1",
+      webEpochId: "epoch-1",
+      physicalContext: { ...physicalContext, activeRequestRevisionId: "r1" },
+      contextAttachment: attachment,
+    });
+    expect(result).toBe("done");
+    expect(order).toEqual(["preload", "submit"]);
+  });
+
+  test("unproven context preload blocks the real Native execution submit", async () => {
+    const events = new EventQueue();
+    const order: string[] = [];
+    const fixture = provider(events);
+    const attachment: ChatGptContextAttachment = createChatGptContextAttachment({
+      ...physicalContext,
+      activeRequestRevisionId: "r1",
+    });
+    const wrapped: WebConversationProvider = {
+      ...fixture,
+      async preloadContextAttachment(_surface, request) {
+        order.push("preload");
+        return {
+          state: "probable",
+          value: {
+            nativeTaskId: request.nativeTaskId,
+            webEpochId: request.webEpochId,
+            attachmentName: request.attachment.name,
+            attachmentSha256: request.attachment.sha256,
+            providerOperationId: "preload-uncertain",
+          },
+          evidence: ["receipt mismatch"],
+        };
+      },
+      async submitTurn(...args) {
+        order.push("submit");
+        return fixture.submitTurn(...args);
+      },
+    };
+    const channel = new RuntimeTurnChannel(binding());
+    await expect(runBrowserTurn({
+      browserHost: browserHost([]),
+      provider: wrapped,
+      channel,
+      nativeTaskId: "task-1",
+      webEpochId: "epoch-1",
+      physicalContext: { ...physicalContext, activeRequestRevisionId: "r1" },
+      contextAttachment: attachment,
+    })).rejects.toThrow("requires proven state");
+    expect(order).toEqual(["preload"]);
+    expect(channel.phase).toBe("prepared");
+  });
+
   test("integrates a tool round, proven continuation, final response, and surface release", async () => {
     const events = new EventQueue();
     const released: string[] = [];
@@ -221,6 +364,70 @@ describe("browser turn runner", () => {
     expect(channel.phase).toBe("submitted");
     expect(() => channel.markSubmitted()).toThrow("invalid turn transition");
     expect(released).toEqual(["surface-1"]);
+  });
+
+  test("surface preparation completes before the consequential submit boundary", async () => {
+    const events = new EventQueue();
+    const channel = new RuntimeTurnChannel(binding());
+    const order: string[] = [];
+    const fixture = provider(events);
+    const wrapped: WebConversationProvider = {
+      ...fixture,
+      async submitTurn(...args) {
+        order.push("submit");
+        return fixture.submitTurn(...args);
+      },
+    };
+    events.push({ kind: "completed", providerTurnId: "web-turn-1", answer: "done" });
+    const result = await runBrowserTurn({
+      browserHost: browserHost([]),
+      provider: wrapped,
+      channel,
+      nativeTaskId: "task-1",
+      webEpochId: "epoch-1",
+      physicalContext,
+      prepareForSubmit: async () => { order.push("prepare"); },
+    });
+    expect(result).toBe("done");
+    expect(order).toEqual(["prepare", "submit"]);
+  });
+
+  test("exact browser-message char preflight fails before model preparation or submit", async () => {
+    const events = new EventQueue();
+    const channel = new RuntimeTurnChannel(binding());
+    const order: string[] = [];
+    const fixture = provider(events);
+    const wrapped: WebConversationProvider = {
+      ...fixture,
+      async submitTurn(...args) {
+        order.push("submit");
+        return fixture.submitTurn(...args);
+      },
+    };
+    await expect(runBrowserTurn({
+      browserHost: browserHost([]),
+      provider: wrapped,
+      channel,
+      nativeTaskId: "task-1",
+      webEpochId: "epoch-1",
+      physicalContext: {
+        ...physicalContext,
+        segments: [{
+          type: "revision",
+          revisionId: "r1",
+          kind: "user",
+          content: "x".repeat(5_000),
+        }],
+      },
+      physicalLimits: {
+        rolloverTokenLimit: 100,
+        contextWindowTokenLimit: 200,
+        composerCharLimit: 100,
+      },
+      prepareForSubmit: async () => { order.push("prepare"); },
+    })).rejects.toThrow("browser message limit");
+    expect(order).toEqual([]);
+    expect(channel.phase).toBe("prepared");
   });
 
   test("completion after a tool result fails closed until Web continuation is observed", async () => {

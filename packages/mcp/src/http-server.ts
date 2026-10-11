@@ -15,6 +15,7 @@ const DEFAULT_HOSTNAME = "127.0.0.1";
 const DEFAULT_PATH = "/mcp";
 const DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_SESSIONS = 16;
+const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 120_000;
 
 export type McpHttpAuthentication =
   | { readonly kind: "none" }
@@ -34,6 +35,9 @@ interface SessionEntry {
   readonly transport: WebStandardStreamableHTTPServerTransport;
   readonly server: McpServer;
   closed: boolean;
+  inFlightRequests: number;
+  lastUsedAtMs: number;
+  idleTimer: ReturnType<typeof setTimeout> | undefined;
 }
 
 export type DevelopmentMcpHttpAuthentication = McpHttpAuthentication;
@@ -90,16 +94,21 @@ async function startMcpHttpServer(input: {
   readonly authentication?: McpHttpAuthentication;
   readonly maxRequestBodyBytes?: number;
   readonly maxSessions?: number;
+  readonly sessionIdleTimeoutMs?: number;
 }): Promise<McpHttpServer> {
   const hostname = input.hostname ?? DEFAULT_HOSTNAME;
   const path = normalizePath(input.path);
   const maxRequestBodyBytes = input.maxRequestBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const maxSessions = input.maxSessions ?? DEFAULT_MAX_SESSIONS;
+  const sessionIdleTimeoutMs = input.sessionIdleTimeoutMs ?? DEFAULT_SESSION_IDLE_TIMEOUT_MS;
   if (!Number.isSafeInteger(maxRequestBodyBytes) || maxRequestBodyBytes < 1) {
     throw new Error(`${input.label} MCP maxRequestBodyBytes must be a positive safe integer`);
   }
   if (!Number.isSafeInteger(maxSessions) || maxSessions < 1) {
     throw new Error(`${input.label} MCP maxSessions must be a positive safe integer`);
+  }
+  if (!Number.isSafeInteger(sessionIdleTimeoutMs) || sessionIdleTimeoutMs < 1) {
+    throw new Error(`${input.label} MCP sessionIdleTimeoutMs must be a positive safe integer`);
   }
 
   const requestedAuth = input.authentication ?? { kind: "bearer" as const };
@@ -114,11 +123,60 @@ async function startMcpHttpServer(input: {
   let pendingInitializations = 0;
   let stopped = false;
 
+  const clearIdleTimer = (entry: SessionEntry): void => {
+    if (!entry.idleTimer) return;
+    clearTimeout(entry.idleTimer);
+    entry.idleTimer = undefined;
+  };
+
   const closeEntry = async (sessionId: string, entry: SessionEntry): Promise<void> => {
     if (entry.closed) return;
     entry.closed = true;
+    clearIdleTimer(entry);
     if (sessions.get(sessionId) === entry) sessions.delete(sessionId);
     await Promise.allSettled([entry.transport.close(), entry.server.close()]);
+  };
+
+  const armIdleTimer = (sessionId: string, entry: SessionEntry): void => {
+    clearIdleTimer(entry);
+    if (entry.closed || entry.inFlightRequests !== 0 || sessions.get(sessionId) !== entry) return;
+    const timer = setTimeout(() => {
+      if (entry.closed || entry.inFlightRequests !== 0 || sessions.get(sessionId) !== entry) return;
+      void closeEntry(sessionId, entry);
+    }, sessionIdleTimeoutMs);
+    timer.unref?.();
+    entry.idleTimer = timer;
+  };
+
+  const handleOwnedSessionRequest = async (
+    sessionId: string,
+    entry: SessionEntry,
+    request: Request,
+    parsedBody: unknown,
+  ): Promise<Response> => {
+    clearIdleTimer(entry);
+    entry.inFlightRequests += 1;
+    entry.lastUsedAtMs = Date.now();
+    try {
+      return await entry.transport.handleRequest(
+        request,
+        request.method === "POST" ? { parsedBody } : undefined,
+      );
+    } finally {
+      entry.inFlightRequests -= 1;
+      entry.lastUsedAtMs = Date.now();
+      armIdleTimer(sessionId, entry);
+    }
+  };
+
+  const oldestIdleSession = (): readonly [string, SessionEntry] | undefined => {
+    let selected: readonly [string, SessionEntry] | undefined;
+    for (const candidate of sessions.entries()) {
+      const [, entry] = candidate;
+      if (entry.closed || entry.inFlightRequests !== 0) continue;
+      if (!selected || entry.lastUsedAtMs < selected[1].lastUsedAtMs) selected = candidate;
+    }
+    return selected;
   };
 
   const createSession = async (): Promise<SessionEntry> => {
@@ -133,12 +191,20 @@ async function startMcpHttpServer(input: {
         sessions.set(sessionId, entry);
       },
     });
-    entry = { transport, server, closed: false };
+    entry = {
+      transport,
+      server,
+      closed: false,
+      inFlightRequests: 0,
+      lastUsedAtMs: Date.now(),
+      idleTimer: undefined,
+    };
     transport.onclose = () => {
       const sessionId = transport.sessionId;
       if (!sessionId) return;
       const owned = sessions.get(sessionId);
       if (owned === entry) {
+        clearIdleTimer(entry!);
         sessions.delete(sessionId);
         entry!.closed = true;
         void server.close().catch(() => {});
@@ -185,31 +251,47 @@ async function startMcpHttpServer(input: {
       if (sessionId) {
         const entry = sessions.get(sessionId);
         if (!entry || entry.closed) return errorResponse(404, "Unknown or closed MCP session");
-        return entry.transport.handleRequest(
-          request,
-          request.method === "POST" ? { parsedBody } : undefined,
-        );
+        return handleOwnedSessionRequest(sessionId, entry, request, parsedBody);
       }
 
       if (request.method !== "POST" || !isInitializeRequest(parsedBody)) {
         return errorResponse(400, "MCP request requires a valid session or initialize request");
       }
 
+      let reclaimed: Promise<void> | undefined;
       if (sessions.size + pendingInitializations >= maxSessions) {
-        return errorResponse(503, `${input.label} MCP session capacity reached`);
+        const idle = oldestIdleSession();
+        if (!idle) return errorResponse(503, `${input.label} MCP session capacity reached`);
+        reclaimed = closeEntry(idle[0], idle[1]);
       }
       pendingInitializations += 1;
 
-      let entry: SessionEntry;
+      let entry: SessionEntry | undefined;
       try {
+        await reclaimed;
         entry = await createSession();
+        entry.inFlightRequests += 1;
+        entry.lastUsedAtMs = Date.now();
         const response = await entry.transport.handleRequest(request, { parsedBody });
         if (!entry.transport.sessionId) {
           entry.closed = true;
           await Promise.allSettled([entry.transport.close(), entry.server.close()]);
+        } else {
+          entry.inFlightRequests -= 1;
+          entry.lastUsedAtMs = Date.now();
+          armIdleTimer(entry.transport.sessionId, entry);
         }
         return response;
       } catch (error) {
+        if (entry) {
+          const ownedSessionId = entry.transport.sessionId;
+          if (ownedSessionId) await closeEntry(ownedSessionId, entry);
+          else if (!entry.closed) {
+            entry.closed = true;
+            clearIdleTimer(entry);
+            await Promise.allSettled([entry.transport.close(), entry.server.close()]);
+          }
+        }
         return errorResponse(503, error instanceof Error ? error.message : "Unable to create MCP session");
       } finally {
         pendingInitializations -= 1;
@@ -247,6 +329,7 @@ export async function startCustomMcpHttpServer(input: {
   readonly authentication?: CustomMcpHttpAuthentication;
   readonly maxRequestBodyBytes?: number;
   readonly maxSessions?: number;
+  readonly sessionIdleTimeoutMs?: number;
 }): Promise<CustomMcpHttpServer> {
   return startMcpHttpServer(input);
 }
@@ -259,6 +342,7 @@ export async function startDevelopmentMcpHttpServer(input: {
   readonly authentication?: DevelopmentMcpHttpAuthentication;
   readonly maxRequestBodyBytes?: number;
   readonly maxSessions?: number;
+  readonly sessionIdleTimeoutMs?: number;
 }): Promise<DevelopmentMcpHttpServer> {
   return startMcpHttpServer({
     ...input,
@@ -280,6 +364,7 @@ export async function startCodexBridgeMcpHttpServer(input: ({
   readonly authentication?: CodexBridgeMcpHttpAuthentication;
   readonly maxRequestBodyBytes?: number;
   readonly maxSessions?: number;
+  readonly sessionIdleTimeoutMs?: number;
 }): Promise<CodexBridgeMcpHttpServer> {
   return startMcpHttpServer({
     ...input,

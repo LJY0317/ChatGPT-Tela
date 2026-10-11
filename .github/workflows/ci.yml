@@ -21,6 +21,13 @@ jobs:
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bun run workspace-files:test
+      - run: bun run workspace-files:build
       - run: bun run verify
+      - run: bun run codex:cleanup-test
+      - run: bun run package:native-helper-test
+      - run: bun run menu-bar:test
+        if: runner.os == 'macOS'
       - run: bun run profile:runtime:build
       - run: bun run package:smoke

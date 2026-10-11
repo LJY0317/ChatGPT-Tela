@@ -4,7 +4,23 @@ import {
   type BrowserPageAutomation,
   type BrowserSurfaceLease,
 } from "@chatgpt-tela/browser-host";
-import { observeChatGptAccountIdentity } from "./account-identity";
+import { observeChatGptAccountDisplay, observeChatGptAccountIdentity } from "./account-identity";
+
+test("display-only email observation never changes authentication and rejects unsafe renderer values", async () => {
+  let value: unknown = { state: "signed-in", email: "user@example.invalid" };
+  const page = { async evaluate(source: string) {
+    expect(source).toContain("/api/auth/session"); expect(source).toContain('cache: "no-store"');
+    expect(source).not.toContain("logout"); expect(source).not.toContain("document.cookie");
+    return value;
+  } } as unknown as BrowserPageAutomation;
+  const surface = { capability: () => page } as unknown as BrowserSurfaceLease;
+  expect(await observeChatGptAccountDisplay(surface)).toEqual({ state: "signed-in", email: "user@example.invalid" });
+  for (const invalid of [{ state: "signed-in", email: "user\r@example.invalid" }, { state: "signed-out", email: "user@example.invalid" }, { state: "unknown" }]) {
+    value = invalid; await expect(observeChatGptAccountDisplay(surface)).rejects.toThrow("Invalid");
+  }
+  value = { state: "signed-out" };
+  expect(await observeChatGptAccountDisplay(surface)).toEqual({ state: "signed-out" });
+});
 
 test("ChatGPT account identity exports only SHA-256 fingerprints plus coarse account structure from the page", async () => {
   const page: BrowserPageAutomation = {

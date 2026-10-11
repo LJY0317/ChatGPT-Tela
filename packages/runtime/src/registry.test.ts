@@ -45,8 +45,16 @@ test("active turn registry issues opaque single-owner capabilities", () => {
 
   registry.retire(registered.capability);
   expect(registry.size).toBe(0);
+  expect(registry.isRetired("thread-1", "turn-1")).toBe(true);
+  expect(registry.isRetired("thread-1", "another-turn")).toBe(false);
+  expect(registry.isRetired("another-thread", "turn-1")).toBe(false);
   expect(() => registry.resolve(registered.capability)).toThrow("unknown or retired");
-  expect(() => registry.register(binding())).toThrow("already retired");
+  try {
+    registry.register(binding());
+    throw new Error("Retired turn was incorrectly re-registered");
+  } catch (error) {
+    expect(error).toMatchObject({code: "tela_native_turn_already_retired"});
+  }
 });
 
 test("registry shutdown cancels and retires every active turn", async () => {

@@ -8,16 +8,27 @@ if (process.platform !== "darwin") {
 }
 
 const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const testMode = process.argv.includes("--test");
 const outputIndex = process.argv.indexOf("--output");
 const output = resolve(outputIndex >= 0 && process.argv[outputIndex + 1]
   ? process.argv[outputIndex + 1]!
-  : resolve(repoRoot, "build/chatgpt-tela-menu-bar"));
+  : resolve(repoRoot, testMode ? "build/work-connection-tests" : "build/chatgpt-tela-menu-bar"));
 mkdirSync(dirname(output), { recursive: true });
 execFileSync("/usr/bin/xcrun", [
   "swiftc",
   "-parse-as-library",
-  resolve(repoRoot, "apps/menu-bar-macos/main.swift"),
+  ...(testMode ? [
+    resolve(repoRoot, "apps/menu-bar-macos/work-connection.swift"),
+    resolve(repoRoot, "apps/menu-bar-macos/work-connection-tests.swift"),
+  ] : [
+    resolve(repoRoot, "apps/menu-bar-macos/main.swift"),
+    resolve(repoRoot, "apps/menu-bar-macos/single-instance.swift"),
+    resolve(repoRoot, "apps/menu-bar-macos/control-center.swift"),
+    resolve(repoRoot, "apps/menu-bar-macos/maintenance.swift"),
+    resolve(repoRoot, "apps/menu-bar-macos/work-connection.swift"),
+  ]),
   "-framework", "AppKit",
   "-o", output,
 ], { cwd: repoRoot, stdio: "inherit" });
-console.log(output);
+if (testMode) execFileSync(output, [], { cwd: repoRoot, stdio: "inherit" });
+else console.log(output);

@@ -170,3 +170,30 @@ describe("composite product native-target adapter", () => {
     await expect(adapter.resolve(2)).rejects.toThrow("optional Multi-Profile launcher is unavailable");
   });
 });
+
+test("provider failure and later removal preserve the same default owner and exact quit consent", async () => {
+  let pid: number | undefined = 111;
+  let available = true;
+  const quitCalls: unknown[] = [];
+  const primary = new DefaultDesktopNativeTargetAdapter({
+    installation: { platform: "linux", chatGptExecutable: "/fixture/app", codexExecutable: "/fixture/codex", codexHome: "/fixture/home", userDataDir: "/fixture/data", normalQuitSupported: true },
+    processIds: async () => pid ? [pid] : [],
+    normalQuit: async (_, actual) => { quitCalls.push(actual); pid = undefined; },
+  });
+  const optional = new MultiProfileNativeTargetAdapter({ launcherCli: "/fixture/provider", client: {
+    targets: async () => { if (!available) throw new Error("provider removed"); return targets; },
+    targetSession: async id => session(id), quitTarget: async (id, _, expected) => { quitCalls.push([id, expected]); return session(id); },
+  } });
+  const combined = new CompositeNativeTargetAdapter({ defaultDesktop: primary, multiProfile: optional });
+  expect((await combined.profiles()).map(p => p.target.slot)).toEqual([1, 2]);
+  await combined.quit("local.plura-desktop.profile2", undefined, 4321);
+  expect(quitCalls).toEqual([["local.plura-desktop.profile2", 4321]]);
+  available = false;
+  expect((await combined.profiles()).map(p => p.target.slot)).toEqual([1]);
+  expect((await combined.resolve(1)).session.desktopProcessId).toBe(111);
+  await expect(combined.quit("default", undefined, 222)).rejects.toThrow("changed since confirmation");
+  expect(pid).toBe(111);
+  await combined.quit("default", undefined, 111);
+  expect(quitCalls).toEqual([["local.plura-desktop.profile2", 4321], 111]);
+  expect((await new CompositeNativeTargetAdapter({ defaultDesktop: primary }).resolve(1)).session.state).toBe("available");
+});

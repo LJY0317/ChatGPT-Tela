@@ -20,6 +20,28 @@ export interface BrowserSurfaceLease {
   capability<T>(capability: BrowserSurfaceCapability<T>): T | undefined;
 }
 
+export interface BrowserReadOnlyPreview {
+  /** Capture the currently rendered surface without revealing, focusing, or sending input to it. */
+  captureJpeg(): Promise<Uint8Array>;
+}
+
+export const BROWSER_READ_ONLY_PREVIEW = createBrowserSurfaceCapability<BrowserReadOnlyPreview>(
+  "browser-read-only-preview",
+);
+
+export const BROWSER_INSPECTION_INPUT = createBrowserSurfaceCapability<{
+  setInteractive(interactive: boolean): void;
+}>("browser-inspection-input");
+
+/** A snapshot of one main-frame document lifetime, independent of the surface/window lease. */
+export interface BrowserDocumentLifetime {
+  current(): { readonly generation: number; readonly signal: AbortSignal };
+}
+
+export const BROWSER_DOCUMENT_LIFETIME = createBrowserSurfaceCapability<BrowserDocumentLifetime>(
+  "browser-document-lifetime",
+);
+
 export interface BrowserHost {
   acquire(input: { taskId: string; epochId: string }): Promise<BrowserSurfaceLease>;
   release(leaseId: string): Promise<void>;
@@ -28,3 +50,4 @@ export interface BrowserHost {
 
 export * from "./controlled";
 export * from "./page-automation";
+export * from "./diagnostics";

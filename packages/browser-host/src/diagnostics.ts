@@ -1,0 +1,115 @@
+import { BROWSER_PAGE_AUTOMATION } from "./page-automation";
+import { BROWSER_READ_ONLY_PREVIEW, type BrowserSurfaceLease } from "./index";
+import { configuredDiagnosticRoot, diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, privateDiagnosticCaptureEnabled, writeDiagnosticIncident, structuralDiagnosticEvent, writePrivateDiagnosticArtifact } from "@chatgpt-tela/core";
+
+const recent = new Map<string,number>();
+/** Diagnostic-only DOM structure. No screenshot/HTML is requested without explicit private capture. */
+export const DIAGNOSTIC_DOM_CAPTURE = String.raw`function(privateCapture) {
+  const passwordCount = document.querySelectorAll('input[type="password"],input[type="email"]').length;
+  const authRoute = /\/(?:auth|login|signin)(?:\/|$)/i.test(location.pathname);
+  const safe = passwordCount === 0 && !authRoute;
+  const result = { element_count: document.querySelectorAll('*').length,
+    dialog_count: document.querySelectorAll('[role="dialog"]').length,
+    button_count: document.querySelectorAll('button,[role="button"]').length,
+    enabled_button_count: document.querySelectorAll('button:not(:disabled)').length,
+    form_count: document.forms.length, capture_safe: safe };
+  // Failure-only capability census. Counts distinguish an absent/virtualized user turn
+  // from a changed renderer marker without exposing text, attributes or turn identifiers.
+  const groups = [...document.querySelectorAll('[data-turn-key]')];
+  result.keyed_turn_count = groups.length;
+  const userMarkers = {
+    user_bubble: '[data-user-message-bubble]',
+    user_author: '[data-message-author-role="user"]',
+    user_conversation: '[data-conversation-role="user"]',
+    user_markdown: '[data-markdown-text-style="user-message"]',
+  };
+  for (const [name, selector] of Object.entries(userMarkers)) {
+    const nodes = [...document.querySelectorAll(selector)];
+    result[name + '_count'] = nodes.length;
+    result[name + '_keyed_count'] = nodes.filter(node => node.closest('[data-turn-key]')).length;
+    result[name + '_group_self_count'] = groups.filter(group => group.matches(selector)).length;
+  }
+  // Read the nearest rendered turn viewport, without scrolling or changing the document.
+  // A missing user at a nonzero offset can then be distinguished from a top-of-thread miss.
+  let ancestor = groups.at(-1)?.parentElement;
+  let viewport;
+  for (let depth = 0; ancestor && depth < 16; depth++, ancestor = ancestor.parentElement) {
+    if (typeof getComputedStyle === 'function' && /^(?:auto|scroll)$/.test(getComputedStyle(ancestor).overflowY)
+      && ancestor.scrollHeight > ancestor.clientHeight) { viewport = ancestor; break; }
+  }
+  result.turn_viewport_observed = !!viewport;
+  if (viewport) {
+    result.turn_scroll_above_px = Math.max(0, Math.floor(viewport.scrollTop));
+    result.turn_scroll_below_px = Math.max(0, Math.floor(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop));
+    result.turn_viewport_height_px = Math.max(0, Math.floor(viewport.clientHeight));
+  }
+  const resources = performance.getEntriesByType('resource').slice(-64);
+  result.resource_count = resources.length;
+  result.resource_status_observed_count = resources.filter(row => Number(row.responseStatus) > 0).length;
+  result.resource_failed_count = resources.filter(row => Number(row.responseStatus) >= 400).length;
+  result.resource_slow_count = resources.filter(row => row.duration >= 10000).length;
+  result.resource_inflight_count = resources.filter(row => row.responseEnd === 0).length;
+  if (privateCapture && safe) {
+    const clone = document.documentElement.cloneNode(true);
+    for (const element of clone.querySelectorAll('script,noscript,iframe,object,embed')) element.remove();
+    for (const element of clone.querySelectorAll('*')) {
+      for (const attribute of [...element.attributes]) {
+        if (/^(?:value|href|src|srcset|action|formaction|nonce|on.*)$/i.test(attribute.name)
+          || /token|secret|password|authorization|cookie|csrf/i.test(attribute.name)) element.removeAttribute(attribute.name);
+      }
+      if (element.tagName === 'TEXTAREA') element.textContent = '';
+    }
+    const html=clone.outerHTML;
+    result.html_truncated = html.length > 1000000;
+    result.html = html.slice(0,1000000).replace(/Bearer\s+[A-Za-z0-9._~+\/-]+/gi,'Bearer [REDACTED]').replace(/\bsk-[A-Za-z0-9_-]{16,}/g,'[REDACTED]');
+  }
+  return result;
+}`;
+
+async function captureEvidence(surface: BrowserSurfaceLease, reason: "turn_failure" | "approval_anomaly" | "surface_anomaly" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution"): Promise<void> {
+  const root=configuredDiagnosticRoot(); if (!root) return;
+  const operation=diagnosticContext().operation_fingerprint ?? diagnosticFingerprint([surface.taskId,surface.epochId].join("\n"));
+  const key=operation+reason; const now=Date.now();
+  if ((recent.get(key) ?? 0)>now-60000) return;
+  recent.set(key,now); for (const [entry,at] of recent) if (recent.size>128 || at<now-600000) recent.delete(entry);
+  const page=surface.capability(BROWSER_PAGE_AUTOMATION); if (!page) return;
+  const enabled=privateDiagnosticCaptureEnabled(root);
+  const controller=new AbortController();
+  let onAbort: (()=>void) | undefined;
+  const timeout=setTimeout(()=>controller.abort(),3000); timeout.unref?.();
+  const run=async()=>{
+    const snapshot=await page.evaluate<boolean,Record<string,unknown>>(DIAGNOSTIC_DOM_CAPTURE,enabled,controller.signal);
+    if (controller.signal.aborted) return;
+    const fields: Record<string,number|boolean|string>={ reason_class:reason };
+    for (const key of ["element_count","dialog_count","button_count","enabled_button_count","form_count","resource_count","resource_status_observed_count","resource_failed_count","resource_slow_count","resource_inflight_count", "keyed_turn_count", "turn_scroll_above_px", "turn_scroll_below_px", "turn_viewport_height_px",
+      ...["user_bubble", "user_author", "user_conversation", "user_markdown"].flatMap(name => [name + "_count", name + "_keyed_count", name + "_group_self_count"])]) {
+      const value=snapshot[key]; if (typeof value==="number" && Number.isSafeInteger(value) && value>=0) fields[key]=value;
+    }
+    fields.private_capture=enabled; fields.capture_safe=snapshot.capture_safe===true;
+    fields.turn_viewport_observed=snapshot.turn_viewport_observed===true;
+    emitDiagnosticEvent("chatgpt_tela_browser","browser_snapshot_observed",fields);
+    if (!enabled || snapshot.capture_safe!==true) return;
+    if (typeof snapshot.html==="string") writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.html),operationFingerprint:operation });
+    const preview=surface.capability(BROWSER_READ_ONLY_PREVIEW);
+    if (preview) {
+      const bytes=await preview.captureJpeg();
+      if (!controller.signal.aborted) writePrivateDiagnosticArtifact(root,{kind:"jpg",bytes,operationFingerprint:operation});
+    }
+    const row=structuralDiagnosticEvent({ ts:new Date().toISOString(), event:"chatgpt_tela_browser", stage:"private_capture_recorded", operation_fingerprint:operation, ...fields });
+    if (row && !controller.signal.aborted) writeDiagnosticIncident(root,{stage:row.stage,observedAt:row.ts,timeline:[row]});
+  };
+  try {
+    await Promise.race([run(),new Promise<void>(resolve=> { onAbort=()=>resolve(); controller.signal.addEventListener("abort",onAbort,{once:true}); })]);
+  } catch { emitDiagnosticEvent("chatgpt_tela_browser","browser_evidence_unavailable",{ reason_class:reason }); }
+  finally { clearTimeout(timeout); controller.abort(); if (onAbort) controller.signal.removeEventListener("abort",onAbort); }
+}
+
+/** Diagnostic failure never changes the browser turn result or approval policy. */
+export async function captureBrowserDiagnosticEvidence(surface: BrowserSurfaceLease, reason: "turn_failure" | "approval_anomaly" | "surface_anomaly" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution"): Promise<void> {
+  try { await captureEvidence(surface, reason); } catch { /* Best effort, including missing capabilities. */ }
+}
+
+export async function captureBrowserDiagnosticCheckpoint(surface: BrowserSurfaceLease, reason: "before_submit" | "turn_accepted" | "surface_anomaly" | "approval_pending" | "approval_resolution"): Promise<void> {
+  const root=configuredDiagnosticRoot();
+  if (root && privateDiagnosticCaptureEnabled(root)) await captureBrowserDiagnosticEvidence(surface,reason);
+}

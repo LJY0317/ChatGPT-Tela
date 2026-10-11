@@ -1,13 +1,29 @@
 import { randomUUID } from "node:crypto";
 import {
+  BROWSER_READ_ONLY_PREVIEW,
+  BROWSER_INSPECTION_INPUT,
+  BROWSER_PAGE_AUTOMATION,
+  type BrowserSurfaceLease,
+} from "@chatgpt-tela/browser-host";
+import {
   createElectronMainProcessBrowserHost,
   type ElectronMainRuntimeLike,
 } from "@chatgpt-tela/electron-host";
 import {
+  CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS,
   ChatGptSemanticProvider,
+  ChatGptDomSurfaceDriver,
+  selectChatGptWebModel,
+  isChatGptTemporaryChatUrl,
+  createChatGptContextAttachment,
+  discoverChatGptWebModelFamilies as discoverWebModelFamilies,
+  probeChatGptWebModelSelection as probeWebModelSelection,
+  requireProven,
   type ChatGptAccountIdentity,
   type ChatGptCapabilities,
   type ChatGptConnectorObservation,
+  type ChatGptWebModelFamily,
+  type ChatGptWebModelSelectionCanary,
   type WebConversationProvider,
   type WebContextCheckpointProvider,
 } from "@chatgpt-tela/chatgpt";
@@ -20,14 +36,20 @@ import {
   type DevelopmentRuntime,
   type DevelopmentWebTurnPlanner,
 } from "./runtime";
+import { createNativeLocalCompactionRouter } from "./native-local-compaction";
 import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
 import {
   createChatGptProfileControl,
   type ChatGptAccountIdentityObserver,
   type ElectronProfileSetupSurface,
+  type ChatGptProfileControl,
 } from "./profile-control";
 
 export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
+  /** On-demand session identity only; no composer input, submission, or sign-in mutation. */
+  probeChatGptAccount: ChatGptProfileControl["probeChatGptAccount"];
+  probeChatGptAccountDisplay: ChatGptProfileControl["probeChatGptAccountDisplay"];
+  prepareChatGptWebSession: ChatGptProfileControl["prepareChatGptWebSession"];
   /**
    * Prove that the persistent ChatGPT profile currently exposes one usable composer/send surface.
    * The probe owns no Native turn and submits nothing.
@@ -38,10 +60,35 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
     readonly account: ChatGptAccountIdentity;
   }>;
   probeChatGptConnector(signal?: AbortSignal): Promise<ChatGptConnectorObservation>;
+  probeChatGptConnection(signal?: AbortSignal, onConnectorProven?: () => void): Promise<{
+    readonly connector: ChatGptConnectorObservation;
+    readonly capabilities: ChatGptCapabilities;
+  }>;
   recoverChatGptConnectorProbeArtifact(
     signal?: AbortSignal,
     options?: { readonly allowUnknownSelectedConnector?: boolean },
   ): Promise<boolean>;
+  /** Read the authenticated ChatGPT account's current selectable Web model families and efforts. */
+  discoverChatGptWebModelFamilies(signal?: AbortSignal): Promise<readonly ChatGptWebModelFamily[]>;
+  /** Non-submit exact model/effort selection + restoration canary on one disposable surface. */
+  probeChatGptWebModelSelection(signal?: AbortSignal): Promise<ChatGptWebModelSelectionCanary>;
+  /** Inert live canary for memory-backed attachment acceptance + exact receipt verification. */
+  probeChatGptContextAttachment(signal?: AbortSignal): Promise<{
+    readonly attachmentBytes: number;
+    readonly receiptVerified: true;
+  }>;
+  /**
+   * Observe the hidden bridge without revealing/focusing it or sending any page input.
+   * Multiple surfaces require explicit selection of a currently owned lease.
+   */
+  revealBridgeSurface(id: string, interactive?: boolean): Promise<void>;
+  observeBridgePreview(id?: string): Promise<{
+    readonly activeSurfaceCount: number;
+    readonly surfaces?: readonly { readonly id: string; readonly label: string }[];
+    readonly selectedSurfaceId?: string;
+    readonly jpeg?: Uint8Array;
+    readonly approvalState?: "pending" | "none" | "unavailable";
+  }>;
   /**
    * Open one visible control-plane ChatGPT surface using the same persistent ChatGPT Tela profile partition.
    * It owns no Native turn authority and exists only for login/developer-mode/connector preparation.
@@ -58,22 +105,41 @@ export interface ElectronDevelopmentRuntimeOptions {
   readonly planWebTurn?: DevelopmentWebTurnPlanner;
   readonly context?: {
     readonly checkpointCache?: ContextCheckpointCache;
+    readonly historyCheckpointCache?: ContextCheckpointCache;
     readonly budgetTokens?: number;
   };
   readonly provider?: WebConversationProvider;
   readonly approvalAutomationMode?: import("@chatgpt-tela/chatgpt").ChatGptApprovalAutomationMode;
+  readonly approvalAutomationDelayMs?: number;
   readonly webTurnTimeoutMs?: number;
   readonly accountIdentityObserver?: ChatGptAccountIdentityObserver;
+  /** Test/provider seam; production uses the ChatGPT semantic model-picker implementation. */
+  readonly modelFamilyDiscovery?: (
+    surface: BrowserSurfaceLease,
+    signal?: AbortSignal,
+  ) => Promise<readonly ChatGptWebModelFamily[]>;
+  readonly modelSelectionCanary?: (
+    surface: BrowserSurfaceLease,
+    signal?: AbortSignal,
+  ) => Promise<ChatGptWebModelSelectionCanary>;
   /**
    * Explicit one-purpose checkpoint provider. The default ChatGPT turn provider is not reused
    * implicitly because ordinary assistant replies are not checkpoint authority.
    */
   readonly checkpointProvider?: WebContextCheckpointProvider;
+  readonly compactionHistory?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["compactionHistory"];
+  readonly compactionAnchor?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["compactionAnchor"];
+  readonly nativeWebHandoff?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["nativeWebHandoff"];
+  readonly verifyNativeWebHandoff?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["verifyNativeWebHandoff"];
+  readonly automaticNativeHandoff?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["automaticNativeHandoff"];
+  readonly verifyAutomaticNativeHandoff?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["verifyAutomaticNativeHandoff"];
   readonly chatGptUrl?: string;
   readonly responses?: {
     readonly hostname?: string;
     readonly port?: number;
     readonly runtimeToken?: string;
+    readonly authentication?: import("@chatgpt-tela/local-server").LocalResponsesAuthentication;
+    readonly requestRouter?: import("@chatgpt-tela/local-server").LocalResponsesRequestRouter;
     readonly maxRequestBodyBytes?: number;
   };
   readonly electron?: {
@@ -106,15 +172,57 @@ export async function startElectronDevelopmentRuntime(
     ...(input.electron?.loadRuntime ? { loadRuntime: input.electron.loadRuntime } : {}),
   });
   const provider = input.provider ?? new ChatGptSemanticProvider({
+    requireTemporaryChat: isChatGptTemporaryChatUrl(input.chatGptUrl ?? ""),
     ...(input.connectorName ? { connectorName: input.connectorName } : {}),
     ...(input.approvalAutomationMode ? { approvalAutomationMode: input.approvalAutomationMode } : {}),
+    ...(input.approvalAutomationDelayMs !== undefined
+      ? { approvalAutomationDelayMs: input.approvalAutomationDelayMs }
+      : {}),
   });
   const checkpointCache = input.context?.checkpointCache;
+  const historyCheckpointCache = input.context?.historyCheckpointCache;
+  const modelFamilyDiscovery = input.modelFamilyDiscovery ?? discoverWebModelFamilies;
+  const modelSelectionCanary = input.modelSelectionCanary ?? probeWebModelSelection;
   const profileControl = createChatGptProfileControl({
     browserHost,
     provider,
+    modelFamilyDiscovery,
     ...(input.accountIdentityObserver ? { accountIdentityObserver: input.accountIdentityObserver } : {}),
   });
+
+  const checkpointController = new AbortController();
+  const checkpointRuns = new Set<Promise<unknown>>();
+  const runOwnedContextCheckpoint = (request: Parameters<typeof runBrowserContextCheckpoint>[0]) => {
+    checkpointController.signal.throwIfAborted();
+    const signal = request.signal
+      ? AbortSignal.any([request.signal, checkpointController.signal]) : checkpointController.signal;
+    const run = runBrowserContextCheckpoint({ ...request, signal });
+    checkpointRuns.add(run);
+    void run.finally(() => checkpointRuns.delete(run)).catch(() => {});
+    return run;
+  };
+
+  const localCompactionRouter = input.checkpointProvider ? createNativeLocalCompactionRouter({
+    source: input.currentTurnSource,
+    ...(input.compactionHistory ? { compactionHistory: input.compactionHistory } : {}),
+    ...(input.compactionAnchor ? { compactionAnchor: input.compactionAnchor } : {}),
+    ...(input.nativeWebHandoff ? { nativeWebHandoff: input.nativeWebHandoff } : {}),
+    ...(input.verifyNativeWebHandoff ? { verifyNativeWebHandoff: input.verifyNativeWebHandoff } : {}),
+    ...(historyCheckpointCache ? { historyCheckpointCache } : {}),
+    summarize: async request => {
+      const result = await runOwnedContextCheckpoint({
+        browserHost, provider: input.checkpointProvider!,
+        ...(input.webTurnTimeoutMs !== undefined
+          ? { signal: AbortSignal.any([...(request.signal ? [request.signal] : []), AbortSignal.timeout(input.webTurnTimeoutMs)]) }
+          : request.signal ? { signal: request.signal } : {}),
+        prepareForSubmit: (surface, signal) => selectChatGptWebModel(surface, request.browserModel, signal),
+        request: { nativeTaskId: request.nativeTaskId, webEpochId: `native-compact-${randomUUID()}`,
+          sourceRevisionId: request.sourceRevisionId, physicalContext: request.physicalContext,
+          ...(request.media ? { media: request.media } : {}) },
+      });
+      return result.content;
+    },
+  }) : undefined;
 
   const runtime = await startDevelopmentRuntime({
     currentTurnSource: input.currentTurnSource,
@@ -122,19 +230,32 @@ export async function startElectronDevelopmentRuntime(
     ...(input.turns ? { turns: input.turns } : {}),
     mcp: input.mcp,
     planWebTurn: input.planWebTurn ?? createNativeRequestDevelopmentWebTurnPlanner({
+      ...(input.compactionHistory ? { compactionHistory: input.compactionHistory } : {}),
+      ...(input.compactionAnchor ? { compactionAnchor: input.compactionAnchor } : {}),
+      ...(input.nativeWebHandoff ? { nativeWebHandoff: input.nativeWebHandoff } : {}),
+      ...(input.verifyNativeWebHandoff ? { verifyNativeWebHandoff: input.verifyNativeWebHandoff } : {}),
+      ...(input.automaticNativeHandoff ? { automaticNativeHandoff: input.automaticNativeHandoff } : {}),
+      ...(input.verifyAutomaticNativeHandoff
+        ? { verifyAutomaticNativeHandoff: input.verifyAutomaticNativeHandoff } : {}),
       ...(checkpointCache ? { checkpointCache } : {}),
+      ...(historyCheckpointCache ? { historyCheckpointCache } : {}),
       ...(input.context?.budgetTokens !== undefined ? { budgetTokens: input.context.budgetTokens } : {}),
       ...(checkpointCache && input.checkpointProvider ? {
-        checkpointProducer: async request => {
+        checkpointProducer: async (request, preparation) => {
           const webEpochId = `checkpoint-${randomUUID()}`;
-          const result = await runBrowserContextCheckpoint({
+          const result = await runOwnedContextCheckpoint({
             browserHost,
             provider: input.checkpointProvider!,
+            ...(input.webTurnTimeoutMs !== undefined
+              ? { signal: AbortSignal.any([...(preparation ? [preparation.signal] : []), AbortSignal.timeout(input.webTurnTimeoutMs)]) }
+              : preparation ? { signal: preparation.signal } : {}),
+            ...(preparation ? { onProgress: preparation.onProgress } : {}),
             request: {
               nativeTaskId: request.nativeTaskId,
               webEpochId,
               sourceRevisionId: request.sourceRevisionId,
               physicalContext: request.physicalContext,
+              ...(request.media ? { media: request.media } : {}),
             },
           });
           return Object.freeze({
@@ -147,7 +268,11 @@ export async function startElectronDevelopmentRuntime(
     }),
     provider,
     ...(input.webTurnTimeoutMs !== undefined ? { webTurnTimeoutMs: input.webTurnTimeoutMs } : {}),
-    ...(input.responses ? { responses: input.responses } : {}),
+    ...((input.responses || localCompactionRouter) ? { responses: {
+      ...input.responses,
+      requestRouter: async request => (await localCompactionRouter?.(request.clone()))
+        ?? input.responses?.requestRouter?.(request),
+    } } : {}),
   });
 
   let stopping: Promise<void> | undefined;
@@ -155,19 +280,115 @@ export async function startElectronDevelopmentRuntime(
     responses: runtime.responses,
     mcp: runtime.mcp,
     turns: runtime.turns,
+    prepareChatGptWebSession: (options: Parameters<ChatGptProfileControl["prepareChatGptWebSession"]>[0]) => profileControl.prepareChatGptWebSession(options),
     probeChatGptReadiness: (signal?: AbortSignal) => profileControl.probeChatGptReadiness(signal),
     probeChatGptProfile: (signal?: AbortSignal) => profileControl.probeChatGptProfile(signal),
+    probeChatGptAccount: (signal?: AbortSignal) => profileControl.probeChatGptAccount(signal),
+    probeChatGptAccountDisplay: (signal?: AbortSignal) => profileControl.probeChatGptAccountDisplay(signal),
     probeChatGptConnector: (signal?: AbortSignal) => profileControl.probeChatGptConnector(signal),
+    probeChatGptConnection: (signal?: AbortSignal, onConnectorProven?: () => void) => profileControl.probeChatGptConnection(signal, onConnectorProven),
     recoverChatGptConnectorProbeArtifact: (
       signal?: AbortSignal,
       options?: { readonly allowUnknownSelectedConnector?: boolean },
     ) => (
       profileControl.recoverChatGptConnectorProbeArtifact(signal, options)
     ),
+    async discoverChatGptWebModelFamilies(signal?: AbortSignal) {
+      const epochId = `profile-model-catalog-${randomUUID()}`;
+      const surface = await browserHost.acquire({
+        taskId: `profile-model-catalog:${input.profileId}`,
+        epochId,
+      });
+      try {
+        return await modelFamilyDiscovery(surface, signal);
+      } finally {
+        await browserHost.release(surface.leaseId);
+      }
+    },
+    async probeChatGptWebModelSelection(signal?: AbortSignal) {
+      const epochId = `profile-model-canary-${randomUUID()}`;
+      const surface = await browserHost.acquire({
+        taskId: `profile-model-canary:${input.profileId}`,
+        epochId,
+      });
+      try {
+        return await modelSelectionCanary(surface, signal);
+      } finally {
+        await browserHost.release(surface.leaseId);
+      }
+    },
+    async probeChatGptContextAttachment(signal?: AbortSignal) {
+      const epochId = `profile-context-canary-${randomUUID()}`;
+      const taskId = `profile-context-canary:${input.profileId}`;
+      const surface = await browserHost.acquire({ taskId, epochId });
+      try {
+        const preload = provider.preloadContextAttachment;
+        if (!preload) throw new Error("Web provider does not support context attachment preload");
+        const attachment = createChatGptContextAttachment(Object.freeze({
+          headRevisionId: "context-canary-r1",
+          activeRequestRevisionId: "context-canary-r1",
+          mode: "full" as const,
+          logicalTokens: 12,
+          transferTokens: 12,
+          segments: Object.freeze([Object.freeze({
+            type: "revision" as const,
+            revisionId: "context-canary-r1",
+            kind: "user" as const,
+            content: [
+              "ChatGPT Tela context attachment live canary. No task execution is requested.",
+              "x".repeat(CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS),
+            ].join("\n"),
+          })]),
+        }));
+        const result = requireProven(await preload.call(provider, surface, {
+          nativeTaskId: taskId,
+          webEpochId: epochId,
+          attachment,
+        }, signal));
+        if (result.nativeTaskId !== taskId
+          || result.webEpochId !== epochId
+          || result.attachmentName !== attachment.name
+          || result.attachmentSha256 !== attachment.sha256) {
+          throw new Error("context attachment canary receipt belongs to a different physical transaction");
+        }
+        return Object.freeze({
+          attachmentBytes: Buffer.byteLength(attachment.contextJson, "utf8"),
+          receiptVerified: true as const,
+        });
+      } finally {
+        await browserHost.release(surface.leaseId);
+      }
+    },
+    async revealBridgeSurface(id: string, interactive = false) {
+      const controls = browserHost.selectedCapability(id, BROWSER_INSPECTION_INPUT);
+      if (!controls) throw new Error("browser inspection input controls are unavailable");
+      controls.setInteractive(interactive);
+      await browserHost.revealSurface(id);
+    },
+    async observeBridgePreview(id?: string) {
+      const surfaces = browserHost.listSurfaces();
+      const selected = id ?? (surfaces.length === 1 ? surfaces[0]!.id : undefined);
+      const capability = selected ? browserHost.selectedCapability(selected, BROWSER_READ_ONLY_PREVIEW) : undefined;
+      const automation = selected ? browserHost.selectedCapability(selected, BROWSER_PAGE_AUTOMATION) : undefined;
+      let approvalState: "pending" | "none" | "unavailable" = "unavailable";
+      if (automation) {
+        try {
+          const observation = await new ChatGptDomSurfaceDriver(automation).observe();
+          approvalState = observation.approval?.cardCount ? "pending" : "none";
+        } catch { /* An unavailable observation cannot assert that approval cleared. */ }
+      }
+      return Object.freeze({ activeSurfaceCount: surfaces.length, surfaces,
+        ...(selected ? { selectedSurfaceId: selected } : {}),
+        ...(selected ? { approvalState } : {}),
+        ...(capability ? { jpeg: await capability.captureJpeg() } : {}),
+      });
+    },
     openProfileSetupSurface: (options?: { readonly reveal?: boolean }) => profileControl.openProfileSetupSurface(options),
     stop() {
       if (stopping) return stopping;
       stopping = (async () => {
+        checkpointController.abort(new Error("Electron checkpoint runtime stopped"));
+        await Promise.allSettled([...checkpointRuns]);
         const failures: unknown[] = [];
         try {
           await profileControl.close();

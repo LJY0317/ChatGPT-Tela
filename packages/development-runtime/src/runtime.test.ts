@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
+import { BROWSER_DOCUMENT_LIFETIME, ControlledBrowserHost } from "@chatgpt-tela/browser-host";
 import type {
   SemanticObservation,
   WebConversationProvider,
@@ -18,6 +21,8 @@ import {
   ExistingHttpsExposure,
 } from "@chatgpt-tela/mcp";
 import { startDevelopmentRuntime } from "./runtime";
+import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
+import { setPrivateDiagnosticCapture, structuralDiagnosticEvent } from "@chatgpt-tela/core";
 
 const source: CanonicalCurrentTurnSource = {
   async currentTurn(threadId) {
@@ -193,6 +198,58 @@ class ExternalContractProvider implements WebConversationProvider {
   }
 }
 
+class RetainedFinalProvider implements WebConversationProvider {
+  readonly surfaceLeaseIds: string[] = [];
+  capabilityProofs = 0;
+
+  async observeCapabilities() {
+    this.capabilityProofs += 1;
+    return {
+      state: "proven" as const,
+      value: { observed: new Set(["composer", "send"]) },
+      evidence: ["fixture"],
+    };
+  }
+
+  async submitTurn(surface: { leaseId: string }, request: WebTurnRequest) {
+    this.surfaceLeaseIds.push(surface.leaseId);
+    return {
+      state: "proven" as const,
+      value: {
+        nativeTaskId: request.nativeTaskId,
+        nativeTurnId: request.nativeTurnId,
+        webEpochId: request.webEpochId,
+        providerTurnId: `web-${request.nativeTurnId}`,
+      },
+      evidence: ["fixture"],
+    };
+  }
+
+  async observeTurn(_surface: unknown, turn: WebTurnHandle) {
+    return {
+      state: "proven" as const,
+      value: { providerTurnId: turn.providerTurnId, phase: "accepted" as const },
+      evidence: ["fixture"],
+    };
+  }
+
+  async armToolContinuation(_surface: unknown, turn: WebTurnHandle, callId: string) {
+    return {
+      state: "proven" as const,
+      value: { providerTurnId: turn.providerTurnId, callId },
+      evidence: ["fixture"],
+    };
+  }
+
+  async waitForTurnEvent(_surface: unknown, turn: WebTurnHandle) {
+    return {
+      state: "proven" as const,
+      value: { kind: "completed" as const, providerTurnId: turn.providerTurnId, answer: `done:${turn.nativeTurnId}` },
+      evidence: ["fixture"],
+    };
+  }
+}
+
 class HangingProvider implements WebConversationProvider {
   async observeCapabilities() {
     return {
@@ -260,6 +317,208 @@ async function post(baseUrl: URL, token: string, body: unknown): Promise<Respons
 }
 
 describe("development runtime composition", () => {
+  test("retains one browser surface across sequential Native turns in the same Web epoch", async () => {
+    let canonicalTurnId = "turn-1";
+    const sequentialSource: CanonicalCurrentTurnSource = {
+      async currentTurn(threadId) {
+        return {
+          threadId,
+          turnId: canonicalTurnId,
+          cwd: "/workspace",
+          workspaceRoots: ["/workspace"],
+          sandbox: { kind: "read-only", network: "restricted" },
+          proof: "turn-context",
+          environmentSourceTurnId: canonicalTurnId,
+        };
+      },
+    };
+    const browserEvents: string[] = [];
+    let browserCreations = 0;
+    const browserHost = new ControlledBrowserHost(async () => {
+      browserCreations += 1;
+      return {
+        async navigate() {}, async reveal() {}, async hide() {},
+        async close() { browserEvents.push("surface-close"); },
+        capability(capability) { return capability === BROWSER_DOCUMENT_LIFETIME ? { current: () => ({ generation: 1, signal: new AbortController().signal }) } as never : undefined; },
+      };
+    });
+    const provider = new RetainedFinalProvider();
+    let committedSurface: string | undefined;
+    const runtime = await startDevelopmentRuntime({
+      currentTurnSource: sequentialSource,
+      browserHost,
+      mcp: { kind: "external", abi: "stable" },
+      provider,
+      planWebTurn(turn) {
+        const turnId = turn.channel.binding.authority.turnId;
+        return {
+          nativeTaskId: turn.channel.binding.authority.threadId,
+          webEpochId: "shared-epoch",
+          ...(committedSurface ? { retainedSurfaceLeaseId: committedSurface, retainedDocumentGeneration: 1 } : {}),
+          settle(outcome) {
+            committedSurface = outcome.status === "completed" ? outcome.surfaceLeaseId : undefined;
+          },
+          physicalContext: {
+            headRevisionId: `revision-${turnId}`,
+            mode: turnId === "turn-1" ? "full" : "retained-delta",
+            ...(turnId === "turn-2" ? { baseRevisionId: "revision-turn-1" } : {}),
+            activeRequestRevisionId: `revision-${turnId}`,
+            logicalTokens: turnId === "turn-1" ? 10 : 20,
+            transferTokens: 10,
+            segments: [{
+              type: "revision",
+              revisionId: `revision-${turnId}`,
+              kind: "user",
+              content: `request:${turnId}`,
+            }],
+          },
+        };
+      },
+    });
+    const requestFor = (turnId: string) => ({
+      ...nativeRequest([{ type: "message", role: "user", content: `request:${turnId}` }]),
+      client_metadata: {
+        "x-codex-turn-metadata": {
+          request_kind: "turn",
+          thread_id: "thread-1",
+          turn_id: turnId,
+        },
+      },
+    });
+
+    try {
+      const first = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, requestFor("turn-1"));
+      expect(first.status).toBe(200);
+      expect(await first.text()).toContain("done:turn-1");
+      canonicalTurnId = "turn-2";
+      const second = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, requestFor("turn-2"));
+      expect(second.status).toBe(200);
+      expect(await second.text()).toContain("done:turn-2");
+
+      expect(browserCreations).toBe(1);
+      expect(provider.capabilityProofs).toBe(1);
+      expect(provider.surfaceLeaseIds).toHaveLength(2);
+      expect(new Set(provider.surfaceLeaseIds).size).toBe(1);
+      expect(browserEvents).toEqual([]);
+    } finally {
+      await runtime.stop();
+    }
+    expect(browserEvents).toEqual(["surface-close"]);
+  });
+
+  test.each(["replaced-epoch", "wrong-lease", "missing-lease", "replaced-document", "missing-document"] as const)(
+    "rejects retained context before submission when its physical owner is %s",
+    async mismatch => {
+      let turnId = "turn-1";
+      let lease: string | undefined;
+      let failed = false;
+      let closed = 0;
+      const browserHost = new ControlledBrowserHost(async () => ({
+        async navigate() {}, async reveal() {}, async hide() {}, async close() { closed += 1; },
+        capability(capability) { return capability === BROWSER_DOCUMENT_LIFETIME && !(mismatch === "missing-document" && turnId === "turn-2") ? { current: () => ({ generation: mismatch === "replaced-document" && turnId === "turn-2" ? 2 : 1, signal: new AbortController().signal }) } as never : undefined; },
+      }));
+      const provider = new RetainedFinalProvider();
+      const runtime = await startDevelopmentRuntime({
+        currentTurnSource: { async currentTurn(threadId) { return { ...(await source.currentTurn(threadId))!, turnId, environmentSourceTurnId: turnId }; } },
+        browserHost, provider, mcp: { kind: "external", abi: "stable" },
+        planWebTurn(turn) {
+          const retained = turnId === "turn-2";
+          const expectedLease = retained ? (mismatch === "wrong-lease" ? "other-page" : mismatch === "missing-lease" ? undefined : lease) : undefined;
+          return {
+            nativeTaskId: turn.channel.binding.authority.threadId,
+            webEpochId: retained && mismatch === "replaced-epoch" ? "new-epoch" : "epoch",
+            ...(expectedLease ? { retainedSurfaceLeaseId: expectedLease, retainedDocumentGeneration: 1 } : {}),
+            physicalContext: { headRevisionId: turnId, activeRequestRevisionId: turnId,
+              mode: retained ? "retained-delta" : "full", logicalTokens: 1, transferTokens: 1,
+              segments: [{ type: "revision", revisionId: turnId, kind: "user", content: "request" }],
+            },
+            settle(outcome) { if (outcome.status === "completed") lease = outcome.surfaceLeaseId; else failed = true; },
+          };
+        },
+      });
+      const request = () => ({ ...nativeRequest(), client_metadata: { "x-codex-turn-metadata": {
+        request_kind: "turn", thread_id: "thread-1", turn_id: turnId,
+      } } });
+      try {
+        const first = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, request());
+        expect(first.status).toBe(200); await first.text();
+        turnId = "turn-2";
+        const second = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, request());
+        expect(second.status).toBe(409);
+        expect(await second.text()).toContain("surviving physical surface");
+        expect(provider.surfaceLeaseIds).toHaveLength(1);
+        expect(failed).toBe(true);
+        expect(closed).toBe(mismatch === "replaced-epoch" ? 2 : 1);
+      } finally { await runtime.stop(); }
+    },
+  );
+
+  test.each(["before-submit", "during-response"] as const)("document loss %s stops the turn without committing its answer", async phase => {
+    const documentController = new AbortController();
+    let completed = false;
+    let failed = false;
+    let closed = 0;
+    const browserHost = new ControlledBrowserHost(async () => ({
+      async navigate() {}, async reveal() {}, async hide() {}, async close() { closed += 1; },
+      capability(capability) { return capability === BROWSER_DOCUMENT_LIFETIME ? { current: () => ({ generation: 1, signal: documentController.signal }) } as never : undefined; },
+    }));
+    const provider = new RetainedFinalProvider();
+    const observe = provider.observeCapabilities.bind(provider);
+    provider.observeCapabilities = async () => { if (phase === "before-submit") documentController.abort(new Error("fixture document lost")); return observe(); };
+    const event = provider.waitForTurnEvent.bind(provider);
+    provider.waitForTurnEvent = async (surface, turn) => { documentController.abort(new Error("fixture document lost")); return event(surface, turn); };
+    const runtime = await startDevelopmentRuntime({
+      currentTurnSource: source, browserHost, provider, mcp: { kind: "external", abi: "stable" },
+      planWebTurn: turn => ({ nativeTaskId: turn.channel.binding.authority.threadId, webEpochId: "epoch",
+        physicalContext: { headRevisionId: "revision", mode: "full", logicalTokens: 1, transferTokens: 1, segments: [] },
+        settle(outcome) { completed = outcome.status === "completed"; failed = outcome.status === "failed"; },
+      }),
+    });
+    try {
+      const response = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, nativeRequest());
+      expect(response.status).toBe(409);
+      expect(await response.text()).toContain("fixture document lost");
+      expect(provider.surfaceLeaseIds).toHaveLength(phase === "before-submit" ? 0 : 1);
+      expect(completed).toBe(false); expect(failed).toBe(true); expect(closed).toBe(1);
+    } finally { await runtime.stop(); }
+  });
+
+  test("bounded idle eviction reconstructs canonical history through the real planner on later explicit use", async () => {
+    const requests: WebTurnRequest[] = [];
+    let turnId = "turn-1";
+    let closed = 0;
+    const host = new ControlledBrowserHost(async () => ({
+      async navigate() {}, async reveal() {}, async hide() {}, async close() { closed += 1; },
+      capability(capability) { return capability === BROWSER_DOCUMENT_LIFETIME ? { current: () => ({generation:1,signal:new AbortController().signal}) } as never : undefined; },
+    }));
+    const provider = new RetainedFinalProvider();
+    const submit = provider.submitTurn.bind(provider);
+    provider.submitTurn = async (surface, request) => { requests.push(request); return submit(surface, request); };
+    const runtime = await startDevelopmentRuntime({
+      currentTurnSource: { async currentTurn(threadId) { return {...(await source.currentTurn(threadId))!,turnId,environmentSourceTurnId:turnId}; } },
+      browserHost: host, provider, mcp: {kind:"external",abi:"stable"},
+      planWebTurn: createNativeRequestDevelopmentWebTurnPlanner(), maxIdleBrowserEpochs: 1,
+    });
+    const send = async (threadId: string, input: unknown[]) => {
+      const response = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, {
+        ...nativeRequest(input),client_metadata:{"x-codex-turn-metadata":{request_kind:"turn",thread_id:threadId,turn_id:turnId}},
+      });
+      expect(response.status).toBe(200); await response.text();
+    };
+    try {
+      const firstInput=[{type:"message",role:"user",content:"Task A exact history"}];
+      await send("task-A",firstInput);
+      await send("task-B",[{type:"message",role:"user",content:"Task B"}]);
+      expect(closed).toBe(1); expect(host.activeSurfaceCount).toBe(1);
+      turnId="turn-2";
+      await send("task-A",[...firstInput,{type:"message",role:"assistant",content:"done:turn-1"},{type:"message",role:"user",content:"Continue A"}]);
+      expect(requests[2]!.physicalContext.mode).toBe("full");
+      expect(JSON.stringify(requests[2]!.physicalContext.segments)).toContain("Task A exact history");
+      expect(provider.surfaceLeaseIds[2]).not.toBe(provider.surfaceLeaseIds[0]);
+      expect(host.activeSurfaceCount).toBe(1);
+    } finally { await runtime.stop(); }
+  });
+
   test("owns one Native HTTP -> browser -> MCP -> Native result -> Web final lifecycle", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "chatgpt-tela-dev-runtime-test", version: "0.0.0" }, { capabilities: {} });
@@ -312,11 +571,13 @@ describe("development runtime composition", () => {
       const secondText = await second.text();
       expect(secondText).toContain('"delta":"web-final"');
       expect(runtime.turns.size).toBe(0);
-      expect(browserEvents).toEqual(["surface-close"]);
+      // A successful task epoch remains physically retained for a later Native turn.
+      expect(browserEvents).toEqual([]);
     } finally {
       await runtime.stop();
       await client.close();
     }
+    expect(browserEvents).toEqual(["surface-close"]);
   });
 
   test("can run the same exact-turn lifecycle through the stable Codex bridge contract", async () => {
@@ -451,6 +712,10 @@ describe("development runtime composition", () => {
   });
 
   test("optional Web turn deadline fails a hanging development turn closed", async () => {
+    const diagnosticDirectory = mkdtempSync(join(tmpdir(), "tela-web-timeout-proof-"));
+    const diagnosticFile = join(diagnosticDirectory, "events.jsonl");
+    const previousDiagnosticFile = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = diagnosticFile;
     const [, serverTransport] = InMemoryTransport.createLinkedPair();
     const browserHost = new ControlledBrowserHost(async () => ({
       async navigate() {},
@@ -486,8 +751,18 @@ describe("development runtime composition", () => {
       const response = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, nativeRequest());
       expect(response.status).toBe(409);
       expect(await response.text()).toContain("development Web turn timed out after 25ms");
+      const events = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const timeout = events.find(event => event.stage === "web_turn_timeout");
+      const failure = events.find(event => event.stage === "web_turn_failed");
+      expect(timeout).toMatchObject({ deadline_ms: 25, tool_round_count: 0, tool_pending: false });
+      expect(timeout.operation_fingerprint).toMatch(/^[a-f0-9]{24}$/);
+      expect(failure.operation_fingerprint).toBe(timeout.operation_fingerprint);
+      expect(readFileSync(diagnosticFile, "utf8")).not.toContain("hang until the development deadline");
     } finally {
       await runtime.stop();
+      if (previousDiagnosticFile === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previousDiagnosticFile;
+      rmSync(diagnosticDirectory, { recursive: true, force: true });
     }
   });
 
@@ -637,4 +912,133 @@ describe("development runtime composition", () => {
       await runtime.stop();
     }
   });
+});
+
+test("HTTP disconnect preserves Web work; exact Native termination retires its accepted surface", async () => {
+  const nativeController = new AbortController();
+  const disconnected = new AbortController();
+  let observeSignal: AbortSignal | undefined;
+  let entered!: () => void;
+  const accepted = new Promise<void>(resolve => { entered = resolve; });
+  let closedWatch!: () => void;
+  const watchClosed = new Promise<void>(resolve => { closedWatch = resolve; });
+  let surfaceClosed = 0;
+  let submissions = 0;
+  let failedSettlement = false;
+  const provider = new HangingProvider();
+  const submit = provider.submitTurn.bind(provider);
+  provider.submitTurn = async (surface, request) => { submissions++; return submit(surface, request); };
+  const wait = provider.waitForTurnEvent.bind(provider);
+  provider.waitForTurnEvent = async (surface, handle, signal) => {
+    observeSignal = signal; entered(); return wait(surface, handle, signal);
+  };
+  const runtime = await startDevelopmentRuntime({
+    currentTurnSource: { ...source, async watchTurn(threadId, turnId) {
+      expect(threadId).toBe("thread-1"); expect(turnId).toBe("turn-1");
+      return { signal: nativeController.signal, async close() { closedWatch(); } };
+    } },
+    browserHost: new ControlledBrowserHost(async () => ({
+      async navigate() {}, async reveal() {}, async hide() {}, async close() { surfaceClosed++; },
+    })),
+    provider, mcp: {kind: "external", abi: "stable"},
+    planWebTurn: turn => ({
+      nativeTaskId: turn.channel.binding.authority.threadId, webEpochId: "epoch-1",
+      physicalContext: {headRevisionId:"r",activeRequestRevisionId:"r",mode:"full",logicalTokens:1,transferTokens:1,segments:[{type:"revision",revisionId:"r",kind:"user",content:"fixture"}]},
+      settle(outcome) { failedSettlement = outcome.status === "failed"; },
+    }),
+  });
+  try {
+    const response = fetch(new URL("responses", runtime.responses.baseUrl), {
+      method:"POST", headers:{authorization:`Bearer ${runtime.responses.runtimeToken}`,"content-type":"application/json"},
+      body:JSON.stringify(nativeRequest()),signal:disconnected.signal,
+    });
+    response.catch(() => {});
+    await accepted;
+    disconnected.abort(); await response.catch(() => {});
+    expect(observeSignal?.aborted).toBe(false);
+    nativeController.abort(new Error("Native interrupted fixture"));
+    await watchClosed;
+    expect(observeSignal?.aborted).toBe(true);
+    expect(submissions).toBe(1);
+    expect(surfaceClosed).toBe(1);
+    expect(failedSettlement).toBe(true);
+    expect(runtime.turns.active("thread-1", "turn-1")).toBeUndefined();
+  } finally { await runtime.stop(); }
+});
+
+test.each(['native_watch','context_plan'] as const)('preparation failure at %s is recorded without browser work or replay',async phase=>{
+  const root=mkdtempSync(join(tmpdir(),'tela-preparation-diagnostic-'));
+  const file=join(root,'events.jsonl'),previous=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+  setPrivateDiagnosticCapture(join(root,'diagnostics'),'until-disabled');
+  let browserCreations=0,watchCloses=0,plannerCalls=0;
+  const error=new Error(phase==='context_plan'?'Native compaction history includes unsupported user content':'private lifecycle exception');
+  const runtime=await startDevelopmentRuntime({
+    currentTurnSource:{...source,async watchTurn(){if(phase==='native_watch')throw error;return {signal:new AbortController().signal,async close(){watchCloses++;}};}},
+    browserHost:new ControlledBrowserHost(async()=>{browserCreations++;throw Error('Browser must not be acquired');}),
+    mcp:{kind:'external',abi:'stable'},
+    planWebTurn(){plannerCalls++;throw error;},
+  });
+  try {
+    const request=nativeRequest([{role:'user',content:'synthetic private request'}]);
+    const response=await post(runtime.responses.baseUrl,runtime.responses.runtimeToken,request);
+    expect(response.status).toBe(409);expect(await response.text()).toContain(error.message);
+    const replay=await post(runtime.responses.baseUrl,runtime.responses.runtimeToken,request);
+    expect(replay.status).toBe(409);expect(await replay.text()).toContain('already retired');
+    const raw=readFileSync(file,'utf8');const events=raw.trim().split('\n').map(line=>JSON.parse(line));
+    const preparation=events.filter(event=>event.stage==='web_preparation_failed');
+    expect(preparation).toHaveLength(1);
+    expect(structuralDiagnosticEvent(preparation[0])).toMatchObject({phase,reason_class:phase==='context_plan'?'history_user_format_unsupported':'unclassified',tool_round_count:0});
+    expect(preparation[0].scope_fingerprint).toMatch(/^[a-f0-9]{24}$/);
+    expect(raw).not.toContain(error.message);expect(raw).not.toContain('synthetic private request');
+    expect(browserCreations).toBe(0);expect(plannerCalls).toBe(phase==='context_plan'?1:0);expect(watchCloses).toBe(phase==='context_plan'?1:0);
+    const captures=readdirSync(join(root,'diagnostics','private')).filter(name=>name.endsWith('.json')&&!name.endsWith('.meta.json'));
+    expect(captures).toHaveLength(1);
+    expect(readFileSync(join(root,'diagnostics','private',captures[0]!),'utf8')).toContain('web_preparation_failure');
+  }finally{
+    await runtime.stop();await new Promise<void>(resolve=>setImmediate(resolve));
+    if(previous===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;
+    rmSync(root,{recursive:true,force:true});
+  }
+});
+
+test("preparation streams presentation and follows Native owner cancellation before browser execution", async () => {
+  const owner = new AbortController();
+  let signal: AbortSignal | undefined, acquisitions = 0;
+  let closeWatch!: () => void;
+  const closed = new Promise<void>(resolve => { closeWatch = resolve; });
+  const runtime = await startDevelopmentRuntime({
+    currentTurnSource: { ...source, async watchTurn() { return { signal: owner.signal, async close() { closeWatch(); } }; } },
+    browserHost: new ControlledBrowserHost(async () => {
+      acquisitions++;
+      return { async navigate() {}, async reveal() {}, async hide() {}, async close() {} };
+    }),
+    provider: new HangingProvider(), mcp: { kind: "external", abi: "stable" },
+    async planWebTurn(_turn, _body, preparation) {
+      if (!preparation) throw Error("missing preparation contract");
+      signal = preparation.signal;
+      preparation.onProgress("Preparing prior conversation context.");
+      await new Promise<never>((_resolve, reject) => {
+        preparation.signal.addEventListener("abort", () => reject(preparation.signal.reason), { once: true });
+      });
+      throw Error("unreachable");
+    },
+  });
+  try {
+    const response = await fetch(new URL("responses", runtime.responses.baseUrl), {
+      method: "POST", headers: { authorization: `Bearer ${runtime.responses.runtimeToken}`, "content-type": "application/json" },
+      body: JSON.stringify(nativeRequest()),
+    });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder(); let text = "";
+    while (!text.includes("response.reasoning_summary_text.delta")) text += decoder.decode((await reader.read()).value);
+    expect(text).toContain("Preparing prior conversation context.");
+    expect(signal?.aborted).toBe(false);
+    owner.abort(new Error("Native owner stopped during preparation"));
+    await closed;
+    expect(signal?.aborted).toBe(true);
+    expect(acquisitions).toBe(0);
+    expect(runtime.turns.active("thread-1", "turn-1")).toBeUndefined();
+    await reader.cancel();
+  } finally { await runtime.stop(); }
 });

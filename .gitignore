@@ -12,3 +12,14 @@ coverage/
 /AGENTS.md
 /STATE.md
 /MILESTONES.md
+
+# Collected diagnostic evidence is private, never a source/build input.
+*.diagnostics.jsonl
+*.diagnostics.jsonl.1
+/diagnostics/
+/private-diagnostics/
+incident_*.json
+artifact_*.html
+artifact_*.jpg
+artifact_*.json
+capture-policy.json

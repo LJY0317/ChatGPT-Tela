@@ -11,6 +11,26 @@ function response(value: unknown, status = 200): Response {
 
 function fixtureTools(events: string[]): ChatAgentWorkspaceTools {
   return {
+    workspaceInstructions(workspaceId) {
+      events.push(`workspace_instructions:${workspaceId}`);
+      return { instructions: [], availableInstructionFiles: [], instructionScanComplete: true };
+    },
+    listDirectory(input) {
+      events.push(`list_directory:${input.workspaceId}:${input.path ?? "."}`);
+      return { path: input.path ?? ".", entries: [], hasMore: false };
+    },
+    searchText(input) {
+      events.push(`search_text:${input.workspaceId}:${input.query}`);
+      return { path: input.path ?? ".", matches: [], scanComplete: true };
+    },
+    listSkills(workspaceId, query = "") {
+      events.push(`list_skills:${workspaceId}:${query}`);
+      return [];
+    },
+    readSkill(input) {
+      events.push(`read_skill:${input.workspaceId}:${input.name}:${input.path ?? "SKILL.md"}`);
+      return { skill: input.name, path: input.path ?? "SKILL.md", content: "1: skill" };
+    },
     read(input) {
       events.push(`read:${input.workspaceId}:${input.path}:${input.offset ?? ""}:${input.limit ?? ""}`);
       return { path: input.path, content: "1: hello" };
@@ -82,9 +102,12 @@ describe("OpenAI Responses Tela Chat agent", () => {
     expect(firstResponse.conversation).toBe("conv_fixture_1");
     expect(JSON.stringify(firstResponse)).not.toContain("/private/workspace");
     expect(firstResponse.instructions).toContain("read_many only for already-known independent paths");
+    expect(firstResponse.instructions).toContain("workspace_instructions");
+    expect(firstResponse.instructions).toContain("list_skills");
     expect(firstResponse.instructions).toContain("Treat actual tool results as evidence");
     expect(firstResponse.instructions).toContain("This run is read-only");
     expect((firstResponse.tools as Array<{ name: string }>).map(tool => tool.name)).toEqual([
+      "workspace_instructions", "list_directory", "search_text", "list_skills", "read_skill",
       "read", "read_many", "show_changes",
     ]);
     const continuationInput = requests[2]!.body.input as Array<Record<string, unknown>>;
@@ -193,5 +216,43 @@ describe("OpenAI Responses Tela Chat agent", () => {
     }
     expect(message).toContain("HTTP 401");
     expect(message).not.toContain(secret);
+  });
+
+  test("late provider response after stop cannot execute a write", async () => {
+    const controller = new AbortController(), events: string[] = [];
+    const driver = new OpenAiChatAgentDriver({
+      apiKey: "sk-fixture-secret-value-long-enough", model: "test-model", workspaceTools: fixtureTools(events),
+      fetch: async () => {
+        controller.abort(new Error("fixture stop"));
+        return response({ output: [{ type: "function_call", call_id: "late", name: "apply_patch",
+          arguments: JSON.stringify({ patch: "*** Begin Patch\n*** End Patch" }) }] });
+      },
+    });
+    await expect(driver.run({ prompt: "write", workspaceId: "chatws_1", workspaceRoot: "/unused",
+      providerSessionId: "conv_existing", writeMode: "workspace_write" }, { onSessionId() {} }, controller.signal))
+      .rejects.toThrow("fixture stop");
+    expect(events).toEqual([]);
+  });
+
+  test("stop during a tool revokes subsequent tools and provider submissions", async () => {
+    const controller = new AbortController(), events: string[] = [];
+    const tools = fixtureTools(events);
+    let requests = 0;
+    const driver = new OpenAiChatAgentDriver({
+      apiKey: "sk-fixture-secret-value-long-enough", model: "test-model",
+      workspaceTools: { ...tools, read(input) { controller.abort(new Error("fixture stop")); return tools.read(input); } },
+      fetch: async () => {
+        requests++;
+        return response({ output: [
+          { type: "function_call", call_id: "read", name: "read", arguments: JSON.stringify({ path: "a.txt" }) },
+          { type: "function_call", call_id: "patch", name: "apply_patch", arguments: JSON.stringify({ patch: "*** Begin Patch\n*** End Patch" }) },
+        ] });
+      },
+    });
+    await expect(driver.run({ prompt: "write", workspaceId: "chatws_1", workspaceRoot: "/unused",
+      providerSessionId: "conv_existing", writeMode: "workspace_write" }, { onSessionId() {} }, controller.signal))
+      .rejects.toThrow("fixture stop");
+    expect(events).toEqual(["read:chatws_1:a.txt::"]);
+    expect(requests).toBe(1);
   });
 });

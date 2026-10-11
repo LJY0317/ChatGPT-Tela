@@ -1,4 +1,5 @@
-import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import { captureBrowserDiagnosticEvidence, type BrowserHost, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   requireProven,
   type WebContextCheckpointProvider,
@@ -11,6 +12,8 @@ export interface BrowserContextCheckpointRunInput {
   readonly provider: WebContextCheckpointProvider;
   readonly request: WebContextCheckpointRequest;
   readonly signal?: AbortSignal;
+  readonly onProgress?: (summary: string) => void;
+  readonly prepareForSubmit?: (surface: BrowserSurfaceLease, signal?: AbortSignal) => Promise<void>;
 }
 
 function validateRequest(request: WebContextCheckpointRequest): void {
@@ -58,17 +61,31 @@ export async function runBrowserContextCheckpoint(
   validateRequest(input.request);
   let surface: BrowserSurfaceLease | undefined;
   try {
+    input.signal?.throwIfAborted();
+    input.onProgress?.("Preparing prior conversation context before starting the task.");
     surface = await input.browserHost.acquire({
       taskId: input.request.nativeTaskId,
       epochId: input.request.webEpochId,
     });
     requireProven(await input.provider.observeCapabilities(surface, input.signal));
+    await input.prepareForSubmit?.(surface, input.signal);
     const result = requireProven(await input.provider.createContextCheckpoint(
       surface,
       input.request,
       input.signal,
+      input.onProgress,
     ));
+    input.signal?.throwIfAborted();
     return validateResult(input.request, result);
+  } catch (error) {
+    emitDiagnosticEvent("chatgpt_tela_work", "context_checkpoint_failed", {
+      reason_class: input.signal?.aborted ? "aborted" : "provider_error",
+      surface_acquired: surface !== undefined,
+    });
+    // Use an independent bounded diagnostic read while this surface is still owned.
+    // The cancelled operation signal must not prevent failure evidence collection.
+    if (surface) await captureBrowserDiagnosticEvidence(surface, "turn_failure");
+    throw error;
   } finally {
     if (surface) await input.browserHost.release(surface.leaseId);
   }

@@ -12,7 +12,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildPackagedPayload,
+  CURRENT_PACKAGED_LIFECYCLE,
   createEd25519PackagedPayloadSigner,
+  parsePackagedNativeEngine,
+  CURRENT_CHAT_PROCESS_STORE_COMPATIBILITY,
 } from "@chatgpt-tela/product-lifecycle";
 
 const repoRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
@@ -71,6 +74,13 @@ function macCodesign(outputPath: string, identity: string): void {
   for (const service of ["gateway", "chat", "codex"] as const) sign(join(outputPath, "services", service));
   const menuBar = join(outputPath, "ui", "chatgpt-tela-menu-bar");
   if (existsSync(menuBar)) sign(menuBar);
+  const workspaceFiles = join(outputPath, "helpers", "tela-workspace-files");
+  if (existsSync(workspaceFiles)) sign(workspaceFiles);
+  const nativeEngine = join(outputPath, "native-engine", "codex");
+  if (existsSync(nativeEngine)) {
+    sign(nativeEngine);
+    sign(join(outputPath, "native-engine", "codex-code-mode-host"));
+  }
   sign(join(outputPath, "electron", "Electron.app"), true);
 }
 
@@ -81,6 +91,13 @@ async function main(): Promise<void> {
   const keyId = requiredOption("--key-id");
   const privateKey = readFileSync(signingKeyPath);
   const macCodesignIdentity = process.platform === "darwin" ? requiredOption("--mac-codesign-identity") : undefined;
+  const workspaceFilesSourcePath = option("--workspace-files");
+  const nativeEnginePath = option("--native-engine");
+  const nativeEngineMetadataPath = option("--native-engine-metadata");
+  if (Boolean(nativeEnginePath) !== Boolean(nativeEngineMetadataPath)) throw new Error("Native engine requires both --native-engine and --native-engine-metadata");
+  const nativeEngineMetadata = nativeEngineMetadataPath
+    ? parsePackagedNativeEngine(JSON.parse(readFileSync(realRegularFile(nativeEngineMetadataPath, "Native engine metadata"), "utf8")))
+    : undefined;
 
   const electronBundle = resolve(repoRoot, "node_modules", "electron", "dist");
   if (!existsSync(electronBundle) || !lstatSync(electronBundle).isDirectory() || lstatSync(electronBundle).isSymbolicLink()) {
@@ -95,6 +112,7 @@ async function main(): Promise<void> {
     const chat = join(temporary, `chat${executableExtension}`);
     const codex = join(temporary, `codex${executableExtension}`);
     const profileRuntime = join(temporary, "profile-runtime.cjs");
+    const profileSetup = join(temporary, "profile-setup.cjs");
     const menuBar = process.platform === "darwin" ? join(temporary, "chatgpt-tela-menu-bar") : undefined;
 
     compileExecutable("apps/packaged-launcher/src/main.ts", launcher);
@@ -103,19 +121,17 @@ async function main(): Promise<void> {
     compileExecutable("apps/codex-daemon/src/main.ts", codex);
     runBun(["build", "apps/profile-runtime/src/main.ts", "--target=node", "--format=cjs", "--external", "electron",
       `--outfile=${profileRuntime}`]);
+    runBun(["build", "apps/profile-setup/src/main.ts", "--target=node", "--format=cjs", "--external", "electron",
+      `--outfile=${profileSetup}`]);
     if (menuBar) {
-      execFileSync("/usr/bin/xcrun", [
-        "swiftc",
-        "-parse-as-library",
-        resolve(repoRoot, "apps/menu-bar-macos/main.swift"),
-        "-framework", "AppKit",
-        "-o", menuBar,
-      ], { cwd: repoRoot, stdio: "inherit" });
+      runBun(["run", "apps/menu-bar-macos/build.ts", "--output", menuBar]);
     }
 
     const built = buildPackagedPayload({
       outputPath,
       productVersion,
+      chatProcessStore: CURRENT_CHAT_PROCESS_STORE_COMPATIBILITY,
+      lifecycle: CURRENT_PACKAGED_LIFECYCLE,
       launcherSourcePath: launcher,
       services: {
         gateway: { executableSourcePath: gateway },
@@ -126,8 +142,14 @@ async function main(): Promise<void> {
         electronBundleSourcePath: electronBundle,
         electronExecutableRelativePath: electronExecutableRelativePath(),
         entrypointSourcePath: profileRuntime,
+        setupEntrypointSourcePath: profileSetup,
       },
       ...(menuBar ? { menuBarSourcePath: menuBar } : {}),
+      ...(workspaceFilesSourcePath ? { workspaceFilesSourcePath } : {}),
+      ...(nativeEngineMetadata && nativeEnginePath ? { nativeEngine: {
+        ...nativeEngineMetadata,
+        executableSourcePath: realRegularFile(nativeEnginePath, "Native engine executable"),
+      } } : {}),
       signer: createEd25519PackagedPayloadSigner({ keyId, privateKey }),
       ...(macCodesignIdentity
         ? { finalizeStagedPayload: ({ outputPath: staged }) => macCodesign(staged, macCodesignIdentity) }
@@ -143,6 +165,8 @@ async function main(): Promise<void> {
       launcher: built.manifest.launcher,
       profileRuntime: built.manifest.profileRuntime,
       menuBar: built.manifest.menuBar,
+      nativeEngine: built.manifest.nativeEngine,
+      workspaceFiles: built.manifest.workspaceFiles,
     }, null, 2));
   } finally {
     rmSync(temporary, { recursive: true, force: true });

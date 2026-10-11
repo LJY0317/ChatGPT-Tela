@@ -1,3 +1,7 @@
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { connectCodexAppServerWebSocket, readDynamicWebModelCatalog, interruptLoadedAppServerTurns } from "@chatgpt-tela/codex";
+import { ProfileConnectionError, type ProfileConnectionPhase, type ProfileStartOptions } from "./profile-operation";
+import { parseCodexTerminalSessionContract, type CodexTerminalSessionContract } from "@chatgpt-tela/service-protocol";
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
@@ -6,7 +10,21 @@ import {
   type RemoteTurnBridge,
   type TurnBridgeBackend,
 } from "@chatgpt-tela/mcp";
-import type { ServiceStatus } from "@chatgpt-tela/service-protocol";
+import {
+  parseCodexWebStateContract,
+  parseCodexAccountCheckContract,
+  type CodexAccountCheckContract,
+  parseCodexAccountDisplayContract,
+  type CodexAccountDisplayContract,
+  type CodexWebState,
+  parseCodexBridgePreviewContract,
+  parseCodexContextAttachmentCanaryContract,
+  parseCodexModelSelectionCanaryContract,
+  type CodexBridgePreviewContract,
+  type CodexContextAttachmentCanaryContract,
+  type CodexModelSelectionCanaryContract,
+  type ServiceStatus,
+} from "@chatgpt-tela/service-protocol";
 import {
   CompositeNativeTargetAdapter,
   DefaultDesktopNativeTargetAdapter,
@@ -15,10 +33,12 @@ import {
   type CodexNativeTargetAdapter,
   type CodexNativeTargetSession,
 } from "./native-target";
+import { profileLaunch, verifyProfileRuntimeProcess } from "./profile-launch";
 import { RoutedCodexTurnBridge } from "./routed-turn-bridge";
+import { createProfileSupervisorLease, type ProfileSupervisorLease } from "./profile-supervision";
 
-const MAX_CHILD_OUTPUT_BYTES = 64 * 1024;
-const CHILD_START_TIMEOUT_MS = 90_000;
+// Native and Web preparation share an authenticated startup lease and bounded deadline.
+const CHILD_START_TIMEOUT_MS = 5 * 60_000;
 const CHILD_STOP_TIMEOUT_MS = 20_000;
 
 export interface CodexServiceConfig {
@@ -33,10 +53,16 @@ export interface CodexProfileStatus {
   readonly targetSessionState: string;
   readonly controlState: "stopped" | "running" | "restart-required" | "orphaned";
   readonly childProcessId?: number;
+  /** Exact Desktop process observed by the profile owner; never the launcher/waiter PID. */
+  readonly desktopProcessId?: number;
+  readonly connectionInProgress?: boolean;
+  readonly webModelsReady?: boolean;
+  readonly webState?: CodexWebState;
   readonly responsesRouteFingerprint?: string;
 }
 
 interface ChildReady {
+  readonly runtimeProcessId: number;
   readonly stage: "product-profile-ready";
   readonly slot: number;
   readonly routeId: string;
@@ -44,15 +70,19 @@ interface ChildReady {
   readonly nativeTargetKind: "default-desktop" | "multi-profile";
   readonly profileId: string;
   readonly internalMcpUrl: string;
+  readonly bridgePreviewUrl: string;
+  readonly terminalEndpoint?: string;
   readonly responsesUrl: string;
   readonly responsesRouteFingerprint: string;
   readonly targetProcessId?: number;
-  readonly accountBinding: "verified";
+  readonly nativeReady: true;
+  readonly webState: CodexWebState;
 }
 
 type ProfileChildProcess = ChildProcessByStdio<null, Readable, Readable>;
 
 interface OwnedProfile {
+  readonly runtimeProcessId: number;
   readonly slot: number;
   readonly target: CodexNativeTarget;
   readonly routeId: string;
@@ -60,7 +90,14 @@ interface OwnedProfile {
   readonly targetProcessId?: number;
   readonly child: ProfileChildProcess;
   readonly bridge: RemoteTurnBridge;
+  readonly supervisor: ProfileSupervisorLease;
+  readonly bridgePreviewUrl: string;
+  readonly terminalEndpoint?: string;
+  readonly uiToken: string;
   readonly unmount: () => void;
+  webState: CodexWebState;
+  webModelsReady: boolean;
+  catalogCheck?: Promise<boolean>;
   stopping: Promise<void> | undefined;
 }
 
@@ -70,8 +107,17 @@ export interface CodexService {
   readonly tools: TurnBridgeBackend;
   serviceStatus(): ServiceStatus;
   profiles(): Promise<readonly CodexProfileStatus[]>;
-  startProfile(slot: number): Promise<CodexProfileStatus>;
+  startProfile(slot: number, options?: ProfileStartOptions): Promise<CodexProfileStatus>;
+  waitWebPreparation(slot: number): Promise<CodexProfileStatus>;
+  reconnectWeb(slot: number): Promise<CodexProfileStatus>;
   stopProfile(slot: number): Promise<CodexProfileStatus>;
+  terminalSession(slot: number): Promise<CodexTerminalSessionContract>;
+  revealBridgeSurface?(slot: number, surfaceId: string, interactive?: boolean): Promise<void>;
+  bridgePreview(slot: number, surfaceId?: string): Promise<CodexBridgePreviewContract>;
+  accountCheck?(slot: number): Promise<CodexAccountCheckContract>;
+  accountDisplay?(slot: number): Promise<CodexAccountDisplayContract>;
+  contextAttachmentCanary(slot: number): Promise<CodexContextAttachmentCanaryContract>;
+  modelSelectionCanary(slot: number): Promise<CodexModelSelectionCanaryContract>;
   close(): Promise<void>;
   readonly activeProfileCount: number;
 }
@@ -109,18 +155,23 @@ function childReady(value: unknown, expected: {
     || string("routeId") !== expected.routeId
     || string("targetId") !== expected.targetId
     || item.nativeTargetKind !== expected.nativeTargetKind
-    || item.accountBinding !== "verified") {
+    || item.nativeReady !== true
+    || !["preparing", "ready", "failed", "closed"].includes(item.webState as string)) {
     throw new Error("profile child readiness identity does not match the requested profile");
   }
   const internalMcpUrl = new URL(string("internalMcpUrl"));
+  const bridgePreviewUrl = new URL(string("bridgePreviewUrl"));
   const responsesUrl = new URL(string("responsesUrl"));
-  for (const url of [internalMcpUrl, responsesUrl]) {
+  for (const url of [internalMcpUrl, bridgePreviewUrl, responsesUrl]) {
     if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) {
       throw new Error("profile child readiness exposed a non-loopback endpoint");
     }
   }
   const fingerprint = string("responsesRouteFingerprint");
   if (!/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("profile child route fingerprint is invalid");
+  if (!Number.isSafeInteger(item.runtimeProcessId) || (item.runtimeProcessId as number) < 1) {
+    throw new Error("profile runtime process identity is invalid");
+  }
   const targetProcessId = item.targetProcessId;
   if (targetProcessId !== undefined
     && (!Number.isSafeInteger(targetProcessId) || (targetProcessId as number) < 1)) {
@@ -128,85 +179,47 @@ function childReady(value: unknown, expected: {
   }
   return Object.freeze({
     stage: "product-profile-ready",
+    runtimeProcessId: item.runtimeProcessId as number,
     slot: expected.slot,
     routeId: expected.routeId,
     targetId: expected.targetId,
     nativeTargetKind: expected.nativeTargetKind,
     profileId: string("profileId"),
     internalMcpUrl: internalMcpUrl.href,
+    bridgePreviewUrl: bridgePreviewUrl.href,
+    ...(item.terminalEndpoint === undefined ? {} : { terminalEndpoint: parseCodexTerminalSessionContract({
+      contractVersion: 1, slot: expected.slot, endpoint: item.terminalEndpoint,
+    }).endpoint }),
     responsesUrl: responsesUrl.href,
     responsesRouteFingerprint: fingerprint,
     ...(targetProcessId === undefined ? {} : { targetProcessId: targetProcessId as number }),
-    accountBinding: "verified",
+    nativeReady: true,
+    webState: item.webState as CodexWebState,
   });
 }
 
-async function waitForReadyLine(child: ProfileChildProcess): Promise<unknown> {
-  let stdout = Buffer.alloc(0);
-  let stderr = Buffer.alloc(0);
-  let stdoutBytes = 0;
-  let ignoredStdout = "";
-  return new Promise((resolvePromise, rejectPromise) => {
+async function waitForProfileReady(child: ProfileChildProcess, supervisor: ProfileSupervisorLease, signal?: AbortSignal): Promise<unknown> {
+  return new Promise((resolve, reject) => {
     let settled = false;
     const cleanup = () => {
       clearTimeout(timeout);
-      child.stdout.removeListener("data", onStdout);
-      child.removeListener("error", onError);
-      child.removeListener("exit", onExit);
+      child.removeListener("error", onError); child.removeListener("exit", onExit);
+      signal?.removeEventListener("abort", onAbort);
     };
-    const fail = (message: string, cause?: unknown) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      const detail = stderr.toString("utf8").trim().slice(-2000);
-      rejectPromise(new Error(message + (detail ? `: ${detail}` : ""), cause ? { cause } : undefined));
+    const finish = (value?: unknown, error?: Error) => {
+      if (settled) return; settled = true; cleanup();
+      if (error) reject(error); else resolve(value);
     };
-    const finish = (value: unknown) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolvePromise(value);
-    };
-    const onStdout = (chunk: Buffer) => {
-      stdoutBytes += chunk.byteLength;
-      if (stdoutBytes > MAX_CHILD_OUTPUT_BYTES) {
-        fail("profile child readiness output exceeded the bounded limit");
-        return;
-      }
-      stdout = Buffer.concat([stdout, chunk]);
-      while (true) {
-        const newline = stdout.indexOf(0x0a);
-        if (newline < 0) return;
-        const line = stdout.subarray(0, newline).toString("utf8").trim();
-        stdout = stdout.subarray(newline + 1);
-        if (!line) continue;
-        try {
-          const parsed = JSON.parse(line) as unknown;
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)
-            && (parsed as { stage?: unknown }).stage === "product-profile-ready") {
-            finish(parsed);
-            return;
-          }
-        } catch {
-          // Electron/Chromium may emit non-protocol diagnostics before app readiness.
-        }
-        ignoredStdout = `${ignoredStdout}\n${line}`.slice(-2000);
-      }
-    };
-    const onError = (error: Error) => fail("profile child failed to start", error);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      fail(`profile child exited before readiness (code=${code ?? "null"} signal=${signal ?? "none"})`);
-    };
-    child.stdout.on("data", onStdout);
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr = Buffer.concat([stderr, chunk]);
-      if (stderr.byteLength > MAX_CHILD_OUTPUT_BYTES) stderr = stderr.subarray(stderr.byteLength - MAX_CHILD_OUTPUT_BYTES);
-    });
-    child.once("error", onError);
-    child.once("exit", onExit);
-    const timeout = setTimeout(() => fail(
-      `profile child readiness timed out${ignoredStdout.trim() ? `; stdout=${ignoredStdout.trim()}` : ""}`,
-    ), CHILD_START_TIMEOUT_MS);
+    const onError = (cause: Error) => finish(undefined, new Error("profile child failed to start", {cause}));
+    const onExit = () => finish(undefined, new Error("profile child exited before readiness"));
+    const onAbort = () => finish(undefined, new Error("profile start cancelled by service shutdown"));
+    const timeout = setTimeout(() => finish(undefined, new Error("profile authenticated readiness timed out")), CHILD_START_TIMEOUT_MS);
+    child.stdout.resume(); child.stderr.resume();
+    child.once("error", onError); child.once("exit", onExit);
+    signal?.addEventListener("abort", onAbort, {once:true});
+    void supervisor.ready.then(value => finish(value), error => finish(undefined, error));
+    if (signal?.aborted) onAbort();
+    else if (child.exitCode !== null || child.signalCode !== null) onExit();
   });
 }
 
@@ -233,6 +246,15 @@ function ownsNativeTargetSession(
   owned: OwnedProfile | undefined,
 ): boolean {
   if (!owned || owned.child.exitCode !== null || owned.child.signalCode !== null) return false;
+  return nativeTargetRouteMatches(target, session, owned);
+}
+
+function nativeTargetRouteMatches(
+  target: CodexNativeTarget,
+  session: CodexNativeTargetSession,
+  owned: OwnedProfile | undefined,
+): boolean {
+  if (!owned) return false;
   if (target.adapterKind === "default-desktop") {
     return owned.targetProcessId !== undefined
       && session.desktopProcessId === owned.targetProcessId;
@@ -255,8 +277,10 @@ function statusFor(target: CodexNativeTarget, slot: number, session: CodexNative
     targetDisplayName: target.displayName,
     targetState: target.state,
     targetSessionState: ownershipMatches ? "ready" : session.state,
+    ...(ownershipMatches && owned ? { webModelsReady: owned.webModelsReady, webState: owned.webState } : {}),
     controlState,
-    ...(owned?.child.pid ? { childProcessId: owned.child.pid } : {}),
+    ...(session.desktopProcessId ? { desktopProcessId: session.desktopProcessId } : {}),
+    ...(owned ? { childProcessId: owned.runtimeProcessId } : {}),
     ...(owned ? { responsesRouteFingerprint: owned.responsesRouteFingerprint } : {}),
   });
 }
@@ -268,17 +292,22 @@ export async function startCodexService(input: {
   /** Re-read user-controlled profile preferences at each profile start without restarting the Codex service. */
   readonly profileRuntimeEnvironment?: () => Readonly<Record<string, string | undefined>>;
   readonly nativeTargetAdapter?: CodexNativeTargetAdapter;
+  readonly onProfileConnectionChanged?: (targetId: string, enabled: boolean) => void;
   readonly signal?: AbortSignal;
 }): Promise<CodexService> {
   const instanceId = randomUUID();
+  // Default Desktop is owned by Tela's built-in adapter. Additional profiles are
+  // optional; provider removal cannot remove the ordinary single-profile path.
+  // Start still proves/ends the exact existing app before acquiring a new runtime.
   const targets = input.nativeTargetAdapter ?? new CompositeNativeTargetAdapter({
     defaultDesktop: new DefaultDesktopNativeTargetAdapter(input.environment ? { environment: input.environment } : {}),
-    ...(input.config.multiProfile
-      ? { multiProfile: new MultiProfileNativeTargetAdapter({ launcherCli: input.config.multiProfile.launcherCli }) }
-      : {}),
+    ...(input.config.multiProfile ? {
+      multiProfile: new MultiProfileNativeTargetAdapter({ launcherCli: input.config.multiProfile.launcherCli }),
+    } : {}),
   });
   const routedBridge = new RoutedCodexTurnBridge();
   const owned = new Map<number, OwnedProfile>();
+  const starting = new Set<number>();
   let closing: Promise<void> | undefined;
   let stopping = false;
 
@@ -286,21 +315,32 @@ export async function startCodexService(input: {
     return targets.resolve(slot, input.signal);
   };
 
-  const stopOwned = async (profile: OwnedProfile): Promise<void> => {
+  const interruptNativeTurns = async (slot: number, session: CodexNativeTargetSession): Promise<void> => {
+    if (!session.endpoint) return;
+    const count = await interruptLoadedAppServerTurns(session.endpoint, {
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+    emitDiagnosticEvent("chatgpt_tela_codex", "profile_turns_interrupted", { slot, count });
+  };
+
+  const stopOwned = async (profile: OwnedProfile, interruptTurns = false): Promise<void> => {
     if (profile.stopping) return profile.stopping;
     profile.stopping = (async () => {
-      const session = await targets.session(profile.target.id, input.signal);
+      // Startup cancellation must not cancel normal cleanup of already-owned resources.
+      const session = await targets.session(profile.target.id);
       const ownsTargetRoute = ownsNativeTargetSession(profile.target, session, profile);
       if (ownsTargetRoute && profile.target.adapterKind === "multi-profile") {
-        const afterQuit = await targets.quit(profile.target.id, input.signal);
+        if (interruptTurns) await interruptNativeTurns(profile.slot, session);
+        const afterQuit = await targets.quit(profile.target.id);
         if (afterQuit.state === "ready") throw new Error("native target remained ready after normal quit");
       }
       profile.unmount();
       await profile.bridge.close().catch(() => {});
-      if (profile.child.exitCode === null && profile.child.signalCode === null) profile.child.kill("SIGTERM");
+      await profile.supervisor.close();
       if (!await waitForExit(profile.child, CHILD_STOP_TIMEOUT_MS)) {
         throw new Error(`Tela Codex profile ${profile.slot} child did not exit after its target closed`);
       }
+      await profile.supervisor.close().catch(() => {});
       owned.delete(profile.slot);
     })().catch(error => {
       profile.stopping = undefined;
@@ -308,6 +348,57 @@ export async function startCodexService(input: {
     });
     return profile.stopping;
   };
+
+  async function refreshWebStatus(profile: OwnedProfile, wait = false): Promise<void> {
+    profile.catalogCheck ??= (async () => {
+      try {
+        const response = await fetch(new URL(`v1/web-state${wait ? "?wait=1" : ""}`, profile.bridgePreviewUrl), {
+          headers: { authorization: `Bearer ${profile.uiToken}` },
+          signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(wait ? CHILD_START_TIMEOUT_MS : 5_000)]) : AbortSignal.timeout(wait ? CHILD_START_TIMEOUT_MS : 5_000),
+        });
+        if (!response.ok) throw new Error("Web state unavailable");
+        const state = parseCodexWebStateContract(await response.json());
+        if (state.slot !== profile.slot) throw new Error("Web state owner mismatch");
+        profile.webState = state.webState;
+        if (state.webState !== "ready" || !profile.terminalEndpoint) return false;
+        const signal = input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000);
+        const rpc = await connectCodexAppServerWebSocket(profile.terminalEndpoint, { signal });
+        try {
+          const ids = await readDynamicWebModelCatalog(rpc, signal);
+          return ids.length === state.webModelIds.length && state.webModelIds.every(id => ids.includes(id));
+        } finally { await rpc.close(); }
+      } catch { return false; }
+    })();
+    const check = profile.catalogCheck;
+    try { profile.webModelsReady = await check; }
+    finally { if (profile.catalogCheck === check) delete profile.catalogCheck; }
+  }
+  async function controlledProfile(slotValue: number): Promise<OwnedProfile> {
+    const slot = slotNumber(slotValue);
+    const profile = owned.get(slot);
+    if (!profile || profile.stopping || profile.child.exitCode !== null || profile.child.signalCode !== null) throw new Error("Native profile is not running");
+    const session = await targets.session(profile.target.id, input.signal);
+    if (owned.get(slot) !== profile || profile.stopping || !ownsNativeTargetSession(profile.target, session, profile)) throw new Error("Native profile ownership changed");
+    return profile;
+  }
+  async function profileStatus(profile: OwnedProfile): Promise<CodexProfileStatus> {
+    const session = await targets.session(profile.target.id, input.signal);
+    return statusFor(profile.target, profile.slot, session, owned.get(profile.slot));
+  }
+
+  async function readProfileAccount<T extends { readonly slot: number }>(slotValue: number, path: string, parse: (value: unknown) => T): Promise<T> {
+    const slot = slotNumber(slotValue);
+    const profile = await controlledProfile(slot);
+    const timeout = AbortSignal.timeout(20_000);
+    const response = await fetch(new URL(path, profile.bridgePreviewUrl), {
+      headers: { authorization: `Bearer ${profile.uiToken}` },
+      signal: input.signal ? AbortSignal.any([input.signal, timeout]) : timeout,
+    });
+    if (!response.ok) throw new Error("Account observation unavailable. Check the profile connection.");
+    const value = parse(await response.json());
+    if (value.slot !== slot || await controlledProfile(slot) !== profile) throw new Error("account observation ownership changed");
+    return value;
+  }
 
   return Object.freeze({
     instanceId,
@@ -318,17 +409,57 @@ export async function startCodexService(input: {
         state: stopping ? "stopping" as const : "ready" as const });
     },
     async profiles() {
-      return Object.freeze((await targets.profiles(input.signal))
-        .map(({ target, session }) => statusFor(target, target.slot, session, owned.get(target.slot))));
+      const inventory = await targets.profiles(input.signal);
+      return Object.freeze(await Promise.all(inventory.map(async ({ target, session }) => {
+        const profile = owned.get(target.slot);
+        if (profile && !profile.stopping && ownsNativeTargetSession(target, session, profile)) {
+          await refreshWebStatus(profile);
+
+        }
+        return Object.freeze({ ...statusFor(target, target.slot, session, owned.get(target.slot)),
+          connectionInProgress: starting.has(target.slot) });
+      })));
     },
-    async startProfile(slotValue: number) {
+    async startProfile(slotValue: number, options?: ProfileStartOptions) {
+      if (stopping || input.signal?.aborted) throw new Error("Tela Codex is stopping");
       const slot = slotNumber(slotValue);
+      if (starting.has(slot)) throw new Error("A connection operation is already running for this profile; wait for it to finish");
+      starting.add(slot);
+      let phase: ProfileConnectionPhase = "checking";
+      const progress = (value: ProfileConnectionPhase) => {
+        phase = value;
+        emitDiagnosticEvent("chatgpt_tela_codex", "profile_connection_phase", { slot, phase: value });
+        options?.onProgress?.(value);
+      };
+      try {
+      progress("checking");
       const existing = owned.get(slot);
-      if (existing && existing.child.exitCode === null && existing.child.signalCode === null) {
+      const existingRunning = existing && existing.child.exitCode === null && existing.child.signalCode === null;
+      // A stopped launch with no live owned child performs its fresh state check below, immediately
+      // before preparation. Early discovery is needed only to protect a possible live-owner transition
+      // or explicit PID-bound reopen consent; do not duplicate cold-launch adapter work.
+      if (options?.expectedDesktopProcessId !== undefined || (options?.requireStopped && existingRunning)) {
+        if (options?.expectedDesktopProcessId !== undefined && (!Number.isSafeInteger(options.expectedDesktopProcessId) || options.expectedDesktopProcessId < 1)) {
+          throw new Error("Invalid ChatGPT process identity");
+        }
+        const observed = await targetAndSession(slot);
+        if (options?.expectedDesktopProcessId !== undefined && observed.session.desktopProcessId !== options.expectedDesktopProcessId) {
+          throw new Error("ChatGPT has changed since you chose to reopen it; the current app was kept open");
+        }
+        if (options?.requireStopped && (observed.session.state !== "available" || observed.target.state === "running")) {
+          throw new Error("Work restoration requires a stopped target; existing app preserved");
+        }
+      }
+      if (existingRunning) {
         const current = await targets.session(existing.target.id, input.signal);
         if (ownsNativeTargetSession(existing.target, current, existing)) {
+          input.onProfileConnectionChanged?.(existing.target.id, true);
           return statusFor(existing.target, slot, current, existing);
         }
+        if (options?.expectedDesktopProcessId !== undefined) {
+          throw new Error("ChatGPT connection ownership changed; the current app was kept open");
+        }
+        progress("closing");
         await stopOwned(existing);
       }
       if (existing) {
@@ -338,50 +469,73 @@ export async function startCodexService(input: {
       }
       const { target, session: initialSession } = await targetAndSession(slot);
       let session = initialSession;
+      if (options?.expectedDesktopProcessId !== undefined && session.desktopProcessId !== options.expectedDesktopProcessId) {
+        throw new Error("ChatGPT has changed since you chose to reopen it; the current app was kept open");
+      }
+      if (options?.requireStopped && (session.state !== "available" || target.state === "running")) {
+        throw new Error("Work restoration requires a stopped target; existing app preserved");
+      }
       if (session.state === "restart-required"
         || (session.state === "ready" && session.responsesRouteFingerprint === undefined)) {
-        session = await targets.quit(target.id, input.signal);
+        progress("closing");
+        if (options?.expectedDesktopProcessId === undefined) await interruptNativeTurns(slot, session);
+        session = await targets.quit(target.id, input.signal, options?.expectedDesktopProcessId);
       }
       if (session.state !== "available") {
         throw new Error(`${target.displayName} must be normally quit before Tela Codex can attach its route (state=${session.state})`);
       }
+      progress("preparing");
       const route = routeId();
       const responsesToken = secret();
       const internalMcpToken = secret();
-      const child = spawn(input.profileRuntimeCommand[0], input.profileRuntimeCommand.slice(1), {
-        env: {
-          ...process.env,
-          ...(input.environment ?? {}),
-          ...(input.profileRuntimeEnvironment?.() ?? {}),
-          CHATGPT_TELA_PRODUCT_PROFILE_SLOT: String(slot),
-          CHATGPT_TELA_PRODUCT_ROUTE_ID: route,
-          ...targets.profileRuntimeEnvironment(target),
-          CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN: responsesToken,
-          CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN: internalMcpToken,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      });
+      const uiToken = secret();
+      const supervisor = await createProfileSupervisorLease({ onProgress: phase => progress(phase as ProfileConnectionPhase) });
+      const launch = profileLaunch(input.profileRuntimeCommand);
+      let child: ProfileChildProcess;
+      try {
+        child = spawn(launch.command[0], launch.command.slice(1), {
+          env: {
+            ...process.env,
+            ...(input.environment ?? {}),
+            ...(input.profileRuntimeEnvironment?.() ?? {}),
+            CHATGPT_TELA_PRODUCT_PROFILE_SLOT: String(slot),
+            CHATGPT_TELA_PRODUCT_ROUTE_ID: route,
+            ...targets.profileRuntimeEnvironment(target),
+            CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN: responsesToken,
+            CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN: internalMcpToken,
+            CHATGPT_TELA_PRODUCT_UI_TOKEN: uiToken,
+            ...supervisor.environment,
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        });
+      } catch (error) {
+        await supervisor.close().catch(() => {});
+        throw error;
+      }
       let ready: ChildReady;
       try {
-        ready = childReady(await waitForReadyLine(child), {
+        ready = childReady(await waitForProfileReady(child, supervisor, input.signal), {
           slot,
           routeId: route,
           targetId: target.id,
           nativeTargetKind: target.adapterKind,
         });
+        await verifyProfileRuntimeProcess(launch, ready.runtimeProcessId, child.pid);
         child.stdout.resume();
       } catch (error) {
-        if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+        await supervisor.close().catch(() => {});
         await waitForExit(child, CHILD_STOP_TIMEOUT_MS);
         throw error;
       }
       let bridge: RemoteTurnBridge | undefined;
       try {
+        progress("connecting");
         bridge = await connectCodexTurnBridge({ endpoint: ready.internalMcpUrl, bearerToken: internalMcpToken,
           clientName: "chatgpt-tela-codex-service" });
         const unmount = routedBridge.mount(route, bridge);
         const profile: OwnedProfile = {
+          runtimeProcessId: ready.runtimeProcessId,
           slot,
           target,
           routeId: route,
@@ -389,33 +543,190 @@ export async function startCodexService(input: {
           ...(ready.targetProcessId === undefined ? {} : { targetProcessId: ready.targetProcessId }),
           child,
           bridge,
+          supervisor,
+          bridgePreviewUrl: ready.bridgePreviewUrl,
+          ...(ready.terminalEndpoint === undefined ? {} : { terminalEndpoint: ready.terminalEndpoint }),
+          uiToken,
           unmount,
+          webState: ready.webState,
+          webModelsReady: false,
           stopping: undefined,
         };
         owned.set(slot, profile);
         child.once("exit", () => {
           if (owned.get(slot) !== profile) return;
+          if (profile.stopping) return;
           profile.unmount();
-          owned.delete(slot);
+          void profile.supervisor.close().catch(() => {});
           void profile.bridge.close().catch(() => {});
+          void (async () => {
+            try {
+              const session = await targets.session(profile.target.id);
+              if (nativeTargetRouteMatches(profile.target, session, profile)) {
+                const afterQuit = await targets.quit(profile.target.id);
+                if (afterQuit.state === "ready") {
+                  throw new Error("native target remained ready after unexpected profile child exit");
+                }
+              }
+              emitDiagnosticEvent("chatgpt_tela_codex", "profile_child_exit_cleanup_complete", { slot });
+            } catch {
+              emitDiagnosticEvent("chatgpt_tela_codex", "profile_child_exit_cleanup_failed", { slot });
+            } finally {
+              if (owned.get(slot) === profile) owned.delete(slot);
+            }
+          })();
         });
-        return statusFor(target, slot, await targets.session(target.id, input.signal), profile);
+        const status = statusFor(target, slot, await targets.session(target.id, input.signal), profile);
+        progress("ready");
+        input.onProfileConnectionChanged?.(target.id, true);
+        return status;
       } catch (error) {
+        const partial = owned.get(slot);
+        if (partial?.child === child) { partial.unmount(); owned.delete(slot); }
         await bridge?.close().catch(() => {});
-        if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+        await supervisor.close().catch(() => {});
         await waitForExit(child, CHILD_STOP_TIMEOUT_MS);
         throw error;
       }
+      } catch (cause) {
+        emitDiagnosticEvent("chatgpt_tela_codex", "profile_connection_failed", { slot, phase });
+        throw new ProfileConnectionError(phase, { cause });
+      } finally { starting.delete(slot); }
     },
     async stopProfile(slotValue: number) {
       const slot = slotNumber(slotValue);
       const profile = owned.get(slot);
-      if (profile) await stopOwned(profile);
+      if (profile) await stopOwned(profile, true);
       const { target, session } = await targetAndSession(slot);
       if (!profile && session.state === "ready") {
         throw new Error(`${target.displayName} is routed by another owner; refusing to stop it`);
       }
+      input.onProfileConnectionChanged?.(target.id, false);
       return statusFor(target, slot, session, undefined);
+    },
+    async waitWebPreparation(slotValue: number) {
+      const profile = await controlledProfile(slotValue);
+      // Join an already-running inventory read, then perform one event-driven wait.
+      await profile.catalogCheck;
+      await refreshWebStatus(profile, true);
+      return profileStatus(profile);
+    },
+    async reconnectWeb(slotValue: number) {
+      const profile = await controlledProfile(slotValue);
+      const response = await fetch(new URL("v1/web-reconnect", profile.bridgePreviewUrl), {
+        method: "POST", headers: { authorization: `Bearer ${profile.uiToken}` },
+        signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(CHILD_START_TIMEOUT_MS)]) : AbortSignal.timeout(CHILD_START_TIMEOUT_MS),
+      });
+      if (!response.ok) throw new Error("Web reconnection did not complete. Native remains available; finish any active Web turn before retrying.");
+      const state = parseCodexWebStateContract(await response.json());
+      if (state.slot !== profile.slot) throw new Error("Web reconnect owner mismatch");
+      profile.webState = state.webState;
+      await profile.catalogCheck;
+      await refreshWebStatus(profile);
+      return profileStatus(profile);
+    },
+    async terminalSession(slotValue: number) {
+      const slot = slotNumber(slotValue);
+      const profile = owned.get(slot);
+      if (!profile || profile.stopping || profile.child.exitCode !== null || profile.child.signalCode !== null) {
+        throw new Error("terminal requires a running Tela profile");
+      }
+      const session = await targets.session(profile.target.id, input.signal);
+      if (owned.get(slot) !== profile || profile.stopping || !ownsNativeTargetSession(profile.target, session, profile)) {
+        throw new Error("terminal profile route ownership changed");
+      }
+      if (!profile.terminalEndpoint) throw new Error("profile runtime requires an update before terminal attachment");
+      return parseCodexTerminalSessionContract({ contractVersion: 1, slot, endpoint: profile.terminalEndpoint });
+    },
+    async revealBridgeSurface(slotValue: number, surfaceId: string, interactive = false) {
+      const profile = owned.get(slotNumber(slotValue));
+      if (!profile || profile.child.exitCode !== null || profile.child.signalCode !== null) throw new Error("profile is not running");
+      if (!/^surface_[A-Za-z0-9_-]{32}$/.test(surfaceId)) throw new Error("invalid surface selection");
+      const response = await fetch(new URL("v1/bridge-reveal", profile.bridgePreviewUrl), {
+        method: "POST", headers: { authorization: `Bearer ${profile.uiToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ surfaceId, interactive }), signal: AbortSignal.timeout(3_000),
+      });
+      if (!response.ok) throw new Error("Selected Web session has ended. Refresh the session list.");
+    },
+    async accountCheck(slotValue: number) {
+      return readProfileAccount(slotValue, "v1/account-check", parseCodexAccountCheckContract);
+    },
+    async accountDisplay(slotValue: number) {
+      return readProfileAccount(slotValue, "v1/account-display", parseCodexAccountDisplayContract);
+    },
+    async bridgePreview(slotValue: number, surfaceId?: string) {
+      const slot = slotNumber(slotValue);
+      const profile = owned.get(slot);
+      if (!profile || profile.child.exitCode !== null || profile.child.signalCode !== null) {
+        return Object.freeze({
+          contractVersion: 1 as const,
+          slot,
+          activeSurfaceCount: 0,
+          previewAvailable: false,
+        });
+      }
+      const url = new URL("v1/bridge-preview", profile.bridgePreviewUrl);
+      if (surfaceId) url.searchParams.set("surfaceId", surfaceId);
+      const response = await fetch(url, {
+        headers: { authorization: `Bearer ${profile.uiToken}` },
+        signal: AbortSignal.timeout(3_000),
+      });
+      const value = await response.json().catch(() => undefined) as unknown;
+      if (!response.ok) throw new Error(`profile bridge preview failed with HTTP ${response.status}`);
+      const preview = parseCodexBridgePreviewContract(value);
+      if (preview.slot !== slot) throw new Error("profile bridge preview slot does not match its owner");
+      return preview;
+    },
+    async modelSelectionCanary(slotValue: number) {
+      const slot = slotNumber(slotValue);
+      const profile = owned.get(slot);
+      if (!profile || profile.child.exitCode !== null || profile.child.signalCode !== null) {
+        throw new Error(`Tela Codex profile ${slot} is not running`);
+      }
+      const response = await fetch(new URL("v1/model-selection-canary", profile.bridgePreviewUrl), {
+        method: "POST",
+        headers: { authorization: `Bearer ${profile.uiToken}` },
+        signal: AbortSignal.timeout(20_000),
+      });
+      const value = await response.json().catch(() => undefined) as unknown;
+      if (!response.ok) {
+        const message = value && typeof value === "object" && !Array.isArray(value)
+          ? (value as { error?: { message?: unknown } }).error?.message
+          : undefined;
+        throw new Error(typeof message === "string" && message.trim()
+          ? message
+          : `profile model selection canary failed with HTTP ${response.status}`);
+      }
+      const canary = parseCodexModelSelectionCanaryContract(value);
+      if (canary.slot !== slot) throw new Error("profile model selection canary slot does not match its owner");
+      return canary;
+    },
+    async contextAttachmentCanary(slotValue: number) {
+      const slot = slotNumber(slotValue);
+      const profile = owned.get(slot);
+      if (!profile || profile.child.exitCode !== null || profile.child.signalCode !== null) {
+        throw new Error(`Tela Codex profile ${slot} is not running`);
+      }
+      const response = await fetch(new URL("v1/context-attachment-canary", profile.bridgePreviewUrl), {
+        method: "POST",
+        headers: { authorization: `Bearer ${profile.uiToken}` },
+        // The semantic preload owns a bounded 120s proof window (attachment upload + exact
+        // receipt). Keep the service envelope slightly wider and propagate cancellation through
+        // the profile HTTP request instead of abandoning a hidden browser operation in place.
+        signal: AbortSignal.timeout(150_000),
+      });
+      const value = await response.json().catch(() => undefined) as unknown;
+      if (!response.ok) {
+        const message = value && typeof value === "object" && !Array.isArray(value)
+          ? (value as { error?: { message?: unknown } }).error?.message
+          : undefined;
+        throw new Error(typeof message === "string" && message.trim()
+          ? message
+          : `profile context attachment canary failed with HTTP ${response.status}`);
+      }
+      const canary = parseCodexContextAttachmentCanaryContract(value);
+      if (canary.slot !== slot) throw new Error("profile context attachment canary slot does not match its owner");
+      return canary;
     },
     close() {
       if (closing) return closing;

@@ -6,6 +6,7 @@ import {
   encodeNativeResponsesOutcome,
   nativeResponsesSsePlan,
 } from "./protocol";
+import { NativeProgressStream } from "./live-progress";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -114,20 +115,62 @@ export async function handleNativeResponsesHttp(
   }
 
   let outcome: NativeGatewayOutcome;
+  const createdAt = Math.floor((options.now?.() ?? Date.now()) / 1000);
+  const progress = body.stream === true ? new NativeProgressStream(body.model, createdAt) : undefined;
   try {
-    outcome = await gateway.handle(body);
+    const pending = gateway.handle(body, progress ? { onProgress: progress.progress, signal: progress.signal.signal } : undefined);
+    if (progress) {
+      const first = await Promise.race([pending.then(value => ({ value })), progress.firstProgress.then(() => null)]);
+      if (first === null) {
+        void pending.then(value => progress.finish(value, gateway), error => progress.fail(error))
+          .catch(error => progress.fail(error));
+        return progress.response();
+      }
+      outcome = first.value;
+      progress.signal.abort();
+    } else outcome = await pending;
   } catch (error) {
+    // A bounded Native-history bootstrap is a recoverable *context* limit,
+    // not a transient network outage. Do not turn it into an opaque 409 or
+    // replay the already-retired Native turn. No private exception payloads
+    // or historical text are returned to the caller.
+    if (record(error)?.code === "native_history_bootstrap_required") {
+      return Response.json({
+        error: {
+          type: "tela_context_recovery_required",
+          code: "tela_native_history_checkpoint_required",
+          retryable: false,
+          recovery: {
+            kind: "explicit_native_handoff",
+            requires_user_action: true,
+            requires_new_native_turn: true,
+            original_history_preserved: true,
+          },
+          message: "This Native conversation needs a verified readable checkpoint or an explicit authorized handoff before Web can continue. Original history was preserved, not silently truncated. No Web answer or tool execution was committed by this request.",
+        },
+      }, { status: 422 });
+    }
+    if (record(error)?.code === "tela_native_turn_already_retired") {
+      return Response.json({
+        error: {
+          type: "chatgpt_tela_runtime_error",
+          code: "tela_native_turn_already_retired",
+          retryable: false,
+          message: "This Native turn is already retired. Repeating it cannot recover missing history. Continue with a new, explicitly authorized Native turn and a verified checkpoint or handoff.",
+        },
+      }, { status: 409 });
+    }
     const message = error instanceof Error ? error.message : String(error);
     return Response.json({
       error: {
         type: "chatgpt_tela_runtime_error",
+        // Only this Tela-owned semantic failure may invalidate a Web catalog across HTTP.
+        ...(record(error)?.code === "tela_web_model_unavailable" ? { code: "tela_web_model_unavailable" } : {}),
         message,
       },
     }, { status: 409 });
   }
 
-  const now = options.now?.() ?? Date.now();
-  const createdAt = Math.floor(now / 1000);
   return responseForOutcome({
     outcome,
     gateway,
@@ -135,4 +178,21 @@ export async function handleNativeResponsesHttp(
     stream: body.stream === true,
     createdAt,
   });
+}
+
+/** Tool-free summary response. Native commits its own local compaction after complete receipt. */
+export function nativeCompactionSummaryResponse(input: {
+  readonly summary: string;
+  readonly operationId: string;
+  readonly model: string;
+  readonly stream: boolean;
+}): Response {
+  if (!input.summary.trim() || !input.operationId.trim()) throw new Error("Native summary response is empty");
+  const outcome: NativeGatewayOutcome = {
+    type: "final", answer: input.summary, delivery: { capability: `compaction-${input.operationId}` },
+  };
+  const encoded = encodeNativeResponsesOutcome({ outcome, model: input.model });
+  if (!input.stream) return Response.json(encoded.response);
+  const plan = nativeResponsesSsePlan(outcome, encoded);
+  return new Response(plan.frames.join(""), { headers: { "content-type": "text/event-stream" } });
 }

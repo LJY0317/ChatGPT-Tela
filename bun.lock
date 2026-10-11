@@ -44,9 +44,11 @@
         "@chatgpt-tela/credential-store": "workspace:*",
         "@chatgpt-tela/default-desktop-target": "workspace:*",
         "@chatgpt-tela/development-runtime": "workspace:*",
+        "@chatgpt-tela/gateway": "workspace:*",
         "@chatgpt-tela/mcp": "workspace:*",
         "@chatgpt-tela/product-config": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
+        "@chatgpt-tela/product-uninstall": "workspace:*",
         "@chatgpt-tela/service-protocol": "workspace:*",
         "@chatgpt-tela/service-supervisor": "workspace:*",
         "@chatgpt-tela/tailscale-ingress": "workspace:*",
@@ -90,15 +92,28 @@
       "name": "@chatgpt-tela/packaged-launcher",
       "version": "0.0.0",
       "dependencies": {
+        "@chatgpt-tela/chat-service": "workspace:*",
+        "@chatgpt-tela/codex": "workspace:*",
+        "@chatgpt-tela/core": "workspace:*",
+        "@chatgpt-tela/default-desktop-target": "workspace:*",
+        "@chatgpt-tela/development-runtime": "workspace:*",
         "@chatgpt-tela/product-config": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
+        "@chatgpt-tela/product-uninstall": "workspace:*",
+        "@chatgpt-tela/service-protocol": "workspace:*",
+        "@chatgpt-tela/service-supervisor": "workspace:*",
       },
     },
     "apps/profile-runtime": {
       "name": "@chatgpt-tela/profile-runtime",
       "version": "0.0.0",
       "dependencies": {
+        "@chatgpt-tela/chatgpt": "workspace:*",
+        "@chatgpt-tela/codex": "workspace:*",
+        "@chatgpt-tela/core": "workspace:*",
         "@chatgpt-tela/development-runtime": "workspace:*",
+        "@chatgpt-tela/http-host": "workspace:*",
+        "@chatgpt-tela/service-protocol": "workspace:*",
       },
     },
     "apps/profile-setup": {
@@ -111,6 +126,9 @@
     "packages/browser-host": {
       "name": "@chatgpt-tela/browser-host",
       "version": "0.0.0",
+      "dependencies": {
+        "@chatgpt-tela/core": "workspace:*",
+      },
     },
     "packages/chat-service": {
       "name": "@chatgpt-tela/chat-service",
@@ -120,6 +138,7 @@
         "@chatgpt-tela/http-host": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
         "@chatgpt-tela/service-protocol": "workspace:*",
+        "yaml": "^2.9.1",
       },
     },
     "packages/chatgpt": {
@@ -135,12 +154,14 @@
       "version": "0.0.0",
       "dependencies": {
         "@chatgpt-tela/core": "workspace:*",
+        "@chatgpt-tela/service-protocol": "workspace:*",
       },
     },
     "packages/codex-service": {
       "name": "@chatgpt-tela/codex-service",
       "version": "0.0.0",
       "dependencies": {
+        "@chatgpt-tela/codex": "workspace:*",
         "@chatgpt-tela/core": "workspace:*",
         "@chatgpt-tela/default-desktop-target": "workspace:*",
         "@chatgpt-tela/http-host": "workspace:*",
@@ -166,6 +187,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@chatgpt-tela/codex": "workspace:*",
+        "@chatgpt-tela/core": "workspace:*",
         "ws": "^8.18.0",
       },
       "devDependencies": {
@@ -184,6 +206,8 @@
         "@chatgpt-tela/electron-host": "workspace:*",
         "@chatgpt-tela/local-server": "workspace:*",
         "@chatgpt-tela/mcp": "workspace:*",
+        "@chatgpt-tela/product-lifecycle": "workspace:*",
+        "@chatgpt-tela/responses": "workspace:*",
         "@chatgpt-tela/runtime": "workspace:*",
         "@chatgpt-tela/setup": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.30.0",
@@ -194,6 +218,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@chatgpt-tela/browser-host": "workspace:*",
+        "@chatgpt-tela/core": "workspace:*",
       },
       "peerDependencies": {
         "electron": "^44.4.5",
@@ -214,6 +239,9 @@
     "packages/http-host": {
       "name": "@chatgpt-tela/http-host",
       "version": "0.0.0",
+      "dependencies": {
+        "@chatgpt-tela/core": "workspace:*",
+      },
     },
     "packages/local-server": {
       "name": "@chatgpt-tela/local-server",
@@ -245,6 +273,17 @@
     "packages/product-lifecycle": {
       "name": "@chatgpt-tela/product-lifecycle",
       "version": "0.0.0",
+    },
+    "packages/product-uninstall": {
+      "name": "@chatgpt-tela/product-uninstall",
+      "version": "0.0.0",
+      "dependencies": {
+        "@chatgpt-tela/chat-service": "workspace:*",
+        "@chatgpt-tela/credential-store": "workspace:*",
+        "@chatgpt-tela/product-lifecycle": "workspace:*",
+        "@chatgpt-tela/service-supervisor": "workspace:*",
+        "@chatgpt-tela/tailscale-ingress": "workspace:*",
+      },
     },
     "packages/responses": {
       "name": "@chatgpt-tela/responses",
@@ -346,6 +385,8 @@
     "@chatgpt-tela/product-config": ["@chatgpt-tela/product-config@workspace:packages/product-config"],
 
     "@chatgpt-tela/product-lifecycle": ["@chatgpt-tela/product-lifecycle@workspace:packages/product-lifecycle"],
+
+    "@chatgpt-tela/product-uninstall": ["@chatgpt-tela/product-uninstall@workspace:packages/product-uninstall"],
 
     "@chatgpt-tela/profile-runtime": ["@chatgpt-tela/profile-runtime@workspace:apps/profile-runtime"],
 
@@ -572,6 +613,8 @@
     "wrappy": ["wrappy@1.0.2", "", {}, "sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ=="],
 
     "ws": ["ws@8.22.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg=="],
+
+    "yaml": ["yaml@2.9.1", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw=="],
 
     "zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 
