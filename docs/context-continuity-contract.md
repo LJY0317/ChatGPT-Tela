@@ -123,6 +123,17 @@ executed model, external account identity or tool-free fork capability.
    summary and limitations. Missing or changed verification fails before a
    derived cache write or Web execution. A Legacy early handoff probe fails
    before unsafe historical pagination.
+   After recognizing the exact requested handoff prompt, both readers reject
+   any **visible** tool call, file change, plan, second user request, extra
+   assistant message, or unknown public item; only one user prompt, optional
+   reasoning, and one final answer are accepted in that completed Native turn.
+   An unrelated ordinary Native tool turn remains a non-handoff. This checks
+   the bounded public `itemsView:summary` projection, **not** a proof that
+   the Native engine blocked every possible hidden tool execution.
+   The current in-progress Web turn also must be unacted: at most its initial
+   public `userMessage` is permitted. A visible agent/tool/unknown item or
+   multiple user items blocks both new and cached handoff verification, rather
+   than importing a previous checkpoint after execution has already started.
 5. Only then try the bounded complete visible Native source. If it is fully readable and
    an ordinary, authorized Web checkpoint producer is available, create one checkpoint
    within the *same* Web source/output budget. Revalidate the public compaction anchor

@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   AppServerNativeHandoffSource, NATIVE_WEB_HANDOFF_PROMPT,
 } from "./native-handoff";
@@ -17,6 +20,8 @@ function source(options: {
   readonly priorStatus?: string;
   readonly overlarge?: boolean;
   readonly missing?: boolean;
+  readonly priorExtras?: readonly Record<string, unknown>[];
+  readonly currentItems?: readonly Record<string, unknown>[];
 } = {}) {
   const methods: { method: string; params: Record<string, unknown> }[] = [];
   let closed = 0;
@@ -28,7 +33,8 @@ function source(options: {
         return { thread: { id: "thread-one", historyMode: "paginated", status: { type: "active" } } };
       }
       if (method === "thread/turns/list") return { data: [
-        { id: options.current ?? "web-turn", status: "inProgress", itemsView: "summary", items: [] },
+        { id: options.current ?? "web-turn", status: "inProgress", itemsView: "summary",
+          items: options.currentItems ?? [] },
         ...options.missing ? [] : [{
           id: options.priorId ?? "native-handoff-turn", status: options.priorStatus ?? "completed",
           itemsView: "summary",
@@ -36,6 +42,7 @@ function source(options: {
             { type: "userMessage", id: "request", content: [
               { type: "text", text: options.prompt ?? NATIVE_WEB_HANDOFF_PROMPT },
             ] },
+            ...(options.priorExtras ?? []),
             { type: "agentMessage", id: "answer", phase: "finalAnswer",
               text: options.answer ?? (options.overlarge ? "x".repeat(140_000) : json) },
           ],
@@ -90,6 +97,112 @@ describe("explicit Native-owned Web handoff, read-only public contract", () => {
       await expect(fixture.reader.latest("thread-one", "web-turn")).rejects.toThrow();
       expect(fixture.closed()).toBe(1);
     }
+  });
+  test("an explicit read-only handoff is refused if its turn also performed tools or had another user or answer", async () => {
+    const disallowed = [
+      { type: "commandExecution", id: "command", command: "untrusted" },
+      { type: "fileChange", id: "modified-file" },
+      { type: "mcpToolCall", id: "mcp-call" },
+      { type: "dynamicToolCall", id: "dynamic-call" },
+      { type: "collabAgentToolCall", id: "collaborator" },
+      { type: "webSearch", id: "remote-query" },
+      { type: "plan", id: "unexpected-plan" },
+      { type: "unknownFutureNativeItem", id: "unsupported-kind" },
+      { type: "userMessage", id: "second-user", content: [{ type: "text", text: "Another task" }] },
+      { type: "agentMessage", id: "other-answer", phase: "commentary", text: "Other work" },
+    ];
+    for (const extra of disallowed) {
+      const fixture = source({ priorExtras: [extra] });
+      await expect(fixture.reader.latest("thread-one", "web-turn"))
+        .rejects.toThrow("unexpected activity");
+      expect(fixture.methods.every(call => call.method !== "thread/fork"
+        && call.method !== "turn/start")).toBe(true);
+      expect(fixture.closed()).toBe(1);
+      const replay = source({ priorExtras: [extra] });
+      await expect(replay.reader.verifyRecent("thread-one", "web-turn",
+        "native-handoff-turn", "0".repeat(64))).rejects.toThrow("unexpected activity");
+      expect(replay.closed()).toBe(1);
+    }
+  });
+  test("an ordinary earlier Native tool turn is not mistaken for an explicit handoff", async () => {
+    const fixture = source({
+      prompt: "Do ordinary Native work",
+      priorExtras: [{ type: "commandExecution", id: "ordinary-tool" }],
+    });
+    expect(await fixture.reader.latest("thread-one", "web-turn")).toBeUndefined();
+    expect(fixture.closed()).toBe(1);
+  });
+  test("a currently executing Web turn cannot import a previous handoff after its own actions", async () => {
+    for (const item of [
+      { type: "commandExecution", id: "current-tool" },
+      { type: "agentMessage", id: "current-answer", phase: "commentary", text: "Already started" },
+      { type: "unknownFutureNativeItem", id: "current-unknown" },
+    ]) {
+      const latest = source({ currentItems: [item] });
+      await expect(latest.reader.latest("thread-one", "web-turn"))
+        .rejects.toThrow("current Web turn already contains activity");
+      expect(latest.closed()).toBe(1);
+
+      const replay = source({ currentItems: [item] });
+      await expect(replay.reader.verifyRecent("thread-one", "web-turn",
+        "native-handoff-turn", "0".repeat(64)))
+        .rejects.toThrow("current Web turn already contains activity");
+      expect(replay.closed()).toBe(1);
+    }
+    // The active turn may contain its own public user input; that alone is
+    // not evidence that Native or Web has already produced an action.
+    const newUser = source({ currentItems: [
+      { type: "userMessage", id: "current-user",
+        content: [{ type: "text", text: "Continue in Web" }] },
+    ] });
+    expect(await newUser.reader.latest("thread-one", "web-turn"))
+      .toMatchObject({ handoffTurnId: "native-handoff-turn" });
+  });
+  test("manual handoff rejections log only a bounded phase and reason, never visible source details", async () => {
+    const base = mkdtempSync(join(tmpdir(), "tela-manual-handoff-diagnostics-"));
+    const path = join(base, "events.jsonl");
+    const original = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = path;
+    try {
+      const sourceTurn = source({ priorExtras: [
+        { type: "commandExecution", id: "private-command-id",
+          command: "sensitive command contents must not be logged" },
+      ] });
+      await expect(sourceTurn.reader.latest("thread-one", "web-turn"))
+        .rejects.toThrow("unexpected activity");
+      const currentTurn = source({ currentItems: [
+        { type: "agentMessage", id: "private-current-message", text: "sensitive answer" },
+      ] });
+      await expect(currentTurn.reader.latest("thread-one", "web-turn"))
+        .rejects.toThrow("current Web turn already contains activity");
+      const normalTurn = source({
+        prompt: "Normal Native user work",
+        priorExtras: [{ type: "commandExecution", id: "normal-tool" }],
+      });
+      expect(await normalTurn.reader.latest("thread-one", "web-turn")).toBeUndefined();
+
+      const log = readFileSync(path, "utf8");
+      const rows = log.trim().split("\n").map(line => JSON.parse(line))
+        .filter(row => row.stage === "native_manual_handoff_rejected");
+      expect(rows.map(row => [row.phase, row.reason_class])).toEqual([
+        ["source_turn", "unexpected_visible_activity"],
+        ["current_turn", "unexpected_visible_activity"],
+      ]);
+      for (const secret of [
+        "private-command-id", "sensitive command contents",
+        "private-current-message", "sensitive answer",
+        "thread-one", "web-turn", "normal-tool",
+      ]) expect(log).not.toContain(secret);
+    } finally {
+      if (original === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = original;
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+  test("a single explanatory Native reasoning item does not become an action grant", async () => {
+    const fixture = source({ priorExtras: [{ type: "agentReasoning", id: "reasoning-only" }] });
+    expect(await fixture.reader.latest("thread-one", "web-turn"))
+      .toMatchObject({ handoffTurnId: "native-handoff-turn" });
   });
   test("a cached handoff is reverified from bounded public summary pages after many Web turns", async () => {
     const previous = source();

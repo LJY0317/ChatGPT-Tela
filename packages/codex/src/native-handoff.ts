@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { connectCodexAppServerWebSocket, type CodexAppServerRpcFactory } from "./app-server";
 import { NativeHistoryBootstrapRequired } from "./compaction-history";
 
@@ -42,6 +43,26 @@ function sourceDigest(value: string): string {
 function checkId(id: unknown): id is string {
   return typeof id === "string" && id.length > 0 && id.length <= 512;
 }
+
+/** Public evidence of the current turn's input, never proof of later tool effects. */
+function hasNoCurrentTurnActivity(turn: Record<string, unknown>): boolean {
+  return Array.isArray(turn.items) && turn.items.length <= 1
+    && turn.items.every(item => record(item)?.type === "userMessage");
+}
+
+function rejectVisibleHandoffActivity(
+  phase: "source_turn" | "current_turn",
+): never {
+  // No raw thread/turn, item types, prompts, tool output, command or paths.
+  // A summary page is not a durable engine tool-free execution certificate.
+  emitDiagnosticEvent("chatgpt_tela_codex", "native_manual_handoff_rejected", {
+    phase, reason_class: "unexpected_visible_activity",
+  });
+  throw new Error(phase === "source_turn"
+    ? "Native handoff turn contains unexpected activity"
+    : "Native handoff current Web turn already contains activity");
+}
+
 function parseHandoff(turn: Record<string, unknown>, threadId: string, currentTurnId: string):
   NativeWebHandoff | undefined {
   if (!checkId(turn.id) || turn.status !== "completed"
@@ -55,6 +76,21 @@ function parseHandoff(turn: Record<string, unknown>, threadId: string, currentTu
   if (text?.type !== "text" || typeof text.text !== "string") return undefined;
   if (Buffer.byteLength(text.text, "utf8") > MAX_PROMPT_BYTES
     || text.text.trim() !== NATIVE_WEB_HANDOFF_PROMPT) return undefined;
+  // The user requested a read-only SUMMARY, not another task. Once that
+  // explicit request is recognized, never overlook a command, file change,
+  // tool, plan, second user input, extra assistant message or unknown item
+  // merely because the final JSON looks like a valid handoff. Reasoning is
+  // inert but any other item type fails closed. Public summary views are not
+  // an engine attestation that hidden tools could never have executed.
+  const items = turn.items.map(record);
+  if (items.some(item => !item || !["userMessage", "agentMessage", "agentReasoning"]
+    .includes(String(item.type)))
+    || items.filter(item => item?.type === "userMessage").length !== 1
+    || items.filter(item => item?.type === "agentMessage").length !== 1
+    || items[0] !== requested
+    || items[items.length - 1]?.type !== "agentMessage") {
+    rejectVisibleHandoffActivity("source_turn");
+  }
   const answer = record([...turn.items].reverse().find(item =>
     record(item)?.type === "agentMessage"));
   if (!answer || !checkId(answer.id) || typeof answer.text !== "string"
@@ -119,6 +155,9 @@ export class AppServerNativeHandoffSource {
       if (!current || current.id !== currentTurnId || current.status !== "inProgress"
         || current.itemsView !== "summary" || !Array.isArray(current.items)) {
         throw new Error("Native handoff page belongs to another current turn");
+      }
+      if (!hasNoCurrentTurnActivity(current)) {
+        rejectVisibleHandoffActivity("current_turn");
       }
       const prior = record(response.data[1]);
       const handoff = prior ? parseHandoff(prior, threadId, currentTurnId) : undefined;
@@ -195,6 +234,9 @@ export class AppServerNativeHandoffSource {
           if (!discovered && page === 0 && seenTurns.size === 1
             && (turn.id !== currentTurnId || turn.status !== "inProgress")) {
             throw new Error("Native handoff verification belongs to another active turn");
+          }
+          if (page === 0 && seenTurns.size === 1 && !hasNoCurrentTurnActivity(turn)) {
+            rejectVisibleHandoffActivity("current_turn");
           }
           if (turn.id === handoffTurnId) {
             discovered = true;
