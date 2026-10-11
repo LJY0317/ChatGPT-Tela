@@ -21,7 +21,7 @@ const family = { key: chatGptWebFamilyKey("Fixture Web"), label: "Fixture Web", 
 const model = chatGptWebModelId(family.key);
 const metadata = { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "thread-1", turn_id: "turn-1" } };
 
-async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource }) => void } = {}) {
+async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-native-first-"));
   const config = loadProductProfileRuntimeConfig({
     CHATGPT_TELA_PROFILE_ROOT: root, CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "1", CHATGPT_TELA_PRODUCT_ROUTE_ID: "fixture123",
@@ -137,12 +137,16 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
   };
 }
 
-test("ordinary product tasks have no elapsed-time deadline and require Native lifecycle authority", async () => {
-  let contract: { readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource } | undefined;
+test("ordinary product tasks have no implicit Native fork, no elapsed-time deadline and require lifecycle authority", async () => {
+  let contract: { readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown } | undefined;
   const f = await fixture({ onExecutionContract: value => { contract = value; } });
   try {
     await f.runtime.prepareWeb();
     expect(contract).not.toHaveProperty("webTurnTimeoutMs");
+    // A future experimental adapter could change its internal default.
+    // The real product must still omit both optional model-backed hooks.
+    expect(contract).not.toHaveProperty("automaticNativeHandoff");
+    expect(contract).not.toHaveProperty("verifyAutomaticNativeHandoff");
     if (!contract?.currentTurnSource.watchTurn) throw new Error("missing product lifecycle adapter");
     // The synthetic Native source has no lifecycle contract. It must fail before browser submission.
     await expect(contract.currentTurnSource.watchTurn("thread-1", "turn-1"))

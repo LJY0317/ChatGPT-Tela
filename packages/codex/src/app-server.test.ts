@@ -733,6 +733,123 @@ test("normal shutdown scans idle thread status without downloading history", asy
 });
 
 describe("Native turn termination observation", () => {
+  test("an already cancelled watcher never connects to Native or creates a live lease", async () => {
+    const cancelled = new AbortController();
+    cancelled.abort(new DOMException("fixture cancelled", "AbortError"));
+    let connections = 0;
+    const source = new AppServerCurrentTurnSource(async () => {
+      connections++;
+      throw Error("Cancellation must be checked before Native connect");
+    }, { preferBoundedTurnProof: true });
+    await expect(source.watchTurn("thread-paged", "turn-exact", cancelled.signal))
+      .rejects.toHaveProperty("name", "AbortError");
+    expect(connections).toBe(0);
+  });
+
+  test("indexed observation proves ownership before resume and again after attach", async () => {
+    const calls: string[] = [];
+    let closed = 0;
+    let unsubscribed = 0;
+    const thread = activeThread({
+      id: "thread-paged", historyMode: "paginated", turns: undefined,
+    });
+    const rpc: CodexAppServerRpc = {
+      async request(method, params) {
+        calls.push(method);
+        if (method === "thread/read") {
+          expect((params as { includeTurns?: boolean }).includeTurns).toBe(false);
+          return { thread };
+        }
+        if (method === "thread/turns/list") return { data: [
+          { id: "turn-exact", status: "inProgress", itemsView: "notLoaded", items: [] },
+        ], nextCursor: null };
+        if (method === "thread/resume") {
+          expect(params).toEqual({ threadId: "thread-paged", excludeTurns: true });
+          return {};
+        }
+        throw new Error("No history hydration, model or tool request permitted");
+      },
+      subscribe() { return () => { unsubscribed++; }; },
+      async close() { closed++; },
+    };
+    const watcher = await new AppServerCurrentTurnSource(async () => rpc, {
+      preferBoundedTurnProof: true,
+    }).watchTurn("thread-paged", "turn-exact");
+    expect(watcher.signal.aborted).toBe(false);
+    expect(calls).toEqual([
+      "thread/read", "thread/turns/list", "thread/read",
+      "thread/resume",
+      "thread/read", "thread/turns/list", "thread/read",
+    ]);
+    await watcher.close();
+    expect(unsubscribed).toBe(1);
+    expect(closed).toBe(1);
+  });
+
+  test("Legacy or unknown history mode cannot cause even an excludeTurns resume", async () => {
+    for (const historyMode of ["legacy", undefined, "future"]) {
+      const calls: string[] = [];
+      let closed = 0;
+      let unsubscribed = 0;
+      const rpc: CodexAppServerRpc = {
+        async request(method, params) {
+          calls.push(method);
+          if (method === "thread/read") {
+            expect((params as { includeTurns?: boolean }).includeTurns).toBe(false);
+            return { thread: activeThread({
+              id: "thread-unindexed", historyMode, turns: undefined,
+            }) };
+          }
+          throw Error("Do not load Native Legacy rollout or attach a watcher");
+        },
+        subscribe() { return () => { unsubscribed++; }; },
+        async close() { closed++; },
+      };
+      await expect(new AppServerCurrentTurnSource(async () => rpc, {
+        preferBoundedTurnProof: true,
+      }).watchTurn("thread-unindexed", "turn-exact")).rejects.toMatchObject({
+        code: "native_history_bootstrap_required",
+        recoveryReason: "unindexed_history",
+      });
+      expect(calls).toEqual(["thread/read"]);
+      expect(unsubscribed).toBe(1);
+      expect(closed).toBe(1);
+    }
+  });
+
+  test("a storage-mode change during watcher attachment prevents the second indexed page", async () => {
+    const calls: string[] = [];
+    let resumed = false;
+    let closed = 0;
+    const rpc: CodexAppServerRpc = {
+      async request(method) {
+        calls.push(method);
+        if (method === "thread/read") return { thread: activeThread({
+          id: "thread-paged",
+          historyMode: resumed ? "legacy" : "paginated", turns: undefined,
+        }) };
+        if (method === "thread/turns/list") return { data: [
+          { id: "turn-exact", status: "inProgress", itemsView: "notLoaded", items: [] },
+        ], nextCursor: null };
+        if (method === "thread/resume") { resumed = true; return {}; }
+        throw Error("No other app-server action may execute");
+      },
+      subscribe() { return () => {}; },
+      async close() { closed++; },
+    };
+    await expect(new AppServerCurrentTurnSource(async () => rpc, {
+      preferBoundedTurnProof: true,
+    }).watchTurn("thread-paged", "turn-exact")).rejects.toMatchObject({
+      code: "native_history_bootstrap_required",
+      recoveryReason: "unindexed_history",
+    });
+    expect(calls).toEqual([
+      "thread/read", "thread/turns/list", "thread/read",
+      "thread/resume", "thread/read",
+    ]);
+    expect(closed).toBe(1);
+  });
+
   function fixture() {
     const rpc = new FixtureRpc({ "thread/resume": {}, "thread/read": { thread: activeThread({ turns: [{ id: "turn-1", status: "inProgress" }] }) } });
     let notify!: (method: string, params: unknown) => void;

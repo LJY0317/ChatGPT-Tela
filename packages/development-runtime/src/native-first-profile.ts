@@ -2,7 +2,7 @@ import { augmentNativeCodexModelCatalog } from "./web-model-catalog";
 import { augmentCodexAppServerModelList } from "./app-server-model-list";
 import { classifyNetworkFailure, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { resolve } from "node:path";
-import { appServerCurrentTurnSource, appServerCompactionHistorySource, appServerNativeHandoffSource, appServerAutomaticNativeHandoffSource, NativeAutoHandoffUnavailable, connectCodexAppServerWebSocket, refreshAdmittedWebModelCatalog } from "@chatgpt-tela/codex";
+import { appServerCurrentTurnSource, appServerCompactionHistorySource, appServerNativeHandoffSource, connectCodexAppServerWebSocket, refreshAdmittedWebModelCatalog } from "@chatgpt-tela/codex";
 import { chatGptWebModelId, CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider, parseChatGptWebModelId, type ChatGptWebModelFamily } from "@chatgpt-tela/chatgpt";
 import { createDefaultDesktopResponsesRoute, resolveDefaultDesktopInstallation, startDefaultDesktopTargetRuntime, TELA_DEFAULT_DESKTOP_RUNTIME_HEADER } from "@chatgpt-tela/default-desktop-target";
 import { startLocalResponsesServer, type LocalResponsesServer } from "@chatgpt-tela/local-server";
@@ -188,10 +188,6 @@ export async function startNativeFirstProductProfileRuntime(
   let controller: AbortController | undefined;
   let native: NativeFirstTarget | undefined;
   let webRequests = 0;
-  // One extra read-only Native model turn at most per opaque compaction state
-  // and proven ChatGPT account in THIS profile process, including Web restarts.
-  // Derived cached summaries are reused first; no polling or background work.
-  const attemptedHandoffs = new Set<string>();
   const isClosed = () => state === "closed";
   const setState = (next: NativeFirstWebState) => {
     state = next;
@@ -344,25 +340,12 @@ export async function startNativeFirstProductProfileRuntime(
             return appServerNativeHandoffSource(native.routedTarget.session.endpoint)
               .verifyRecent(threadId, turnId, handoffTurnId, answerDigest, signal);
           },
-          automaticNativeHandoff: (threadId, turnId, fingerprint, signal) => {
-            if (!native) throw new NativeAutoHandoffUnavailable();
-            const account = readChatGptTelaAccountBinding(config.browserProfile);
-            if (!account) throw new NativeAutoHandoffUnavailable();
-            const attemptKey = JSON.stringify([account.accountFingerprint, threadId, fingerprint]);
-            if (attemptedHandoffs.has(attemptKey)) throw new NativeAutoHandoffUnavailable();
-            attemptedHandoffs.add(attemptKey);
-            if (attemptedHandoffs.size > 128) {
-              const oldest = attemptedHandoffs.values().next().value;
-              if (oldest) attemptedHandoffs.delete(oldest);
-            }
-            return appServerAutomaticNativeHandoffSource(native.routedTarget.session.endpoint)
-              .prepare(threadId, turnId, signal);
-          },
-          verifyAutomaticNativeHandoff: (threadId, turnId, sourceTurnId, signal) => {
-            if (!native) throw new NativeAutoHandoffUnavailable();
-            return appServerAutomaticNativeHandoffSource(native.routedTarget.session.endpoint)
-              .verifyRecent(threadId, turnId, sourceTurnId, signal);
-          },
+          // Automatic extra-model Native forks remain strictly research-only.
+          // Current public app-server responses do not attest historical
+          // executed model/provider or pre-execution tool-free fork policy.
+          // Do not wire even a default-denied probe into normal product
+          // sessions: explicit source/owner capability must be implemented
+          // and reviewed before future production opt-in.
           compactionHistory: (threadId, turnId) => {
             if (!native) throw new Error("Native context authority is not ready");
             return appServerCompactionHistorySource(native.routedTarget.session.endpoint).project(threadId, turnId);

@@ -287,6 +287,7 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
   async watchTurn(threadId: string, turnId: string, signal?: AbortSignal) {
     identifier(threadId, "watched thread id");
     identifier(turnId, "watched turn id");
+    signal?.throwIfAborted();
     const origin = { ...diagnosticContext(), scope_fingerprint: diagnosticFingerprint(threadId),
       turn_fingerprint: diagnosticFingerprint(turnId) };
     const rpc = await this.#connect(signal);
@@ -326,10 +327,28 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
       }, () => terminate("observer_disconnected", new Error("Native lifecycle observation disconnected")));
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) abort();
+      // Do not return an open but already-cancelled observer. The catch path
+      // closes this connection and releases its notification subscription.
+      signal?.throwIfAborted();
+      // Observing a Native turn must not implicitly load an old Legacy
+      // rollout merely to attach the notification stream. On indexed
+      // product targets, prove both the active turn and the storage mode
+      // BEFORE thread/resume, which can otherwise initiate server-side
+      // reconstruction despite excludeTurns:true.
+      if (this.#preferBoundedTurnProof && !controller.signal.aborted) {
+        const initial = await readBoundedNewestTurn(rpc, threadId, signal);
+        if (record(initial.thread.status)?.type !== "active"
+          || initial.newest?.id !== turnId || initial.newest.status !== "inProgress") {
+          terminate("snapshot_inactive", new Error("Native turn no longer active"));
+        }
+      }
+      signal?.throwIfAborted();
+      if (controller.signal.aborted) return { signal: controller.signal, close };
       // Public resume attaches this connection to the loaded thread's notifications.
       // No model/config overrides: Native keeps its existing runtime and authority.
       await rpc.request("thread/resume", { threadId, excludeTurns: true }, signal);
-      // Observe before the snapshot so a termination during setup cannot be missed.
+      // Reprove after attaching; a turn ending between preflight and resume
+      // cannot obtain a watcher for the old active Native authority.
       const bounded = this.#preferBoundedTurnProof
         ? await readBoundedNewestTurn(rpc, threadId, signal) : undefined;
       const snapshot = bounded ? undefined

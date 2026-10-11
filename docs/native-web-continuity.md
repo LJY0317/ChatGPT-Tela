@@ -29,19 +29,21 @@ items reject the fork and trigger interruption of its **own** turn only.
 No original Native task, tool or approval state is modified. The extra Native
 model request is explicitly recorded in payload-free routine diagnostics.
 
-**Production rejects this extra fork/model action before opening an RPC
-connection.** The public Codex engine does not yet prove historical executed
-model/provider provenance or a pre-execution tool-free fork policy. Tests
-of fixture behavior must not be mistaken for a released feature.
+**Production does not install the experimental automatic-handoff callbacks
+at all; its standalone adapter also rejects before RPC connect.**
+The public Codex engine does not yet prove historical executed model/provider
+provenance or a pre-execution tool-free fork policy. Tests of fixture behavior
+must not be mistaken for a released feature.
 
 The experimental resulting JSON records objective, constraints, completed and pending
 work, decisions, file/evidence hints and evidence limitations. It is
 **lossy context, not original source evidence**. Its exact source turn,
 content digest and opaque Native compaction fingerprint bind an account-scoped
 cache. After restart, public recent-turn ancestry must be re-proven; on a
-live retained Web page only the new logical delta is transferred. A single
-opaque compaction fingerprint is attempted once per live product profile
-session, not on every selected Web model or new user turn.
+live retained Web page only the new logical delta is transferred.
+The product has no extra Native summary attempt counter while this
+research-only feature is unshipped. No secondary model inference is
+started merely because a user selects a Web model.
 
 ## Old long conversation, no readable checkpoint
 

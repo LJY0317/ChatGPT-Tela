@@ -15,6 +15,12 @@ interruption scan similarly rejects an unindexed active thread before
 Idle unindexed loaded threads remain skippable from metadata alone.
 Both the default Desktop target and the optional multi-profile target now
 configure bounded active-turn ownership proof.
+The bounded Native turn **watcher** also validates the indexed current-turn
+identity before sending `thread/resume(excludeTurns:true)` and rechecks after
+the observation connection attaches. Legacy/unknown active turns never
+reach the resume request merely to attach notifications; a storage-mode
+change at either proof stage fails closed. The pre-resume indexed probe is
+on demand for an actual watched turn, not an idle sampler.
 
 An old 73 MiB Legacy cold Web attempt with no prior verified current-input
 or retained source is therefore **not yet recoverable automatically**.
@@ -46,8 +52,10 @@ the cached value after Web restart. The derived summary is lower-priority
 task guidance with explicit original-evidence limitations, not authority.
 
 Where any public fork isolation or exact historical executed Native model
-proof is unsupported, no model is started. The current product-facing
-automatic source defaults to **deny before RPC connect**; only isolated
+proof is unsupported, no model is started. The product runtime now
+**omits** the `automaticNativeHandoff` and
+`verifyAutomaticNativeHandoff` callbacks entirely. The separate
+source adapter remains **deny before RPC connect** by default; only isolated
 synthetic fixtures explicitly opt into unshipped fork behavior. The typed
 HTTP 422 cold-history boundary remains. Synthetic tests do not constitute
 live Native authority, historical model provenance, a verified tool-free
