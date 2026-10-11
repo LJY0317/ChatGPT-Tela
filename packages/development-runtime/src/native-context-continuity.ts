@@ -40,9 +40,11 @@ export interface NativeContinuitySources {
     threadId: string, currentTurnId: string, handoffTurnId: string,
     answerDigest: string, signal?: AbortSignal,
   ) => Promise<NativeWebHandoff | undefined>;
-  /** Only called when all usable readable/cached sources have failed. A visible
-   * Web selection authorizes at most one ephemeral read-only Native fork turn
-   * per exact opaque compaction fingerprint, never a turn on the original. */
+  /** Research-only injection seam, NOT wired by the product. A Web selection
+   * alone does NOT authorize a Native fork or extra model call. The installed
+   * public engine lacks effective historical model/provider attestation and
+   * true pre-execution tool-free fork enforcement. No production caller may
+   * supply this until both are proven by the canonical Native owner. */
   readonly automaticNativeHandoff?: (
     threadId: string, currentTurnId: string, opaqueFingerprint: string, signal?: AbortSignal,
   ) => Promise<AutomaticNativeHandoff>;
@@ -132,6 +134,15 @@ export async function resolveNativeContextContinuity(input: {
   const { threadId, currentTurnId, opaque, options, preparation } = input;
   const signal = preparation?.signal;
   signal?.throwIfAborted();
+  // Only the canonical in-process Native turn authority may select a Web
+  // projection. The duplicate IDs are adapter inputs, NOT a second source
+  // of ownership. Check before retained-history reuse, cache reads, public
+  // history RPCs or any optional checkpoint/model producer.
+  if (input.authority?.source !== "native-current-turn"
+    || input.authority.threadId !== threadId
+    || input.authority.turnId !== currentTurnId) {
+    throw new Error("Native continuity source does not match canonical current-turn authority");
+  }
   if (opaque.count === 0) return resolved("current-input");
   if (opaque.count !== 1) throw new Error("Native compaction history has ambiguous encrypted checkpoints");
   if (input.retainedHistory !== undefined) return resolved("retained", input.retainedHistory);
@@ -196,9 +207,28 @@ export async function resolveNativeContextContinuity(input: {
       throw new Error("Native manual handoff is not owned by the exact active turn");
     }
     signal?.throwIfAborted();
-    const text = manualHandoffText(handoff);
+    // Fresh handoffs are candidates, not current Native source proof.
+    // Recheck the same bounded public final answer independently before
+    // Web can use it or persist any derived checkpoint.
+    if (!options.verifyNativeWebHandoff) {
+      throw new NativeHistoryBootstrapRequired();
+    }
+    const verified = await options.verifyNativeWebHandoff(
+      threadId, currentTurnId, handoff.handoffTurnId, handoff.answerDigest, signal,
+    );
+    signal?.throwIfAborted();
+    if (!verified || verified.threadId !== threadId
+      || verified.currentTurnId !== currentTurnId
+      || verified.handoffTurnId !== handoff.handoffTurnId
+      || verified.handoffItemId !== handoff.handoffItemId
+      || verified.answerDigest !== handoff.answerDigest
+      || verified.summary !== handoff.summary
+      || verified.limitations !== handoff.limitations) {
+      throw new NativeHistoryBootstrapRequired();
+    }
+    const text = manualHandoffText(verified);
     if (cache && fingerprint) {
-      await storeManualHandoff(cache, handoff, fingerprint);
+      await storeManualHandoff(cache, verified, fingerprint);
       signal?.throwIfAborted();
     }
     return resolved("explicit-handoff", text);

@@ -99,6 +99,14 @@ All checkpoint and Web physical state is derived and disposable.
 
 On each authenticated Native-owned Web request:
 
+The resolver first requires its `threadId` and `currentTurnId` to match
+the in-process canonical `NativeTurnAuthority` exactly, including the
+`native-current-turn` authority source. A mismatched owner fails before
+reusing hot history, reading local derived caches, invoking public history
+adapters or producing a checkpoint. This prevents accidental cross-turn or
+cross-thread routing inside Tela; it does **not** itself attest a historical
+executed model, external account identity or tool-free fork capability.
+
 1. The canonical current-turn proof and original Native Responses input remain unchanged.
    A readable local `context_compaction` followed by a user summary is ordinary current
    Native input; it needs no separate historical adapter or model call.
@@ -110,8 +118,11 @@ On each authenticated Native-owned Web request:
    identity must be rechecked.
 4. If unavailable, optionally read a *user-requested* completed Native final-answer
    handoff only through a proven indexed Paginated source. A persisted handoff
-   is accepted only after rereading its public Native answer. A Legacy early
-   handoff probe fails before unsafe historical pagination.
+   and a newly found handoff are each accepted only after independent
+   verification of the exact same public Native answer, source IDs, digest,
+   summary and limitations. Missing or changed verification fails before a
+   derived cache write or Web execution. A Legacy early handoff probe fails
+   before unsafe historical pagination.
 5. Only then try the bounded complete visible Native source. If it is fully readable and
    an ordinary, authorized Web checkpoint producer is available, create one checkpoint
    within the *same* Web source/output budget. Revalidate the public compaction anchor

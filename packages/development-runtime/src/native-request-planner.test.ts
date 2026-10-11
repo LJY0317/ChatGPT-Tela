@@ -145,7 +145,7 @@ describe("Native request development Web planner", () => {
         {type:"message",role:"user",content:"After browser restart"},
       ]});
       expect(cold.diagnostics?.history_checkpoint_reused).toBe(true);
-      expect(verificationCalls).toBe(1);
+      expect(verificationCalls).toBe(2); // Fresh source and cached restart both re-proven.
       expect(rawReads).toBe(0);
       cold.settle?.({status:"failed"});
     }finally{rmSync(directory,{recursive:true,force:true});}
@@ -167,7 +167,7 @@ describe("Native request development Web planner", () => {
         compactionAnchor:async()=>{throw new NativeHistoryBootstrapRequired();},
         compactionHistory:async()=>{throw new Error("Unbounded history is not allowed");},
         nativeWebHandoff:async()=>admitted ? manual : undefined,
-        verifyNativeWebHandoff:async()=>{throw new Error("Compaction changed; cannot import old cache");},
+        verifyNativeWebHandoff:async()=>manual,
       });
       const body=(opaque:string)=>({input:[
         {type:"compaction",encrypted_content:opaque},
