@@ -32,6 +32,14 @@ describe("Tela Chat failure-only process diagnostics", () => {
     let manager: ChatProcessManager | undefined;
     try {
       manager = new ChatProcessManager({ workspaces: registry, storePath });
+      const original = readFileSync(storePath, "utf8");
+      const occupancy = manager.list({ workspaceId: workspace.id });
+      expect(occupancy.capacity).toEqual({
+        registryCount: 1024, registryLimit: 1024, availableSlots: 0,
+        unknownCount: 824, activeCount: 0,
+        terminalRecentCount: 200, terminalExpiredCount: 0,
+      });
+      expect(readFileSync(storePath, "utf8")).toBe(original);
       // Reservation admission must reject before starting a shell process.
       const privateCommand = "printf sensitive-command > should-not-exist.txt";
       await expect(manager.exec({ workspaceId: workspace.id, command: privateCommand }))

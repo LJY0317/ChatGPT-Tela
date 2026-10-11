@@ -128,7 +128,7 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "list_processes",
-    description: "List saved command reservations in one approved workspace, including after a Chat service restart. Defaults to unresolved records; include_completed includes terminal command records. Use nextAfterSessionId as after_session_id for another bounded page. observation=registry is not a fresh owner probe or proof that all descendants stopped; use process_status for authenticated current owner status. Does not start commands, consume output, send input or clear uncertain records.",
+    description: "List saved command reservations in one approved workspace, including after a Chat service restart. Defaults to unresolved records; include_completed includes terminal command records. Use nextAfterSessionId as after_session_id for another bounded page. The capacity object is service-wide aggregate reservation occupancy (total/limit/available and safe state counts), including when this workspace has no unresolved processes. It is not proof that a process ended or license to delete protected work. observation=registry is not a fresh owner probe; use process_status for authenticated current owner status. Does not start commands, consume output, send input or clear uncertain records.",
     inputSchema: object({ workspace_id: workspaceId, after_session_id: integer(0),
       limit: integer(1, 50), include_completed: boolean }, ["workspace_id"]),
   },

@@ -44,7 +44,20 @@ retry, original exceptions or Native execution:
 | Chat shutdown | `shutdown_rejected` | Active request count or unresolved-work safety gate refused shutdown. |
 | Chat local incidents | `reasonClass` on `list_incidents`/`show_incident` | A persisted, bounded error classification in addition to existing capability and failed/aborted status. Old records without this optional field remain readable. |
 | Codex paginated owner proof | `native_current_turn_rejected` | Missing/Legacy indexing, unavailable/invalid page, changed active status, owner or environment **before Web authority is granted**. |
-| Codex automatic handoff | `native_auto_handoff_rejected` | A production attempt was denied **before RPC connect**; `prepare`, `verify_source`, or `verify_recent` only. |
+| Codex automatic handoff | `native_auto_handoff_rejected` | A direct call to the default-denied research adapter was rejected **before RPC connect**; `prepare`, `verify_source`, or `verify_recent` only. The product does not wire this adapter. |
+
+`list_processes` now also returns a read-only `capacity` object with
+`registryCount`, `registryLimit`, `availableSlots`, `unknownCount`,
+`activeCount`, `terminalRecentCount` and `terminalExpiredCount`.
+These are **service-wide aggregates only**; the process rows remain limited
+to the caller's approved workspace. A full registry can therefore be
+diagnosed through `list_processes` even when `exec_command` cannot start
+another process or the chosen workspace has no unresolved commands.
+The snapshot does not start, terminate, consume or reclassify any operation.
+Terminal reservations less than 24 hours old still protect command
+idempotency; uncertain owners are never retired to free capacity. A source
+change or Git commit does **not** update the running installed service:
+verify its actual `registryLimit` after a separately approved normal rollout.
 
 For older/unindexed Native compaction history, the Web preparation failure
 classifier now reports the fixed `history_mode_unindexed` class. This is
@@ -53,6 +66,9 @@ but indexed source). The HTTP recovery contract returns nonretryable 422
 `tela_native_history_indexed_source_required` and
 `continue_on_native`; an extra Legacy handoff turn is **not** claimed
 to bypass the hidden server-side history reconstruction.
+Bounded Native observation likewise proves the indexed active turn before
+`thread/resume`. A missing rejection event on a normal product turn does
+not mean a hidden fork ran: the product deliberately omits fork callbacks.
 
 This is not an always-on process sampler: reservation count breakdowns are
 computed **only on capacity rejection**; no command, request body,

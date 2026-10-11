@@ -308,6 +308,29 @@ export class ChatProcessManager {
     }
   }
 
+  /** Content-free, read-only admission diagnostics even when exec is full.
+   * This is service-wide aggregate occupancy, never operation identities,
+   * commands, workspace paths or proof that a PID has stopped.
+   */
+  #capacitySnapshot() {
+    let unknownCount = 0, activeCount = 0;
+    let terminalRecentCount = 0, terminalExpiredCount = 0;
+    const cutoff = Date.now() - TERMINAL_RETENTION_MS;
+    for (const operation of this.#operations.values()) {
+      if (operation.state === "unknown") unknownCount++;
+      else if (operation.state === "running" || operation.state === "starting") activeCount++;
+      else if (Number.isFinite(Date.parse(operation.updatedAt))
+        && Date.parse(operation.updatedAt) <= cutoff) terminalExpiredCount++;
+      else terminalRecentCount++;
+    }
+    return Object.freeze({
+      registryCount: this.#operations.size,
+      registryLimit: MAX_OPERATIONS,
+      availableSlots: Math.max(0, MAX_OPERATIONS - this.#operations.size),
+      unknownCount, activeCount, terminalRecentCount, terminalExpiredCount,
+    });
+  }
+
   #prune(): void {
     const retirement = new ProcessRetirement({ storePath: this.#storePath, key: this.#requestKey });
     const commit = (value: unknown): void => {
@@ -593,22 +616,16 @@ export class ChatProcessManager {
       throw error;
     }
     if (this.#operations.size >= MAX_OPERATIONS) {
-      let unknown = 0, active = 0, terminalRecent = 0, terminalExpired = 0;
-      const cutoff = Date.now() - TERMINAL_RETENTION_MS;
-      for (const operation of this.#operations.values()) {
-        if (operation.state === "unknown") unknown++;
-        else if (operation.state === "running" || operation.state === "starting") active++;
-        else if (Number.isFinite(Date.parse(operation.updatedAt))
-          && Date.parse(operation.updatedAt) <= cutoff) terminalExpired++;
-        else terminalRecent++;
-      }
+      const occupancy = this.#capacitySnapshot();
       withDiagnosticContext({
         operation_fingerprint: diagnosticFingerprint(operationId),
         scope_fingerprint: diagnosticFingerprint(workspace.id),
       }, () => emitDiagnosticEvent("chatgpt_tela_chat", "process_capacity_rejected", {
-        reason_class: "capacity_exhausted", registry_count: this.#operations.size,
-        registry_limit: MAX_OPERATIONS, unknown_count: unknown, active_count: active,
-        terminal_recent_count: terminalRecent, terminal_expired_count: terminalExpired,
+        reason_class: "capacity_exhausted", registry_count: occupancy.registryCount,
+        registry_limit: occupancy.registryLimit, unknown_count: occupancy.unknownCount,
+        active_count: occupancy.activeCount,
+        terminal_recent_count: occupancy.terminalRecentCount,
+        terminal_expired_count: occupancy.terminalExpiredCount,
       }));
       throw new Error("Tela Chat process operation registry is at capacity; no process was started");
     }
@@ -776,6 +793,7 @@ export class ChatProcessManager {
       .sort((left, right) => left.sessionId - right.sessionId);
     const page = matching.slice(0, limit);
     return Object.freeze({ observation: "registry" as const,
+      capacity: this.#capacitySnapshot(),
       processes: Object.freeze(page.map(operation => this.#statusSnapshot(operation))),
       nextAfterSessionId: matching.length > limit ? page.at(-1)!.sessionId : null });
   }

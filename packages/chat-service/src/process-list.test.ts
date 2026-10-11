@@ -31,6 +31,13 @@ test("public registry discovery paginates unresolved work without cross-workspac
     const before = readFileSync(f.storePath, "utf8");
     const first: any = await f.runtime.call("list_processes", { workspace_id: f.first.id, limit: 50 });
     expect(first.observation).toBe("registry"); expect(first.processes).toHaveLength(50);
+    expect(first.capacity).toEqual({
+      registryCount: 62, registryLimit: 1024, availableSlots: 962,
+      unknownCount: 61, activeCount: 0,
+      terminalRecentCount: 1, terminalExpiredCount: 0,
+    });
+    expect(JSON.stringify(first.capacity)).not.toContain(f.first.id);
+    expect(JSON.stringify(first.capacity)).not.toContain(f.second.id);
     expect(first.nextAfterSessionId).toBe(50);
     const second: any = await f.runtime.call("list_processes", { workspace_id: f.first.id, after_session_id: 50 });
     expect(second.processes).toHaveLength(10); expect(second.nextAfterSessionId).toBeNull();
@@ -44,6 +51,10 @@ test("public registry discovery paginates unresolved work without cross-workspac
     expect(all.processes.map((row: any) => row.sessionId)).toEqual([61]);
     const other: any = await f.runtime.call("list_processes", { workspace_id: f.second.id });
     expect(other.processes.map((row: any) => row.sessionId)).toEqual([62]);
+    // The only service-wide information is aggregate capacity; no foreign
+    // operation identity or path leaks into the selected workspace's list.
+    expect(other.capacity).toEqual(first.capacity);
+    expect(first.processes.every((row: any) => row.workspaceId === f.first.id)).toBe(true);
     expect(readFileSync(f.storePath, "utf8")).toBe(before);
     await expect(f.runtime.close()).rejects.toThrow("unresolved execution");
   } finally { rmSync(f.base, { recursive: true, force: true }); }
