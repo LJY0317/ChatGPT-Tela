@@ -19,13 +19,10 @@ describe("Tela Chat failure-only process diagnostics", () => {
     });
     const workspace = registry.open(root);
     const old = "2000-01-01T00:00:00.000Z";
-    const current = new Date().toISOString();
     const operations = Array.from({ length: 1024 }, (_, i) => ({
       operationId: randomUUID(), serverInstanceId: randomUUID(),
       workspaceId: workspace.id, sessionId: i + 1,
-      state: i < 800 ? "unknown" : i < 824 ? "running" : "exited",
-      startedAt: i < 824 ? old : current, updatedAt: i < 824 ? old : current,
-      ...(i >= 824 ? { endedAt: current, exitCode: 0 } : {}),
+      state: "unknown", startedAt: old, updatedAt: old,
     }));
     writeFileSync(storePath, JSON.stringify({ version: 1, nextSessionId: 1025, operations }));
     process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = log;
@@ -36,8 +33,9 @@ describe("Tela Chat failure-only process diagnostics", () => {
       const occupancy = manager.list({ workspaceId: workspace.id });
       expect(occupancy.capacity).toEqual({
         registryCount: 1024, registryLimit: 1024, availableSlots: 0,
-        unknownCount: 824, activeCount: 0,
-        terminalRecentCount: 200, terminalExpiredCount: 0,
+        unknownCount: 1024, activeCount: 0,
+        terminalRecentCount: 0, terminalExpiredCount: 0,
+        archivedTerminalCount: 0, archiveLimit: 50_000,
       });
       expect(readFileSync(storePath, "utf8")).toBe(original);
       // Reservation admission must reject before starting a shell process.
@@ -50,8 +48,8 @@ describe("Tela Chat failure-only process diagnostics", () => {
       expect(matching).toHaveLength(1);
       expect(matching[0]).toMatchObject({
         reason_class: "capacity_exhausted", registry_count: 1024,
-        registry_limit: 1024, unknown_count: 824, active_count: 0,
-        terminal_recent_count: 200, terminal_expired_count: 0,
+        registry_limit: 1024, unknown_count: 1024, active_count: 0,
+        terminal_recent_count: 0, terminal_expired_count: 0,
         scope_fingerprint: expect.stringMatching(/^[a-f0-9]{24}$/),
         operation_fingerprint: expect.stringMatching(/^[a-f0-9]{24}$/),
       });

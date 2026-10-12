@@ -14,6 +14,7 @@ import { readBoundedProcessState, replaceProcessState, writeExclusiveProcessStat
 import { appendProcessOutput, consumeProcessOutput, PROCESS_OUTPUT_LIMIT } from "./process-output";
 import { ProcessExecutionJournal } from "./process-execution-journal";
 import { ProcessRetirement, type RetirementArtifactProof } from "./process-retirement";
+import { ProcessCompletionArchive } from "./process-completion-archive";
 import { callProcessOwner, type ProcessOwnerRequest } from "./process-owner";
 
 const MAX_YIELD_MS = 12_000;
@@ -24,6 +25,7 @@ const MAX_OUTPUT_BYTES = PROCESS_OUTPUT_LIMIT;
 // evict an uncertain execution or replay a recent finished command.
 // The 1 MiB store budget remains independently enforced.
 const MAX_OPERATIONS = 1024;
+const MAX_COMPLETED_ARCHIVE = 50_000;
 const MAX_STORE_BYTES = 1024 * 1024;
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
 
@@ -233,6 +235,7 @@ export class ChatProcessManager {
   readonly #serverInstanceId = randomUUID();
   readonly #requestKey: string;
   readonly #ownerWorker: OwnedProcessWorkerConfig | undefined;
+  readonly #archive: ProcessCompletionArchive<DurableOperation>;
   readonly #operations = new Map<string, DurableOperation>();
   readonly #sessions = new Map<number, LiveSession>();
   #nextSessionId = 1;
@@ -256,12 +259,14 @@ export class ChatProcessManager {
             : stored;
           this.#operations.set(operation.operationId, operation);
         }
+        this.#archive = new ProcessCompletionArchive(`${this.#storePath}.completed.sqlite`, this.#requestKey, MAX_COMPLETED_ARCHIVE);
         recoveryPhase = "retire";
         this.#prune();
         recoveryPhase = "write";
         this.#save();
       } else {
         this.#requestKey = randomBytes(32).toString("hex");
+        this.#archive = new ProcessCompletionArchive(`${this.#storePath}.completed.sqlite`, this.#requestKey, MAX_COMPLETED_ARCHIVE);
       }
     } catch (error) {
       emitDiagnosticEvent("chatgpt_tela_chat", "process_recovery_failed", {
@@ -328,36 +333,40 @@ export class ChatProcessManager {
       registryLimit: MAX_OPERATIONS,
       availableSlots: Math.max(0, MAX_OPERATIONS - this.#operations.size),
       unknownCount, activeCount, terminalRecentCount, terminalExpiredCount,
+      archivedTerminalCount: this.#archive.count(),
+      archiveLimit: MAX_COMPLETED_ARCHIVE,
     });
   }
 
-  #prune(): void {
+  #prune(allowArchival = false): void {
     const retirement = new ProcessRetirement({ storePath: this.#storePath, key: this.#requestKey });
     const commit = (value: unknown): void => {
       const retired = parseStore({ version: 1, requestKey: this.#requestKey, operations: [value] }).operations[0]!;
       if (!["exited", "signaled", "spawn_failed"].includes(retired.state)) throw new Error("retirement is not terminal");
       const current = this.#operations.get(retired.operationId);
+      const archived = this.#archive.get(retired.operationId);
       const canonical = (row: DurableOperation) => JSON.stringify(Object.entries(row).sort(([left], [right]) => left.localeCompare(right)));
       if (current && canonical(current) !== canonical(retired)) throw new Error("retirement reservation changed");
+      if (archived && canonical(archived) !== canonical(retired)) throw new Error("archived retirement reservation changed");
       this.#nextSessionId = Math.max(this.#nextSessionId, retired.sessionId + 1);
-      this.#operations.delete(retired.operationId);
-      try {
-        this.#save(); // Commit authoritative removal/high-water mark before deleting any output.
-      } catch (error) {
-        // A failed publication must not free in-memory replay/capacity authority either.
-        if (current) this.#operations.set(retired.operationId, current);
-        throw error;
+      if (current) {
+        this.#operations.delete(retired.operationId);
+        try {
+          this.#save(); // Commit authoritative removal/high-water mark before deleting any output.
+        } catch (error) {
+          this.#operations.set(retired.operationId, current);
+          throw error;
+        }
       }
+      // A crash between these two commits is resumed by the signed retirement
+      // plan. Neither uncertainty nor a partially completed archive move can
+      // grant a second execution of the same operation ID.
+      if (archived) this.#archive.remove(retired);
       this.#sessions.delete(retired.sessionId);
     };
     retirement.resume(commit);
     const threshold = Date.now() - TERMINAL_RETENTION_MS;
-    for (const [id, operation] of this.#operations) {
-      if (this.#operations.size < MAX_OPERATIONS) break;
-      // Unknown execution may still be live. Preserve its reservation until resolved.
-      if (!["exited", "signaled", "spawn_failed"].includes(operation.state)) continue;
-      const updated = Date.parse(operation.updatedAt);
-      if (!Number.isFinite(updated) || updated > threshold) continue;
+    const retire = (operation: DurableOperation): void => {
       const artifacts: RetirementArtifactProof[] = [];
       if (operation.resultFingerprint !== undefined) {
         this.#recoverOutput(operation, digest => artifacts.push({ kind: "result", digest }));
@@ -368,12 +377,43 @@ export class ChatProcessManager {
         if (completed.state !== operation.state || completed.endedAt !== operation.endedAt
           || completed.exitCode !== operation.exitCode || completed.signal !== operation.signal
           || completed.resultFingerprint !== operation.resultFingerprint || completed.resultTruncated !== operation.resultTruncated) throw new Error("retirement completion does not match reservation");
-        if (existsSync(`${this.#storePath}.executions/${id}.live.json`)) {
+        if (existsSync(`${this.#storePath}.executions/${operation.operationId}.live.json`)) {
           journal.readLive(claim, digest => artifacts.push({ kind: "live", digest }));
         }
       }
       retirement.prepare(operation, artifacts);
       retirement.resume(commit);
+    };
+    for (const operation of this.#operations.values()) {
+      if (this.#operations.size < MAX_OPERATIONS) break;
+      // Unknown execution may still be live. Preserve its reservation until resolved.
+      if (!["exited", "signaled", "spawn_failed"].includes(operation.state)) continue;
+      const updated = Date.parse(operation.updatedAt);
+      if (!Number.isFinite(updated) || updated > threshold) continue;
+      retire(operation);
+    }
+    // Expired archive receipts are retired with the same authenticated plan,
+    // before admitting another terminal receipt. This remains demand-driven.
+    for (let count = 0; count < 8; count++) {
+      const expired = this.#archive.oldestExpired(new Date(threshold).toISOString());
+      if (!expired) break;
+      retire(expired);
+    }
+    // Archive old terminal receipts only when hot admission actually needs a
+    // slot. Archive publication precedes hot deletion and is restart-idempotent.
+    if (allowArchival && this.#operations.size >= MAX_OPERATIONS) {
+      const completed = [...this.#operations.values()].find(operation =>
+        ["exited", "signaled", "spawn_failed"].includes(operation.state));
+      if (completed) {
+        this.#archive.save(completed);
+        this.#operations.delete(completed.operationId);
+        try { this.#save(); }
+        catch (error) { this.#operations.set(completed.operationId, completed); throw error; }
+        emitDiagnosticEvent("chatgpt_tela_chat", "process_completion_archived", {
+          registry_count: this.#operations.size, archived_count: this.#archive.count(),
+          archive_limit: MAX_COMPLETED_ARCHIVE,
+        });
+      }
     }
   }
 
@@ -598,7 +638,7 @@ export class ChatProcessManager {
     const requestFingerprint = createHmac("sha256", Buffer.from(this.#requestKey, "hex"))
       .update(JSON.stringify(["tela-chat-exec-v1", workspace.id, cwd, input.command])).digest("hex");
     const operationId = input.operationId ? uuid(input.operationId) : randomUUID();
-    const existing = this.#operations.get(operationId);
+    const existing = this.#operations.get(operationId) ?? this.#archive.get(operationId);
     if (existing) {
       if (existing.workspaceId !== workspace.id) throw new Error("process operation belongs to another workspace");
       if (existing.requestFingerprint === undefined) throw new Error("process operation request identity is unavailable; inspect its status instead");
@@ -607,7 +647,7 @@ export class ChatProcessManager {
       return this.#snapshot(existing, false);
     }
     try {
-      this.#prune();
+      this.#prune(true);
     } catch (error) {
       emitDiagnosticEvent("chatgpt_tela_chat", "process_retirement_failed", {
         reason_class: diagnosticFailureClass(error), registry_count: this.#operations.size,
@@ -626,6 +666,8 @@ export class ChatProcessManager {
         active_count: occupancy.activeCount,
         terminal_recent_count: occupancy.terminalRecentCount,
         terminal_expired_count: occupancy.terminalExpiredCount,
+        archived_terminal_count: this.#archive.count(),
+        archive_limit: MAX_COMPLETED_ARCHIVE,
       }));
       throw new Error("Tela Chat process operation registry is at capacity; no process was started");
     }
@@ -749,7 +791,7 @@ export class ChatProcessManager {
 
   status(workspaceId: string, operationId: string): ChatProcessStatus {
     this.#workspaces.get(workspaceId);
-    const stored = this.#operations.get(uuid(operationId));
+    const stored = this.#operations.get(uuid(operationId)) ?? this.#archive.get(operationId);
     if (!stored || stored.workspaceId !== workspaceId) throw new Error("unknown process operation in this workspace");
     return this.#statusSnapshot(this.#reconcileOwnedCompletion(stored));
   }
@@ -787,7 +829,11 @@ export class ChatProcessManager {
     if (input.includeCompleted !== undefined && typeof input.includeCompleted !== "boolean") {
       throw new Error("include_completed must be a boolean");
     }
-    const matching = [...this.#operations.values()].filter(operation => operation.workspaceId === input.workspaceId
+    // An interrupted hot-to-archive publication can temporarily have both
+    // authenticated copies; the hot record remains canonical until committed.
+    const archived = input.includeCompleted ? this.#archive.page(input.workspaceId, after, limit + 1)
+      .filter(operation => !this.#operations.has(operation.operationId)) : [];
+    const matching = [...this.#operations.values(), ...archived].filter(operation => operation.workspaceId === input.workspaceId
       && operation.sessionId > after && (input.includeCompleted
         || !["exited", "signaled", "spawn_failed"].includes(operation.state)))
       .sort((left, right) => left.sessionId - right.sessionId);
@@ -801,8 +847,8 @@ export class ChatProcessManager {
   /** Public on-demand observation; never equates a saved PID with live execution authority. */
   async inspect(workspaceId: string, operationId: string): Promise<ChatProcessStatus> {
     const known = this.status(workspaceId, operationId);
-    const operation = this.#operations.get(known.operationId)!;
-    if (operation.executionMode !== "owned-worker-v1" || ["exited", "signaled", "spawn_failed"].includes(known.state)) return known;
+    const operation = this.#operations.get(known.operationId);
+    if (!operation || operation.executionMode !== "owned-worker-v1" || ["exited", "signaled", "spawn_failed"].includes(known.state)) return known;
     const observed = await this.#observeOwned(operation, { action: "status" });
     return Object.freeze({ ...this.status(workspaceId, operationId),
       state: observed.state, ioAvailable: observed.ioAvailable, updatedAt: observed.updatedAt,
@@ -826,5 +872,6 @@ export class ChatProcessManager {
     if (this.#closed) return;
     this.assertCanClose();
     this.#closed = true;
+    this.#archive.close();
   }
 }

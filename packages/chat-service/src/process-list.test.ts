@@ -35,6 +35,7 @@ test("public registry discovery paginates unresolved work without cross-workspac
       registryCount: 62, registryLimit: 1024, availableSlots: 962,
       unknownCount: 61, activeCount: 0,
       terminalRecentCount: 1, terminalExpiredCount: 0,
+      archivedTerminalCount: 0, archiveLimit: 50_000,
     });
     expect(JSON.stringify(first.capacity)).not.toContain(f.first.id);
     expect(JSON.stringify(first.capacity)).not.toContain(f.second.id);
