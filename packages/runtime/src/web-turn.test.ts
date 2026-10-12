@@ -456,4 +456,30 @@ describe("browser turn runner", () => {
     await expect(run).rejects.toThrow("continuation is proven");
     expect(String(channel.phase)).toBe("indeterminate-after-acceptance");
   });
+
+  test("a final Web event cannot commit after the original Native owner revokes its signal", async () => {
+    const owner = new AbortController();
+    const events = new EventQueue();
+    const channel = new RuntimeTurnChannel(binding());
+    const released: string[] = [];
+    const run = runBrowserTurn({
+      browserHost: browserHost(released),
+      provider: provider(events),
+      channel,
+      nativeTaskId: "task-1",
+      webEpochId: "epoch-1",
+      physicalContext,
+      signal: owner.signal,
+    });
+
+    while (channel.phase !== "accepted") await Promise.resolve();
+    // A callback from the original Native owner may revoke this turn while
+    // a previously queued provider completion settles in the same event loop.
+    events.push({ kind: "completed", providerTurnId: "web-turn-1", answer: "stale Web final" });
+    owner.abort(new Error("Native live turn ownership was revoked"));
+    await expect(run).rejects.toThrow("Native live turn ownership was revoked");
+    expect(String(channel.phase)).not.toBe("completed");
+    await expect(channel.waitForFinal()).rejects.toThrow();
+    expect(released).toEqual(["surface-1"]);
+  });
 });
