@@ -6,6 +6,7 @@ import {
   loadProductProfileRuntimeConfig,
   prepareProductWebDiscovery,
   productPublicMcpIdentity,
+  startProductProfileRuntime,
 } from "./product-profile";
 
 function common(root: string): Record<string, string> {
@@ -28,11 +29,32 @@ describe("product profile native-target selection", () => {
       expect(config.publicMcpAbi).toBe("stable");
       expect(config.approvalAutomationMode).toBe("off");
       expect(config.approvalAutomationDelayMs).toBe(0);
+      expect(config.acceptanceSavedChat).toBe(false);
       expect(config).not.toHaveProperty("webTurnTimeoutMs");
       expect(JSON.stringify(config)).not.toContain("launcherCli");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("ordinary Work remains Temporary Chat unless the exact profile is explicitly selected for acceptance", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-product-saved-acceptance-"));
+    try {
+      expect(loadProductProfileRuntimeConfig({
+        ...common(root), CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT: "1",
+      }).acceptanceSavedChat).toBe(true);
+      expect(loadProductProfileRuntimeConfig({
+        ...common(root), CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT: "2",
+      }).acceptanceSavedChat).toBe(false);
+      await expect(startProductProfileRuntime(loadProductProfileRuntimeConfig({
+        ...common(root), CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT: "1",
+      }))).rejects.toThrow("Native-first runtime");
+      for (const value of ["0", "-1", "100", "1,2", "01", "all", "true"]) {
+        expect(() => loadProductProfileRuntimeConfig({
+          ...common(root), CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT: value,
+        })).toThrow("ACCEPTANCE_SAVED_CHAT_SLOT");
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   test("approval automation is explicit and limited to recognized one-shot cards", () => {

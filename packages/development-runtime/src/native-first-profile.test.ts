@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chatGptWebFamilyKey, chatGptWebModelId, ChatGptWebModelUnavailableError } from "@chatgpt-tela/chatgpt";
+import { CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL, chatGptWebFamilyKey, chatGptWebModelId, ChatGptWebModelUnavailableError } from "@chatgpt-tela/chatgpt";
 import { NativeResponsesGateway } from "@chatgpt-tela/runtime";
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 import { bindChatGptTelaAccount } from "./browser-profile";
@@ -22,11 +22,12 @@ const family = { key: chatGptWebFamilyKey("Fixture Web"), label: "Fixture Web", 
 const model = chatGptWebModelId(family.key);
 const metadata = { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "thread-1", turn_id: "turn-1" } };
 
-async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
+async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-native-first-"));
   const config = loadProductProfileRuntimeConfig({
     CHATGPT_TELA_PROFILE_ROOT: root, CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "1", CHATGPT_TELA_PRODUCT_ROUTE_ID: "fixture123",
     CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN: "r".repeat(48), CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN: "m".repeat(48), CHATGPT_TELA_PRODUCT_UI_TOKEN: "u".repeat(48),
+    ...(input.acceptanceSavedChat ? { CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT: "1" } : {}),
   });
   mkdirSync(config.browserProfile.userDataDir, { recursive: true });
   bindChatGptTelaAccount(config.browserProfile, "a".repeat(64));
@@ -177,11 +178,12 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
 }
 
 test("ordinary product tasks have no implicit Native fork, no elapsed-time deadline and require lifecycle authority", async () => {
-  let contract: { readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown } | undefined;
+  let contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown } | undefined;
   const f = await fixture({ onExecutionContract: value => { contract = value; } });
   try {
     await f.runtime.prepareWeb();
     expect(contract).not.toHaveProperty("webTurnTimeoutMs");
+    expect(contract?.chatGptUrl).toBe(CHATGPT_TEMPORARY_CHAT_URL);
     // A future experimental adapter could change its internal default.
     // The real product must still omit both optional model-backed hooks.
     expect(contract).not.toHaveProperty("automaticNativeHandoff");
@@ -192,6 +194,26 @@ test("ordinary product tasks have no implicit Native fork, no elapsed-time deadl
       .rejects.toThrow("product Native turn lifecycle is unavailable");
     expect(f.webGenerations).toBe(0);
     expect((await f.post("native-fixture")).status).toBe(200);
+  } finally { await f.cleanup(); }
+});
+
+test("saved-chat acceptance is exact-owner opt-in and account browser close restores Temporary Chat", async () => {
+  const urls: string[] = [];
+  const reconnect = deferred<void>();
+  let proofs = 0;
+  const f = await fixture({
+    acceptanceSavedChat: true,
+    onExecutionContract: value => { urls.push(value.chatGptUrl ?? ""); },
+    onFreshProof: () => { if (++proofs === 2) reconnect.resolve(); },
+  });
+  try {
+    await f.runtime.waitForWeb();
+    expect(urls).toEqual([CHATGPT_SAVED_CHAT_URL]);
+    await f.runtime.openWebAccountBrowser();
+    f.closeAccountBrowser();
+    await reconnect.promise;
+    expect(urls).toEqual([CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL]);
+    expect(f.nativeStops).toBe(0);
   } finally { await f.cleanup(); }
 });
 

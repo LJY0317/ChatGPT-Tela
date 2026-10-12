@@ -3,7 +3,7 @@ import { augmentCodexAppServerModelList } from "./app-server-model-list";
 import { classifyNetworkFailure, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { resolve } from "node:path";
 import { appServerCurrentTurnSource, appServerCompactionHistorySource, appServerNativeHandoffSource, connectCodexAppServerWebSocket, refreshAdmittedWebModelCatalog } from "@chatgpt-tela/codex";
-import { chatGptWebModelId, CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider, parseChatGptWebModelId, type ChatGptWebModelFamily } from "@chatgpt-tela/chatgpt";
+import { chatGptWebModelId, CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider, parseChatGptWebModelId, type ChatGptWebModelFamily } from "@chatgpt-tela/chatgpt";
 import { createDefaultDesktopResponsesRoute, resolveDefaultDesktopInstallation, startDefaultDesktopTargetRuntime, TELA_DEFAULT_DESKTOP_RUNTIME_HEADER } from "@chatgpt-tela/default-desktop-target";
 import { startLocalResponsesServer, type LocalResponsesServer } from "@chatgpt-tela/local-server";
 import { startCodexBridgeMcpHttpServer, type CodexBridgeMcpHttpServer } from "@chatgpt-tela/mcp";
@@ -280,6 +280,9 @@ export async function startNativeFirstProductProfileRuntime(
   let internalMcp: CodexBridgeMcpHttpServer | undefined;
   let nativeReady!: Promise<NativeFirstTarget>;
   let browserClosing: Promise<void> | undefined;
+  // The explicit saved-chat acceptance session ends when the owner closes its
+  // account browser after cleanup; reconnection restores ordinary Temporary Chat.
+  let acceptanceSavedChat = config.acceptanceSavedChat;
   const closeBrowser = (): Promise<void> => {
     if (browserClosing) return browserClosing;
     if (!browser) return Promise.resolve();
@@ -312,7 +315,8 @@ export async function startNativeFirstProductProfileRuntime(
         await closeBrowser();
         signal.throwIfAborted();
         browser = await (options.browserStarter ?? startElectronDevelopmentRuntime)({
-          profileId: config.browserProfile.profileId, chatGptUrl: CHATGPT_TEMPORARY_CHAT_URL,
+          profileId: config.browserProfile.profileId,
+          chatGptUrl: acceptanceSavedChat ? CHATGPT_SAVED_CHAT_URL : CHATGPT_TEMPORARY_CHAT_URL,
           connectorName: identity.connectorName,
           // Browser preparation may precede Native. No evidence means no turn authority.
           currentTurnSource: {
@@ -502,6 +506,7 @@ export async function startNativeFirstProductProfileRuntime(
           const fallbackOwner = fallback;
           const detach = owned.onUserHide(() => {
             if (accountBrowser?.surface !== owned) return;
+            acceptanceSavedChat = false;
             const current = accountBrowser;
             accountBrowser = undefined;
             current?.detach();

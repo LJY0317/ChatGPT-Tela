@@ -87,6 +87,8 @@ export interface ProductProfileRuntimeConfig {
   readonly publicMcpAbi: ProductProfilePublicMcpAbi;
   readonly approvalAutomationMode: import("@chatgpt-tela/chatgpt").ChatGptApprovalAutomationMode;
   readonly approvalAutomationDelayMs: number;
+  /** Explicit owner acceptance only; consumer Work defaults to Temporary Chat. */
+  readonly acceptanceSavedChat: boolean;
   /** Explicit diagnostic deadline only. Normal task lifetime belongs to Native turn authority. */
   readonly webTurnTimeoutMs?: number;
 }
@@ -195,6 +197,10 @@ export function loadProductProfileRuntimeConfig(
   if (approvalAutomationMode !== "off" && approvalAutomationMode !== "recognized_once") {
     throw new Error("CHATGPT_TELA_APPROVAL_AUTOMATION_MODE must be off or recognized_once");
   }
+  const acceptanceSavedSlot = optional(env, "CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT");
+  if (acceptanceSavedSlot !== undefined && !/^[1-9][0-9]?$/.test(acceptanceSavedSlot)) {
+    throw new Error("CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT must be an exact profile slot from 1 to 99");
+  }
   const nativeKind = optional(env, "CHATGPT_TELA_PRODUCT_NATIVE_TARGET_KIND") ?? "default-desktop";
   let nativeTarget: ProductProfileNativeTargetConfig;
   if (nativeKind === "default-desktop") {
@@ -224,6 +230,7 @@ export function loadProductProfileRuntimeConfig(
     uiToken,
     publicMcpAbi,
     approvalAutomationMode,
+    acceptanceSavedChat: acceptanceSavedSlot === String(browserProfile.slot),
     approvalAutomationDelayMs: boundedNonnegativeInteger(
       optional(env, "CHATGPT_TELA_APPROVAL_DELAY_MS"),
       "CHATGPT_TELA_APPROVAL_DELAY_MS",
@@ -304,6 +311,9 @@ export async function startProductProfileRuntime(
     readonly onStartupStage?: (stage: string) => void;
   } = {},
 ): Promise<ProductProfileRuntime> {
+  if (config.acceptanceSavedChat) {
+    throw new Error("saved-chat acceptance requires the Native-first runtime's owner-bound account browser");
+  }
   const startupStage = (
     stage: string,
     fields: Readonly<Record<string, string | number | boolean>> = {},
