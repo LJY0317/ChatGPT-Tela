@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { runInNewContext } from "node:vm";
 import {
+  ChatGptWebModelPickerControlUnavailableError,
   chatGptWebFamilyKey,
   chatGptWebModelId,
   parseChatGptWebModelId,
@@ -9,6 +10,11 @@ import {
 import { BROWSER_PAGE_AUTOMATION, type BrowserPageAutomation, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 
 describe("ChatGPT Web model route identity", () => {
+  test("only one visible composer with a missing model control qualifies for a bounded preparation recovery", () => {
+    const candidate = new ChatGptWebModelPickerControlUnavailableError();
+    expect(candidate.code).toBe("tela_web_model_picker_control_unavailable");
+    expect(candidate.message).not.toMatch(/login|account|sign.in/i);
+  });
   test("missing family produces a semantic catalog fault without selecting a replacement", async () => {
     let activations = 0;
     const page: BrowserPageAutomation = {

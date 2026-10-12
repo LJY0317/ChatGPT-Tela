@@ -2,6 +2,7 @@ import { diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiag
 import {
   BROWSER_READ_ONLY_PREVIEW,
   BROWSER_INSPECTION_INPUT,
+  BROWSER_USER_HIDE,
   BROWSER_PAGE_AUTOMATION,
   BROWSER_DOCUMENT_LIFETIME,
   ControlledBrowserHost,
@@ -176,10 +177,22 @@ export function createElectronBrowserHost(input: {
         action, owned_document_live: !documentController.signal.aborted, document_generation: documentGeneration,
       }));
     // Inspection visibility is independent from the Native-owned document lifetime.
+    const hideListeners = new Set<() => void>();
     const hideOnClose = (event: { preventDefault(): void }) => {
-      if (!closed) { event.preventDefault(); inspection.setInteractive(false); window.hide(); recordInspection("close_to_hide"); }
+      if (!closed) {
+        event.preventDefault(); inspection.setInteractive(false); window.hide(); recordInspection("close_to_hide");
+        // User gesture only. Callback must never grant task or account
+        // authority; the specific lease owner decides whether to retire.
+        for (const observer of [...hideListeners]) {
+          try { observer(); } catch { /* UI observer cannot affect Electron close lifecycle. */ }
+        }
+      }
     };
-    window.on?.("close", hideOnClose);
+    // A user-close signal is safe to expose only when its exact listener can
+    // also be removed on lease retirement. Never advertise an inert observer.
+    const observesUserClose = typeof window.on === "function"
+      && typeof window.removeListener === "function";
+    if (observesUserClose) window.on!("close", hideOnClose);
 
     return {
       displayName: () => window.getTitle?.() || "",
@@ -202,6 +215,7 @@ export function createElectronBrowserHost(input: {
         if (closed) return;
         closed = true;
         window.removeListener?.("close", hideOnClose);
+        hideListeners.clear();
         documentController.abort(new Error("owned browser document is closed"));
         recordInspection("release");
         inspection.dispose();
@@ -209,6 +223,13 @@ export function createElectronBrowserHost(input: {
         if (!window.isDestroyed()) window.destroy();
       },
       capability<T>(capability: BrowserSurfaceCapability<T>): T | undefined {
+        if (capability === BROWSER_USER_HIDE && observesUserClose) {
+          return { onUserHide(observer: () => void) {
+            if (closed) throw new Error("browser surface is closed");
+            hideListeners.add(observer);
+            return () => { hideListeners.delete(observer); };
+          } } as T;
+        }
         if (capability === BROWSER_INSPECTION_INPUT) return inspection as T;
         if (capability === BROWSER_PAGE_AUTOMATION) return automation as T;
         if (capability === BROWSER_DOCUMENT_LIFETIME && documentLifetime) return documentLifetime as T;

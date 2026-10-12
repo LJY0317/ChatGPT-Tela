@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -37,10 +38,10 @@ const source: CanonicalCurrentTurnSource = {
 class FakeWindow implements ElectronBrowserWindowLike {
   readonly events: string[] = [];
   destroyed = false;
-  readonly webContents = {
+  readonly webContents = Object.assign(new EventEmitter(), {
     executeJavaScript: async () => 0,
     isDestroyed: () => this.destroyed,
-  };
+  });
 
   async loadURL(url: string): Promise<void> { this.events.push(`load:${url}`); }
   show(): void { this.events.push("show"); }

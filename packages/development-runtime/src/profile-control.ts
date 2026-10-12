@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import { BROWSER_INSPECTION_INPUT, BROWSER_USER_HIDE, type BrowserHost, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import type {
   ChatGptAccountIdentity,
@@ -11,6 +11,7 @@ import type {
 } from "@chatgpt-tela/chatgpt";
 import {
   ChatGptConnectorCatalogUnavailableError,
+  ChatGptWebModelPickerControlUnavailableError,
   observeChatGptAccountIdentity,
   observeChatGptAccountDisplay,
 } from "@chatgpt-tela/chatgpt";
@@ -27,6 +28,8 @@ export type ChatGptAccountIdentityObserver = (
 
 export interface ElectronProfileSetupSurface {
   readonly leaseId: string;
+  /** Exact owner-bound user-close signal, not account or turn authority. */
+  onUserHide(observer: () => void): () => void;
   probeChatGptReadiness(signal?: AbortSignal): Promise<ChatGptCapabilities>;
   probeChatGptProfile(signal?: AbortSignal): Promise<ChatGptProfileObservation>;
   reveal(): Promise<void>;
@@ -148,22 +151,34 @@ export function createChatGptProfileControl(input: {
         throw new Error("ChatGPT provider does not support Web preparation");
       }
       const { signal } = options;
+      let originalAccount: ChatGptAccountIdentity | undefined;
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         signal?.throwIfAborted();
         const surface = await input.browserHost.acquire({
           taskId: "chatgpt-tela-web-preparation", epochId: `preparation-${randomUUID()}`,
         });
+        let stage: "account" | "model-discovery" | "connector" | "readiness" = "account";
         try {
           signal?.throwIfAborted();
           const profile = await proveProfile(surface, input.provider, accountIdentityObserver, signal);
           signal?.throwIfAborted();
+          // A second disposable preparation page can never adopt a different
+          // logged-in account or profile container from the original proof.
+          if (originalAccount && (profile.account.accountFingerprint !== originalAccount.accountFingerprint
+            || profile.account.containerFingerprint !== originalAccount.containerFingerprint
+            || profile.account.accountStructure !== originalAccount.accountStructure)) {
+            throw new Error("ChatGPT account changed during Web preparation recovery");
+          }
+          originalAccount ??= profile.account;
           options.onProfile(profile);
           signal?.throwIfAborted();
+          stage = "model-discovery";
           const families = Object.freeze([...(await input.modelFamilyDiscovery(surface, signal))]);
           signal?.throwIfAborted();
           if (!families.length) throw new Error("Web model discovery is incomplete");
           options.onFamilies?.(families);
           signal?.throwIfAborted();
+          stage = "connector";
           options.onConnectorStarting?.();
           signal?.throwIfAborted();
           const connector = await input.provider.probeConnector(surface, signal);
@@ -171,6 +186,7 @@ export function createChatGptProfileControl(input: {
           options.onConnectorProven?.();
           // Connector proof settles its own draft before returning; the same document must
           // still be ready and belong to the account validated at the start of this lease.
+          stage = "readiness";
           const capabilities = await proveReadiness(surface, input.provider, signal);
           const finalAccount = await accountIdentityObserver(surface, signal);
           signal?.throwIfAborted();
@@ -182,6 +198,16 @@ export function createChatGptProfileControl(input: {
           }
           return Object.freeze({ families, connector, capabilities });
         } catch (error) {
+          if (error instanceof ChatGptWebModelPickerControlUnavailableError
+            && stage === "model-discovery" && attempt === 1 && !signal?.aborted) {
+            emitDiagnosticEvent("chatgpt_tela_work", "web_preparation_recovery", {
+              reason_class: "model_picker_control_unavailable", attempt: 2,
+            });
+            // finally releases this exact old lease before the next iteration
+            // re-proves the same account in a fresh disposable page. No model
+            // or connector operation was sent on the failed first page.
+            continue;
+          }
           if (!(error instanceof ChatGptConnectorCatalogUnavailableError) || attempt >= 2 || signal?.aborted) throw error;
           emitDiagnosticEvent("chatgpt_tela_connector", "catalog_refresh", { attempt });
         } finally {
@@ -272,6 +298,9 @@ export function createChatGptProfileControl(input: {
         epochId: `setup-${randomUUID()}`,
       });
       try {
+        if (options.reveal !== false) {
+          lease.capability(BROWSER_INSPECTION_INPUT)?.setInteractive(true);
+        }
         if (options.reveal !== false) await lease.reveal();
       } catch (error) {
         await input.browserHost.release(lease.leaseId).catch(() => {});
@@ -279,6 +308,7 @@ export function createChatGptProfileControl(input: {
       }
       setupLeases.add(lease.leaseId);
       let surfaceClosed = false;
+      const subscriptions = new Set<() => void>();
       const requireSurfaceOpen = (): void => {
         if (surfaceClosed || !setupLeases.has(lease.leaseId)) {
           throw new Error("ChatGPT profile setup surface is closed");
@@ -286,6 +316,14 @@ export function createChatGptProfileControl(input: {
       };
       return Object.freeze({
         leaseId: lease.leaseId,
+        onUserHide(observer: () => void) {
+          requireSurfaceOpen();
+          const events = lease.capability(BROWSER_USER_HIDE);
+          if (!events) throw new Error("owned browser does not expose user-close observation");
+          const unsubscribe = events.onUserHide(observer);
+          subscriptions.add(unsubscribe);
+          return () => { subscriptions.delete(unsubscribe); unsubscribe(); };
+        },
         async probeChatGptReadiness(signal?: AbortSignal) {
           requireSurfaceOpen();
           return proveReadiness(lease, input.provider, signal);
@@ -296,11 +334,14 @@ export function createChatGptProfileControl(input: {
         },
         async reveal() {
           requireSurfaceOpen();
+          lease.capability(BROWSER_INSPECTION_INPUT)?.setInteractive(true);
           await lease.reveal();
         },
         async close() {
           if (surfaceClosed) return;
           surfaceClosed = true;
+          for (const unsubscribe of subscriptions) unsubscribe();
+          subscriptions.clear();
           if (!setupLeases.delete(lease.leaseId)) return;
           await input.browserHost.release(lease.leaseId);
         },

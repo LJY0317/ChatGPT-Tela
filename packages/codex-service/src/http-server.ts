@@ -117,6 +117,12 @@ export async function startCodexServiceHttpServer(input: {
           await input.service.revealBridgeSurface(Number(revealMatch[1]), body.surfaceId, body.interactive === true);
           return new Response(null, { status: 204 });
         }
+        const browserMatch = request.method === "POST"
+          ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/account-browser$/.exec(url.pathname) : null;
+        if (browserMatch && input.service.openAccountBrowser) {
+          await input.service.openAccountBrowser(Number(browserMatch[1]));
+          return new Response(null, { status: 204 });
+        }
         const bridgeSlot = request.method === "GET" ? previewSlot(url.pathname) : undefined;
         if (bridgeSlot !== undefined) {
           return Response.json(await input.service.bridgePreview(bridgeSlot, url.searchParams.get("surfaceId") ?? undefined), {

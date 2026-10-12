@@ -57,6 +57,21 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("running Web account browser route is per-slot, authenticated and not a launcher setup bypass", async () => {
+    const service = fixtureService(); const invoked: number[] = [];
+    service.openAccountBrowser = async slot => { invoked.push(slot); };
+    const token = "b".repeat(48);
+    const server = await startCodexServiceHttpServer({ service, bearerToken: token });
+    const url = new URL("v1/codex/profiles/2/account-browser", server.endpoint);
+    try {
+      expect((await fetch(url, { method: "POST" })).status).toBe(401);
+      expect((await fetch(url, { method: "POST", headers: { authorization: `Bearer ${token}`,
+        origin: "https://chatgpt.com" } })).status).toBe(403);
+      expect((await fetch(url, { headers: { authorization: `Bearer ${token}` } })).status).toBe(404);
+      expect((await fetch(url, { method: "POST", headers: { authorization: `Bearer ${token}` } })).status).toBe(204);
+      expect(invoked).toEqual([2]);
+    } finally { await server.close(); }
+  });
   test("email display is local authenticated UI data, separate from inventory and coarse checks", async () => {
     const service = fixtureService(); let calls = 0; let wrongSlot = false;
     service.accountDisplay = async slot => { calls++; return { contractVersion: 1, slot: wrongSlot ? 2 : slot,

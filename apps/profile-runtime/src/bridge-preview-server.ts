@@ -31,6 +31,7 @@ export async function startProfileBridgePreviewServer(input: {
   readonly webState?: () => unknown;
   readonly waitForWeb?: () => Promise<void>;
   readonly reconnectWeb?: () => Promise<void>;
+  readonly openAccountBrowser?: () => Promise<void>;
   readonly reveal?: (id: string, interactive?: boolean) => Promise<void>;
   readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable" }>;
   readonly probeModelSelection?: () => Promise<{
@@ -75,6 +76,15 @@ export async function startProfileBridgePreviewServer(input: {
           return Response.json(input.webState(), { headers: { "cache-control": "no-store" } });
         } catch {
           return Response.json({ error: { message: "Web reconnection did not complete. Native remains available. Finish any active Web turn before retrying." } },
+            { status: 409, headers: { "cache-control": "no-store" } });
+        }
+      }
+      if (request.method === "POST" && url.pathname === "/v1/account-browser" && input.openAccountBrowser) {
+        try {
+          await input.openAccountBrowser();
+          return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+        } catch {
+          return Response.json({ error: { message: "Finish your active Web work, then open the account browser." } },
             { status: 409, headers: { "cache-control": "no-store" } });
         }
       }

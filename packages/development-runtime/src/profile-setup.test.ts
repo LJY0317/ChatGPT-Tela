@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { join, resolve } from "node:path";
 import type { BrowserWindowConstructorOptions } from "electron";
 import type { ElectronBrowserWindowLike } from "@chatgpt-tela/electron-host";
@@ -25,10 +26,10 @@ function setupConfig(root: string): ElectronProfileSetupConfig {
 class FakeWindow implements ElectronBrowserWindowLike {
   readonly events: string[] = [];
   destroyed = false;
-  readonly webContents = {
+  readonly webContents = Object.assign(new EventEmitter(), {
     executeJavaScript: async () => 0,
     isDestroyed: () => this.destroyed,
-  };
+  });
 
   async loadURL(url: string): Promise<void> { this.events.push(`load:${url}`); }
   show(): void { this.events.push("show"); }

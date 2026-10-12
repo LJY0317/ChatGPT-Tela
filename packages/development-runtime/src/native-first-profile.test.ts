@@ -8,6 +8,7 @@ import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 import { bindChatGptTelaAccount } from "./browser-profile";
 import { loadProductProfileRuntimeConfig } from "./product-profile";
 import type { ElectronDevelopmentRuntime } from "./electron";
+import type { ElectronProfileSetupRuntime } from "./profile-setup";
 import { writeWebModelDisplayCache } from "./web-model-display-cache";
 import { startNativeFirstProductProfileRuntime, type NativeFirstProfileOptions, type NativeFirstProfileRuntime } from "./native-first-profile";
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
@@ -21,7 +22,7 @@ const family = { key: chatGptWebFamilyKey("Fixture Web"), label: "Fixture Web", 
 const model = chatGptWebModelId(family.key);
 const metadata = { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "thread-1", turn_id: "turn-1" } };
 
-async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
+async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-native-first-"));
   const config = loadProductProfileRuntimeConfig({
     CHATGPT_TELA_PROFILE_ROOT: root, CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "1", CHATGPT_TELA_PRODUCT_ROUTE_ID: "fixture123",
@@ -40,6 +41,11 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
   let nativeRequests = 0;
   let webGenerations = 0;
   let dispatchCalls = 0;
+  let accountBrowserOpens = 0;
+  let accountBrowserCloses = 0;
+  let accountBrowserReveals = 0;
+  let fallbackAccountBrowserStops = 0;
+  let accountHide: (() => void) | undefined;
   let fail = input.fail;
   let currentTurnId = "turn-1";
   let stopFails = input.stopFails;
@@ -49,6 +55,21 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
     sandbox: { kind: "read-only" as const, network: "restricted" as const }, proof: "turn-context" as const, environmentSourceTurnId: currentTurnId,
   }; } };
   const options: NativeFirstProfileOptions = {
+    ...(input.accountBrowserFallback ? { accountBrowserStarter: async () => ({
+      async openProfileSetupSurface() {
+        accountBrowserOpens++;
+        return {
+          leaseId: `fixture-failed-web-${accountBrowserOpens}`,
+          onUserHide(observer: () => void) {
+            accountHide = observer;
+            return () => { if (accountHide === observer) accountHide = undefined; };
+          },
+          async reveal() { accountBrowserReveals++; },
+          async close() { accountBrowserCloses++; },
+        };
+      },
+      async stop() { fallbackAccountBrowserStops++; },
+    } as unknown as ElectronProfileSetupRuntime) } : {}),
     nativeStarter: async url => {
       order.push("native");
       // Native startup can fetch its official catalog before any browser exists.
@@ -115,6 +136,18 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
           return {};
         },
         async probeChatGptReadiness() { if (fail === "fresh") throw new Error("fresh surface not proven"); input.onFreshProof?.(); },
+        async openProfileSetupSurface() {
+          accountBrowserOpens++;
+          return {
+            leaseId: `synthetic-account-${accountBrowserOpens}`,
+            onUserHide(observer: () => void) {
+              accountHide = observer;
+              return () => { if (accountHide === observer) accountHide = undefined; };
+            },
+            async reveal() { accountBrowserReveals++; },
+            async close() { accountBrowserCloses++; },
+          };
+        },
       } as unknown as ElectronDevelopmentRuntime;
     },
   };
@@ -126,6 +159,12 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
     async breakTransport() { await lastBrowserResponses?.stop(); },
     get nativeStops() { return nativeStops; }, get browserStops() { return browserStops; },
     get creations() { return creations; }, get nativeRequests() { return nativeRequests; }, get webGenerations() { return webGenerations; },
+    get accountBrowserOpens() { return accountBrowserOpens; },
+    get accountBrowserCloses() { return accountBrowserCloses; },
+    get accountBrowserReveals() { return accountBrowserReveals; },
+    get fallbackAccountBrowserStops() { return fallbackAccountBrowserStops; },
+    closeAccountBrowser() { if (!accountHide) throw Error("account browser is not open"); accountHide(); },
+    changeAccount() { fail = "account"; },
     advanceTurn() { currentTurnId = "turn-2"; },
     fix() { fail = undefined; stopFails = false; },
     async post(chosen: string, client_metadata: unknown = metadata) {
@@ -153,6 +192,102 @@ test("ordinary product tasks have no implicit Native fork, no elapsed-time deadl
       .rejects.toThrow("product Native turn lifecycle is unavailable");
     expect(f.webGenerations).toBe(0);
     expect((await f.post("native-fixture")).status).toBe(200);
+  } finally { await f.cleanup(); }
+});
+
+test("running Native profile opens one account browser, blocks Web submissions, and re-proves after human close", async () => {
+  const complete = deferred<void>();
+  let proofs = 0;
+  const f = await fixture({ onFreshProof: () => { if (++proofs === 2) complete.resolve(); } });
+  try {
+    await f.runtime.waitForWeb();
+    expect(f.runtime.webState).toBe("ready");
+    await f.runtime.openWebAccountBrowser();
+    await f.runtime.openWebAccountBrowser();
+    expect(f.accountBrowserOpens).toBe(1);
+    expect(f.accountBrowserReveals).toBe(2);
+    expect(f.runtime.webState).toBe("preparing");
+    expect((await f.post(model)).status).toBe(400);
+    expect((await f.post("native-fixture")).status).toBe(200);
+    await expect(f.runtime.reconnectWeb()).rejects.toThrow("Close the account browser");
+    f.closeAccountBrowser();
+    await complete.promise;
+    await f.runtime.waitForWeb();
+    expect(f.accountBrowserCloses).toBe(1);
+    expect(f.runtime.webState).toBe("ready");
+    expect(f.browserStops).toBe(1);
+    expect(f.nativeStops).toBe(0);
+  } finally { await f.cleanup(); }
+});
+
+test("account browser cannot interrupt an in-flight owned Web task or replay it", async () => {
+  const f = await fixture({ holdGeneration: true });
+  try {
+    await f.runtime.waitForWeb();
+    const executing = f.post(model);
+    await f.generationStarted.promise;
+    await expect(f.runtime.openWebAccountBrowser()).rejects.toThrow("Finish the current Web task");
+    expect(f.accountBrowserOpens).toBe(0);
+    expect(f.runtime.webState).toBe("ready");
+    f.generationGate.resolve();
+    expect((await (await executing).text())).toContain("mock Web reply");
+    expect(f.webGenerations).toBe(1);
+    expect(f.nativeStops).toBe(0);
+  } finally { f.generationGate.resolve(); await f.cleanup(); }
+});
+
+test("changing the Web account in its browser revokes old Web models without replacing Native", async () => {
+  const f = await fixture();
+  try {
+    await f.runtime.waitForWeb();
+    await f.runtime.openWebAccountBrowser();
+    f.changeAccount();
+    f.closeAccountBrowser();
+    // Browser removal and preparation are both asynchronous user-close
+    // reactions. Wait for the observed second fixture startup, not a timer.
+    for (let n = 0; n < 15 && f.creations < 2; n++) await Bun.sleep(5);
+    await f.runtime.waitForWeb();
+    expect(f.runtime.webState).toBe("failed");
+    expect(f.runtime.webModelIds).toEqual([]);
+    expect(f.nativeStops).toBe(0);
+    expect((await f.post("native-fixture")).status).toBe(200);
+    expect((await f.post(model)).status).toBe(400);
+  } finally { await f.cleanup(); }
+});
+
+test("failed Web admission can still open the same persistent account profile without restarting Native", async () => {
+  const recovered = deferred<void>();
+  const f = await fixture({ fail: "discovery", accountBrowserFallback: true,
+    onFreshProof: () => recovered.resolve() });
+  try {
+    await f.runtime.waitForWeb();
+    expect(f.runtime.webState).toBe("failed");
+    await f.runtime.openWebAccountBrowser();
+    expect(f.accountBrowserOpens).toBe(1);
+    expect(f.runtime.webState).toBe("preparing");
+    expect(f.nativeStops).toBe(0);
+    await expect(f.runtime.reconnectWeb()).rejects.toThrow("Close the account browser");
+    f.fix();
+    f.closeAccountBrowser();
+    await recovered.promise;
+    await f.runtime.waitForWeb();
+    expect(f.runtime.webState).toBe("ready");
+    expect(f.fallbackAccountBrowserStops).toBe(1);
+    expect(f.nativeStops).toBe(0);
+  } finally { await f.cleanup(); }
+});
+
+test("account management cannot reopen while old Web authority is still being invalidated", async () => {
+  const f = await fixture({ fail: "discovery", accountBrowserFallback: true });
+  try {
+    await f.runtime.waitForWeb();
+    expect(f.runtime.webState).toBe("failed");
+    const invalidating = f.runtime.invalidateWebAccount();
+    await expect(f.runtime.openWebAccountBrowser()).rejects.toThrow("Finish Web account revalidation");
+    expect(f.accountBrowserOpens).toBe(0);
+    await invalidating;
+    expect(f.runtime.webState).toBe("failed");
+    expect(f.nativeStops).toBe(0);
   } finally { await f.cleanup(); }
 });
 

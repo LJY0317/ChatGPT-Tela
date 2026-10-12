@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test';
 import {ControlledBrowserHost} from '@chatgpt-tela/browser-host';
-import {ChatGptConnectorCatalogUnavailableError} from '@chatgpt-tela/chatgpt';
+import {ChatGptConnectorCatalogUnavailableError,ChatGptWebModelPickerControlUnavailableError} from '@chatgpt-tela/chatgpt';
 import {createChatGptProfileControl} from './profile-control';
 
 test('account-only observation needs no composer, submits nothing and releases its hidden page on failure',async()=>{
@@ -66,9 +66,10 @@ test('catalog-unavailable retry owns a fresh page and still proves final cleanup
 });
 
 function preparationFixture(options: {
-  mismatch?: boolean; empty?: boolean; retry?: boolean; failCleanup?: boolean; cancelDiscovery?: boolean;
+  mismatch?: boolean; empty?: boolean; retry?: boolean; retryPicker?: boolean; retryPickerAccountChanged?: boolean;
+  failCleanup?: boolean; cancelDiscovery?: boolean;
 } = {}) {
-  let created = 0, closed = 0, accountCalls = 0, connectorCalls = 0;
+  let created = 0, closed = 0, accountCalls = 0, connectorCalls = 0, discoveries = 0;
   const leases = new Set<string>();
   const order: string[] = [];
   const controller = new AbortController();
@@ -80,12 +81,16 @@ function preparationFixture(options: {
     browserHost: host,
     accountIdentityObserver: async surface => {
       leases.add(surface.leaseId); order.push('account'); accountCalls++;
-      return { accountFingerprint: options.mismatch && accountCalls > 1 ? 'b'.repeat(64) : 'a'.repeat(64),
+      return { accountFingerprint: (options.mismatch && accountCalls > 1)
+          || (options.retryPickerAccountChanged && created > 1) ? 'b'.repeat(64) : 'a'.repeat(64),
         accountStructure: 'personal', containerFingerprint: 'container' };
     },
     modelFamilyDiscovery: async surface => {
-      leases.add(surface.leaseId); order.push('models');
+      leases.add(surface.leaseId); order.push('models'); discoveries++;
       if (options.cancelDiscovery) controller.abort();
+      if ((options.retryPicker || options.retryPickerAccountChanged) && discoveries === 1) {
+        throw new ChatGptWebModelPickerControlUnavailableError();
+      }
       return options.empty ? [] : [{ key: 'a'.repeat(20), label: 'Fixture', availableEfforts: ['medium'] }];
     },
     provider: {
@@ -150,4 +155,24 @@ test('existing catalog retry repeats complete preparation in a new lease', async
   await f.control.prepareChatGptWebSession({ onProfile() {} });
   expect(f.created).toBe(2); expect(f.closed).toBe(2); expect(f.leases.size).toBe(2);
   expect(f.order).toEqual(['readiness','account','models','connector','readiness','account','models','connector','cleanup','readiness','account']);
+});
+
+test('a missing model picker control retries exactly once after releasing its owned preparation surface', async () => {
+  const f = preparationFixture({ retryPicker: true });
+  const result = await f.control.prepareChatGptWebSession({ onProfile() {} });
+  expect(result.families).toHaveLength(1);
+  expect(f.created).toBe(2);
+  expect(f.closed).toBe(2);
+  expect(f.leases.size).toBe(2);
+  expect(f.order).toEqual(['readiness','account','models','readiness','account','models',
+    'connector','cleanup','readiness','account']);
+});
+
+test('the picker retry does not authorize a changed Web account', async () => {
+  const f = preparationFixture({ retryPickerAccountChanged: true });
+  await expect(f.control.prepareChatGptWebSession({ onProfile() {} }))
+    .rejects.toThrow('account changed during Web preparation recovery');
+  expect(f.created).toBe(2);
+  expect(f.closed).toBe(2);
+  expect(f.order).toEqual(['readiness','account','models','readiness','account']);
 });

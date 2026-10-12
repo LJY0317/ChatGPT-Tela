@@ -2,6 +2,33 @@ import { describe, expect, test } from "bun:test";
 import { startProfileBridgePreviewServer } from "./bridge-preview-server";
 
 describe("profile bridge preview server", () => {
+  test("Web account browser opens only through the owned authenticated POST and rejects unsafe active work", async () => {
+    const token = "w".repeat(48);
+    let openCalls = 0;
+    let blocked = false;
+    const server = await startProfileBridgePreviewServer({
+      slot: 2, bearerToken: token, async observe() { return { activeSurfaceCount: 0 }; },
+      async openAccountBrowser() { openCalls++; if (blocked) throw Error("turn busy"); },
+    });
+    const url = new URL("v1/account-browser", server.endpoint);
+    const authorization = `Bearer ${token}`;
+    try {
+      expect((await fetch(url, { method: "POST" })).status).toBe(401);
+      expect((await fetch(url, { method: "POST", headers: {
+        authorization, origin: "https://chatgpt.com",
+      } })).status).toBe(403);
+      expect((await fetch(url, { headers: { authorization } })).status).toBe(404);
+      expect(openCalls).toBe(0);
+      const result = await fetch(url, { method: "POST", headers: { authorization } });
+      expect(result.status).toBe(204);
+      expect(result.headers.get("cache-control")).toBe("no-store");
+      blocked = true;
+      const refused = await fetch(url, { method: "POST", headers: { authorization } });
+      expect(refused.status).toBe(409);
+      expect((await refused.text()).toLowerCase()).not.toContain("turn busy");
+      expect(openCalls).toBe(2);
+    } finally { await server.close(); }
+  });
   test("account observation requires authentication, rejects browser origin, and returns only coarse state",async()=>{
     let calls=0; const token="k".repeat(48);
     const server=await startProfileBridgePreviewServer({slot:1,bearerToken:token,async observe(){return {activeSurfaceCount:0};},

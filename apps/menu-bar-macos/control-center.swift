@@ -716,11 +716,13 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           profileCard.addArrangedSubview(actionButton("Open logs", action: #selector(openLogs)))
         }
         if installedServiceControlsAvailable() {
-          let login = actionButton("Sign in / manage connection…", action: #selector(openLoginSetup(_:)))
+          let login = actionButton(profile.connected ? "Manage Web account…" : "Sign in / manage connection…",
+                                   action: #selector(openLoginSetup(_:)))
           login.tag = profile.slot
           login.isEnabled = !operationInProgress && workInventory.error == nil
-            && profile.controlState != "running" && profile.controlState != "orphaned"
-          login.toolTip = "Disconnect this Work profile before opening login."
+          login.toolTip = profile.connected
+            ? "Open the Web browser for this profile. Close it when finished; Tela checks the Web connection again. Native stays open."
+            : "Sign in to the selected Tela Web profile."
           profileCard.addArrangedSubview(login)
         }
       }
@@ -1081,9 +1083,36 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   @objc private func openLoginSetup(_ sender: NSButton) {
-    guard !operationInProgress,
-          let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"] else { return }
+    guard !operationInProgress else { return }
     let slot = sender.tag
+    if let profile = profiles.first(where: { $0.slot == slot }) {
+      if profile.controlState == "orphaned" {
+        connectionProfileSlot = slot
+        profileFailure = "Reconnect this Work profile before changing its Web account."
+        renderCurrentPage()
+        return
+      }
+      if profile.controlState == "running" {
+        connectionProfileSlot = slot
+        profileFailure = nil
+        changingProfile = true
+        profileProgress = "Opening Web account…"
+        renderCurrentPage()
+        Task {
+          do {
+            guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "TelaWork", code: 11) }
+            _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/account-browser", method: "POST")
+          } catch {
+            profileFailure = "Finish active Web work or reconnect Web before managing this account."
+          }
+          profileProgress = nil
+          changingProfile = false
+          await refreshCurrentPage()
+        }
+        return
+      }
+    }
+    guard let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"] else { return }
     settingUp = true
     setupMessage = nil
     renderCurrentPage()

@@ -26,6 +26,19 @@ export class ChatGptWebModelUnavailableError extends Error {
   }
 }
 
+/**
+ * The profile composer was visible, but there was no model selector in its
+ * owned form. This does not prove a login failure or a different model.
+ * Only disposable, non-submitting Web preparation may retry this fault.
+ */
+export class ChatGptWebModelPickerControlUnavailableError extends Error {
+  readonly code = "tela_web_model_picker_control_unavailable";
+  constructor() {
+    super("ChatGPT Web model picker control was not ready");
+    this.name = "ChatGptWebModelPickerControlUnavailableError";
+  }
+}
+
 export interface ChatGptWebModelSelectionCanary {
   readonly familyCount: number;
   readonly exercised: boolean;
@@ -381,6 +394,16 @@ async function waitFor(
           form_button_count: last.structure.formButtonCount,
         } : {}),
       });
+      // A complete composer and its form, but no global or form-scoped model
+      // control, is the specific transient structure seen in the installed
+      // Work first-use failure. Ambiguous composers/controls and later picker
+      // mutations are NOT safe evidence for automatic preparation recovery.
+      if (stage === "control" && last.controlCount === 0
+        && last.structure?.composerCount === 1
+        && last.structure.composerFormPresent
+        && last.structure.globalControlCount === 0) {
+        throw new ChatGptWebModelPickerControlUnavailableError();
+      }
       throw new Error(`ChatGPT model picker timed out waiting for ${stage}`);
     }
     await new Promise(resolve => setTimeout(resolve, Math.min(50, Math.max(1, deadline - Date.now()))));

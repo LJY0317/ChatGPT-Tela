@@ -33,6 +33,12 @@ export const BROWSER_INSPECTION_INPUT = createBrowserSurfaceCapability<{
   setInteractive(interactive: boolean): void;
 }>("browser-inspection-input");
 
+/** A user closing this exact browser window, not a document/navigation or
+ * task-completion signal. Only an optional account-management owner uses it. */
+export const BROWSER_USER_HIDE = createBrowserSurfaceCapability<{
+  onUserHide(observer: () => void): () => void;
+}>("browser-user-hide");
+
 /** A snapshot of one main-frame document lifetime, independent of the surface/window lease. */
 export interface BrowserDocumentLifetime {
   current(): { readonly generation: number; readonly signal: AbortSignal };

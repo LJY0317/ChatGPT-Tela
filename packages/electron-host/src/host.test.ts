@@ -300,3 +300,38 @@ test("closing manual inspection resets viewing and keeps the owned lease alive",
   await host.release(surface.leaseId);
   expect(()=>controls.setInteractive(true)).toThrow("unavailable"); await host.close();
 });
+
+test("user-hide observation is tied to one browser lease and never fires on ordinary release", async () => {
+  const window = new FakeWindow();
+  let closeListener: ((event: { preventDefault(): void }) => void) | undefined;
+  const host = createElectronBrowserHost({ profileId: "account-visible",
+    createWindow: () => Object.assign(window, {
+      on(_event: "close", fn: typeof closeListener) { closeListener = fn; },
+      removeListener() { closeListener = undefined; },
+    }),
+  });
+  const surface = await host.acquire({ taskId: "account", epochId: "reveal" });
+  const { BROWSER_USER_HIDE } = await import("@chatgpt-tela/browser-host");
+  let hides = 0;
+  const unsubscribe = surface.capability(BROWSER_USER_HIDE)!.onUserHide(() => { hides++; });
+  await surface.reveal();
+  closeListener!({ preventDefault() {} });
+  expect(hides).toBe(1);
+  unsubscribe();
+  closeListener!({ preventDefault() {} });
+  expect(hides).toBe(1);
+  await host.release(surface.leaseId);
+  expect(hides).toBe(1);
+  expect(closeListener).toBeUndefined();
+  await host.close();
+});
+
+test("user-hide observation requires a removable exact-window close listener", async () => {
+  const window = Object.assign(new FakeWindow(), { on(_event: "close", _listener: (event: { preventDefault(): void }) => void) {} });
+  const host = createElectronBrowserHost({ profileId: "close-observer-unavailable", createWindow: () => window });
+  const surface = await host.acquire({ taskId: "task", epochId: "epoch" });
+  const { BROWSER_USER_HIDE } = await import("@chatgpt-tela/browser-host");
+  expect(surface.capability(BROWSER_USER_HIDE)).toBeUndefined();
+  await host.release(surface.leaseId);
+  await host.close();
+});

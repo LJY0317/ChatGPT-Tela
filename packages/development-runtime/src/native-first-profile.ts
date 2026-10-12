@@ -16,6 +16,8 @@ import { readChatGptTelaAccountBinding } from "./browser-profile";
 import { startModelListOverlayServer } from "./model-list-overlay-server";
 import { readWebModelDisplayCache, writeWebModelDisplayCache } from "./web-model-display-cache";
 import { startElectronDevelopmentRuntime, type ElectronDevelopmentRuntime, type ElectronDevelopmentRuntimeOptions } from "./electron";
+import type { ElectronProfileSetupSurface } from "./profile-control";
+import { startElectronProfileSetupRuntime, type ElectronProfileSetupRuntime } from "./profile-setup";
 import type { NativeCodexFetch } from "./native-passthrough";
 import { prepareProductWebDiscovery, productPublicMcpIdentity, PRODUCT_RESPONSES_ENV_KEY, type ProductProfileRuntimeConfig, type ProductProfileRoutedTarget } from "./product-profile";
 
@@ -39,6 +41,9 @@ export interface NativeFirstProfileRuntime {
   readonly webModelIds: readonly string[];
   waitForWeb(): Promise<void>;
   reconnectWeb(): Promise<void>;
+  /** On-demand, same-profile account browser. Native remains owned/running;
+   * the old Web admission is suspended until its user-close revalidation. */
+  openWebAccountBrowser(): Promise<void>;
   /** Revoke old Web authority on a proven account change; never changes Native authentication. */
   invalidateWebAccount(): Promise<void>;
   prepareWeb(): Promise<void>;
@@ -55,6 +60,9 @@ export interface NativeFirstProfileOptions {
   /** Verified candidate descriptor for custom Native fixtures, before initial catalog delivery. */
   readonly nativeEngine?: ReturnType<typeof resolveOwnedNativeEngine>;
   readonly browserStarter?: typeof startElectronDevelopmentRuntime;
+  /** Injected only for isolated login-browser fixtures. Normal product uses
+   * the same Electron app/profile partition when Web admission has failed. */
+  readonly accountBrowserStarter?: typeof startElectronProfileSetupRuntime;
 }
 
 function catalogRefreshForEndpoint(endpoint: string): NonNullable<NativeFirstTarget["refreshModelCatalog"]> {
@@ -192,6 +200,13 @@ export async function startNativeFirstProductProfileRuntime(
   let controller: AbortController | undefined;
   let native: NativeFirstTarget | undefined;
   let webRequests = 0;
+  let accountBrowserBlocked = false;
+  let accountBrowser: {
+    surface: ElectronProfileSetupSurface;
+    detach: () => void;
+    readonly fallback?: ElectronProfileSetupRuntime;
+  } | undefined;
+  let accountBrowserOpening: Promise<void> | undefined;
   const isClosed = () => state === "closed";
   const setState = (next: NativeFirstWebState) => {
     state = next;
@@ -216,7 +231,8 @@ export async function startNativeFirstProductProfileRuntime(
       const body = await request.clone().json().catch(() => undefined);
       const model = typeof body?.model === "string" ? parseChatGptWebModelId(body.model) : undefined;
       if (!model) return undefined;
-      if (state !== "ready" || !browser || !admitted.some(family => family.key === model.familyKey)) {
+      if (accountBrowserBlocked || state !== "ready" || !browser
+        || !admitted.some(family => family.key === model.familyKey)) {
         return Response.json({ error: { type: "invalid_request_error", code: "tela_web_not_ready",
           message: "Web connection is not ready for this model. Native remains available." } }, { status: 400 });
       }
@@ -280,6 +296,7 @@ export async function startNativeFirstProductProfileRuntime(
   };
   const prepareWeb = (): Promise<void> => {
     if (state === "closed") return Promise.reject(new Error("Native-first profile is closed"));
+    if (accountBrowserBlocked) return Promise.reject(new Error("Finish Web account management before reconnecting"));
     if (accountInvalidation) return accountInvalidation.then(() => prepareWeb());
     if (preparation) return preparation;
     if (state === "ready") return Promise.resolve();
@@ -439,8 +456,102 @@ export async function startNativeFirstProductProfileRuntime(
     get webRuntime() { return state === "ready" ? browser : undefined; },
     get webModelIds() { return Object.freeze(admitted.map(family => chatGptWebModelId(family.key))); },
     async waitForWeb() { await preparation?.catch(() => {}); },
+    openWebAccountBrowser() {
+      if (isClosed()) return Promise.reject(new Error("Native-first profile is closed"));
+      if (accountInvalidation) return Promise.reject(new Error("Finish Web account revalidation before reopening its browser"));
+      if (accountBrowserOpening) return accountBrowserOpening;
+      if (accountBrowser) return accountBrowser.surface.reveal();
+      if (accountBrowserBlocked || !((state === "ready" && browser) || (state === "failed" && !browser))) {
+        return Promise.reject(new Error("Finish Web preparation before opening the account browser"));
+      }
+      // A manual account change can invalidate context and an unfinished
+      // submission. Never reveal an interactive login surface while either
+      // one is owned, and never stop/restart the Native Desktop on this path.
+      if (webRequests || turns.size) {
+        return Promise.reject(new Error("Finish the current Web task before changing the account"));
+      }
+      accountBrowserBlocked = true;
+      const owner = browser;
+      const opening = (async () => {
+        let surface: ElectronProfileSetupSurface | undefined;
+        let fallback: ElectronProfileSetupRuntime | undefined;
+        let suspended = false;
+        try {
+          if (owner) {
+            surface = await owner.openProfileSetupSurface({ reveal: false });
+          } else {
+            // Web failed before admission: its BrowserHost was disposed.
+            // Reuse this Electron process's *same Tela profile partition*
+            // with an isolated, control-only surface; do not launch a second
+            // app, Native engine, MCP listener or Responses route.
+            fallback = await (options.accountBrowserStarter ?? startElectronProfileSetupRuntime)({
+              slot: config.slot,
+              profileId: config.browserProfile.profileId,
+              profileRoot: config.browserProfile.profileRoot,
+              browserUserDataDir: config.browserProfile.userDataDir,
+              accountBindingPath: config.browserProfile.accountBindingPath,
+              revealWhenReady: true,
+              runContextCanary: false,
+            }, options.electron ? { electron: options.electron } : {});
+            surface = await fallback.openProfileSetupSurface({ reveal: false });
+          }
+          if (isClosed() || browser !== owner || webRequests || turns.size) {
+            throw new Error("Web account browser ownership changed during setup");
+          }
+          const owned = surface;
+          const fallbackOwner = fallback;
+          const detach = owned.onUserHide(() => {
+            if (accountBrowser?.surface !== owned) return;
+            const current = accountBrowser;
+            accountBrowser = undefined;
+            current?.detach();
+            // User closed the browser: revoke the old physical projection and
+            // rediscover account/model/connector on a fresh owned page, never
+            // resubmitting a Native/Web turn.
+            void (async () => {
+              await owned.close();
+              await fallbackOwner?.stop();
+              if (isClosed()) return;
+              await result.invalidateWebAccount();
+              if (!isClosed()) await result.reconnectWeb();
+            })().catch(() => {
+              emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_account_browser_settled", {
+                outcome: "reconnection_failed",
+              });
+            });
+          });
+          accountBrowser = { surface: owned, detach,
+            ...(fallbackOwner ? { fallback: fallbackOwner } : {}) };
+          // These models cannot be used while the human may change the shared
+          // persistent cookie jar. Web re-verification is mandatory on close.
+          admitted = []; displayed = [];
+          writeWebModelDisplayCache(config.browserProfile, []);
+          setState("preparing");
+          suspended = true;
+          await owned.reveal();
+        } catch (error) {
+          if (accountBrowser?.surface === surface) {
+            accountBrowser?.detach(); accountBrowser = undefined;
+          }
+          await surface?.close().catch(() => {});
+          await fallback?.stop().catch(() => {});
+          // A failed reveal never authorizes stale Web models. The user can
+          // explicitly reconnect; Native is still available.
+          if (!isClosed() && suspended) setState("failed");
+          throw error;
+        } finally {
+          if (!accountBrowser) accountBrowserBlocked = false;
+        }
+      })();
+      accountBrowserOpening = opening;
+      void opening.finally(() => {
+        if (accountBrowserOpening === opening) accountBrowserOpening = undefined;
+      }).catch(() => {});
+      return opening;
+    },
     reconnectWeb() {
       if (state === "closed") return Promise.reject(new Error("Native-first profile is closed"));
+      if (accountBrowserBlocked) return Promise.reject(new Error("Close the account browser before reconnecting Web"));
       if (accountInvalidation) return accountInvalidation.then(() => result.reconnectWeb());
       if (preparation) return preparation;
       // Registry stays owned through streaming completion, beyond receipt of HTTP headers.
@@ -453,6 +564,10 @@ export async function startNativeFirstProductProfileRuntime(
       if (accountInvalidation) return accountInvalidation;
       if (state === "closed") return Promise.resolve();
       const reason = new Error("Web account authority changed");
+      const managedSurface = accountBrowser;
+      accountBrowser = undefined;
+      managedSurface?.detach();
+      accountBrowserBlocked = false;
       native?.invalidateIngressMedia?.();
       // Revoke before awaiting cleanup: old cached rows and late browser completions
       // cannot authorize work under the next account.
@@ -464,6 +579,8 @@ export async function startNativeFirstProductProfileRuntime(
       setState("failed");
       const operation = (async () => {
         await preparation?.catch(() => {});
+        await managedSurface?.surface.close().catch(() => {});
+        await managedSurface?.fallback?.stop().catch(() => {});
         await closeBrowser();
         await router.refreshWebModelFamilies();
       })();
@@ -484,9 +601,14 @@ export async function startNativeFirstProductProfileRuntime(
       if (stopping) return stopping;
       setState("closed");
       admitted = [];
+      accountBrowser?.detach();
+      const accountBrowserFallback = accountBrowser?.fallback;
+      accountBrowser = undefined;
+      accountBrowserBlocked = false;
       controller?.abort(new Error("Native-first profile stopped"));
       stopping = (async () => {
         await target.stop();
+        await accountBrowserFallback?.stop();
         await preparation?.catch(() => {});
         await accountInvalidation;
         await closeBrowser();

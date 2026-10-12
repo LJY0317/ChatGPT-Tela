@@ -69,6 +69,7 @@ async function main(): Promise<void> {
       webState: () => ({ contractVersion: 1, slot: config.slot, webState: runtime.webState, webModelIds: runtime.webModelIds }),
       waitForWeb: () => runtime.waitForWeb(),
       reconnectWeb: () => runtime.reconnectWeb(),
+      openAccountBrowser: () => runtime.openWebAccountBrowser(),
       observe: id => runtime.webRuntime?.observeBridgePreview(id) ?? Promise.resolve({ activeSurfaceCount: 0 }),
       reveal: async (id, interactive) => {
         if (!runtime.webRuntime) throw new Error("Web connection is not ready");
