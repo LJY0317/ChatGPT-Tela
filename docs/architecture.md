@@ -31,6 +31,52 @@ task execution authority. Release its page on success, failure and cancellation;
 may require a fresh session. Web failure preserves Native; retry is explicit and does not replay uncertain
 submission or silently select a different model.
 
+#### Work connection UX: calm, concise, and easy to recover
+
+Use Tailscale-like **restraint and directness** as a UX quality reference, not
+as a copied interface or dependency. The normal Work view should offer a
+single plain-language state (`Connected`, `Connecting…`, `Sign in`, or
+`Connection needs attention`) and one useful next action where needed.
+Avoid duplicate controls, technical proof/timeout labels, repeated dialogs,
+and multiple setup steps. Keep detailed errors, logs, per-model diagnostics,
+extra-profile controls and developer settings under intentional disclosure.
+Make success unobtrusive; do not turn routine transient recovery into a
+notification or another permanent configuration setting.
+
+**Fix recoverable failure at the boundary, not with more instructions.**
+For the observed case where a ChatGPT composer exists but the model-picker
+control is not yet observable, an account/login error is not proven.
+Readiness may be re-observed once in the **same owned Web preparation**
+after a bounded UI stabilization opportunity; never accept composer
+visibility or model-catalog API rows as picker proof. Never continually
+poll, blindly lengthen timeouts, reload a live draft, restart Native, switch
+accounts, or replay an uncertain model submission. A fresh disposable
+preparation session is allowed only if the prior one is provably released
+and no active/draft work can be disturbed. If the bounded safe attempt still
+fails, keep Native available and show only a contextual `Reconnect Web`
+action. Log the precise non-sensitive failure class and proven profile
+scope; a nearby Native model-list timeout is separate evidence, not an
+assumed cause.
+
+**Browser access is not login setup.** Keep a discoverable
+`Manage account / Open browser` entry available even when connected.
+For running Work, reveal the exact existing owner-bound Web browser for
+viewing or deliberate interaction; do not start a second login browser or
+silently disconnect Native. The separate setup process may still require
+Native control to be stopped. If an active Web turn, draft, or uncertain
+submission makes account mutation unsafe, permit non-destructive viewing
+and explain the minimum necessary action before enabling changes. An
+explicit sign-out/account switch must invalidate old Web model/connector,
+account and physical-context authority before new Web preparation.
+Never touch Plura's or the original app's separately owned sessions.
+
+Installed acceptance must demonstrate: one-step normal connect, bounded
+safe recovery without repeated user intervention, honest one-action
+failure state, an accessible existing-browser/account entry while
+connected, and safe sign-out/return without task or account drift.
+Verify the default profile first, then isolated extra profiles; source
+tests and a working `Reconnect Web` button do not prove these end-to-end.
+
 Acceptance separates window appearance, Native availability, actual picker visibility, Web request
 admission and first useful Web execution. Catalog API rows or a ready badge alone do not prove picker or
 submission success. Verify first tool use through the normal mounted service/public connector boundary.
