@@ -12,6 +12,7 @@
     "bun": "1.4.0"
   },
   "scripts": {
+    "codex:continuity-probe": "bun run apps/codex-contract-probe/src/main.ts",
     "test": "bun test ./apps ./packages",
     "typecheck": "tsc --noEmit",
     "verify": "bun run typecheck && bun run test",

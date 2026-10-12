@@ -44,6 +44,35 @@ not satisfy this exact contract. **Production automatic handoff remains
 default-deny.** Recheck the runtime's actual service/engine version and any
 future documented exact RPC contract before changing this conclusion.
 
+### Repeatable public-contract inspection (schema-only)
+
+Tela now includes an on-demand probe that invokes only the official Codex
+`--version` and `app-server generate-json-schema --experimental` commands
+with a disposable, empty `HOME` / `CODEX_HOME` and without inherited
+credentials. Run it with the exact CLI executable being evaluated:
+
+```sh
+bun run codex:continuity-probe --codex /absolute/path/to/codex
+```
+
+The structured output reports public method inventory, whether thread status
+contains an exact current-turn identifier, which fields are exposed on the
+`contextCompaction` item, and whether fork parameters advertise any tool
+control options. It also lists *candidate* future method names for review.
+On Codex CLI `0.162.1`: 170 methods, `contextCompaction` exposes only
+`id`/`type`, active status exposes only `type`/`activeFlags`,
+the thread model explicitly is **not** per-turn execution telemetry, and
+`thread/compact/start` is a **mutating trigger**, not a readable context
+certificate. All four required evidence gates remain `not_proven`.
+
+**Crucially:** inspection success is not feature readiness. Neither naming
+matches nor optional request fields can prove server-side Legacy resource
+bounds, historical effective execution, atomic source revision, or a
+pre-execution no-tools engine policy. The probe unconditionally reports
+`productionAutomaticHandoff:default_deny`; the product does not use its
+report as an execution permission. Real owner-authorized upstream and
+installed-product acceptance remain separate.
+
 ## Preferred upstream path: bounded original compaction context, no extra model
 
 For the 73 MiB Legacy use case, the first choice should be an **engine-owned,
