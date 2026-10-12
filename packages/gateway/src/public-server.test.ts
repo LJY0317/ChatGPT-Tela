@@ -37,6 +37,9 @@ describe("ChatGPT Tela frozen ABI", () => {
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("ordinary conversation or knowledge work");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("independent backends");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("reuse its workspace_id");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("Omit it or use an empty string to discover all capabilities");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("Do not paste a user's full request, conversation titles");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("Inventory is read-only");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("process_status before starting the command again");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("authentication and routing");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("not a command, a permission grant");
@@ -118,6 +121,11 @@ describe("ChatGPT Tela frozen ABI", () => {
         arguments: { query: "future_chat" },
       });
       expect(JSON.parse(text(chatInventory))).toEqual(catalog);
+      const fullChatInventory = await client.callTool({
+        name: CHATGPT_TELA_CHAT_CAPABILITY_INVENTORY,
+        arguments: {},
+      });
+      expect(JSON.parse(text(fullChatInventory))).toEqual(catalog);
       const chatCall = await client.callTool({
         name: CHATGPT_TELA_CHAT_CAPABILITY_CALL,
         arguments: { capability: "future_chat_capability_2099", arguments: { future: true } },

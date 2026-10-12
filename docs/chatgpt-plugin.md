@@ -67,6 +67,10 @@ that are present for every connection:
 
 - MCP server instructions decide when Tela is relevant and preserve the Chat/Codex authority split.
 - Tool and capability descriptions require runtime discovery rather than guessed tool names/schemas.
+- Tela Chat inventory is a read-only capability lookup, not a task executor. Omit `query` to discover the
+  complete set; if filtering, use a short capability keyword rather than copying a user's task, conversation
+  title, or other identifiers into the search field. A filtered empty result is not proof of missing tools.
+  Account chat deletion is not provided by Tela Chat's workspace capability inventory.
 - Tela Chat agent instructions guide bounded reads, edits, verification, and retry behavior.
 - The Codex/Web transport contract preserves system/developer/user priority, exact active request identity,
   opaque turn-capability routing, evidence requirements, and same-task continuation.
