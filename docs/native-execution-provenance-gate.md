@@ -2,10 +2,47 @@
 
 **Status: required upstream public Codex capability, not an implemented
 endpoint, executable permission, available model certificate or production
-rollout.** Tela's installed Native Codex 0.159.0 public contract has not
-provided the two engine-owned proofs below. Tela must not reconstruct the
+rollout.** The previously inspected Native Codex 0.159.0 public contract did
+not provide the two engine-owned proofs below, and the newer locally callable
+0.162.1 schema inspection below did not establish them either. Tela must not reconstruct the
 user's old Legacy transcript, guess a historical model, call a new Native
 model or reuse an automatic derived checkpoint to compensate.
+
+## 2026-10-12 follow-up: locally callable Codex CLI 0.162.1
+
+The user-local executable `~/.local/bin/codex --version` reports
+`codex-cli 0.162.1` (rather than the `0.159.0` recorded at the preceding
+checkpoint). This establishes the callable executable version **only**: it
+does not establish the version of the Native engine to which the running
+Tela Codex service is connected, nor any installation/update acceptance.
+
+Generated the **experimental public protocol schema** with
+`codex app-server generate-json-schema --experimental --out <temporary-dir>`;
+the generated schema was inspected without connecting to a Native thread,
+reading rollout history, forking, or starting a model turn. In this schema:
+
+- `v2/ThreadForkParams` has `threadId`, `lastTurnId`, `ephemeral`,
+  `excludeTurns`, `deferGoalContinuation`, `model`, `modelProvider`,
+  `sandbox`, and `approvalPolicy`. These are fork/request settings, **not**
+  attestations of the original turn's actually executed model/provider or
+  of a no-tools capability boundary.
+- `v2/ThreadForkResponse` includes `model` and `modelProvider`, but they
+  describe the fork response, not a durable segment-by-segment record of
+  historical effective execution.
+- `v2/TurnStartParams` provides `model`, `sandboxPolicy` and
+  `approvalPolicy`; no public pre-execution engine-enforced no-tools fork
+  policy is exposed by these request parameters.
+- `v2/ThreadReadParams` exposes `includeTurns`; the public description
+  continues to recommend metadata-only reads and paginated turns/items.
+  This is not evidence that old Legacy rollout paging has become bounded.
+
+Neither required engine-authenticated historical effective execution record
+nor the owner-bound, pre-execution all-tools-disabled fork certificate was
+identified in these public request/response shapes. A generic occurrence
+of the words *provenance* or *attestation* elsewhere in the protocol does
+not satisfy this exact contract. **Production automatic handoff remains
+default-deny.** Recheck the runtime's actual service/engine version and any
+future documented exact RPC contract before changing this conclusion.
 
 ## 1. Historical executed-model/provider provenance
 
