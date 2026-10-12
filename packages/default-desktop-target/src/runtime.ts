@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import {
-  defaultDesktopLaunchCommand,
+  createDefaultDesktopLaunch,
   defaultDesktopProcessIds,
   requestDefaultDesktopNormalQuit,
   type DefaultDesktopInstallation,
@@ -273,16 +273,13 @@ export async function startDefaultDesktopTargetRuntime(input: {
     const desktopEnvironment: NodeJS.ProcessEnv = {
       ...process.env,
       ...(input.environment ?? {}),
-      CODEX_HOME: input.installation.codexHome,
-      CODEX_ELECTRON_USER_DATA_PATH: input.installation.userDataDir,
-      CODEX_APP_SERVER_WS_URL: proxy.endpoint,
     };
     delete desktopEnvironment[input.route.envKey];
-    const [desktopCommand, ...desktopArguments] = defaultDesktopLaunchCommand(input.installation);
+    const launch = createDefaultDesktopLaunch(input.installation, proxy.endpoint, desktopEnvironment);
     step("launching");
-    desktop = spawn(desktopCommand!, desktopArguments, {
+    desktop = spawn(launch.command, [...launch.arguments], {
       cwd: dirname(input.installation.codexHome),
-      env: desktopEnvironment,
+      env: launch.environment,
       stdio: "ignore",
       windowsHide: true,
     });

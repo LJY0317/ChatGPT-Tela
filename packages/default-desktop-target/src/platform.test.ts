@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  defaultDesktopLaunchCommand,
+  createDefaultDesktopLaunch,
   defaultDesktopProcessIds,
   requestDefaultDesktopNormalQuit,
   resolveDefaultDesktopInstallation,
@@ -318,9 +318,27 @@ describe("built-in default Desktop installation resolver", () => {
   });
 });
 
-test("macOS uses standard application launch and preserves the separate waiter identity", () => {
-  const installation = { platform: "darwin" as const, chatGptExecutable: "/fixture/ChatGPT.app/Contents/MacOS/ChatGPT", codexExecutable: "/fixture/codex", codexHome: "/fixture/.codex", userDataDir: "/fixture/data", normalQuitSupported: true };
-  expect(defaultDesktopLaunchCommand(installation)).toEqual(["/usr/bin/open", "-W", "-n", "-a", "/fixture/ChatGPT.app", "--args", "--user-data-dir=/fixture/data"]);
-  expect(() => defaultDesktopLaunchCommand({ ...installation, chatGptExecutable: "/fixture/non-app" })).toThrow("application bundle");
-  expect(defaultDesktopLaunchCommand({ ...installation, platform: "linux" })).toEqual([installation.chatGptExecutable, "--user-data-dir=/fixture/data"]);
+test("Desktop launch owns one profile/transport contract across platform launchers", () => {
+  const installation = { platform: "darwin" as const, chatGptExecutable: "/fixture/ChatGPT.app/Contents/MacOS/ChatGPT", codexExecutable: "/fixture/codex", codexHome: "/fixture/.codex", userDataDir: "/fixture/data with spaces", normalQuitSupported: true };
+  const endpoint = "ws://127.0.0.1:18741/";
+  const base = { INHERITED_SECRET: "fixture-secret", CODEX_HOME: "/wrong-profile" };
+  const mac = createDefaultDesktopLaunch(installation, endpoint, base);
+  expect(mac.command).toBe("/usr/bin/open");
+  expect(mac.arguments).toEqual(["-W", "-n",
+    "--env", "CODEX_HOME=/fixture/.codex",
+    "--env", "CODEX_ELECTRON_USER_DATA_PATH=/fixture/data with spaces",
+    "--env", "CODEX_APP_SERVER_WS_URL=ws://127.0.0.1:18741/",
+    "-a", "/fixture/ChatGPT.app", "--args", "--user-data-dir=/fixture/data with spaces"]);
+  expect(mac.arguments.join(" ")).not.toContain("fixture-secret");
+  expect(mac.environment.CODEX_HOME).toBe(installation.codexHome);
+  for (const platform of ["linux", "win32"] as const) {
+    const direct = createDefaultDesktopLaunch({ ...installation, platform }, endpoint, base);
+    expect(direct.command).toBe(installation.chatGptExecutable);
+    expect(direct.arguments).toEqual(["--user-data-dir=/fixture/data with spaces"]);
+    expect(direct.environment).toEqual(mac.environment);
+  }
+  expect(() => createDefaultDesktopLaunch({ ...installation, chatGptExecutable: "/fixture/non-app" }, endpoint)).toThrow("application bundle");
+  for (const invalid of ["", "ws://example.com:1234/", "ws://user:password@127.0.0.1:1234/", "ws://127.0.0.1:1234/?token=private", "http://127.0.0.1:1234/"]) {
+    expect(() => createDefaultDesktopLaunch(installation, invalid)).toThrow("owned loopback");
+  }
 });

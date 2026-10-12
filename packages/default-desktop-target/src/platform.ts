@@ -395,14 +395,48 @@ export function resolveDefaultDesktopInstallation(input: {
 }
 
 /** Launch through the platform application lifecycle; macOS open is a waiter, not Desktop. */
-export function defaultDesktopLaunchCommand(installation: DefaultDesktopInstallation): readonly string[] {
+export interface DefaultDesktopLaunch {
+  readonly command: string;
+  readonly arguments: readonly string[];
+  readonly environment: Readonly<NodeJS.ProcessEnv>;
+}
+
+/** One launch contract owns profile identity and the fresh loopback transport on every OS. */
+export function createDefaultDesktopLaunch(
+  installation: DefaultDesktopInstallation,
+  appServerEndpoint: string,
+  baseEnvironment: Readonly<NodeJS.ProcessEnv> = {},
+): DefaultDesktopLaunch {
+  let endpoint: URL;
+  try { endpoint = new URL(appServerEndpoint); }
+  catch { throw new Error("Desktop launch requires an owned loopback app-server endpoint"); }
+  if (endpoint.protocol !== "ws:" || !["127.0.0.1", "[::1]"].includes(endpoint.hostname)
+    || !endpoint.port || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+    throw new Error("Desktop launch requires an owned loopback app-server endpoint");
+  }
+  const settings = {
+    CODEX_HOME: installation.codexHome,
+    CODEX_ELECTRON_USER_DATA_PATH: installation.userDataDir,
+    CODEX_APP_SERVER_WS_URL: appServerEndpoint,
+  };
+  const environment = Object.freeze({ ...baseEnvironment, ...settings });
   const arguments_ = [`--user-data-dir=${installation.userDataDir}`];
-  if (installation.platform !== "darwin") return [installation.chatGptExecutable, ...arguments_];
+  if (installation.platform !== "darwin") return Object.freeze({
+    command: installation.chatGptExecutable, arguments: Object.freeze(arguments_), environment,
+  });
   const executableDirectory = dirname(installation.chatGptExecutable);
   const contents = dirname(executableDirectory);
   const bundle = dirname(contents);
   if (!bundle.endsWith(".app") || executableDirectory !== join(contents, "MacOS") || contents !== join(bundle, "Contents")) {
     throw new Error("official macOS Desktop executable is outside an application bundle");
   }
-  return ["/usr/bin/open", "-W", "-n", "-a", bundle, "--args", ...arguments_];
+  // LaunchServices does not inherit open's environment. Its standard API receives
+  // the same settings as direct execution, without exposing other environment values on argv.
+  return Object.freeze({
+    command: "/usr/bin/open",
+    arguments: Object.freeze(["-W", "-n",
+      ...Object.entries(settings).flatMap(([key, value]) => ["--env", `${key}=${value}`]),
+      "-a", bundle, "--args", ...arguments_]),
+    environment,
+  });
 }
