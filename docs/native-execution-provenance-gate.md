@@ -44,6 +44,51 @@ not satisfy this exact contract. **Production automatic handoff remains
 default-deny.** Recheck the runtime's actual service/engine version and any
 future documented exact RPC contract before changing this conclusion.
 
+## Preferred upstream path: bounded original compaction context, no extra model
+
+For the 73 MiB Legacy use case, the first choice should be an **engine-owned,
+owner-authorized, bounded export of the current Native model-visible task
+context**, when such a durable source exists. This avoids both reconstructing
+the complete historical rollout and starting a second Native model turn.
+Current Codex 0.162.1 has **not** advertised this as a callable public RPC.
+
+The required *new* engine contract, not a Tela-inferred compatibility alias:
+
+- Bind one read-only query to the exact authenticated current thread/turn,
+  account, compaction lineage and source revision **atomically inside Native**.
+  The response represents only context that the Native engine itself can
+  attest as the currently active, original source; a UI title, Goal, model
+  selection, partial item page or Tela cache is not a substitute.
+- Return a separately indexed, strictly size-limited **readable compaction
+  checkpoint or complete bounded model-visible task summary** with canonical
+  source anchor and content digest, or typed `unavailable`. It must state
+  explicitly whether original pre-compaction evidence is omitted. Opaque
+  encrypted state alone is not transferable to the Web model.
+- Enforce the bound **server-side before** parsing/replaying a 73 MiB Legacy
+  rollout. If a historical Legacy checkpoint was never stored in such an
+  index, reply `unavailable` instead of promising recovery. The public
+  `thread/timeline/list` experimental schema and `thread/turns/list` page
+  limits do not prove this property for Legacy.
+- Carry no command, file, network, MCP, approval or model execution authority.
+  Import only lower-priority Web task guidance; original tool/file evidence
+  remains unavailable until independently verified through authorized Native
+  tools. Do not modify, fork, compact, cancel or replay the original thread.
+- Expose an exact owner/revision invalidation result for races, not only
+  separate before/after metadata samples. Never reuse derived Web summaries
+  as substitutes for the Native source proof.
+
+**Acceptance:** an isolated 73 MiB-equivalent Legacy metadata fixture must
+obtain either one bounded canonical source or `unavailable` with zero
+unindexed pagination, full-history hydration, fork, `turn/start`, tool call
+or original-thread mutation. Source-digest/owner/revision changes must
+invalidate reuse. These are specifications for upstream implementation and
+later installed acceptance, **not** claims about current Codex. If unavailable,
+keep the existing 422 `continue_on_native` outcome.
+
+Only when this read-only path proves unavailable should the more permissive
+model-backed fork proposal below even be considered, and that separately
+requires both engine certificates and user consent.
+
 ## 1. Historical executed-model/provider provenance
 
 Tela needs one **bounded, read-only, authenticated** engine query for the

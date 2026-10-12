@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AppServerCurrentTurnSource, type CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 import {
   ActiveTurnRegistry,
@@ -109,6 +112,69 @@ describe("Native Responses HTTP transport", () => {
     const text = await response.text();
     expect(text).toContain("response.failed"); expect(text).toContain("synthetic failure");
     expect(text).not.toContain("response.completed"); expect(turns.size).toBe(0);
+  });
+  test("late streamed Native history failure preserves the nonretryable recovery contract without exposing private error text", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "tela-stream-recovery-"));
+    const log = join(folder, "diagnostics.jsonl");
+    const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = log;
+    try {
+      for (const recoveryReason of ["unindexed_history", "source_unavailable"] as const) {
+        const turns = new ActiveTurnRegistry();
+        let fail!: () => void;
+        const gateway = new NativeResponsesGateway(source, turns, async registered => {
+          registered.channel.markSubmitted();
+          registered.channel.markAccepted();
+          registered.channel.publishProgress("Checking owned context");
+          await new Promise<void>((_, reject) => {
+            fail = () => reject(Object.assign(
+              new Error("PRIVATE ORIGINAL NATIVE TRANSCRIPT CONTENT"),
+              { code: "native_history_bootstrap_required", recoveryReason },
+            ));
+          });
+        });
+        const response = await handleNativeResponsesHttp(post(body()), gateway);
+        // A started SSE stream cannot be retroactively changed into HTTP 422.
+        expect(response.status).toBe(200);
+        fail();
+        const text = await response.text();
+        const events = text.split("\n")
+          .filter(line => line.startsWith("data: {"))
+          .map(line => JSON.parse(line.slice(6)) as Record<string, any>);
+        const failures = events.filter(event => event.type === "response.failed");
+        expect(failures).toHaveLength(1);
+        expect(failures[0]!.response.error).toMatchObject({
+          code: recoveryReason === "unindexed_history"
+            ? "tela_native_history_indexed_source_required"
+            : "tela_native_history_checkpoint_required",
+          retryable: false,
+          recovery: {
+            kind: recoveryReason === "unindexed_history"
+              ? "continue_on_native" : "explicit_native_handoff",
+            requires_user_action: true,
+            requires_new_native_turn: recoveryReason !== "unindexed_history",
+            original_history_preserved: true,
+          },
+        });
+        expect(text).not.toContain("PRIVATE ORIGINAL NATIVE TRANSCRIPT CONTENT");
+        expect(events.some(event => event.type === "response.completed")).toBe(false);
+        expect(turns.size).toBe(0);
+      }
+      const diagnostics = readFileSync(log, "utf8");
+      const recoveryEvents = diagnostics.trim().split("\n").map(line => JSON.parse(line))
+        .filter(row => row.stage === "native_context_recovery_streamed");
+      expect(recoveryEvents.map(row => [row.reason_class, row.transport_phase])).toEqual([
+        ["history_mode_unindexed", "sse_after_progress"],
+        ["history_bootstrap_required", "sse_after_progress"],
+      ]);
+      for (const privateSource of ["PRIVATE ORIGINAL NATIVE TRANSCRIPT CONTENT", "thread-1", "turn-1"]) {
+        expect(diagnostics).not.toContain(privateSource);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
   test("propagates the catalog invalidation code only for the declared semantic failure", async () => {
     for (const code of ["tela_web_model_unavailable", "arbitrary-provider-code"]) {

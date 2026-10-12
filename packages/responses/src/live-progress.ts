@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import type { NativeGatewayOutcome, NativeResponsesGateway } from "@chatgpt-tela/runtime";
 import { encodeNativeResponsesOutcome, nativeResponsesSsePlan } from "./protocol";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { nativeHistoryRecovery } from "./native-history-recovery";
 
 /** A request-local, bounded presentation stream. Only pulled outcome frames commit execution. */
 export class NativeProgressStream {
@@ -72,8 +74,22 @@ export class NativeProgressStream {
 
   fail(error: unknown): void {
     if (this.#ended || this.signal.signal.aborted) return;
+    const recovery = nativeHistoryRecovery(error);
+    if (recovery) {
+      // HTTP status is already committed as 200 once an SSE progress frame
+      // leaves. Preserve typed nonretryable recovery in response.failed.
+      // The exception itself may contain private Native history or tool text.
+      emitDiagnosticEvent("chatgpt_tela_work", "native_context_recovery_streamed", {
+        reason_class: recovery.recovery.kind === "continue_on_native"
+          ? "history_mode_unindexed" : "history_bootstrap_required",
+        transport_phase: "sse_after_progress",
+      });
+    }
     this.#event("response.failed", { response: this.#envelope("failed", [], {
-      code: "chatgpt_tela_runtime_error", message: error instanceof Error ? error.message : String(error),
+      ...(recovery ?? {
+        code: "chatgpt_tela_runtime_error",
+        message: error instanceof Error ? error.message : String(error),
+      }),
     }) });
     this.#frames.push({ text: "data: [DONE]\n\n" });
     this.#ended = true;

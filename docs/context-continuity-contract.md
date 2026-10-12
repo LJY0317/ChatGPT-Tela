@@ -33,6 +33,16 @@ action was touched. The missing upstream requirements remain a bounded,
 owner-authenticated Legacy source/compaction read and historical executed-model
 provenance with a true pre-execution no-tools fork policy.
 
+When a Web attempt has already emitted SSE preparation progress, HTTP status
+cannot be changed retroactively to 422. A late typed Native-history failure
+therefore ends the *same* stream with `response.failed` carrying the identical
+nonretryable Tela recovery code and `continue_on_native` / explicit handoff
+action as the ordinary pre-stream HTTP 422. Both paths use fixed messages,
+never exception text or private Native history. No `response.completed` or
+Web continuation is committed after that failure. The structural diagnostic
+`native_context_recovery_streamed` distinguishes this late SSE result from
+a normal pre-stream HTTP 422; HTTP 200 alone is not proof of recovery.
+
 ## Automatic cold Native handoff (source-only 2026-10-11 extension)
 
 The normal current input, proven retained Web page, durable Native readable
