@@ -67,27 +67,45 @@ type BrowserTurnSignal =
   | { readonly kind: "provider"; readonly event: WebTurnEvent }
   | { readonly kind: "channel" };
 
+interface BrowserTurnWaitState {
+  /** One causal provider observation must survive independent Native state wakes. */
+  readonly signal: AbortSignal;
+  pendingProvider: Promise<Extract<BrowserTurnSignal, { readonly kind: "provider" }>> | undefined;
+}
+
 async function waitForBrowserTurnSignal(
   input: BrowserTurnSurfaceRunInput,
   surface: BrowserSurfaceLease,
   handle: WebTurnHandle,
+  state: BrowserTurnWaitState,
 ): Promise<BrowserTurnSignal> {
-  const controller = new AbortController();
-  const forwardAbort = () => controller.abort(input.signal?.reason);
-  if (input.signal?.aborted) controller.abort(input.signal.reason);
-  else input.signal?.addEventListener("abort", forwardAbort, { once: true });
+  state.signal.throwIfAborted();
+  const channelAbort = new AbortController();
   const revision = input.channel.stateRevision;
   try {
-    const provider = input.provider.waitForTurnEvent(surface, handle, controller.signal)
-      .then(observation => ({
-        kind: "provider" as const,
-        event: requireProven(observation),
-      }));
-    const channel = input.channel.waitForStateChange(revision, controller.signal)
+    if (!state.pendingProvider) {
+      const provider = input.provider.waitForTurnEvent(surface, handle, state.signal)
+        .then(observation => ({
+          kind: "provider" as const,
+          event: requireProven(observation),
+        }));
+      // The Native channel may win while a provider event is being consumed.
+      // Keep the SAME waiter/one-shot result for the next loop, never issue a
+      // second concurrent observation or abort the first as a side effect.
+      // The owning run may settle before the pending provider promise does.
+      void provider.catch(() => {});
+      state.pendingProvider = provider;
+    }
+    const channel = input.channel.waitForStateChange(
+      revision, AbortSignal.any([state.signal, channelAbort.signal]),
+    )
       .then(() => ({ kind: "channel" as const }));
     try {
-      const result = await Promise.race([provider, channel]);
-      controller.abort();
+      const result = await Promise.race([state.pendingProvider, channel]);
+      // If the original Native owner revoked during a fulfilled Web event,
+      // the event is observation, not permission to commit an old answer.
+      state.signal.throwIfAborted();
+      if (result.kind === "provider") state.pendingProvider = undefined;
       return result;
     } catch (error) {
       if (input.signal?.aborted && input.signal.reason instanceof Error) {
@@ -96,7 +114,7 @@ async function waitForBrowserTurnSignal(
       throw error;
     }
   } finally {
-    input.signal?.removeEventListener("abort", forwardAbort);
+    channelAbort.abort();
   }
 }
 
@@ -176,9 +194,15 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
     acceptedHandle = handle;
     input.channel.markAccepted();
 
-    while (true) {
+    const eventAbort = new AbortController();
+    const eventWait: BrowserTurnWaitState = {
+      signal: input.signal ? AbortSignal.any([input.signal, eventAbort.signal]) : eventAbort.signal,
+      pendingProvider: undefined,
+    };
+    try {
+      while (true) {
       boundary = "event_wait";
-      const signal = await waitForBrowserTurnSignal(input, surface, handle);
+      const signal = await waitForBrowserTurnSignal(input, surface, handle, eventWait);
       if (signal.kind === "channel") {
         const state = input.channel.state();
         if (state.phase === "tool-result-delivered"
@@ -195,6 +219,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
             || continuation.callId !== state.outstandingToolCallId) {
             throw new Error("Web provider armed the wrong tool continuation boundary");
           }
+          eventWait.signal.throwIfAborted();
           input.channel.releaseNativeToolResultToWeb(state.outstandingToolCallId);
         }
         continue;
@@ -203,6 +228,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       const event = signal.event;
       boundary = "event_dispatch";
       validateEvent(handle, event);
+      eventWait.signal.throwIfAborted();
 
       if (event.kind === "progress") {
         input.channel.publishProgress(event.summary);
@@ -223,11 +249,17 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       }
 
       if (event.kind === "completed") {
+        eventWait.signal.throwIfAborted();
         input.channel.complete(event.answer);
         return event.answer;
       }
 
       throw new Error(`Web turn failed: ${event.detail}`);
+      }
+    } finally {
+      // Cancels only this turn's outstanding provider observation, not the
+      // runtime, Native tool owner, or unrelated browser surface.
+      eventAbort.abort();
     }
   } catch (error) {
     // Preserve the primary boundary before diagnostic observation or surface retirement can race.

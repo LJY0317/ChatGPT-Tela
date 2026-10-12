@@ -482,4 +482,66 @@ describe("browser turn runner", () => {
     await expect(channel.waitForFinal()).rejects.toThrow();
     expect(released).toEqual(["surface-1"]);
   });
+
+  test("Native tool-state wake must not discard an already observed one-shot Web event", async () => {
+    const channel = new RuntimeTurnChannel(binding());
+    const released: string[] = [];
+    const progress: string[] = [];
+    channel.subscribeProgress(summary => progress.push(summary));
+    const fixture = provider(new EventQueue());
+    let waitCalls = 0;
+    let firstObservationSettled = false;
+    let pendingNativeTool: Promise<unknown> | undefined;
+    const observed = (value: WebTurnEvent): SemanticObservation<WebTurnEvent> => ({
+      state: "proven", value, evidence: ["single-use renderer event fixture"],
+    });
+    const wrapped: WebConversationProvider = {
+      ...fixture,
+      async waitForTurnEvent() {
+        waitCalls++;
+        if (waitCalls === 1) {
+          // The Native channel becomes ready while a real renderer observation
+          // is already in flight. Its one-shot result cannot be re-observed.
+          pendingNativeTool = channel.requestTool({
+            callId: "call-1", wireName: "exec_command",
+            mode: "structured", arguments: { cmd: ["synthetic"] },
+          });
+          queueMicrotask(async () => {
+            const tool = await channel.nextNativeTool();
+            channel.markNativeToolDelivered(tool.callId);
+            channel.deliverNativeToolResult({ callId: tool.callId, content: "synthetic-result", isError: false });
+          });
+          return await new Promise<SemanticObservation<WebTurnEvent>>(resolve => {
+            setTimeout(() => {
+              firstObservationSettled = true;
+              resolve(observed({ kind: "progress", providerTurnId: "web-turn-1",
+                summary: "Web has observed the original Native tool request" }));
+            }, 10);
+          });
+        }
+        if (!firstObservationSettled) {
+          throw new Error("concurrent provider wait discarded a one-shot Web event");
+        }
+        if (waitCalls === 2) {
+          return observed({ kind: "continuing", providerTurnId: "web-turn-1" });
+        }
+        if (waitCalls === 3) {
+          return observed({ kind: "completed", providerTurnId: "web-turn-1",
+            answer: "original Native turn finished" });
+        }
+        throw new Error("duplicate Web observation after final");
+      },
+    };
+
+    const result = await runBrowserTurn({
+      browserHost: browserHost(released), provider: wrapped, channel,
+      nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext,
+    });
+    expect(result).toBe("original Native turn finished");
+    expect(progress).toContain("Web has observed the original Native tool request");
+    expect(await pendingNativeTool).toMatchObject({ callId: "call-1", content: "synthetic-result" });
+    expect(waitCalls).toBe(3);
+    expect(String(channel.phase)).toBe("completed");
+    expect(released).toEqual(["surface-1"]);
+  });
 });
