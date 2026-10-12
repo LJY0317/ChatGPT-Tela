@@ -77,6 +77,22 @@ connected, and safe sign-out/return without task or account drift.
 Verify the default profile first, then isolated extra profiles; source
 tests and a working `Reconnect Web` button do not prove these end-to-end.
 
+**Saved-chat acceptance versus normal Temporary Chat.** Ordinary Tela-mediated
+Web Work/Codex retains the Temporary Chat default in both consumer builds and
+normal use. A bounded, clearly identified *new* saved conversation may be used
+for owner-authorized real-profile acceptance testing where account-side history
+provides a useful observable receipt. The test must preserve the original
+Native turn authority and the exact profile/account binding. Cleanup can use
+ChatGPT's official per-conversation **Delete** UI in the existing profile-bound
+Electron account browser, followed by an absence check in that same profile;
+it need not wait for a new automatic-delete API. The existing account-browser
+control opens a separate visible page within the same persistent Electron
+partition, and it temporarily suspends Web execution while account state is
+revalidated on close. Use it after, not during, a Web task. A deletion failure
+or ambiguous target must be reported rather than guessed or blindly retried.
+Local Desktop catalog reconciliation is not server-side chat deletion, and
+removal from the visible list is not proof of immediate server erasure.
+
 Acceptance separates window appearance, Native availability, actual picker visibility, Web request
 admission and first useful Web execution. Catalog API rows or a ready badge alone do not prove picker or
 submission success. Verify first tool use through the normal mounted service/public connector boundary.
