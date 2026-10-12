@@ -108,6 +108,12 @@ Tela now refuses such requests *before* issuing them, including lifecycle
 interruption. A future public, indexed, owner-authenticated exact-revision
 API for readable Native compaction summaries would enable bounded Legacy
 recovery. No private fallback is permitted.
+The current-turn owner reader also defaults to the indexed proof path in
+both normal product-profile construction and the public source factory;
+an omitted constructor option must not hydrate the full Legacy rollout.
+An older unindexed engine may therefore reject a Web transition that the
+previous unsafe compatibility reader attempted. Continuing in Native
+preserves the original task until a genuine bounded public API is available.
 
 The automatic fork and structured handoff remain **disabled in production**.
 Isolated synthetic RPC/model-provider regressions passed, but the actual

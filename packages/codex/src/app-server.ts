@@ -277,11 +277,17 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
 
   constructor(connect: CodexAppServerRpcFactory, options: {
     readonly includeNativeGoal?: boolean;
+    /** Defaults to true. False is a temporary unsafe whole-history compatibility
+     * mode for isolated fixtures; product callers must never opt out. */
     readonly preferBoundedTurnProof?: boolean;
   } = {}) {
     this.#connect = connect;
     this.#includeNativeGoal = options.includeNativeGoal === true;
-    this.#preferBoundedTurnProof = options.preferBoundedTurnProof === true;
+    // Default-deny unknown and Legacy storage modes for EVERY caller, not
+    // only the handful of product routes that remembered this option.
+    // includeTurns:true could replay an entire multi-MiB encrypted Legacy
+    // rollout before any response budget or application guard could apply.
+    this.#preferBoundedTurnProof = options.preferBoundedTurnProof !== false;
   }
 
   async watchTurn(threadId: string, turnId: string, signal?: AbortSignal) {
@@ -672,11 +678,15 @@ export async function connectCodexAppServerWebSocket(
 export function appServerCurrentTurnSource(
   endpoint: string, options: {
     readonly includeNativeGoal?: boolean;
-    readonly preferBoundedTurnProof?: boolean;
+    // The public product factory deliberately has no unsafe Legacy opt-out.
+    readonly preferBoundedTurnProof?: true;
   } = {},
 ): AppServerCurrentTurnSource {
   return new AppServerCurrentTurnSource(
     signal => connectCodexAppServerWebSocket(endpoint, { ...(signal ? { signal } : {}) }),
-    options,
+    // This factory is the product API, not the isolated legacy-fixture
+    // constructor. Runtime callers (including untyped JS) cannot turn its
+    // current-turn authority read into an unbounded Legacy snapshot.
+    { ...options, preferBoundedTurnProof: true },
   );
 }

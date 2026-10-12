@@ -8,6 +8,7 @@ import {
   connectCodexAppServerWebSocket,
   interruptLoadedAppServerTurns,
   type CodexAppServerRpc,
+  type CodexAppServerRpcFactory,
 } from "./app-server";
 
 class FixtureRpc implements CodexAppServerRpc {
@@ -25,6 +26,19 @@ class FixtureRpc implements CodexAppServerRpc {
   async close(): Promise<void> {
     this.closed += 1;
   }
+}
+
+/** Isolated regression fixtures for the old official Desktop snapshot shape.
+ * Never the production current-turn default: includeTurns:true may hydrate
+ * private Legacy history and must not become an implicit call-site choice.
+ */
+function legacySnapshotFixtureSource(
+  connect: CodexAppServerRpcFactory,
+  options: { readonly includeNativeGoal?: boolean } = {},
+): AppServerCurrentTurnSource {
+  return new AppServerCurrentTurnSource(connect, {
+    ...options, preferBoundedTurnProof: false,
+  });
 }
 
 function activeThread(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -46,6 +60,31 @@ function activeThread(overrides: Record<string, unknown> = {}): Record<string, u
 }
 
 describe("Codex app-server current-turn authority", () => {
+  test("a default-constructed current-turn source rejects unindexed history before any expensive RPC", async () => {
+    for (const historyMode of ["legacy", undefined, "new-unindexed-mode"]) {
+      const methods: Array<{ method: string; params: unknown }> = [];
+      let closed = 0;
+      const rpc: CodexAppServerRpc = {
+        async request(method, params) {
+          methods.push({ method, params });
+          if (method !== "thread/read" || (params as { includeTurns?: boolean }).includeTurns !== false) {
+            throw new Error("A default Native owner reader must never hydrate Legacy history");
+          }
+          return { thread: activeThread({ historyMode, turns: undefined }) };
+        },
+        async close() { closed++; },
+      };
+      await expect(new AppServerCurrentTurnSource(async () => rpc).currentTurn("thread-1"))
+        .rejects.toMatchObject({
+          code: "native_history_bootstrap_required",
+          recoveryReason: "unindexed_history",
+        });
+      expect(methods).toEqual([{ method: "thread/read",
+        params: { threadId: "thread-1", includeTurns: false } }]);
+      expect(closed).toBe(1);
+    }
+  });
+
   test("bounded current-turn proof never reads an entire 73 MB Native history", async () => {
     const methods: Array<{ method: string; params: any }> = [];
     let closed = 0;
@@ -234,7 +273,7 @@ describe("Codex app-server current-turn authority", () => {
       "thread/read": { thread: active },
       "thread/goal/get": { goal },
     });
-    const source = new AppServerCurrentTurnSource(async () => rpc, { includeNativeGoal: true });
+    const source = legacySnapshotFixtureSource(async () => rpc, { includeNativeGoal: true });
     const observed = await source.currentTurn("thread-1");
     expect(observed?.nativeGoal).toEqual(goal);
     expect(observed?.turnId).toBe("turn-1");
@@ -245,7 +284,7 @@ describe("Codex app-server current-turn authority", () => {
       "thread/read": { thread: active },
       "thread/goal/get": { goal: null },
     });
-    const noGoal = await new AppServerCurrentTurnSource(
+    const noGoal = await legacySnapshotFixtureSource(
       async () => absent, { includeNativeGoal: true }).currentTurn("thread-1");
     expect(noGoal?.nativeGoal).toBeUndefined();
     expect(noGoal?.nativeGoalState).toBe("absent");
@@ -253,7 +292,7 @@ describe("Codex app-server current-turn authority", () => {
       "thread/read": { thread: active },
       "thread/goal/get": { goal: { ...goal, threadId: "foreign" } },
     });
-    await expect(new AppServerCurrentTurnSource(
+    await expect(legacySnapshotFixtureSource(
       async () => wrong, { includeNativeGoal: true }).currentTurn("thread-1"))
       .rejects.toThrow("ownership");
     expect(wrong.closed).toBe(1);
@@ -274,7 +313,7 @@ describe("Codex app-server current-turn authority", () => {
         },
         async close() { closed++; },
       };
-      const current = await new AppServerCurrentTurnSource(
+      const current = await legacySnapshotFixtureSource(
         async () => rpc, { includeNativeGoal: true }).currentTurn("thread-1");
       expect(current?.turnId).toBe("turn-1");
       expect(current?.nativeGoal).toBeUndefined();
@@ -295,14 +334,14 @@ describe("Codex app-server current-turn authority", () => {
         },
         async close() {},
       };
-      await expect(new AppServerCurrentTurnSource(async () => rpc, { includeNativeGoal: true })
+      await expect(legacySnapshotFixtureSource(async () => rpc, { includeNativeGoal: true })
         .currentTurn("thread-1")).rejects.toThrow(failure);
     }
     const invalid = new FixtureRpc({
       "thread/read": { thread: activeThread({ turns: [{ id: "turn-1", status: "inProgress", items: [] }] }) },
       "thread/goal/get": { unrelated: "no goal" },
     });
-    await expect(new AppServerCurrentTurnSource(async () => invalid, { includeNativeGoal: true })
+    await expect(legacySnapshotFixtureSource(async () => invalid, { includeNativeGoal: true })
       .currentTurn("thread-1")).rejects.toThrow("malformed");
   });
 
@@ -311,7 +350,7 @@ describe("Codex app-server current-turn authority", () => {
       "thread/read": { thread: activeThread({ status: { type: "idle" },
         turns: [{ id: "completed", status: "completed", items: [] }] }) },
     });
-    expect(await new AppServerCurrentTurnSource(
+    expect(await legacySnapshotFixtureSource(
       async () => rpc, { includeNativeGoal: true }).currentTurn("thread-1")).toBeUndefined();
     expect(rpc.calls.map(entry => entry.method)).toEqual(["thread/read"]);
   });
@@ -335,7 +374,7 @@ describe("Codex app-server current-turn authority", () => {
         }),
       },
     });
-    const source = new AppServerCurrentTurnSource(async () => rpc);
+    const source = legacySnapshotFixtureSource(async () => rpc);
 
     expect(await source.currentTurn("thread-1")).toEqual({
       threadId: "thread-1",
@@ -363,7 +402,7 @@ describe("Codex app-server current-turn authority", () => {
       { id: "turn-a", status: "inProgress", items: [] },
     ]]) {
       const rpc = new FixtureRpc({ "thread/read": { thread: activeThread({ turns: entries }) } });
-      await expect(new AppServerCurrentTurnSource(async () => rpc).currentTurn("thread-1"))
+      await expect(legacySnapshotFixtureSource(async () => rpc).currentTurn("thread-1"))
         .rejects.toThrow();
       expect(rpc.calls.map(call => call.method)).toEqual(["thread/read"]);
       expect(rpc.closed).toBe(1);
@@ -376,7 +415,7 @@ describe("Codex app-server current-turn authority", () => {
       { id: "later-completed", status: "completed", items: [] },
       { id: "current", status: "inProgress", items: [] },
     ] }) } });
-    const evidence = await new AppServerCurrentTurnSource(async () => rpc).currentTurn("thread-1");
+    const evidence = await legacySnapshotFixtureSource(async () => rpc).currentTurn("thread-1");
     expect(evidence?.turnId).toBe("current");
     expect(evidence?.environmentSourceTurnId).toBe("current");
     expect(rpc.closed).toBe(1);
@@ -386,7 +425,7 @@ describe("Codex app-server current-turn authority", () => {
     const rpc = new FixtureRpc({
       "thread/read": { thread: activeThread({ environments: null, cwd: resolve("/plain"), turns: [{ id: "turn-1", status: "inProgress", items: [] }] }) },
     });
-    const source = new AppServerCurrentTurnSource(async () => rpc);
+    const source = legacySnapshotFixtureSource(async () => rpc);
 
     const evidence = await source.currentTurn("thread-1");
     expect(evidence?.cwd).toBe(resolve("/plain"));
@@ -398,7 +437,7 @@ describe("Codex app-server current-turn authority", () => {
     const rpc = new FixtureRpc({
       "thread/read": { thread: activeThread({ status: { type: "idle" } }) },
     });
-    const source = new AppServerCurrentTurnSource(async () => rpc);
+    const source = legacySnapshotFixtureSource(async () => rpc);
 
     expect(await source.currentTurn("thread-1")).toBeUndefined();
     expect(rpc.calls.map(call => call.method)).toEqual(["thread/read"]);
@@ -412,7 +451,7 @@ describe("Codex app-server current-turn authority", () => {
         { id: "turn-completed", status: "completed", items: [] },
       ] }) },
     });
-    await expect(new AppServerCurrentTurnSource(async () => staleNewest).currentTurn("thread-1"))
+    await expect(legacySnapshotFixtureSource(async () => staleNewest).currentTurn("thread-1"))
       .rejects.toThrow("not the newest turn");
 
     const conflictingOwner = new FixtureRpc({
@@ -431,7 +470,7 @@ describe("Codex app-server current-turn authority", () => {
         }),
       },
     });
-    await expect(new AppServerCurrentTurnSource(async () => conflictingOwner).currentTurn("thread-1"))
+    await expect(legacySnapshotFixtureSource(async () => conflictingOwner).currentTurn("thread-1"))
       .rejects.toThrow("lineage is internally inconsistent");
   });
 });
@@ -733,6 +772,32 @@ test("normal shutdown scans idle thread status without downloading history", asy
 });
 
 describe("Native turn termination observation", () => {
+  test("a default-constructed watcher rejects a Legacy active turn before thread/resume", async () => {
+    const methods: string[] = [];
+    let closed = 0;
+    let unsubscribed = 0;
+    const rpc: CodexAppServerRpc = {
+      async request(method, params) {
+        methods.push(method);
+        if (method !== "thread/read"
+          || (params as { includeTurns?: boolean }).includeTurns !== false) {
+          throw Error("No hidden Legacy history replay or thread/resume allowed");
+        }
+        return { thread: activeThread({ id: "thread-legacy",
+          historyMode: "legacy", turns: undefined }) };
+      },
+      subscribe() { return () => { unsubscribed++; }; },
+      async close() { closed++; },
+    };
+    await expect(new AppServerCurrentTurnSource(async () => rpc)
+      .watchTurn("thread-legacy", "active-turn"))
+      .rejects.toMatchObject({ code: "native_history_bootstrap_required",
+        recoveryReason: "unindexed_history" });
+    expect(methods).toEqual(["thread/read"]);
+    expect(unsubscribed).toBe(1);
+    expect(closed).toBe(1);
+  });
+
   test("an already cancelled watcher never connects to Native or creates a live lease", async () => {
     const cancelled = new AbortController();
     cancelled.abort(new DOMException("fixture cancelled", "AbortError"));
@@ -858,7 +923,7 @@ describe("Native turn termination observation", () => {
     const observed = Object.assign(rpc, { subscribe(n: typeof notify, d: typeof disconnect) {
       notify = n; disconnect = d; return () => { removed++; };
     } });
-    return { rpc, source: new AppServerCurrentTurnSource(async () => observed),
+    return { rpc, source: legacySnapshotFixtureSource(async () => observed),
       emit: (threadId: string, id: string, status: string, error?: unknown) => notify("turn/completed", {threadId, turn: { id, status, error }}),
       disconnect: () => disconnect(), removed: () => removed };
   }

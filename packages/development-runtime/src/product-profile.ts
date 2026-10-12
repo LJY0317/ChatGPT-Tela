@@ -462,7 +462,11 @@ export async function startProductProfileRuntime(
         ),
       });
       startupStage("native_target_ready");
-      const currentTurnSource = appServerCurrentTurnSource(defaultDesktopTarget.proxyEndpoint);
+      const currentTurnSource = appServerCurrentTurnSource(defaultDesktopTarget.proxyEndpoint, {
+        // The default Desktop profile must not accidentally opt into a
+        // Legacy includeTurns:true snapshot before admitting Web authority.
+        preferBoundedTurnProof: true,
+      });
       routedTarget = Object.freeze({
         target: Object.freeze({ id: "default" }),
         session: Object.freeze({

@@ -78,11 +78,16 @@ engine policy, or an installed automatic recovery feature.
 - Previously permitted Legacy `thread/turns/list` requests are now
   **blocked before pagination** in compaction source/anchor and explicit
   handoff readers; their limits did not bound Native-internal rollout work.
-- The `AppServerCurrentTurnSource` class retains an explicit older
-  compatibility mode for non-product adapter callers/tests; both current
-  product target constructors now request bounded proof and fail closed for
-  Legacy/missing/unknown modes. Product lifecycle interruption never
-  invokes the older full-history fallback.
+- `AppServerCurrentTurnSource` now **defaults** to bounded proof for every
+  new caller, not merely the explicitly configured Native-first and optional
+  multi-profile routes. The standalone default Desktop product-profile route
+  also explicitly selects bounded proof. All these routes fail closed for
+  Legacy, missing or unknown history modes before any unbounded read; the
+  public product source factory does not expose an unsafe override.
+  Older full-snapshot compatibility remains only as an explicitly requested
+  `preferBoundedTurnProof:false` mode in isolated internal regression
+  fixtures; it is never selected implicitly. Product lifecycle interruption
+  never invokes the full-history fallback.
 - A verified user-requested Native handoff remains available through
   **Paginated public** recent-turn summaries, not unindexed Legacy.
   Without a validated checkpoint, independently verifiable handoff or
