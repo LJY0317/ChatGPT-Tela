@@ -60,6 +60,15 @@ synthetic fixtures explicitly opt into unshipped fork behavior. The typed
 HTTP 422 cold-history boundary remains. Synthetic tests do not constitute
 live Native authority, historical model provenance, a verified tool-free
 engine policy, or an installed automatic recovery feature.
+The common Native continuity resolver also **ignores accidental callback
+injection and cached automatic summaries** unless a second, conspicuously
+unsafe flag is supplied by an isolated synthetic fixture. The actual product
+does not supply that flag. A denied injection emits one content-free
+`native_auto_handoff_rejected` event in the `continuity_resolver` phase;
+this is not an engine capability claim or a release enablement switch.
+See [the required upstream execution-provenance and tool-free fork contract](native-execution-provenance-gate.md)
+for the exact missing engine evidence and acceptance gates; it is a request,
+not a public API that Tela can already call.
 
 ## Legacy compatibility cleanup (2026-10-11)
 

@@ -14,6 +14,7 @@ import type {
   NativeInlineHistoryAsset,
   NativeTurnAuthority,
 } from "@chatgpt-tela/core";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { chatGptWebCheckpointSourceTokenLimit, type ChatGptWebEffort } from "@chatgpt-tela/chatgpt";
 import type { ContextCheckpointCache } from "./context-cache";
 import { readNativeHistoryCheckpoint, maybeProduceNativeHistoryCheckpoint } from "./native-history-checkpoint";
@@ -51,6 +52,11 @@ export interface NativeContinuitySources {
   readonly verifyAutomaticNativeHandoff?: (
     threadId: string, currentTurnId: string, sourceTurnId: string, signal?: AbortSignal,
   ) => Promise<boolean>;
+  /** TEST FIXTURES ONLY: allow a fake Native fork to exercise this otherwise
+   * dormant research path. Production must not set this. Without this flag
+   * neither injected auto callbacks nor cached auto summaries are consulted.
+   * This flag does not attest real Native provenance or enforce no-tools. */
+  readonly unsafePermitModelToolsInIsolatedSyntheticFixture?: true;
   readonly historyCheckpointCache?: ContextCheckpointCache;
   readonly checkpointProducer?: NativeRequestCheckpointProducer;
 }
@@ -149,7 +155,22 @@ export async function resolveNativeContextContinuity(input: {
 
   const cache = options.historyCheckpointCache;
   const fingerprint = opaque.fingerprint;
+  let automaticDisabledRecorded = false;
   const automatic = async (mayProduce: boolean): Promise<NativeContinuityDecision | undefined> => {
+    // An accidental future callback wiring must never silently activate a
+    // secondary Native model or trust a previously derived auto summary.
+    // The product neither supplies this fixture flag nor installs the
+    // experimental callbacks, regardless of source/cached checkpoint state.
+    if (options.unsafePermitModelToolsInIsolatedSyntheticFixture !== true) {
+      if (!automaticDisabledRecorded
+        && (options.automaticNativeHandoff || options.verifyAutomaticNativeHandoff)) {
+        automaticDisabledRecorded = true;
+        emitDiagnosticEvent("chatgpt_tela_codex", "native_auto_handoff_rejected", {
+          phase: "continuity_resolver", reason_class: "production_disabled",
+        });
+      }
+      return undefined;
+    }
     if (!cache || !fingerprint || !options.verifyAutomaticNativeHandoff) return undefined;
     const cached = await recentAutomaticNativeHandoff(cache, threadId, fingerprint);
     if (cached && await options.verifyAutomaticNativeHandoff(

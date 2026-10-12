@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineNativeTurnAuthority } from "@chatgpt-tela/core";
@@ -357,6 +357,8 @@ test("synthetic-only fallback reuses a derived checkpoint after restart without 
    let sourceCalls=0, autoCalls=0, verified=0;
    const cache=new FileContextCheckpointCache({directory:root});
    const options={
+     // This allows only fake-model fixture execution, not real Native authority.
+     unsafePermitModelToolsInIsolatedSyntheticFixture:true as const,
      historyCheckpointCache:cache,
      compactionHistory:async()=>{
        sourceCalls++;
@@ -399,6 +401,23 @@ test("synthetic-only fallback reuses a derived checkpoint after restart without 
    expect(autoCalls).toBe(1);
    expect(sourceCalls).toBe(1);
    expect(verified).toBe(2);
+   // The same saved automatic summary and the same injected callbacks must
+   // not be used by a product-like caller that omits the synthetic gate.
+   const {unsafePermitModelToolsInIsolatedSyntheticFixture: _fixture, ...normalOptions}=options;
+   await expect(resolveNativeContextContinuity(input({
+     currentTurnId:"web-third",
+     authority:defineNativeTurnAuthority({
+       threadId:"task-1",turnId:"web-third",cwd:"/readonly/fixture",
+       workspaceRoots:["/readonly/fixture"],
+       sandbox:{kind:"read-only",network:"restricted"},
+     }),
+     options:{...normalOptions,
+       historyCheckpointCache:new FileContextCheckpointCache({directory:root}),
+     },
+   }))).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
+   expect(autoCalls).toBe(1);
+   expect(verified).toBe(2);
+   expect(sourceCalls).toBe(2);
  } finally { rmSync(root,{recursive:true,force:true}); }
 });
 test("complete original Native source never starts a second Native model",async()=>{
@@ -423,6 +442,7 @@ test("a failed automatic fork never claims an incomplete Native transcript is re
    let attempts=0;
    await expect(resolveNativeContextContinuity(input({
      options:{
+       unsafePermitModelToolsInIsolatedSyntheticFixture:true,
        historyCheckpointCache:new FileContextCheckpointCache({directory:root}),
        compactionHistory:async()=>{throw new NativeHistoryBootstrapRequired();},
        verifyAutomaticNativeHandoff:async()=>true,
@@ -431,4 +451,42 @@ test("a failed automatic fork never claims an incomplete Native transcript is re
    }))).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
    expect(attempts).toBe(1);
  } finally {rmSync(root,{recursive:true,force:true});}
+});
+test("injecting a model-backed handoff callback alone never authorizes an extra Native model request",async()=>{
+ const root=mkdtempSync(join(tmpdir(),"tela-auto-unwired-product-"));
+ const log=join(root,"diagnostics.jsonl");
+ const previous=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+ process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=log;
+ try {
+   let externalCalls=0;
+   await expect(resolveNativeContextContinuity(input({
+     options:{
+       historyCheckpointCache:new FileContextCheckpointCache({directory:root}),
+       compactionHistory:async()=>{throw new NativeHistoryBootstrapRequired();},
+       automaticNativeHandoff:async()=>{
+         externalCalls++;
+         throw Error("An accidental production fork must never execute");
+       },
+       verifyAutomaticNativeHandoff:async()=>{
+         externalCalls++;
+         return true;
+       },
+     },
+   }))).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
+   expect(externalCalls).toBe(0);
+   const entries=readFileSync(log,"utf8").trim().split("\n").map(line=>JSON.parse(line))
+     .filter(item=>item.stage==="native_auto_handoff_rejected");
+   expect(entries).toHaveLength(1);
+   expect(entries[0]).toMatchObject({
+     phase:"continuity_resolver",reason_class:"production_disabled",
+   });
+   const contents=readFileSync(log,"utf8");
+   expect(contents).not.toContain("task-1");
+   expect(contents).not.toContain("web-current");
+   expect(contents).not.toContain("opaque-native-state");
+ } finally {
+   if(previous===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+   else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;
+   rmSync(root,{recursive:true,force:true});
+ }
 });
