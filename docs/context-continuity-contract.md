@@ -7,7 +7,12 @@ receipt for an original public `turn/start` response that confirms the exact
 `inProgress` Native turn. It joins the engine's `turn.id` to the original
 `threadId` using the same socket and matching JSON-RPC request ID, not
 untrusted Responses metadata. A mismatched, missing, completed, replaced or
-ambiguous receipt grants no turn authority. A second socket cannot silently
+ambiguous receipt grants no turn authority. The same JSON-RPC request ID
+cannot be reused to prove a later turn on that connection: an old delayed
+ACK could otherwise be mistaken for the newly requested thread. Native
+traffic is still forwarded without mutation, but the reused ID grants no
+new Legacy ownership. The bounded proof registry disables further admissions
+if it runs out of safe request-ID slots. A second socket cannot silently
 take over an accepted receipt. Close, explicit thread/turn retirement, new
 Native turn, account invalidation and owned proxy shutdown revoke it.
 

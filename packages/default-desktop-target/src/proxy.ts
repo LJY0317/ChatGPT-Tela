@@ -176,6 +176,11 @@ export async function startDefaultDesktopAppServerProxy(input: {
       readonly threadId: string;
       readonly generation: number;
     }>();
+    // An original turn/start ACK has no independent thread ID in the public
+    // response. Reusing a completed JSON-RPC id on this same socket would
+    // allow a delayed old reply to masquerade as another thread's ACK.
+    // Never recycle turn-authority correlation keys during one connection.
+    const seenLiveRpcIds = new Set<string>();
     const finishedLiveTurns = new Set<string>();
     const startedLiveTurns = new Map<string, string>();
     let liveReceiptsDisabled = false;
@@ -218,7 +223,8 @@ export async function startDefaultDesktopAppServerProxy(input: {
         client_written_bytes: clientWrittenBytes, delivery: "socket_write_only" });
       pendingCatalog.clear(); pendingModelLists.clear(); pendingHistory.clear();
       pendingMedia.clear();
-      pendingLiveTurns.clear(); finishedLiveTurns.clear(); startedLiveTurns.clear();
+      pendingLiveTurns.clear(); seenLiveRpcIds.clear();
+      finishedLiveTurns.clear(); startedLiveTurns.clear();
       liveTurnProof.retireOwner(state);
     };
     let permissionProfiles = false;
@@ -437,14 +443,24 @@ export async function startDefaultDesktopAppServerProxy(input: {
             liveTurnProof.retireThread(threadId);
           }
           if (!liveReceiptsDisabled && key && nativeLiveIdentity(threadId)) {
-            if (pendingLiveTurns.has(key) || pendingLiveTurns.size >= 64) {
+            if (pendingLiveTurns.has(key)) {
               // An ambiguous RPC id must not authorize a later answer. Do
               // not modify normal Native traffic on this optional proof path.
               liveReceiptsDisabled = true;
               pendingLiveTurns.clear();
               liveTurnProof.retireOwner(state);
               diagnostic("desktop_native_live_turn_rejected", { reason_class: "ambiguous_request" });
+            } else if (seenLiveRpcIds.has(key)) {
+              // Preserve existing valid turns; only this new request loses
+              // optional Legacy live proof. No old delayed ACK can bind it.
+              diagnostic("desktop_native_live_turn_rejected", { reason_class: "reused_request_id" });
+            } else if (pendingLiveTurns.size >= 64 || seenLiveRpcIds.size >= 512) {
+              liveReceiptsDisabled = true;
+              pendingLiveTurns.clear();
+              liveTurnProof.retireOwner(state);
+              diagnostic("desktop_native_live_turn_rejected", { reason_class: "request_capacity" });
             } else {
+              seenLiveRpcIds.add(key);
               pendingLiveTurns.set(key, {
                 threadId, generation: liveTurnProof.generation,
               });

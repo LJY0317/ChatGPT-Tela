@@ -11,6 +11,70 @@ function openSocket(url: string): Promise<WebSocket> {
 }
 
 describe("default Desktop route-preserving app-server proxy", () => {
+  test("a reused JSON-RPC turn/start id cannot bind a delayed old engine ACK to a new Legacy thread", async () => {
+    const diagnostics: Array<{ stage: string; reason: unknown }> = [];
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request, server) { return server.upgrade(request) ? undefined : new Response(null, { status: 400 }); },
+      websocket: {
+        message(socket, raw) {
+          const request = JSON.parse(String(raw));
+          if (request.method !== "turn/start") return;
+          // A request id is only a transport correlation key. Reusing one
+          // after a completed request can make a delayed earlier reply look
+          // like the ACK for a different thread.
+          const turnId = request.id === 7 ? "turn-a" : "turn-c";
+          socket.send(JSON.stringify({ id: request.id, result: {
+            turn: { id: turnId, status: "inProgress" },
+          } }));
+        },
+      },
+    });
+    const proxy = await startDefaultDesktopAppServerProxy({
+      upstreamEndpoint: `ws://127.0.0.1:${upstream.port}/`,
+      route: createDefaultDesktopResponsesRoute({
+        baseUrl: "http://127.0.0.1:18741/v1", envKey: "TEST_KEY",
+        credential: "x".repeat(48),
+      }),
+      onDiagnostic(stage, fields) {
+        diagnostics.push({ stage, reason: fields.reason_class });
+      },
+    });
+    const client = await openSocket(proxy.endpoint);
+    const send = async (id: number, threadId: string) => {
+      const response = new Promise<void>(resolve => {
+        const listener = (event: MessageEvent) => {
+          const incoming = JSON.parse(String(event.data));
+          if (incoming.id !== id) return;
+          client.removeEventListener("message", listener);
+          resolve();
+        };
+        client.addEventListener("message", listener);
+      });
+      client.send(JSON.stringify({ id, method: "turn/start", params: {
+        threadId, input: [{ type: "text", text: "fixture only" }],
+      } }));
+      await response;
+    };
+    try {
+      await send(7, "thread-a");
+      expect(proxy.liveTurnProof.current("thread-a")?.turnId).toBe("turn-a");
+      // A stale duplicate ACK for thread-a arrives as the reply for a
+      // new thread-b request that recycled the same id=7.
+      await send(7, "thread-b");
+      expect(proxy.liveTurnProof.current("thread-b")).toBeUndefined();
+      expect(diagnostics).toContainEqual({
+        stage: "desktop_native_live_turn_rejected", reason: "reused_request_id",
+      });
+      expect(JSON.stringify(diagnostics)).not.toContain("thread-b");
+      await send(8, "thread-c");
+      expect(proxy.liveTurnProof.current("thread-c")?.turnId).toBe("turn-c");
+    } finally {
+      client.close();
+      await proxy.close();
+      upstream.stop(true);
+    }
+  });
   test("exact original turn/start ACK yields revocable live Legacy owner without reading any history", async () => {
     const upstream = Bun.serve({
       hostname: "127.0.0.1", port: 0,
