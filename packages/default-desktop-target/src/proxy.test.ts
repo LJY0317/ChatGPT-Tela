@@ -11,6 +11,73 @@ function openSocket(url: string): Promise<WebSocket> {
 }
 
 describe("default Desktop route-preserving app-server proxy", () => {
+  test("exact original turn/start ACK yields revocable live Legacy owner without reading any history", async () => {
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request, server) { return server.upgrade(request) ? undefined : new Response(null, { status: 400 }); },
+      websocket: {
+        message(socket, raw) {
+          const incoming = JSON.parse(String(raw));
+          if (incoming.method === "turn/start") {
+            // Published TurnStartResponse contains turn.id/status, not an
+            // independently supplied thread ID. A wrong RPC id isn't a proof.
+            socket.send(JSON.stringify({ id: incoming.id + 100, result: {
+              turn: { id: "foreign-ack", status: "inProgress" },
+            } }));
+            socket.send(JSON.stringify({ id: incoming.id, result: {
+              turn: { id: incoming.id === 9 ? "new-legacy-turn" : "live-legacy-turn", status: "inProgress" },
+            } }));
+          }
+          if (incoming.method === "fixture/finish") {
+            socket.send(JSON.stringify({ method: "turn/completed", params: {
+              threadId: "legacy-thread", turn: { id: "live-legacy-turn", status: "completed" },
+            } }));
+            socket.send(JSON.stringify({ id: incoming.id, result: {} }));
+          }
+        },
+      },
+    });
+    const proxy = await startDefaultDesktopAppServerProxy({
+      upstreamEndpoint: `ws://127.0.0.1:${upstream.port}/`,
+      route: createDefaultDesktopResponsesRoute({
+        baseUrl: "http://127.0.0.1:18741/v1", envKey: "TEST_KEY", credential: "x".repeat(48),
+      }),
+    });
+    const client = await openSocket(proxy.endpoint);
+    const exchange = async (id: number, method: string, params: unknown) => {
+      const reply = new Promise<void>(resolve => {
+        const listener = (event: MessageEvent) => {
+          const result = JSON.parse(String(event.data));
+          if (result.id !== id) return;
+          client.removeEventListener("message", listener);
+          resolve();
+        };
+        client.addEventListener("message", listener);
+      });
+      client.send(JSON.stringify({ id, method, params }));
+      await reply;
+    };
+    try {
+      expect(proxy.liveTurnProof.current("legacy-thread")).toBeUndefined();
+      await exchange(7, "turn/start", { threadId: "legacy-thread", input: [{ type: "text", text: "synthetic" }] });
+      expect(proxy.liveTurnProof.current("legacy-thread")).toMatchObject({
+        threadId: "legacy-thread", turnId: "live-legacy-turn",
+      });
+      expect(proxy.liveTurnProof.current("unrelated-thread")).toBeUndefined();
+      await exchange(8, "fixture/finish", {});
+      expect(proxy.liveTurnProof.current("legacy-thread")).toBeUndefined();
+      await exchange(9, "turn/start", { threadId: "legacy-thread" });
+      const exact = proxy.liveTurnProof.current("legacy-thread")!;
+      expect(exact.turnId).toBe("new-legacy-turn");
+      client.close();
+      for (let i = 0; i < 80 && proxy.liveTurnProof.isCurrent(exact); i++) {
+        await new Promise(resolve => setTimeout(resolve, 2));
+      }
+      expect(proxy.liveTurnProof.isCurrent(exact)).toBe(false);
+    } finally {
+      client.close(); await proxy.close(); upstream.stop(true);
+    }
+  });
   test("exact public Native turn/start image is bound only after same RPC ack and revoked on completion", async () => {
     const png = Buffer.from("89504e470d0a1a0a00000000", "hex");
     const upstream = Bun.serve({

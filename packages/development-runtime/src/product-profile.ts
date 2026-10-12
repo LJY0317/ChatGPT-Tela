@@ -466,6 +466,7 @@ export async function startProductProfileRuntime(
         // The default Desktop profile must not accidentally opt into a
         // Legacy includeTurns:true snapshot before admitting Web authority.
         preferBoundedTurnProof: true,
+        liveTurnProof: defaultDesktopTarget.liveTurnProof,
       });
       routedTarget = Object.freeze({
         target: Object.freeze({ id: "default" }),

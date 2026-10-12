@@ -11,6 +11,7 @@ export * from "./turn";
 export * from "./network-failure";
 export * from "./evidence";
 export * from "./native-ingress-media";
+export * from "./native-live-turn";
 export * from "./diagnostic-inventory";
 export * from "./diagnostic-private";
 export * from "./diagnostic-center";

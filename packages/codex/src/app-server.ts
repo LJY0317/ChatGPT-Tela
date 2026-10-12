@@ -3,6 +3,7 @@ import type { CanonicalCurrentTurnSource } from "./binding";
 import type { CanonicalCurrentTurnEvidence } from "./rollout";
 import { capturePrivateDiagnosticValue, diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import { NativeHistoryBootstrapRequired } from "./history-bootstrap-error";
+import type { NativeLiveTurnProof, NativeLiveTurnReceipt } from "@chatgpt-tela/core";
 
 const CLIENT_NAME = "chatgpt-tela";
 const CLIENT_VERSION = "0.0.0";
@@ -92,13 +93,19 @@ function owner(thread: Record<string, unknown>): {
  */
 async function readBoundedNewestTurn(
   rpc: CodexAppServerRpc, threadId: string, signal?: AbortSignal,
-): Promise<{ readonly thread: Record<string, unknown>; readonly newest?: Record<string, unknown> }> {
+  liveTurnProof?: NativeLiveTurnProof,
+): Promise<{
+  readonly thread: Record<string, unknown>;
+  readonly newest?: Record<string, unknown>;
+  readonly liveReceipt?: NativeLiveTurnReceipt;
+}> {
   const rejected = (reason: "unindexed_history" | "public_page_unavailable"
-    | "invalid_page" | "invalid_turn" | "source_changed" | "owner_changed"): void => {
+    | "invalid_page" | "invalid_turn" | "source_changed" | "owner_changed",
+    routeKind: "public_paginated_metadata" | "public_live_ack_metadata" = "public_paginated_metadata"): void => {
     withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(threadId) }, () =>
       emitDiagnosticEvent("chatgpt_tela_codex", "native_current_turn_rejected", {
         reason_class: reason,
-        route_kind: "public_paginated_metadata",
+        route_kind: routeKind,
       }));
   };
   const status = record(await rpc.request("thread/read", {
@@ -113,6 +120,37 @@ async function readBoundedNewestTurn(
   // server's internal work. A Legacy page may replay a huge rollout.
   // Unknown or missing modes are not proof that indexed paging is safe.
   if (thread.historyMode !== "paginated") {
+    if (thread.historyMode === "legacy" && liveTurnProof) {
+      // This is ONLY a fresh turn/start receipt observed on the current,
+      // still-owned Desktop proxy connection, not a stored-history inference.
+      // No turns/items paging or thread/resume is allowed in Legacy.
+      const receipt = liveTurnProof.current(threadId);
+      if (receipt && receipt.threadId === threadId
+        && liveTurnProof.isCurrent(receipt)) {
+        const verified = record(await rpc.request("thread/read", {
+          threadId, includeTurns: false,
+        }, signal));
+        const fresh = record(verified?.thread);
+        if (fresh && fresh.id === threadId && fresh.historyMode === "legacy"
+          && record(fresh.status)?.type === "active"
+          && liveTurnProof.isCurrent(receipt)
+          && JSON.stringify(owner(thread)) === JSON.stringify(owner(fresh))
+          && JSON.stringify(environment(thread)) === JSON.stringify(environment(fresh))) {
+          withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(threadId) }, () =>
+            emitDiagnosticEvent("chatgpt_tela_codex", "native_live_turn_proven", {
+              route_kind: "public_live_ack_metadata",
+              history_mode: "legacy",
+            }));
+          return {
+            thread: fresh,
+            newest: { id: receipt.turnId, status: "inProgress" },
+            liveReceipt: receipt,
+          };
+        }
+        rejected("source_changed", "public_live_ack_metadata");
+        throw new NativeHistoryBootstrapRequired("unindexed_history");
+      }
+    }
     rejected("unindexed_history");
     throw new NativeHistoryBootstrapRequired("unindexed_history");
   }
@@ -274,12 +312,16 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
   readonly #connect: CodexAppServerRpcFactory;
   readonly #includeNativeGoal: boolean;
   readonly #preferBoundedTurnProof: boolean;
+  readonly #liveTurnProof: NativeLiveTurnProof | undefined;
 
   constructor(connect: CodexAppServerRpcFactory, options: {
     readonly includeNativeGoal?: boolean;
     /** Defaults to true. False is a temporary unsafe whole-history compatibility
      * mode for isolated fixtures; product callers must never opt out. */
     readonly preferBoundedTurnProof?: boolean;
+    /** Original turn/start ACKs observed through the owned default Desktop
+     * proxy. This never authenticates persisted Legacy history or compaction. */
+    readonly liveTurnProof?: NativeLiveTurnProof;
   } = {}) {
     this.#connect = connect;
     this.#includeNativeGoal = options.includeNativeGoal === true;
@@ -288,6 +330,7 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
     // includeTurns:true could replay an entire multi-MiB encrypted Legacy
     // rollout before any response budget or application guard could apply.
     this.#preferBoundedTurnProof = options.preferBoundedTurnProof !== false;
+    this.#liveTurnProof = options.liveTurnProof;
   }
 
   async watchTurn(threadId: string, turnId: string, signal?: AbortSignal) {
@@ -299,6 +342,7 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
     const rpc = await this.#connect(signal);
     const controller = new AbortController();
     let unsubscribe: (() => void) | undefined;
+    let unsubscribeLive: (() => void) | undefined;
     let closing = false;
     const terminate = (reason: string, error: unknown) => {
       if (closing || controller.signal.aborted) return;
@@ -312,6 +356,7 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
       closing = true;
       signal?.removeEventListener("abort", abort);
       unsubscribe?.();
+      unsubscribeLive?.();
       await rpc.close();
     };
     try {
@@ -342,10 +387,30 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
       // BEFORE thread/resume, which can otherwise initiate server-side
       // reconstruction despite excludeTurns:true.
       if (this.#preferBoundedTurnProof && !controller.signal.aborted) {
-        const initial = await readBoundedNewestTurn(rpc, threadId, signal);
+        const initial = await readBoundedNewestTurn(rpc, threadId, signal, this.#liveTurnProof);
         if (record(initial.thread.status)?.type !== "active"
           || initial.newest?.id !== turnId || initial.newest.status !== "inProgress") {
           terminate("snapshot_inactive", new Error("Native turn no longer active"));
+        }
+        if (initial.liveReceipt && !controller.signal.aborted) {
+          // The original Desktop proxy observes turn completion and connection
+          // loss on the precise socket that received turn/start's engine ACK.
+          // This replaces a dangerous Legacy thread/resume, which could
+          // replay the entire 73 MiB rollout internally.
+          unsubscribeLive = this.#liveTurnProof?.subscribe(initial.liveReceipt,
+            () => terminate("live_owner_revoked", new Error("Native live turn ownership was revoked")));
+          if (!unsubscribeLive) {
+            terminate("live_owner_revoked", new Error("Native live turn ownership was not retained"));
+          }
+          signal?.throwIfAborted();
+          if (controller.signal.aborted) return { signal: controller.signal, close };
+          const fresh = await readBoundedNewestTurn(rpc, threadId, signal, this.#liveTurnProof);
+          if (fresh.liveReceipt !== initial.liveReceipt
+            || fresh.newest?.id !== turnId || fresh.newest.status !== "inProgress"
+            || !this.#liveTurnProof?.isCurrent(initial.liveReceipt)) {
+            terminate("snapshot_inactive", new Error("Native live turn changed during observation"));
+          }
+          return { signal: controller.signal, close };
         }
       }
       signal?.throwIfAborted();
@@ -356,7 +421,7 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
       // Reprove after attaching; a turn ending between preflight and resume
       // cannot obtain a watcher for the old active Native authority.
       const bounded = this.#preferBoundedTurnProof
-        ? await readBoundedNewestTurn(rpc, threadId, signal) : undefined;
+        ? await readBoundedNewestTurn(rpc, threadId, signal, this.#liveTurnProof) : undefined;
       const snapshot = bounded ? undefined
         : record(await rpc.request("thread/read", { threadId, includeTurns: true }, signal));
       const thread = bounded?.thread ?? record(snapshot?.thread);
@@ -378,7 +443,7 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
     const rpc = await this.#connect();
     try {
       const bounded = this.#preferBoundedTurnProof
-        ? await readBoundedNewestTurn(rpc, expectedThreadId) : undefined;
+        ? await readBoundedNewestTurn(rpc, expectedThreadId, undefined, this.#liveTurnProof) : undefined;
       const readResponse = bounded ? undefined : record(await rpc.request("thread/read", {
         threadId: expectedThreadId, includeTurns: true,
       }));
@@ -466,6 +531,9 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
           });
         }
       }
+      if (bounded?.liveReceipt && !this.#liveTurnProof?.isCurrent(bounded.liveReceipt)) {
+        throw new NativeHistoryBootstrapRequired("unindexed_history");
+      }
       return Object.freeze({
         threadId: expectedThreadId,
         turnId: currentTurnId,
@@ -474,7 +542,9 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
         cwd: resolvedEnvironment.cwd,
         workspaceRoots: resolvedEnvironment.workspaceRoots,
         sandbox: Object.freeze({ kind: "native-enforced" as const }),
-        proof: "app-server-active-turn" as const,
+        proof: bounded?.liveReceipt
+          ? "app-server-acknowledged-live-turn" as const
+          : "app-server-active-turn" as const,
         environmentSourceTurnId: currentTurnId,
         ...(nativeGoal ? { nativeGoal } : {}),
         ...(nativeGoalState ? { nativeGoalState } : {}),
@@ -678,6 +748,7 @@ export async function connectCodexAppServerWebSocket(
 export function appServerCurrentTurnSource(
   endpoint: string, options: {
     readonly includeNativeGoal?: boolean;
+    readonly liveTurnProof?: NativeLiveTurnProof;
     // The public product factory deliberately has no unsafe Legacy opt-out.
     readonly preferBoundedTurnProof?: true;
   } = {},

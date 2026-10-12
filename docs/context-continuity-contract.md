@@ -1,5 +1,41 @@
 # Native / Web context continuity contract
 
+## Original-turn ACK route for readable Legacy current input (source candidate 2026-10-12)
+
+The owned default Desktop proxy now records a **process-local, revocable**
+receipt for an original public `turn/start` response that confirms the exact
+`inProgress` Native turn. It joins the engine's `turn.id` to the original
+`threadId` using the same socket and matching JSON-RPC request ID, not
+untrusted Responses metadata. A mismatched, missing, completed, replaced or
+ambiguous receipt grants no turn authority. A second socket cannot silently
+take over an accepted receipt. Close, explicit thread/turn retirement, new
+Native turn, account invalidation and owned proxy shutdown revoke it.
+
+For a thread **explicitly reporting `historyMode=legacy`**, the default
+Desktop current-turn reader may now use this fresh original engine ACK and
+two public `thread/read(includeTurns:false)` metadata checks with matching
+owner/environment, while the exact receipt remains current. A watcher uses
+the same receipt and its original socket's lifecycle signals; it **never**
+calls `thread/resume`, `thread/turns/list`, `thread/items/list`,
+`thread/fork`, or `turn/start` merely to inspect old Legacy history. Without
+this live receipt (for example after restart), or for unknown storage modes,
+the existing unindexed-history refusal remains unchanged. Paginated readers
+retain their existing indexed proof path.
+
+This unlocks Native→Web continuity for an older Legacy thread **only where
+the already-authenticated current Native Responses request contains a
+complete, readable model-visible task context**, including an ordinary
+readable `context_compaction` marker followed by its user summary. It never
+manufactures historical content. A 73 MiB Legacy thread with **opaque**
+encrypted compaction and no separately verifiable checkpoint still returns
+`tela_native_history_indexed_source_required` and
+`recovery.kind=continue_on_native`, not a partial, falsely successful Web
+answer. The live ACK proves the new turn's identity, **not** atomic historical
+revision, past executed model/provider, or a tool-free fork certificate.
+Only default Desktop routing owns this proxy receipt. Source tests use
+synthetic metadata/turns and do not establish installed or live 73 MiB
+acceptance.
+
 ## 2026-10-11 resumed original-work safety gate: no hidden Legacy replay
 
 The product must not turn a small public page limit into an unbounded

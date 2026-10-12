@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { emitDiagnosticEvent, type DiagnosticScalar, type NativeIngressMediaRegistry } from "@chatgpt-tela/core";
+import { emitDiagnosticEvent, type DiagnosticScalar, type NativeIngressMediaRegistry, type NativeLiveTurnRegistry } from "@chatgpt-tela/core";
 import { execFile, spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
 import { dirname, join } from "node:path";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -36,6 +36,7 @@ export interface DefaultDesktopTargetRuntime {
   readonly proxyEndpoint: string;
   readonly responsesRouteFingerprint: string;
   readonly ingressMedia: NativeIngressMediaRegistry;
+  readonly liveTurnProof: NativeLiveTurnRegistry;
   stop(): Promise<void>;
 }
 
@@ -311,6 +312,7 @@ export async function startDefaultDesktopTargetRuntime(input: {
       proxyEndpoint: proxy.endpoint,
       responsesRouteFingerprint: input.route.fingerprint,
       ingressMedia: proxy.ingressMedia,
+      liveTurnProof: proxy.liveTurnProof,
       stop() {
         if (stopping) return stopping;
         const stopStarted = performance.now();

@@ -101,10 +101,14 @@ async function startNativeTarget(config: ProductProfileRuntimeConfig, url: URL, 
     });
     const publicSource = appServerCurrentTurnSource(host.proxyEndpoint, {
       includeNativeGoal: true, preferBoundedTurnProof: true,
+      liveTurnProof: host.liveTurnProof,
     });
     return {
       localCompaction: nativeEngine?.localCompaction === true,
-      invalidateIngressMedia: () => host.ingressMedia.clear(),
+      invalidateIngressMedia: () => {
+        host.ingressMedia.clear();
+        host.liveTurnProof.clear();
+      },
       ...(nativeEngine?.catalogRefresh ? { refreshModelCatalog: catalogRefreshForEndpoint(host.proxyEndpoint) } : {}),
       routedTarget: {
         target: { id: "default" },

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { diagnosticFingerprint, setPrivateDiagnosticCapture, withDiagnosticContext } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, NativeLiveTurnRegistry, setPrivateDiagnosticCapture, withDiagnosticContext } from "@chatgpt-tela/core";
 import {
   AppServerCurrentTurnSource,
   connectCodexAppServerWebSocket,
@@ -60,6 +60,73 @@ function activeThread(overrides: Record<string, unknown> = {}): Record<string, u
 }
 
 describe("Codex app-server current-turn authority", () => {
+  test("an owned engine-acknowledged Legacy live turn uses only metadata and never pages historical history", async () => {
+    const live = new NativeLiveTurnRegistry();
+    const owner = {};
+    expect(live.accept("thread-1", "turn-live", owner)).toBe(true);
+    const calls: string[] = [];
+    const rpc: CodexAppServerRpc = {
+      async request(method, params) {
+        calls.push(method);
+        if (method !== "thread/read" || (params as { includeTurns?: boolean }).includeTurns !== false) {
+          throw new Error("Legacy must not page, resume, fork or start a Native model");
+        }
+        return { thread: activeThread({ historyMode: "legacy", turns: undefined }) };
+      },
+      async close() {},
+    };
+    const source = new AppServerCurrentTurnSource(async () => rpc, {
+      liveTurnProof: live,
+    });
+    expect(await source.currentTurn("thread-1")).toMatchObject({
+      threadId: "thread-1", turnId: "turn-live",
+      proof: "app-server-acknowledged-live-turn",
+    });
+    expect(calls).toEqual(["thread/read", "thread/read"]);
+    live.retire("thread-1", "turn-live");
+    await expect(source.currentTurn("thread-1")).rejects.toMatchObject({
+      code: "native_history_bootstrap_required", recoveryReason: "unindexed_history",
+    });
+    expect(calls).toEqual(["thread/read", "thread/read", "thread/read"]);
+    expect(live.accept("thread-1", "turn-replaced", owner)).toBe(true);
+    await expect(source.currentTurn("thread-1")).resolves.toMatchObject({
+      turnId: "turn-replaced",
+    });
+  });
+
+  test("Legacy live receipt loss, metadata owner change or unknown storage mode fails before historical RPC", async () => {
+    for (const reason of ["revoked", "owner_changed", "unknown_mode"] as const) {
+      const live = new NativeLiveTurnRegistry();
+      const owner = {};
+      live.accept("thread-1", "turn-live", owner);
+      const calls: string[] = [];
+      const rpc: CodexAppServerRpc = {
+        async request(method, params) {
+          calls.push(method);
+          if (method !== "thread/read" || (params as { includeTurns?: boolean }).includeTurns !== false) {
+            throw new Error("Legacy history is never read or resumed");
+          }
+          if (reason === "revoked") live.retire("thread-1", "turn-live");
+          return { thread: activeThread({
+            historyMode: reason === "unknown_mode" ? undefined : "legacy",
+            turns: undefined,
+            ...(reason === "owner_changed" && calls.length > 1 ? {
+              environments: [{ cwd: "/different/owner",
+                runtimeWorkspaceRoots: ["/different/owner"] }],
+            } : {}),
+          }) };
+        },
+        async close() {},
+      };
+      await expect(new AppServerCurrentTurnSource(async () => rpc, {
+        liveTurnProof: live,
+      }).currentTurn("thread-1")).rejects.toMatchObject({
+        code: "native_history_bootstrap_required", recoveryReason: "unindexed_history",
+      });
+      expect(calls.every(method => method === "thread/read")).toBe(true);
+      expect(calls.length).toBeLessThanOrEqual(2);
+    }
+  });
   test("a default-constructed current-turn source rejects unindexed history before any expensive RPC", async () => {
     for (const historyMode of ["legacy", undefined, "new-unindexed-mode"]) {
       const methods: Array<{ method: string; params: unknown }> = [];
@@ -772,6 +839,37 @@ test("normal shutdown scans idle thread status without downloading history", asy
 });
 
 describe("Native turn termination observation", () => {
+  test("engine-acknowledged live Legacy observation never calls thread/resume and cancels on original owner loss", async () => {
+    const live = new NativeLiveTurnRegistry();
+    const owner = {};
+    live.accept("thread-legacy", "live-current", owner);
+    const calls: string[] = [];
+    let unsubscriptions = 0;
+    let closes = 0;
+    const rpc: CodexAppServerRpc = {
+      async request(method, params) {
+        calls.push(method);
+        if (method !== "thread/read"
+          || (params as { includeTurns?: boolean }).includeTurns !== false) {
+          throw Error("No Legacy history hydration, attach, model or tool action");
+        }
+        return { thread: activeThread({ id: "thread-legacy",
+          historyMode: "legacy", turns: undefined }) };
+      },
+      subscribe() { return () => { unsubscriptions++; }; },
+      async close() { closes++; },
+    };
+    const watcher = await new AppServerCurrentTurnSource(async () => rpc, {
+      liveTurnProof: live,
+    }).watchTurn("thread-legacy", "live-current");
+    expect(watcher.signal.aborted).toBe(false);
+    expect(calls).toEqual(Array(4).fill("thread/read"));
+    live.retireOwner(owner);
+    expect(watcher.signal.aborted).toBe(true);
+    await watcher.close();
+    expect(unsubscriptions).toBe(1);
+    expect(closes).toBe(1);
+  });
   test("a default-constructed watcher rejects a Legacy active turn before thread/resume", async () => {
     const methods: string[] = [];
     let closed = 0;

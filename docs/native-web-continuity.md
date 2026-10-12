@@ -16,6 +16,16 @@ session preferentially uses an integrity-checked Native-compaction-anchor-bound
 readable checkpoint; if the complete historical source fits within a bounded
 model budget, Tela may create such a Web-side checkpoint.
 
+The owned default Desktop proxy can also prove a **fresh original Native
+turn** in a Legacy thread using its accepted public `turn/start` response
+and bounded metadata-only `thread/read` checks. This admits Web execution
+only when the current Native request already contains complete **readable**
+task context. No Legacy history page is requested and the proxy receipt is
+revoked on turn/connection loss. A cold restart without the receipt or an
+old opaque compaction still fails closed; this is not full automatic
+reconstruction of the 73 MiB source. Other/native managed profiles without
+an owned proxy receipt retain the indexed-mode requirement.
+
 **Experimental cold automatic fallback (not enabled in production):** When no readable checkpoint
 or complete Web-sized historical source can be supplied, Tela's isolated fixture tests an
 single extra Native model call through the **public app-server** without a

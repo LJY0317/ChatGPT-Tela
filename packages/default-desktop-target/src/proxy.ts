@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import {
   emitDiagnosticEvent, prepareNativeIngressTurnMedia, NativeIngressMediaRegistry,
+  NativeLiveTurnRegistry,
   type NativeIngressPendingMedia, type DiagnosticScalar,
 } from "@chatgpt-tela/core";
 import { once } from "node:events";
@@ -36,6 +37,8 @@ export interface DefaultDesktopAppServerProxy {
   readonly activeConnectionCount: number;
   /** Ephemeral media is never authority until an exact current Native turn is proved. */
   readonly ingressMedia: NativeIngressMediaRegistry;
+  /** Memory-only original turn/start engine receipts for bounded Legacy live-turn proof. */
+  readonly liveTurnProof: NativeLiveTurnRegistry;
   close(): Promise<void>;
 }
 
@@ -45,6 +48,11 @@ function jsonRpcIdKey(value: unknown): string | undefined {
   if (typeof value === "string" && value.length > 0 && value.length <= 512) return `s:${value}`;
   if (typeof value === "number" && Number.isSafeInteger(value)) return `n:${value}`;
   return undefined;
+}
+
+function nativeLiveIdentity(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 512
+    && !/[\u0000-\u001f\u007f]/.test(value) && !!value.trim();
 }
 
 function modelListRequestId(message: string): string | undefined {
@@ -124,6 +132,7 @@ export async function startDefaultDesktopAppServerProxy(input: {
   const upstreamEndpoint = loopbackWebSocket(input.upstreamEndpoint);
   const connections = new Set<ConnectionState>();
   const ingressMedia = new NativeIngressMediaRegistry();
+  const liveTurnProof = new NativeLiveTurnRegistry();
   let closing = false;
   const server = new WebSocketServer({
     host: "127.0.0.1",
@@ -163,6 +172,13 @@ export async function startDefaultDesktopAppServerProxy(input: {
       readonly media: NativeIngressPendingMedia;
       readonly generation: number;
     }>();
+    const pendingLiveTurns = new Map<string, {
+      readonly threadId: string;
+      readonly generation: number;
+    }>();
+    const finishedLiveTurns = new Set<string>();
+    const startedLiveTurns = new Map<string, string>();
+    let liveReceiptsDisabled = false;
     const pendingCatalog = new Map<string, number>();
     const pendingHistory = new Map<string, { began: number; fingerprint: string }>();
     const connectionFingerprint = randomBytes(12).toString("hex");
@@ -202,6 +218,8 @@ export async function startDefaultDesktopAppServerProxy(input: {
         client_written_bytes: clientWrittenBytes, delivery: "socket_write_only" });
       pendingCatalog.clear(); pendingModelLists.clear(); pendingHistory.clear();
       pendingMedia.clear();
+      pendingLiveTurns.clear(); finishedLiveTurns.clear(); startedLiveTurns.clear();
+      liveTurnProof.retireOwner(state);
     };
     let permissionProfiles = false;
     connections.add(state);
@@ -240,6 +258,27 @@ export async function startDefaultDesktopAppServerProxy(input: {
         const parsed = JSON.parse(message);
         const key = jsonRpcIdKey(parsed?.id);
         if (key) {
+          const pendingLive = pendingLiveTurns.get(key);
+          if (pendingLive) {
+            pendingLiveTurns.delete(key);
+            const turn = parsed?.result?.turn;
+            // The public turn/start reply contains a turn.id/status, not a
+            // thread id. Bind it to the original request via this socket and
+            // JSON-RPC id; reject an optional contradictory thread id.
+            if (!liveReceiptsDisabled && parsed.error === undefined
+              && typeof turn?.id === "string" && turn.status === "inProgress"
+              && (turn.threadId === undefined || turn.threadId === pendingLive.threadId)
+              && !finishedLiveTurns.has(JSON.stringify([pendingLive.threadId, turn.id]))
+              && (!startedLiveTurns.has(pendingLive.threadId)
+                || startedLiveTurns.get(pendingLive.threadId) === turn.id)) {
+              if (!liveTurnProof.accept(pendingLive.threadId, turn.id, state,
+                pendingLive.generation)) {
+                diagnostic("desktop_native_live_turn_rejected", { reason_class: "receipt_unavailable" });
+              }
+            } else if (parsed.error === undefined) {
+              diagnostic("desktop_native_live_turn_rejected", { reason_class: "ambiguous_or_late_receipt" });
+            }
+          }
           const pending = pendingMedia.get(key);
           if (pending) {
             pendingMedia.delete(key);
@@ -253,13 +292,40 @@ export async function startDefaultDesktopAppServerProxy(input: {
             }
           }
         }
-        if (parsed?.method === "turn/completed"
-          && typeof parsed.params?.threadId === "string"
-          && typeof parsed.params?.turn?.id === "string") {
-          ingressMedia.retire(parsed.params.threadId, parsed.params.turn.id);
+        if (parsed?.method === "turn/started"
+          && nativeLiveIdentity(parsed.params?.threadId)
+          && nativeLiveIdentity(parsed.params?.turn?.id)) {
+          const threadId = parsed.params.threadId;
+          const turnId = parsed.params.turn.id;
+          if (!startedLiveTurns.has(threadId) && startedLiveTurns.size >= 128) {
+            liveReceiptsDisabled = true;
+            pendingLiveTurns.clear();
+            liveTurnProof.retireOwner(state);
+            diagnostic("desktop_native_live_turn_rejected", { reason_class: "notification_capacity" });
+          } else {
+            startedLiveTurns.set(threadId, turnId);
+          }
+          const existing = liveTurnProof.current(threadId);
+          if (existing && existing.turnId !== turnId) liveTurnProof.retireThread(threadId);
         }
-        if (parsed?.method === "thread/closed" && typeof parsed.params?.threadId === "string") {
+        if (parsed?.method === "turn/completed"
+          && nativeLiveIdentity(parsed.params?.threadId)
+          && nativeLiveIdentity(parsed.params?.turn?.id)) {
+          ingressMedia.retire(parsed.params.threadId, parsed.params.turn.id);
+          const marker = JSON.stringify([parsed.params.threadId, parsed.params.turn.id]);
+          if (finishedLiveTurns.size < 128) finishedLiveTurns.add(marker);
+          else { liveReceiptsDisabled = true; pendingLiveTurns.clear(); }
+          liveTurnProof.retire(parsed.params.threadId, parsed.params.turn.id);
+        }
+        if (parsed?.method === "thread/closed" && nativeLiveIdentity(parsed.params?.threadId)) {
           ingressMedia.retireThread(parsed.params.threadId);
+          liveTurnProof.retireThread(parsed.params.threadId);
+        }
+        if (parsed?.method === "thread/status/changed"
+          && nativeLiveIdentity(parsed.params?.threadId)
+          && parsed.params?.status?.type !== undefined
+          && parsed.params.status.type !== "active") {
+          liveTurnProof.retireThread(parsed.params.threadId);
         }
       } catch (error) {
         if (error instanceof SyntaxError) {
@@ -363,6 +429,27 @@ export async function startDefaultDesktopAppServerProxy(input: {
           } else diagnostic("desktop_history_tracking_saturated", { pending_count: pendingHistory.size });
         }
         if (handshake?.method === "turn/start") {
+          const key = jsonRpcIdKey(handshake.id);
+          const threadId = handshake.params?.threadId;
+          if (nativeLiveIdentity(threadId)) {
+            // Starting a new Native turn on this exact thread invalidates an
+            // older live Web owner even before the new RPC is acknowledged.
+            liveTurnProof.retireThread(threadId);
+          }
+          if (!liveReceiptsDisabled && key && nativeLiveIdentity(threadId)) {
+            if (pendingLiveTurns.has(key) || pendingLiveTurns.size >= 64) {
+              // An ambiguous RPC id must not authorize a later answer. Do
+              // not modify normal Native traffic on this optional proof path.
+              liveReceiptsDisabled = true;
+              pendingLiveTurns.clear();
+              liveTurnProof.retireOwner(state);
+              diagnostic("desktop_native_live_turn_rejected", { reason_class: "ambiguous_request" });
+            } else {
+              pendingLiveTurns.set(key, {
+                threadId, generation: liveTurnProof.generation,
+              });
+            }
+          }
           const media = prepareNativeIngressTurnMedia(handshake.params);
           if (media) {
             const key = jsonRpcIdKey(handshake.id);
@@ -417,11 +504,13 @@ export async function startDefaultDesktopAppServerProxy(input: {
     upstreamEndpoint,
     get activeConnectionCount() { return connections.size; },
     ingressMedia,
+    liveTurnProof,
     async close() {
       if (stopped) return;
       stopped = true;
       closing = true;
       ingressMedia.clear();
+      liveTurnProof.clear();
       const closingConnections = [...connections];
       const ignoreShutdownError = () => {};
       for (const state of closingConnections) {

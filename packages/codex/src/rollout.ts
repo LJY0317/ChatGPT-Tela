@@ -6,7 +6,8 @@ import type { NativeSandboxAuthority, NativeIngressTurnMedia } from "@chatgpt-te
 export type CanonicalCurrentTurnProof =
   | "turn-context"
   | "current-task-inherited-context"
-  | "app-server-active-turn";
+  | "app-server-active-turn"
+  | "app-server-acknowledged-live-turn";
 
 /** Current Native public goal state. This is observation, not execution authority. */
 export interface NativeThreadGoalObservation {
