@@ -242,6 +242,54 @@ describe("development MCP Streamable HTTP server", () => {
 });
 
 describe("private Codex bridge Streamable HTTP server", () => {
+  test("two owned profiles cannot borrow each other's bearer or original Native turn capability", async () => {
+    const firstTurns = new ActiveTurnRegistry({ routeId: "Profile1A" });
+    const secondTurns = new ActiveTurnRegistry({ routeId: "Profile2B" });
+    const firstTurn = firstTurns.register(binding());
+    const secondTurn = secondTurns.register(binding());
+    const first = await startCodexBridgeMcpHttpServer({ turns: firstTurns });
+    const second = await startCodexBridgeMcpHttpServer({ turns: secondTurns });
+    const transport = new StreamableHTTPClientTransport(second.endpointUrl, {
+      requestInit: { headers: { authorization: `Bearer ${second.bearerToken}` } },
+    });
+    const client = new Client({ name: "tela-profile-boundary-fixture", version: "1.0.0" }, { capabilities: {} });
+    try {
+      // A different profile's bearer cannot initialize an MCP session.
+      const stolenBearer = await fetch(second.endpointUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${first.bearerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize",
+          params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "fixture", version: "1" } } }),
+      });
+      expect(stolenBearer.status).toBe(401);
+      await client.connect(transport as unknown as Transport);
+      // Even with valid profile 2 authentication, a profile 1 Native turn
+      // capability grants neither inventory nor execution in profile 2.
+      const foreignInventory = await client.callTool({
+        name: CHATGPT_TELA_CODEX_TOOL_INVENTORY,
+        arguments: { turn_capability: firstTurn.capability, query: "" },
+      });
+      expect(foreignInventory.isError).toBe(true);
+      const foreignTool = await client.callTool({
+        name: CHATGPT_TELA_CODEX_TOOL_CALL,
+        arguments: { turn_capability: firstTurn.capability, call_id: "foreign-test",
+          wire_name: "exec_command", mode: "structured", arguments: {} },
+      });
+      expect(foreignTool.isError).toBe(true);
+      expect(firstTurns.size).toBe(1);
+      expect(secondTurns.size).toBe(1);
+      expect(firstTurns.active("thread-1", "turn-1")?.capability).toBe(firstTurn.capability);
+      expect(secondTurns.active("thread-1", "turn-1")?.capability).toBe(secondTurn.capability);
+      expect(firstTurn.capability).not.toBe(secondTurn.capability);
+      expect(firstTurn.channel.state().toolRoundCount).toBe(0);
+      expect(secondTurn.channel.state().toolRoundCount).toBe(0);
+    } finally {
+      await client.close().catch(() => {});
+      await first.stop();
+      await second.stop();
+    }
+  });
+
   test("serves the stable Codex bridge tools through the same bounded authenticated lifecycle", async () => {
     const server = await startCodexBridgeMcpHttpServer({ turns: new ActiveTurnRegistry() });
     const transport = new StreamableHTTPClientTransport(server.endpointUrl, {
