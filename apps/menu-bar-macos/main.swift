@@ -65,8 +65,7 @@ enum TelaPreferencesStore {
 
 private struct MenuSnapshot {
   let services: [(String, String)]
-  let approvalAutomation: String?
-  let approvalError: Bool
+  let runtimeReady: Bool
   let workInventory: TelaWorkInventory
 }
 
@@ -77,33 +76,45 @@ private final class TelaMenuToggleRow: NSView {
   private let label = NSTextField(labelWithString: "")
   private let detail = NSTextField(labelWithString: "")
   private let toggle = NSSwitch()
+  private let progress = NSProgressIndicator()
   private let icon = NSImageView()
   var action: (() -> Void)?
   var enabled = true
 
   init(title: String, image: NSImage?, on: Bool) {
-    super.init(frame: NSRect(x: 0, y: 0, width: 340, height: 48))
+    super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 48))
     icon.image = image
     icon.frame = NSRect(x: 16, y: 14, width: 20, height: 20)
-    label.frame = NSRect(x: 44, y: 25, width: 228, height: 18)
-    detail.frame = NSRect(x: 44, y: 7, width: 228, height: 16)
+    label.frame = NSRect(x: 44, y: 25, width: 196, height: 18)
+    detail.frame = NSRect(x: 44, y: 7, width: 196, height: 16)
     detail.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
     detail.textColor = .secondaryLabelColor
     label.lineBreakMode = .byTruncatingTail
-    toggle.frame = NSRect(x: 292, y: 12, width: 38, height: 24)
+    detail.lineBreakMode = .byTruncatingTail
+    toggle.frame = NSRect(x: 252, y: 12, width: 38, height: 24)
+    toggle.controlSize = .small
     addSubview(icon); addSubview(label); addSubview(detail); addSubview(toggle)
+    progress.style = .spinning
+    progress.controlSize = .small
+    progress.isIndeterminate = true
+    progress.frame = NSRect(x: 260, y: 16, width: 16, height: 16)
+    progress.isHidden = true
+    addSubview(progress)
     setAccessibilityElement(true)
     setAccessibilityRole(.checkBox)
     update(title: title, on: on, enabled: true)
   }
   required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
-  func update(title: String, on: Bool, enabled: Bool) {
+  func update(title: String, on: Bool, enabled: Bool, busy: Bool = false) {
     let parts = title.components(separatedBy: " — ")
     label.stringValue = parts.first ?? title
     detail.stringValue = parts.dropFirst().joined(separator: " — ")
     self.enabled = enabled
     toggle.state = on ? .on : .off
     toggle.isEnabled = enabled
+    toggle.isHidden = busy
+    progress.isHidden = !busy
+    if busy { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
     label.textColor = enabled ? .labelColor : .disabledControlTextColor
     setAccessibilityLabel(title)
     setAccessibilityValue(on ? 1 : 0)
@@ -199,9 +210,9 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private func updateConnectionProgress(_ message: String?) {
     connectionProgress = message
     guard let button = statusItem.button else { return }
-    let visibleProgress = message ?? (workInventory.error == nil && workInventory.profiles.contains { $0.connectionInProgress == true || ($0.connected && $0.webState == "preparing") } ? "Connecting ChatGPT…" : nil)
+    let visibleProgress = message ?? (refreshing ? "Checking status…" : nil) ?? (workInventory.error == nil && workInventory.profiles.contains { $0.connectionInProgress == true || ($0.connected && $0.webState == "preparing") } ? "Connecting ChatGPT…" : nil)
     button.toolTip = visibleProgress ?? "ChatGPT Tela"
-    button.setAccessibilityLabel(message.map { "Tela: \($0)" } ?? "ChatGPT Tela")
+    button.setAccessibilityLabel(visibleProgress.map { "Tela: \($0)" } ?? "ChatGPT Tela")
     if visibleProgress != nil {
       if connectionSpinner == nil {
         let spinner = NSProgressIndicator()
@@ -235,11 +246,12 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       if let profile = workInventory.profiles.first(where: { $0.slot == slot }) {
         let presentation = TelaProfilePresentation(profile: profile, inventoryError: workInventory.error,
           localProgress: controlCenter.connectionProgressSlot == slot ? connectionProgress : nil)
-        item.title = "Web in \(profile.targetDisplayName) — \(presentation.label)"
+        let title = workInventory.profiles.count == 1 ? "Web models" : profile.targetDisplayName
+        item.title = "\(title) — \(presentation.label)"
         item.state = profile.connected ? .on : .off
-        profileToggleRows[slot]?.update(title: "Web in \(profile.targetDisplayName) — \(presentation.label)",
+        profileToggleRows[slot]?.update(title: item.title,
           on: profile.connected, enabled: workInventory.error == nil && !controlCenter.connectionOperationInProgress
-            && profile.connectionInProgress != true)
+            && profile.connectionInProgress != true, busy: presentation.busy)
       }
       item.isEnabled = workInventory.error == nil && !controlCenter.connectionOperationInProgress
         && workInventory.profiles.first(where: { $0.slot == slot })?.connectionInProgress != true
@@ -427,22 +439,17 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       let envelope = try JSONDecoder().decode(ProfilesEnvelope.self, from: await request(descriptor, path: "v1/codex/profiles"))
       controlCenter.workState.finishRead(ticket, profiles: envelope.profiles)
     } catch { controlCenter.workState.finishRead(ticket, profiles: nil, error: error) }
-    let workProfileReady = workInventory.error == nil && workInventory.profiles.contains { $0.connected && $0.connectionInProgress != true }
     let gatewayState = await gateway
     let chatState = await chat
     let codexState = await codex
     let ingressStatus = await ingress
     let connectionReady = gatewayState == "Ready" && ingressStatus?.availability == "ready"
     let chatReady = connectionReady && chatState == "Ready"
-    let codexReady = codexState == "Ready" && workProfileReady
-    let preferences = try? TelaPreferencesStore.read(at: preferencesURL)
     return MenuSnapshot(
       services: [
-        ("Chat", chatReady ? "Available" : "Unavailable"),
-        ("Work / Codex", codexReady ? "Available" : "Unavailable")
+        ("Chat", chatReady ? "Ready" : (chatState == "Stopped" ? "Off" : "Needs attention"))
       ],
-      approvalAutomation: preferences?.approvalAutomation,
-      approvalError: preferences == nil,
+      runtimeReady: gatewayState == "Ready" && chatState == "Ready" && codexState == "Ready",
       workInventory: workInventory
     )
   }
@@ -486,17 +493,22 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     profileToggleRows.removeAll()
     profileConnectionItems.removeAll(); profileOpenItems.removeAll()
     menu.removeAllItems()
-    addDisabled("ChatGPT Tela", to: menu)
-    menu.addItem(actionItem("Open Tela…", action: #selector(openControlCenter), keyEquivalent: "o"))
-    menu.addItem(.separator())
-    if loading || snapshot == nil {
-      addDisabled("Chat: Checking…", to: menu)
-      addDisabled("Work / Codex: Checking…", to: menu)
+    if let connectionProgress {
+      addDisabled(connectionProgress, to: menu)
+    } else if loading || snapshot == nil {
+      addDisabled("Checking status…", to: menu)
     } else if let snapshot {
       for (name, state) in snapshot.services {
         addDisabled("\(name): \(state)", to: menu)
       }
-      if workInventory.error != nil { addDisabled("Couldn't check ChatGPT apps", to: menu) }
+    }
+    if let snapshot {
+      if !snapshot.runtimeReady {
+        let start = actionItem("Start Tela", action: #selector(startTela))
+        start.isEnabled = !controlCenter.connectionOperationInProgress
+        menu.addItem(start)
+      }
+      menu.addItem(.separator())
       for profile in workInventory.profiles {
         let item = actionItem("Web in \(profile.targetDisplayName) — \(profile.connectionLabel)", action: #selector(toggleWorkProfile(_:)))
         item.tag = profile.slot
@@ -513,29 +525,29 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         profileToggleRows[profile.slot] = row
         menu.addItem(item)
         addProfileOpen(profile.slot, name: profile.targetDisplayName, to: menu)
-        if profile.canReconnectWeb {
+        if profile.needsWebReconnect {
           let retry = actionItem("Reconnect Web", action: #selector(reconnectWebProfile(_:)))
           retry.tag = profile.slot
           retry.isEnabled = !controlCenter.connectionOperationInProgress && workInventory.error == nil
           menu.addItem(retry)
         }
       }
-      menu.addItem(.separator())
-      let approval = actionItem("Auto-approve one-time requests", action: #selector(toggleApproval))
-      approval.toolTip = "Automatically approve only supported one-time requests. Persistent and unknown requests remain manual."
-      approval.state = snapshot.approvalAutomation == "recognized_once" ? .on : .off
-      approval.isEnabled = !snapshot.approvalError
-      menu.addItem(approval)
-      if snapshot.approvalError {
-        addDisabled("Couldn't load approval settings. Open Tela for help.", to: menu)
-      }
     }
     if workInventory.profiles.isEmpty {
       addProfileOpen(1, name: "ChatGPT", to: menu)
     }
     menu.addItem(.separator())
+    menu.addItem(actionItem("Open Tela…", action: #selector(openControlCenter), keyEquivalent: "o"))
     menu.addItem(actionItem("Quit Tela Menu", action: #selector(quitMenuBar), keyEquivalent: "q"))
     updateProfileProgress()
+  }
+
+  @objc private func startTela() {
+    statusMenu.cancelTracking()
+    DispatchQueue.main.async { [weak self] in
+      guard let self, !self.menuOpen else { return }
+      self.controlCenter.startTelaFromMenu()
+    }
   }
 
   private func addProfileOpen(_ slot: Int, name: String, to menu: NSMenu) {
@@ -557,26 +569,6 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     controlCenter.connectFromMenu(slot: sender.tag)
   }
 
-  @objc private func toggleApproval(_ sender: NSMenuItem) {
-    do {
-      var preferences = try TelaPreferencesStore.read(at: preferencesURL)
-      preferences.approvalAutomation = preferences.approvalAutomation == "recognized_once" ? "off" : "recognized_once"
-      try TelaPreferencesStore.write(preferences, at: preferencesURL)
-      sender.state = preferences.approvalAutomation == "recognized_once" ? .on : .off
-      if let current = snapshot {
-        snapshot = MenuSnapshot(
-          services: current.services,
-          approvalAutomation: preferences.approvalAutomation,
-          approvalError: false,
-          workInventory: current.workInventory
-        )
-      }
-    } catch {
-      NSSound.beep()
-    }
-    Task { await refreshNow() }
-  }
-
   @objc private func openControlCenter() {
     controlCenterRevealPending = true
     statusMenu.cancelTracking()
@@ -592,8 +584,10 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private func refreshNow() async {
     guard !refreshing else { refreshAgain = true; return }
     refreshing = true
+    updateConnectionProgress(connectionProgress)
     defer {
       refreshing = false
+      updateConnectionProgress(connectionProgress)
       if refreshAgain { refreshAgain = false; Task { await refreshNow() } }
     }
     refreshGeneration += 1

@@ -204,6 +204,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
   private var profileFailure: String?
   private var changingServices = false
+  private var serviceAction: String?
+  private var previewLoads = 0
   private var bootstrapState = "checking"
   private var connectorURL: String?
   private var savingConfiguration = false
@@ -532,21 +534,62 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     row(title, subtitle: subtitle, control: state, in: stack)
   }
 
-  private func pageHeader(_ subtitle: String) {
+  private func pageHeader(_ subtitle: String, title: String? = nil) {
     guard let stack = detailStack else { return }
     let header = NSStackView()
     header.distribution = .fill
     header.orientation = .vertical
     header.alignment = .leading
     header.spacing = 6
-    append(sectionTitle(selectedPage.rawValue), to: header)
-    append(secondary(subtitle), to: header)
+    append(sectionTitle(title ?? selectedPage.rawValue), to: header)
+    if let activity = activityMessage {
+      let progress = NSProgressIndicator()
+      progress.style = .spinning
+      progress.controlSize = .small
+      progress.isIndeterminate = true
+      progress.setAccessibilityLabel(activity)
+      let line = NSStackView(views: [progress, secondary(activity)])
+      line.orientation = .horizontal
+      line.spacing = 8
+      append(line, to: header)
+      progress.startAnimation(nil)
+    }
+    if !subtitle.isEmpty { append(secondary(subtitle), to: header) }
     append(header, to: stack)
     stack.setCustomSpacing(22, after: header)
   }
 
   private var connectorReady: Bool {
     serviceStates["gateway"] == "Ready" && ingressStatus?.availability == "ready"
+  }
+
+  private var activityMessage: String? {
+    if changingServices { return serviceAction }
+    if changingProfile { return profileProgress ?? "Connecting…" }
+    if savingConfiguration { return "Saving settings…" }
+    if settingUp { return "Waiting for sign-in…" }
+    if changingChatFolders { return "Updating folder access…" }
+    if launchingMaintenance { return "Opening maintenance…" }
+    if previewLoads > 0 { return "Loading preview…" }
+    if refreshing { return "Checking status…" }
+    return nil
+  }
+
+  private func addTelaControl() {
+    guard installedServiceControlsAvailable() else { return }
+    let ready = ["gateway", "chat", "codex"].allSatisfy { serviceStates[$0] == "Ready" }
+    guard !ready || changingServices else { return }
+    let connection = card("Tela")
+    if changingServices {
+      append(secondary(serviceAction ?? "Updating…"), to: connection)
+    } else if serviceStates.isEmpty {
+      append(secondary("Checking…"), to: connection)
+    } else {
+      let stopped = serviceStates.values.allSatisfy { $0 == "Stopped" }
+      let start = actionButton("Start Tela", action: #selector(startServices))
+      start.isEnabled = !operationInProgress && !refreshing
+      row(stopped ? "Off" : "Needs attention", control: start, in: connection)
+    }
   }
 
   private func availability(for service: String, needsProfile: Bool = false) -> String {
@@ -560,6 +603,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func renderCurrentPage() {
     guard let stack = detailStack else { return }
+    onConnectionProgressChanged?(activityMessage)
     // Preserve an unfinished form across on-demand connection refreshes.
     if let field = endpointField { endpointDraft = field.stringValue }
     if let field = portField { portDraft = field.stringValue }
@@ -574,13 +618,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     switch selectedPage {
     case .home:
       pageHeader("Your ChatGPT connections at a glance.")
+      addTelaControl()
       let connections = card()
       addStatus("Chat", value: availability(for: "chat"),
                 subtitle: "Use your local workspace in ChatGPT.", to: connections)
       divider(in: connections)
       addStatus("Work / Codex", value: availability(for: "codex", needsProfile: true),
                 subtitle: "Use Web models in your Codex conversations.", to: connections)
-      if availability(for: "codex", needsProfile: true) == "Needs attention" {
+      if serviceStates["codex"] == "Ready" && availability(for: "codex", needsProfile: true) == "Needs attention" {
         let help = card("Finish connecting Work")
         append(secondary("Open Work to get Web models ready in ChatGPT."), to: help)
         help.addArrangedSubview(actionButton("Open Work", action: #selector(openWork)))
@@ -588,7 +633,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       stack.addArrangedSubview(actionButton("Refresh status", action: #selector(refreshPage)))
     case .work:
       pageHeader("Connect ChatGPT and check your Web activity.")
-      if installedServiceControlsAvailable() && (!profiles.contains { $0.connected } || settingUp || setupMessage != nil) {
+      addTelaControl()
+      if installedServiceControlsAvailable() && serviceStates["codex"] == "Ready" && (profiles.isEmpty || settingUp || setupMessage != nil) {
         let setup = card("Sign in and connect ChatGPT")
         append(secondary("Sign in in Tela's login window. In ChatGPT, enable Developer mode and create an MCP connection named ChatGPT Tela using the address below. Then close the login window to verify, and turn on the profile connection."), to: setup)
         if let connectorURL {
@@ -605,14 +651,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         }
         if settingUp { append(secondary("Complete setup in the login window. Choose Finish setup from its menu or close the window. Cancel setup leaves the profile disconnected."), to: setup) }
         if let setupMessage { append(secondary(setupMessage), to: setup) }
-        if serviceStates["codex"] != "Ready" {
-          let start = actionButton("Start Tela", action: #selector(startServices))
-          start.isEnabled = !operationInProgress
-          setup.addArrangedSubview(start)
-        }
       }
       let profileCard = card(profiles.count > 1 ? "ChatGPT profiles" : "ChatGPT")
-      append(secondary("Web models are available in Work chats running on your computer. In ChatGPT's computer/cloud menu, choose On your computer. Cloud chats use ChatGPT's own model list."), to: profileCard)
+      append(secondary("Web models · Work on your computer"), to: profileCard)
       if let error = workInventory.error { append(secondary(error), to: profileCard) }
       else if profiles.isEmpty { append(secondary("No Work profiles found."), to: profileCard) }
       for (index, profile) in profiles.enumerated() {
@@ -661,9 +702,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
             append(secondary("Email addresses match"), to: profileCard)
           }
         } else {
-          append(secondary(profile.connected ? "Checking accounts…" : "Connect to view the Work and Web accounts."), to: profileCard)
+          append(secondary(profile.connected ? "Checking accounts…" : "Web models off"), to: profileCard)
         }
-        if profile.canReconnectWeb {
+        if profile.needsWebReconnect {
           let retry = actionButton("Reconnect Web", action: #selector(reconnectWebButton(_:)))
           retry.tag = profile.slot
           retry.isEnabled = !operationInProgress && workInventory.error == nil
@@ -684,7 +725,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         }
       }
       if profiles.contains(where: { $0.connected && $0.webState == "ready" && $0.webModelsReady != false }) {
-        append(secondary("If Web models are missing after choosing On your computer, ChatGPT may take a few minutes to update its model list. Return to ChatGPT later and reopen the model picker."), to: profileCard)
+        append(secondary("New models may take a few minutes to appear in ChatGPT."), to: profileCard)
       }
       let preview = card("Web activity")
       let runningProfiles = profiles.filter { $0.controlState == "running" }
@@ -959,7 +1000,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func renderFirstUse() {
     guard let stack = detailStack else { return }
-    append(sectionTitle("Set up ChatGPT Tela"), to: stack)
+    pageHeader("", title: "Set up ChatGPT Tela")
     if bootstrapState == "checking" {
       append(secondary("Checking your installation…"), to: stack)
       return
@@ -1057,6 +1098,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   @objc private func startServices() { changeBackgroundServices(start: true) }
+  func startTelaFromMenu() {
+    show()
+    Task {
+      await refreshCurrentPage()
+      guard bootstrapState == "configured" else { return }
+      changeBackgroundServices(start: true)
+    }
+  }
   @objc private func stopServices() { changeBackgroundServices(start: false) }
 
   private func changeBackgroundServices(start: Bool) {
@@ -1071,6 +1120,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       guard alert.runModal() == .alertFirstButtonReturn else { return }
     }
     changingServices = true
+    serviceAction = start ? "Starting Tela…" : "Stopping Tela…"
     renderCurrentPage()
     let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"]
     Task {
@@ -1085,6 +1135,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         catch { return false }
       }.value
       changingServices = false
+      serviceAction = nil
       if !success {
         let alert = NSAlert()
         alert.messageText = "Some background services couldn't be changed"
@@ -1460,8 +1511,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       return
     }
     refreshing = true
+    renderCurrentPage()
     defer {
       refreshing = false
+      renderCurrentPage()
       let waiters = refreshWaiters
       refreshWaiters.removeAll()
       for waiter in waiters { waiter.resume() }
@@ -1573,6 +1626,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func loadBridgePreview() async {
+    previewLoads += 1
+    renderCurrentPage()
+    defer { previewLoads -= 1; renderCurrentPage() }
     previewRevision += 1
     let revision = previewRevision
     bridgeImage = nil

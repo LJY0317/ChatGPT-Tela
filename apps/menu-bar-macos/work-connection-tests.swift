@@ -52,7 +52,7 @@ let progressPresentation = TelaProfilePresentation(profile: connected, inventory
 precondition(progressPresentation.busy && progressPresentation.label == "Checking ChatGPT…")
 var catalogFailure = connected
 catalogFailure.webModelsReady = false
-precondition(catalogFailure.connected && catalogFailure.connectionLabel == "Web models need attention")
+precondition(catalogFailure.connected && catalogFailure.connectionLabel == "Models unavailable")
 let shared = TelaWorkState()
 let oldRead = shared.beginRead()
 let newRead = shared.beginRead()
@@ -65,12 +65,12 @@ shared.finishRead(pendingRead, profiles: nil, error: NSError(domain: "stale", co
 precondition(shared.inventory.error == nil)
 var preparingWeb = connected; preparingWeb.webState = "preparing"; preparingWeb.webModelsReady = false
 let preparingPresentation = TelaProfilePresentation(profile: preparingWeb, inventoryError: nil, localProgress: nil)
-precondition(preparingPresentation.busy && preparingPresentation.label.contains("Native ready"))
+precondition(preparingPresentation.busy && preparingPresentation.label == "Connecting…")
 var failedWeb = preparingWeb; failedWeb.webState = "failed"
-precondition(failedWeb.connected && failedWeb.canReconnectWeb && failedWeb.connectionLabel.contains("Native ready"))
+precondition(failedWeb.connected && failedWeb.needsWebReconnect && failedWeb.connectionLabel == "Connection failed")
 precondition(!TelaProfilePresentation(profile: failedWeb, inventoryError: nil, localProgress: nil).busy)
 var readyWeb = preparingWeb; readyWeb.webState = "ready"; readyWeb.webModelsReady = true
-precondition(readyWeb.connectionLabel == "Native ready · Web connected")
+precondition(readyWeb.connectionLabel == "Connected" && !readyWeb.needsWebReconnect)
 precondition(!TelaProfilePresentation(profile: readyWeb, inventoryError: nil, localProgress: nil).busy)
 print("launch notices, shared presentation and stale read exclusion passed")
 

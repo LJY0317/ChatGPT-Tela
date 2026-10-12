@@ -467,7 +467,7 @@ or separate Electron build. A fresh installation opens **Set up ChatGPT Tela** a
    HTTPS route or your Tailscale Funnel. The existing route must forward to that port; Tailscale must already
    be installed and signed in. This preview requires explicit consent to **development-only unauthenticated
    exposure**: anyone with the endpoint address can reach its exposed tools. It is not consumer-safe yet.
-3. Save and continue, then choose **Start Tela** in Work. Select **Open ChatGPT login** or the profile's
+3. Save and continue, then choose **Start Tela** from the menu bar or Home. Select **Open ChatGPT login** or the profile's
    **Sign in / manage connection…** button. Connected profiles must first be disconnected.
 4. Sign in yourself in the visible login window. Copy the connection address from Work and create the
    **ChatGPT Tela** Plugin using the connection instructions below. Close the login window or choose
@@ -479,6 +479,18 @@ or separate Electron build. A fresh installation opens **Set up ChatGPT Tela** a
 Existing configurations are preserved and skip the first-use form. An invalid or unverified configuration
 shows a repair instruction rather than being replaced. Extra profiles appear only when an optional
 multi-profile adapter is already configured and detected.
+
+### Everyday use and restarting your computer
+
+The Tela menu bar opens when you sign in to macOS. Choose **Start Tela** from its menu if Tela is off;
+the spinning indicator shows startup and connection progress. **Chat: Ready** means the ChatGPT Tela
+connector can reach your local Chat tools. Chat needs no Work profile switch.
+
+For Web models in Work, turn on **Web models** for your ChatGPT app, then choose **Open ChatGPT**.
+Saved connections are restored when their apps are fully stopped; an already-open app may need the
+confirmed reconnect action. Use Work **On your computer**. Sign-in and connector setup are needed on
+first use or when the connection needs repair, rather than after every reboot. Settings holds approval
+automation, connection details, and maintenance.
 
 CLI users and other platforms can use `chatgpt-tela configure --file ./product-config.json`, followed by
 `chatgpt-tela services start` and `chatgpt-tela setup [--slot N]`. The minimal configuration remains:
@@ -892,8 +904,8 @@ service startup attempts restoration once, only for fully stopped targets. Exist
 are preserved and show that reconnection is needed. Explicit disconnect clears the choice; service shutdown
 preserves it. Original ChatGPT configuration files remain unchanged.
 
-It refreshes at launch and when opened (no idle polling). The menu shows whether Chat and Work/Codex are
-available through the public connector, opens the Control Center, and controls one-shot approval automation.
+It refreshes at launch and when opened (no idle polling). The menu shows Chat availability and Web profile
+connections, starts Tela when needed, and opens ChatGPT or the Control Center. Approval automation lives in Settings.
 The Control Center groups status in Home, profile controls and on-demand browser snapshots in Work, and
 approval settings, connection details, logs, and update status in Settings. Profile stop/restart requires
 confirmation before interruption; approval delay is set in Settings. The hidden Electron Codex/Web bridge calls

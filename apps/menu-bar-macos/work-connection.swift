@@ -43,13 +43,14 @@ struct TelaWorkProfile: Decodable, Equatable {
   var webModelsReady: Bool? = nil
   var webState: String? = nil
   var canReconnectWeb: Bool { connected && (webState == "failed" || webState == "ready") }
+  var needsWebReconnect: Bool { canReconnectWeb && (webState == "failed" || webModelsReady == false) }
   var connected: Bool { controlState == "running" && targetSessionState == "ready" }
   var action: String { connected ? "stop" : (targetState == "running" || controlState == "restart-required" ? "restart" : "start") }
   var connectionLabel: String {
-    if connected && webState == "preparing" { return "Native ready · preparing Web…" }
-    if connected && webState == "failed" { return "Native ready · Web connection failed" }
-    if connected && webState == "ready" && webModelsReady != false { return "Native ready · Web connected" }
-    return connected && webModelsReady == false ? "Web models need attention" : connected ? "Web models are ready" : (action == "restart" ? "Reopen to use Web models" : "Web models are off")
+    if connected && webState == "preparing" { return "Connecting…" }
+    if connected && webState == "failed" { return "Connection failed" }
+    if connected && webState == "ready" && webModelsReady != false { return "Connected" }
+    return connected && webModelsReady == false ? "Models unavailable" : connected ? "Connected" : (action == "restart" ? "Reconnect required" : "Off")
   }
 }
 

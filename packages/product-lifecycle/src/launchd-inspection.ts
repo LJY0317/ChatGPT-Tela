@@ -7,7 +7,7 @@ export function launchdJobField(stdout: string, field: "state" | "path"): string
   let depth = 0;
   let roots = 0;
   for (const line of stdout.split(/\r?\n/)) {
-    if (/=\s*\{\s*$/.test(line)) {
+    if (/=>?\s*\{\s*$/.test(line)) {
       if (depth === 0) roots++;
       depth++;
     } else if (/^\s*}\s*$/.test(line)) {
