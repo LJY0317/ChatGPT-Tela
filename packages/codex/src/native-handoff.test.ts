@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +23,7 @@ function source(options: {
   readonly missing?: boolean;
   readonly priorExtras?: readonly Record<string, unknown>[];
   readonly currentItems?: readonly Record<string, unknown>[];
+  readonly malformedHead?: boolean;
 } = {}) {
   const methods: { method: string; params: Record<string, unknown> }[] = [];
   let closed = 0;
@@ -31,6 +33,12 @@ function source(options: {
       if (method === "thread/read") {
         if (params.includeTurns !== false) throw new Error("History download forbidden");
         return { thread: { id: "thread-one", historyMode: "paginated", status: { type: "active" } } };
+      }
+      if (method === "thread/turns/list" && params.itemsView === "notLoaded") {
+        return { data: [
+          { id: options.current ?? "web-turn", status: "inProgress",
+            itemsView: options.malformedHead ? "summary" : "notLoaded", items: [] },
+        ], nextCursor: null };
       }
       if (method === "thread/turns/list") return { data: [
         { id: options.current ?? "web-turn", status: "inProgress", itemsView: "summary",
@@ -57,6 +65,78 @@ function source(options: {
 }
 
 describe("explicit Native-owned Web handoff, read-only public contract", () => {
+  test("an active Native thread changing its newest turn during public handoff proof cannot authorize stale Web context", async () => {
+    const digest = createHash("sha256").update(json).digest("hex");
+    const folder = mkdtempSync(join(tmpdir(), "tela-handoff-head-change-"));
+    const path = join(folder, "events.jsonl");
+    const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = path;
+    try {
+      for (const method of ["latest", "verifyRecent"] as const) {
+        const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+        let closed = 0;
+        const rpc = {
+          async request(name: string, params: Record<string, unknown>): Promise<unknown> {
+            requests.push({ method: name, params });
+            if (name === "thread/read") {
+              if (params.includeTurns !== false) throw Error("Never read an unbounded Native rollout");
+              return { thread: {
+                id: "thread-one", status: { type: "active" }, historyMode: "paginated",
+              } };
+            }
+            if (name === "thread/turns/list" && params.itemsView === "summary") {
+              return { data: [
+                { id: "web-turn", status: "inProgress", itemsView: "summary", items: [] },
+                { id: "native-handoff-turn", status: "completed", itemsView: "summary", items: [
+                  { id: "request", type: "userMessage", content: [
+                    { type: "text", text: NATIVE_WEB_HANDOFF_PROMPT },
+                  ] },
+                  { id: "answer", type: "agentMessage", phase: "finalAnswer", text: json },
+                ] },
+              ], nextCursor: null };
+            }
+            if (name === "thread/turns/list" && params.itemsView === "notLoaded") {
+              // The thread remained active but moved to a different newest turn.
+              return { data: [
+                { id: "new-current", status: "inProgress", itemsView: "notLoaded", items: [] },
+              ], nextCursor: null };
+            }
+            throw Error("Unexpected RPC or attempted model/fork/tool call");
+          },
+          async close() { closed++; },
+        };
+        const reader = new AppServerNativeHandoffSource(async () => rpc);
+        if (method === "latest") {
+          await expect(reader.latest("thread-one", "web-turn"))
+            .rejects.toThrow("newest current turn changed");
+        } else {
+          await expect(reader.verifyRecent("thread-one", "web-turn",
+            "native-handoff-turn", digest)).rejects.toThrow("newest current turn changed");
+        }
+        expect(requests.every(call => call.method === "thread/read"
+          || call.method === "thread/turns/list")).toBe(true);
+        expect(requests.every(call => call.method !== "thread/read"
+          || call.params.includeTurns === false)).toBe(true);
+        expect(closed).toBe(1);
+      }
+      const log = readFileSync(path, "utf8");
+      const rows = log.trim().split("\n").map(line => JSON.parse(line))
+        .filter(row => row.stage === "native_manual_handoff_rejected");
+      expect(rows.map(row => [row.phase, row.reason_class])).toEqual([
+        ["current_turn", "current_turn_changed"],
+        ["current_turn", "current_turn_changed"],
+      ]);
+      for (const privateSource of [
+        "thread-one", "web-turn", "new-current", "native-handoff-turn",
+        "TELA_NATIVE_WEB_HANDOFF_V1", json,
+      ]) expect(log).not.toContain(privateSource);
+    } finally {
+      if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
   test("only an exact preceding Native user request + completed final answer is an eligible handoff", async () => {
     const fixture = source();
     const handoff = await fixture.reader.latest("thread-one", "web-turn");
@@ -68,10 +148,21 @@ describe("explicit Native-owned Web handoff, read-only public contract", () => {
     });
     expect(handoff?.answerDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(fixture.methods.map(item => item.method))
-      .toEqual(["thread/read", "thread/turns/list", "thread/read"]);
+      .toEqual(["thread/read", "thread/turns/list", "thread/read", "thread/turns/list"]);
     expect(fixture.methods[1]?.params).toMatchObject({
       itemsView: "summary", limit: 2, sortDirection: "desc",
     });
+    expect(fixture.methods[3]?.params).toMatchObject({
+      itemsView: "notLoaded", limit: 1, sortDirection: "desc",
+    });
+    expect(fixture.closed()).toBe(1);
+  });
+  test("a malformed indexed head never authorizes an otherwise valid handoff", async () => {
+    const fixture = source({ malformedHead: true });
+    await expect(fixture.reader.latest("thread-one", "web-turn"))
+      .rejects.toThrow("newest current turn proof is unavailable");
+    expect(fixture.methods.map(item => item.method))
+      .toEqual(["thread/read", "thread/turns/list", "thread/read", "thread/turns/list"]);
     expect(fixture.closed()).toBe(1);
   });
   test("ordinary latest Native answer never silently replaces full historical evidence", async () => {
@@ -82,6 +173,9 @@ describe("explicit Native-owned Web handoff, read-only public contract", () => {
     ]) {
       const fixture = source(invalid);
       expect(await fixture.reader.latest("thread-one", "web-turn")).toBeUndefined();
+      // No accepted handoff means no additional indexed head reproof.
+      expect(fixture.methods.map(item => item.method))
+        .toEqual(["thread/read", "thread/turns/list", "thread/read"]);
       expect(fixture.closed()).toBe(1);
     }
   });
@@ -231,6 +325,12 @@ describe("explicit Native-owned Web handoff, read-only public contract", () => {
           if (params.includeTurns !== false) throw Error("Whole history forbidden");
           return { thread: { id: "thread-one", historyMode: "paginated", status: { type: "active" } } };
         }
+        if (method === "thread/turns/list" && params.itemsView === "notLoaded") {
+          return { data: [
+            { id: "web-turn", status: "inProgress",
+              itemsView: "notLoaded", items: [] },
+          ], nextCursor: null };
+        }
         if (method === "thread/turns/list") {
           const offset = params.cursor ? Number(params.cursor) : 0;
           const data = all.slice(offset, offset + params.limit);
@@ -244,7 +344,7 @@ describe("explicit Native-owned Web handoff, read-only public contract", () => {
     const verifier = new AppServerNativeHandoffSource(async () => rpc);
     expect(await verifier.verifyRecent("thread-one", "web-turn",
       initial.handoffTurnId, initial.answerDigest)).toEqual(initial);
-    expect(methods.filter(value => value.method === "thread/turns/list")).toHaveLength(2);
+    expect(methods.filter(value => value.method === "thread/turns/list")).toHaveLength(3);
     expect(methods.every(value => value.method !== "thread/read"
       || value.params.includeTurns === false)).toBe(true);
     expect(closed).toBe(1);

@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { connectCodexAppServerWebSocket, type CodexAppServerRpcFactory } from "./app-server";
+import {
+  connectCodexAppServerWebSocket,
+  type CodexAppServerRpc, type CodexAppServerRpcFactory,
+} from "./app-server";
 import { NativeHistoryBootstrapRequired } from "./compaction-history";
 
 /**
@@ -61,6 +64,35 @@ function rejectVisibleHandoffActivity(
   throw new Error(phase === "source_turn"
     ? "Native handoff turn contains unexpected activity"
     : "Native handoff current Web turn already contains activity");
+}
+
+async function reproveCurrentHandoffTurn(
+  rpc: CodexAppServerRpc, threadId: string, currentTurnId: string, signal?: AbortSignal,
+): Promise<void> {
+  // Metadata-only indexed paging is safe ONLY after verifying Paginated in
+  // thread/read. Its limit bounds the server-side indexed store access too.
+  // Reprove at admission time: thread/read(status=active) alone cannot tell
+  // whether the previous Web turn was replaced while the summary was read.
+  const response = record(await rpc.request("thread/turns/list", {
+    threadId, sortDirection: "desc", itemsView: "notLoaded", limit: 1,
+  }, signal));
+  const rows = response?.data;
+  const current = Array.isArray(rows) && rows.length === 1 ? record(rows[0]) : undefined;
+  if (!current || !checkId(current.id) || typeof current.status !== "string"
+    || current.itemsView !== "notLoaded" || !Array.isArray(current.items)
+    || current.items.length !== 0
+    || Buffer.byteLength(JSON.stringify(rows), "utf8") > 8 * 1024) {
+    emitDiagnosticEvent("chatgpt_tela_codex", "native_manual_handoff_rejected", {
+      phase: "current_turn", reason_class: "invalid_indexed_head",
+    });
+    throw new Error("Native handoff newest current turn proof is unavailable");
+  }
+  if (current.id !== currentTurnId || current.status !== "inProgress") {
+    emitDiagnosticEvent("chatgpt_tela_codex", "native_manual_handoff_rejected", {
+      phase: "current_turn", reason_class: "current_turn_changed",
+    });
+    throw new Error("Native handoff newest current turn changed during public source read");
+  }
 }
 
 function parseHandoff(turn: Record<string, unknown>, threadId: string, currentTurnId: string):
@@ -175,6 +207,7 @@ export class AppServerNativeHandoffSource {
         || JSON.stringify(updated.source) !== JSON.stringify(metadata.source)) {
         throw new Error("Native handoff thread changed during public source read");
       }
+      if (handoff) await reproveCurrentHandoffTurn(rpc, threadId, currentTurnId, active);
       return handoff;
     } finally { await rpc.close(); }
   }
@@ -266,6 +299,7 @@ export class AppServerNativeHandoffSource {
         || JSON.stringify(fresh.source) !== JSON.stringify(metadata.source)) {
         throw new Error("Native handoff thread changed during public source verification");
       }
+      if (verified) await reproveCurrentHandoffTurn(rpc, threadId, currentTurnId, active);
       return verified;
     } finally { await rpc.close(); }
   }

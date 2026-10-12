@@ -148,6 +148,16 @@ executed model, external account identity or tool-free fork capability.
    public `userMessage` is permitted. A visible agent/tool/unknown item or
    multiple user items blocks both new and cached handoff verification, rather
    than importing a previous checkpoint after execution has already started.
+   Before accepting either a newly found or cached manual handoff, Tela
+   rechecks the newest in-progress turn through one
+   `thread/turns/list(itemsView:notLoaded,limit:1)` **indexed Paginated**
+   metadata page, after the normal post-source metadata owner check.
+   A changed newest turn or malformed public head refuses the handoff
+   before returning derived Web context. The extra page never requests
+   historical tool outputs or attempts a Legacy server-side replay.
+   This narrows the source-snapshot race; it is **not** an atomic Native
+   turn-revision certificate or proof that a Native engine cannot change
+   state after the final public check.
 5. Only then try the bounded complete visible Native source. If it is fully readable and
    an ordinary, authorized Web checkpoint producer is available, create one checkpoint
    within the *same* Web source/output budget. Revalidate the public compaction anchor

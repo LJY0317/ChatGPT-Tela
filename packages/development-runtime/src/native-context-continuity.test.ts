@@ -193,6 +193,12 @@ test("Paginated public Native handoff is re-proven before a cold Web checkpoint 
             status: { type: "active" } } };
         }
         if (method === "thread/turns/list") {
+          if (params.itemsView === "notLoaded" && params.limit === 1) {
+            return { data: [
+              { id: "web-current", status: "inProgress",
+                itemsView: "notLoaded", items: [] },
+            ], nextCursor: null };
+          }
           if (params.itemsView !== "summary" || Number(params.limit) > 8) {
             throw Error("Only bounded public summaries are permitted");
           }
@@ -226,7 +232,9 @@ test("Paginated public Native handoff is re-proven before a cold Web checkpoint 
     expect(await cache.list("task-1")).toHaveLength(1);
     expect(methods.map(entry => entry.method)).toEqual([
       "thread/read", "thread/turns/list", "thread/read",
+      "thread/turns/list",
       "thread/read", "thread/turns/list", "thread/read",
+      "thread/turns/list",
     ]);
     expect(closed).toBe(2);
   } finally { rmSync(root, { recursive: true, force: true }); }
