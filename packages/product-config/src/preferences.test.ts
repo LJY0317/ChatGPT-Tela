@@ -10,6 +10,10 @@ import {
   resolveProductPreferencesPath,
   writeProductPreferences,
   setWorkProfileConnection,
+  armSavedChatAcceptance,
+  clearSavedChatAcceptance,
+  consumeSavedChatAcceptance,
+  savedChatAcceptanceSlot,
 } from "./preferences";
 
 describe("product preferences", () => {
@@ -70,4 +74,46 @@ test("Work connection choices survive reload without replacing approval settings
     expect(() => setWorkProfileConnection("../invalid", true, path)).toThrow("identities");
     expect(readProductPreferences(path).workProfileConnections).toEqual(["local.profile2"]);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("saved-chat acceptance is exact-slot, 15-minute bounded, and removable without other preference drift", () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-saved-chat-lease-"));
+  const path = join(root, "preferences-v1.json");
+  const now = 1_800_000_000_000;
+  try {
+    writeProductPreferences({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "250ms" }, path);
+    expect(savedChatAcceptanceSlot(readProductPreferences(path), now)).toBeUndefined();
+    armSavedChatAcceptance(2, path, now);
+    const lease = readProductPreferences(path);
+    expect(lease.savedChatAcceptance).toEqual({ slot: 2, expiresAt: now + 900_000 });
+    expect(savedChatAcceptanceSlot(lease, now)).toBe(2);
+    expect(savedChatAcceptanceSlot(lease, now + 899_999)).toBe(2);
+    expect(savedChatAcceptanceSlot(lease, now + 900_000)).toBeUndefined();
+    expect(savedChatAcceptanceSlot(lease, now - 1)).toBeUndefined();
+    expect(() => armSavedChatAcceptance(1, path, now)).toThrow("has not expired");
+    expect(consumeSavedChatAcceptance(1, path, now)).toBe(false);
+    expect(readProductPreferences(path).savedChatAcceptance?.slot).toBe(2);
+    expect(consumeSavedChatAcceptance(2, path, now)).toBe(true);
+    expect(consumeSavedChatAcceptance(2, path, now)).toBe(false);
+    expect(readProductPreferences(path)).toEqual({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "250ms" });
+    armSavedChatAcceptance(1, path, now);
+    expect(savedChatAcceptanceSlot(readProductPreferences(path), now)).toBe(1);
+    clearSavedChatAcceptance(path);
+    expect(readProductPreferences(path).savedChatAcceptance).toBeUndefined();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("malformed acceptance leases fail closed without broadening preferences", () => {
+  for (const savedChatAcceptance of [
+    { slot: 0, expiresAt: 1_800_000_000_000 },
+    { slot: 100, expiresAt: 1_800_000_000_000 },
+    { slot: 2.5, expiresAt: 1_800_000_000_000 },
+    { slot: 2, expiresAt: -1 },
+    { slot: 2, expiresAt: "tomorrow" },
+    { slot: 2, expiresAt: 1_800_000_000_000, cookie: "foreign" },
+  ]) {
+    expect(() => parseProductPreferences({
+      version: 1, approvalAutomation: "off", savedChatAcceptance,
+    })).toThrow("lease");
+  }
 });

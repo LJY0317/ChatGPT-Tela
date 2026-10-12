@@ -28,6 +28,22 @@ test("reopen consent is bound to the observed Desktop PID; replacement apps rema
   } finally { await service.close(); }
 });
 
+test("profile startup passes the exact owned slot to its optional environment authority", async () => {
+  const native = fixture("available", "stopped");
+  const observed: number[] = [];
+  const service = await startCodexService({
+    config: {}, profileRuntimeCommand: ["unused"], nativeTargetAdapter: native.adapter,
+    profileRuntimeEnvironment(slot) {
+      observed.push(slot);
+      throw new Error("synthetic profile environment admission refusal");
+    },
+  });
+  try {
+    await expect(service.startProfile(1)).rejects.toThrow(ProfileConnectionError);
+    expect(observed).toEqual([1]);
+  } finally { await service.close(); }
+});
+
 test("reopen rechecks identity immediately before quit after the initial consent check", async () => {
   const native = fixture("restart-required", "running", 123);
   let reads = 0;

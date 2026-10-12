@@ -291,7 +291,7 @@ export async function startCodexService(input: {
   readonly profileRuntimeCommand: readonly [string, ...string[]];
   readonly environment?: Readonly<Record<string, string | undefined>>;
   /** Re-read user-controlled profile preferences at each profile start without restarting the Codex service. */
-  readonly profileRuntimeEnvironment?: () => Readonly<Record<string, string | undefined>>;
+  readonly profileRuntimeEnvironment?: (slot: number) => Readonly<Record<string, string | undefined>>;
   readonly nativeTargetAdapter?: CodexNativeTargetAdapter;
   readonly onProfileConnectionChanged?: (targetId: string, enabled: boolean) => void;
   readonly signal?: AbortSignal;
@@ -498,7 +498,7 @@ export async function startCodexService(input: {
           env: {
             ...process.env,
             ...(input.environment ?? {}),
-            ...(input.profileRuntimeEnvironment?.() ?? {}),
+            ...(input.profileRuntimeEnvironment?.(slot) ?? {}),
             CHATGPT_TELA_PRODUCT_PROFILE_SLOT: String(slot),
             CHATGPT_TELA_PRODUCT_ROUTE_ID: route,
             ...targets.profileRuntimeEnvironment(target),

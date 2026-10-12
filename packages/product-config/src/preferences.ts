@@ -30,6 +30,8 @@ export interface ProductPreferences {
   readonly approvalDelay?: ProductApprovalDelayPreset;
   /** Target identities chosen by the user; never evidence of live route ownership. */
   readonly workProfileConnections?: readonly string[];
+  /** Explicit owner-only acceptance window; never enables saved Web chats by default. */
+  readonly savedChatAcceptance?: { readonly slot: number; readonly expiresAt: number };
 }
 
 export const DEFAULT_PRODUCT_PREFERENCES: ProductPreferences = Object.freeze({
@@ -47,7 +49,7 @@ export function parseProductPreferences(value: unknown): ProductPreferences {
     throw new Error("ChatGPT Tela preferences must be a JSON object");
   }
   const item = value as Record<string, unknown>;
-  const extra = Object.keys(item).filter(key => !["version", "approvalAutomation", "approvalDelay", "workProfileConnections"].includes(key));
+  const extra = Object.keys(item).filter(key => !["version", "approvalAutomation", "approvalDelay", "workProfileConnections", "savedChatAcceptance"].includes(key));
   if (extra.length > 0) throw new Error(`ChatGPT Tela preferences contain unknown fields: ${extra.join(", ")}`);
   if (item.version !== 1) throw new Error("unsupported ChatGPT Tela preferences version");
   const approvalAutomation = item.approvalAutomation ?? "off";
@@ -64,11 +66,25 @@ export function parseProductPreferences(value: unknown): ProductPreferences {
     || new Set(connections).size !== connections.length)) {
     throw new Error("ChatGPT Tela Work connection identities are invalid");
   }
+  const acceptance = item.savedChatAcceptance;
+  if (acceptance !== undefined && (!acceptance || typeof acceptance !== "object" || Array.isArray(acceptance)
+    || Object.keys(acceptance).some(key => key !== "slot" && key !== "expiresAt")
+    || !Number.isSafeInteger((acceptance as { slot?: unknown }).slot)
+    || Number((acceptance as { slot: number }).slot) < 1
+    || Number((acceptance as { slot: number }).slot) > 99
+    || !Number.isSafeInteger((acceptance as { expiresAt?: unknown }).expiresAt)
+    || Number((acceptance as { expiresAt: number }).expiresAt) <= 0)) {
+    throw new Error("ChatGPT Tela saved-chat acceptance lease is invalid");
+  }
   return Object.freeze({
     version: 1,
     approvalAutomation,
     approvalDelay: approvalDelay as ProductApprovalDelayPreset,
     ...(connections === undefined ? {} : { workProfileConnections: Object.freeze([...connections as string[]]) }),
+    ...(acceptance === undefined ? {} : { savedChatAcceptance: Object.freeze({
+      slot: (acceptance as { slot: number }).slot,
+      expiresAt: (acceptance as { expiresAt: number }).expiresAt,
+    }) }),
   });
 }
 
@@ -107,4 +123,44 @@ export function setWorkProfileConnection(targetId: string, enabled: boolean, pat
   const identities = new Set(preferences.workProfileConnections ?? []);
   if (enabled) identities.add(targetId); else identities.delete(targetId);
   writeProductPreferences({ ...preferences, workProfileConnections: [...identities].sort() }, path);
+}
+
+/** Owner-operated, bounded, local-only experiment; no permanent saved-chat preference. */
+export function armSavedChatAcceptance(
+  slot: number, path = resolveProductPreferencesPath(), now = Date.now(),
+): void {
+  if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99 || !Number.isSafeInteger(now) || now < 1) {
+    throw new Error("saved-chat acceptance needs a valid slot and current time");
+  }
+  const preferences = readProductPreferences(path);
+  if (preferences.savedChatAcceptance && preferences.savedChatAcceptance.expiresAt > now) {
+    throw new Error("another saved-chat acceptance lease has not expired");
+  }
+  writeProductPreferences({ ...preferences, savedChatAcceptance: {
+    slot, expiresAt: now + 15 * 60_000,
+  } }, path);
+}
+
+export function clearSavedChatAcceptance(path = resolveProductPreferencesPath()): void {
+  const { savedChatAcceptance, ...preferences } = readProductPreferences(path);
+  if (savedChatAcceptance) writeProductPreferences(preferences, path);
+}
+
+export function savedChatAcceptanceSlot(preferences: ProductPreferences, now = Date.now()): number | undefined {
+  const lease = preferences.savedChatAcceptance;
+  if (!lease || !Number.isSafeInteger(now) || now < 1
+    || lease.expiresAt <= now || lease.expiresAt > now + 15 * 60_000) return undefined;
+  return lease.slot;
+}
+
+/** Consume before spawning the exact owned profile; failed starts cannot replay the grant. */
+export function consumeSavedChatAcceptance(
+  slot: number, path = resolveProductPreferencesPath(), now = Date.now(),
+): boolean {
+  const preferences = readProductPreferences(path);
+  if (savedChatAcceptanceSlot(preferences, now) !== slot) return false;
+  const { savedChatAcceptance, ...ordinary } = preferences;
+  if (!savedChatAcceptance) return false;
+  writeProductPreferences(ordinary, path);
+  return true;
 }
