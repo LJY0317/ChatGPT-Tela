@@ -10,6 +10,23 @@ Native Codex remains the only authority for task state, tools, approvals, cancel
 
 ## Normal use
 
+### Installed first-use acceptance checkpoint (2026-10-12)
+
+On the locally installed signed `01e0178` source-based Tela preview,
+the **mainstream default Web profile (slot 1)** passed two bounded browser
+canaries: a real model picker discovered three families, exercised a
+selection and verified restoration of the original family/effort; a separate
+synthetic 200,316-byte context attachment returned the exact expected
+request-bound receipt. Neither canary submits a model request, starts a
+Native fork, reads the real user's Native history, or verifies continuation
+after a Native tool call. They establish real installed **picker and context
+transport** readiness, not first useful Web execution or automatic opaque
+73 MiB Legacy recovery. A separate optional Web profile remained failed;
+its readiness must not be inferred from slot 1 or repaired by changing
+another product's login/profile owner. The remaining next major acceptance
+is a separately owner-authorized original-task, same-turn Web/tool/final
+round trip.
+
 Choosing a Web model normally does not launch a Native summary model call.
 A verified retained Web session receives only the new suffix. A new Web
 session preferentially uses an integrity-checked Native-compaction-anchor-bound

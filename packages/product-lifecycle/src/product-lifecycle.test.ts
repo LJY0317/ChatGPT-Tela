@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -13,6 +13,57 @@ import {
 } from "./index";
 
 describe("product lifecycle ownership", () => {
+  test("removing Tela with all data preserves separate Plura, official Desktop and Native files", async () => {
+    // The temporary filesystem is the *entire* test world. Neither this
+    // fixture nor the product should operate on real app/profile paths.
+    const root = mkdtempSync(join(tmpdir(), "tela-separate-products-"));
+    try {
+      const tela = join(root, "ChatGPT Tela", "state");
+      const plura = join(root, "PluraDesktop", "profiles");
+      const originalDesktop = join(root, "ChatGPT.app");
+      const originalNative = join(root, ".codex");
+      for (const path of [plura, originalDesktop, originalNative]) {
+        mkdirSync(path, { recursive: true });
+        writeFileSync(join(path, "retain.txt"), "independent-original-data");
+      }
+      let manifest = createOwnershipManifest("tela-fixture");
+      manifest = withOwnedResource(manifest, {
+        kind: "directory", id: "tela-state", owner: "codex", path: tela, dataClass: "state",
+      });
+      writeOwnershipMarker(tela, manifest, "tela-state");
+      const owner = new FilesystemOwnershipObserver();
+      const plan = await planUninstall({ manifest, observer: owner, removeData: true });
+      expect(plan.steps).toMatchObject([{ resourceId: "tela-state", action: "remove" }]);
+      const result = await applyUninstallPlan({
+        manifest, plan,
+        operator: {
+          observe: (resource, starting) => owner.observe(resource, starting),
+          async remove(resource) {
+            if (resource.kind !== "directory") throw Error("fixture only removes Tela's marked directory");
+            rmSync(resource.path, { recursive: true });
+            return { removed: true, detail: "exact fixture-owned directory removed" };
+          },
+        },
+      });
+      expect(result.failedCount).toBe(0);
+      expect(result.removedCount).toBe(1);
+      expect(existsSync(tela)).toBe(false);
+      for (const path of [plura, originalDesktop, originalNative]) {
+        expect(readFileSync(join(path, "retain.txt"), "utf8")).toBe("independent-original-data");
+      }
+      // In the reverse standalone choice, a separate Plura-only removal
+      // does not have any Tela or OpenAI resource in its own owner scope.
+      writeOwnershipMarker(tela, manifest, "tela-state");
+      rmSync(join(root, "PluraDesktop"), { recursive: true });
+      expect(existsSync(tela)).toBe(true);
+      for (const path of [originalDesktop, originalNative]) {
+        expect(readFileSync(join(path, "retain.txt"), "utf8")).toBe("independent-original-data");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("uses platform-native roots while keeping service state separate", () => {
     const mac = resolveProductPaths({ platform: "darwin", home: "/Users/test", environment: {} });
     const macHome = resolve("/Users/test");

@@ -122,6 +122,20 @@ describe("product profile native-target selection", () => {
         targetId: "local.profile2",
         launcherCli: launcher,
       });
+      rmSync(launcher);
+      expect(() => loadProductProfileRuntimeConfig({
+        ...common(root),
+        CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "2",
+        CHATGPT_TELA_PRODUCT_NATIVE_TARGET_KIND: "multi-profile",
+        CHATGPT_TELA_PRODUCT_TARGET_ID: "local.profile2",
+        CHATGPT_TELA_PRODUCT_LAUNCHER_CLI: launcher,
+      })).toThrow("does not exist");
+      // A removed optional provider must not change the standalone default:
+      // no silent failover from an explicitly selected foreign owner.
+      expect(loadProductProfileRuntimeConfig({
+        ...common(root),
+        CHATGPT_TELA_PRODUCT_LAUNCHER_CLI: launcher,
+      }).nativeTarget).toEqual({ kind: "default-desktop", targetId: "default" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

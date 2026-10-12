@@ -61,6 +61,50 @@ target are synthetic. Native engine was reused; owner activation remains off. Th
 fixture binary were removed after recording hashes/metadata. Actual platform registration and production
 CLI cancellation apply remain unproven; this fixture does not establish consumer release acceptance.
 
+## Independence from original apps and optional providers
+
+**Release invariant:** OpenAI's original ChatGPT Desktop/Native Codex app must
+remain independently usable if Tela, Plura Desktop, both, or neither is
+installed. Tela and Plura are separately installed and removed products, not
+mutual prerequisites. Neither product owns the other's installation,
+launch agents, browser partitions, authentication, user data or workspaces.
+
+| Installed choice | Required owner and outcome |
+| --- | --- |
+| Neither Tela nor Plura | Original ChatGPT Desktop/Native Codex remains usable with its original state. |
+| Tela alone | Mainstream default target uses Tela's built-in original-Desktop adapter; Tela never invokes a Plura executable. |
+| Plura alone | Plura manages only its own explicitly owned targets; no Tela Gateway/Chat/Codex or Tela browser is required. |
+| Both, no provider selected in Tela | Tela default remains built-in; Plura is independently usable and its failure/removal does not affect Tela's default route. |
+| Both, Plura explicitly selected in Tela | Tela's built-in adapter still owns default slot 1; Plura owns only the selected additional managed slots (2+). Tela owns its separate Web/task/Responses routes. No slot has competing Desktop owners. |
+| Remove Tela, keep Plura | Tela's exact owner-verified uninstall removes only Tela assets and any Tela-owned route lease. Plura and original app continue unchanged. |
+| Remove Plura, keep Tela | First finish/disconnect any Plura-owned **additional** Tela targets. Default slot 1 stays on Tela's built-in adapter without reconfiguration. Extra managed slots become unavailable; explicit `configure` without the optional launcher may detach its stale reference. Never switch an active Native turn or take over another Desktop process. |
+| Remove both | Apply each product's own owner-verified uninstall independently, preserving the original app, Native home/history and any user-owned repositories. |
+
+Provider-unavailable **optional** selection is a typed target failure,
+while the built-in default remains available. It is not evidence that an
+unrelated app should be installed, started, shut down or uninstalled.
+Plura's public launcher is an optional adapter:
+Tela records a reference, not removal authority. Remove-data for Tela may
+delete only Tela-owned profile/binding/cache state; it must never remove
+Plura's or OpenAI's browser partitions, cookies or Native history.
+
+**Acceptance evidence must be separate:** fake-OS ownership and uninstall
+tests may establish source invariants; an installed Tela upgrade and service
+readiness do not establish removal of both independent products. Before a
+consumer release, exercise each row's install/start/stop/remove/reinstall
+flows on a disposable supported host with separate original-app, Tela and
+Plura ownership records. Verify the remaining app still starts and retains
+its own data after each removal, plus original Desktop startup after both
+are gone. The currently signed local preview has not passed that full
+installed cross-product removal matrix.
+An installed signed **Tela-only** `uninstall --dry-run` also enumerated
+exact Tela service registrations, its own route lease, managed worktrees and
+product binaries without treating Plura or the original app as an owned
+resource. This is a planning observation, not installed uninstall/apply
+acceptance. Actual removal of either/both products remains a separate
+operator-owned acceptance exercise; production builds must not report it
+complete from fake-OS tests alone.
+
 ## Product-owned resources
 
 Every persistent resource created by Tela is recorded in one versioned ownership manifest with an install

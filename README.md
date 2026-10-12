@@ -663,12 +663,26 @@ whose SHA-256 equals the current package's bundled `app/resources/codex.exe`. Ex
 `CHATGPT_EXECUTABLE` / `CODEX_EXECUTABLE` overrides remain available for nonstandard installs. Real-OS
 product validation is still required before public Windows/Linux release.
 
-**Plura Desktop** is therefore an optional advanced lifecycle provider, not a required dependency. Without it,
-canonical slot 1 uses Tela's built-in official Desktop adapter exactly as before. When the provider is explicitly
-configured, Plura Desktop becomes the single Desktop lifecycle owner for slot 1 and any additional managed slots
-through the same public target/session contract. Tela still owns its Responses/browser/task runtime, but it no
-longer starts a competing supervisor for the same default ChatGPT user-data directory. Ordinary single-account
-users do not install or traverse the provider path.
+**Plura Desktop** is therefore an optional advanced lifecycle provider, not a required dependency. Canonical
+slot 1 always uses Tela's built-in official Desktop adapter, even when Plura is configured. The composite
+production route uses Plura's public target/session contract only for additional managed slots (2+).
+Plura owns those targets' Desktop lifecycle; Tela owns its own Responses/browser/task runtime and never
+asks Plura to supervise canonical slot 1. Ordinary single-account users do not traverse the provider path.
+
+**Independent installation and removal:** The original ChatGPT Desktop/Native Codex app must keep working
+without either Tela or Plura. Tela alone uses the original app through its built-in adapter; Plura alone
+manages only its own Desktop targets. Installing, updating, or uninstalling Tela never grants ownership of
+Plura's executable, services, profiles, credentials, or Native history, and vice versa. Removing both products
+must leave the original app and user-owned data intact.
+
+If Plura supplies additional Tela slots, finish/close those *owned target sessions* before removing Plura.
+Tela's built-in default continues independently; provider loss does not silently transfer an in-progress
+Native turn to another Desktop owner. Additional Plura-managed slots become unavailable. To remove the stale
+optional adapter reference, the source `configure` command may be run without `--multi-profile-launcher`
+(supplying the normal public MCP exposure settings again). Conversely, Tela removal needs no Plura
+operation: use Tela's own `uninstall --dry-run` and its owner-verified apply/keep-data choice.
+Never remove the original ChatGPT app, native config, or Plura resources as part of that plan. See
+[independent product lifecycle acceptance](docs/product-lifecycle.md#independence-from-original-apps-and-optional-providers).
 
 The source runtime supports two explicit public exposure ownership modes. `existing-https` verifies and reuses a
 route owned elsewhere. `tailscale-funnel` lets Tela create and verify one exact Funnel path and record that

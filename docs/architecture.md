@@ -685,10 +685,10 @@ reading or changing another slot's binding. See [authentication](https://learn.c
 
 Desktop lifecycle ownership is mutually exclusive. With no Multi-Profile provider configured, slot 1 is resolved
 by the built-in default Desktop adapter and remains independent of every optional provider. When a Multi-Profile
-provider is explicitly configured, that provider resolves slot 1 and any additional managed slots through one
-public target/session contract. Tela must not run its built-in default supervisor beside the provider: both would
-otherwise own the same default ChatGPT user-data directory and invalidate each other's canonical session. This
-changes only Desktop lifecycle ownership; Tela's Responses/browser/task authority remains in the same product
+provider is explicitly configured, the composite product route still resolves **slot 1 through the built-in
+default** and delegates only optional managed slots (2+) to the public target/session contract. Tela does not
+invoke both Desktop adapters for one slot. Provider removal makes those optional slots unavailable without
+retargeting the default Native owner. Tela's Responses/browser/task authority remains in the same product
 runtime.
 
 Product configuration is also independent from browser-profile ownership. The canonical version-1 config is
@@ -1486,10 +1486,20 @@ oracle until the new service proves those behaviors.
 
 Tela works with the ordinary official ChatGPT profile without a multi-profile provider.
 Plura Desktop manages isolated ChatGPT profiles without Tela. When both are present, Tela
-uses the public optional provider contract only for additional profiles; the default
-profile remains on Tela's built-in adapter. Provider absence or failure must not block
-that default profile. No provider's package or user data is owned by the other product.
-Before removing an integration in use, disconnect its exact owned runtime normally.
+uses the public optional provider contract **only when explicitly configured**.
+Without that configuration, the default profile remains on Tela's built-in
+adapter and must not import, start, or depend on Plura. With the provider
+explicitly configured, Plura is the **sole Desktop lifecycle owner** of the
+additional managed targets (slots 2+), while Tela's built-in adapter remains
+the canonical slot 1 owner. Tela never starts both owners for one slot and
+continues to own its own Web browser/task/Responses state. Provider loss
+invalidates only the optional managed slots; it must not rewrite original
+Native history, stop Tela's default profile, or destroy independent Tela Chat
+or the original ChatGPT app. Changing an extra slot's owner is an explicit
+disconnected transition, never an in-flight automatic fallback.
+Neither product may claim the other's installation, registration, profile,
+credentials, or user data for removal. For the standalone/coexistence/removal
+acceptance matrix, see [product lifecycle](product-lifecycle.md#independence-from-original-apps-and-optional-providers).
 
 Desktop process ownership and Web model readiness are separate states. Readiness requires
 an effective startup catalog and visible Web model rows. Inventory checks verify these
