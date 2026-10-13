@@ -290,12 +290,25 @@ function retainedDelta(
   ));
   if (inputHeadIndex < 0) return undefined;
 
+  // Match the answer to the immediately completed original Native request,
+  // not to the last assistant message whose prose happens to repeat it.
+  // Later completed turns may legitimately have identical final answers;
+  // their entire canonical user/assistant suffix must reach the retained
+  // page instead of disappearing behind a text-only fingerprint match.
   let assistantIndex = -1;
-  for (let index = projection.revisions.length - 1; index > inputHeadIndex; index -= 1) {
-    const item = projection.revisions[index]!;
-    if (item.revision.kind !== "assistant") continue;
-    assistantIndex = index;
-    break;
+  for (let index = inputHeadIndex + 1; index < projection.revisions.length; index += 1) {
+    const kind = projection.revisions[index]!.revision.kind;
+    if (kind === "user" || kind === "steering") break;
+    if (kind === "assistant") {
+      // Ambiguous multi-message Native completion has no single proven
+      // committed answer boundary. Rebuild from canonical history.
+      if (assistantIndex >= 0) return undefined;
+      assistantIndex = index;
+    } else if (assistantIndex >= 0) {
+      // A later tool event after a purported final answer is not proven to
+      // exist on the retained physical Web page.
+      return undefined;
+    }
   }
   if (assistantIndex < 0) return undefined;
   const assistant = projection.revisions[assistantIndex]!;

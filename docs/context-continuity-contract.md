@@ -229,6 +229,10 @@ canonical Native logical revision lineage, then selects:
 
 - Verified retained Web epoch: transfer only the new canonical suffix, preserving its
   already-resident context and required media. Reuse the proven logical projection once.
+  The prior committed answer must be the single assistant completion of the immediately
+  preceding original Native request, before any subsequent user/steering request.
+  Repeated assistant text later in the Native history must not skip intervening turns;
+  an ambiguous completion boundary or post-final tool event requires fresh projection.
 - New or rolled-over Web epoch: use source-bound Web checkpoint + revisions when valid,
   otherwise the bounded, physically fitted visible context. Optional context attachment
   has a separate upload receipt. Provider projection cannot erase the current request,

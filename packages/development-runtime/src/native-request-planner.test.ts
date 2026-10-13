@@ -880,6 +880,104 @@ describe("Native request development Web planner", () => {
     third.settle?.({ status: "failed" });
   });
 
+  test("repeated identical Native assistant answers never hide intervening completed turns from retained Web context", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const first = await planner(registered(), {
+      model: "native-model-a",
+      input: [{ type: "message", role: "user", content: "Inspect file A." }],
+    });
+    first.settle?.({
+      status: "completed", documentGeneration: 1,
+      surfaceLeaseId: "physical-page-a", answer: "Completed.",
+    });
+    const next = await planner(registered(), {
+      model: "native-model-a",
+      input: [
+        { type: "message", role: "user", content: "Inspect file A." },
+        { type: "message", role: "assistant", content: "Completed." },
+        { type: "message", role: "user", content: "Inspect file B." },
+        { type: "message", role: "assistant", content: "Completed." },
+        { type: "message", role: "user", content: "Now inspect file C." },
+      ],
+    });
+    expect(next.physicalContext.mode).toBe("retained-delta");
+    expect(next.physicalContext.segments.filter(segment => segment.type === "revision")
+      .map(segment => segment.content)).toEqual([
+        "Inspect file B.", "Completed.", "Now inspect file C.",
+      ]);
+    next.settle?.({ status: "failed" });
+  });
+
+  test("an intervening Native request before the previous Web answer revokes retained-page ancestry", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const first = await planner(registered(), {
+      input: [{ type: "message", role: "user", content: "Initial request." }],
+    });
+    first.settle?.({
+      status: "completed", documentGeneration: 1,
+      surfaceLeaseId: "physical-page-a", answer: "Repeated final answer.",
+    });
+    const next = await planner(registered(), {
+      input: [
+        { type: "message", role: "user", content: "Initial request." },
+        { type: "message", role: "user", content: "A later, independently routed request." },
+        { type: "message", role: "assistant", content: "Repeated final answer." },
+        { type: "message", role: "user", content: "Current request." },
+      ],
+    });
+    expect(next.physicalContext.mode).toBe("full");
+    expect(next.retainedSurfaceLeaseId).toBeUndefined();
+    expect(JSON.stringify(next.physicalContext.segments)).toContain("A later, independently routed request.");
+    next.settle?.({ status: "failed" });
+  });
+
+  test("multiple assistant messages before the next Native request cannot impersonate one committed Web final", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const first = await planner(registered(), {
+      input: [{ type: "message", role: "user", content: "Original request." }],
+    });
+    first.settle?.({
+      status: "completed", documentGeneration: 1,
+      surfaceLeaseId: "physical-page-a", answer: "Final answer.",
+    });
+    const next = await planner(registered(), {
+      input: [
+        { type: "message", role: "user", content: "Original request." },
+        { type: "message", role: "assistant", content: "Unverified intervening answer." },
+        { type: "message", role: "assistant", content: "Final answer." },
+        { type: "message", role: "user", content: "Follow-up." },
+      ],
+    });
+    expect(next.physicalContext.mode).toBe("full");
+    expect(next.retainedSurfaceLeaseId).toBeUndefined();
+    expect(JSON.stringify(next.physicalContext.segments))
+      .toContain("Unverified intervening answer.");
+    next.settle?.({ status: "failed" });
+  });
+
+  test("a Native tool result after the committed Web final invalidates the retained-page boundary", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const first = await planner(registered(), {
+      input: [{ type: "message", role: "user", content: "First request." }],
+    });
+    first.settle?.({
+      status: "completed", documentGeneration: 1,
+      surfaceLeaseId: "physical-page-a", answer: "First final.",
+    });
+    const later = await planner(registered(), {
+      input: [
+        { type: "message", role: "user", content: "First request." },
+        { type: "message", role: "assistant", content: "First final." },
+        { type: "function_call_output", call_id: "late-native-tool", output: "Late tool output." },
+        { type: "message", role: "user", content: "Follow-up request." },
+      ],
+    });
+    expect(later.physicalContext.mode).toBe("full");
+    expect(later.retainedSurfaceLeaseId).toBeUndefined();
+    expect(JSON.stringify(later.physicalContext.segments)).toContain("Late tool output.");
+    later.settle?.({ status: "failed" });
+  });
+
   test("large retained assistant growth rolls over only the physical Web epoch while Native history stays complete", async () => {
     const planner = createNativeRequestDevelopmentWebTurnPlanner();
     const familyKey = chatGptWebFamilyKey("Observed Family");
