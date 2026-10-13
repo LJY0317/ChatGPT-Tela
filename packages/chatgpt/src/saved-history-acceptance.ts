@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { BROWSER_PAGE_AUTOMATION, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { ChatGptDomSurfaceDriver } from "./dom-driver";
 import { deleteOwnedSyntheticSavedChat, type SyntheticSavedChatDeleteReceipt } from "./saved-history-delete";
 import { CHATGPT_SAVED_CHAT_URL } from "./session";
@@ -57,7 +58,10 @@ export async function exerciseSavedChatCreateAndDelete(
   const baselineSalt = randomBytes(16).toString("hex");
   const deadline = AbortSignal.timeout(90_000);
   const bounded = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  const stage = (phase: string): void => emitDiagnosticEvent("chatgpt_tela_work",
+    "saved_delete_acceptance_phase", { phase });
 
+  stage("inspect_start_surface");
   const alreadyOpen = await driver.observe(bounded);
   const initial = new URL(alreadyOpen.url);
   if (initial.origin !== "https://chatgpt.com" || initial.pathname !== "/"
@@ -65,9 +69,11 @@ export async function exerciseSavedChatCreateAndDelete(
     || alreadyOpen.composers.some(c => c.textLength || c.attachmentNames.length || c.connectorFingerprints.length)) {
     throw new Error("Existing account-browser conversation or unsent draft must not be changed");
   }
+  stage("navigate_saved_home");
   // Even if the Work browser used the standard Temporary Chat URL, this
   // explicit test alone navigates to the normal saved ChatGPT home.
   await surface.navigate(CHATGPT_SAVED_CHAT_URL);
+  stage("observe_saved_home");
   let home: ChatGptSurfaceSnapshot | undefined;
   for (let attempt = 0; attempt < 8; attempt++) {
     bounded.throwIfAborted();
@@ -84,6 +90,7 @@ export async function exerciseSavedChatCreateAndDelete(
   if (composer.textLength || composer.attachmentNames.length || composer.connectorFingerprints.length) {
     throw new Error("Saved ChatGPT composer is not empty");
   }
+  stage("read_history_baseline");
   const historyHashes = await page.evaluate<string, string[]>(HISTORY_BASELINE, baselineSalt, bounded);
   if (!Array.isArray(historyHashes) || historyHashes.length > 500
     || historyHashes.some(value => typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))) {
@@ -92,6 +99,7 @@ export async function exerciseSavedChatCreateAndDelete(
 
   // All preparatory work above is non-sending. Do not retry Send after this
   // exact activation boundary, even if the browser returns an error.
+  stage("prepare_test_message");
   await driver.replaceComposerText(composer.key, marker, bounded);
   let filled = await driver.observe(bounded);
   let expected = filled.composers.filter(c => c.key === composer.key && c.visible && c.editable
@@ -104,7 +112,9 @@ export async function exerciseSavedChatCreateAndDelete(
     if (expected.length === 1) await driver.clearComposerText(composer.key, bounded);
     throw new Error("Exact synthetic saved-chat send control could not be proven");
   }
+  stage("activate_send_once");
   await driver.activateSend(controls[0]!.key, bounded);
+  stage("observe_new_test_user");
   let acceptedPath: string | undefined;
   let modelReplyCompleted = false;
   let replyDeadline: AbortSignal | undefined;
@@ -130,17 +140,20 @@ export async function exerciseSavedChatCreateAndDelete(
         throw new Error("New synthetic test route was present before the send");
       }
       acceptedPath = path;
+      stage("new_user_and_route_proven");
       replyDeadline ??= AbortSignal.timeout(20_000);
       modelReplyCompleted = seen.turns.some(t => t.role === "assistant" && t.phase === "complete");
       if (modelReplyCompleted || seen.turns.some(t => t.role === "assistant" && t.phase === "failed")) break;
     }
   }
   if (!acceptedPath) throw new Error("The new saved chat identity was not proven after Send");
+  stage("official_ui_delete_start");
   // The only trusted deletion authority is the freshly submitted marker,
   // matching the exact new conversation path on the SAME owner surface.
   const officialDelete = await deleteOwnedSyntheticSavedChat(surface, {
     path: acceptedPath, exactUserMessage: marker,
   }, bounded);
+  stage("official_ui_delete_absence_proven");
   return Object.freeze({ contractVersion: 1, newlyAccepted: true,
     modelReplyCompleted, officialDelete });
 }
