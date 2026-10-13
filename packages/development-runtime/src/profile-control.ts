@@ -14,6 +14,8 @@ import {
   ChatGptWebModelPickerControlUnavailableError,
   observeChatGptAccountIdentity,
   observeChatGptAccountDisplay,
+  observeChatGptHistoryUi,
+  type ChatGptHistoryUiReadiness,
 } from "@chatgpt-tela/chatgpt";
 
 export interface ChatGptProfileObservation {
@@ -32,6 +34,8 @@ export interface ElectronProfileSetupSurface {
   onUserHide(observer: () => void): () => void;
   probeChatGptReadiness(signal?: AbortSignal): Promise<ChatGptCapabilities>;
   probeChatGptProfile(signal?: AbortSignal): Promise<ChatGptProfileObservation>;
+  /** Owner-only, content-free official history UI preflight. Never clicks/deletes. */
+  probeChatGptHistoryUi?(): Promise<ChatGptHistoryUiReadiness>;
   reveal(): Promise<void>;
   close(): Promise<void>;
 }
@@ -331,6 +335,10 @@ export function createChatGptProfileControl(input: {
         async probeChatGptProfile(signal?: AbortSignal) {
           requireSurfaceOpen();
           return proveProfile(lease, input.provider, accountIdentityObserver, signal);
+        },
+        async probeChatGptHistoryUi() {
+          requireSurfaceOpen();
+          return observeChatGptHistoryUi(lease, AbortSignal.timeout(8_000));
         },
         async reveal() {
           requireSurfaceOpen();

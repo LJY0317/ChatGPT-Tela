@@ -216,6 +216,7 @@ export interface WebConversationProvider {
 
 export * from "./surface";
 export * from "./account-identity";
+export * from "./history-ui";
 export * from "./approval-policy";
 export * from "./dom-driver";
 export * from "./session";

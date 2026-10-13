@@ -57,6 +57,32 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("history preflight rejects unowned callers and wrong-slot private observations", async () => {
+    const service = fixtureService();
+    const seen: number[] = [];
+    let mismatch = false;
+    service.inspectAccountBrowserHistoryUi = async slot => {
+      seen.push(slot);
+      return { contractVersion: 1, slot: mismatch ? 1 : slot, route: "home", historyLinkCount: 0,
+        visibleHistoryLinkCount: 0, nearbyActionRowCount: 0,
+        nearbyMenuRowCount: 0, visibleMenuCount: 0, visibleDialogCount: 0 };
+    };
+    const token = "r".repeat(48);
+    const server = await startCodexServiceHttpServer({ service, bearerToken: token });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+      bearerToken: token, startedAt: new Date().toISOString() });
+    try {
+      const url = new URL("v1/codex/profiles/2/account-browser-history-ui", server.endpoint);
+      expect((await fetch(url)).status).toBe(401);
+      expect((await fetch(url, { headers: { authorization: `Bearer ${token}`, origin: "https://chatgpt.com" } })).status).toBe(403);
+      expect(seen).toEqual([]);
+      expect((await client.inspectAccountBrowserHistoryUi(2)).slot).toBe(2);
+      mismatch = true;
+      await expect(client.inspectAccountBrowserHistoryUi(2)).rejects.toThrow();
+      expect(seen).toEqual([2, 2]);
+    } finally { await client.close(); await server.close(); }
+  });
   test("closing the exact account browser uses only the authenticated profile path", async () => {
     const service = fixtureService();
     const closed: number[] = [];

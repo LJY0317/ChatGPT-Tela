@@ -6,6 +6,7 @@ import {
   parseCodexToolInvokeRequest,
   parseCodexAccountCheckContract,
   parseCodexAccountDisplayContract,
+  parseCodexHistoryUiContract,
 } from "@chatgpt-tela/service-protocol";
 import { ProfileConnectionError } from "./profile-operation";
 import type { CodexService } from "./controller";
@@ -128,6 +129,14 @@ export async function startCodexServiceHttpServer(input: {
         if (closeBrowserMatch && input.service.closeAccountBrowser) {
           await input.service.closeAccountBrowser(Number(closeBrowserMatch[1]));
           return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+        }
+        const historyMatch = request.method === "GET"
+          ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/account-browser-history-ui$/.exec(url.pathname) : null;
+        if (historyMatch && input.service.inspectAccountBrowserHistoryUi) {
+          const slot = Number(historyMatch[1]);
+          const result = parseCodexHistoryUiContract(await input.service.inspectAccountBrowserHistoryUi(slot));
+          if (result.slot !== slot) throw new Error("History UI observation profile ownership mismatch");
+          return Response.json(result, { headers: { "cache-control": "no-store" } });
         }
         const bridgeSlot = request.method === "GET" ? previewSlot(url.pathname) : undefined;
         if (bridgeSlot !== undefined) {

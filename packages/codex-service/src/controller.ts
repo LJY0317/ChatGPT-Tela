@@ -15,6 +15,8 @@ import {
   parseCodexAccountCheckContract,
   type CodexAccountCheckContract,
   parseCodexAccountDisplayContract,
+  parseCodexHistoryUiContract,
+  type CodexHistoryUiContract,
   type CodexAccountDisplayContract,
   type CodexWebState,
   parseCodexBridgePreviewContract,
@@ -115,6 +117,7 @@ export interface CodexService {
   revealBridgeSurface?(slot: number, surfaceId: string, interactive?: boolean): Promise<void>;
   openAccountBrowser?(slot: number): Promise<void>;
   closeAccountBrowser?(slot: number): Promise<void>;
+  inspectAccountBrowserHistoryUi?(slot: number): Promise<CodexHistoryUiContract>;
   bridgePreview(slot: number, surfaceId?: string): Promise<CodexBridgePreviewContract>;
   accountCheck?(slot: number): Promise<CodexAccountCheckContract>;
   accountDisplay?(slot: number): Promise<CodexAccountDisplayContract>;
@@ -675,6 +678,22 @@ export async function startCodexService(input: {
           : AbortSignal.timeout(60_000),
       });
       if (!response.ok) throw new Error("Account browser closure was not confirmed. Inspect profile Web state.");
+    },
+    async inspectAccountBrowserHistoryUi(slotValue: number) {
+      const slot = slotNumber(slotValue);
+      const profile = owned.get(slot);
+      if (!profile || profile.stopping || profile.child.exitCode !== null || profile.child.signalCode !== null) {
+        throw new Error("An owned running Tela Work profile is required for history inspection");
+      }
+      const response = await fetch(new URL("v1/account-browser-history-ui", profile.bridgePreviewUrl), {
+        headers: { authorization: `Bearer ${profile.uiToken}` },
+        signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(10_000)])
+          : AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) throw new Error("Open this profile's idle account browser before inspecting its history UI");
+      const result = parseCodexHistoryUiContract(await response.json());
+      if (result.slot !== slot) throw new Error("History UI observation does not match profile owner");
+      return result;
     },
     async accountCheck(slotValue: number) {
       return readProfileAccount(slotValue, "v1/account-check", parseCodexAccountCheckContract);

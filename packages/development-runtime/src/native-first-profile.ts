@@ -3,7 +3,7 @@ import { augmentCodexAppServerModelList } from "./app-server-model-list";
 import { classifyNetworkFailure, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { resolve } from "node:path";
 import { appServerCurrentTurnSource, appServerCompactionHistorySource, appServerNativeHandoffSource, connectCodexAppServerWebSocket, refreshAdmittedWebModelCatalog } from "@chatgpt-tela/codex";
-import { chatGptWebModelId, CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider, parseChatGptWebModelId, type ChatGptWebModelFamily } from "@chatgpt-tela/chatgpt";
+import { chatGptWebModelId, CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider, parseChatGptWebModelId, type ChatGptWebModelFamily, type ChatGptHistoryUiReadiness } from "@chatgpt-tela/chatgpt";
 import { createDefaultDesktopResponsesRoute, resolveDefaultDesktopInstallation, startDefaultDesktopTargetRuntime, TELA_DEFAULT_DESKTOP_RUNTIME_HEADER } from "@chatgpt-tela/default-desktop-target";
 import { startLocalResponsesServer, type LocalResponsesServer } from "@chatgpt-tela/local-server";
 import { startCodexBridgeMcpHttpServer, type CodexBridgeMcpHttpServer } from "@chatgpt-tela/mcp";
@@ -47,6 +47,8 @@ export interface NativeFirstProfileRuntime {
   /** Explicit owner-bound close when OS accessibility cannot deliver user-close.
    * Closes only the account browser and revalidates Web; never stops Native. */
   closeWebAccountBrowser(): Promise<void>;
+  /** Content-free inspection of the *open* exact owner's official history UI. */
+  inspectWebHistoryUi(): Promise<ChatGptHistoryUiReadiness>;
   /** Revoke old Web authority on a proven account change; never changes Native authentication. */
   invalidateWebAccount(): Promise<void>;
   prepareWeb(): Promise<void>;
@@ -580,6 +582,13 @@ export async function startNativeFirstProductProfileRuntime(
       }
       if (!accountBrowser) return Promise.reject(new Error("No owned account browser is open"));
       return accountBrowser.settle();
+    },
+    inspectWebHistoryUi() {
+      if (isClosed() || !accountBrowser || accountBrowserSettling || accountBrowserOpening
+        || webRequests || turns.size || !accountBrowser.surface.probeChatGptHistoryUi) {
+        return Promise.reject(new Error("An idle owned account browser must be open for history inspection"));
+      }
+      return accountBrowser.surface.probeChatGptHistoryUi();
     },
     reconnectWeb() {
       if (state === "closed") return Promise.reject(new Error("Native-first profile is closed"));

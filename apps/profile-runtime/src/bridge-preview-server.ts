@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { startWebHttpServer, type WebHttpServer } from "@chatgpt-tela/http-host";
 import type { AccountCheck } from "./account-check";
 import type { AccountDisplay } from "./account-display";
-import { parseCodexAccountDisplayContract } from "@chatgpt-tela/service-protocol";
+import { parseCodexAccountDisplayContract, parseCodexHistoryUiContract, type CodexHistoryUiContract } from "@chatgpt-tela/service-protocol";
 
 const MAX_JPEG_BYTES = 4 * 1024 * 1024;
 
@@ -33,6 +33,7 @@ export async function startProfileBridgePreviewServer(input: {
   readonly reconnectWeb?: () => Promise<void>;
   readonly openAccountBrowser?: () => Promise<void>;
   readonly closeAccountBrowser?: () => Promise<void>;
+  readonly inspectHistoryUi?: () => Promise<Omit<CodexHistoryUiContract, "slot">>;
   readonly reveal?: (id: string, interactive?: boolean) => Promise<void>;
   readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable" }>;
   readonly probeModelSelection?: () => Promise<{
@@ -95,6 +96,15 @@ export async function startProfileBridgePreviewServer(input: {
           return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
         } catch {
           return Response.json({ error: { message: "The owned account browser could not close and revalidate Web. Check the profile state." } },
+            { status: 409, headers: { "cache-control": "no-store" } });
+        }
+      }
+      if (request.method === "GET" && url.pathname === "/v1/account-browser-history-ui" && input.inspectHistoryUi) {
+        try {
+          const result = parseCodexHistoryUiContract({ ...await input.inspectHistoryUi(), slot: input.slot });
+          return Response.json(result, { headers: { "cache-control": "no-store" } });
+        } catch {
+          return Response.json({ error: { message: "No idle owned account browser is available for history inspection." } },
             { status: 409, headers: { "cache-control": "no-store" } });
         }
       }

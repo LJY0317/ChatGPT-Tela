@@ -9,6 +9,8 @@ import {
   parseCodexAccountCheckContract,
   type CodexAccountCheckContract,
   parseCodexAccountDisplayContract,
+  parseCodexHistoryUiContract,
+  type CodexHistoryUiContract,
   type CodexAccountDisplayContract,
   parseCodexBridgePreviewContract,
   parseCodexModelSelectionCanaryContract,
@@ -122,6 +124,15 @@ export class CodexServiceClient extends LocalServiceClient {
   async closeAccountBrowser(slot: number, signal?: AbortSignal): Promise<void> {
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("invalid profile slot");
     await this.request(`v1/codex/profiles/${slot}/account-browser-close`, "POST", {}, signal);
+  }
+
+  /** Owner-bound, content-free official saved chat history observation. No Delete action. */
+  async inspectAccountBrowserHistoryUi(slot: number, signal?: AbortSignal): Promise<CodexHistoryUiContract> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("invalid profile slot");
+    const response = parseCodexHistoryUiContract(await this.request(
+      `v1/codex/profiles/${slot}/account-browser-history-ui`, "GET", undefined, signal));
+    if (response.slot !== slot) throw new Error("history UI observation slot does not match request");
+    return response;
   }
 
   async accountCheck(slot: number, signal?: AbortSignal): Promise<CodexAccountCheckContract> {

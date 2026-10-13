@@ -2,6 +2,37 @@ import { describe, expect, test } from "bun:test";
 import { startProfileBridgePreviewServer } from "./bridge-preview-server";
 
 describe("profile bridge preview server", () => {
+  test("history inspection is authenticated, content-free and only present for an open owned browser", async () => {
+    const token = "h".repeat(48);
+    let inspections = 0;
+    let open = true;
+    const server = await startProfileBridgePreviewServer({
+      slot: 2, bearerToken: token, async observe() { return { activeSurfaceCount: 0 }; },
+      async inspectHistoryUi() {
+        inspections += 1;
+        if (!open) throw new Error("private owner state");
+        return { contractVersion: 1, route: "home", historyLinkCount: 3,
+          visibleHistoryLinkCount: 2, nearbyActionRowCount: 2,
+          nearbyMenuRowCount: 1, visibleMenuCount: 0, visibleDialogCount: 0 };
+      },
+    });
+    const url = new URL("v1/account-browser-history-ui", server.endpoint);
+    try {
+      expect((await fetch(url)).status).toBe(401);
+      expect((await fetch(url, { headers: { authorization: `Bearer ${token}`, origin: "https://chatgpt.com" } })).status).toBe(403);
+      expect(inspections).toBe(0);
+      const ok = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("cache-control")).toBe("no-store");
+      expect(await ok.json()).toEqual({ contractVersion: 1, slot: 2, route: "home",
+        historyLinkCount: 3, visibleHistoryLinkCount: 2, nearbyActionRowCount: 2,
+        nearbyMenuRowCount: 1, visibleMenuCount: 0, visibleDialogCount: 0 });
+      open = false;
+      const refused = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+      expect(refused.status).toBe(409);
+      expect(await refused.text()).not.toContain("private owner state");
+    } finally { await server.close(); }
+  });
   test("owner-bound account browser close requires authentication and never hides failed revalidation", async () => {
     const token = "z".repeat(48);
     let calls = 0;

@@ -71,6 +71,7 @@ async function main(): Promise<void> {
       reconnectWeb: () => runtime.reconnectWeb(),
       openAccountBrowser: () => runtime.openWebAccountBrowser(),
       closeAccountBrowser: () => runtime.closeWebAccountBrowser(),
+      inspectHistoryUi: () => runtime.inspectWebHistoryUi(),
       observe: id => runtime.webRuntime?.observeBridgePreview(id) ?? Promise.resolve({ activeSurfaceCount: 0 }),
       reveal: async (id, interactive) => {
         if (!runtime.webRuntime) throw new Error("Web connection is not ready");

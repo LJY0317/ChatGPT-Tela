@@ -455,6 +455,48 @@ export interface CodexTerminalSessionContract {
   readonly endpoint: string;
 }
 
+/** Private, exact-slot, content-free inspection. No chat id/title/URL or mutation authority. */
+export interface CodexHistoryUiContract {
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly route: "home" | "conversation" | "other";
+  readonly historyLinkCount: number;
+  readonly visibleHistoryLinkCount: number;
+  readonly nearbyActionRowCount: number;
+  readonly nearbyMenuRowCount: number;
+  readonly visibleMenuCount: number;
+  readonly visibleDialogCount: number;
+}
+
+export function parseCodexHistoryUiContract(value: unknown): CodexHistoryUiContract {
+  const item = object(value, "Codex history UI preflight");
+  const fields = ["contractVersion", "slot", "route", "historyLinkCount", "visibleHistoryLinkCount",
+    "nearbyActionRowCount", "nearbyMenuRowCount", "visibleMenuCount", "visibleDialogCount"];
+  if (Object.keys(item).some(key => !fields.includes(key)) || item.contractVersion !== 1
+    || !Number.isSafeInteger(item.slot) || (item.slot as number) < 1 || (item.slot as number) > 99
+    || !["home", "conversation", "other"].includes(item.route as string)) {
+    throw new Error("Codex history UI observation identity or fields are invalid");
+  }
+  for (const field of fields.slice(3)) {
+    if (!Number.isSafeInteger(item[field]) || (item[field] as number) < 0 || (item[field] as number) > 500) {
+      throw new Error("Codex history UI bounded count is invalid");
+    }
+  }
+  if ((item.visibleHistoryLinkCount as number) > (item.historyLinkCount as number)
+    || (item.nearbyActionRowCount as number) > (item.historyLinkCount as number)
+    || (item.nearbyMenuRowCount as number) > (item.nearbyActionRowCount as number)) {
+    throw new Error("Codex history UI observation counts are inconsistent");
+  }
+  return Object.freeze({ contractVersion: 1, slot: item.slot as number,
+    route: item.route as CodexHistoryUiContract["route"],
+    historyLinkCount: item.historyLinkCount as number,
+    visibleHistoryLinkCount: item.visibleHistoryLinkCount as number,
+    nearbyActionRowCount: item.nearbyActionRowCount as number,
+    nearbyMenuRowCount: item.nearbyMenuRowCount as number,
+    visibleMenuCount: item.visibleMenuCount as number,
+    visibleDialogCount: item.visibleDialogCount as number });
+}
+
 export function parseCodexTerminalSessionContract(value: unknown): CodexTerminalSessionContract {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid terminal session");
   const item = value as Record<string, unknown>;
