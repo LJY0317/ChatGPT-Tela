@@ -8,7 +8,7 @@ import { ChatWorkspaceRegistry } from "./workspaces";
 import { ProcessExecutionJournal } from "./process-execution-journal";
 import { startProcessOwnerControl } from "./process-owner";
 
-async function fixture() {
+async function fixture(options: { holdWait?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-owner-status-")), stateRoot = join(root, "state");
   mkdirSync(stateRoot);
   const registry = new ChatWorkspaceRegistry({ allowedRoots: [root], storePath: join(stateRoot, "workspaces-v1.json") });
@@ -20,12 +20,23 @@ async function fixture() {
   const journal = new ProcessExecutionJournal({ root: `${storePath}.executions`, key: requestKey });
   const claim = journal.reserve({ operationId, workspaceId: workspace.id, launchingServerId: serverInstanceId, requestFingerprint });
   let queries = 0, waits = 0, writes = 0, wrongOwner = false;
+  let releaseWait!: () => void;
+  let markWaitStarted!: () => void;
+  const waitGate = new Promise<void>(resolve => { releaseWait = resolve; });
+  const waitStarted = new Promise<void>(resolve => { markWaitStarted = resolve; });
   const control = await startProcessOwnerControl({ binding: { ownerId: claim.ownerId, operationId, workspaceId: workspace.id },
     secret: randomBytes(32).toString("hex"), authority: {
       status() { queries++; return { operationId, workspaceId: workspace.id, serverInstanceId: wrongOwner ? randomUUID() : serverInstanceId,
         sessionId: 1, state: "running", startedAt: timestamp, updatedAt: timestamp, pid: 321,
         ioAvailable: true, output: "", outputTruncated: false, outputRecovered: false }; },
-      async wait() { waits++; return {}; }, write() { writes++; },
+      async wait() {
+        waits++; markWaitStarted();
+        if (options.holdWait) await waitGate;
+        return { operationId, workspaceId: workspace.id, serverInstanceId,
+          sessionId: 1, state: "spawn_failed", startedAt: timestamp,
+          updatedAt: new Date().toISOString(), ioAvailable: false,
+          output: "", outputTruncated: false, outputRecovered: false };
+      }, write() { writes++; },
     } });
   journal.publishLive(claim, control.descriptor);
   const runtime = createChatToolRuntime({ allowedRoots: [root], stateRoot });
@@ -36,7 +47,7 @@ async function fixture() {
     completed = true;
   };
   return { workspace, operationId, serverInstanceId, runtime, storePath,
-    complete, counts: () => ({ queries, waits, writes }),
+    complete, waitStarted, releaseWait, counts: () => ({ queries, waits, writes }),
     corruptOwner: () => { wrongOwner = true; }, async close() {
       complete();
       await runtime.close(); await control.close(); rmSync(root, { recursive: true, force: true });
@@ -98,4 +109,24 @@ test("failed signed completion commit cannot leak a terminal registry state", as
     if (blocked) { rmSync(f.storePath, { recursive: true }); renameSync(backup, f.storePath); }
     await f.close();
   }
+});
+
+test("an in-flight owner wait accepts a completion archived by another authenticated observer", async () => {
+  const f = await fixture({ holdWait: true });
+  try {
+    const waiting = f.runtime.processes.writeStdin({
+      workspaceId: f.workspace.id, sessionId: 1, yieldTimeMs: 0,
+    });
+    await f.waitStarted;
+    f.complete();
+    expect(f.runtime.processes.status(f.workspace.id, f.operationId).state).toBe("spawn_failed");
+    const capacity = f.runtime.processes.list({ workspaceId: f.workspace.id }).capacity;
+    expect(capacity.registryCount).toBe(0);
+    expect(capacity.archivedTerminalCount).toBe(1);
+    f.releaseWait();
+    const completed = await waiting;
+    expect(completed.state).toBe("spawn_failed");
+    expect(completed.operationId).toBe(f.operationId);
+    expect(f.counts().waits).toBe(1);
+  } finally { f.releaseWait(); await f.close(); }
 });

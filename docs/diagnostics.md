@@ -51,14 +51,51 @@ Original-turn receipt reuse is refused with fixed `desktop_native_live_turn_reje
 | Codex explicit manual handoff | `native_manual_handoff_rejected` | A public indexed summary contained unexpected visible activity in `source_turn` (tool/action, multiple messages, unknown kind) or an already-acted `current_turn` (`unexpected_visible_activity`). A final metadata-only indexed head check may also refuse a changed newest current turn (`current_turn_changed`) or malformed head (`invalid_indexed_head`). Only fixed phase/reason fields; never activity details, prompt, tool output, or Native identifiers. Absence of this event does **not** prove a tool-free engine policy. |
 | Native-to-Web streamed source recovery | `native_context_recovery_streamed` | After SSE progress commits HTTP 200, late typed Native bootstrap failure ends with `response.failed`. Records only `transport_phase=sse_after_progress` and fixed `reason_class` (either `history_mode_unindexed` or `history_bootstrap_required`). The client receives the same nonretryable recovery action as HTTP 422. This is a failed continuation, not successful delivery; neither event nor SSE failure contains original exception text. |
 
-`list_processes` now also returns a read-only `capacity` object with
+`list_processes` also returns a read-only `capacity` object with
 `registryCount`, `registryLimit`, `availableSlots`, `unknownCount`,
-`activeCount`, `terminalRecentCount` and `terminalExpiredCount`.
+`activeCount`, `terminalRecentCount`, `terminalExpiredCount`,
+`archivedTerminalCount`, `archiveLimit`, and `admissionOutlook`.
+The `availableSlots` field is **immediate hot-registry headroom**, not a
+boolean for whether the next command can be executed. The outlook is:
+
+- `slot_available`: a hot reservation slot is already free.
+- `on_demand_reclaim_candidate`: the hot registry is full, but at least
+  one completed record is a candidate for retirement or archived preservation
+  before the next command. No cleanup is performed by this observation.
+- `archive_capacity_uncertain`: recent terminal receipts exist but the
+  separate archive is full. Expired archive records might be retired on
+  demand; success is not assumed.
+- `no_terminal_candidate`: the full hot registry contains no completed
+  receipts eligible for reclaim. Unresolved work must be independently
+  reconciled; it is never discarded merely to free a slot.
+
+This classification is **an advisory structural snapshot**, never a
+guarantee of successful execution: authenticated retirement, archive
+integrity, the independent 1 MiB hot-store budget, disk writes, and OS
+process admission can still fail. Only an actual accepted `exec_command`
+receipt establishes that a particular new operation was started.
+The event-driven source candidate now publishes each proven terminal
+receipt to the bounded, authenticated SQLite completion archive **after**
+its result and hot terminal state have committed, then releases its hot
+reservation. This is distinct from deleting the receipt: its exact
+operation ID and recovered output remain available through restart and
+idempotent replay, while same-process incremental output retains a small
+byte cursor rather than a completed child and its buffered output in RAM.
+A service start drains older proven hot completions in one SQLite
+transaction; active/unknown reservations never move. An interrupted
+handoff preserves a canonical hot copy, and archive/storage failure keeps
+the hot receipt instead of guessing success. Existing minimum 24-hour
+terminal retention and authenticated expiration remain in force.
+Thus healthy recent completions normally increase `archivedTerminalCount`,
+not `registryCount`; an archive at its own limit can still cause future
+admission pressure. This remains source-only until a verified signed
+installation and authenticated live-service acceptance.
 These are **service-wide aggregates only**; the process rows remain limited
 to the caller's approved workspace. A full registry can therefore be
 diagnosed through `list_processes` even when `exec_command` cannot start
 another process or the chosen workspace has no unresolved commands.
-The snapshot does not start, terminate, consume or reclassify any operation.
+The snapshot does not start, terminate, consume or reclassify any operation,
+probe a saved PID, or test writable storage.
 Terminal reservations less than 24 hours old still protect command
 idempotency; uncertain owners are never retired to free capacity. A source
 change or Git commit does **not** update the running installed service:
@@ -76,7 +113,9 @@ Bounded Native observation likewise proves the indexed active turn before
 not mean a hidden fork ran: the product deliberately omits fork callbacks.
 
 This is not an always-on process sampler: reservation count breakdowns are
-computed **only on capacity rejection**; no command, request body,
+computed **on explicit `list_processes` reads or capacity rejection only**;
+the read-only admission outlook does not add background observation or polling.
+No command, request body,
 conversation text, raw workspace/thread/turn identity, path, URL, token or
 exception message enters the added events. Correlation remains a locally
 generated request/operation/scope fingerprint and is never account authority.

@@ -45,4 +45,24 @@ describe("separate authenticated completion archive", () => {
     } finally { f.archive.close(); rmSync(f.root, { recursive: true, force: true }); }
   });
 
+  test("atomic bulk promotion publishes all verified identities or none", () => {
+    const f = setup();
+    try {
+      const first = f.make(1), second = f.make(2);
+      f.archive.saveMany([first, second]);
+      f.archive.saveMany([first, second]);
+      expect(f.archive.count()).toBe(2);
+      expect(f.archive.getBySessionId(1)).toEqual(first);
+      expect(f.archive.getBySessionId(2)).toEqual(second);
+      expect(() => f.archive.saveMany([f.make(3), f.make(4)])).toThrow("capacity");
+      expect(f.archive.count()).toBe(2);
+      expect(() => f.archive.saveMany([first, { ...second, state: "signaled" }]))
+        .toThrow("changed");
+      expect(f.archive.get(second.operationId)).toEqual(second);
+      expect(() => f.archive.saveMany([f.make(3), f.make(4, "unknown")]))
+        .toThrow("unresolved");
+      expect(f.archive.count()).toBe(2);
+    } finally { f.archive.close(); rmSync(f.root, { recursive: true, force: true }); }
+  });
+
 });

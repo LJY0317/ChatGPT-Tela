@@ -39,14 +39,20 @@ function fixture() {
 
 async function exerciseRecentCompletions(f: Fixture) {
   let manager = new ChatProcessManager({ workspaces: f.registry, storePath: f.storePath });
-  assert.equal(manager.list({ workspaceId: f.workspace.id }).capacity.registryCount, 1024);
+  // A legacy full hot store is drained at startup, without an execution
+  // request or a periodic timer. All 1,024 identities remain queryable.
+  assert.equal(manager.list({ workspaceId: f.workspace.id }).capacity.registryCount, 0);
+  assert.equal(manager.list({ workspaceId: f.workspace.id }).capacity.archivedTerminalCount, 1024);
+  assert.equal(manager.list({ workspaceId: f.workspace.id }).capacity.admissionOutlook, "slot_available");
   const fresh = await manager.exec({ workspaceId: f.workspace.id, command: "printf new-command-executed", yieldTimeMs: 3000 });
   assert.equal(fresh.state, "exited");
   assert.equal(fresh.output, "new-command-executed");
   assert.equal(fresh.sessionId, 1025);
   assert.equal(manager.status(f.workspace.id, f.firstId).state, "exited");
+  assert.equal(manager.list({ workspaceId: f.workspace.id }).capacity.registryCount, 0);
+  assert.equal(manager.list({ workspaceId: f.workspace.id }).capacity.admissionOutlook, "slot_available");
   const retained = new ProcessCompletionArchive(`${f.storePath}.completed.sqlite`, f.key);
-  try { assert.equal(retained.count(), 1); assert.equal(retained.get(f.firstId)?.sessionId, 1); }
+  try { assert.equal(retained.count(), 1025); assert.equal(retained.get(f.firstId)?.sessionId, 1); }
   finally { retained.close(); }
   assert.equal(manager.list({ workspaceId: f.workspace.id, includeCompleted: true, limit: 1 }).processes[0]?.operationId, f.firstId);
   await manager.close();
@@ -83,12 +89,55 @@ async function exerciseInterruptedArchival(f: Fixture) {
   } finally { await manager.close(); }
 }
 
+async function exerciseIncrementalOutputAfterEagerArchival() {
+  const f = fixture();
+  // Verify the distinct fresh-store case too, not only legacy hot migration.
+  rmSync(f.storePath);
+  let manager = new ChatProcessManager({ workspaces: f.registry, storePath: f.storePath });
+  const operationId = randomUUID();
+  const command = "printf alpha; sleep 0.2; printf omega";
+  try {
+    const started = await manager.exec({ workspaceId: f.workspace.id,
+      operationId, command, yieldTimeMs: 40 });
+    assert.equal(started.state === "running" || started.state === "starting", true);
+    assert.equal(started.output, "alpha");
+    const completed = await manager.writeStdin({
+      workspaceId: f.workspace.id, sessionId: started.sessionId, yieldTimeMs: 3000,
+    });
+    assert.equal(completed.state, "exited");
+    assert.equal(completed.output, "omega");
+    assert.equal(completed.outputRecovered, false);
+    assert.equal(manager.list({ workspaceId: f.workspace.id }).capacity.registryCount, 0);
+    assert.equal(manager.list({ workspaceId: f.workspace.id }).capacity.archivedTerminalCount, 1);
+    const reread = await manager.writeStdin({ workspaceId: f.workspace.id,
+      sessionId: started.sessionId, yieldTimeMs: 0 });
+    assert.equal(reread.output, "");
+    const duplicate = await manager.exec({ workspaceId: f.workspace.id,
+      operationId, command, yieldTimeMs: 0 });
+    assert.equal(duplicate.output, "");
+    await assert.rejects(manager.exec({ workspaceId: f.workspace.id,
+      operationId, command: "printf unauthorized-replay", yieldTimeMs: 0 }), /does not match/);
+    await manager.close();
+    manager = new ChatProcessManager({ workspaces: f.registry, storePath: f.storePath });
+    const recovered = await manager.exec({ workspaceId: f.workspace.id,
+      operationId, command, yieldTimeMs: 0 });
+    assert.equal(recovered.output, "alphaomega");
+    assert.equal(recovered.outputRecovered, true);
+    assert.equal(manager.status(f.workspace.id, operationId).state, "exited");
+    assert.equal(manager.list({ workspaceId: f.workspace.id }).capacity.registryCount, 0);
+  } finally {
+    await manager.close();
+    rmSync(f.base, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const first = fixture(), second = fixture();
   try {
     await exerciseRecentCompletions(first);
     await exerciseInterruptedArchival(second);
-    console.log("PASS: recent terminal archive, new spawn, exact replay, restart, interrupted publication, stable high-water mark");
+    await exerciseIncrementalOutputAfterEagerArchival();
+    console.log("PASS: event-driven terminal separation, incremental output cursor, exact replay, restart, interrupted publication, stable high-water mark");
   } finally {
     rmSync(first.base, { recursive: true, force: true });
     rmSync(second.base, { recursive: true, force: true });

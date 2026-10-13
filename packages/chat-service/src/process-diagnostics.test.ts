@@ -36,6 +36,7 @@ describe("Tela Chat failure-only process diagnostics", () => {
         unknownCount: 1024, activeCount: 0,
         terminalRecentCount: 0, terminalExpiredCount: 0,
         archivedTerminalCount: 0, archiveLimit: 50_000,
+        admissionOutlook: "no_terminal_candidate",
       });
       expect(readFileSync(storePath, "utf8")).toBe(original);
       // Reservation admission must reject before starting a shell process.

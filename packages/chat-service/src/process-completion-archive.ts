@@ -96,21 +96,55 @@ export class ProcessCompletionArchive<T extends {
     return result;
   }
 
+  /** Exact-session lookup for post-completion owner-worker observations.
+   * Callers still must validate workspace and execution mode.
+   */
+  getBySessionId(sessionId: number): T | undefined {
+    if (!Number.isSafeInteger(sessionId) || sessionId < 1) throw new Error("invalid archive session id");
+    const row = this.#database.prepare("select payload, signature from completed_operations where session_id = ?")
+      .get(sessionId) as { payload: string; signature: string } | undefined;
+    if (!row) return undefined;
+    const result = this.#decode(row);
+    if (result.sessionId !== sessionId) throw new Error("completion archive session identity is invalid");
+    return result;
+  }
+
   save(operation: T): void {
-    if (!["exited", "signaled", "spawn_failed"].includes(operation.state)) {
-      throw new Error("unresolved execution cannot be archived");
+    this.saveMany([operation]);
+  }
+
+  /** One atomic batch for event-driven completion and initial hot-store drain.
+   * Replaying an interrupted publication is idempotent; a changed receipt,
+   * exhausted archive or failed transaction leaves the batch unpublished.
+   */
+  saveMany(operations: readonly T[]): void {
+    if (!operations.length) return;
+    this.#database.exec("begin immediate");
+    try {
+      let count = this.count();
+      const insert = this.#database.prepare(`insert into completed_operations
+        (operation_id, session_id, workspace_id, updated_at, payload, signature)
+        values (?, ?, ?, ?, ?, ?)`);
+      for (const operation of operations) {
+        if (!["exited", "signaled", "spawn_failed"].includes(operation.state)) {
+          throw new Error("unresolved execution cannot be archived");
+        }
+        const payload = JSON.stringify(operation);
+        const prior = this.get(operation.operationId);
+        if (prior) {
+          if (!sameRecord(prior, operation)) throw new Error("completion archive reservation changed");
+          continue; // Crash after archive commit but before hot-store removal.
+        }
+        if (count >= this.#limit) throw new Error("completion archive is at capacity; no execution was started");
+        insert.run(operation.operationId, operation.sessionId,
+          operation.workspaceId, operation.updatedAt, payload, this.#sign(payload));
+        count++;
+      }
+      this.#database.exec("commit");
+    } catch (error) {
+      this.#database.exec("rollback");
+      throw error;
     }
-    const payload = JSON.stringify(operation);
-    const prior = this.get(operation.operationId);
-    if (prior) {
-      if (!sameRecord(prior, operation)) throw new Error("completion archive reservation changed");
-      return; // Restart after the archive commit but before hot-store commit.
-    }
-    if (this.count() >= this.#limit) throw new Error("completion archive is at capacity; no execution was started");
-    this.#database.prepare(`insert into completed_operations
-      (operation_id, session_id, workspace_id, updated_at, payload, signature)
-      values (?, ?, ?, ?, ?, ?)`).run(operation.operationId, operation.sessionId,
-        operation.workspaceId, operation.updatedAt, payload, this.#sign(payload));
   }
 
   remove(operation: T): void {

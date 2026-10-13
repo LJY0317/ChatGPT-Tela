@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ChatWorkspaceRegistry } from "./workspaces";
 import { createChatToolRuntime } from "./tools";
+import { processAdmissionOutlook } from "./processes";
 
 function fixture() {
   const base = mkdtempSync(join(tmpdir(), "tela-process-list-"));
@@ -32,10 +33,11 @@ test("public registry discovery paginates unresolved work without cross-workspac
     const first: any = await f.runtime.call("list_processes", { workspace_id: f.first.id, limit: 50 });
     expect(first.observation).toBe("registry"); expect(first.processes).toHaveLength(50);
     expect(first.capacity).toEqual({
-      registryCount: 62, registryLimit: 1024, availableSlots: 962,
+      registryCount: 61, registryLimit: 1024, availableSlots: 963,
       unknownCount: 61, activeCount: 0,
-      terminalRecentCount: 1, terminalExpiredCount: 0,
-      archivedTerminalCount: 0, archiveLimit: 50_000,
+      terminalRecentCount: 0, terminalExpiredCount: 0,
+      archivedTerminalCount: 1, archiveLimit: 50_000,
+      admissionOutlook: "slot_available",
     });
     expect(JSON.stringify(first.capacity)).not.toContain(f.first.id);
     expect(JSON.stringify(first.capacity)).not.toContain(f.second.id);
@@ -59,6 +61,24 @@ test("public registry discovery paginates unresolved work without cross-workspac
     expect(readFileSync(f.storePath, "utf8")).toBe(before);
     await expect(f.runtime.close()).rejects.toThrow("unresolved execution");
   } finally { rmSync(f.base, { recursive: true, force: true }); }
+});
+
+test("on-demand admission outlook distinguishes hot occupancy from execution blockage without side effects", () => {
+  const base = {
+    registryCount: 1024, registryLimit: 1024,
+    terminalRecentCount: 0, terminalExpiredCount: 0,
+    archivedTerminalCount: 0, archiveLimit: 50_000,
+  };
+  expect(processAdmissionOutlook({ ...base, registryCount: 1023 })).toBe("slot_available");
+  expect(processAdmissionOutlook({ ...base, terminalRecentCount: 1 }))
+    .toBe("on_demand_reclaim_candidate");
+  expect(processAdmissionOutlook({ ...base, terminalExpiredCount: 1,
+    archivedTerminalCount: 50_000 })).toBe("on_demand_reclaim_candidate");
+  // A full archive may have independently expired receipts: do not report
+  // either a guaranteed execution or a definite failure without admission.
+  expect(processAdmissionOutlook({ ...base, terminalRecentCount: 1,
+    archivedTerminalCount: 50_000 })).toBe("archive_capacity_uncertain");
+  expect(processAdmissionOutlook(base)).toBe("no_terminal_candidate");
 });
 
 test("list bounds and workspace authority reject invalid discovery without changing reservations", async () => {

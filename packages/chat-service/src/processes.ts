@@ -20,14 +20,40 @@ import { callProcessOwner, type ProcessOwnerRequest } from "./process-owner";
 const MAX_YIELD_MS = 12_000;
 const DEFAULT_YIELD_MS = 10_000;
 const MAX_OUTPUT_BYTES = PROCESS_OUTPUT_LIMIT;
-// Preserve recent idempotency/status reservations even during tool-heavy
-// sessions across multiple workspaces. Raise bounded headroom rather than
-// evict an uncertain execution or replay a recent finished command.
-// The 1 MiB store budget remains independently enforced.
+// Hot reservations primarily protect unfinished/uncertain executions.
+// Authenticated completed receipts are independently bounded in SQLite;
+// archive failure preserves the original hot reservation and may still
+// exhaust this cap. 1,024 is an engineering guard, not an industry standard.
+// The 1 MiB hot JSON budget remains independently enforced.
 const MAX_OPERATIONS = 1024;
 const MAX_COMPLETED_ARCHIVE = 50_000;
 const MAX_STORE_BYTES = 1024 * 1024;
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+/** Capacity-only, read-only outlook. Never promises successful archival, disk
+ * persistence or a new execution: those require the real admission path.
+ */
+export function processAdmissionOutlook(capacity: {
+  readonly registryCount: number;
+  readonly registryLimit: number;
+  readonly terminalRecentCount: number;
+  readonly terminalExpiredCount: number;
+  readonly archivedTerminalCount: number;
+  readonly archiveLimit: number;
+}): "slot_available" | "on_demand_reclaim_candidate" | "archive_capacity_uncertain" | "no_terminal_candidate" {
+  if (capacity.registryCount < capacity.registryLimit) return "slot_available";
+  // Expired terminal-marked reservations can be retired without using the
+  // completion archive. The actual owner proof/store operations may still fail.
+  if (capacity.terminalExpiredCount > 0) return "on_demand_reclaim_candidate";
+  // Recent terminal reservations are safely moved to the archive on demand.
+  if (capacity.terminalRecentCount > 0 && capacity.archivedTerminalCount < capacity.archiveLimit) {
+    return "on_demand_reclaim_candidate";
+  }
+  // A full archive may have expired receipts eligible for retirement, but this
+  // snapshot deliberately does not perform retirement or attest its success.
+  if (capacity.terminalRecentCount > 0) return "archive_capacity_uncertain";
+  return "no_terminal_candidate";
+}
 
 /** Never log the attempted command, executable, cwd, stderr or raw error. */
 export function safeProcessSpawnFailure(error: unknown): {
@@ -103,6 +129,17 @@ interface LiveSession {
   readOffset: number;
   truncated: boolean;
   closed: boolean;
+}
+
+/** Lightweight same-instance output cursor retained after process close.
+ * Command/output bytes are not held in memory once signed result storage
+ * has been committed; restart intentionally recovers the full verified tail.
+ */
+interface CompletedSessionCursor {
+  readonly operationId: string;
+  readonly workspaceId: string;
+  readonly baseOffset: number;
+  readOffset: number;
 }
 
 export interface ChatProcessSnapshot {
@@ -238,6 +275,7 @@ export class ChatProcessManager {
   readonly #archive: ProcessCompletionArchive<DurableOperation>;
   readonly #operations = new Map<string, DurableOperation>();
   readonly #sessions = new Map<number, LiveSession>();
+  readonly #completedSessions = new Map<number, CompletedSessionCursor>();
   #nextSessionId = 1;
   #closed = false;
 
@@ -262,6 +300,17 @@ export class ChatProcessManager {
         this.#archive = new ProcessCompletionArchive(`${this.#storePath}.completed.sqlite`, this.#requestKey, MAX_COMPLETED_ARCHIVE);
         recoveryPhase = "retire";
         this.#prune();
+        // Completed receipts have an independent bounded SQLite owner.
+        // Drain pre-existing hot receipts on service startup, even if no
+        // subsequent command happens to arrive. This is not a background
+        // timer. Any archive failure leaves the original hot evidence intact.
+        try { this.#archiveCompleted([...this.#operations.values()]); }
+        catch (error) {
+          emitDiagnosticEvent("chatgpt_tela_chat", "process_completion_archive_failed", {
+            reason_class: diagnosticFailureClass(error),
+            registry_count: this.#operations.size, archive_limit: MAX_COMPLETED_ARCHIVE,
+          });
+        }
         recoveryPhase = "write";
         this.#save();
       } else {
@@ -328,14 +377,51 @@ export class ChatProcessManager {
         && Date.parse(operation.updatedAt) <= cutoff) terminalExpiredCount++;
       else terminalRecentCount++;
     }
-    return Object.freeze({
+    const capacity = {
       registryCount: this.#operations.size,
       registryLimit: MAX_OPERATIONS,
       availableSlots: Math.max(0, MAX_OPERATIONS - this.#operations.size),
       unknownCount, activeCount, terminalRecentCount, terminalExpiredCount,
       archivedTerminalCount: this.#archive.count(),
       archiveLimit: MAX_COMPLETED_ARCHIVE,
+    };
+    return Object.freeze({ ...capacity, admissionOutlook: processAdmissionOutlook(capacity) });
+  }
+
+  /** Durable handoff: commit authenticated archive first, then remove hot
+   * terminal reservations in one synchronized state publication. A crash
+   * between the two leaves both copies, with hot remaining authoritative.
+   */
+  #archiveCompleted(candidates: readonly DurableOperation[]): void {
+    const completed = candidates.filter(operation =>
+      ["exited", "signaled", "spawn_failed"].includes(operation.state)
+      && this.#operations.get(operation.operationId) === operation);
+    if (!completed.length) return;
+    this.#archive.saveMany(completed);
+    for (const operation of completed) this.#operations.delete(operation.operationId);
+    try { this.#save(); }
+    catch (error) {
+      for (const operation of completed) this.#operations.set(operation.operationId, operation);
+      throw error;
+    }
+    // Ordinary completions are not incidents. Keep this structural receipt
+    // for a one-off legacy backlog drain, not every short shell command.
+    if (completed.length > 1) emitDiagnosticEvent("chatgpt_tela_chat", "process_completion_archived", {
+      registry_count: this.#operations.size, archived_count: this.#archive.count(),
+      archive_limit: MAX_COMPLETED_ARCHIVE,
     });
+  }
+
+  #archiveCompletedSafely(operation: DurableOperation): void {
+    try { this.#archiveCompleted([operation]); }
+    catch (error) {
+      // The command has already completed. Failed completion archival
+      // cannot revoke its committed hot receipt or authorize replay.
+      emitDiagnosticEvent("chatgpt_tela_chat", "process_completion_archive_failed", {
+        reason_class: diagnosticFailureClass(error),
+        registry_count: this.#operations.size, archive_limit: MAX_COMPLETED_ARCHIVE,
+      });
+    }
   }
 
   #prune(allowArchival = false): void {
@@ -363,6 +449,7 @@ export class ChatProcessManager {
       // grant a second execution of the same operation ID.
       if (archived) this.#archive.remove(retired);
       this.#sessions.delete(retired.sessionId);
+      this.#completedSessions.delete(retired.sessionId);
     };
     retirement.resume(commit);
     const threshold = Date.now() - TERMINAL_RETENTION_MS;
@@ -399,20 +486,13 @@ export class ChatProcessManager {
       if (!expired) break;
       retire(expired);
     }
-    // Archive old terminal receipts only when hot admission actually needs a
-    // slot. Archive publication precedes hot deletion and is restart-idempotent.
+    // Safety fallback for terminal hot receipts left behind by failed archive
+    // publication: never evict active/uncertain work just to admit a command.
     if (allowArchival && this.#operations.size >= MAX_OPERATIONS) {
       const completed = [...this.#operations.values()].find(operation =>
         ["exited", "signaled", "spawn_failed"].includes(operation.state));
       if (completed) {
-        this.#archive.save(completed);
-        this.#operations.delete(completed.operationId);
-        try { this.#save(); }
-        catch (error) { this.#operations.set(completed.operationId, completed); throw error; }
-        emitDiagnosticEvent("chatgpt_tela_chat", "process_completion_archived", {
-          registry_count: this.#operations.size, archived_count: this.#archive.count(),
-          archive_limit: MAX_COMPLETED_ARCHIVE,
-        });
+        this.#archiveCompleted([completed]);
       }
     }
   }
@@ -430,7 +510,11 @@ export class ChatProcessManager {
 
   /** Child events must not crash the service or publish an uncommitted outcome. */
   #recordTransition(operationId: string, update: Partial<DurableOperation>): boolean {
-    try { this.#update(operationId, update); return true; }
+    try {
+      const committed = this.#update(operationId, update);
+      if (["exited", "signaled", "spawn_failed"].includes(committed.state)) this.#archiveCompletedSafely(committed);
+      return true;
+    }
     catch {
       const previous = this.#operations.get(operationId);
       if (previous) this.#operations.set(operationId, Object.freeze({ ...previous,
@@ -454,11 +538,19 @@ export class ChatProcessManager {
   }
 
   #reconcileOwnedCompletion(operation: DurableOperation): DurableOperation {
-    if (operation.executionMode !== "owned-worker-v1" || ["exited", "signaled", "spawn_failed"].includes(operation.state)) return operation;
-    const { journal, claim } = this.#ownedEvidence(operation);
-    if (!existsSync(`${this.#storePath}.executions/${operation.operationId}.completed.json`)) return operation;
+    // An async owner observation may have started before another request
+    // committed and archived its completion. Always use the current durable
+    // receipt rather than updating a stale hot-record object.
+    const current = this.#operations.get(operation.operationId) ?? this.#archive.get(operation.operationId);
+    if (!current || current.workspaceId !== operation.workspaceId) throw new Error("process owner reservation changed");
+    if (current.executionMode !== "owned-worker-v1"
+      || ["exited", "signaled", "spawn_failed"].includes(current.state)) return current;
+    const { journal, claim } = this.#ownedEvidence(current);
+    if (!existsSync(`${this.#storePath}.executions/${current.operationId}.completed.json`)) return current;
     const completion = journal.readCompletion(claim);
-    return this.#update(operation.operationId, { ...completion, updatedAt: completion.endedAt });
+    const committed = this.#update(current.operationId, { ...completion, updatedAt: completion.endedAt });
+    this.#archiveCompletedSafely(committed);
+    return committed;
   }
 
   async #observeOwned(operation: DurableOperation, request: ProcessOwnerRequest): Promise<ChatProcessSnapshot> {
@@ -563,12 +655,17 @@ export class ChatProcessManager {
     return { resultFingerprint: this.#resultFingerprint(operation, output), resultTruncated: session.truncated };
   }
 
-  #recoverOutput(operation: DurableOperation, authenticatedDigest?: (digest: string) => void): { output: string; truncated: boolean } {
+  #verifiedOutputBytes(operation: DurableOperation, authenticatedDigest?: (digest: string) => void): Buffer {
     const path = this.#resultPath(operation.operationId);
     if (lstatSync(dirname(path)).isSymbolicLink()) throw new Error("process result directory must not be a symlink");
     const output = readBoundedProcessState(path, MAX_OUTPUT_BYTES);
     if (this.#resultFingerprint(operation, output) !== operation.resultFingerprint) throw new Error("process retained result does not match its reservation");
     authenticatedDigest?.(createHash("sha256").update(output).digest("hex"));
+    return output;
+  }
+
+  #recoverOutput(operation: DurableOperation, authenticatedDigest?: (digest: string) => void): { output: string; truncated: boolean } {
+    const output = this.#verifiedOutputBytes(operation, authenticatedDigest);
     return { output: output.toString("utf8"), truncated: operation.resultTruncated ?? false };
   }
 
@@ -597,9 +694,24 @@ export class ChatProcessManager {
 
   #snapshot(operation: DurableOperation, consumeOutput: boolean): ChatProcessSnapshot {
     const session = this.#sessions.get(operation.sessionId);
-    const recovered = session === undefined && operation.resultFingerprint !== undefined;
-    const output = recovered ? this.#recoverOutput(operation)
-      : session && consumeOutput ? this.#output(session) : { output: "", truncated: false };
+    const terminalCursor = this.#completedSessions.get(operation.sessionId);
+    const recovered = session === undefined && terminalCursor === undefined && operation.resultFingerprint !== undefined;
+    let output: { output: string; truncated: boolean };
+    if (terminalCursor && operation.resultFingerprint !== undefined) {
+      // Match the old direct-process read-once semantics even though the
+      // completed process and all its buffered chunks have been released.
+      // A new service instance has no cursor, so it recovers the full tail.
+      const verified = this.#verifiedOutputBytes(operation);
+      const offset = Math.max(0, terminalCursor.readOffset - terminalCursor.baseOffset);
+      output = consumeOutput
+        ? { output: verified.subarray(offset).toString("utf8"),
+          truncated: (operation.resultTruncated ?? false) && offset === 0 }
+        : { output: "", truncated: false };
+      if (consumeOutput) terminalCursor.readOffset = terminalCursor.baseOffset + verified.length;
+    } else {
+      output = recovered ? this.#recoverOutput(operation)
+        : session && consumeOutput ? this.#output(session) : { output: "", truncated: false };
+    }
     return Object.freeze({
       operationId: operation.operationId,
       serverInstanceId: operation.serverInstanceId,
@@ -740,8 +852,20 @@ export class ChatProcessManager {
     });
     child.once("close", (code, signal) => {
       session.closed = true;
-      const current = this.#operations.get(operationId);
-      if (!current || !["starting", "running", "unknown"].includes(current.state)) return;
+      const current = this.#operations.get(operationId) ?? this.#archive.get(operationId);
+      if (!current) return;
+      if (current.state === "spawn_failed") {
+        // A child with an emitted spawn error can still deliver a 'close'
+        // event. Its already-committed terminal receipt must not retain a
+        // dead ChildProcess or its output buffers indefinitely.
+        this.#completedSessions.set(sessionId, {
+          operationId, workspaceId: workspace.id,
+          baseOffset: session.baseOffset, readOffset: session.readOffset,
+        });
+        this.#sessions.delete(sessionId);
+        return;
+      }
+      if (!["starting", "running", "unknown"].includes(current.state)) return;
       const endedAt = new Date().toISOString();
       let result: Partial<DurableOperation>;
       try {
@@ -759,11 +883,21 @@ export class ChatProcessManager {
       const committed = this.#recordTransition(operationId, signal
         ? { state: "signaled", signal, endedAt, ...result }
         : { state: "exited", exitCode: code ?? -1, endedAt, ...result });
-      if (committed) processDiagnostic("process_settled", { exit_code: code ?? -1, signaled: signal !== null, result_bytes: session.outputBytes, truncated: session.truncated });
+      if (committed) {
+        // The archived receipt authenticates the complete bounded tail.
+        // Preserve only the byte cursor needed for remaining incremental
+        // reads; never retain up to 512 KiB per completed child in RAM.
+        this.#completedSessions.set(sessionId, {
+          operationId, workspaceId: workspace.id,
+          baseOffset: session.baseOffset, readOffset: session.readOffset,
+        });
+        this.#sessions.delete(sessionId);
+        processDiagnostic("process_settled", { exit_code: code ?? -1, signaled: signal !== null, result_bytes: session.outputBytes, truncated: session.truncated });
+      }
       else processDiagnostic("process_completion_storage_failed", { result_bytes: session.outputBytes, truncated: session.truncated });
     });
     await this.#wait(session, waitTime);
-    return this.#snapshot(this.#operations.get(operationId)!, true);
+    return this.#snapshot((this.#operations.get(operationId) ?? this.#archive.get(operationId))!, true);
   }
 
   async writeStdin(input: {
@@ -776,17 +910,35 @@ export class ChatProcessManager {
     if (!Number.isSafeInteger(input.sessionId) || input.sessionId < 1) throw new Error("process session id is invalid");
     const waitTime = yieldMs(input.yieldTimeMs);
     const owned = [...this.#operations.values()].find(operation => operation.sessionId === input.sessionId
-      && operation.workspaceId === input.workspaceId && operation.executionMode === "owned-worker-v1");
+      && operation.workspaceId === input.workspaceId && operation.executionMode === "owned-worker-v1")
+      ?? (() => {
+        const archived = this.#archive.getBySessionId(input.sessionId);
+        return archived?.workspaceId === input.workspaceId && archived.executionMode === "owned-worker-v1"
+          ? archived : undefined;
+      })();
     if (owned) {
+      if (["exited", "signaled", "spawn_failed"].includes(owned.state)) {
+        if (input.chars) throw new Error("process input is no longer available");
+        return this.#snapshot(owned, false);
+      }
       if (input.chars) await this.#observeOwned(owned, { action: "stdin", chars: input.chars });
-      return this.#observeOwned(this.#operations.get(owned.operationId)!, { action: "wait", yieldTimeMs: waitTime });
+      return this.#observeOwned((this.#operations.get(owned.operationId) ?? this.#archive.get(owned.operationId))!,
+        { action: "wait", yieldTimeMs: waitTime });
     }
     const session = this.#sessions.get(input.sessionId);
-    if (!session || session.workspaceId !== input.workspaceId) throw new Error("process session is not available in this workspace");
-    const operation = this.#operations.get(session.operationId)!;
+    if (!session) {
+      const finished = this.#completedSessions.get(input.sessionId);
+      if (!finished || finished.workspaceId !== input.workspaceId) throw new Error("process session is not available in this workspace");
+      const terminal = this.#operations.get(finished.operationId) ?? this.#archive.get(finished.operationId);
+      if (!terminal) throw new Error("completed process receipt is no longer available");
+      return this.#snapshot(terminal, true);
+    }
+    if (session.workspaceId !== input.workspaceId) throw new Error("process session is not available in this workspace");
+    const operation = this.#operations.get(session.operationId) ?? this.#archive.get(session.operationId);
+    if (!operation) throw new Error("process reservation is no longer available");
     if (input.chars && this.#directIoAvailable(operation, session)) session.child.stdin.write(input.chars);
     await this.#wait(session, waitTime);
-    return this.#snapshot(this.#operations.get(session.operationId)!, true);
+    return this.#snapshot((this.#operations.get(session.operationId) ?? this.#archive.get(session.operationId))!, true);
   }
 
   status(workspaceId: string, operationId: string): ChatProcessStatus {

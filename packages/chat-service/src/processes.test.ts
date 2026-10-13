@@ -6,6 +6,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import { ChatWorkspaceRegistry } from "./workspaces";
 import { ChatProcessManager } from "./processes";
 import { ProcessExecutionJournal } from "./process-execution-journal";
+import { ProcessCompletionArchive } from "./process-completion-archive";
 
 function fixture() {
   const base = mkdtempSync(join(tmpdir(), "tela-chat-process-"));
@@ -37,8 +38,12 @@ describe("Tela Chat process operations", () => {
       expect(newRun.sessionId).toBe(257);
       expect(newRun.output).toBe("capacity-headroom");
       const stored = JSON.parse(readFileSync(f.storePath, "utf8"));
-      expect(stored.operations).toHaveLength(257);
-      expect(stored.operations[0].operationId).toBe(previous[0]!.operationId);
+      // Startup transfers existing completed entries into independent,
+      // authenticated SQLite receipts. New completions do not occupy hot
+      // unresolved capacity after their output has been committed.
+      expect(stored.operations).toHaveLength(0);
+      expect(recovered.status(f.workspace.id, previous[0]!.operationId).state).toBe("exited");
+      expect(recovered.list({ workspaceId: f.workspace.id }).capacity.archivedTerminalCount).toBe(257);
       expect(stored.nextSessionId).toBe(258);
     } finally { await recovered.close(); await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
   });
@@ -92,6 +97,7 @@ describe("Tela Chat process operations", () => {
     if (process.platform === "win32") return;
     const f = fixture();
     let sessionId: number | undefined;
+    let completedAndClosed = false;
     try {
       const live = await f.manager.exec({ workspaceId: f.workspace.id,
         command: "read value; printf '%s' \"$value\"", yieldTimeMs: 10 });
@@ -106,8 +112,9 @@ describe("Tela Chat process operations", () => {
       expect(completed.state).toBe("exited");
       expect(completed.output).toBe("completed");
       await f.manager.close();
+      completedAndClosed = true;
     } finally {
-      if (sessionId) await f.manager.writeStdin({ workspaceId: f.workspace.id, sessionId,
+      if (sessionId && !completedAndClosed) await f.manager.writeStdin({ workspaceId: f.workspace.id, sessionId,
         chars: "cleanup\n", yieldTimeMs: 1000 });
       await f.manager.close();
       rmSync(f.base, { recursive: true, force: true });
@@ -172,7 +179,7 @@ describe("Tela Chat process operations", () => {
       } finally { await expect(reopened.close()).rejects.toThrow("unresolved execution"); }
     } finally { await expect(retired.close()).rejects.toThrow("unresolved execution"); await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
   });
-  test("failed retirement publication preserves memory authority and resumes without starting a command", async () => {
+  test("invalid interrupted retirement evidence preserves archived authority and blocks a new command", async () => {
     const f = fixture(), old = "2000-01-01T00:00:00.000Z", retiredId = randomUUID();
     const operations = Array.from({ length: 1023 }, (_, index) => ({
       operationId: index === 1022 ? retiredId : randomUUID(), serverInstanceId: randomUUID(),
@@ -181,29 +188,28 @@ describe("Tela Chat process operations", () => {
     }));
     writeFileSync(f.storePath, JSON.stringify({ version: 2, requestKey: "1".repeat(64), nextSessionId: 1024, operations }));
     const manager = new ChatProcessManager({ workspaces: f.registry, storePath: f.storePath });
-    const pending = `${f.storePath}.pending-v1`, command = "printf once >> started";
+    const pending = `${f.storePath}.retirement.json`, command = "printf once >> started";
     try {
-      const filled = await manager.exec({ workspaceId: f.workspace.id, command: "printf filled", yieldTimeMs: 1000 });
-      expect(filled.state).toBe("exited");
+      expect(manager.status(f.workspace.id, retiredId).state).toBe("exited");
       const saved = readFileSync(f.storePath, "utf8");
-      writeFileSync(pending, "incomplete fixture publication");
+      writeFileSync(pending, "incomplete synthetic retirement plan");
       await expect(manager.exec({ workspaceId: f.workspace.id, command, yieldTimeMs: 1000 })).rejects.toThrow();
       expect(manager.status(f.workspace.id, retiredId).state).toBe("exited");
       expect(readFileSync(f.storePath, "utf8")).toBe(saved);
-      expect(readFileSync(pending, "utf8")).toBe("incomplete fixture publication");
+      expect(readFileSync(pending, "utf8")).toBe("incomplete synthetic retirement plan");
       expect(existsSync(`${f.storePath}.retirement.json`)).toBe(true);
       expect(existsSync(join(f.root, "started"))).toBe(false);
       // Only the synthetic fixture removes its injected obstruction; product never adopts it.
       rmSync(pending);
       const resumed = await manager.exec({ workspaceId: f.workspace.id, command, yieldTimeMs: 1000 });
       expect(resumed.state).toBe("exited");
-      expect(resumed.sessionId).toBe(1025);
+      expect(resumed.sessionId).toBe(1024);
       expect(readFileSync(join(f.root, "started"), "utf8")).toBe("once");
       expect(existsSync(`${f.storePath}.retirement.json`)).toBe(false);
       expect(() => manager.status(f.workspace.id, retiredId)).toThrow();
       const store = JSON.parse(readFileSync(f.storePath, "utf8"));
-      expect(store.nextSessionId).toBe(1026);
-      expect(store.operations).toHaveLength(1024);
+      expect(store.nextSessionId).toBe(1025);
+      expect(store.operations).toHaveLength(1022);
     } finally {
       await expect(manager.close()).rejects.toThrow("unresolved execution");
       await f.manager.close();
@@ -358,7 +364,7 @@ describe("Tela Chat process operations", () => {
       expect(result.state).toBe("exited");
       expect(result.output).toContain("reclaimed");
       const saved = JSON.parse(readFileSync(f.storePath, "utf8")).operations;
-      expect(saved).toHaveLength(1024);
+      expect(saved).toHaveLength(1023);
       expect(saved.filter((row: { state: string }) => row.state === "unknown")).toHaveLength(1023);
       expect(() => recovered.status(f.workspace.id, operations[1023]!.operationId)).toThrow("unknown process operation");
     } finally {
@@ -443,7 +449,14 @@ describe("Tela Chat process operations", () => {
       await f.manager.exec({ workspaceId: f.workspace.id, operationId, command: "echo retained", yieldTimeMs: 1000 });
       await f.manager.close();
       const store = JSON.parse(readFileSync(f.storePath, "utf8"));
-      store.operations[0].updatedAt = "2000-01-01T00:00:00.000Z";
+      // Recreate a supported pre-archival hot receipt in this isolated
+      // fixture. Do not edit an authenticated SQLite receipt in place.
+      const archive = new ProcessCompletionArchive(`${f.storePath}.completed.sqlite`, store.requestKey);
+      try {
+        const previous = archive.get(operationId)!;
+        archive.remove(previous);
+        store.operations.push({ ...previous, updatedAt: "2000-01-01T00:00:00.000Z" });
+      } finally { archive.close(); }
       for (let index = 0; index < 1023; index++) store.operations.push({
         operationId: randomUUID(), workspaceId: f.workspace.id, serverInstanceId: randomUUID(),
         sessionId: index + 2, state: "unknown", startedAt: "2000-01-01T00:00:00.000Z", updatedAt: "2000-01-01T00:00:00.000Z",

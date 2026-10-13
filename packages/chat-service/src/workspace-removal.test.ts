@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatWorkspaceRegistry } from "./workspaces";
@@ -38,8 +39,12 @@ test("restart leaves unfinished durable operations unresolved and refuses destru
     expect((await processes.exec({ workspaceId: f.workspace.id, command: "true", yieldTimeMs: 1000 })).state).toBe("exited");
     await processes.close();
     const store = JSON.parse(readFileSync(f.processStore, "utf8"));
-    store.operations[0].state = "running";
-    for (const field of ["resultFingerprint", "resultTruncated", "endedAt", "exitCode", "signal"]) delete store.operations[0][field];
+    // Completed receipts now live in SQLite. Model a distinct in-flight
+    // reservation across restart instead of rewriting a finished receipt.
+    const now = new Date().toISOString();
+    store.operations.push({ operationId: randomUUID(), serverInstanceId: randomUUID(),
+      workspaceId: f.workspace.id, sessionId: store.nextSessionId++,
+      state: "running", startedAt: now, updatedAt: now });
     writeFileSync(f.processStore, JSON.stringify(store));
     const workspaces = f.registry();
     const restarted = new ChatProcessManager({ workspaces, storePath: f.processStore });
