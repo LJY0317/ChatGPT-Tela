@@ -519,6 +519,121 @@ describe("development runtime composition", () => {
     } finally { await runtime.stop(); }
   });
 
+  test("original Native thread survives model switch, readable compaction, Web failure and fresh recovery without stale epoch replay", async () => {
+    let turnId = "turn-1";
+    let browserCreated = 0;
+    let browserClosed = 0;
+    const observations: Array<{
+      turnId: string;
+      mode: string;
+      epoch: string;
+      segments: string[];
+    }> = [];
+    const nativeSource: CanonicalCurrentTurnSource = {
+      async currentTurn(threadId) {
+        return { ...(await source.currentTurn(threadId))!, turnId,
+          environmentSourceTurnId: turnId };
+      },
+    };
+    const browserHost = new ControlledBrowserHost(async () => {
+      browserCreated += 1;
+      return {
+        async navigate() {}, async reveal() {}, async hide() {},
+        async close() { browserClosed += 1; },
+        capability(capability) {
+          return capability === BROWSER_DOCUMENT_LIFETIME
+            ? { current: () => ({ generation: 1, signal: new AbortController().signal }) } as never
+            : undefined;
+        },
+      };
+    });
+    const provider = new RetainedFinalProvider();
+    const normalEvent = provider.waitForTurnEvent.bind(provider);
+    provider.waitForTurnEvent = async (surface, handle) => {
+      if (handle.nativeTurnId === "turn-6") {
+        throw new Error("synthetic Web observation rejected after Native submission");
+      }
+      return normalEvent(surface, handle);
+    };
+    const realPlanner = createNativeRequestDevelopmentWebTurnPlanner();
+    const runtime = await startDevelopmentRuntime({
+      currentTurnSource: nativeSource,
+      browserHost, provider, mcp: { kind: "external", abi: "stable" },
+      async planWebTurn(turn, request, preparation) {
+        const plan = await realPlanner(turn, request, preparation);
+        observations.push({
+          turnId: turn.channel.binding.authority.turnId,
+          mode: plan.physicalContext.mode,
+          epoch: plan.webEpochId,
+          segments: plan.physicalContext.segments.map(segment => segment.content),
+        });
+        return plan;
+      },
+    });
+    const message = (role: string, content: string) => ({ type: "message", role, content });
+    const history = [message("user", "Read the source repository.")];
+    const run = async (current: string, model: string, input: unknown[], expectedStatus = 200) => {
+      turnId = current;
+      const response = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, {
+        ...nativeRequest(input), model,
+        client_metadata: { "x-codex-turn-metadata": {
+          request_kind: "turn", thread_id: "thread-1", turn_id: current,
+        } },
+      });
+      const output = await response.text();
+      expect(response.status).toBe(expectedStatus);
+      if (expectedStatus === 200) expect(output).toContain(`done:${current}`);
+      return output;
+    };
+    try {
+      await run("turn-1", "native-model-a", history);
+      history.push(message("assistant", "done:turn-1"), message("user", "Inspect the next file."));
+      await run("turn-2", "native-model-a", history);
+      expect(observations[1]!.mode).toBe("retained-delta");
+      expect(provider.surfaceLeaseIds[1]).toBe(provider.surfaceLeaseIds[0]);
+
+      history.push(message("assistant", "done:turn-2"), message("user", "Change model, preserve prior findings."));
+      await run("turn-3", "native-model-b", history);
+      expect(observations[2]!.mode).toBe("full");
+      expect(observations[2]!.epoch).not.toBe(observations[1]!.epoch);
+      expect(observations[2]!.segments.join("\n")).toContain("Inspect the next file.");
+      expect(provider.surfaceLeaseIds[2]).not.toBe(provider.surfaceLeaseIds[1]);
+
+      history.push(message("assistant", "done:turn-3"), message("user", "Continue in model B."));
+      await run("turn-4", "native-model-b", history);
+      expect(observations[3]!.mode).toBe("retained-delta");
+      expect(provider.surfaceLeaseIds[3]).toBe(provider.surfaceLeaseIds[2]);
+
+      const compacted = [
+        { type: "context_compaction" },
+        message("user", "Verified Native readable compaction summary: both files inspected."),
+        message("user", "Continue the compacted task."),
+      ];
+      await run("turn-5", "native-model-b", compacted);
+      expect(observations[4]!.mode).toBe("full");
+      expect(observations[4]!.epoch).not.toBe(observations[3]!.epoch);
+      expect(observations[4]!.segments.join("\n")).toContain("Verified Native readable compaction summary");
+      expect(observations[4]!.segments.join("\n")).not.toContain("Read the source repository.");
+
+      const failedInput = [...compacted, message("assistant", "done:turn-5"),
+        message("user", "Check the next file but do not commit on Web error.")];
+      await run("turn-6", "native-model-b", failedInput, 409);
+      expect(observations[5]!.mode).toBe("retained-delta");
+
+      await run("turn-7", "native-model-b", [...failedInput,
+        message("user", "Recover by rebuilding canonical Native history.")]);
+      expect(observations[6]!.mode).toBe("full");
+      expect(observations[6]!.segments.join("\n")).toContain("Check the next file");
+      expect(observations[6]!.segments.join("\n")).toContain("Recover by rebuilding");
+      expect(provider.surfaceLeaseIds[6]).not.toBe(provider.surfaceLeaseIds[5]);
+      expect(browserCreated).toBe(4);
+      expect(browserClosed).toBe(3);
+    } finally {
+      await runtime.stop();
+    }
+    expect(browserClosed).toBe(browserCreated);
+  });
+
   test("owns one Native HTTP -> browser -> MCP -> Native result -> Web final lifecycle", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "chatgpt-tela-dev-runtime-test", version: "0.0.0" }, { capabilities: {} });
@@ -1040,5 +1155,58 @@ test("preparation streams presentation and follows Native owner cancellation bef
     expect(acquisitions).toBe(0);
     expect(runtime.turns.active("thread-1", "turn-1")).toBeUndefined();
     await reader.cancel();
+  } finally { await runtime.stop(); }
+});
+
+test("Native cancellation immediately after context planning releases its pending transaction for a later original turn", async () => {
+  const firstOwner = new AbortController();
+  let currentTurnId = "turn-1";
+  let planned = 0;
+  let browserAcquisitions = 0;
+  const actualPlanner = createNativeRequestDevelopmentWebTurnPlanner();
+  const runtime = await startDevelopmentRuntime({
+    currentTurnSource: {
+      ...source,
+      async currentTurn(threadId) {
+        return { ...(await source.currentTurn(threadId))!, turnId: currentTurnId,
+          environmentSourceTurnId: currentTurnId };
+      },
+      async watchTurn(_threadId, turnId) {
+        return { signal: turnId === "turn-1" ? firstOwner.signal : new AbortController().signal,
+          async close() {} };
+      },
+    },
+    browserHost: new ControlledBrowserHost(async () => {
+      browserAcquisitions += 1;
+      return { async navigate() {}, async reveal() {}, async hide() {}, async close() {} };
+    }),
+    mcp: { kind: "external", abi: "stable" },
+    provider: new ExternalContractProvider(),
+    async planWebTurn(turn, request, preparation) {
+      const result = await actualPlanner(turn, request, preparation);
+      planned += 1;
+      if (planned === 1) firstOwner.abort(new Error("original Native turn retired after planning"));
+      return result;
+    },
+  });
+  const request = () => ({
+    ...nativeRequest([{ type: "message", role: "user", content: "Same canonical task." }]),
+    client_metadata: { "x-codex-turn-metadata": {
+      request_kind: "turn", thread_id: "thread-1", turn_id: currentTurnId,
+    } },
+  });
+  try {
+    const first = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, request());
+    expect(first.status).toBe(409);
+    expect(await first.text()).toContain("original Native turn retired after planning");
+    expect(browserAcquisitions).toBe(0);
+    expect(runtime.turns.active("thread-1", "turn-1")).toBeUndefined();
+
+    currentTurnId = "turn-2";
+    const next = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, request());
+    expect(next.status).toBe(200);
+    expect(await next.text()).toContain("external-v2-final");
+    expect(planned).toBe(2);
+    expect(browserAcquisitions).toBe(1);
   } finally { await runtime.stop(); }
 });

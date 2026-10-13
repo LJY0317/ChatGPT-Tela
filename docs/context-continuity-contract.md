@@ -249,6 +249,10 @@ actual completed answer with physical surface lease and document generation adva
 the committed Web epoch. Failure, cancellation and retired leases invalidate uncertain
 Web state, not the Native task. Route/effort changes create another physical epoch
 without claiming shared underlying model KV cache.
+If the original Native owner cancels just after the context planner reserves a
+pending transaction but before Web surface acquisition, that plan is settled
+failed immediately. No Web request is submitted and a later independently
+authorized original Native turn may plan anew without inheriting a stale lock.
 
 ## Restart, account and source recovery
 

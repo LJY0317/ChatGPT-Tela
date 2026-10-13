@@ -193,7 +193,15 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
       nativeSignal.throwIfAborted();
       preparationPhase = "context_plan";
       const plan = await input.planWebTurn(turn, nativeRequest, { signal: nativeSignal, onProgress: summary => turn.channel.publishProgress(summary) });
-      nativeSignal.throwIfAborted();
+      // Planning may successfully reserve the task's transactional context
+      // before the original Native owner revokes its signal. This boundary is
+      // still pre-execution, so the browser catch/settlement path has not been
+      // entered. Release the reserved plan rather than poisoning the next
+      // independently authorized Native turn with an unsettled transaction.
+      if (nativeSignal.aborted) {
+        plan.settle?.({ status: "failed" });
+        nativeSignal.throwIfAborted();
+      }
       executionStarted = true;
       const startedAt = Date.now();
       const diagnosticIdentity = {
