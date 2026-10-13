@@ -46,6 +46,7 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
   let accountBrowserCloses = 0;
   let accountBrowserReveals = 0;
   let deleteAcceptanceCalls = 0;
+  let syntheticRecoveryCalls = 0;
   let fallbackAccountBrowserStops = 0;
   let accountHide: (() => void) | undefined;
   let fail = input.fail;
@@ -156,6 +157,13 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
                   officialDeleteSelected: true as const,
                   officialConfirmationDispatched: true as const, historyAbsentAfterReload: true as const } };
             },
+            async recoverSyntheticSavedChat() {
+              syntheticRecoveryCalls++;
+              return { contractVersion: 1 as const, syntheticConversationProven: true as const,
+                officialDelete: { contractVersion: 1 as const, menuOpened: true as const,
+                  officialDeleteSelected: true as const,
+                  officialConfirmationDispatched: true as const, historyAbsentAfterReload: true as const } };
+            },
             async close() { accountBrowserCloses++; },
           };
         },
@@ -174,6 +182,7 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
     get accountBrowserCloses() { return accountBrowserCloses; },
     get accountBrowserReveals() { return accountBrowserReveals; },
     get deleteAcceptanceCalls() { return deleteAcceptanceCalls; },
+    get syntheticRecoveryCalls() { return syntheticRecoveryCalls; },
     get fallbackAccountBrowserStops() { return fallbackAccountBrowserStops; },
     closeAccountBrowser() { if (!accountHide) throw Error("account browser is not open"); accountHide(); },
     changeAccount() { fail = "account"; },
@@ -252,6 +261,35 @@ test("synthetic saved-delete acceptance is exact-owner opt-in, one-shot and does
     await testOnly.runtime.closeWebAccountBrowser();
     expect(testOnly.runtime.webState).toBe("ready");
   } finally { await testOnly.cleanup(); }
+});
+
+test("synthetic saved-chat recovery is owner-browser-bound, Send-free and one-shot", async () => {
+  const ordinary = await fixture();
+  try {
+    await ordinary.runtime.waitForWeb();
+    await expect(ordinary.runtime.recoverSyntheticSavedChat()).rejects.toThrow("unused owner-bound");
+    await ordinary.runtime.openWebAccountBrowser();
+    expect((await ordinary.runtime.recoverSyntheticSavedChat()).syntheticConversationProven).toBe(true);
+    expect(ordinary.syntheticRecoveryCalls).toBe(1);
+    await expect(ordinary.runtime.recoverSyntheticSavedChat()).rejects.toThrow("unused owner-bound");
+    await ordinary.runtime.closeWebAccountBrowser();
+  } finally { await ordinary.cleanup(); }
+
+  const owned = await fixture({ acceptanceSavedChat: true });
+  try {
+    await owned.runtime.waitForWeb();
+    await expect(owned.runtime.recoverSyntheticSavedChat()).rejects.toThrow("unused owner-bound");
+    await owned.runtime.openWebAccountBrowser();
+    const done = await owned.runtime.recoverSyntheticSavedChat();
+    expect(done.syntheticConversationProven).toBe(true);
+    expect(done.officialDelete.historyAbsentAfterReload).toBe(true);
+    await expect(owned.runtime.recoverSyntheticSavedChat()).rejects.toThrow("unused owner-bound");
+    expect(owned.syntheticRecoveryCalls).toBe(1);
+    expect(owned.deleteAcceptanceCalls).toBe(0);
+    expect(owned.nativeStops).toBe(0);
+    await owned.runtime.closeWebAccountBrowser();
+    expect(owned.runtime.webState).toBe("ready");
+  } finally { await owned.cleanup(); }
 });
 
 test("after-send failure leaves a pending test cleanup and never replays the message", async () => {

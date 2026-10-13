@@ -1,4 +1,5 @@
 import { BROWSER_PAGE_AUTOMATION, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 
 /** Only a newly created, unique synthetic ChatGPT test turn may be deleted. The
  * exact path/marker are held privately in this process and never logged or returned.
@@ -60,18 +61,26 @@ const INSPECT_EXACT_TEST_CHAT = String.raw`function (argument) {
       || allHistory.length < 1 || links.length) return { ready: false, reason: "history_not_rehydrated_or_present" };
     return { ready: true, reason: "history_absent_after_navigation", historyLinkCount: Math.min(allHistory.length,500) };
   }
-  if (location.pathname !== path || links.length !== 1) return { ready: false, reason: "route_or_link_not_unique" };
+  const visibleLinks = links.filter(visible);
+  if (location.pathname !== path || visibleLinks.length !== 1) {
+    return { ready: false, reason: "route_or_link_not_unique" };
+  }
   // Only inspect the currently open conversation, never private neighbors in the sidebar.
-  const userBubbles = [...document.querySelectorAll('[data-message-author-role="user"]')];
-  if (userBubbles.length !== 1
-    || String(userBubbles[0].innerText || "").trim() !== exactUserMessage) {
+  // Mirror the production DOM driver's proven author payload extraction;
+  // generic author-role containers can include actions, copy controls and
+  // extra text that is not part of the user's original message.
+  const userBubbles = [...document.querySelectorAll('[data-user-message-bubble]')];
+  const authorRoots = userBubbles.length === 1
+    ? [...userBubbles[0].querySelectorAll('[data-search-result-target]')] : [];
+  if (authorRoots.length !== 1
+    || String(authorRoots[0].textContent || "").replace(/\r\n?/g, "\n") !== exactUserMessage) {
     return { ready: false, reason: "synthetic_message_not_proven" };
   }
   if (step === "menu") {
     if ([...document.querySelectorAll('[role="menu"],[role="dialog"],[role="alertdialog"]')].some(visible)) {
       return { ready: false, reason: "competing_popup" };
     }
-    const link = links[0];
+    const link = visibleLinks[0];
     const row = link.closest("li,[role=listitem],[data-testid*=history]") || link.parentElement?.parentElement;
     if (!row || [...row.querySelectorAll('a[href^="/c/"]')].length !== 1) {
       return { ready: false, reason: "history_row_not_unique" };
@@ -143,10 +152,18 @@ export async function deleteOwnedSyntheticSavedChat(
       const row = await page.evaluate<{ path: string; exactUserMessage: string; step: Step }, TargetProbe>(
         INSPECT_EXACT_TEST_CHAT, { ...witness, step }, signal);
       if (row.ready) return row;
+      emitDiagnosticEvent("chatgpt_tela_work", "saved_delete_official_ui_gate", {
+        step, reason_class: row.reason, attempt,
+      });
       if (attempt === 3) throw new Error("Exact synthetic chat UI proof unavailable: " + row.reason);
-      await page.waitForDomMutation(before, AbortSignal.any([
-        signal ?? new AbortController().signal, AbortSignal.timeout(4_000),
-      ]));
+      try {
+        await page.waitForDomMutation(before, AbortSignal.any([
+          signal ?? new AbortController().signal, AbortSignal.timeout(1_500),
+        ]));
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        // No mutation occurred. A later retry is observation only, not another click.
+      }
     }
     throw new Error("Synthetic chat UI did not become ready");
   };

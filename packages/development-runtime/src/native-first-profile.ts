@@ -3,7 +3,7 @@ import { augmentCodexAppServerModelList } from "./app-server-model-list";
 import { classifyNetworkFailure, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { resolve } from "node:path";
 import { appServerCurrentTurnSource, appServerCompactionHistorySource, appServerNativeHandoffSource, connectCodexAppServerWebSocket, refreshAdmittedWebModelCatalog } from "@chatgpt-tela/codex";
-import { chatGptWebModelId, CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider, parseChatGptWebModelId, type ChatGptWebModelFamily, type ChatGptHistoryUiReadiness, type SavedChatCleanupAcceptanceReceipt } from "@chatgpt-tela/chatgpt";
+import { chatGptWebModelId, CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider, parseChatGptWebModelId, type ChatGptWebModelFamily, type ChatGptHistoryUiReadiness, type SavedChatCleanupAcceptanceReceipt, type SyntheticSavedChatRecoveryReceipt } from "@chatgpt-tela/chatgpt";
 import { createDefaultDesktopResponsesRoute, resolveDefaultDesktopInstallation, startDefaultDesktopTargetRuntime, TELA_DEFAULT_DESKTOP_RUNTIME_HEADER } from "@chatgpt-tela/default-desktop-target";
 import { startLocalResponsesServer, type LocalResponsesServer } from "@chatgpt-tela/local-server";
 import { startCodexBridgeMcpHttpServer, type CodexBridgeMcpHttpServer } from "@chatgpt-tela/mcp";
@@ -51,6 +51,7 @@ export interface NativeFirstProfileRuntime {
   inspectWebHistoryUi(): Promise<ChatGptHistoryUiReadiness>;
   /** ONE-SHOT, explicit saved-Web test: send one synthetic chat and delete by official UI. */
   runSavedChatDeleteAcceptance(): Promise<SavedChatCleanupAcceptanceReceipt>;
+  recoverSyntheticSavedChat(): Promise<SyntheticSavedChatRecoveryReceipt>;
   /** Revoke old Web authority on a proven account change; never changes Native authentication. */
   invalidateWebAccount(): Promise<void>;
   prepareWeb(): Promise<void>;
@@ -293,6 +294,7 @@ export async function startNativeFirstProductProfileRuntime(
   // account browser after cleanup; reconnection restores ordinary Temporary Chat.
   let acceptanceSavedChat = config.acceptanceSavedChat;
   let acceptanceDeleteStarted = false;
+  let syntheticRecoveryStarted = false;
   const closeBrowser = (): Promise<void> => {
     if (browserClosing) return browserClosing;
     if (!browser) return Promise.resolve();
@@ -602,6 +604,18 @@ export async function startNativeFirstProductProfileRuntime(
       // Never repeat this potential Send operation, even on transient errors.
       acceptanceDeleteStarted = true;
       return accountBrowser.surface.runSavedChatDeleteAcceptance();
+    },
+    recoverSyntheticSavedChat() {
+      if (isClosed() || syntheticRecoveryStarted
+        || !accountBrowser || accountBrowserSettling || accountBrowserOpening || webRequests || turns.size
+        || !accountBrowser.surface.recoverSyntheticSavedChat) {
+        return Promise.reject(new Error("One unused owner-bound idle account browser is required for cleanup"));
+      }
+      // Cleanup-only is authorized separately from the saved-chat Send lease:
+      // it can delete ONLY the 128-bit Tela synthetic marker, never a personal
+      // chat and never Send. An uncertain UI click cannot be replayed.
+      syntheticRecoveryStarted = true;
+      return accountBrowser.surface.recoverSyntheticSavedChat();
     },
     reconnectWeb() {
       if (state === "closed") return Promise.reject(new Error("Native-first profile is closed"));

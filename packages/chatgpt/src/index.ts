@@ -219,6 +219,7 @@ export * from "./account-identity";
 export * from "./history-ui";
 export * from "./saved-history-delete";
 export * from "./saved-history-acceptance";
+export * from "./saved-history-recovery";
 export * from "./approval-policy";
 export * from "./dom-driver";
 export * from "./session";

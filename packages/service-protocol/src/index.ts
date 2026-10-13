@@ -542,6 +542,31 @@ export function parseCodexSavedDeleteAcceptanceContract(value: unknown): CodexSa
   });
 }
 
+/** Cleanup-only receipt for a uniquely marked saved test chat. Never sends a message. */
+export interface CodexSyntheticRecoveryContract {
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly syntheticConversationProven: true;
+  readonly officialDelete: CodexSavedDeleteAcceptanceContract["officialDelete"];
+}
+
+export function parseCodexSyntheticRecoveryContract(value: unknown): CodexSyntheticRecoveryContract {
+  const row = object(value, "synthetic ChatGPT history cleanup");
+  if (Object.keys(row).sort().join("|")
+      !== ["contractVersion", "slot", "syntheticConversationProven", "officialDelete"].sort().join("|")
+    || row.contractVersion !== 1 || row.syntheticConversationProven !== true) {
+    throw new Error("Invalid synthetic cleanup proof fields");
+  }
+  const validated = parseCodexSavedDeleteAcceptanceContract({
+    contractVersion: 1, slot: row.slot, newlyAccepted: true,
+    modelReplyCompleted: false, officialDelete: row.officialDelete,
+  });
+  return Object.freeze({
+    contractVersion: 1, slot: validated.slot, syntheticConversationProven: true,
+    officialDelete: validated.officialDelete,
+  });
+}
+
 export function parseCodexTerminalSessionContract(value: unknown): CodexTerminalSessionContract {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid terminal session");
   const item = value as Record<string, unknown>;

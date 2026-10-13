@@ -57,6 +57,33 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("synthetic cleanup rejects browser-origin callers and mismatched profile receipts", async () => {
+    const service = fixtureService();
+    let invoked = 0, wrongSlot = false;
+    service.recoverSyntheticSavedChat = async slot => {
+      invoked++;
+      return { contractVersion: 1, slot: wrongSlot ? 2 : slot,
+        syntheticConversationProven: true, officialDelete: { contractVersion: 1,
+          menuOpened: true, officialDeleteSelected: true,
+          officialConfirmationDispatched: true, historyAbsentAfterReload: true } };
+    };
+    const token = "v".repeat(48);
+    const server = await startCodexServiceHttpServer({ service, bearerToken: token });
+    const c = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+      bearerToken: token, startedAt: new Date().toISOString() });
+    try {
+      const uri = new URL("v1/codex/profiles/1/synthetic-cleanup", server.endpoint);
+      expect((await fetch(uri, { method: "POST" })).status).toBe(401);
+      expect((await fetch(uri, { method: "POST", headers: { authorization: `Bearer ${token}`,
+        origin: "https://chatgpt.com" } })).status).toBe(403);
+      expect(invoked).toBe(0);
+      expect((await c.recoverSyntheticSavedChat(1)).officialDelete.historyAbsentAfterReload).toBe(true);
+      wrongSlot = true;
+      await expect(c.recoverSyntheticSavedChat(1)).rejects.toThrow();
+      expect(invoked).toBe(2);
+    } finally { await c.close(); await server.close(); }
+  });
   test("saved delete acceptance cannot run from a browser origin or return a wrong-slot receipt", async () => {
     const service = fixtureService();
     let called = 0;

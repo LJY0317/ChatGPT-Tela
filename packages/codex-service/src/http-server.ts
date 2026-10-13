@@ -8,6 +8,7 @@ import {
   parseCodexAccountDisplayContract,
   parseCodexHistoryUiContract,
   parseCodexSavedDeleteAcceptanceContract,
+  parseCodexSyntheticRecoveryContract,
 } from "@chatgpt-tela/service-protocol";
 import { ProfileConnectionError } from "./profile-operation";
 import type { CodexService } from "./controller";
@@ -145,6 +146,14 @@ export async function startCodexServiceHttpServer(input: {
           const slot = Number(savedDeleteMatch[1]);
           const receipt = parseCodexSavedDeleteAcceptanceContract(await input.service.runSavedDeleteAcceptance(slot));
           if (receipt.slot !== slot) throw new Error("Saved Chat delete acceptance profile ownership mismatch");
+          return Response.json(receipt, { headers: { "cache-control": "no-store" } });
+        }
+        const syntheticRecoveryMatch = request.method === "POST"
+          ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/synthetic-cleanup$/.exec(url.pathname) : null;
+        if (syntheticRecoveryMatch && input.service.recoverSyntheticSavedChat) {
+          const slot = Number(syntheticRecoveryMatch[1]);
+          const receipt = parseCodexSyntheticRecoveryContract(await input.service.recoverSyntheticSavedChat(slot));
+          if (receipt.slot !== slot) throw Error("Synthetic saved cleanup receipt from different profile");
           return Response.json(receipt, { headers: { "cache-control": "no-store" } });
         }
         const bridgeSlot = request.method === "GET" ? previewSlot(url.pathname) : undefined;

@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { startWebHttpServer, type WebHttpServer } from "@chatgpt-tela/http-host";
 import type { AccountCheck } from "./account-check";
 import type { AccountDisplay } from "./account-display";
-import { parseCodexAccountDisplayContract, parseCodexHistoryUiContract, parseCodexSavedDeleteAcceptanceContract, type CodexHistoryUiContract, type CodexSavedDeleteAcceptanceContract } from "@chatgpt-tela/service-protocol";
+import { parseCodexAccountDisplayContract, parseCodexHistoryUiContract, parseCodexSavedDeleteAcceptanceContract, parseCodexSyntheticRecoveryContract, type CodexHistoryUiContract, type CodexSavedDeleteAcceptanceContract, type CodexSyntheticRecoveryContract } from "@chatgpt-tela/service-protocol";
 
 const MAX_JPEG_BYTES = 4 * 1024 * 1024;
 
@@ -35,6 +35,7 @@ export async function startProfileBridgePreviewServer(input: {
   readonly closeAccountBrowser?: () => Promise<void>;
   readonly inspectHistoryUi?: () => Promise<Omit<CodexHistoryUiContract, "slot">>;
   readonly runSavedDeleteAcceptance?: () => Promise<Omit<CodexSavedDeleteAcceptanceContract, "slot">>;
+  readonly recoverSyntheticSavedChat?: () => Promise<Omit<CodexSyntheticRecoveryContract, "slot">>;
   readonly reveal?: (id: string, interactive?: boolean) => Promise<void>;
   readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable" }>;
   readonly probeModelSelection?: () => Promise<{
@@ -119,6 +120,17 @@ export async function startProfileBridgePreviewServer(input: {
           // A Send may have occurred. Never return a success receipt or silently retry.
           // The owned account browser remains open so the owner can manually clean up.
           return Response.json({ error: { message: "Saved test-chat deletion was not proven. Inspect the owner account browser without retrying Send." } },
+            { status: 409, headers: { "cache-control": "no-store" } });
+        }
+      }
+      if (request.method === "POST" && url.pathname === "/v1/account-browser-synthetic-cleanup" && input.recoverSyntheticSavedChat) {
+        try {
+          const receipt = parseCodexSyntheticRecoveryContract({
+            ...await input.recoverSyntheticSavedChat(), slot: input.slot,
+          });
+          return Response.json(receipt, { headers: { "cache-control": "no-store" } });
+        } catch {
+          return Response.json({ error: { message: "One synthetic saved chat could not be safely verified or deleted. Inspect this owner's account browser; do not retry." } },
             { status: 409, headers: { "cache-control": "no-store" } });
         }
       }

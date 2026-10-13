@@ -19,6 +19,8 @@ import {
   type CodexHistoryUiContract,
   parseCodexSavedDeleteAcceptanceContract,
   type CodexSavedDeleteAcceptanceContract,
+  parseCodexSyntheticRecoveryContract,
+  type CodexSyntheticRecoveryContract,
   type CodexAccountDisplayContract,
   type CodexWebState,
   parseCodexBridgePreviewContract,
@@ -121,6 +123,7 @@ export interface CodexService {
   closeAccountBrowser?(slot: number): Promise<void>;
   inspectAccountBrowserHistoryUi?(slot: number): Promise<CodexHistoryUiContract>;
   runSavedDeleteAcceptance?(slot: number): Promise<CodexSavedDeleteAcceptanceContract>;
+  recoverSyntheticSavedChat?(slot: number): Promise<CodexSyntheticRecoveryContract>;
   bridgePreview(slot: number, surfaceId?: string): Promise<CodexBridgePreviewContract>;
   accountCheck?(slot: number): Promise<CodexAccountCheckContract>;
   accountDisplay?(slot: number): Promise<CodexAccountDisplayContract>;
@@ -714,6 +717,22 @@ export async function startCodexService(input: {
       if (!response.ok) throw new Error("Saved test conversation may need manual cleanup in the owner account browser");
       const receipt = parseCodexSavedDeleteAcceptanceContract(await response.json());
       if (receipt.slot !== slot) throw new Error("Saved test conversation cleanup has a mismatched profile owner");
+      return receipt;
+    },
+    async recoverSyntheticSavedChat(slotValue: number) {
+      const slot = slotNumber(slotValue), profile = owned.get(slot);
+      if (!profile || profile.stopping || profile.child.exitCode !== null || profile.child.signalCode !== null) {
+        throw Error("An exact owner-bound profile is required for synthetic cleanup");
+      }
+      // Never retry: the first call may have already completed the official UI click.
+      const response = await fetch(new URL("v1/account-browser-synthetic-cleanup", profile.bridgePreviewUrl), {
+        method: "POST", headers: { authorization: `Bearer ${profile.uiToken}` },
+        signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(115_000)])
+          : AbortSignal.timeout(115_000),
+      });
+      if (!response.ok) throw Error("Synthetic cleanup not proven; owner UI requires inspection");
+      const receipt = parseCodexSyntheticRecoveryContract(await response.json());
+      if (receipt.slot !== slot) throw Error("Synthetic cleanup owner slot mismatch");
       return receipt;
     },
     async accountCheck(slotValue: number) {

@@ -13,6 +13,8 @@ import {
   type CodexHistoryUiContract,
   parseCodexSavedDeleteAcceptanceContract,
   type CodexSavedDeleteAcceptanceContract,
+  parseCodexSyntheticRecoveryContract,
+  type CodexSyntheticRecoveryContract,
   type CodexAccountDisplayContract,
   parseCodexBridgePreviewContract,
   parseCodexModelSelectionCanaryContract,
@@ -142,6 +144,14 @@ export class CodexServiceClient extends LocalServiceClient {
     const result = parseCodexSavedDeleteAcceptanceContract(await this.request(
       `v1/codex/profiles/${slot}/saved-delete-acceptance`, "POST", {}, signal));
     if (result.slot !== slot) throw new Error("Saved Chat deletion receipt slot does not match request");
+    return result;
+  }
+  /** Delete-only owner-bound recovery of one saved test chat. No Send and no automatic retry. */
+  async recoverSyntheticSavedChat(slot: number, signal?: AbortSignal): Promise<CodexSyntheticRecoveryContract> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw Error("invalid profile slot");
+    const result = parseCodexSyntheticRecoveryContract(await this.request(
+      `v1/codex/profiles/${slot}/synthetic-cleanup`, "POST", {}, signal));
+    if (result.slot !== slot) throw Error("synthetic cleanup receipt slot mismatch");
     return result;
   }
 

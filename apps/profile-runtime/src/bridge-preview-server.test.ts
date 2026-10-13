@@ -2,6 +2,40 @@ import { describe, expect, test } from "bun:test";
 import { startProfileBridgePreviewServer } from "./bridge-preview-server";
 
 describe("profile bridge preview server", () => {
+  test("synthetic saved cleanup is separately authenticated, deletion-only and strips internal errors", async () => {
+    let calls = 0;
+    const token = "u".repeat(48);
+    const server = await startProfileBridgePreviewServer({
+      slot: 1, bearerToken: token,
+      async observe() { return { activeSurfaceCount: 0 }; },
+      async recoverSyntheticSavedChat() {
+        calls++;
+        if (calls === 2) throw Error("secret synthetic marker must remain private");
+        return { contractVersion: 1, syntheticConversationProven: true,
+          officialDelete: { contractVersion: 1, menuOpened: true,
+            officialDeleteSelected: true, officialConfirmationDispatched: true,
+            historyAbsentAfterReload: true } };
+      },
+    });
+    const uri = new URL("v1/account-browser-synthetic-cleanup", server.endpoint);
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      expect((await fetch(uri, { method: "POST" })).status).toBe(401);
+      expect((await fetch(uri, { method: "POST", headers: { ...headers, origin: "https://chatgpt.com" } })).status).toBe(403);
+      expect((await fetch(uri, { headers })).status).toBe(404);
+      expect(calls).toBe(0);
+      const response = await fetch(uri, { method: "POST", headers });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toEqual({ contractVersion: 1, slot: 1,
+        syntheticConversationProven: true, officialDelete: { contractVersion: 1,
+          menuOpened: true, officialDeleteSelected: true,
+          officialConfirmationDispatched: true, historyAbsentAfterReload: true } });
+      const refused = await fetch(uri, { method: "POST", headers });
+      expect(refused.status).toBe(409);
+      expect(await refused.text()).not.toContain("secret synthetic marker");
+    } finally { await server.close(); }
+  });
   test("saved-chat deletion acceptance has exact bearer, one-shot receipt, no cross-origin and no leaked failure details", async () => {
     const token = "s".repeat(48);
     let invokes = 0;
