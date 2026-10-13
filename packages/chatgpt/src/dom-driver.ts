@@ -1986,6 +1986,11 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     await this.page.evaluate(REPLACE_COMPOSER_TEXT, { composerKey, text }, signal);
   }
 
+  /** Nonmutating focus of the exact current composer for trusted Electron typing. */
+  async focusComposer(composerKey: string, signal?: AbortSignal): Promise<void> {
+    await this.page.evaluate(FOCUS_COMPOSER, { composerKey }, signal);
+  }
+
   async clearComposerText(composerKey: string, signal?: AbortSignal): Promise<void> {
     await this.page.evaluate(FOCUS_COMPOSER, { composerKey }, signal);
     await this.page.clearFocusedEditable(signal);

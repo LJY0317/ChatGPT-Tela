@@ -100,13 +100,24 @@ export async function exerciseSavedChatCreateAndDelete(
   // All preparatory work above is non-sending. Do not retry Send after this
   // exact activation boundary, even if the browser returns an error.
   stage("prepare_test_message");
-  await driver.replaceComposerText(composer.key, marker, bounded);
+  // Experimental saved-chat input uses *trusted* Electron keyboard events
+  // rather than execCommand; ordinary Tela Work composer behavior is unchanged.
+  await driver.focusComposer(composer.key, bounded);
+  await page.typeFocusedEditable(marker, bounded);
+  stage("composer_trusted_input_returned");
   let filled = await driver.observe(bounded);
+  stage("composer_dom_readback_completed");
   let expected = filled.composers.filter(c => c.key === composer.key && c.visible && c.editable
     && c.ownedByChatGptForm && c.textLength === marker.length && c.textFingerprint === markerDigest
     && c.attachmentNames.length === 0 && c.connectorFingerprints.length === 0);
   let controls = filled.sendControls.filter(s => s.composerKey === composer.key && s.visible && s.enabled);
   if (expected.length !== 1 || controls.length !== 1) {
+    emitDiagnosticEvent("chatgpt_tela_work", "saved_delete_composer_rejected", {
+      exact_text_proven: expected.length === 1,
+      matching_composer_count: expected.length,
+      enabled_send_count: controls.length,
+      observed_composer_count: filled.composers.length,
+    });
     // Preserve unrelated drafts. This exact synthetic marker was prepared
     // by us in the same lease and can be cleared when not submitted.
     if (expected.length === 1) await driver.clearComposerText(composer.key, bounded);

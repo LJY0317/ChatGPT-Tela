@@ -153,6 +153,9 @@ class FakePage implements BrowserPageAutomation {
       return undefined as Result;
     }
     if (source.includes("composers[0].focus();")) {
+      if ((argument as { composerKey?: string }).composerKey !== "composer:primary") {
+        throw new Error("ChatGPT current composer is not uniquely addressable");
+      }
       return undefined as Result;
     }
     throw new Error("unexpected fixture page operation");
@@ -277,6 +280,16 @@ class RendererFixturePage extends FakePage {
 }
 
 describe("current ChatGPT DOM surface driver", () => {
+  test("exact composer focus for trusted synthetic typing never changes or submits a draft", async () => {
+    const page = new FakePage();
+    const driver = new ChatGptDomSurfaceDriver(page);
+    const original = structuredClone(page.raw);
+    await driver.focusComposer("composer:primary");
+    expect(page.raw).toEqual(original);
+    expect(page.actions).toEqual([]);
+    await expect(driver.focusComposer("not-a-composer")).rejects.toThrow("not uniquely addressable");
+    expect(page.raw).toEqual(original);
+  });
   test("question identity survives fold, visibility and action-label changes; author edits still change proof", async () => {
     const author = new FixtureElement(); author.textContent = "First line\nSecond line";
     const user = new FixtureElement({}, { '[data-search-result-target]': [author] });
