@@ -24,6 +24,8 @@ interface TargetProbe {
   readonly reason: string;
   readonly point?: { readonly x: number; readonly y: number };
   readonly historyLinkCount?: number;
+  readonly visibleExactLinkCount?: number;
+  readonly qualifiedMenuRowCount?: number;
 }
 
 const INSPECT_EXACT_TEST_CHAT = String.raw`function (argument) {
@@ -62,8 +64,9 @@ const INSPECT_EXACT_TEST_CHAT = String.raw`function (argument) {
     return { ready: true, reason: "history_absent_after_navigation", historyLinkCount: Math.min(allHistory.length,500) };
   }
   const visibleLinks = links.filter(visible);
-  if (location.pathname !== path || visibleLinks.length !== 1) {
-    return { ready: false, reason: "route_or_link_not_unique" };
+  if (location.pathname !== path || visibleLinks.length < 1 || visibleLinks.length > 8) {
+    return { ready: false, reason: "route_or_link_not_visible",
+      visibleExactLinkCount: Math.min(500, visibleLinks.length) };
   }
   // Only inspect the currently open conversation, never private neighbors in the sidebar.
   // Mirror the production DOM driver's proven author payload extraction;
@@ -80,19 +83,31 @@ const INSPECT_EXACT_TEST_CHAT = String.raw`function (argument) {
     if ([...document.querySelectorAll('[role="menu"],[role="dialog"],[role="alertdialog"]')].some(visible)) {
       return { ready: false, reason: "competing_popup" };
     }
-    const link = visibleLinks[0];
-    const row = link.closest("li,[role=listitem],[data-testid*=history]") || link.parentElement?.parentElement;
-    if (!row || [...row.querySelectorAll('a[href^="/c/"]')].length !== 1) {
-      return { ready: false, reason: "history_row_not_unique" };
+    // Search results can coexist with the same sidebar history link after
+    // official navigation. Multiple href copies are not multiple owner
+    // conversations. Authorize only ONE *row* with a uniquely associated,
+    // visible and actually hit-testable official menu trigger.
+    const qualified = [];
+    const seenRows = new Set();
+    for (const link of visibleLinks) {
+      const row = link.closest("li,[role=listitem],[data-testid*=history]") || link.parentElement?.parentElement;
+      if (!row || seenRows.has(row)) continue;
+      seenRows.add(row);
+      const rowHistoryLinks = [...row.querySelectorAll('a[href^="/c/"]')];
+      if (rowHistoryLinks.length !== 1 || rowHistoryLinks[0] !== link) continue;
+      const candidates = [...row.querySelectorAll('button,[role="button"]')]
+        .filter(button => button.getAttribute("aria-haspopup") === "menu"
+          || button.getAttribute("data-state") === "closed"
+          || button.getAttribute("data-testid") === "history-item-more-button");
+      if (candidates.length !== 1) continue;
+      const target = point(candidates[0]);
+      if (target) qualified.push(target);
     }
-    const candidates = [...row.querySelectorAll('button,[role="button"]')]
-      .filter(button => button.getAttribute("aria-haspopup") === "menu"
-        || button.getAttribute("data-state") === "closed"
-        || button.getAttribute("data-testid") === "history-item-more-button");
-    if (candidates.length !== 1) return { ready: false, reason: "history_menu_not_unique" };
-    const target = point(candidates[0]);
-    return target ? { ready: true, reason: "exact_synthetic_history_row", point: target }
-      : { ready: false, reason: "menu_not_visible_or_hittable" };
+    return qualified.length === 1
+      ? { ready: true, reason: "unique_synthetic_history_menu_row", point: qualified[0] }
+      : { ready: false, reason: "exact_synthetic_history_menu_row_not_unique",
+          visibleExactLinkCount: Math.min(500, visibleLinks.length),
+          qualifiedMenuRowCount: Math.min(500, qualified.length) };
   }
   if (step === "delete") {
     const menus = [...document.querySelectorAll('[role="menu"]')].filter(visible);
@@ -154,6 +169,8 @@ export async function deleteOwnedSyntheticSavedChat(
       if (row.ready) return row;
       emitDiagnosticEvent("chatgpt_tela_work", "saved_delete_official_ui_gate", {
         step, reason_class: row.reason, attempt,
+        visible_exact_link_count: row.visibleExactLinkCount ?? -1,
+        qualified_menu_row_count: row.qualifiedMenuRowCount ?? -1,
       });
       if (attempt === 3) throw new Error("Exact synthetic chat UI proof unavailable: " + row.reason);
       try {
