@@ -2,6 +2,32 @@ import { describe, expect, test } from "bun:test";
 import { startProfileBridgePreviewServer } from "./bridge-preview-server";
 
 describe("profile bridge preview server", () => {
+  test("owner-bound account browser close requires authentication and never hides failed revalidation", async () => {
+    const token = "z".repeat(48);
+    let calls = 0;
+    let blocked = false;
+    const server = await startProfileBridgePreviewServer({
+      slot: 2, bearerToken: token,
+      async observe() { return { activeSurfaceCount: 0 }; },
+      async closeAccountBrowser() { calls++; if (blocked) throw Error("private account proof"); },
+    });
+    const url = new URL("v1/account-browser-close", server.endpoint);
+    const authorization = `Bearer ${token}`;
+    try {
+      expect((await fetch(url, { method: "POST" })).status).toBe(401);
+      expect((await fetch(url, { method: "POST", headers: { authorization, origin: "https://chatgpt.com" } })).status).toBe(403);
+      expect((await fetch(url, { headers: { authorization } })).status).toBe(404);
+      expect(calls).toBe(0);
+      const done = await fetch(url, { method: "POST", headers: { authorization } });
+      expect(done.status).toBe(204);
+      expect(done.headers.get("cache-control")).toBe("no-store");
+      blocked = true;
+      const refused = await fetch(url, { method: "POST", headers: { authorization } });
+      expect(refused.status).toBe(409);
+      expect((await refused.text()).toLowerCase()).not.toContain("private");
+      expect(calls).toBe(2);
+    } finally { await server.close(); }
+  });
   test("Web account browser opens only through the owned authenticated POST and rejects unsafe active work", async () => {
     const token = "w".repeat(48);
     let openCalls = 0;

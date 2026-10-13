@@ -217,6 +217,56 @@ test("saved-chat acceptance is exact-owner opt-in and account browser close rest
   } finally { await f.cleanup(); }
 });
 
+test("owner-bound account browser close revalidates Web without OS accessibility or a Native stop", async () => {
+  const urls: string[] = [];
+  const f = await fixture({
+    acceptanceSavedChat: true,
+    onExecutionContract: value => { urls.push(value.chatGptUrl ?? ""); },
+  });
+  try {
+    await f.runtime.waitForWeb();
+    await expect(f.runtime.closeWebAccountBrowser()).rejects.toThrow("No owned account browser");
+    await f.runtime.openWebAccountBrowser();
+    expect(f.runtime.webState).toBe("preparing");
+    await f.runtime.closeWebAccountBrowser();
+    expect(f.runtime.webState).toBe("ready");
+    expect(urls).toEqual([CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL]);
+    expect(f.accountBrowserCloses).toBe(1);
+    expect(f.nativeStops).toBe(0);
+    expect((await f.post("native-fixture")).status).toBe(200);
+    await expect(f.runtime.closeWebAccountBrowser()).rejects.toThrow("No owned account browser");
+  } finally { await f.cleanup(); }
+});
+
+test("user-close and owner-close share the same single in-flight account revalidation", async () => {
+  const f = await fixture();
+  try {
+    await f.runtime.waitForWeb();
+    await f.runtime.openWebAccountBrowser();
+    f.closeAccountBrowser();
+    await f.runtime.closeWebAccountBrowser();
+    expect(f.runtime.webState).toBe("ready");
+    expect(f.accountBrowserCloses).toBe(1);
+    expect(f.nativeStops).toBe(0);
+  } finally { await f.cleanup(); }
+});
+
+test("owner-bound account browser close refuses stale Web after account mismatch but preserves Native", async () => {
+  const f = await fixture();
+  try {
+    await f.runtime.waitForWeb();
+    await f.runtime.openWebAccountBrowser();
+    f.changeAccount();
+    await expect(f.runtime.closeWebAccountBrowser()).rejects.toThrow();
+    expect(f.runtime.webState).toBe("failed");
+    expect(f.runtime.webModelIds).toEqual([]);
+    expect(f.accountBrowserCloses).toBe(1);
+    expect(f.nativeStops).toBe(0);
+    expect((await f.post("native-fixture")).status).toBe(200);
+    expect((await f.post(model)).status).toBe(400);
+  } finally { await f.cleanup(); }
+});
+
 test("running Native profile opens one account browser, blocks Web submissions, and re-proves after human close", async () => {
   const complete = deferred<void>();
   let proofs = 0;

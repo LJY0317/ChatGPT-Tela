@@ -32,6 +32,7 @@ export async function startProfileBridgePreviewServer(input: {
   readonly waitForWeb?: () => Promise<void>;
   readonly reconnectWeb?: () => Promise<void>;
   readonly openAccountBrowser?: () => Promise<void>;
+  readonly closeAccountBrowser?: () => Promise<void>;
   readonly reveal?: (id: string, interactive?: boolean) => Promise<void>;
   readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable" }>;
   readonly probeModelSelection?: () => Promise<{
@@ -85,6 +86,15 @@ export async function startProfileBridgePreviewServer(input: {
           return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
         } catch {
           return Response.json({ error: { message: "Finish your active Web work, then open the account browser." } },
+            { status: 409, headers: { "cache-control": "no-store" } });
+        }
+      }
+      if (request.method === "POST" && url.pathname === "/v1/account-browser-close" && input.closeAccountBrowser) {
+        try {
+          await input.closeAccountBrowser();
+          return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+        } catch {
+          return Response.json({ error: { message: "The owned account browser could not close and revalidate Web. Check the profile state." } },
             { status: 409, headers: { "cache-control": "no-store" } });
         }
       }

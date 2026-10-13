@@ -118,6 +118,11 @@ export class CodexServiceClient extends LocalServiceClient {
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("invalid profile slot");
     return parseCodexProfileStatusContract(await this.request(`v1/codex/profiles/${slot}/web-reconnect`, "POST", {}, signal));
   }
+  /** Explicit owner-bound account-browser close; not a chat deletion API. */
+  async closeAccountBrowser(slot: number, signal?: AbortSignal): Promise<void> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("invalid profile slot");
+    await this.request(`v1/codex/profiles/${slot}/account-browser-close`, "POST", {}, signal);
+  }
 
   async accountCheck(slot: number, signal?: AbortSignal): Promise<CodexAccountCheckContract> {
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("invalid profile slot");

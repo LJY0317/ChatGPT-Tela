@@ -57,6 +57,26 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("closing the exact account browser uses only the authenticated profile path", async () => {
+    const service = fixtureService();
+    const closed: number[] = [];
+    service.closeAccountBrowser = async slot => { closed.push(slot); };
+    const token = "q".repeat(48);
+    const server = await startCodexServiceHttpServer({ service, bearerToken: token });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href, bearerToken: token, startedAt: new Date().toISOString() });
+    const url = new URL("v1/codex/profiles/2/account-browser-close", server.endpoint);
+    try {
+      expect((await fetch(url, { method: "POST" })).status).toBe(401);
+      expect((await fetch(url, { method: "POST", headers: { authorization: `Bearer ${token}`, origin: "https://chatgpt.com" } })).status).toBe(403);
+      expect((await fetch(url, { headers: { authorization: `Bearer ${token}` } })).status).toBe(404);
+      expect(closed).toEqual([]);
+      await client.closeAccountBrowser(2);
+      expect(closed).toEqual([2]);
+      await expect(client.closeAccountBrowser(100)).rejects.toThrow("invalid profile slot");
+      expect(closed).toEqual([2]);
+    } finally { await client.close(); await server.close(); }
+  });
   test("running Web account browser route is per-slot, authenticated and not a launcher setup bypass", async () => {
     const service = fixtureService(); const invoked: number[] = [];
     service.openAccountBrowser = async slot => { invoked.push(slot); };

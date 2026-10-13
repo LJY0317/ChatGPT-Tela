@@ -114,6 +114,7 @@ export interface CodexService {
   terminalSession(slot: number): Promise<CodexTerminalSessionContract>;
   revealBridgeSurface?(slot: number, surfaceId: string, interactive?: boolean): Promise<void>;
   openAccountBrowser?(slot: number): Promise<void>;
+  closeAccountBrowser?(slot: number): Promise<void>;
   bridgePreview(slot: number, surfaceId?: string): Promise<CodexBridgePreviewContract>;
   accountCheck?(slot: number): Promise<CodexAccountCheckContract>;
   accountDisplay?(slot: number): Promise<CodexAccountDisplayContract>;
@@ -661,6 +662,19 @@ export async function startCodexService(input: {
           : AbortSignal.timeout(15_000),
       });
       if (!response.ok) throw new Error("Finish active Web work before opening the account browser");
+    },
+    async closeAccountBrowser(slotValue: number) {
+      const profile = owned.get(slotNumber(slotValue));
+      if (!profile || profile.stopping || profile.child.exitCode !== null || profile.child.signalCode !== null) {
+        throw new Error("Tela Work profile is not running");
+      }
+      const response = await fetch(new URL("v1/account-browser-close", profile.bridgePreviewUrl), {
+        method: "POST",
+        headers: { authorization: `Bearer ${profile.uiToken}` },
+        signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(60_000)])
+          : AbortSignal.timeout(60_000),
+      });
+      if (!response.ok) throw new Error("Account browser closure was not confirmed. Inspect profile Web state.");
     },
     async accountCheck(slotValue: number) {
       return readProfileAccount(slotValue, "v1/account-check", parseCodexAccountCheckContract);

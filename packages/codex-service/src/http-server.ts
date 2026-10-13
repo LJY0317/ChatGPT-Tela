@@ -123,6 +123,12 @@ export async function startCodexServiceHttpServer(input: {
           await input.service.openAccountBrowser(Number(browserMatch[1]));
           return new Response(null, { status: 204 });
         }
+        const closeBrowserMatch = request.method === "POST"
+          ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/account-browser-close$/.exec(url.pathname) : null;
+        if (closeBrowserMatch && input.service.closeAccountBrowser) {
+          await input.service.closeAccountBrowser(Number(closeBrowserMatch[1]));
+          return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+        }
         const bridgeSlot = request.method === "GET" ? previewSlot(url.pathname) : undefined;
         if (bridgeSlot !== undefined) {
           return Response.json(await input.service.bridgePreview(bridgeSlot, url.searchParams.get("surfaceId") ?? undefined), {

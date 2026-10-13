@@ -44,6 +44,9 @@ export interface NativeFirstProfileRuntime {
   /** On-demand, same-profile account browser. Native remains owned/running;
    * the old Web admission is suspended until its user-close revalidation. */
   openWebAccountBrowser(): Promise<void>;
+  /** Explicit owner-bound close when OS accessibility cannot deliver user-close.
+   * Closes only the account browser and revalidates Web; never stops Native. */
+  closeWebAccountBrowser(): Promise<void>;
   /** Revoke old Web authority on a proven account change; never changes Native authentication. */
   invalidateWebAccount(): Promise<void>;
   prepareWeb(): Promise<void>;
@@ -204,9 +207,11 @@ export async function startNativeFirstProductProfileRuntime(
   let accountBrowser: {
     surface: ElectronProfileSetupSurface;
     detach: () => void;
+    settle: () => Promise<void>;
     readonly fallback?: ElectronProfileSetupRuntime;
   } | undefined;
   let accountBrowserOpening: Promise<void> | undefined;
+  let accountBrowserSettling: Promise<void> | undefined;
   const isClosed = () => state === "closed";
   const setState = (next: NativeFirstWebState) => {
     state = next;
@@ -463,6 +468,7 @@ export async function startNativeFirstProductProfileRuntime(
     openWebAccountBrowser() {
       if (isClosed()) return Promise.reject(new Error("Native-first profile is closed"));
       if (accountInvalidation) return Promise.reject(new Error("Finish Web account revalidation before reopening its browser"));
+      if (accountBrowserSettling) return Promise.reject(new Error("Finish Web account revalidation before reopening its browser"));
       if (accountBrowserOpening) return accountBrowserOpening;
       if (accountBrowser) return accountBrowser.surface.reveal();
       if (accountBrowserBlocked || !((state === "ready" && browser) || (state === "failed" && !browser))) {
@@ -504,28 +510,37 @@ export async function startNativeFirstProductProfileRuntime(
           }
           const owned = surface;
           const fallbackOwner = fallback;
-          const detach = owned.onUserHide(() => {
-            if (accountBrowser?.surface !== owned) return;
+          const settle = (): Promise<void> => {
+            if (accountBrowser?.surface !== owned) {
+              return accountBrowserSettling ?? Promise.reject(new Error("Account browser owner changed"));
+            }
             acceptanceSavedChat = false;
             const current = accountBrowser;
             accountBrowser = undefined;
             current?.detach();
-            // User closed the browser: revoke the old physical projection and
-            // rediscover account/model/connector on a fresh owned page, never
-            // resubmitting a Native/Web turn.
-            void (async () => {
+            // User-close or explicitly authenticated owner-close takes exactly
+            // the same path. Never resubmit or replace the Native owner.
+            const operation = (async () => {
               await owned.close();
               await fallbackOwner?.stop();
               if (isClosed()) return;
               await result.invalidateWebAccount();
               if (!isClosed()) await result.reconnectWeb();
-            })().catch(() => {
+            })();
+            accountBrowserSettling = operation;
+            void operation.finally(() => {
+              if (accountBrowserSettling === operation) accountBrowserSettling = undefined;
+            }).catch(() => {});
+            return operation;
+          };
+          const detach = owned.onUserHide(() => {
+            void settle().catch(() => {
               emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_account_browser_settled", {
                 outcome: "reconnection_failed",
               });
             });
           });
-          accountBrowser = { surface: owned, detach,
+          accountBrowser = { surface: owned, detach, settle,
             ...(fallbackOwner ? { fallback: fallbackOwner } : {}) };
           // These models cannot be used while the human may change the shared
           // persistent cookie jar. Web re-verification is mandatory on close.
@@ -553,6 +568,18 @@ export async function startNativeFirstProductProfileRuntime(
         if (accountBrowserOpening === opening) accountBrowserOpening = undefined;
       }).catch(() => {});
       return opening;
+    },
+    closeWebAccountBrowser() {
+      if (isClosed()) return Promise.reject(new Error("Native-first profile is closed"));
+      if (webRequests || turns.size) {
+        return Promise.reject(new Error("Finish the current Web task before closing the account browser"));
+      }
+      if (accountBrowserSettling) return accountBrowserSettling;
+      if (accountBrowserOpening) {
+        return accountBrowserOpening.then(() => result.closeWebAccountBrowser());
+      }
+      if (!accountBrowser) return Promise.reject(new Error("No owned account browser is open"));
+      return accountBrowser.settle();
     },
     reconnectWeb() {
       if (state === "closed") return Promise.reject(new Error("Native-first profile is closed"));
