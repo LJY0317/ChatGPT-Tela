@@ -66,6 +66,10 @@ precondition(shared.inventory.error == nil)
 var preparingWeb = connected; preparingWeb.webState = "preparing"; preparingWeb.webModelsReady = false
 let preparingPresentation = TelaProfilePresentation(profile: preparingWeb, inventoryError: nil, localProgress: nil)
 precondition(preparingPresentation.busy && preparingPresentation.label == "Connecting…")
+var accountBrowserWeb = preparingWeb; accountBrowserWeb.accountManagementActive = true
+let accountBrowserPresentation = TelaProfilePresentation(profile: accountBrowserWeb, inventoryError: nil, localProgress: nil)
+precondition(!accountBrowserPresentation.busy && accountBrowserPresentation.label == "Finish account management")
+precondition(!accountBrowserWeb.needsWebReconnect && accountBrowserWeb.connected)
 var failedWeb = preparingWeb; failedWeb.webState = "failed"
 precondition(failedWeb.connected && failedWeb.needsWebReconnect && failedWeb.connectionLabel == "Connection failed")
 precondition(!TelaProfilePresentation(profile: failedWeb, inventoryError: nil, localProgress: nil).busy)

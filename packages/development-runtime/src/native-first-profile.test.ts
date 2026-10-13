@@ -315,11 +315,14 @@ test("owner-bound account browser close revalidates Web without OS accessibility
   });
   try {
     await f.runtime.waitForWeb();
+    expect(f.runtime.accountManagementActive).toBe(false);
     await expect(f.runtime.closeWebAccountBrowser()).rejects.toThrow("No owned account browser");
     await f.runtime.openWebAccountBrowser();
     expect(f.runtime.webState).toBe("preparing");
+    expect(f.runtime.accountManagementActive).toBe(true);
     await f.runtime.closeWebAccountBrowser();
     expect(f.runtime.webState).toBe("ready");
+    expect(f.runtime.accountManagementActive).toBe(false);
     expect(urls).toEqual([CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL]);
     expect(f.accountBrowserCloses).toBe(1);
     expect(f.nativeStops).toBe(0);
@@ -369,6 +372,7 @@ test("running Native profile opens one account browser, blocks Web submissions, 
     expect(f.accountBrowserOpens).toBe(1);
     expect(f.accountBrowserReveals).toBe(2);
     expect(f.runtime.webState).toBe("preparing");
+    expect(f.runtime.accountManagementActive).toBe(true);
     expect((await f.post(model)).status).toBe(400);
     expect((await f.post("native-fixture")).status).toBe(200);
     await expect(f.runtime.reconnectWeb()).rejects.toThrow("Close the account browser");
@@ -377,6 +381,7 @@ test("running Native profile opens one account browser, blocks Web submissions, 
     await f.runtime.waitForWeb();
     expect(f.accountBrowserCloses).toBe(1);
     expect(f.runtime.webState).toBe("ready");
+    expect(f.runtime.accountManagementActive).toBe(false);
     expect(f.browserStops).toBe(1);
     expect(f.nativeStops).toBe(0);
   } finally { await f.cleanup(); }

@@ -101,13 +101,21 @@ test("Web admission is explicit and does not imply visible models or Native shut
   const base = { slot: 1, targetId: "default", targetDisplayName: "ChatGPT", targetState: "running", targetSessionState: "ready", controlState: "running" };
   expect(parseCodexProfileStatusContract({ ...base, webState: "failed", webModelsReady: false }).controlState).toBe("running");
   expect(parseCodexProfileStatusContract({ ...base, webState: "preparing", webModelsReady: false }).webState).toBe("preparing");
+  expect(parseCodexProfileStatusContract({ ...base, webState: "preparing", webModelsReady: false,
+    accountManagementActive: true }).accountManagementActive).toBe(true);
+  expect(() => parseCodexProfileStatusContract({ ...base, webState: "ready", accountManagementActive: true })).toThrow();
+  expect(() => parseCodexProfileStatusContract({ ...base, webState: "preparing", accountManagementActive: "yes" })).toThrow();
   expect(() => parseCodexProfileStatusContract({ ...base, webState: "guessed" })).toThrow();
   expect(parseCodexWebStateContract({ contractVersion: 1, slot: 1, webState: "ready", webModelIds: ["chatgpt-tela-web/fixture"] }).webState).toBe("ready");
+  expect(parseCodexWebStateContract({ contractVersion: 1, slot: 1, webState: "preparing", webModelIds: [],
+    accountManagementActive: true }).accountManagementActive).toBe(true);
   for (const value of [
     { contractVersion: 1, slot: 1, webState: "ready", webModelIds: [] },
     { contractVersion: 1, slot: 1, webState: "failed", webModelIds: ["chatgpt-tela-web/fixture"] },
     { contractVersion: 1, slot: 1, webState: "ready", webModelIds: ["native-fixture"] },
     { contractVersion: 1, slot: 1, webState: "ready", webModelIds: ["chatgpt-tela-web/fixture", "chatgpt-tela-web/fixture"] },
+    { contractVersion: 1, slot: 1, webState: "ready", webModelIds: ["chatgpt-tela-web/fixture"], accountManagementActive: true },
+    { contractVersion: 1, slot: 1, webState: "preparing", webModelIds: [], accountManagementActive: "yes" },
   ]) expect(() => parseCodexWebStateContract(value)).toThrow();
 });
 

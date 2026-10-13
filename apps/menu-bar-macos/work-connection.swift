@@ -42,11 +42,13 @@ struct TelaWorkProfile: Decodable, Equatable {
   var connectionInProgress: Bool? = nil
   var webModelsReady: Bool? = nil
   var webState: String? = nil
+  var accountManagementActive: Bool? = nil
   var canReconnectWeb: Bool { connected && (webState == "failed" || webState == "ready") }
   var needsWebReconnect: Bool { canReconnectWeb && (webState == "failed" || webModelsReady == false) }
   var connected: Bool { controlState == "running" && targetSessionState == "ready" }
   var action: String { connected ? "stop" : (targetState == "running" || controlState == "restart-required" ? "restart" : "start") }
   var connectionLabel: String {
+    if connected && accountManagementActive == true { return "Finish account management" }
     if connected && webState == "preparing" { return "Connecting…" }
     if connected && webState == "failed" { return "Connection failed" }
     if connected && webState == "ready" && webModelsReady != false { return "Connected" }
@@ -139,7 +141,8 @@ struct TelaProfilePresentation {
   let busy: Bool
   let label: String
   init(profile: TelaWorkProfile, inventoryError: String?, localProgress: String?) {
-    busy = localProgress != nil || (inventoryError == nil && (profile.connectionInProgress == true || (profile.connected && profile.webState == "preparing")))
+    busy = localProgress != nil || (inventoryError == nil && (profile.connectionInProgress == true
+      || (profile.connected && profile.webState == "preparing" && profile.accountManagementActive != true)))
     label = localProgress ?? (busy ? (profile.connected ? profile.connectionLabel : "Connecting…") : (inventoryError == nil ? profile.connectionLabel : "Connection status unavailable"))
   }
 }

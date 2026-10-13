@@ -39,6 +39,8 @@ export interface NativeFirstProfileRuntime {
   readonly webState: NativeFirstWebState;
   readonly webRuntime: ElectronDevelopmentRuntime | undefined;
   readonly webModelIds: readonly string[];
+  /** Exact owner-managed account browser currently suspends Web admission. */
+  readonly accountManagementActive: boolean;
   waitForWeb(): Promise<void>;
   reconnectWeb(): Promise<void>;
   /** On-demand, same-profile account browser. Native remains owned/running;
@@ -471,6 +473,7 @@ export async function startNativeFirstProductProfileRuntime(
     get webState() { return state; },
     get webRuntime() { return state === "ready" ? browser : undefined; },
     get webModelIds() { return Object.freeze(admitted.map(family => chatGptWebModelId(family.key))); },
+    get accountManagementActive() { return accountBrowserBlocked; },
     async waitForWeb() { await preparation?.catch(() => {}); },
     openWebAccountBrowser() {
       if (isClosed()) return Promise.reject(new Error("Native-first profile is closed"));

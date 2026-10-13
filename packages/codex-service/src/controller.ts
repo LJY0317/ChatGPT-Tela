@@ -64,6 +64,7 @@ export interface CodexProfileStatus {
   readonly connectionInProgress?: boolean;
   readonly webModelsReady?: boolean;
   readonly webState?: CodexWebState;
+  readonly accountManagementActive?: boolean;
   readonly responsesRouteFingerprint?: string;
 }
 
@@ -103,6 +104,7 @@ interface OwnedProfile {
   readonly unmount: () => void;
   webState: CodexWebState;
   webModelsReady: boolean;
+  accountManagementActive: boolean;
   catalogCheck?: Promise<boolean>;
   stopping: Promise<void> | undefined;
 }
@@ -288,7 +290,8 @@ function statusFor(target: CodexNativeTarget, slot: number, session: CodexNative
     targetDisplayName: target.displayName,
     targetState: target.state,
     targetSessionState: ownershipMatches ? "ready" : session.state,
-    ...(ownershipMatches && owned ? { webModelsReady: owned.webModelsReady, webState: owned.webState } : {}),
+    ...(ownershipMatches && owned ? { webModelsReady: owned.webModelsReady, webState: owned.webState,
+      ...(owned.accountManagementActive ? { accountManagementActive: true } : {}) } : {}),
     controlState,
     ...(session.desktopProcessId ? { desktopProcessId: session.desktopProcessId } : {}),
     ...(owned ? { childProcessId: owned.runtimeProcessId } : {}),
@@ -371,6 +374,7 @@ export async function startCodexService(input: {
         const state = parseCodexWebStateContract(await response.json());
         if (state.slot !== profile.slot) throw new Error("Web state owner mismatch");
         profile.webState = state.webState;
+        profile.accountManagementActive = state.accountManagementActive === true;
         if (state.webState !== "ready" || !profile.terminalEndpoint) return false;
         const signal = input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000);
         const rpc = await connectCodexAppServerWebSocket(profile.terminalEndpoint, { signal });
@@ -561,6 +565,7 @@ export async function startCodexService(input: {
           unmount,
           webState: ready.webState,
           webModelsReady: false,
+          accountManagementActive: false,
           stopping: undefined,
         };
         owned.set(slot, profile);
@@ -632,6 +637,7 @@ export async function startCodexService(input: {
       const state = parseCodexWebStateContract(await response.json());
       if (state.slot !== profile.slot) throw new Error("Web reconnect owner mismatch");
       profile.webState = state.webState;
+      profile.accountManagementActive = state.accountManagementActive === true;
       await profile.catalogCheck;
       await refreshWebStatus(profile);
       return profileStatus(profile);

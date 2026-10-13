@@ -122,6 +122,8 @@ export interface CodexProfileStatusContract {
   readonly connectionInProgress?: boolean;
   readonly webModelsReady?: boolean;
   readonly webState?: CodexWebState;
+  /** UI-only hint: this exact owner's account browser has suspended Web admission. */
+  readonly accountManagementActive?: boolean;
   readonly responsesRouteFingerprint?: string;
 }
 
@@ -175,6 +177,10 @@ export function parseCodexProfileStatusContract(value: unknown): CodexProfileSta
   }
   if (item.webState !== undefined && !["preparing", "ready", "failed", "closed"].includes(item.webState as string)) throw new Error("invalid Web connection state");
   if (item.webModelsReady !== undefined && typeof item.webModelsReady !== "boolean") throw new Error("invalid Web model readiness");
+  if (item.accountManagementActive !== undefined && typeof item.accountManagementActive !== "boolean") {
+    throw new Error("invalid account management state");
+  }
+  if (item.accountManagementActive === true && item.webState !== "preparing") throw new Error("account management must suspend Web admission");
   if (item.connectionInProgress !== undefined && typeof item.connectionInProgress !== "boolean") {
     throw new Error("Codex profile connection progress is invalid");
   }
@@ -193,6 +199,7 @@ export function parseCodexProfileStatusContract(value: unknown): CodexProfileSta
     ...(item.desktopProcessId === undefined ? {} : { desktopProcessId: item.desktopProcessId as number }),
     ...(item.webState === undefined ? {} : { webState: item.webState as CodexWebState }),
     ...(item.webModelsReady === undefined ? {} : { webModelsReady: item.webModelsReady as boolean }),
+    ...(item.accountManagementActive === undefined ? {} : { accountManagementActive: item.accountManagementActive as boolean }),
     ...(item.connectionInProgress === undefined ? {} : { connectionInProgress: item.connectionInProgress as boolean }),
     ...(fingerprint === undefined ? {} : { responsesRouteFingerprint: fingerprint }),
   });
@@ -588,6 +595,7 @@ export interface CodexWebStateContract {
   readonly slot: number;
   readonly webState: CodexWebState;
   readonly webModelIds: readonly string[];
+  readonly accountManagementActive?: boolean;
 }
 export function parseCodexWebStateContract(value: unknown): CodexWebStateContract {
   const item = object(value, "Codex Web state");
@@ -596,7 +604,10 @@ export function parseCodexWebStateContract(value: unknown): CodexWebStateContrac
     || !Array.isArray(item.webModelIds) || item.webModelIds.length > 128
     || item.webModelIds.some(id => typeof id !== "string" || id.length > 256 || !id.startsWith("chatgpt-tela-web/"))
     || new Set(item.webModelIds).size !== item.webModelIds.length
-    || (item.webState === "ready" ? item.webModelIds.length === 0 : item.webModelIds.length !== 0)) throw new Error("invalid Codex Web state");
+    || (item.webState === "ready" ? item.webModelIds.length === 0 : item.webModelIds.length !== 0)
+    || (item.accountManagementActive !== undefined && typeof item.accountManagementActive !== "boolean")
+    || (item.accountManagementActive === true && item.webState !== "preparing")) throw new Error("invalid Codex Web state");
   return Object.freeze({ contractVersion: 1, slot: item.slot as number, webState: item.webState as CodexWebState,
-    webModelIds: Object.freeze([...item.webModelIds]) as readonly string[] });
+    webModelIds: Object.freeze([...item.webModelIds]) as readonly string[],
+    ...(item.accountManagementActive === undefined ? {} : { accountManagementActive: item.accountManagementActive as boolean }) });
 }

@@ -68,6 +68,10 @@ submission makes account mutation unsafe, permit non-destructive viewing
 and explain the minimum necessary action before enabling changes. An
 explicit sign-out/account switch must invalidate old Web model/connector,
 account and physical-context authority before new Web preparation.
+When a verified owner-bound account-management browser intentionally
+suspends Web admission, show `Finish account management` instead of an
+indefinitely busy `Connecting` label. User-close or authenticated owner-close
+must independently re-prove Web readiness without stopping Native.
 Never touch Plura's or the original app's separately owned sessions.
 
 Installed acceptance must demonstrate: one-step normal connect, bounded
@@ -1562,6 +1566,14 @@ disconnected transition, never an in-flight automatic fallback.
 Neither product may claim the other's installation, registration, profile,
 credentials, or user data for removal. For the standalone/coexistence/removal
 acceptance matrix, see [product lifecycle](product-lifecycle.md#independence-from-original-apps-and-optional-providers).
+
+Cross-profile **original local Work/Codex thread sharing** is an explicit
+separate owner-requested feature, not equivalent to single-profile Native/Web
+model switching or copying a task summary. The exact per-thread owner
+authorization and one-writer handoff gates are documented in
+[cross-profile local thread continuity](cross-profile-local-thread-continuity.md).
+No profile-to-profile authorization or original-thread continuity is inferred
+from parallel logins, local storage access, approval UI, or a matching thread ID.
 
 Desktop process ownership and Web model readiness are separate states. Readiness requires
 an effective startup catalog and visible Web model rows. Inventory checks verify these

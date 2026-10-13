@@ -66,7 +66,8 @@ async function main(): Promise<void> {
           return web.probeChatGptAccountDisplay(signal);
         },
       }),
-      webState: () => ({ contractVersion: 1, slot: config.slot, webState: runtime.webState, webModelIds: runtime.webModelIds }),
+      webState: () => ({ contractVersion: 1, slot: config.slot, webState: runtime.webState, webModelIds: runtime.webModelIds,
+        ...(runtime.accountManagementActive ? { accountManagementActive: true } : {}) }),
       waitForWeb: () => runtime.waitForWeb(),
       reconnectWeb: () => runtime.reconnectWeb(),
       openAccountBrowser: () => runtime.openWebAccountBrowser(),
