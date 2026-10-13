@@ -57,6 +57,34 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("saved delete acceptance cannot run from a browser origin or return a wrong-slot receipt", async () => {
+    const service = fixtureService();
+    let called = 0;
+    let mismatched = false;
+    service.runSavedDeleteAcceptance = async slot => {
+      called++;
+      return { contractVersion: 1, slot: mismatched ? 2 : slot, newlyAccepted: true,
+        modelReplyCompleted: true, officialDelete: { contractVersion: 1,
+          menuOpened: true, officialDeleteSelected: true,
+          officialConfirmationDispatched: true, historyAbsentAfterReload: true } };
+    };
+    const token = "q".repeat(48);
+    const server = await startCodexServiceHttpServer({ service, bearerToken: token });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+      bearerToken: token, startedAt: new Date().toISOString() });
+    try {
+      const url = new URL("v1/codex/profiles/1/saved-delete-acceptance", server.endpoint);
+      expect((await fetch(url, { method: "POST" })).status).toBe(401);
+      expect((await fetch(url, { method: "POST", headers: { authorization: `Bearer ${token}`,
+        origin: "https://chatgpt.com" } })).status).toBe(403);
+      expect(called).toBe(0);
+      expect((await client.runSavedDeleteAcceptance(1)).newlyAccepted).toBe(true);
+      mismatched = true;
+      await expect(client.runSavedDeleteAcceptance(1)).rejects.toThrow();
+      expect(called).toBe(2);
+    } finally { await client.close(); await server.close(); }
+  });
   test("history preflight rejects unowned callers and wrong-slot private observations", async () => {
     const service = fixtureService();
     const seen: number[] = [];

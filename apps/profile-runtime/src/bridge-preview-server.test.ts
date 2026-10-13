@@ -2,6 +2,39 @@ import { describe, expect, test } from "bun:test";
 import { startProfileBridgePreviewServer } from "./bridge-preview-server";
 
 describe("profile bridge preview server", () => {
+  test("saved-chat deletion acceptance has exact bearer, one-shot receipt, no cross-origin and no leaked failure details", async () => {
+    const token = "s".repeat(48);
+    let invokes = 0;
+    const server = await startProfileBridgePreviewServer({ slot: 1, bearerToken: token,
+      async observe() { return { activeSurfaceCount: 0 }; },
+      async runSavedDeleteAcceptance() {
+        invokes++;
+        if (invokes > 1) throw Error("private user marker 123");
+        return { contractVersion: 1, newlyAccepted: true, modelReplyCompleted: true,
+          officialDelete: { contractVersion: 1, menuOpened: true, officialDeleteSelected: true,
+            officialConfirmationDispatched: true, historyAbsentAfterReload: true } };
+      },
+    });
+    const url = new URL("v1/account-browser-saved-delete-acceptance", server.endpoint);
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      expect((await fetch(url, { method: "POST" })).status).toBe(401);
+      expect((await fetch(url, { method: "POST", headers: { ...headers, origin: "https://chatgpt.com" } })).status).toBe(403);
+      expect((await fetch(url, { headers })).status).toBe(404);
+      expect(invokes).toBe(0);
+      const ok = await fetch(url, { method: "POST", headers });
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("cache-control")).toBe("no-store");
+      expect(await ok.json()).toEqual({ contractVersion: 1, slot: 1, newlyAccepted: true,
+        modelReplyCompleted: true, officialDelete: { contractVersion: 1,
+          menuOpened: true, officialDeleteSelected: true,
+          officialConfirmationDispatched: true, historyAbsentAfterReload: true } });
+      const refused = await fetch(url, { method: "POST", headers });
+      expect(refused.status).toBe(409);
+      expect(await refused.text()).not.toContain("private user marker");
+      expect(invokes).toBe(2);
+    } finally { await server.close(); }
+  });
   test("history inspection is authenticated, content-free and only present for an open owned browser", async () => {
     const token = "h".repeat(48);
     let inspections = 0;

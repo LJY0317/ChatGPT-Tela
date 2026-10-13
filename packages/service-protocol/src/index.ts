@@ -497,6 +497,51 @@ export function parseCodexHistoryUiContract(value: unknown): CodexHistoryUiContr
     visibleDialogCount: item.visibleDialogCount as number });
 }
 
+/** Owner-private receipt; never includes test markers, raw conversation paths or user content. */
+export interface CodexSavedDeleteAcceptanceContract {
+  readonly contractVersion: 1;
+  readonly slot: number;
+  readonly newlyAccepted: true;
+  readonly modelReplyCompleted: boolean;
+  readonly officialDelete: {
+    readonly contractVersion: 1;
+    readonly menuOpened: true;
+    readonly officialDeleteSelected: true;
+    readonly officialConfirmationDispatched: true;
+    readonly historyAbsentAfterReload: true;
+  };
+}
+
+export function parseCodexSavedDeleteAcceptanceContract(value: unknown): CodexSavedDeleteAcceptanceContract {
+  const row = object(value, "saved chat cleanup receipt");
+  if (row.contractVersion !== 1 || !Number.isSafeInteger(row.slot)
+    || (row.slot as number) < 1 || (row.slot as number) > 99
+    || row.newlyAccepted !== true || typeof row.modelReplyCompleted !== "boolean"
+    || Object.keys(row).sort().join("|") !== ["contractVersion", "slot", "newlyAccepted", "modelReplyCompleted", "officialDelete"].sort().join("|")) {
+    throw new Error("invalid owner-bound saved chat acceptance receipt");
+  }
+  const deleted = object(row.officialDelete, "saved chat official deletion");
+  if (Object.keys(deleted).sort().join("|")
+      !== ["contractVersion", "menuOpened", "officialDeleteSelected",
+        "officialConfirmationDispatched", "historyAbsentAfterReload"].sort().join("|")
+    || deleted.contractVersion !== 1 || deleted.menuOpened !== true
+    || deleted.officialDeleteSelected !== true
+    || deleted.officialConfirmationDispatched !== true
+    || deleted.historyAbsentAfterReload !== true) {
+    throw new Error("official saved-chat deletion was not proven");
+  }
+  return Object.freeze({
+    contractVersion: 1,
+    slot: row.slot as number,
+    newlyAccepted: true,
+    modelReplyCompleted: row.modelReplyCompleted as boolean,
+    officialDelete: Object.freeze({
+      contractVersion: 1, menuOpened: true, officialDeleteSelected: true,
+      officialConfirmationDispatched: true, historyAbsentAfterReload: true,
+    }),
+  });
+}
+
 export function parseCodexTerminalSessionContract(value: unknown): CodexTerminalSessionContract {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid terminal session");
   const item = value as Record<string, unknown>;

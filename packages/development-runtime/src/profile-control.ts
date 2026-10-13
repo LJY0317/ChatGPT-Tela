@@ -16,6 +16,8 @@ import {
   observeChatGptAccountDisplay,
   observeChatGptHistoryUi,
   type ChatGptHistoryUiReadiness,
+  exerciseSavedChatCreateAndDelete,
+  type SavedChatCleanupAcceptanceReceipt,
 } from "@chatgpt-tela/chatgpt";
 
 export interface ChatGptProfileObservation {
@@ -36,6 +38,8 @@ export interface ElectronProfileSetupSurface {
   probeChatGptProfile(signal?: AbortSignal): Promise<ChatGptProfileObservation>;
   /** Owner-only, content-free official history UI preflight. Never clicks/deletes. */
   probeChatGptHistoryUi?(): Promise<ChatGptHistoryUiReadiness>;
+  /** Explicit test-only saved chat, and official UI cleanup. Not a consumer Web action. */
+  runSavedChatDeleteAcceptance?(): Promise<SavedChatCleanupAcceptanceReceipt>;
   reveal(): Promise<void>;
   close(): Promise<void>;
 }
@@ -339,6 +343,10 @@ export function createChatGptProfileControl(input: {
         async probeChatGptHistoryUi() {
           requireSurfaceOpen();
           return observeChatGptHistoryUi(lease, AbortSignal.timeout(8_000));
+        },
+        async runSavedChatDeleteAcceptance() {
+          requireSurfaceOpen();
+          return exerciseSavedChatCreateAndDelete(lease);
         },
         async reveal() {
           requireSurfaceOpen();

@@ -7,6 +7,7 @@ import {
   parseCodexAccountCheckContract,
   parseCodexAccountDisplayContract,
   parseCodexHistoryUiContract,
+  parseCodexSavedDeleteAcceptanceContract,
 } from "@chatgpt-tela/service-protocol";
 import { ProfileConnectionError } from "./profile-operation";
 import type { CodexService } from "./controller";
@@ -137,6 +138,14 @@ export async function startCodexServiceHttpServer(input: {
           const result = parseCodexHistoryUiContract(await input.service.inspectAccountBrowserHistoryUi(slot));
           if (result.slot !== slot) throw new Error("History UI observation profile ownership mismatch");
           return Response.json(result, { headers: { "cache-control": "no-store" } });
+        }
+        const savedDeleteMatch = request.method === "POST"
+          ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/saved-delete-acceptance$/.exec(url.pathname) : null;
+        if (savedDeleteMatch && input.service.runSavedDeleteAcceptance) {
+          const slot = Number(savedDeleteMatch[1]);
+          const receipt = parseCodexSavedDeleteAcceptanceContract(await input.service.runSavedDeleteAcceptance(slot));
+          if (receipt.slot !== slot) throw new Error("Saved Chat delete acceptance profile ownership mismatch");
+          return Response.json(receipt, { headers: { "cache-control": "no-store" } });
         }
         const bridgeSlot = request.method === "GET" ? previewSlot(url.pathname) : undefined;
         if (bridgeSlot !== undefined) {

@@ -22,7 +22,7 @@ const family = { key: chatGptWebFamilyKey("Fixture Web"), label: "Fixture Web", 
 const model = chatGptWebModelId(family.key);
 const metadata = { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "thread-1", turn_id: "turn-1" } };
 
-async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
+async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-native-first-"));
   const config = loadProductProfileRuntimeConfig({
     CHATGPT_TELA_PROFILE_ROOT: root, CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "1", CHATGPT_TELA_PRODUCT_ROUTE_ID: "fixture123",
@@ -45,6 +45,7 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
   let accountBrowserOpens = 0;
   let accountBrowserCloses = 0;
   let accountBrowserReveals = 0;
+  let deleteAcceptanceCalls = 0;
   let fallbackAccountBrowserStops = 0;
   let accountHide: (() => void) | undefined;
   let fail = input.fail;
@@ -146,6 +147,15 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
               return () => { if (accountHide === observer) accountHide = undefined; };
             },
             async reveal() { accountBrowserReveals++; },
+            async runSavedChatDeleteAcceptance() {
+              deleteAcceptanceCalls++;
+              if (input.deleteAcceptanceFails) throw Error("synthetic after-send ownership uncertain");
+              return { contractVersion: 1 as const, newlyAccepted: true as const,
+                modelReplyCompleted: true,
+                officialDelete: { contractVersion: 1 as const, menuOpened: true as const,
+                  officialDeleteSelected: true as const,
+                  officialConfirmationDispatched: true as const, historyAbsentAfterReload: true as const } };
+            },
             async close() { accountBrowserCloses++; },
           };
         },
@@ -163,6 +173,7 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
     get accountBrowserOpens() { return accountBrowserOpens; },
     get accountBrowserCloses() { return accountBrowserCloses; },
     get accountBrowserReveals() { return accountBrowserReveals; },
+    get deleteAcceptanceCalls() { return deleteAcceptanceCalls; },
     get fallbackAccountBrowserStops() { return fallbackAccountBrowserStops; },
     closeAccountBrowser() { if (!accountHide) throw Error("account browser is not open"); accountHide(); },
     changeAccount() { fail = "account"; },
@@ -214,6 +225,47 @@ test("saved-chat acceptance is exact-owner opt-in and account browser close rest
     await reconnect.promise;
     expect(urls).toEqual([CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL]);
     expect(f.nativeStops).toBe(0);
+  } finally { await f.cleanup(); }
+});
+
+test("synthetic saved-delete acceptance is exact-owner opt-in, one-shot and does not stop Native", async () => {
+  const ordinary = await fixture();
+  try {
+    await ordinary.runtime.waitForWeb();
+    await ordinary.runtime.openWebAccountBrowser();
+    await expect(ordinary.runtime.runSavedChatDeleteAcceptance()).rejects.toThrow("One unused");
+    expect(ordinary.deleteAcceptanceCalls).toBe(0);
+    await ordinary.runtime.closeWebAccountBrowser();
+  } finally { await ordinary.cleanup(); }
+
+  const testOnly = await fixture({ acceptanceSavedChat: true });
+  try {
+    await testOnly.runtime.waitForWeb();
+    await expect(testOnly.runtime.runSavedChatDeleteAcceptance()).rejects.toThrow("One unused");
+    await testOnly.runtime.openWebAccountBrowser();
+    const receipt = await testOnly.runtime.runSavedChatDeleteAcceptance();
+    expect(receipt.newlyAccepted).toBe(true);
+    expect(receipt.officialDelete.historyAbsentAfterReload).toBe(true);
+    await expect(testOnly.runtime.runSavedChatDeleteAcceptance()).rejects.toThrow("One unused");
+    expect(testOnly.deleteAcceptanceCalls).toBe(1);
+    expect(testOnly.nativeStops).toBe(0);
+    await testOnly.runtime.closeWebAccountBrowser();
+    expect(testOnly.runtime.webState).toBe("ready");
+  } finally { await testOnly.cleanup(); }
+});
+
+test("after-send failure leaves a pending test cleanup and never replays the message", async () => {
+  const f = await fixture({ acceptanceSavedChat: true, deleteAcceptanceFails: true });
+  try {
+    await f.runtime.waitForWeb();
+    await f.runtime.openWebAccountBrowser();
+    await expect(f.runtime.runSavedChatDeleteAcceptance()).rejects.toThrow("synthetic after-send");
+    await expect(f.runtime.runSavedChatDeleteAcceptance()).rejects.toThrow("One unused");
+    expect(f.deleteAcceptanceCalls).toBe(1);
+    expect(f.runtime.webState).toBe("preparing");
+    expect(f.nativeStops).toBe(0);
+    await f.runtime.closeWebAccountBrowser();
+    expect(f.runtime.webState).toBe("ready");
   } finally { await f.cleanup(); }
 });
 

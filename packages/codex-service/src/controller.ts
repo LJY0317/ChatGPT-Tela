@@ -17,6 +17,8 @@ import {
   parseCodexAccountDisplayContract,
   parseCodexHistoryUiContract,
   type CodexHistoryUiContract,
+  parseCodexSavedDeleteAcceptanceContract,
+  type CodexSavedDeleteAcceptanceContract,
   type CodexAccountDisplayContract,
   type CodexWebState,
   parseCodexBridgePreviewContract,
@@ -118,6 +120,7 @@ export interface CodexService {
   openAccountBrowser?(slot: number): Promise<void>;
   closeAccountBrowser?(slot: number): Promise<void>;
   inspectAccountBrowserHistoryUi?(slot: number): Promise<CodexHistoryUiContract>;
+  runSavedDeleteAcceptance?(slot: number): Promise<CodexSavedDeleteAcceptanceContract>;
   bridgePreview(slot: number, surfaceId?: string): Promise<CodexBridgePreviewContract>;
   accountCheck?(slot: number): Promise<CodexAccountCheckContract>;
   accountDisplay?(slot: number): Promise<CodexAccountDisplayContract>;
@@ -694,6 +697,24 @@ export async function startCodexService(input: {
       const result = parseCodexHistoryUiContract(await response.json());
       if (result.slot !== slot) throw new Error("History UI observation does not match profile owner");
       return result;
+    },
+    async runSavedDeleteAcceptance(slotValue: number) {
+      const slot = slotNumber(slotValue);
+      const profile = owned.get(slot);
+      if (!profile || profile.stopping || profile.child.exitCode !== null || profile.child.signalCode !== null) {
+        throw new Error("An owner-bound running profile is required for saved-chat cleanup acceptance");
+      }
+      // Deliberate one-shot POST. Do not retry it if the request or response is uncertain.
+      const response = await fetch(new URL("v1/account-browser-saved-delete-acceptance", profile.bridgePreviewUrl), {
+        method: "POST",
+        headers: { authorization: `Bearer ${profile.uiToken}` },
+        signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(120_000)])
+          : AbortSignal.timeout(120_000),
+      });
+      if (!response.ok) throw new Error("Saved test conversation may need manual cleanup in the owner account browser");
+      const receipt = parseCodexSavedDeleteAcceptanceContract(await response.json());
+      if (receipt.slot !== slot) throw new Error("Saved test conversation cleanup has a mismatched profile owner");
+      return receipt;
     },
     async accountCheck(slotValue: number) {
       return readProfileAccount(slotValue, "v1/account-check", parseCodexAccountCheckContract);

@@ -11,6 +11,8 @@ import {
   parseCodexAccountDisplayContract,
   parseCodexHistoryUiContract,
   type CodexHistoryUiContract,
+  parseCodexSavedDeleteAcceptanceContract,
+  type CodexSavedDeleteAcceptanceContract,
   type CodexAccountDisplayContract,
   parseCodexBridgePreviewContract,
   parseCodexModelSelectionCanaryContract,
@@ -133,6 +135,14 @@ export class CodexServiceClient extends LocalServiceClient {
       `v1/codex/profiles/${slot}/account-browser-history-ui`, "GET", undefined, signal));
     if (response.slot !== slot) throw new Error("history UI observation slot does not match request");
     return response;
+  }
+  /** One-shot test-only operation. Never repeat automatically after an uncertain Send. */
+  async runSavedDeleteAcceptance(slot: number, signal?: AbortSignal): Promise<CodexSavedDeleteAcceptanceContract> {
+    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("invalid profile slot");
+    const result = parseCodexSavedDeleteAcceptanceContract(await this.request(
+      `v1/codex/profiles/${slot}/saved-delete-acceptance`, "POST", {}, signal));
+    if (result.slot !== slot) throw new Error("Saved Chat deletion receipt slot does not match request");
+    return result;
   }
 
   async accountCheck(slot: number, signal?: AbortSignal): Promise<CodexAccountCheckContract> {
