@@ -111,6 +111,32 @@ second client to the owner's unrestricted App Server:
   either identity; it did not read a chat or send a model message.
   The HMAC key is process-local rather than a permanent account database;
   a restart deliberately invalidates previously derived access bindings.
+- `packages/codex-service/src/cross-profile-native-reader.ts` implements
+  the **first real public Native read method** behind the selected-T owner
+  interface (still **not** installed or exposed to another profile).
+  Under an independently proven source process/session and login it calls
+  `thread/read(includeTurns:false)` for **T only**, insists on
+  `historyMode:paginated`, and uses bounded
+  `thread/turns/list` pages (newest-turn metadata, then up to four
+  `itemsView:summary` turns). It re-reads the exact head/revision,
+  source account and exact runtime before releasing a maximum 128-KiB
+  **chat-text-only preview**. It deliberately omits command/tool
+  arguments and outputs, private reasoning, files, images and
+  attachments; omission is shown rather than represented as full
+  conversation export. A cursor indicates when older turns remain.
+  The preview **does not yet offer full paginated replay or live
+  notifications**. Legacy, active/unfinished, changed/oversized or
+  malformed sources fail closed without `includeTurns:true`,
+  `thread/list`, cloning or model calls.
+- Crucially, this new owner's `continue` method **always refuses**.
+  Hashing a timestamp plus newest-turn metadata helps detect
+  inconsistent reads but is **not** an upstream atomic revision
+  or a lease against a Desktop actor writing between probes. A
+  `turn/start` without verified exclusive Native writer admission
+  must not be dispatched even after human approval. Tests compose
+  the real-shape read adapter with the earlier local relay and cover
+  changed login, runtime, active source, latest turn, API view and
+  private content omission.
 
 **Not a released feature.** The real authenticated `profile`, `delegate`,
 `approve` and `owner` adapters have intentionally **not** been wired.
@@ -136,10 +162,12 @@ all user-facing cross-profile sharing claims.
    and runtime-generation binding**, plus proof that each incoming request
    actually came from the selected destination. Tela's current
    `userIdentity:"unverified"` does not meet this bar.
-2. Prove scoped real Native owner reads and owner-atomic turn acceptance
-   without giving destination B unrestricted app-server access. An idle
-   snapshot and a task/thread ID by themselves do not guarantee exclusive
-   original writer state.
+2. Bind the new **selected-T-only indexed read adapter** to the actual
+   authenticated source owner and establish full bounded paging/events.
+   Separately prove **owner-atomic turn acceptance** without giving
+   destination B unrestricted app-server access. An idle snapshot and
+   a task/thread ID by themselves do not guarantee exclusive original
+   writer state.
 3. Persist bounded operation-idempotency/uncertainty through service restart
    and handle exact-thread paging and notification delivery, account logout,
    session loss, compaction and approval/tool-result handoff.
