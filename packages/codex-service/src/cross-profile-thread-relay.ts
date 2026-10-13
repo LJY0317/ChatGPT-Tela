@@ -231,14 +231,20 @@ export class LocalOriginalThreadRelay {
       if (grant) this.#grants.delete(digest);
       throw new Error("Delegated original thread access is unavailable");
     }
-    const [authenticated, source] = await Promise.all([
+    const [authenticated, source, destination] = await Promise.all([
       this.#adapters.delegate(caller),
       this.#adapters.profile(grant.source.slot),
+      this.#adapters.profile(grant.destination.slot),
     ]);
-    validBinding(authenticated); validBinding(source);
-    if (!sameBinding(authenticated, grant.destination) || !sameBinding(source, grant.source)) {
+    validBinding(authenticated); validBinding(source); validBinding(destination);
+    // A foreign caller with a copied/guessed token must not be allowed to
+    // revoke an otherwise valid local user's approved selected-thread grant.
+    if (!sameBinding(source, grant.source) || !sameBinding(destination, grant.destination)) {
       this.#grants.delete(digest);
       throw new Error("Delegated original thread binding was revoked by a profile change");
+    }
+    if (!sameBinding(authenticated, grant.destination)) {
+      throw new Error("Delegated original thread caller binding is not authorized");
     }
     return grant;
   }

@@ -59,6 +59,12 @@ tool capabilities, login state or entire app-server endpoints between them.
   temporary email-comparison hint and expressly does **not** prove
   matching owner/workspace. Neither is sufficient to authenticate
   a destination account for a cross-profile original conversation.
+- A further **read-only** official `account/read(refreshToken:false)` call
+  over each installed, owner-bound Native session proved both profiles
+  expose `workspaceRouting.chatgptAccountId`, but the **route/account ID
+  was equal** while the two actual Native login emails were **different**.
+  Raw account IDs, emails and tokens were never printed. Therefore the
+  routing ID is NOT a unique user ID or suitable authorization key.
 
 ## 2026-10-13 research-only owner relay
 
@@ -75,7 +81,10 @@ second client to the owner's unrestricted App Server:
 - Every operation re-proves the authenticated source profile's account,
   session and route binding and the calling destination's exact binding.
   Account switch, owner restart, expiration and explicit revocation deny
-  subsequent access. No idle timer or unrelated thread listing is added.
+  subsequent access. A caller that is **not** the authorized destination
+  is denied without revoking the real destination's valid grant; actual
+  source or destination owner changes revoke it. No idle timer or
+  unrelated thread listing is added.
 - Read-only responses are bounded, revision-stable and structurally tied
   to T. A continuation is **requested from A's one canonical Native
   worker** with optimistic revision checking; it is not executed by B's
@@ -85,6 +94,23 @@ second client to the owner's unrestricted App Server:
   or malformed owner execution acknowledgement fails closed as
   **uncertain**, with no automatic second turn. These are isolated
   contract tests, not verified Native process transactions.
+- `packages/codex-service/src/cross-profile-account-proof.ts` adds a
+  **separate, read-only, source-only Native login change detector**. It
+  accepts only an independently verified exact owner-bound loopback
+  app-server session, reads public `account/read` twice without a token
+  refresh, verifies stable login email **and** workspace routing ID,
+  checks the same owned process/response route afterward, and returns
+  only keyed SHA-256 fingerprints. An email comparison is useful for
+  detecting that an already connected Native login changed; it is
+  **not** a cryptographic backend user identity, a durable credential,
+  or evidence of authorization to read a different account's thread.
+  Fixture tests explicitly use **equal routing IDs and distinct login
+  emails** and verify the two proofs stay distinct. The same
+  read-only proof, using the real signed installed Codex session
+  contracts, distinguished both actual profile logins without printing
+  either identity; it did not read a chat or send a model message.
+  The HMAC key is process-local rather than a permanent account database;
+  a restart deliberately invalidates previously derived access bindings.
 
 **Not a released feature.** The real authenticated `profile`, `delegate`,
 `approve` and `owner` adapters have intentionally **not** been wired.

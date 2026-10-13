@@ -147,6 +147,7 @@ describe("one-owner original local thread delegation (source-only, not user-faci
     expect(f.sourceCalls.some(c => c.threadId === P || c.method === "thread/list")).toBe(false);
     await expect(f.relay.read(capability, "authenticated-profile-3"))
       .rejects.toThrow("binding");
+    expect((await f.relay.read(capability, f.caller)).threadId).toBe(T);
     await expect(f.relay.read("x".repeat(43), f.caller))
       .rejects.toThrow("unavailable");
   });
