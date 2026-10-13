@@ -37,6 +37,90 @@ tool capabilities, login state or entire app-server endpoints between them.
   or atomic owner-transfer contract. Do not treat an ability to address
   an opaque thread ID as authorization to read or execute it.
   Source: https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md
+- On the installed, pinned Codex **0.159.0** Native engine, a freshly
+  generated **experimental public JSON schema** exposes `thread/read`,
+  `thread/resume`, `thread/fork` and `account/read`, but **no method in
+  the `thread/(share|grant|delegate|transfer|permission|access)` family**.
+  This is a bounded observation of that public schema, **not proof that no
+  future or separate ChatGPT-side sharing API could exist**.
+- An independent, no-model synthetic App Server experiment was added at
+  `packages/codex/src/cross-profile-path-resume.integration.ts`. It
+  creates two disposable, separately rooted `CODEX_HOME` instances, starts
+  an **empty** Native thread in the first instance, normally closes that
+  owner, and attempts a public experimental path-based resume from the
+  second instance. On the pinned 0.159.0 engine, this fixture had **no
+  persisted rollout file** (it sent no model turn); resume returned
+  JSON-RPC `-32600`. The result is expressly
+  `inconclusive_no_persisted_rollout`, **not** evidence that resuming
+  an ordinary populated thread must fail. It never touched real profiles,
+  personal conversations, account credentials or the installed service.
+- Tela's installed `CodexAccountCheckContract` deliberately returns
+  `userIdentity:"unverified"`; `accountDisplay` exposes at most a
+  temporary email-comparison hint and expressly does **not** prove
+  matching owner/workspace. Neither is sufficient to authenticate
+  a destination account for a cross-profile original conversation.
+
+## 2026-10-13 research-only owner relay
+
+An isolated, **unwired** `LocalOriginalThreadRelay` prototype now lives
+under `packages/codex-service/src/cross-profile-thread-relay.ts`. Its
+synthetic tests exercise the desired *single original conversation* model,
+without copying a rollout, inventing a new thread ID, or attaching a
+second client to the owner's unrestricted App Server:
+
+- A trusted local user-approval callback selects **one exact Native thread
+  T**, original source profile A, destination profile B and read/continue
+  permission. An unpredictable, hashed, ephemeral capability is restricted
+  to that selection; permission is never inferred from a thread ID.
+- Every operation re-proves the authenticated source profile's account,
+  session and route binding and the calling destination's exact binding.
+  Account switch, owner restart, expiration and explicit revocation deny
+  subsequent access. No idle timer or unrelated thread listing is added.
+- Read-only responses are bounded, revision-stable and structurally tied
+  to T. A continuation is **requested from A's one canonical Native
+  worker** with optimistic revision checking; it is not executed by B's
+  independent App Server or silently billed as a B-side turn.
+- Concurrent continuation requests cannot both enter the broker's writer
+  path. Exact same-request retries replay a proven result locally; a lost
+  or malformed owner execution acknowledgement fails closed as
+  **uncertain**, with no automatic second turn. These are isolated
+  contract tests, not verified Native process transactions.
+
+**Not a released feature.** The real authenticated `profile`, `delegate`,
+`approve` and `owner` adapters have intentionally **not** been wired.
+In particular, the existing account-check boolean flags and local
+Desktop email are not accepted as substitute identities. Before exposing
+this as a service endpoint, establish account/workspace-scoped identities
+and exact destination request authentication, native owner-mediated
+per-thread paging/events, an atomic Native turn writer/revision guard,
+durable request-idempotency across crash/restart, and revocation that
+survives service transitions. An in-memory uncertainty set alone is not a
+production crash-recovery guarantee.
+
+The built-in Desktop/Work conversation list will **not** automatically
+display a source-owned T merely because this relay exists. A separately
+supported destination UI/Remote route must show T as an explicitly shared
+original with its real owner and tool/usage attribution, not pretend that
+T belongs to B or silently fork it. Until that route is proven, disable
+all user-facing cross-profile sharing claims.
+
+### Next release-critical proofs (not cosmetic UI)
+
+1. Obtain a stable, authenticated source **and destination account/workspace
+   and runtime-generation binding**, plus proof that each incoming request
+   actually came from the selected destination. Tela's current
+   `userIdentity:"unverified"` does not meet this bar.
+2. Prove scoped real Native owner reads and owner-atomic turn acceptance
+   without giving destination B unrestricted app-server access. An idle
+   snapshot and a task/thread ID by themselves do not guarantee exclusive
+   original writer state.
+3. Persist bounded operation-idempotency/uncertainty through service restart
+   and handle exact-thread paging and notification delivery, account logout,
+   session loss, compaction and approval/tool-result handoff.
+4. Establish a **supported destination UI or Remote link** that can show
+   and act on T without pretending it is B's own saved conversation.
+   Do not assume Codex Native protocol proves ChatGPT Work account storage,
+   billing attribution or mobile Remote portability.
 
 ## Required behavior and acceptance gates
 
