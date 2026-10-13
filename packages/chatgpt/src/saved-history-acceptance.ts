@@ -28,6 +28,32 @@ const HISTORY_BASELINE = String.raw`async function (salt) {
   return digests;
 }`;
 
+// This observation is intentionally structural. It never returns button names,
+// draft text, URLs, conversation IDs or DOM nodes. Use it only if exact synthetic
+// composer text was already proven but the ordinary Send selector is not ready.
+const SEND_CONTROL_SHAPE = String.raw`function () {
+  if (location.origin !== "https://chatgpt.com") throw Error("Wrong owner UI origin");
+  const composers = [...document.querySelectorAll(
+    '[data-testid="prompt-textarea"],#prompt-textarea,[contenteditable="true"][data-lexical-editor="true"],form[data-chatgpt-composer] [data-composer-markdown][contenteditable="true"][role="textbox"],[data-composer-body] [contenteditable="true"][role="textbox"]'
+  )];
+  const composer = composers.length === 1 ? composers[0] : null;
+  const form = composer?.closest("form[data-chatgpt-composer],form") ?? null;
+  const count = (root, selector) => Math.min(100, root?.querySelectorAll(selector).length ?? 0);
+  const possibleSend = 'button[data-testid="send-button"],button[type="submit"]';
+  const labelMatches = button => /^(send|send message|전송|보내기)$/i.test(String(button.getAttribute("aria-label") || "").trim());
+  return {
+    composerCount: Math.min(composers.length,100),
+    formFound: !!form,
+    formButtons: count(form,"button"),
+    formKnownSendButtons: count(form,possibleSend),
+    documentKnownSendButtons: count(document,possibleSend),
+    formOtherSubmitButtons: count(form,'[data-testid="composer-submit-button"],#composer-submit-button'),
+    documentOtherSubmitButtons: count(document,'[data-testid="composer-submit-button"],#composer-submit-button'),
+    formSendLabeledButtons: Math.min(100,form ? [...form.querySelectorAll("button")].filter(labelMatches).length : 0),
+    documentSendLabeledButtons: Math.min(100,[...document.querySelectorAll("button")].filter(labelMatches).length),
+  };
+}`;
+
 const savedChatRoute = (urlString: string): string | undefined => {
   try {
     const url = new URL(urlString);
@@ -105,24 +131,45 @@ export async function exerciseSavedChatCreateAndDelete(
   await driver.focusComposer(composer.key, bounded);
   await page.typeFocusedEditable(marker, bounded);
   stage("composer_trusted_input_returned");
-  let filled = await driver.observe(bounded);
+  let filled: ChatGptSurfaceSnapshot | undefined;
+  let expectedCount = 0;
+  let controls: ChatGptSurfaceSnapshot["sendControls"] = [];
+  let visibleControlCount = 0;
+  // A trusted keyboard event can reach the live contenteditable before the
+  // React-owned Send control is re-rendered. Give it one bounded window, but
+  // never send if exact synthetic text stops being proven.
+  for (let attempt = 0; attempt < 16; attempt++) {
+    bounded.throwIfAborted();
+    filled = await driver.observe(bounded);
+    expectedCount = filled.composers.filter(c => c.key === composer.key && c.visible && c.editable
+      && c.ownedByChatGptForm && c.textLength === marker.length && c.textFingerprint === markerDigest
+      && c.attachmentNames.length === 0 && c.connectorFingerprints.length === 0).length;
+    const visible = filled.sendControls.filter(s => s.composerKey === composer.key && s.visible);
+    visibleControlCount = visible.length;
+    controls = visible.filter(s => s.enabled);
+    if (expectedCount !== 1 || visible.length > 1) break;
+    if (controls.length === 1) break;
+    if (attempt < 15) await new Promise<void>(resolve => setTimeout(resolve, 250));
+  }
   stage("composer_dom_readback_completed");
-  let expected = filled.composers.filter(c => c.key === composer.key && c.visible && c.editable
-    && c.ownedByChatGptForm && c.textLength === marker.length && c.textFingerprint === markerDigest
-    && c.attachmentNames.length === 0 && c.connectorFingerprints.length === 0);
-  let controls = filled.sendControls.filter(s => s.composerKey === composer.key && s.visible && s.enabled);
-  if (expected.length !== 1 || controls.length !== 1) {
+  if (expectedCount !== 1 || controls.length !== 1) {
+    const structure = expectedCount === 1
+      ? await page.evaluate<null, Record<string, number | boolean>>(SEND_CONTROL_SHAPE, null, bounded)
+      : {};
     emitDiagnosticEvent("chatgpt_tela_work", "saved_delete_composer_rejected", {
-      exact_text_proven: expected.length === 1,
-      matching_composer_count: expected.length,
+      exact_text_proven: expectedCount === 1,
+      matching_composer_count: expectedCount,
+      visible_send_count: visibleControlCount,
       enabled_send_count: controls.length,
-      observed_composer_count: filled.composers.length,
+      observed_composer_count: filled?.composers.length ?? 0,
+      ...structure,
     });
     // Preserve unrelated drafts. This exact synthetic marker was prepared
     // by us in the same lease and can be cleared when not submitted.
-    if (expected.length === 1) await driver.clearComposerText(composer.key, bounded);
+    if (expectedCount === 1) await driver.clearComposerText(composer.key, bounded);
     throw new Error("Exact synthetic saved-chat send control could not be proven");
   }
+  if (!filled) throw new Error("Synthetic chat composer observation was unavailable");
   stage("activate_send_once");
   await driver.activateSend(controls[0]!.key, bounded);
   stage("observe_new_test_user");
