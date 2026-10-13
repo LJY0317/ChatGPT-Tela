@@ -17,6 +17,26 @@ const DEFAULT_MAX_CHECKPOINTS_PER_TASK = 8;
 const MAX_CHECKPOINT_CONTENT_BYTES = 40 * 1024;
 const MAX_CHECKPOINT_CACHE_FILE_BYTES = 512 * 1024;
 
+// Serializes a single task's read/modify/rename and clear across cache
+// instances in this runtime. Independent Native tasks do not block each other.
+// The key uses the canonical directory and one-way task fingerprint, never
+// stores the raw Native thread ID, and is released even after a failed write.
+// Cross-process cache access still requires the existing single-writer owner.
+const taskMutations = new Map<string, Promise<void>>();
+async function withTaskMutation<T>(path: string, mutation: () => Promise<T>): Promise<T> {
+  const predecessor = taskMutations.get(path);
+  let release!: () => void;
+  const current = new Promise<void>(resolve => { release = resolve; });
+  taskMutations.set(path, current);
+  if (predecessor) await predecessor;
+  try {
+    return await mutation();
+  } finally {
+    if (taskMutations.get(path) === current) taskMutations.delete(path);
+    release();
+  }
+}
+
 export interface CachedContextCheckpoint {
   readonly checkpoint: ContextCheckpoint;
   readonly content: string;
@@ -180,20 +200,22 @@ export class FileContextCheckpointCache implements ContextCheckpointCache {
       contentHash: identity.contentHash,
       content: input.content,
     });
-    const current = await this.#read(fingerprint);
-    const deduped = current.checkpoints.filter(checkpoint => checkpoint.id !== next.id);
-    const checkpoints = [...deduped, next].slice(-this.#maxCheckpointsPerTask);
-    await this.#write(Object.freeze({
-      schemaVersion: SCHEMA_VERSION,
-      taskFingerprint: fingerprint,
-      checkpoints: Object.freeze(checkpoints),
-    }));
-    return toCached(next);
+    return withTaskMutation(this.#path(fingerprint), async () => {
+      const current = await this.#read(fingerprint);
+      const deduped = current.checkpoints.filter(checkpoint => checkpoint.id !== next.id);
+      const checkpoints = [...deduped, next].slice(-this.#maxCheckpointsPerTask);
+      await this.#write(Object.freeze({
+        schemaVersion: SCHEMA_VERSION,
+        taskFingerprint: fingerprint,
+        checkpoints: Object.freeze(checkpoints),
+      }));
+      return toCached(next);
+    });
   }
 
   async clear(nativeTaskId: string): Promise<void> {
     const path = this.#path(taskFingerprint(nativeTaskId));
-    await rm(path, { force: true });
+    await withTaskMutation(path, () => rm(path, { force: true }));
   }
 
   #path(fingerprint: string): string {

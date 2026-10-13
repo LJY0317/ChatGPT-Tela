@@ -1,4 +1,5 @@
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -132,6 +133,79 @@ describe("persistent derived context checkpoint cache", () => {
       expect(await cache.list("thread-1")).not.toContain(first);
       await cache.clear("thread-1");
       expect(await cache.list("thread-1")).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("concurrent checkpoints for one Native task retain all bounded revisions across cache instances", async () => {
+    const root = scratch();
+    try {
+      const first = new FileContextCheckpointCache({ directory: root });
+      const second = new FileContextCheckpointCache({ directory: root });
+      const inputs = Array.from({ length: 8 }, (_, index) => ({
+        nativeTaskId: "thread-concurrent",
+        revisionId: `revision-${index}`,
+        content: `independent verified checkpoint ${index}`,
+        estimatedTokens: index + 1,
+      }));
+      const stored = await Promise.all(inputs.map((entry, index) =>
+        (index % 2 ? first : second).put(entry)));
+      const reloaded = new FileContextCheckpointCache({ directory: root });
+      expect(await reloaded.list("thread-concurrent")).toEqual(stored);
+      expect(await reloaded.list("unrelated-thread")).toEqual([]);
+      expect(readdirSync(root)).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("clear is ordered after queued checkpoint writes and prevents stale resurrection", async () => {
+    const root = scratch();
+    try {
+      const first = new FileContextCheckpointCache({ directory: root });
+      const second = new FileContextCheckpointCache({ directory: root });
+      const writes = Array.from({ length: 8 }, (_, index) =>
+        (index % 2 ? first : second).put({
+          nativeTaskId: "revoked-task", revisionId: `rev-${index}`,
+          content: `derived state ${index}`, estimatedTokens: index + 1,
+        }));
+      const cleared = second.clear("revoked-task");
+      await Promise.all([...writes, cleared]);
+      expect(await first.list("revoked-task")).toEqual([]);
+      expect(await second.list("revoked-task")).toEqual([]);
+      // A new authorized source may still create an unrelated task checkpoint.
+      const next = await first.put({
+        nativeTaskId: "other-task", revisionId: "new-revision",
+        content: "only new task evidence", estimatedTokens: 4,
+      });
+      expect(await second.list("other-task")).toEqual([next]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed write releases the same-task queue for a later valid checkpoint", async () => {
+    const root = scratch();
+    try {
+      const directory = join(root, "cached");
+      // A regular file in place of a directory provokes a real filesystem
+      // failure after admission, not just synchronous input validation.
+      writeFileSync(directory, "not a directory");
+      const cache = new FileContextCheckpointCache({ directory });
+      const entries = [1, 2].map(index => ({
+        nativeTaskId: "thread-failing-write",
+        revisionId: `revision-${index}`,
+        content: `verified summary ${index}`,
+        estimatedTokens: index,
+      }));
+      const failures = await Promise.allSettled(entries.map(entry => cache.put(entry)));
+      expect(failures.map(result => result.status)).toEqual(["rejected", "rejected"]);
+      rmSync(directory);
+      mkdirSync(directory);
+      const recovered = await cache.put(entries[1]!);
+      expect(await new FileContextCheckpointCache({ directory })
+        .list("thread-failing-write")).toEqual([recovered]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
