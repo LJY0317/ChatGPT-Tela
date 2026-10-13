@@ -43,6 +43,17 @@ old opaque compaction still fails closed; this is not full automatic
 reconstruction of the 73 MiB source. Other/native managed profiles without
 an owned proxy receipt retain the indexed-mode requirement.
 
+For **first Web use after a long Native-only session**, a publicly readable
+`context_compaction` marker followed by its Native-provided user summary
+supersedes *earlier* model-visible user/assistant/tool history in that same
+authenticated current request. Tela checks every earlier readable marker,
+selects the **latest** valid boundary, and projects only its summary and
+subsequent turns alongside current instructions and independently verified
+owner/goal evidence. Superseded tool outputs must not inflate the first Web
+transfer or be presented as current work. This requires a real readable
+summary: it does **not** decrypt opaque Legacy compactions, recover unindexed
+historical model state, or claim prior tool evidence was newly verified.
+
 **Experimental cold automatic fallback (not enabled in production):** When no readable checkpoint
 or complete Web-sized historical source can be supplied, Tela's isolated fixture tests an
 single extra Native model call through the **public app-server** without a

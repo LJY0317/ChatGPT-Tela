@@ -161,6 +161,11 @@ test("readable original Legacy turn keeps one owner through Web progress, authen
     ].sort());
 
     const original = nativeRequest(turnId, [
+      // The original Native thread can contain an enormous historical tool
+      // transcript before a verified readable compaction boundary.
+      { type: "message", role: "user", content: "Old Native task already summarized." },
+      { type: "function_call_output", call_id: "old-completed-native-tool",
+        output: "superseded-private-old-tool-output ".repeat(4_000) },
       { type: "context_compaction" },
       { type: "message", role: "user", content: "Fully readable synthetic compaction summary and verified constraints" },
       { type: "message", role: "user", content: "Continue the original Native task using its tool" },
@@ -174,6 +179,7 @@ test("readable original Legacy turn keeps one owner through Web progress, authen
     expect(provider.submissions).toHaveLength(1);
     expect(provider.submissions[0]?.nativeTurnId).toBe(turnId);
     expect(JSON.stringify(provider.submissions[0]?.physicalContext)).toContain("Fully readable synthetic compaction summary");
+    expect(JSON.stringify(provider.submissions[0]?.physicalContext)).not.toContain("superseded-private-old-tool-output");
     expect(fixture.live.current(THREAD)?.turnId).toBe(turnId);
 
     const followup = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken,
