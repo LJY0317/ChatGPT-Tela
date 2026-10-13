@@ -625,6 +625,80 @@ describe("Native request development Web planner", () => {
     })).toThrow("following readable user summary");
   });
 
+  test("the latest readable Native compaction boundary supersedes the older model-visible transcript", () => {
+    const old = "Long private Native-only work before compaction ".repeat(2_500);
+    const projected = projectNativeRequestContext("thread-1", {
+      instructions: "Preserve current Codex instructions and authorized task.",
+      input: [
+        { type: "message", role: "user", content: old },
+        { type: "message", role: "assistant", content: "Earlier Native answer before compaction." },
+        { type: "context_compaction" },
+        { type: "message", role: "user", content: "Readable compacted Native state: task B remains." },
+        { type: "message", role: "user", content: "Continue task B with the Web model." },
+      ],
+    });
+    expect(projected.revisions.map(item => item.content)).toEqual([
+      "Preserve current Codex instructions and authorized task.",
+      "Readable compacted Native state: task B remains.",
+      "Continue task B with the Web model.",
+    ]);
+    expect(projected.revisions.map(item => item.revision.kind)).toEqual(["system", "user", "user"]);
+  });
+
+  test("first Web use after a long readable Native compaction fits without replaying superseded tool history", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner({ budgetTokens: 700 });
+    const oldToolOutput = "Historical tool output from discarded Native context ".repeat(3_000);
+    const turn = await planner(registered(), {
+      model: chatGptWebModelId(chatGptWebFamilyKey("Fixture")),
+      reasoning: { effort: "medium" },
+      instructions: "Use the existing Native workspace and original task.",
+      input: [
+        { type: "message", role: "user", content: "Old work that Native already summarized." },
+        { type: "function_call_output", call_id: "old-native-read", output: oldToolOutput },
+        { type: "context_compaction" },
+        { type: "message", role: "user", content: "Readable Native summary: finish the work already started." },
+        { type: "message", role: "user", content: "Make the next change using Native tools only when authorized." },
+      ],
+    });
+    expect(turn.physicalContext.mode).toBe("full");
+    const full = turn.physicalContext.segments.map(segment => segment.content).join("\n");
+    expect(full).toContain("Readable Native summary: finish the work already started.");
+    expect(full).toContain("Make the next change using Native tools only when authorized.");
+    expect(full).not.toContain("Historical tool output from discarded Native context");
+    expect(turn.physicalContext.transferTokens).toBeLessThan(700);
+    turn.settle?.({ status: "failed" });
+  });
+
+  test("a later readable Native compaction replaces even an earlier valid compaction summary", () => {
+    const projection = projectNativeRequestContext("thread-1", {
+      input: [
+        { type: "message", role: "user", content: "Source before first compact." },
+        { type: "context_compaction" },
+        { type: "message", role: "user", content: "First compacted summary." },
+        { type: "message", role: "assistant", content: "Work after first compact." },
+        { type: "context_compaction" },
+        { type: "message", role: "user", content: "Latest readable summary." },
+        { type: "message", role: "user", content: "First Web request after second compaction." },
+      ],
+    });
+    expect(projection.revisions.map(item => item.content)).toEqual([
+      "Latest readable summary.",
+      "First Web request after second compaction.",
+    ]);
+  });
+
+  test("a malformed earlier compaction marker cannot be bypassed by a later valid marker", () => {
+    expect(() => projectNativeRequestContext("thread-1", {
+      input: [
+        { type: "context_compaction" },
+        { type: "message", role: "assistant", content: "Not an authorized Native summary." },
+        { type: "context_compaction" },
+        { type: "message", role: "user", content: "A later readable summary." },
+        { type: "message", role: "user", content: "Continue." },
+      ],
+    })).toThrow("following readable user summary");
+  });
+
   test("Native compaction retires the prior Web epoch and rebuilds from the new canonical summary", async () => {
     const planner = createNativeRequestDevelopmentWebTurnPlanner();
     const turn = registered();

@@ -458,8 +458,30 @@ export function projectNativeRequestContext(
   if (typeof body.input === "string") {
     append("user", body.input);
   } else if (Array.isArray(body.input)) {
-    let awaitingCompactionSummary = false;
+    // A completed, readable local Native compaction replaces the preceding
+    // model-visible transcript. On the first Web use after a long Native-only
+    // session, retaining those superseded turns can overflow Web context and
+    // reintroduce tool results that Native itself no longer sees.
+    // Check every marker before selecting the latest boundary: an invalid
+    // older marker must not be silently bypassed by a later valid marker.
+    let startAt = 0;
     for (const [index, raw] of body.input.entries()) {
+      const marker = record(raw);
+      if (marker?.type !== "context_compaction" || marker.encrypted_content !== undefined) continue;
+      const summary = record(body.input[index + 1]);
+      if (!summary || (summary.type !== undefined && summary.type !== "message")
+        || summary.role !== "user"
+        || !textFromContent(summary.content, "Native local compaction summary").trim()) {
+        throw new Error("Native local compaction marker requires a following readable user summary");
+      }
+      // The verified summary remains on the original Native input path.
+      // Current instructions, separate Native history and goal evidence
+      // have already been appended and therefore remain intact.
+      startAt = index + 1;
+    }
+    let awaitingCompactionSummary = false;
+    for (let index = startAt; index < body.input.length; index++) {
+      const raw = body.input[index];
       if (awaitingCompactionSummary) {
         const summary = record(raw);
         if (!summary || (summary.type !== undefined && summary.type !== "message") || summary.role !== "user"
