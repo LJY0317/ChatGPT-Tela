@@ -317,6 +317,81 @@ async function post(baseUrl: URL, token: string, body: unknown): Promise<Respons
 }
 
 describe("development runtime composition", () => {
+  test.each([false, true] as const)(
+    "a fresh full Native projection never reuses a completed Web page when the epoch repeats (document proof: %s)",
+    async hasDocumentProof => {
+      // The transport epoch is deterministically derived from the canonical
+      // Native head. Two distinct original Native turns can have identical
+      // request text, hence identical epoch IDs. Whether or not the prior Web
+      // page has a document-lifetime proof, the new request has no matching
+      // preceding Native assistant answer and must use a fresh physical page.
+      let nativeTurnId = "turn-1";
+      let created = 0;
+      let closed = 0;
+      const host = new ControlledBrowserHost(async () => {
+        created++;
+        return {
+          async navigate() {}, async reveal() {}, async hide() {},
+          async close() { closed++; },
+          // A present document owner is still not license to append a *full*
+          // reconstruction when no canonical Native assistant boundary matches.
+          capability(capability) {
+            return hasDocumentProof && capability === BROWSER_DOCUMENT_LIFETIME
+              ? { current: () => ({ generation: 1, signal: new AbortController().signal }) } as never
+              : undefined;
+          },
+        };
+      });
+      const provider = new RetainedFinalProvider();
+      const originalPlanner = createNativeRequestDevelopmentWebTurnPlanner();
+      const modes: string[] = [];
+      const epochs: string[] = [];
+      const runtime = await startDevelopmentRuntime({
+        currentTurnSource: {
+          async currentTurn(threadId) {
+            return {
+              ...(await source.currentTurn(threadId))!,
+              turnId: nativeTurnId, environmentSourceTurnId: nativeTurnId,
+            };
+          },
+        },
+        browserHost: host, provider,
+        mcp: { kind: "external", abi: "stable" },
+        async planWebTurn(turn, request, preparation) {
+          const plan = await originalPlanner(turn, request, preparation);
+          modes.push(plan.physicalContext.mode);
+          epochs.push(plan.webEpochId);
+          return plan;
+        },
+      });
+      const request = () => ({
+        ...nativeRequest([{ type: "message", role: "user", content: "Repeat the same source-only request." }]),
+        client_metadata: { "x-codex-turn-metadata": {
+          request_kind: "turn", thread_id: "thread-1", turn_id: nativeTurnId,
+        } },
+      });
+      try {
+        const first = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, request());
+        expect(first.status).toBe(200);
+        expect(await first.text()).toContain("done:turn-1");
+        nativeTurnId = "turn-2";
+        const second = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, request());
+        expect(second.status).toBe(200);
+        expect(await second.text()).toContain("done:turn-2");
+        expect(modes).toEqual(["full", "full"]);
+        expect(epochs[1]).toBe(epochs[0]);
+        expect(provider.surfaceLeaseIds).toHaveLength(2);
+        expect(new Set(provider.surfaceLeaseIds).size).toBe(2);
+        expect(provider.capabilityProofs).toBe(2);
+        expect(created).toBe(2);
+        expect(closed).toBe(1);
+      } finally {
+        await runtime.stop();
+      }
+      expect(closed).toBe(created);
+    },
+  );
+
   test("retains one browser surface across sequential Native turns in the same Web epoch", async () => {
     let canonicalTurnId = "turn-1";
     const sequentialSource: CanonicalCurrentTurnSource = {

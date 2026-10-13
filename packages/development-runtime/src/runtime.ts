@@ -222,6 +222,18 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           });
         let acquired: Awaited<ReturnType<RetainedBrowserEpochRegistry["acquire"]>> | undefined;
         try {
+          signal.throwIfAborted();
+          if (plan.physicalContext.mode !== "retained-delta") {
+            // A fresh/full canonical projection is a new logical Web
+            // conversation, not a message to append to any prior surface.
+            // Epoch IDs derive from Native source anchors; two *different*
+            // original Native turns can have an identical head and route.
+            // Without this explicit retirement, the registry can reuse the
+            // old Web conversation merely because the epoch ID collided,
+            // leaking invisible previous Web context into the fresh turn.
+            await browserEpochs.retire(plan.nativeTaskId);
+          }
+          signal.throwIfAborted();
           acquired = await browserEpochs.acquire(plan.nativeTaskId, plan.webEpochId);
           const document = acquired.surface.capability(BROWSER_DOCUMENT_LIFETIME)?.current();
           if (plan.physicalContext.mode === "retained-delta"

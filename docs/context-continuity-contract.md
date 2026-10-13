@@ -237,6 +237,11 @@ canonical Native logical revision lineage, then selects:
   otherwise the bounded, physically fitted visible context. Optional context attachment
   has a separate upload receipt. Provider projection cannot erase the current request,
   authorization or verified original evidence.
+  Every fresh full/checkpoint-delta Native projection requires a **new physical
+  Web conversation**, even if its deterministic Web epoch ID matches a
+  previously completed original Native turn (for example, repeated identical
+  requests). Only a separately proven `retained-delta` plan may reuse an
+  existing physical surface. Matching epoch IDs alone do not prove ancestry.
 
 All actual Web summarizers, including Native local compaction, use
 `web-checkpoint-source.ts` to enforce one source-plus-media budget with reserved
