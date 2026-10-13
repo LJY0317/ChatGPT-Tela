@@ -169,14 +169,20 @@ async function discoverViaOfficialHistorySearch(
   page: BrowserPageAutomation,
   signal: AbortSignal,
 ): Promise<RecoveryCandidate | undefined> {
-  const button = await page.evaluate<null, { ready: boolean; reason: string; point?: {x: number; y: number} }>(
-    LOCATE_HISTORY_SEARCH_BUTTON, null, signal);
-  if (!button.ready || !button.point) {
-    emitDiagnosticEvent("chatgpt_tela_work", "saved_cleanup_search_blocked", { reason_class: button.reason });
-    return undefined;
+  if (page.pressPrimaryShortcut) {
+    // Official ChatGPT Search accelerator; avoids a hover-sensitive sidebar
+    // button in a hidden owner Electron window. Never re-press after ambiguity.
+    await page.pressPrimaryShortcut("k", signal);
+  } else {
+    const button = await page.evaluate<null, { ready: boolean; reason: string; point?: {x: number; y: number} }>(
+      LOCATE_HISTORY_SEARCH_BUTTON, null, signal);
+    if (!button.ready || !button.point) {
+      emitDiagnosticEvent("chatgpt_tela_work", "saved_cleanup_search_blocked", { reason_class: button.reason });
+      return undefined;
+    }
+    // Older browser host: one unique hit-tested Search button, never Delete.
+    await page.pointerClick(button.point, signal);
   }
-  // This opens Search but never a personal conversation or a destructive menu.
-  await page.pointerClick(button.point, signal);
   let field: {ready:boolean;reason:string;candidateCount?:number;visibleInputCount?:number;
     visibleEditableCount?:number;visibleDialogCount?:number} | undefined;
   for (let attempt=0; attempt<12; attempt++) {

@@ -432,6 +432,17 @@ export class ElectronWebContentsPageAutomation implements BrowserPageAutomation 
     sendInputEvent({ type: "keyUp", keyCode });
   }
 
+  async pressPrimaryShortcut(keyCode: "k", signal?: AbortSignal): Promise<void> {
+    if (keyCode !== "k") throw new Error("unsupported owned-browser primary shortcut");
+    assertActive(this.webContents);
+    if (signal?.aborted) throw abortError();
+    const sendInputEvent = this.dispatchInput ?? this.webContents.sendInputEvent?.bind(this.webContents);
+    if (!sendInputEvent) throw new Error("Electron WebContents does not expose trusted keyboard input");
+    const primary = process.platform === "darwin" ? "meta" : "control";
+    sendInputEvent({ type: "keyDown", keyCode: "K", modifiers: [primary] });
+    sendInputEvent({ type: "keyUp", keyCode: "K", modifiers: [primary] });
+  }
+
   async mutationRevision(signal?: AbortSignal): Promise<number> {
     assertActive(this.webContents);
     if (signal?.aborted) throw abortError();

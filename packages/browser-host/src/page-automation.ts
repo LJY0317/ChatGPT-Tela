@@ -28,6 +28,12 @@ export interface BrowserPageAutomation {
   /** Send one trusted non-text keyboard key to the currently focused ChatGPT control. */
   pressKey(keyCode: string, signal?: AbortSignal): Promise<void>;
 
+  /** Optional trusted primary-accelerator shortcut. Currently only K is
+   * authorized for an owned browser's official Search UI (Cmd+K / Ctrl+K).
+   * It must be sent only once; do not retry an uncertain UI transition.
+   */
+  pressPrimaryShortcut?(keyCode: "k", signal?: AbortSignal): Promise<void>;
+
   /**
    * Clear the currently focused editable surface through trusted browser keyboard input.
    * Implementations map the primary modifier to Command on macOS and Control elsewhere.

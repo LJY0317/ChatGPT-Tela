@@ -10,6 +10,7 @@ function mockHistory(options: {
   initialUrl?: string; candidateCount?: number; currentUser?: string;
   searchCandidate?: boolean; noSearchButton?: boolean;
   searchFieldDelayed?: boolean;
+  searchShortcut?: boolean;
 } = {}) {
   let currentUrl = options.initialUrl ?? origin + "/";
   let step = 0;
@@ -90,6 +91,12 @@ function mockHistory(options: {
       expect(text).toBe("TELA-SAVED-DELETE-TEST:");
       actions.push("synthetic-search-query");
     },
+    ...(options.searchShortcut ? {
+      async pressPrimaryShortcut(key: "k") {
+        expect(key).toBe("k");
+        actions.push("official-primary-search-shortcut");
+      },
+    } : {}),
   };
   const surface = {
     capability(name: unknown) { return name === BROWSER_PAGE_AUTOMATION ? page : undefined; },
@@ -136,6 +143,16 @@ test("official Search input may appear asynchronously after the unique Search co
   expect(actions.filter(action => action === "official-search")).toHaveLength(1);
   expect(actions.filter(action => action === "synthetic-search-query")).toHaveLength(1);
   expect(actions.filter(action => action === "confirm")).toHaveLength(1);
+});
+
+test("an owned Electron browser prefers the official primary-K Search shortcut over fragile sidebar clicks", async () => {
+  const { surface, actions } = mockHistory({ candidateCount: 0, searchShortcut: true });
+  const receipt = await recoverAndDeleteSyntheticSavedChat(surface);
+  expect(receipt.officialDelete.historyAbsentAfterReload).toBe(true);
+  expect(actions).toEqual(["navigate:home", "official-primary-search-shortcut",
+    "synthetic-search-query", "navigate:synthetic",
+    "menu", "delete", "confirm", "navigate:home"]);
+  expect(actions).not.toContain("official-search");
 });
 
 test("missing unique official Search UI permits no opening or deleting a personal conversation", async () => {

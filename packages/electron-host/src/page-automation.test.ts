@@ -156,6 +156,19 @@ describe("Electron WebContents page automation", () => {
     ]);
   });
 
+  test("owned browser Search uses one trusted platform primary-K shortcut without clicking or typing into a chat", async () => {
+    const wc = new FakeWebContents();
+    const page = new ElectronWebContentsPageAutomation(wc);
+    const modifier = process.platform === "darwin" ? "meta" : "control";
+    await page.pressPrimaryShortcut("k");
+    expect(wc.inputEvents).toEqual([
+      { type: "keyDown", keyCode: "K", modifiers: [modifier] },
+      { type: "keyUp", keyCode: "K", modifiers: [modifier] },
+    ]);
+    await expect(page.pressPrimaryShortcut("x" as "k")).rejects.toThrow("unsupported");
+    expect(wc.inputEvents).toHaveLength(2);
+  });
+
   test("focused editable typing emits trusted char input in order", async () => {
     const webContents = new FakeWebContents();
     const automation = new ElectronWebContentsPageAutomation(webContents);
