@@ -108,25 +108,42 @@ const FOCUS_EMPTY_HISTORY_SEARCH = String.raw`function () {
   const visible = el => el instanceof HTMLElement && el.getClientRects().length > 0
     && getComputedStyle(el).visibility !== "hidden"
     && getComputedStyle(el).display !== "none";
-  const options = [...document.querySelectorAll('input,[role="searchbox"]')].filter(visible)
-    .filter(el => el instanceof HTMLInputElement && (
-      el.type === "search"
-      || /search|검색/i.test(String(el.getAttribute("placeholder") || "") + " "
-        + String(el.getAttribute("aria-label") || ""))));
-  if (options.length !== 1) return { ready: false, reason: "search_field_not_unique" };
+  const visibleFields = [...document.querySelectorAll('input,[role="searchbox"],[contenteditable="true"]')]
+    .filter(visible);
+  const searchLabel = el => /search|검색/i.test(
+    String(el.getAttribute("placeholder") || "") + " "
+    + String(el.getAttribute("aria-label") || "") + " "
+    + String(el.getAttribute("data-testid") || ""));
+  const options = visibleFields.filter(el =>
+    (el instanceof HTMLInputElement && (el.type === "search" || searchLabel(el)))
+    || (el.getAttribute("role") === "searchbox" && el.isContentEditable)
+    || (el.isContentEditable && searchLabel(el) && !el.matches(
+      '#prompt-textarea,[data-testid="prompt-textarea"]')));
+  const diagnostics = { candidateCount: Math.min(options.length,20),
+    visibleInputCount: Math.min(visibleFields.filter(el => el instanceof HTMLInputElement).length,20),
+    visibleEditableCount: Math.min(visibleFields.filter(el => el.isContentEditable).length,20),
+    visibleDialogCount: Math.min([...document.querySelectorAll('[role="dialog"]')].filter(visible).length,20) };
+  if (options.length !== 1) return { ready: false, reason: "search_field_not_unique", ...diagnostics };
   const input = options[0];
-  if (input.value !== "") return { ready: false, reason: "existing_search_draft" };
+  if (String(input instanceof HTMLInputElement ? input.value : input.textContent || "") !== "") {
+    return { ready: false, reason: "existing_search_draft", ...diagnostics };
+  }
   input.focus();
-  return { ready: document.activeElement === input, reason: "official_search_input_focus" };
+  return { ready: document.activeElement === input,
+    reason: "official_search_input_focus", ...diagnostics };
 }`;
 
 const FIND_SYNTHETIC_SEARCH_RESULT = String.raw`function () {
   if (location.origin !== "https://chatgpt.com") throw Error("Wrong search origin");
-  const inputs = [...document.querySelectorAll('input,[role="searchbox"]')].filter(el =>
-    el instanceof HTMLInputElement && (
+  const inputs = [...document.querySelectorAll('input,[role="searchbox"],[contenteditable="true"]')].filter(el =>
+    (el instanceof HTMLInputElement && (
       el.type === "search" || /search|검색/i.test(
-        String(el.getAttribute("placeholder") || "") + String(el.getAttribute("aria-label") || ""))));
-  if (!inputs.some(el => el.value === "TELA-SAVED-DELETE-TEST:")) {
+        String(el.getAttribute("placeholder") || "") + String(el.getAttribute("aria-label") || ""))))
+    || (el instanceof HTMLElement && el.isContentEditable && (
+      el.getAttribute("role") === "searchbox" || /search|검색/i.test(
+        String(el.getAttribute("data-testid") || "") + String(el.getAttribute("aria-label") || "")))));
+  if (!inputs.some(el => String(el instanceof HTMLInputElement ? el.value : el.textContent || "")
+    === "TELA-SAVED-DELETE-TEST:")) {
     return { matchCount: 0, historyLinkCount: 0, searchActive: false };
   }
   const found = new Map();
@@ -160,9 +177,23 @@ async function discoverViaOfficialHistorySearch(
   }
   // This opens Search but never a personal conversation or a destructive menu.
   await page.pointerClick(button.point, signal);
-  const field = await page.evaluate<null, {ready:boolean;reason:string}>(FOCUS_EMPTY_HISTORY_SEARCH, null, signal);
+  let field: {ready:boolean;reason:string;candidateCount?:number;visibleInputCount?:number;
+    visibleEditableCount?:number;visibleDialogCount?:number} | undefined;
+  for (let attempt=0; attempt<12; attempt++) {
+    signal.throwIfAborted();
+    field = await page.evaluate<null, NonNullable<typeof field>>(FOCUS_EMPTY_HISTORY_SEARCH, null, signal);
+    if (field.ready || field.reason === "existing_search_draft") break;
+    if (attempt < 11) await new Promise<void>(resolve => setTimeout(resolve, 250));
+  }
+  if (!field) throw Error("Search UI inspection returned no result");
   if (!field.ready) {
-    emitDiagnosticEvent("chatgpt_tela_work", "saved_cleanup_search_blocked", { reason_class: field.reason });
+    emitDiagnosticEvent("chatgpt_tela_work", "saved_cleanup_search_blocked", {
+      reason_class: field.reason,
+      candidate_count: field.candidateCount ?? 0,
+      visible_input_count: field.visibleInputCount ?? 0,
+      visible_editable_count: field.visibleEditableCount ?? 0,
+      visible_dialog_count: field.visibleDialogCount ?? 0,
+    });
     return undefined;
   }
   await page.typeFocusedEditable("TELA-SAVED-DELETE-TEST:", signal);

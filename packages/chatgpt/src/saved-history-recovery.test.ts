@@ -9,9 +9,11 @@ const origin = "https://chatgpt.com";
 function mockHistory(options: {
   initialUrl?: string; candidateCount?: number; currentUser?: string;
   searchCandidate?: boolean; noSearchButton?: boolean;
+  searchFieldDelayed?: boolean;
 } = {}) {
   let currentUrl = options.initialUrl ?? origin + "/";
   let step = 0;
+  let searchFieldChecks = 0;
   const actions: string[] = [];
   const page = {
     async evaluate(source: string, argument: unknown) {
@@ -47,8 +49,12 @@ function mockHistory(options: {
           ? { ready: false, reason: "search_button_not_unique" }
           : { ready: true, reason: "official_search_button", point: { x: 60, y: 10 } };
       }
-      if (source.includes('const options = [...document.querySelectorAll(\'input,[role="searchbox"]\')')) {
-        return { ready: true, reason: "official_search_input_focus" };
+      if (source.includes("const visibleFields = [...document.querySelectorAll")) {
+        searchFieldChecks++;
+        return options.searchFieldDelayed && searchFieldChecks < 3
+          ? { ready: false, reason: "search_field_not_unique", candidateCount: 0,
+            visibleInputCount: 0, visibleEditableCount: 1, visibleDialogCount: 0 }
+          : { ready: true, reason: "official_search_input_focus", candidateCount: 1 };
       }
       if (source.includes("const authorRoots = [...userBubbles[0]")) {
         return currentUrl !== origin + path
@@ -121,6 +127,15 @@ test("official in-product Search can locate the exact marked message without a m
     "navigate:home", "official-search", "synthetic-search-query",
     "navigate:synthetic", "menu", "delete", "confirm", "navigate:home",
   ]);
+});
+
+test("official Search input may appear asynchronously after the unique Search control is clicked", async () => {
+  const { surface, actions } = mockHistory({ candidateCount: 0, searchFieldDelayed: true });
+  const receipt = await recoverAndDeleteSyntheticSavedChat(surface);
+  expect(receipt.officialDelete.historyAbsentAfterReload).toBe(true);
+  expect(actions.filter(action => action === "official-search")).toHaveLength(1);
+  expect(actions.filter(action => action === "synthetic-search-query")).toHaveLength(1);
+  expect(actions.filter(action => action === "confirm")).toHaveLength(1);
 });
 
 test("missing unique official Search UI permits no opening or deleting a personal conversation", async () => {
