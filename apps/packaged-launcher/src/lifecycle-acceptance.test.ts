@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildPackagedPayload, createEd25519PackagedPayloadSigner, prepareOwnedDirectory,
+  buildPackagedPayload, createEd25519PackagedPayloadSigner, prepareOwnedDirectory, CURRENT_PACKAGED_LIFECYCLE,
   readOwnershipManifest, resolveProductPaths,
   type ServiceRegistrationCommandResult, type ServiceRegistrationCommandRunner,
 } from "@chatgpt-tela/product-lifecycle";
@@ -53,7 +53,7 @@ test("signed install -> update -> keep-data removal -> reinstall -> complete rem
     const payload = (version: string) => {
       writeFileSync(join(input, "launcher"), `launcher ${version}`, { mode: 0o755 });
       const outputPath = join(root, version);
-      buildPackagedPayload({ outputPath, productVersion: version,
+      buildPackagedPayload({ outputPath, productVersion: version, lifecycle: CURRENT_PACKAGED_LIFECYCLE,
         launcherSourcePath: join(input, "launcher"),
         services: Object.fromEntries(["gateway", "chat", "codex"].map(service => [service,
           { executableSourcePath: join(input, "launcher") }])) as Record<"gateway" | "chat" | "codex", { executableSourcePath: string }>,

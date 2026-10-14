@@ -237,8 +237,8 @@ function clearIncompletePayload(resource: DirectoryResource): void {
   }
 }
 
-function copyPayload(source: string, target: string): void {
-  for (const item of walkPayload(source)) {
+function copyPayload(source: string, target: string, reservedPolicy: "reject" | "skip" = "reject"): void {
+  for (const item of walkPayload(source, reservedPolicy)) {
     const destination = join(target, ...item.relativePath.split("/"));
     if (item.kind === "directory") {
       mkdirSync(destination, { recursive: false, mode: item.mode || 0o700 });
@@ -252,6 +252,32 @@ function copyPayload(source: string, target: string): void {
     }
     copyFileSync(item.absolutePath, destination);
     try { chmodSync(destination, item.mode); } catch { /* Windows ACLs own permissions there. */ }
+  }
+}
+
+export function copyVerifiedPackagedPayload(source: string, target: string, fingerprint: string): void {
+  if (packagedPayloadFingerprint(source) !== fingerprint || existsSync(target)) throw new Error("recovery copy source/destination changed");
+  mkdirSync(target, { mode: 0o700 });
+  copyPayload(source, target);
+  if (packagedPayloadFingerprint(target) !== fingerprint) throw new Error("recovery copy integrity failed");
+}
+
+/** A clean snapshot excludes only proved installation bookkeeping, never payload bytes. */
+export function copyOwnedPackagedPayloadSnapshot(input: {
+  readonly resource: DirectoryResource;
+  readonly manifest: OwnershipManifest;
+  readonly expected: PackagedPayloadReceipt;
+  readonly destinationPath: string;
+}): void {
+  const current = observeInstalledPackagedPayload(input.resource, input.manifest);
+  if (current.state !== "owned" || JSON.stringify(current.receipt) !== JSON.stringify(input.expected)) {
+    throw new Error("recovery snapshot source no longer matches the owned installation");
+  }
+  if (existsSync(input.destinationPath)) throw new Error("recovery snapshot destination already exists");
+  mkdirSync(input.destinationPath, { mode: 0o700 });
+  copyPayload(input.resource.path, input.destinationPath, "skip");
+  if (packagedPayloadFingerprint(input.destinationPath) !== input.expected.payloadFingerprint) {
+    throw new Error("recovery snapshot changed during copy");
   }
 }
 

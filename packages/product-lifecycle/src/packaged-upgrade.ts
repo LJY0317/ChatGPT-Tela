@@ -1,3 +1,4 @@
+import { retainPackagedRecoveryArtifact, reviewPackagedRecoveryArtifact } from "./recovery-artifact";
 import { withPackagedTransitionOwner } from "./transition-owner";
 import {
   chmodSync,
@@ -64,6 +65,8 @@ export interface PackagedUpgradeJournal {
   readonly resumeServices: readonly TelaServiceId[];
   readonly quiescedServices: readonly TelaServiceId[];
   readonly resumedServices: readonly TelaServiceId[];
+  readonly stopEvidenceVersion?: 1;
+  readonly pendingStop?: TelaServiceId | null;
 }
 
 function serviceId(value: unknown, field: string): TelaServiceId {
@@ -94,8 +97,12 @@ function parseJournal(value: unknown): PackagedUpgradeJournal {
   const item = value as Record<string, unknown>;
   const phases: readonly PackagedUpgradePhase[] = ["prepared", "quiescing", "quiesced", "payload-replacing", "payload-installed", "manifest-updated", "restoring-source"];
   if (item.version !== 1 || !phases.includes(item.phase as PackagedUpgradePhase)) throw new Error("packaged upgrade journal version/phase is unsupported");
+  if (item.stopEvidenceVersion !== undefined && item.stopEvidenceVersion !== 1) throw new Error("upgrade stop evidence version is unsupported");
+  if (item.stopEvidenceVersion === 1 && item.pendingStop !== null) serviceId(item.pendingStop, "upgrade pending stop");
+  if (item.stopEvidenceVersion === undefined && item.pendingStop !== undefined) throw new Error("upgrade pending stop has no evidence version");
   return Object.freeze({
     version: 1,
+    ...(item.stopEvidenceVersion === 1 ? { stopEvidenceVersion: 1 as const, pendingStop: item.pendingStop === null ? null : serviceId(item.pendingStop, "upgrade pending stop") } : {}),
     installId: text(item.installId, "upgrade install id"),
     fromVersion: text(item.fromVersion, "upgrade from version"),
     toVersion: text(item.toVersion, "upgrade to version"),
@@ -131,7 +138,7 @@ function sameUpgrade(journal: PackagedUpgradeJournal, plan: PackagedUpgradePlan)
 }
 
 function updateJournal(path: string, current: PackagedUpgradeJournal, changes: Partial<Pick<PackagedUpgradeJournal,
-  "phase" | "resumeServices" | "quiescedServices" | "resumedServices">>): PackagedUpgradeJournal {
+  "phase" | "resumeServices" | "quiescedServices" | "resumedServices" | "pendingStop">>): PackagedUpgradeJournal {
   const next = parseJournal({ ...current, ...changes });
   writeJournal(path, next);
   return next;
@@ -246,6 +253,8 @@ function initialJournal(plan: PackagedUpgradePlan): PackagedUpgradeJournal {
     sourcePayloadFingerprint: plan.sourcePayload.payloadFingerprint,
     targetPayloadFingerprint: plan.targetPayloadFingerprint,
     phase: "prepared",
+    stopEvidenceVersion: 1,
+    pendingStop: null,
     resumeServices: Object.freeze([]),
     quiescedServices: Object.freeze([]),
     resumedServices: Object.freeze([]),
@@ -307,9 +316,11 @@ async function applyPackagedUpgradeOwned(input: {
     const quiesced = [...journal.quiescedServices];
     for (const service of QUIESCE_ORDER) {
       if (quiesced.includes(service)) continue;
+      if (journal.stopEvidenceVersion === 1) journal = updateJournal(journalPath, journal, { pendingStop: service });
       await input.services.quiesce(service);
       quiesced.push(service);
-      journal = updateJournal(journalPath, journal, { quiescedServices: Object.freeze([...quiesced]) });
+      journal = updateJournal(journalPath, journal, { quiescedServices: Object.freeze([...quiesced]),
+        ...(journal.stopEvidenceVersion === 1 ? { pendingStop: null } : {}) });
     }
     journal = updateJournal(journalPath, journal, { phase: "quiesced" });
   }
@@ -422,8 +433,7 @@ export async function applySignedPackagedUpgradeFromPayload(input: {
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly runner?: ServiceRegistrationCommandRunner;
 }): ReturnType<typeof applyPackagedUpgradeFromPayload> {
-  verifyPackagedPayloadSignature({ payloadRoot: input.payloadSourcePath, trustedKeys: input.trustedKeys });
-  return applyPackagedUpgradeFromPayload(input);
+  return applySignedPackagedUpgradeWithRecovery(input);
 }
 
 /** Read-only source restoration review; installed files are never replaced. */
@@ -545,8 +555,9 @@ async function applySignedPackagedUpgradeWithRecoveryOwned(input: Parameters<typ
     // A missing descriptor, a rejected HTTP call or a settled JS Promise alone
     // cannot prove an OS/service stop request has finished.
     if (journal.phase === "quiescing") {
-      let settled = false;
-      try { settled = await input.services.settleQuiescence?.() === true; } catch { /* Unknown stays protected. */ }
+      // Explicit null is an acknowledged stop boundary, not missing legacy evidence.
+      let settled = journal.stopEvidenceVersion === 1 && journal.pendingStop === null;
+      if (!settled) try { settled = await input.services.settleQuiescence?.() === true; } catch { /* Unknown stays protected. */ }
       if (!settled) throw new PackagedUpgradeRecoveryError("settlement-required", failure);
     }
     try {
@@ -576,11 +587,16 @@ export async function applyPackagedUpgradeFromPayload(input: Parameters<typeof a
   return withPackagedTransitionOwner({ paths: input.plan.targetBlueprint.paths, installId: input.plan.installId }, () => applyPackagedUpgradeOwned(input));
 }
 
-export async function applySignedPackagedUpgradeWithRecovery(input: Parameters<typeof applySignedPackagedUpgradeWithRecoveryOwned>[0]): ReturnType<typeof applySignedPackagedUpgradeWithRecoveryOwned> {
-  // Invalid artifacts must fail before even registering coordination state.
-  assertPackagedUpgradeRecoveryArtifact(input.plan, input.recovery);
+export async function applySignedPackagedUpgradeWithRecovery(input: Parameters<typeof applySignedPackagedUpgradeFromPayload>[0] & {
+  readonly recovery?: PackagedUpgradeRecoveryArtifact;
+}): ReturnType<typeof applyPackagedUpgradeOwned> {
+  if (input.recovery) assertPackagedUpgradeRecoveryArtifact(input.plan, input.recovery);
   verifyPackagedPayloadSignature({ payloadRoot: input.payloadSourcePath, trustedKeys: input.trustedKeys });
-  return withPackagedTransitionOwner({ paths: input.plan.targetBlueprint.paths, installId: input.plan.installId }, () => applySignedPackagedUpgradeWithRecoveryOwned(input));
+  reviewPackagedRecoveryArtifact(input.plan, input.trustedKeys, input.recovery);
+  return withPackagedTransitionOwner({ paths: input.plan.targetBlueprint.paths, installId: input.plan.installId }, async () => {
+    const recovery = await retainPackagedRecoveryArtifact(input.plan, input.trustedKeys, input.recovery);
+    return applySignedPackagedUpgradeWithRecoveryOwned({ ...input, recovery });
+  });
 }
 
 export async function cancelSignedPackagedUpgrade(input: Parameters<typeof cancelSignedPackagedUpgradeOwned>[0]): ReturnType<typeof cancelSignedPackagedUpgradeOwned> {

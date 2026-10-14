@@ -1,11 +1,12 @@
 import { withPackagedTransitionOwner } from "./transition-owner";
+import { retainPackagedRecoveryArtifact, reviewPackagedRecoveryArtifact } from "./recovery-artifact";
 import { describe, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { cancelSignedPackagedUpgrade } from "./packaged-upgrade";
 import { createEd25519PackagedPayloadSigner, writePackagedPayloadSignature } from "./packaged-signature";
 import { assertPackagedLaunchAdmission } from "./packaged-launch-admission";
 import { observeInstalledPackagedPayload } from "./packaged-payload";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyPackagedInstallFromPayload, planPackagedInstallFromPayload } from "./packaged-install";
@@ -13,6 +14,7 @@ import { PACKAGED_PRODUCT_MANIFEST } from "./packaged-manifest";
 import {
   applyPackagedUpgradeFromPayload,
   applySignedPackagedUpgradeWithRecovery,
+  applySignedPackagedUpgradeFromPayload,
   packagedUpgradeJournalPath,
   planPackagedUpgradeFromPayload,
   readPackagedUpgradeJournal,
@@ -62,6 +64,151 @@ class SystemdUpgradeRunner implements ServiceRegistrationCommandRunner {
     throw new Error(`unexpected systemctl arguments: ${arguments_.join(" ")}`);
   }
 }
+
+async function recoveryFixture() {
+  const root = mkdtempSync(join(tmpdir(), "tela-owned-recovery-")), home = join(root, "home"); mkdirSync(home);
+  const runner = new SystemdUpgradeRunner(), options = { platform: "linux" as const, home, environment: {}, runner };
+  const keys = generateKeyPairSync("ed25519"), trustedKeys = { fixture: keys.publicKey };
+  const source = createPayload(root, "1.0.0", "source"), target = createPayload(root, "2.0.0", "target");
+  for (const path of [source, target]) {
+    const manifest = JSON.parse(readFileSync(join(path, PACKAGED_PRODUCT_MANIFEST), "utf8"));
+    Object.assign(manifest, { launcher: { executable: "tela" }, profileRuntime: { executable: "tela", entrypoint: "tela" },
+      lifecycle: { transitionLaunch: 1, sourceCancellation: 1 }, integrity: { signature: "ed25519-sha256-tree-v1", keyId: "fixture" } });
+    writeFileSync(join(path, PACKAGED_PRODUCT_MANIFEST), JSON.stringify(manifest));
+    writePackagedPayloadSignature({ payloadRoot: path, signer: createEd25519PackagedPayloadSigner({ keyId: "fixture", privateKey: keys.privateKey }) });
+  }
+  const planned = await planPackagedInstallFromPayload({ payloadSourcePath: source, ...options });
+  await applyPackagedInstallFromPayload({ planned, payloadSourcePath: source, ...options });
+  const plan = await planPackagedUpgradeFromPayload({ payloadSourcePath: target, ...options });
+  return { root, source, target, plan, trustedKeys, options, services: new UpgradeServices(["gateway", "chat", "codex"]) };
+}
+
+test("ordinary signed upgrade snapshots the installed source and restores without an operator recovery path", async () => {
+  const f = await recoveryFixture();
+  try {
+    rmSync(f.source, { recursive: true }); // No dependency on the original download/workspace.
+    const paths = f.plan.targetBlueprint.paths;
+    expect(reviewPackagedRecoveryArtifact(f.plan, f.trustedKeys).origin).toBe("installed");
+    expect(existsSync(join(paths.stateRoot, "install", "recovery"))).toBe(false);
+    const original = f.services.quiesce.bind(f.services);
+    f.services.quiesce = async service => {
+      expect(reviewPackagedRecoveryArtifact(f.plan, f.trustedKeys).origin).toBe("retained");
+      await original(service);
+      if (service === "codex") throw new Error("synthetic stop failed after settlement");
+    };
+    await expect(applySignedPackagedUpgradeFromPayload({ plan: f.plan, payloadSourcePath: f.target,
+      trustedKeys: f.trustedKeys, services: f.services, ...f.options })).rejects.toMatchObject({ recoveryState: "source-restored" });
+    expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("1.0.0");
+    expect(f.services.events).toEqual(["stop:gateway", "stop:codex", "start:codex", "start:gateway"]);
+    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))).toBeUndefined();
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("retained recovery survives an interrupted restoration without a second stop or the original package", async () => {
+  const f = await recoveryFixture();
+  try {
+    const original = f.services.quiesce.bind(f.services);
+    f.services.quiesce = async service => { await original(service); if (service === "codex") throw new Error("synthetic stop failure"); };
+    f.services.failResumeOnce = "gateway";
+    const invoke = () => applySignedPackagedUpgradeFromPayload({ plan: f.plan, payloadSourcePath: f.target,
+      trustedKeys: f.trustedKeys, services: f.services, ...f.options });
+    await expect(invoke()).rejects.toMatchObject({ recoveryState: "restoration-incomplete" });
+    rmSync(f.source, { recursive: true });
+    const stops = f.services.events.filter(row => row.startsWith("stop:")).length;
+    await expect(invoke()).rejects.toMatchObject({ recoveryState: "source-restored" });
+    expect(f.services.events.filter(row => row.startsWith("stop:"))).toHaveLength(stops);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("corrupted retained evidence is preserved and blocks shutdown instead of falling back", async () => {
+  const f = await recoveryFixture();
+  try {
+    const retained = await withPackagedTransitionOwner({ paths: f.plan.targetBlueprint.paths, installId: f.plan.installId },
+      () => retainPackagedRecoveryArtifact(f.plan, f.trustedKeys));
+    writeFileSync(join(retained.sourcePayloadPath, "tela"), "foreign bytes");
+    await expect(applySignedPackagedUpgradeFromPayload({ plan: f.plan, payloadSourcePath: f.target,
+      trustedKeys: f.trustedKeys, services: f.services, ...f.options })).rejects.toThrow("fingerprint");
+    expect(f.services.events).toEqual([]);
+    expect(readFileSync(join(retained.sourcePayloadPath, "tela"), "utf8")).toBe("foreign bytes");
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("a retained key cannot replace externally supplied release trust", async () => {
+  const f = await recoveryFixture();
+  try {
+    const retained = await withPackagedTransitionOwner({ paths: f.plan.targetBlueprint.paths, installId: f.plan.installId },
+      () => retainPackagedRecoveryArtifact(f.plan, f.trustedKeys));
+    const path = join(retained.sourcePayloadPath, "..", "trusted-key.pem");
+    writeFileSync(path, "unknown key");
+    await expect(applySignedPackagedUpgradeFromPayload({ plan: f.plan, payloadSourcePath: f.target,
+      trustedKeys: f.trustedKeys, services: f.services, ...f.options })).rejects.toThrow("differs from release authority");
+    expect(f.services.events).toEqual([]);
+    expect(readFileSync(path, "utf8")).toBe("unknown key");
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("owned interrupted snapshot staging resumes before any stop was issued", async () => {
+  const f = await recoveryFixture();
+  try {
+    const input = { paths: f.plan.targetBlueprint.paths, installId: f.plan.installId };
+    const retained = await withPackagedTransitionOwner(input, () => retainPackagedRecoveryArtifact(f.plan, f.trustedKeys));
+    const cache = join(input.paths.stateRoot, "install", "recovery"), pending = join(cache, "pending");
+    renameSync(join(cache, "source"), pending);
+    const receiptPath = join(pending, "receipt.json"), receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+    writeFileSync(receiptPath, JSON.stringify({ ...receipt, phase: "copying" }));
+    writeFileSync(join(pending, "payload", "tela"), "partial copy");
+    expect(reviewPackagedRecoveryArtifact(f.plan, f.trustedKeys).origin).toBe("installed");
+    const restored = await withPackagedTransitionOwner(input, () => retainPackagedRecoveryArtifact(f.plan, f.trustedKeys));
+    expect(restored.sourcePayloadPath).toBe(retained.sourcePayloadPath);
+    expect(readFileSync(join(restored.sourcePayloadPath, "tela"), "utf8")).toBe("source");
+    expect(existsSync(pending)).toBe(false);
+    expect(f.services.events).toEqual([]);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+for (const evidence of ["pending", "absent"] as const) test(`resumed shutdown ${evidence} evidence remains protected without settlement`, async () => {
+  const f = await recoveryFixture();
+  try {
+    const original = f.services.quiesce.bind(f.services);
+    f.services.quiesce = async service => { await original(service); if (service === "codex") throw new Error("interrupted before acknowledgment"); };
+    f.services.settleQuiescence = async () => false;
+    const invoke = () => applySignedPackagedUpgradeFromPayload({ plan: f.plan, payloadSourcePath: f.target,
+      trustedKeys: f.trustedKeys, services: f.services, ...f.options });
+    await expect(invoke()).rejects.toMatchObject({ recoveryState: "settlement-required" });
+    const path = packagedUpgradeJournalPath(f.plan.targetBlueprint.paths);
+    expect(readPackagedUpgradeJournal(path)).toMatchObject({ stopEvidenceVersion: 1, pendingStop: "codex" });
+    if (evidence === "absent") {
+      const journal = JSON.parse(readFileSync(path, "utf8")); delete journal.stopEvidenceVersion; delete journal.pendingStop;
+      writeFileSync(path, JSON.stringify(journal));
+    }
+    const bytes = readFileSync(path);
+    const stops = f.services.events.length;
+    await expect(invoke()).rejects.toMatchObject({ recoveryState: "settlement-required" });
+    expect(f.services.events).toHaveLength(stops);
+    expect(readFileSync(path)).toEqual(bytes);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("an acknowledged durable stop boundary permits source restoration with a fresh controller", async () => {
+  const f = await recoveryFixture();
+  try {
+    const input = { paths: f.plan.targetBlueprint.paths, installId: f.plan.installId };
+    await withPackagedTransitionOwner(input, () => retainPackagedRecoveryArtifact(f.plan, f.trustedKeys));
+    // A crash after the acknowledgment write, before the next service's intent.
+    f.services.states.set("gateway", "stopped");
+    const path = packagedUpgradeJournalPath(input.paths);
+    writeFileSync(path, JSON.stringify({ version: 1, installId: f.plan.installId, fromVersion: f.plan.fromVersion,
+      toVersion: f.plan.toVersion, sourcePayloadFingerprint: f.plan.sourcePayload.payloadFingerprint,
+      targetPayloadFingerprint: f.plan.targetPayloadFingerprint, phase: "quiescing",
+      resumeServices: ["gateway", "codex", "chat"], quiescedServices: ["gateway"], resumedServices: [],
+      stopEvidenceVersion: 1, pendingStop: null }));
+    f.services.settleQuiescence = async () => false;
+    await expect(applySignedPackagedUpgradeFromPayload({ plan: f.plan, payloadSourcePath: f.target,
+      trustedKeys: f.trustedKeys, services: f.services, ...f.options })).rejects.toMatchObject({ recoveryState: "source-restored" });
+    expect(f.services.events).toEqual(["start:gateway"]);
+    expect(existsSync(path)).toBe(false);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
 
 class UpgradeServices implements PackagedUpgradeServiceController {
   readonly states = new Map<TelaServiceId, "running" | "stopped">();

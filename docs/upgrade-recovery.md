@@ -1,11 +1,30 @@
 # Guarded signed upgrade recovery
 
-The independent packaged launcher supports an upgrade with a verified source
-artifact, using `--recovery-payload` and `--recovery-public-key` together.
-These operator inputs are also checked by dry-run before stopping services.
-The ordinary upgrade contract is unchanged when recovery inputs are absent;
-it does not promise automatic source restoration. Consumer updater integration
-must supply and retain owned signed artifacts without requiring manual setup.
+The ordinary signed upgrade now prepares source recovery automatically before
+stopping services. It verifies the exact owned installed source and release key,
+creates a clean signed snapshot in product-owned storage, then uses the same
+recovering transition as an explicit operator request. Dry-run reports the source
+origin without creating files. `--recovery-payload` and `--recovery-public-key`
+remain available for an explicitly verified source/key (for example key rotation).
+An unsigned source or source lacking the signed cancellation protocol is refused
+before shutdown; the client never silently falls back to an unprotected update.
+
+## Recovery storage
+
+One registered state directory contains fixed `source`, `previous` and `pending`
+slots. A bundle holds clean payload bytes, a receipt bound to the install and
+source fingerprint, and a retained public key. Release authority is still supplied
+externally: the cached key is checked against that authority and is not implicitly
+trusted. No development checkout or agent workspace is needed for restoration.
+Data-preserving removal retains these receipts; complete removal owns their cleanup.
+
+Snapshot publication uses verified bytes and same-filesystem renames. Interrupted
+copying is discarded/rebuilt only under the owned staging intent, while no upgrade
+journal exists and the source is proven again. Interrupted publication can reuse a
+complete matching slot. Changed signatures, unknown files/ownership or a conflicting
+journal are preserved and block mutation. Storage is bounded to the fixed slots;
+there is no idle retention timer or model/network retry. Process-interruption tests
+are distinct from power-loss guarantees and OS-level installed acceptance.
 
 ## Failure boundary
 
@@ -37,10 +56,13 @@ commands are not yet covered by this transition lock; there is no OS watchdog.
 
 Supervisor admission, stop request and process-exit wait consume one deadline.
 Descriptor loss is not process exit. An old process exiting cannot remove a
-replacement instance's descriptor. The platform controller observes the exact
-service registrations whose stop it requested, within their original budgets;
-settlement never sends another quit request. After a crash, unknown stop
-requests cannot be declared settled by an empty process-local observation map.
+replacement instance's descriptor. The journal writes a service stop intent before sending it, and clears that
+intent only after the controller acknowledges completion. A fresh coordinator can
+restore at an acknowledged boundary without replaying quit. A pending or older
+unproven intent still requires actual stop settlement; an empty process-local map,
+service descriptor disappearance or elapsed deadline cannot authorize restoration.
+The controller observes exact requested registrations within their original budgets.
+No new quit request is sent during settlement.
 
 JXA zero-argument Objective-C calls are property evaluations. Exactly one
 `app.terminate` produces the Boolean request receipt. Parentheses can invoke
@@ -59,8 +81,7 @@ Decision observations distinguish unavailable, empty and stale evidence.
 
 Source tests are not a real installed upgrade acceptance. Before rollout,
 combine the current owner's source and diagnostic patches, preserve drafts and
-active work, verify the consumer updater
-retains signed recovery artifacts and reconciles interrupted shutdown evidence, and verify
+active work, verify independent installed recovery and intended profile/account readiness, and verify
 previously intended profiles separately after service restoration. Native/Web
 readiness and account binding require their own receipts. A remaining user
 popup must never be automatically clicked to satisfy an installation gate.

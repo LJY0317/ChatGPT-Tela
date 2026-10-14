@@ -15,7 +15,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { readPackagedProductManifest } from "./packaged-manifest";
-import { PACKAGED_PAYLOAD_SIGNATURE, packagedPayloadFingerprint } from "./packaged-payload";
+import { PACKAGED_PAYLOAD_SIGNATURE, packagedPayloadFingerprint, observeInstalledPackagedPayload } from "./packaged-payload";
+import type { OwnedResource, OwnershipManifest } from "./ownership";
 
 export interface PackagedPayloadSignatureEnvelope {
   readonly version: 1;
@@ -128,13 +129,30 @@ export function verifyPackagedPayloadSignature(input: {
   readonly payloadRoot: string;
   readonly trustedKeys: PackagedPayloadTrustedKeys;
 }): PackagedPayloadSignatureEnvelope {
+  return verifySignature(input, packagedPayloadFingerprint(input.payloadRoot));
+}
+
+/** Installed bookkeeping is excluded only after exact resource/receipt proof. */
+export function verifyOwnedInstalledPackagedPayloadSignature(input: {
+  readonly resource: Extract<OwnedResource, { kind: "directory" }>;
+  readonly manifest: OwnershipManifest;
+  readonly trustedKeys: PackagedPayloadTrustedKeys;
+}): PackagedPayloadSignatureEnvelope {
+  const observed = observeInstalledPackagedPayload(input.resource, input.manifest);
+  if (observed.state !== "owned") throw new Error("installed recovery source is not exact-owned");
+  return verifySignature({ payloadRoot: input.resource.path, trustedKeys: input.trustedKeys }, observed.receipt.payloadFingerprint);
+}
+
+function verifySignature(input: {
+  readonly payloadRoot: string;
+  readonly trustedKeys: PackagedPayloadTrustedKeys;
+}, actualFingerprint: string): PackagedPayloadSignatureEnvelope {
   const manifest = readPackagedProductManifest(input.payloadRoot);
   if (!manifest.integrity) throw new Error("packaged manifest does not declare signed payload integrity");
   const envelope = readPackagedPayloadSignature(input.payloadRoot);
   if (envelope.keyId !== manifest.integrity.keyId || envelope.productVersion !== manifest.productVersion) {
     throw new Error("packaged payload signature identity does not match its manifest");
   }
-  const actualFingerprint = packagedPayloadFingerprint(input.payloadRoot);
   if (envelope.payloadFingerprint !== actualFingerprint) throw new Error("packaged payload fingerprint does not match its signature envelope");
   const trusted = input.trustedKeys[envelope.keyId];
   if (!trusted) throw new Error(`packaged payload signing key is not trusted: ${envelope.keyId}`);

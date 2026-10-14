@@ -11,9 +11,9 @@ import {
   planSignedPackagedUpgradeCancellation,
   applySignedPackagedInstallFromPayload,
   applySignedPackagedRepairFromPayload,
-  applySignedPackagedUpgradeFromPayload,
   applySignedPackagedUpgradeWithRecovery,
   assertPackagedUpgradeRecoveryArtifact,
+  reviewPackagedRecoveryArtifact,
   PackagedPlatformServiceController,
   planSignedPackagedInstallFromPayload,
   planSignedPackagedRepairFromPayload,
@@ -240,6 +240,8 @@ export async function runPackagedLifecycleCommand(
     trustedKeys: trustedKeys(parsed.recoveryPayloadPath, parsed.recoveryPublicKeyPath!),
   } : undefined;
   if (recovery) assertPackagedUpgradeRecoveryArtifact(plan, recovery);
+  const recoveryKeys = recovery?.trustedKeys ?? keys;
+  const recoveryReview = reviewPackagedRecoveryArtifact(plan, recoveryKeys, recovery);
   if (parsed.mode === "dry-run") {
     return Object.freeze({
       command: parsed.command,
@@ -247,7 +249,8 @@ export async function runPackagedLifecycleCommand(
       installId: plan.installId,
       fromVersion: plan.fromVersion,
       toVersion: plan.toVersion,
-      recoveryVerified: Boolean(recovery),
+      recoveryVerified: true,
+      recoverySource: recoveryReview.origin,
       payload: Object.freeze({ action: "replace" as const }),
       services: Object.freeze(plan.targetBlueprint.services.map(service => Object.freeze({
         service: service.service,
@@ -268,8 +271,6 @@ export async function runPackagedLifecycleCommand(
     services,
     ...environment,
   };
-  const result = recovery
-    ? await applySignedPackagedUpgradeWithRecovery({ ...upgradeInput, recovery })
-    : await applySignedPackagedUpgradeFromPayload(upgradeInput);
+  const result = await applySignedPackagedUpgradeWithRecovery({ ...upgradeInput, ...(recovery ? { recovery } : {}) });
   return Object.freeze({ command: parsed.command, mode: parsed.mode, ...result });
 }
