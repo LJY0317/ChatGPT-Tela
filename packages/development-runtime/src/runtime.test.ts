@@ -22,7 +22,7 @@ import {
 } from "@chatgpt-tela/mcp";
 import { startDevelopmentRuntime } from "./runtime";
 import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
-import { setPrivateDiagnosticCapture, structuralDiagnosticEvent } from "@chatgpt-tela/core";
+import { nativeInputReceipt, setPrivateDiagnosticCapture, structuralDiagnosticEvent } from "@chatgpt-tela/core";
 
 const source: CanonicalCurrentTurnSource = {
   async currentTurn(threadId) {
@@ -760,7 +760,7 @@ describe("development runtime composition", () => {
       expect(second.status).toBe(200);
       const secondText = await second.text();
       expect(secondText).toContain('"delta":"web-final"');
-      expect(runtime.turns.size).toBe(0);
+      expect(runtime.turns.size).toBe(1);
       // A successful task epoch remains physically retained for a later Native turn.
       expect(browserEvents).toEqual([]);
     } finally {
@@ -1283,5 +1283,42 @@ test("Native cancellation immediately after context planning releases its pendin
     expect(await next.text()).toContain("external-v2-final");
     expect(planned).toBe(2);
     expect(browserAcquisitions).toBe(1);
+  } finally { await runtime.stop(); }
+});
+
+test("same Native turn continuation runs two settled Web cycles through the real planner and retained browser owner", async () => {
+  const owner = new AbortController();
+  const inputs: NonNullable<ReturnType<typeof nativeInputReceipt>>[] = [];
+  const provider = new ExternalContractProvider();
+  const submitted: WebTurnRequest[] = [];
+  const originalSubmit = provider.submitTurn.bind(provider);
+  provider.submitTurn = async (surface, request) => { submitted.push(request); return originalSubmit(surface, request); };
+  let acquisitions = 0;
+  const runtime = await startDevelopmentRuntime({
+    currentTurnSource: { ...source, async watchTurn() { return { signal: owner.signal, inputs: () => inputs, async close() {} }; } },
+    browserHost: new ControlledBrowserHost(async () => {
+      acquisitions++;
+      return { async navigate() {}, async reveal() {}, async hide() {}, async close() {},
+        capability(capability) { return capability === BROWSER_DOCUMENT_LIFETIME ? { current: () => ({ generation: 1, signal: new AbortController().signal }) } as never : undefined; } };
+    }), provider, mcp: { kind: "external", abi: "stable" },
+    planWebTurn: createNativeRequestDevelopmentWebTurnPlanner(),
+  });
+  try {
+    const first = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, nativeRequest([{ role: "user", content: "initial" }]));
+    expect(first.status).toBe(200); expect(await first.text()).toContain("external-v2-final");
+    inputs.push(nativeInputReceipt({ type: "userMessage", id: "steered", content: [{ type: "text", text: "followup" }] })!);
+    const secondBody = nativeRequest([{ role: "user", content: "initial" }, { role: "assistant", content: "external-v2-final" }, { role: "user", content: "followup" }]);
+    const second = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, secondBody);
+    expect(second.status).toBe(200); expect(await second.text()).toContain("external-v2-final");
+    expect(submitted).toHaveLength(2); expect(acquisitions).toBe(1);
+    expect(submitted[1]!.nativeTurnId).toBe(submitted[0]!.nativeTurnId);
+    expect(submitted[1]!.toolBridge?.turnCapability).not.toBe(submitted[0]!.toolBridge?.turnCapability);
+    expect(submitted[1]!.physicalContext.mode).toBe("retained-delta");
+    expect(JSON.stringify(submitted[1]!.physicalContext)).toContain("followup");
+    const duplicate = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, secondBody);
+    expect(duplicate.status).toBe(409);
+    expect(await duplicate.json()).toMatchObject({ error: { code: "tela_native_response_cycle_conflict", retryable: false } });
+    expect(submitted).toHaveLength(2);
+    owner.abort(new Error("Native completed")); expect(runtime.turns.size).toBe(0);
   } finally { await runtime.stop(); }
 });

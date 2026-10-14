@@ -230,14 +230,28 @@ describe("built-in default Desktop installation resolver", () => {
     const runner: DefaultDesktopCommandRunner = {
       async run(command, arguments_) {
         calls.push({ command, arguments_ });
-        return { stdout: command === "/bin/ps" ? `301 ${installation.chatGptExecutable}\n` : "", stderr: "" };
+        return { stdout: command === "/bin/ps" ? `301 ${installation.chatGptExecutable}\n` : "requested\n", stderr: "" };
       },
     };
     await requestDefaultDesktopNormalQuit(installation, 301, { runner });
     expect(calls.at(-1)?.command).toBe("/usr/bin/osascript");
     expect(calls.at(-1)?.arguments_.slice(0, 3)).toEqual(["-l", "JavaScript", "-e"]);
     expect(calls.at(-1)?.arguments_.at(-1)).toContain("runningApplicationWithProcessIdentifier(301)");
+    expect(calls.at(-1)?.arguments_.at(-1)).toContain("app.terminate()");
     expect(calls.at(-1)?.arguments_.at(-1)).not.toContain("tell application");
+  });
+
+  test("macOS normal quit refuses an unacknowledged termination and never falls back to a kill", async () => {
+    const installation: DefaultDesktopInstallation = {
+      platform: "darwin", chatGptExecutable: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+      codexExecutable: "/fixture/codex", codexHome: "/fixture/home", userDataDir: "/fixture/data", normalQuitSupported: true,
+    };
+    await expect(requestDefaultDesktopNormalQuit(installation, 301, {
+      runner: { async run(command) {
+        return { stdout: command === "/bin/ps" ? `301 ${installation.chatGptExecutable}\n` : "refused\n", stderr: "" };
+      } },
+      kill() { throw new Error("must not signal Desktop"); },
+    })).rejects.toMatchObject({ reasonClass: "request_rejected" });
   });
 
   test("Linux process lifecycle re-proves the exact executable before graceful SIGTERM", async () => {

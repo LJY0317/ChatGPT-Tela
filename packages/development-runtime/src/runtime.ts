@@ -180,16 +180,14 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
     ...(planner.retireSurface ? { onRetire: (taskId: string, leaseId: string) => planner.retireSurface!(taskId, leaseId) } : {}),
   });
 
-  const startWebTurn = (turn: RegisteredTurn, nativeRequest: unknown): Promise<unknown> => {
+  const startWebTurn = (turn: RegisteredTurn, nativeRequest: unknown, ownerSignal?: AbortSignal): Promise<unknown> => {
     const run = (async () => {
       const authority = turn.channel.binding.authority;
       const preparationStartedAt = Date.now();
       let preparationPhase = "native_watch";
       let executionStarted = false;
-      let watch: Awaited<ReturnType<NonNullable<CanonicalCurrentTurnSource["watchTurn"]>>> = undefined;
       try {
-      watch = await input.currentTurnSource.watchTurn?.(authority.threadId, authority.turnId, abortController.signal);
-      const nativeSignal = watch ? AbortSignal.any([abortController.signal, watch.signal]) : abortController.signal;
+      const nativeSignal = ownerSignal ? AbortSignal.any([abortController.signal, ownerSignal]) : abortController.signal;
       nativeSignal.throwIfAborted();
       preparationPhase = "context_plan";
       const plan = await input.planWebTurn(turn, nativeRequest, { signal: nativeSignal, onProgress: summary => turn.channel.publishProgress(summary) });
@@ -354,17 +352,6 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           });
         });
         throw error;
-      } finally {
-        if (watch?.signal.aborted) {
-          const phase = turn.channel.phase;
-          if (!["completed", "cancelled", "failed-before-acceptance", "indeterminate-after-acceptance"].includes(phase)) {
-            turn.channel.cancel(watch.signal.reason);
-          }
-          if (turns.active(authority.threadId, authority.turnId)?.capability === turn.capability) {
-            turns.retire(turn.capability);
-          }
-        }
-        await watch?.close();
       }
     })();
     webRuns.add(run);
@@ -428,6 +415,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
   } catch (error) {
     abortController.abort(error);
     turns.cancelAll(error);
+    await gateway.close();
     await Promise.allSettled([
       ...(mcp ? [mcp.close()] : []),
       input.browserHost.close(),
@@ -448,6 +436,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
         await responses.stop();
         abortController.abort(reason);
         turns.cancelAll(reason);
+        await gateway.close();
         await Promise.allSettled([
           mcp.close(),
           input.browserHost.close(),

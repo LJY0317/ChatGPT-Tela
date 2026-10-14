@@ -63,7 +63,7 @@ export interface WebPhysicalContext {
 export interface WebToolBridgeContext {
   readonly protocol: "mcp";
   readonly contract: "development" | "stable";
-  /** Opaque, exact-turn bearer capability. Invalid once the runtime retires that turn. */
+  /** Opaque response-cycle bearer capability bound to an exact Native turn. Invalid after cycle retirement. */
   readonly turnCapability: string;
 }
 

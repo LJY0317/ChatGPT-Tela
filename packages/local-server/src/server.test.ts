@@ -149,6 +149,8 @@ describe("local Native Responses server", () => {
       const finalText = await followup.text();
       expect(finalText).toContain('"delta":"done:ok"');
       expect(finalText).toContain("response.completed");
+      expect(turns.size).toBe(1);
+      await gateway.close();
       expect(turns.size).toBe(0);
     } finally {
       await server.stop();

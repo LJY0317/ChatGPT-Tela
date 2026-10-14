@@ -445,10 +445,10 @@ async function advancedPicker(page: BrowserPageAutomation, signal?: AbortSignal)
     const transition = await waitForOptional(page, value => value.menuCount === 0
       || ((value.view === "advanced" || value.view === "legacy") && value.families.length > 0), 1_000, signal);
     if (transition?.menuCount === 0) await openPicker(page, signal);
-    if (!transition) {
-      // A dispatched DOM click is not proof of activation. Only retry with native input
-      // if the same simple menu still exposes its unique visible toggle; use fresh geometry.
-      const current = await observe(page, signal);
+    const current = await observe(page, signal);
+    if (current.menuCount === 1 && current.view === "simple") {
+      // Dismissal can occur without committing the advanced preference. The actual reopened
+      // view owns this decision, not the click receipt or the transition's menuCount.
       if (current.menuCount !== 1 || current.view !== "simple" || !current.advancedPoint) {
         throw new Error("ChatGPT model picker advanced transition was not confirmed");
       }

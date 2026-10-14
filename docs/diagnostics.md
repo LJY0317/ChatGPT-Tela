@@ -202,6 +202,25 @@ Failure/checkpoint DOM evidence also records bounded viewport geometry near the 
 It reads at most 16 ancestors, does not move the viewport, and logs no text or element identities.
 This can help investigate rendering/virtualization but is not response ownership proof.
 
+### Native tool contract and safety-status evidence
+
+`native_tool_queued`, `native_tool_delivery_committed`, and `native_tool_result_received` /
+`native_tool_result_error` correlate the exact call with process-local salted tool/schema fingerprints,
+structured/freeform mode, observed Native sandbox kind, and workspace-root count. No root paths,
+tool names, capabilities, invocation arguments, descriptions, result prose or credentials are logged.
+Contract inspection is bounded to512 nodes/12 levels/64 KiB of strings; incomplete inspection is explicit.
+Local transport commitment and result receipt do not prove host execution, permission acceptance,
+or the origin of a failure. They never affect validation, delivery, replay or approval decisions.
+
+Shared MCP tracing distinguishes an error result from a thrown callback error. Error-only inspection
+of already received text is bounded to16 KiB characters/32 nodes and records whether the known
+safety-status-undetermined message was observed. `origin_proven:false` and `execution_proven:false`
+remain explicit: this is a message signal, not attestation of an OpenAI policy decision. Unknown or
+truncated errors stay unclassified, and original results/errors are returned unchanged. There is no
+new request, retry, poller, capture enablement or idle work. Existing local rotation/incidents apply.
+A platform rejection before Tela receives a request still requires host/platform evidence; these logs
+cannot retroactively explain that rejection or make a blocked operation permissible.
+
 ## Retention and cost
 
 Retained-prefix failures emit `web_retained_anchor_rejected` with fixed reason classes,
@@ -330,3 +349,7 @@ A successful socket write does not prove frontend receipt, filtering or renderin
 `web_turn_ownership_observed` records transition-only author-payload/anchor states, accepted-key count and route-match booleans (64 witnesses per turn). Missing author projection is distinguished from confirmed conflicting identity; the first acceptance wait and recovery have separate events. It stores no body or raw identifiers.
 
 `inspection_window_action` distinguishes reveal, hide, close-to-hide and owned release, including document generation/live state. `inspection_mode_changed` records mode changes; `inspection_input_observed` records at most64 activation categories per surface with owned-input/mode flags, never keys, coordinates or target text. These observations establish timing and input source, not approval acceptance or causality. Existing structural incident limits/private capture consent and retention apply; no sampler or model request is added.
+
+### Native response versus task lifetime
+
+`native_execution_failed` records the first bounded execution failure class and phase. `native_outcome_committed` records provider tool/final delivery, not official Native task termination (`native_terminal_observed=false`). `native_replay_rejected` carries pseudonymous scope/turn correlations and `current_authority_proven=false`; it is a negative guard, not a current-task proof. Match these events before attributing a409 to stale new-turn identity. A model response may complete while the official engine still has accepted steering input. These events do not relax retirement or authorize automatic replay.

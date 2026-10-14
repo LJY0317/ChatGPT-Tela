@@ -261,6 +261,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   var onWindowStateChanged: ((String) -> Void)?
+  /** Bounded own-UI decision evidence. Never serialize prompt text or auto-approve. */
+  var onDecisionStateChanged: ((String, Int, String) -> Void)?
   var windowStateEvidence: [String: Bool] {
     ["visible": window?.isVisible == true, "key": window?.isKeyWindow == true,
       "main": window?.isMainWindow == true, "onscreen": window?.occlusionState.contains(.visible) == true]
@@ -1395,7 +1397,13 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         : "This closes this ChatGPT app and interrupts any ongoing work. Your conversations will be kept. You can still open ChatGPT normally to use Native models."
       alert.addButton(withTitle: action == "restart" ? "Reopen with Tela" : "Turn Off and Close")
       alert.addButton(withTitle: "Cancel")
-      guard alert.runModal() == .alertFirstButtonReturn else { return }
+      let decision = action == "restart" ? "web_reopen" : "web_disconnect"
+      let decisionId = UUID().uuidString
+      onDecisionStateChanged?("decision_\(decision)_pending", slot, decisionId)
+      let answer = alert.runModal()
+      onDecisionStateChanged?(answer == .alertFirstButtonReturn
+        ? "decision_\(decision)_accepted" : "decision_\(decision)_deferred", slot, decisionId)
+      guard answer == .alertFirstButtonReturn else { return }
     }
     connectionProfileSlot = slot
     changingProfile = true

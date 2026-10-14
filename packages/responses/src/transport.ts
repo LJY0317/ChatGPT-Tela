@@ -156,6 +156,12 @@ export async function handleNativeResponsesHttp(
         },
       }, { status: 409 });
     }
+    if (record(error)?.code === "tela_native_response_cycle_conflict") {
+      return Response.json({ error: { type: "chatgpt_tela_runtime_error",
+        code: "tela_native_response_cycle_conflict", retryable: false,
+        message: error instanceof Error ? error.message : "Native response cycle ownership was not proven",
+      } }, { status: 409 });
+    }
     const message = error instanceof Error ? error.message : String(error);
     return Response.json({
       error: {

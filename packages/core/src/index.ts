@@ -15,3 +15,4 @@ export * from "./native-live-turn";
 export * from "./diagnostic-inventory";
 export * from "./diagnostic-private";
 export * from "./diagnostic-center";
+export * from "./diagnostic-tool-evidence";

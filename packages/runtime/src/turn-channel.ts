@@ -1,6 +1,9 @@
 import {
   transitionTurn,
   diagnosticFingerprint,
+  diagnosticToolContract,
+  diagnosticToolFailureEvidence,
+  type DiagnosticScalar,
   emitDiagnosticEvent,
   type NativeToolCatalogEntry,
   type NativeToolInvocation,
@@ -14,6 +17,7 @@ interface PendingTool {
   readonly resolve: (result: NativeToolResult) => void;
   readonly reject: (error: Error) => void;
   nativeDelivery: "queued" | "delivered";
+  readonly diagnosticContract: Readonly<Record<string, DiagnosticScalar>>;
   result?: NativeToolResult;
 }
 
@@ -92,7 +96,7 @@ function validateInvocation(
 }
 
 /**
- * Event-driven causal channel for one exact bound Native turn.
+ * Event-driven causal channel for one response/Web cycle of an exact bound Native turn.
  *
  * The Web/MCP side may request one native tool call at a time. The Native response side receives
  * that exact call, returns one result, and the Web side must then prove continuation before a
@@ -104,7 +108,7 @@ export class RuntimeTurnChannel {
   #pendingTool: PendingTool | undefined;
   #toolWaiter: ToolWaiter | undefined;
   readonly #stateWaiters = new Set<StateWaiter>();
-  readonly #usedCallIds = new Set<string>();
+  readonly #usedCallIds: Set<string>;
   readonly #finalPromise: Promise<string>;
   readonly #resolveFinal: (answer: string) => void;
   readonly #rejectFinal: (error: Error) => void;
@@ -190,8 +194,9 @@ export class RuntimeTurnChannel {
     return () => { this.#progressListeners.delete(deliver); };
   }
 
-  constructor(binding: NativeTurnBinding) {
+  constructor(binding: NativeTurnBinding, nativeCallIds: Set<string> = new Set()) {
     this.#binding = binding;
+    this.#usedCallIds = nativeCallIds;
     let resolveFinal!: (answer: string) => void;
     let rejectFinal!: (error: Error) => void;
     this.#finalPromise = new Promise<string>((resolve, reject) => {
@@ -304,7 +309,8 @@ export class RuntimeTurnChannel {
     if (this.#usedCallIds.has(invocation.callId)) {
       throw new Error(`native tool callId was already used: ${invocation.callId}`);
     }
-    validateInvocation(this.binding, invocation);
+    const advertised = validateInvocation(this.binding, invocation);
+    const diagnosticContract = diagnosticToolContract(advertised);
 
     this.#usedCallIds.add(invocation.callId);
     this.#toolRoundCount += 1;
@@ -315,9 +321,11 @@ export class RuntimeTurnChannel {
         resolve,
         reject,
         nativeDelivery: "queued",
+        diagnosticContract,
       };
     });
     this.#move("tool-wait");
+    this.#toolEvidence("native_tool_queued", this.#pendingTool!);
     this.#notifyToolWaiter();
     return result;
   }
@@ -353,6 +361,7 @@ export class RuntimeTurnChannel {
       throw new Error("native tool call delivery is already committed");
     }
     pending.nativeDelivery = "delivered";
+    this.#toolEvidence("native_tool_delivery_committed", pending);
     this.#touchState();
   }
 
@@ -365,6 +374,7 @@ export class RuntimeTurnChannel {
     if (pending.result) throw new Error("native tool result was already received for the outstanding call");
     pending.result = Object.freeze({ ...result });
     this.#move("tool-result-delivered");
+    this.#toolEvidence(result.isError ? "native_tool_result_error" : "native_tool_result_received", pending, result.isError ? diagnosticToolFailureEvidence(result.content) : {});
   }
 
   /**
@@ -427,6 +437,21 @@ export class RuntimeTurnChannel {
     this.#toolWaiter = undefined;
     if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
     waiter.resolve(pending.invocation);
+  }
+
+  /** Observation only: local delivery/result receipt is not proof of host execution or policy origin. */
+  #toolEvidence(stage: string, pending: PendingTool, fields: Readonly<Record<string, DiagnosticScalar>> = {}): void {
+    emitDiagnosticEvent("chatgpt_tela_work", stage, {
+      ...pending.diagnosticContract,
+      scope_fingerprint: diagnosticFingerprint(this.#binding.authority.threadId),
+      turn_fingerprint: diagnosticFingerprint(this.#binding.authority.turnId),
+      operation_fingerprint: diagnosticFingerprint(pending.invocation.callId),
+      mode: pending.invocation.mode, policy: this.#binding.authority.sandbox.kind,
+      root_count: this.#binding.authority.workspaceRoots.length,
+      native_delivery_committed: pending.nativeDelivery === "delivered",
+      result_received: pending.result !== undefined,
+      execution_proven: false, origin_proven: false, ...fields,
+    });
   }
 
   #move(to: TurnPhase): void {

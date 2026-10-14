@@ -10,6 +10,32 @@ import {
 import { BROWSER_PAGE_AUTOMATION, type BrowserPageAutomation, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 
 describe("ChatGPT Web model route identity", () => {
+  test("a dismissed menu that reopens simple does not falsely prove advanced preference", async () => {
+    let opened = true, advanced = false, pointerActivations = 0;
+    const page: BrowserPageAutomation = {
+      async evaluate(source, argument) {
+        if (source.includes("chatgpt-tela-model-picker-activate-v1")) {
+          const action = argument as { target: string; method: string };
+          if (action.target === "advanced") opened = false; // dismissed, preference NOT committed
+          return { ok: true } as never;
+        }
+        return { controlCount: 1, controlOpen: opened, menuCount: opened ? 1 : 0,
+          view: opened ? advanced ? "advanced" : "simple" : undefined,
+          advancedPoint: opened && !advanced ? { x: 10, y: 20 } : undefined,
+          families: opened && advanced ? [{ label: "Fixture", checked: true, disabled: false }] : [],
+          slider: opened ? { min: 0, max: 0, value: 0, power: false, ticks: [{ locked: false, selected: true }] } : undefined,
+        } as never;
+      },
+      async pressKey(key) { opened = key === "Enter"; },
+      async pointerClick() { pointerActivations++; advanced = true; opened = false; },
+      async typeFocusedEditable() {}, async clearFocusedEditable() {},
+      async mutationRevision() { return 0; }, async waitForDomMutation() { return 1; },
+    };
+    const surface = { capability: (capability: unknown) => capability === BROWSER_PAGE_AUTOMATION ? page : undefined } as BrowserSurfaceLease;
+    await selectChatGptWebModel(surface, { familyKey: chatGptWebFamilyKey("Fixture"), effort: "low" });
+    expect(pointerActivations).toBe(1);
+    expect(opened).toBe(false);
+  });
   test("only one visible composer with a missing model control qualifies for a bounded preparation recovery", () => {
     const candidate = new ChatGptWebModelPickerControlUnavailableError();
     expect(candidate.code).toBe("tela_web_model_picker_control_unavailable");

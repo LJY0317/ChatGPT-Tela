@@ -23,6 +23,10 @@ import {
 
 const DEFAULT_START_TIMEOUT_MS = 15_000;
 const DEFAULT_STOP_TIMEOUT_MS = 10_000;
+// Codex closes owned Desktop/profile runtimes through their normal OS lifecycle.
+// A single Desktop quit can take 15s and its profile child can take 20s more;
+// the service supervisor must not declare failure while that safe drain runs.
+const DEFAULT_CODEX_STOP_TIMEOUT_MS = 60_000;
 const START_LOCK_STALE_MS = 30_000;
 
 function sleep(ms: number): Promise<void> {
@@ -226,7 +230,8 @@ export class LocalServiceSupervisor {
     } finally {
       requestDeadline.close();
     }
-    const deadline = Date.now() + (input.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
+    const deadline = Date.now() + (input.stopTimeoutMs ??
+      (input.service === "codex" ? DEFAULT_CODEX_STOP_TIMEOUT_MS : DEFAULT_STOP_TIMEOUT_MS));
     while (Date.now() < deadline) {
       if (!existsSync(input.descriptorPath) || !pidAlive(running.descriptor.pid)) {
         if (!pidAlive(running.descriptor.pid)) removeServiceRuntimeDescriptor(input.descriptorPath);

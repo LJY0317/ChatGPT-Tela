@@ -49,6 +49,7 @@ export function turnCapabilityRoute(token: string): string | undefined {
  */
 export class ActiveTurnRegistry {
   readonly #byCapability = new Map<string, RuntimeTurnChannel>();
+  readonly #nativeCallIdsByTurn = new Map<string, Set<string>>();
   readonly #capabilityByTurn = new Map<string, string>();
   readonly #retiredTurns = new Map<string, true>();
   static readonly MAX_RETIRED_TURNS = 256;
@@ -67,7 +68,9 @@ export class ActiveTurnRegistry {
       throw new Error("native turn already has an active runtime owner");
     }
     const token = capability(this.#routeId);
-    const channel = new RuntimeTurnChannel(binding);
+    const callIds = new Set<string>();
+    const channel = new RuntimeTurnChannel(binding, callIds);
+    this.#nativeCallIdsByTurn.set(key, callIds);
     this.#byCapability.set(token, channel);
     this.#capabilityByTurn.set(key, token);
     return Object.freeze({ capability: token, channel });
@@ -98,12 +101,28 @@ export class ActiveTurnRegistry {
     return Object.freeze({ capability: token, channel });
   }
 
+  /** End a delivered response cycle without retiring its still-live canonical Native owner. */
+  nextCycle(token: string, binding: NativeTurnBinding): RegisteredTurn {
+    const previous = this.resolve(token);
+    if (previous.phase !== "completed" || turnKey(previous.binding) !== turnKey(binding)) {
+      throw new Error("only a completed response cycle of the same Native owner may be replaced");
+    }
+    const nextToken = capability(this.#routeId);
+    const channel = new RuntimeTurnChannel(binding, this.#nativeCallIdsByTurn.get(turnKey(binding))!);
+    previous.releaseProgress();
+    this.#byCapability.delete(token);
+    this.#byCapability.set(nextToken, channel);
+    this.#capabilityByTurn.set(turnKey(binding), nextToken);
+    return Object.freeze({ capability: nextToken, channel });
+  }
+
   retire(token: string): void {
     const channel = this.resolve(token);
     const key = turnKey(channel.binding);
     channel.releaseProgress();
     this.#byCapability.delete(token);
     this.#capabilityByTurn.delete(key);
+    this.#nativeCallIdsByTurn.delete(key);
     this.#retiredTurns.delete(key);
     this.#retiredTurns.set(key, true);
     while (this.#retiredTurns.size > ActiveTurnRegistry.MAX_RETIRED_TURNS) {
@@ -117,6 +136,7 @@ export class ActiveTurnRegistry {
     const active = [...this.#byCapability.entries()];
     this.#byCapability.clear();
     this.#capabilityByTurn.clear();
+    this.#nativeCallIdsByTurn.clear();
     for (const [token, channel] of active) {
       const key = turnKey(channel.binding);
       try {

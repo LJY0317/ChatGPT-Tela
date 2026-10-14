@@ -13,6 +13,10 @@ coverage/
 /STATE.md
 /MILESTONES.md
 
+# Private operator roadmap and preserved state history; never release inputs.
+/WORK-PLAN.md
+/LOCAL-HISTORY/
+
 # Collected diagnostic evidence is private, never a source/build input.
 *.diagnostics.jsonl
 *.diagnostics.jsonl.1

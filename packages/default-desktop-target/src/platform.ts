@@ -25,6 +25,14 @@ export interface DefaultDesktopCommandRunner {
   run(command: string, arguments_: readonly string[]): Promise<DefaultDesktopCommandResult>;
 }
 
+/** Content-free, platform-neutral classification of a normal Desktop quit refusal. */
+export class DesktopNormalQuitError extends Error {
+  constructor(readonly reasonClass: "unsupported" | "identity_changed" | "request_failed" | "request_rejected") {
+    super(`ChatGPT normal quit ${reasonClass.replaceAll("_", " ")}; existing app preserved`);
+    this.name = "DesktopNormalQuitError";
+  }
+}
+
 export interface DefaultDesktopDiscoveryResult {
   readonly exitCode: number;
   readonly stdout: string;
@@ -125,18 +133,24 @@ export async function requestDefaultDesktopNormalQuit(
   } = {},
 ): Promise<void> {
   if (!installation.normalQuitSupported) {
-    throw new Error(`normal default Desktop quit is not supported on ${installation.platform}`);
+    throw new DesktopNormalQuitError("unsupported");
   }
   const runner = options.runner ?? systemCommandRunner;
   const current = await defaultDesktopProcessIds(installation, runner);
   if (current.length !== 1 || current[0] !== expectedPid) {
-    throw new Error("ChatGPT Desktop process identity changed before normal quit");
+    throw new DesktopNormalQuitError("identity_changed");
   }
   if (installation.platform === "darwin") {
-    const script = `ObjC.import("AppKit"); const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(${expectedPid}); if (!app || app.isNil() || !app.terminate) throw new Error("ChatGPT process could not be asked to quit");`;
-    const result = await runner.run("/usr/bin/osascript", ["-l", "JavaScript", "-e", script]);
-    if (result.stderr.trim()) {
-      throw new Error(`ChatGPT normal quit reported an error: ${result.stderr.trim().slice(0, 240)}`);
+    // Checking that terminate exists is NOT a termination request. Invoke it
+    // on the exact PID after process-identity proof; never force-quit on refusal.
+    const script = `ObjC.import("AppKit"); const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(${expectedPid}); if (!app || app.isNil()) throw new Error("missing-app"); app.terminate() ? "requested" : "refused";`;
+    let result: DefaultDesktopCommandResult;
+    try { result = await runner.run("/usr/bin/osascript", ["-l", "JavaScript", "-e", script]); }
+    catch { throw new DesktopNormalQuitError("request_failed"); }
+    // The JXA last-expression result is a bounded success acknowledgement.
+    // Never include osascript stderr, user paths or executable details in errors.
+    if (result.stderr.trim() || result.stdout.trim() !== "requested") {
+      throw new DesktopNormalQuitError("request_rejected");
     }
     return;
   }

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
+import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 import { LocalServiceSupervisor } from "./index";
 
 const repoRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
@@ -33,6 +34,48 @@ function isolatedProductEnvironment(home: string, installId: string): Record<str
 }
 
 describe("local service supervisor", () => {
+  test("waits beyond 10s for an owned Codex graceful shutdown instead of reporting a false timeout", async () => {
+    const home = mkdtempSync(join(tmpdir(), "tela-codex-drain-"));
+    const descriptorPath = join(home, "codex", "descriptor.json");
+    const installId = "codex-drain-test-install";
+    const instanceId = "codex-drain-test-instance";
+    const token = "d".repeat(48);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        if (request.headers.get("authorization") !== `Bearer ${token}`) return new Response(null, { status: 401 });
+        const path = new URL(request.url).pathname;
+        if (request.method === "GET" && path === "/v1/status") {
+          return Response.json({ contractVersion: 1, service: "codex", instanceId, state: "ready" });
+        }
+        if (request.method === "POST" && path === "/v1/shutdown") {
+          // Fake a valid, slow close without touching an actual Desktop/profile.
+          timer ??= setTimeout(() => rmSync(descriptorPath), 11_200);
+          return Response.json({});
+        }
+        return new Response(null, { status: 404 });
+      },
+    });
+    try {
+      writeServiceRuntimeDescriptor(descriptorPath, {
+        version: 1, service: "codex", instanceId, installId, pid: process.pid,
+        endpoint: `http://127.0.0.1:${server.port}/`, bearerToken: token,
+        startedAt: new Date().toISOString(),
+      });
+      const supervisor = new LocalServiceSupervisor({ installId });
+      const startedAt = performance.now();
+      expect(await supervisor.shutdown({ service: "codex", descriptorPath })).toBe(true);
+      expect(performance.now() - startedAt).toBeGreaterThan(10_000);
+      expect(existsSync(descriptorPath)).toBe(false);
+    } finally {
+      if (timer) clearTimeout(timer);
+      server.stop(true);
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 25_000);
+
   test("starts, reuses, and normally shuts down one exact Chat daemon", async () => {
     const home = mkdtempSync(join(tmpdir(), "tela-supervisor-"));
     const environment = isolatedProductEnvironment(home, "supervisor-install-1");

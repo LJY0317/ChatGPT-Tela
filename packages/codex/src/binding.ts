@@ -10,6 +10,8 @@ import {
 } from "./rollout";
 
 export interface NativeTurnTerminationWatch {
+  /** Exact Native user-message events observed under this live owner. */
+  inputs?(): readonly import("@chatgpt-tela/core").NativeInputReceipt[];
   readonly signal: AbortSignal;
   close(): Promise<void>;
 }

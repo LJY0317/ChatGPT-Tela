@@ -193,6 +193,9 @@ test("readable original Legacy turn keeps one owner through Web progress, authen
       "web-progress", "web-requested-native-tool", "continuation-armed",
       "native-result-observed-by-web", "web-continued", "web-final",
     ]);
+    expect(runtime.turns.size).toBe(1);
+    fixture.live.retire(THREAD, turnId);
+    await new Promise<void>(resolve => setImmediate(resolve));
     expect(runtime.turns.size).toBe(0);
     expect(fixture.calls.length).toBeGreaterThan(0);
     expect(fixture.calls.every(call => call.method === "thread/read"

@@ -3,6 +3,8 @@ const toolKey=randomBytes(32);
 import { capturePrivateDiagnosticValue } from "./diagnostic-private";
 import { diagnosticContext, diagnosticSerializedBytes, withDiagnosticContext } from "./diagnostic-context";
 import { diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent } from "./diagnostic-events";
+import { diagnosticToolFailureEvidence } from "./diagnostic-tool-evidence";
+import { diagnosticFailureClass } from "./diagnostic-failure";
 import { classifyNetworkFailure } from "./network-failure";
 
 /** Observes public MCP calls without changing cancellation, approval or invocation authority. */
@@ -29,10 +31,10 @@ export async function traceDiagnosticToolCall<T>(tool: string, arguments_: unkno
     try {
       const result=await invoke(); capturePrivateDiagnosticValue("tool_result",result); resultBytes=diagnosticSerializedBytes(result);
       errorResult=Boolean(result && typeof result === "object" && (result as {isError?:unknown}).isError === true);
-      if (errorResult) emit("tool_error",{error_result:true});
+      if (errorResult) emit("tool_error",{error_result:true, delivery:"mcp_callback_returned", ...diagnosticToolFailureEvidence(result)});
       return result;
     } catch (error) {
-      outcome="failed"; emit("tool_failed",{ network_kind:classifyNetworkFailure(error) }); throw error;
+      outcome="failed"; emit("tool_failed",{ network_kind:classifyNetworkFailure(error), delivery:"mcp_callback_thrown", status:diagnosticFailureClass(error), ...diagnosticToolFailureEvidence(error) }); throw error;
     } finally {
       metadata.signal?.removeEventListener("abort",onAbort);
       emit("tool_settled", { outcome, duration_ms:diagnosticDurationMs(startedAt), abort_observed:aborted, error_result:errorResult,

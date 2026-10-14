@@ -10,6 +10,7 @@ import {
   createDefaultDesktopLaunch,
   defaultDesktopProcessIds,
   requestDefaultDesktopNormalQuit,
+  DesktopNormalQuitError,
   type DefaultDesktopInstallation,
 } from "./platform";
 import {
@@ -317,6 +318,7 @@ export async function startDefaultDesktopTargetRuntime(input: {
         if (stopping) return stopping;
         const stopStarted = performance.now();
         let stopPhase = "ownership";
+        let stopFailureReason = "unknown";
         diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: 0 });
         stopping = (async () => {
           if (desktop && alive(desktop)) {
@@ -328,11 +330,20 @@ export async function startDefaultDesktopTargetRuntime(input: {
             if (currentDesktopPids.includes(desktopPid!)) {
               stopPhase = "normal_quit";
               diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: Math.round(performance.now() - stopStarted) });
-              await normalQuit(input.installation, desktopPid!);
+              try {
+                await normalQuit(input.installation, desktopPid!);
+                diagnostic("desktop_quit_requested", { phase: stopPhase, request_state: "accepted" });
+              } catch (error) {
+                stopFailureReason = error instanceof DesktopNormalQuitError ? error.reasonClass : "request_failed";
+                throw error;
+              }
               if (!await waitForExit(desktop, STOP_TIMEOUT_MS)) {
                 // Discovery still proves this exact pid as the configured Desktop child, so the
                 // bounded fallback cannot target an unrelated replacement process.
-                if (input.installation.platform === "darwin") throw new Error("ChatGPT did not close after normal quit; owned app preserved");
+                if (input.installation.platform === "darwin") {
+                  stopFailureReason = "exit_timeout";
+                  throw new Error("ChatGPT did not close after normal quit; owned app preserved");
+                }
                 desktop.kill("SIGTERM");
                 if (!await waitForExit(desktop, 2_000)) desktop.kill("SIGKILL");
                 await waitForExit(desktop, 1_000);
@@ -346,7 +357,9 @@ export async function startDefaultDesktopTargetRuntime(input: {
           if (catalogDirectory) rmSync(catalogDirectory, { recursive: true, force: true });
           diagnostic("desktop_stop_complete", { phase: "closed", duration_ms: Math.round(performance.now() - stopStarted) });
         })().catch(error => {
-          diagnostic("desktop_stop_failed", { phase: stopPhase, duration_ms: Math.round(performance.now() - stopStarted) });
+          diagnostic("desktop_stop_failed", { phase: stopPhase,
+            reason_class: stopFailureReason === "unknown" && stopPhase === "transport_cleanup" ? "cleanup_failed" : stopFailureReason,
+            duration_ms: Math.round(performance.now() - stopStarted) });
           stopping = undefined;
           throw error;
         });

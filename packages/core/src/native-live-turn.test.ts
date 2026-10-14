@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { NativeLiveTurnRegistry } from "./native-live-turn";
+import { nativeTextHash, NativeLiveTurnRegistry } from "./native-live-turn";
 
 describe("Native engine acknowledged live turn evidence", () => {
   test("only the exact in-memory accepted owner/turn survives; replacement, finish and close revoke watchers", () => {
@@ -59,4 +59,20 @@ describe("Native engine acknowledged live turn evidence", () => {
     live.retireOwner(connection);
     expect(live.current("thread-0")).toBeUndefined();
   });
+});
+
+test("input provenance stays exact-owner bound, deduplicated and revoked on conflicting events", () => {
+  const live = new NativeLiveTurnRegistry(), owner = {}, foreign = {};
+  live.accept("thread", "turn", owner);
+  const receipt = live.current("thread")!;
+  const item = { type: "userMessage", id: "input", content: [{ type: "text", text: "synthetic steering" }] };
+  live.observeInput("thread", "turn", foreign, item);
+  live.observeInput("thread", "other", owner, item);
+  expect(live.inputs(receipt)).toEqual([]);
+  live.observeInput("thread", "turn", owner, item);
+  live.observeInput("thread", "turn", owner, item);
+  expect(live.inputs(receipt)).toEqual([{ id: "input", textHash: nativeTextHash("synthetic steering") }]);
+  live.observeInput("thread", "turn", owner, { ...item, content: [{ type: "text", text: "changed" }] });
+  expect(live.isCurrent(receipt)).toBe(false);
+  expect(live.inputs(receipt)).toEqual([]);
 });

@@ -1023,14 +1023,16 @@ describe("Native turn termination observation", () => {
     } });
     return { rpc, source: legacySnapshotFixtureSource(async () => observed),
       emit: (threadId: string, id: string, status: string, error?: unknown) => notify("turn/completed", {threadId, turn: { id, status, error }}),
+      input: (threadId: string, turnId: string, item: unknown) => notify("item/completed", { threadId, turnId, item }),
       disconnect: () => disconnect(), removed: () => removed };
   }
-  test("only the exact Native interrupted turn aborts; unrelated turns and successful completion do not", async () => {
+  test("only exact Native terminal events revoke the watcher including successful completion", async () => {
     const f = fixture(); const watch = await f.source.watchTurn("thread-1", "turn-1");
     f.emit("thread-other", "turn-1", "interrupted");
     f.emit("thread-1", "turn-other", "interrupted");
-    f.emit("thread-1", "turn-1", "completed");
     expect(watch.signal.aborted).toBe(false);
+    f.emit("thread-1", "turn-1", "completed");
+    expect(watch.signal.aborted).toBe(true);
     f.emit("thread-1", "turn-1", "interrupted");
     expect(watch.signal.aborted).toBe(true);
     await watch.close(); expect(f.removed()).toBe(1); expect(f.rpc.closed).toBe(1);
@@ -1040,6 +1042,17 @@ describe("Native turn termination observation", () => {
     const f = fixture(); const watch = await f.source.watchTurn("thread-1", "turn-1");
     f.disconnect(); expect(watch.signal.aborted).toBe(true); await watch.close();
     expect(f.removed()).toBe(1);
+  });
+  test("only exact Native user-message events grant bounded input witnesses", async () => {
+    const f = fixture(), watch = await f.source.watchTurn("thread-1", "turn-1");
+    const item = { type: "userMessage", id: "new-input", content: [{ type: "text", text: "synthetic steering" }] };
+    f.input("foreign", "turn-1", item); f.input("thread-1", "foreign", item);
+    expect(watch.inputs()).toEqual([]);
+    f.input("thread-1", "turn-1", item); f.input("thread-1", "turn-1", item);
+    expect(watch.inputs()).toHaveLength(1);
+    f.input("thread-1", "turn-1", { ...item, content: [{ type: "text", text: "changed" }] });
+    expect(watch.signal.aborted).toBe(true);
+    await watch.close();
   });
   test("termination during snapshot setup is not missed", async () => {
     const f = fixture(); const read = f.rpc.request.bind(f.rpc);

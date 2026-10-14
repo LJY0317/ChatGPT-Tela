@@ -70,6 +70,8 @@ describe("Native Responses semantic gateway", () => {
     const final = await gateway.handle(request(currentTurnId));
     expect(final.type).toBe("final");
     gateway.commit(final);
+    expect(turns.size).toBe(1);
+    await gateway.close();
     expect(turns.size).toBe(0);
     expect(launches).toBe(2);
     expect(canonicalReads).toBe(2);
@@ -136,6 +138,8 @@ describe("Native Responses semantic gateway", () => {
     expect(turns.size).toBe(1);
     expect(await gateway.handle(request("turn-1"))).toEqual(final);
     gateway.commit(final);
+    expect(turns.size).toBe(1);
+    await gateway.close();
     expect(turns.size).toBe(0);
   });
 
@@ -208,8 +212,10 @@ describe("Native Responses semantic gateway", () => {
       if (final.type !== "final") throw new Error("expected final");
       expect(final.answer).toBe(`${agent.threadId}:result-${agent.threadId}`);
       gateway.commit(final);
-      await expect(gateway.handle(body(agent))).rejects.toThrow("already retired");
+      await expect(gateway.handle(body(agent))).rejects.toThrow("proven new input");
     }
+    await gateway.close();
+    expect(turns.size).toBe(0);
     expect(launches.sort()).toEqual(agents.map(agent => agent.threadId).sort());
   });
 
@@ -272,7 +278,8 @@ describe("Native Responses semantic gateway", () => {
     expect(finalReplay).toEqual(final);
     gateway.commit(final);
 
-    await expect(gateway.handle(followup)).rejects.toThrow("already retired");
+    await expect(gateway.handle(followup)).rejects.toThrow("proven new input");
+    await gateway.close();
     expect(launches).toBe(1);
   });
 
@@ -332,5 +339,7 @@ test("tool-round progress gap replays once after local transport commit and reta
   expect(repeated).toEqual(["between rounds"]);
   expect(replay.delivery.progressCursor).toBe(final.delivery.progressCursor);
   gateway.commit(final);
+  expect(turns.size).toBe(1);
+  await gateway.close();
   expect(turns.size).toBe(0);
 });

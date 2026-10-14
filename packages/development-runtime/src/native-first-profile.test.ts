@@ -22,7 +22,7 @@ const family = { key: chatGptWebFamilyKey("Fixture Web"), label: "Fixture Web", 
 const model = chatGptWebModelId(family.key);
 const metadata = { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "thread-1", turn_id: "turn-1" } };
 
-async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
+async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-native-first-"));
   const config = loadProductProfileRuntimeConfig({
     CHATGPT_TELA_PROFILE_ROOT: root, CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "1", CHATGPT_TELA_PRODUCT_ROUTE_ID: "fixture123",
@@ -51,12 +51,13 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
   let accountHide: (() => void) | undefined;
   let fail = input.fail;
   let currentTurnId = "turn-1";
+  let nativeOwner = new AbortController();
   let stopFails = input.stopFails;
   const order: string[] = [];
   const source = { async currentTurn(threadId: string) { return {
     threadId, turnId: currentTurnId, cwd: "/workspace", workspaceRoots: ["/workspace"],
     sandbox: { kind: "read-only" as const, network: "restricted" as const }, proof: "turn-context" as const, environmentSourceTurnId: currentTurnId,
-  }; } };
+  }; }, ...(!input.noLifecycle ? { async watchTurn() { return { signal: nativeOwner.signal, async close() {} }; } } : {}) };
   const options: NativeFirstProfileOptions = {
     ...(input.accountBrowserFallback ? { accountBrowserStarter: async () => ({
       async openProfileSetupSurface() {
@@ -100,10 +101,14 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
       order.push("browser");
       if (input.holdCreation && creations === 1) await gate.promise;
       // Real gateway/HTTP transport; only browser generation is fake. Current-turn checks remain real.
-      const gateway = new NativeResponsesGateway(options.currentTurnSource, options.turns!, async registered => {
+      const gateway = new NativeResponsesGateway(options.currentTurnSource, options.turns!, async (registered, _body, nativeSignal) => {
         webGenerations++;
         generationStarted.resolve();
-        if (input.holdGeneration) await generationGate.promise;
+        if (input.holdGeneration) await Promise.race([generationGate.promise, new Promise<never>((_resolve, reject) => {
+          if (nativeSignal?.aborted) reject(nativeSignal.reason);
+          else nativeSignal?.addEventListener("abort", () => reject(nativeSignal.reason), { once: true });
+        })]);
+        nativeSignal?.throwIfAborted();
         if (fail === "generation") throw new ChatGptWebModelUnavailableError();
         registered.channel.markSubmitted(); registered.channel.markAccepted(); registered.channel.complete("mock Web reply");
       });
@@ -115,7 +120,7 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
           if (input.dispatchFailure && dispatchCalls === 1) throw new Error("synthetic dispatch failure");
           return responses.handleRequest(request);
         } },
-        async stop() { browserStops++; input.onBrowserStopped?.(); await responses.stop(); },
+        async stop() { browserStops++; input.onBrowserStopped?.(); await responses.stop(); await gateway.close(); },
         async prepareChatGptWebSession(preparation: import("./profile-control").ChatGptWebPreparationOptions) {
           preparation.onProfile({ capabilities: { observed: new Set(["composer", "send"]) }, account: { accountFingerprint: fail === "account" ? "b".repeat(64) : "a".repeat(64), accountStructure: "personal", containerFingerprint: "fixture" } });
           if (fail === "discovery") throw new Error("discovery incomplete");
@@ -186,7 +191,8 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
     get fallbackAccountBrowserStops() { return fallbackAccountBrowserStops; },
     closeAccountBrowser() { if (!accountHide) throw Error("account browser is not open"); accountHide(); },
     changeAccount() { fail = "account"; },
-    advanceTurn() { currentTurnId = "turn-2"; },
+    completeTurn() { nativeOwner.abort(new Error("Native completed")); },
+    advanceTurn() { nativeOwner.abort(new Error("Native completed")); nativeOwner = new AbortController(); currentTurnId = "turn-2"; },
     fix() { fail = undefined; stopFails = false; },
     async post(chosen: string, client_metadata: unknown = metadata) {
       return fetch(new URL("responses", runtime.responses.baseUrl), { method: "POST", headers: { authorization: "Bearer synthetic-native", "OpenAI-Organization": config.responsesToken, "content-type": "application/json" },
@@ -199,7 +205,7 @@ async function fixture(input: { dispatchFailure?: boolean; holdCreation?: boolea
 
 test("ordinary product tasks have no implicit Native fork, no elapsed-time deadline and require lifecycle authority", async () => {
   let contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown } | undefined;
-  const f = await fixture({ onExecutionContract: value => { contract = value; } });
+  const f = await fixture({ noLifecycle: true, onExecutionContract: value => { contract = value; } });
   try {
     await f.runtime.prepareWeb();
     expect(contract).not.toHaveProperty("webTurnTimeoutMs");
@@ -604,6 +610,8 @@ test("Web reconnection cannot dispose a browser with an active streaming turn", 
     expect(f.nativeStops).toBe(0);
     f.generationGate.resolve();
     expect((await (await turn).text())).toContain("mock Web reply");
+    f.completeTurn();
+    await new Promise<void>(resolve => setImmediate(resolve));
     await f.runtime.reconnectWeb();
     expect(f.creations).toBe(2);
   } finally { await f.cleanup(); }

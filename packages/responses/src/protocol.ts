@@ -70,6 +70,7 @@ function completedMessageItem(outcome: Extract<NativeGatewayOutcome, { type: "fi
     id,
     status: "completed",
     role: "assistant",
+    phase: "final_answer",
     content: Object.freeze([Object.freeze({
       type: "output_text",
       text: outcome.answer,

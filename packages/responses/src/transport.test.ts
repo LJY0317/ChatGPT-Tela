@@ -77,6 +77,8 @@ describe("Native Responses HTTP transport", () => {
     expect(complete.output.map((item: any) => item.type)).toEqual(["reasoning", "message"]);
     expect(complete.output[1].content[0].text).toBe("**Final**");
     expect(events.find(event => event.type === "response.output_text.delta").output_index).toBe(1);
+    expect(turns.size).toBe(1);
+    await gateway.close();
     expect(turns.size).toBe(0);
   });
 
@@ -355,6 +357,8 @@ describe("Native Responses HTTP transport", () => {
     const finalText = await final.text();
     expect(finalText).toContain('"delta":"done:ok"');
     expect(finalText).toContain("response.completed");
+    expect(turns.size).toBe(1);
+    await gateway.close();
     expect(turns.size).toBe(0);
   });
 
@@ -375,9 +379,11 @@ describe("Native Responses HTTP transport", () => {
       type: "message",
       id: expect.stringMatching(/^msg_tela_/),
       status: "completed",
-      role: "assistant",
+      role: "assistant", phase: "final_answer",
       content: [{ type: "output_text", text: "hello", annotations: [] }],
     }]);
+    expect(turns.size).toBe(1);
+    await gateway.close();
     expect(turns.size).toBe(0);
   });
 
@@ -419,5 +425,7 @@ test("SSE carries gap progress into the next tool round without repeating commit
   const events = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
   expect(events.filter(event => event.type === "response.reasoning_summary_text.delta").map(event => event.delta))
     .toEqual(["Public explanation during tool execution"]);
+  expect(turns.size).toBe(1);
+  await gateway.close();
   expect(turns.size).toBe(0);
 });

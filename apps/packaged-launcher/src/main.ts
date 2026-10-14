@@ -29,7 +29,7 @@ Usage:
   chatgpt-tela cancel-upgrade (--dry-run | --apply) --trusted-public-key <release-public-key.pem> --payload <source-package-directory>
   chatgpt-tela uninstall (--dry-run | --apply) [--remove-data]
   chatgpt-tela work [--slot <profile>] [--thread <id>] [--model <id>] [--cwd <folder>]
-  chatgpt-tela diagnostics [list|inspect|record|activity|capture]
+  chatgpt-tela diagnostics [list|decisions|inspect|record|activity|capture]
 
 The package directory defaults to the directory containing this launcher. Use --dry-run before --apply.
 

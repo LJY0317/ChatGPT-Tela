@@ -157,6 +157,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private var noticePolicy = TelaLaunchNoticePolicy()
   private var pendingLaunchPids = Set<Int>()
   private var showingLaunchNotice = false
+  private let decisionUiSession = UUID().uuidString
   private let controlCenter = TelaControlCenterController()
   private let fileManager = FileManager.default
   private let home = FileManager.default.homeDirectoryForCurrentUser
@@ -197,6 +198,9 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     statusMenu = menu
     statusItem.menu = menu
     controlCenter.onWindowStateChanged = { [weak self] event in self?.recordMenuState(event) }
+    controlCenter.onDecisionStateChanged = { [weak self] event, slot, decisionId in
+      self?.recordMenuState(event, slot: slot, decisionId: decisionId)
+    }
     rebuildMenu(loading: true)
     let notifications = NSWorkspace.shared.notificationCenter
     for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didActivateApplicationNotification,
@@ -310,7 +314,14 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       alert.addButton(withTitle: "Later")
       alert.window.level = .floating
       NSApp.activate(ignoringOtherApps: true)
+      let decisionId = UUID().uuidString
+      // The modal can remain unanswered while the owner is away. Persist
+      // structure only, before entering runModal; never infer a user decision.
+      recordMenuState("decision_web_reopen_pending", slot: profile.slot, decisionId: decisionId)
       let answer = alert.runModal()
+      recordMenuState(answer == .alertFirstButtonReturn
+        ? "decision_web_reopen_accepted" : "decision_web_reopen_deferred",
+        slot: profile.slot, decisionId: decisionId)
       showingLaunchNotice = false
       if answer == .alertFirstButtonReturn {
         controlCenter.reopenForWeb(slot: profile.slot, expectedDesktopPid: pid)
@@ -343,7 +354,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   func applicationDidBecomeActive(_ notification: Notification) { recordMenuState("app_active") }
   func applicationDidResignActive(_ notification: Notification) { recordMenuState("app_inactive") }
 
-  private func recordMenuState(_ event: String) {
+  private func recordMenuState(_ event: String, slot: Int? = nil, decisionId: String? = nil) {
     // Event-driven, bounded, local-only evidence: no window titles, other app identities or content.
     let directory = home.appendingPathComponent("Library/Logs/ChatGPT Tela", isDirectory: true)
     let url = directory.appendingPathComponent("menu-ui-events.json")
@@ -352,9 +363,13 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
        let existing = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] { rows = existing }
     let now = Date().timeIntervalSince1970
     rows = rows.filter { ($0["at"] as? Double ?? 0) > now - 86400 }
-    rows.append(["at": now, "event": event, "menuOpen": menuOpen,
+    var evidence: [String: Any] = ["at": now, "event": event, "menuOpen": menuOpen,
+      "uiSession": decisionUiSession,
       "appActive": NSApp.isActive, "ownAppFrontmost": NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
-      "window": controlCenter.windowStateEvidence])
+      "window": controlCenter.windowStateEvidence]
+    if let slot, (1...99).contains(slot) { evidence["slot"] = slot }
+    if let decisionId { evidence["decision"] = decisionId }
+    rows.append(evidence)
     do {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
         attributes: [.posixPermissions: 0o700])

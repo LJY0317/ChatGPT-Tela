@@ -1,9 +1,11 @@
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { createHash } from "node:crypto";
+import { capturePrivateDiagnosticValue, nativeTextHash, diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import {
   bindNativeTurnRequest,
   extractNativeToolResults,
   parseNativeTurnReplayIdentity,
   type CanonicalCurrentTurnSource,
+  type NativeTurnTerminationWatch,
   type NativeResponsesToolCallItem,
 } from "@chatgpt-tela/codex";
 import { ActiveTurnRegistry, NativeTurnAlreadyRetired, type RegisteredTurn } from "./registry";
@@ -31,7 +33,40 @@ export type NativeGatewayOutcome =
       };
     };
 
-export type StartWebTurn = (turn: RegisteredTurn, nativeRequest: unknown) => Promise<unknown>;
+export type StartWebTurn = (turn: RegisteredTurn, nativeRequest: unknown, nativeSignal?: AbortSignal) => Promise<unknown>;
+
+interface NativeLifetime {
+  readonly controller: AbortController;
+  current: RegisteredTurn;
+  watch: NativeTurnTerminationWatch | undefined;
+  delivered: boolean;
+  requestHash: string;
+  answerHash?: string;
+  readonly consumedInputs: Set<string>;
+}
+
+function requestHash(body: unknown): string {
+  return createHash("sha256").update(JSON.stringify(body)).digest("hex");
+}
+
+function requestMessages(body: unknown): readonly { role: string; hash: string }[] {
+  const input = (body as { input?: unknown }).input;
+  if (!Array.isArray(input)) return [];
+  return input.flatMap(raw => {
+    if (!raw || typeof raw !== "object") return [];
+    const item = raw as Record<string, unknown>;
+    if (item.role !== "user" && item.role !== "assistant") return [];
+    let text: string;
+    if (typeof item.content === "string") text = item.content;
+    else if (Array.isArray(item.content)) {
+      const parts = item.content as Record<string, unknown>[];
+      if (parts.some(part => !part || typeof part.text !== "string"
+        || !["input_text", "output_text", "text"].includes(String(part.type)))) return [{ role: item.role, hash: "unproven" }];
+      text = parts.map(part => part.text).join("\n");
+    } else return [{ role: item.role, hash: "unproven" }];
+    return [{ role: item.role, hash: nativeTextHash(text) }];
+  });
+}
 
 function never(): Promise<never> {
   return new Promise(() => {});
@@ -53,7 +88,12 @@ function terminalPhase(phase: string): boolean {
  * undelivered Native tool call into an executed one.
  */
 export class NativeResponsesGateway {
+  readonly #controller = new AbortController();
   readonly #launches = new Map<string, Promise<unknown>>();
+  readonly #lifetimes = new Map<string, NativeLifetime>();
+  readonly #closingWatches = new Set<Promise<void>>();
+  readonly #issuedFinals = new Map<string, string>();
+  readonly #admissions = new Map<string, Promise<unknown>>();
 
   constructor(
     readonly source: CanonicalCurrentTurnSource,
@@ -65,69 +105,15 @@ export class NativeResponsesGateway {
     readonly onProgress: (summary: string) => void | boolean;
     readonly signal?: AbortSignal;
   }): Promise<NativeGatewayOutcome> {
-    // An already-retired turn was previously registered against canonical
-    // Native authority. Rejecting that *same* claim never grants new
-    // authority. Avoid repeating a multi-second public Desktop history read
-    // for each retry after a large cold-history bootstrap fails.
+    this.#controller.signal.throwIfAborted();
     const identity = parseNativeTurnReplayIdentity(body);
-    if (this.turns.isRetired(identity.threadId, identity.turnId)) {
-      // Fixed structural fields only. Never log claimed Native identifiers,
-      // raw prompts, model inputs or tool data from an unverified replay.
-      emitDiagnosticEvent("chatgpt_tela_work", "native_replay_rejected", {
-        reason_class: "retired_turn",
-        native_source_probe: "skipped",
-        retryable: false,
-      });
-      throw new NativeTurnAlreadyRetired();
-    }
-    const binding = await bindNativeTurnRequest(body, this.source);
-    let registered = this.turns.active(binding.authority.threadId, binding.authority.turnId);
-
-    if (!registered) {
-      registered = this.turns.register(binding);
-      const owned = registered;
-      const launch = Promise.resolve().then(() => this.startWebTurn(owned, body)).catch(error => {
-        // A settled execution failure owns no future tool authority. Revoke it here even when
-        // preparation failed before submission (and the Native failure watcher already closed).
-        // Successful outcomes remain live until the Native transport commits their delivery.
-        if (!terminalPhase(owned.channel.phase)) {
-          if (owned.channel.phase === "prepared") owned.channel.failBeforeAcceptance(error);
-          else if (owned.channel.phase === "submitted") owned.channel.cancel(error);
-          else owned.channel.markIndeterminate(error);
-        }
-        const authority = owned.channel.binding.authority;
-        if (owned.channel.phase !== "completed"
-          && this.turns.active(authority.threadId, authority.turnId)?.capability === owned.capability) {
-          this.turns.retire(owned.capability);
-        }
-        throw error;
-      });
-      // The launch is observed both here and by the outcome race; this prevents process-level
-      // unhandled rejections if the Native client disconnects before awaiting the gateway result.
-      void launch.catch(() => {});
-      this.#launches.set(registered.capability, launch);
-      void launch.finally(() => {
-        const authority = owned.channel.binding.authority;
-        if (!this.turns.active(authority.threadId, authority.turnId)) {
-          this.#launches.delete(owned.capability);
-        }
-      }).catch(() => {});
-    } else if (!terminalPhase(registered.channel.phase)) {
-      const outstanding = registered.channel.outstandingToolCallId;
-      if (outstanding) {
-        const hasMatchingResult = extractNativeToolResults(body)
-          .some(result => result.callId === outstanding);
-        if (hasMatchingResult) {
-          acceptBoundNativeRoundRequest(registered.channel, binding, body);
-        } else if (registered.channel.outstandingNativeDelivery === "delivered") {
-          throw new Error("Native tool call was already delivered; the follow-up request must contain its result");
-        }
-        // An uncommitted queued call is intentionally left on the old binding so the exact same
-        // output can be replayed after a transport failure. It is not a new Native round yet.
-      } else {
-        registered = this.turns.refresh(binding);
-      }
-    }
+    const key = `${identity.threadId}\u0000${identity.turnId}`;
+    const prior = this.#admissions.get(key) ?? Promise.resolve();
+    const admission = prior.catch(() => {}).then(() => this.#admit(body, key));
+    this.#admissions.set(key, admission);
+    let registered: RegisteredTurn;
+    try { registered = await admission; }
+    finally { if (this.#admissions.get(key) === admission) this.#admissions.delete(key); }
 
     let progressCursor = registered.channel.progressTransportCursor;
     const unsubscribe = presentation && !presentation.signal?.aborted
@@ -148,25 +134,229 @@ export class NativeResponsesGateway {
     }
   }
 
+  async #admit(body: unknown, key: string): Promise<RegisteredTurn> {
+    // An already-retired turn was previously registered against canonical
+    // Native authority. Rejecting that *same* claim never grants new
+    // authority. Avoid repeating a multi-second public Desktop history read
+    // for each retry after a large cold-history bootstrap fails.
+    const identity = parseNativeTurnReplayIdentity(body);
+    if (this.turns.isRetired(identity.threadId, identity.turnId)) {
+      // Fixed structural fields only. Never log claimed Native identifiers,
+      // raw prompts, model inputs or tool data from an unverified replay.
+      withDiagnosticContext({
+        scope_fingerprint: diagnosticFingerprint(identity.threadId),
+        turn_fingerprint: diagnosticFingerprint(identity.turnId),
+      }, () => emitDiagnosticEvent("chatgpt_tela_work", "native_replay_rejected", {
+        reason_class: "retired_turn",
+        native_source_probe: "skipped",
+        current_authority_proven: false,
+        retryable: false,
+      }));
+      throw new NativeTurnAlreadyRetired();
+    }
+    const binding = await bindNativeTurnRequest(body, this.source);
+    this.#controller.signal.throwIfAborted();
+    let registered = this.turns.active(binding.authority.threadId, binding.authority.turnId);
+
+    // Canonical environment/lineage cannot change under an existing Native owner.
+    if (registered && (JSON.stringify(registered.channel.binding.authority) !== JSON.stringify(binding.authority)
+      || registered.channel.binding.canonicalEvidence.parentThreadId !== binding.canonicalEvidence.parentThreadId
+      || registered.channel.binding.canonicalEvidence.agentName !== binding.canonicalEvidence.agentName)) {
+      this.#retire(key, new Error("Native owner changed"));
+      throw new Error("Native owner changed under the active response cycle");
+    }
+    let lifetime = this.#lifetimes.get(key);
+    if (registered && lifetime?.delivered) {
+      lifetime.watch?.signal.throwIfAborted();
+      const messages = requestMessages(body);
+      const finalIndex = messages.map(message => message.role === "assistant" && message.hash === lifetime!.answerHash).lastIndexOf(true);
+      const newMessages = finalIndex < 0 ? [] : messages.slice(finalIndex + 1).filter(message => message.role === "user");
+      const inputs = lifetime.watch?.inputs?.() ?? [];
+      const fresh = inputs.filter(input => !lifetime!.consumedInputs.has(input.id)
+        && newMessages.some(message => message.hash === input.textHash));
+      if (!fresh.length || newMessages.length !== fresh.length || newMessages.some(message => !fresh.some(input => input.textHash === message.hash))) {
+        this.#rejectCycle(identity, "missing_input_proof", "Native response cycle continuation lacks proven new input and prior final delivery");
+      }
+      // A final answer may reach Native before browser/context settlement. Never overlap planners.
+      await this.#launches.get(registered.capability);
+      lifetime.watch?.signal.throwIfAborted();
+      if (this.turns.active(identity.threadId, identity.turnId)?.capability !== registered.capability) {
+        throw new NativeTurnAlreadyRetired();
+      }
+      this.#launches.delete(registered.capability);
+      registered = this.turns.nextCycle(registered.capability, binding);
+      lifetime.current = registered;
+      lifetime.delivered = false;
+      delete lifetime.answerHash;
+      lifetime.requestHash = requestHash(body);
+      for (const input of fresh) lifetime.consumedInputs.add(input.id);
+    } else if (registered && terminalPhase(registered.channel.phase)) {
+      if (!lifetime || lifetime.requestHash !== requestHash(body)) {
+        this.#rejectCycle(identity, "uncommitted_delivery", "Completed response may only replay its exact uncommitted request");
+      }
+      return registered;
+    }
+    if (!registered || registered.channel.phase === "prepared" && !this.#launches.has(registered.capability)) {
+      if (!registered) {
+        registered = this.turns.register(binding);
+        lifetime = { controller: new AbortController(), current: registered, watch: undefined, delivered: false, requestHash: requestHash(body), consumedInputs: new Set() };
+        this.#lifetimes.set(key, lifetime);
+        try {
+          lifetime.watch = await this.source.watchTurn?.(identity.threadId, identity.turnId, this.#controller.signal);
+          this.#controller.signal.throwIfAborted();
+          if (this.source.watchTurn && !lifetime.watch) throw new Error("Native lifecycle observation was not proven");
+          lifetime.watch?.signal.throwIfAborted();
+          if (lifetime.watch) {
+            const signal = lifetime.watch.signal;
+            signal.addEventListener("abort", () => this.#retire(key, signal.reason), { once: true });
+            for (const input of lifetime.watch.inputs?.() ?? []) {
+              if (requestMessages(body).some(message => message.role === "user" && message.hash === input.textHash)) lifetime.consumedInputs.add(input.id);
+            }
+          }
+        } catch (error) {
+          withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId), turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () => {
+            capturePrivateDiagnosticValue("web_preparation_failure", { phase: "native_watch", request: body,
+              error: error instanceof Error ? { name: error.name, message: error.message } : { name: "unknown" } });
+            emitDiagnosticEvent("chatgpt_tela_work", "web_preparation_failed", { phase: "native_watch", reason_class: "unclassified", tool_round_count: 0 });
+          });
+          this.#retire(key, error); throw error;
+        }
+      }
+      const owned = registered;
+      const launch = Promise.resolve().then(() => this.startWebTurn(owned, body, AbortSignal.any([this.#controller.signal, lifetime!.controller.signal, ...(lifetime?.watch ? [lifetime.watch.signal] : [])]))).catch(error => {
+        const failedOwner = owned.channel.binding.authority;
+        withDiagnosticContext({
+          scope_fingerprint: diagnosticFingerprint(failedOwner.threadId),
+          turn_fingerprint: diagnosticFingerprint(failedOwner.turnId),
+        }, () => emitDiagnosticEvent("chatgpt_tela_work", "native_execution_failed", {
+          status: diagnosticFailureClass(error),
+          turn_phase: owned.channel.phase,
+          tool_round_count: owned.channel.toolRoundCount,
+        }));
+        // A settled execution failure owns no future tool authority. Revoke it here even when
+        // preparation failed before submission (and the Native failure watcher already closed).
+        // Successful cycles remain replayable until delivery; Native lifecycle owns final retirement.
+        if (!terminalPhase(owned.channel.phase)) {
+          if (owned.channel.phase === "prepared") owned.channel.failBeforeAcceptance(error);
+          else if (owned.channel.phase === "submitted") owned.channel.cancel(error);
+          else owned.channel.markIndeterminate(error);
+        }
+        const authority = owned.channel.binding.authority;
+        if (owned.channel.phase !== "completed"
+          && this.turns.active(authority.threadId, authority.turnId)?.capability === owned.capability) {
+          this.#retire(key, error);
+        }
+        throw error;
+      });
+      // The launch is observed both here and by the outcome race; this prevents process-level
+      // unhandled rejections if the Native client disconnects before awaiting the gateway result.
+      void launch.catch(() => {});
+      this.#launches.set(registered.capability, launch);
+      void launch.finally(() => {
+        const authority = owned.channel.binding.authority;
+        if (!this.turns.active(authority.threadId, authority.turnId)) {
+          this.#launches.delete(owned.capability);
+        }
+      }).catch(() => {});
+    } else if (!terminalPhase(registered.channel.phase)) {
+      const outstanding = registered.channel.outstandingToolCallId;
+      if (outstanding) {
+        const hasMatchingResult = extractNativeToolResults(body)
+          .some(result => result.callId === outstanding);
+        if (hasMatchingResult) {
+          acceptBoundNativeRoundRequest(registered.channel, binding, body);
+          if (lifetime) lifetime.requestHash = requestHash(body);
+        } else if (registered.channel.outstandingNativeDelivery === "delivered") {
+          throw new Error("Native tool call was already delivered; the follow-up request must contain its result");
+        }
+        // An uncommitted queued call is intentionally left on the old binding so the exact same
+        // output can be replayed after a transport failure. It is not a new Native round yet.
+      } else {
+        registered = this.turns.refresh(binding);
+        if (lifetime) lifetime.requestHash = requestHash(body);
+      }
+    }
+
+    return registered;
+  }
+
+  #rejectCycle(identity: { threadId: string; turnId: string }, reason: string, message: string): never {
+    withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId), turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () =>
+      emitDiagnosticEvent("chatgpt_tela_work", "native_replay_rejected", {
+        reason_class: reason, native_source_probe: "proven", current_authority_proven: true, retryable: false,
+      }));
+    throw Object.assign(new Error(message), { code: "tela_native_response_cycle_conflict", retryable: false });
+  }
+
+  #retire(key: string, reason?: unknown): void {
+    const lifetime = this.#lifetimes.get(key);
+    if (!lifetime) return;
+    this.#lifetimes.delete(key);
+    lifetime.controller.abort(reason ?? new Error("Native owner retired"));
+    const owned = lifetime.current;
+    if (!terminalPhase(owned.channel.phase)) owned.channel.cancel(reason);
+    const authority = owned.channel.binding.authority;
+    if (this.turns.active(authority.threadId, authority.turnId)?.capability === owned.capability) this.turns.retire(owned.capability);
+    const launch = this.#launches.get(owned.capability);
+    this.#launches.delete(owned.capability);
+    // Observation owns Native lifetime; Web cleanup still finishes before closing its observer.
+    const closing = (launch ?? Promise.resolve()).catch(() => {})
+      .then(() => lifetime.watch?.close()).then(() => {});
+    this.#closingWatches.add(closing);
+    void closing.finally(() => this.#closingWatches.delete(closing)).catch(() => {});
+  }
+
+  async close(): Promise<void> {
+    this.#controller.abort(new Error("Native gateway closed"));
+    for (const key of [...this.#lifetimes.keys()]) this.#retire(key, new Error("Native gateway closed"));
+    await Promise.allSettled([...this.#closingWatches]);
+  }
+
   commit(outcome: NativeGatewayOutcome): void {
-    const channel = this.turns.resolve(outcome.delivery.capability);
+    let channel;
+    try { channel = this.turns.resolve(outcome.delivery.capability); }
+    catch (error) {
+      // A late final transport ACK may follow Native completion or a newer cycle. It grants no authority.
+      if (outcome.type === "final" && this.#issuedFinals.get(outcome.delivery.capability) === nativeTextHash(outcome.answer)) return;
+      throw error;
+    }
+    if (outcome.type === "final" && this.#issuedFinals.get(outcome.delivery.capability) !== nativeTextHash(outcome.answer)) throw new Error("final outcome was not issued by this response cycle");
+    const authority = channel.binding.authority;
+    withDiagnosticContext({
+      scope_fingerprint: diagnosticFingerprint(authority.threadId),
+      turn_fingerprint: diagnosticFingerprint(authority.turnId),
+    }, () => emitDiagnosticEvent("chatgpt_tela_work", "native_outcome_committed", {
+      outcome: outcome.type === "final" ? "final" : "tool_call",
+      turn_phase: channel.phase,
+      tool_round_count: channel.toolRoundCount,
+      native_terminal_observed: false,
+    }));
     channel.commitProgressTransport(outcome.delivery.progressCursor ?? channel.progressTransportCursor);
     if (outcome.type === "tool-call") {
       this.turns.resolve(outcome.delivery.capability)
         .markNativeToolDelivered(outcome.delivery.callId);
       return;
     }
-    this.turns.retire(outcome.delivery.capability);
-    this.#launches.delete(outcome.delivery.capability);
+    const key = `${authority.threadId}\u0000${authority.turnId}`;
+    const lifetime = this.#lifetimes.get(key);
+    if (!lifetime || lifetime.current.capability !== outcome.delivery.capability) throw new Error("final delivery does not own the current response cycle");
+    lifetime.delivered = true;
+    lifetime.answerHash = nativeTextHash(outcome.answer);
+    // Without a lifecycle observer the owner remains uncertain until explicit gateway shutdown.
+    // Such inert/test sources can never authorize another response cycle.
   }
 
   async #nextOutcome(registered: RegisteredTurn): Promise<NativeGatewayOutcome> {
     const channel = registered.channel;
-    const final = channel.waitForFinal().then(answer => Object.freeze({
-      type: "final" as const,
-      answer,
-      delivery: Object.freeze({ capability: registered.capability }),
-    }));
+    const final = channel.waitForFinal().then(answer => {
+      this.#issuedFinals.set(registered.capability, nativeTextHash(answer));
+      while (this.#issuedFinals.size > ActiveTurnRegistry.MAX_RETIRED_TURNS) this.#issuedFinals.delete(this.#issuedFinals.keys().next().value!);
+      return Object.freeze({
+        type: "final" as const,
+        answer,
+        delivery: Object.freeze({ capability: registered.capability }),
+      });
+    });
     if (terminalPhase(channel.phase)) return final;
 
     const tool = nextNativeResponsesToolCall(channel)
