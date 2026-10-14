@@ -9,6 +9,7 @@ export interface StructuralDiagnosticEvent { readonly ts: string; readonly event
 const SAFE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const FORBIDDEN = /(prompt|path|url|uri|secret|email|content|command|output|argument|authorization|cookie|raw_|token|workspace_id|account_id|user_id|session_id|turn_id|thread_id)/i;
 const FINGERPRINT = /^[a-f0-9]{24}$/;
+const SAFE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const STRINGS = new Set(["service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state"]);
 /** Never copies unclassified text, identifiers or payloads from a raw diagnostic file. */
 export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticEvent | undefined {
@@ -22,13 +23,16 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
     if (typeof field === "number" && Number.isSafeInteger(field) && Math.abs(field) <= Number.MAX_SAFE_INTEGER) safe[key] = field;
     else if (typeof field === "boolean") safe[key] = field;
     else if (typeof field === "string" && ((key.endsWith("_fingerprint") && FINGERPRINT.test(field))
+      || (key === "effort" && SAFE_EFFORTS.has(field))
       || (STRINGS.has(key) && /^[a-z][a-z0-9_-]{0,63}$/.test(field)))) safe[key] = field;
   }
   return safe as StructuralDiagnosticEvent;
 }
 
-export function readDiagnosticTail(path: string, maxBytes = DIAGNOSTIC_LIMITS.tailBytes) {
+export interface DiagnosticWindow { readonly fromMs: number; readonly toMs: number; }
+export function readDiagnosticTail(path: string, maxBytes = DIAGNOSTIC_LIMITS.tailBytes, window?: DiagnosticWindow) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 8 * 1024 * 1024) throw new Error("invalid diagnostic read budget");
+  if (window && (!Number.isFinite(window.fromMs) || !Number.isFinite(window.toMs) || window.fromMs > window.toMs)) throw new Error("invalid diagnostic window");
   let fd: number | undefined;
   try {
     if (lstatSync(path).isSymbolicLink()) throw new Error("unsafe source");
@@ -39,21 +43,30 @@ export function readDiagnosticTail(path: string, maxBytes = DIAGNOSTIC_LIMITS.ta
     let text = buffer.subarray(0, used).toString("utf8");
     if (stat.size > bytes) { const newline = text.indexOf("\n"); text = newline < 0 ? "" : text.slice(newline + 1); }
     const events: StructuralDiagnosticEvent[] = [];
-    let invalidTimestampRows = 0;
+    let invalidTimestampRows = 0, malformedRows = 0, oversizedRows = 0, outsideWindowRows = 0;
     for (const line of text.split("\n")) {
-      if (line.length > 8192) continue;
+      if (!line.trim()) continue;
+      if (line.length > 8192) { oversizedRows++; continue; }
       try { const raw = JSON.parse(line); if (raw && typeof raw === "object" && (!raw.ts || !Number.isFinite(Date.parse(raw.ts)))) invalidTimestampRows++;
-        const event = structuralDiagnosticEvent(raw); if (event) events.push(event); } catch { /* Partial/malformed lines are not evidence. */ }
+        const event = structuralDiagnosticEvent(raw);
+        if (event) {
+          const at = Date.parse(event.ts);
+          if (window && (at < window.fromMs || at > window.toMs)) outsideWindowRows++;
+          else events.push(event);
+        }
+      } catch { malformedRows++; }
     }
-    return { state: "read" as const, invalidTimestampRows, bytesRead: used, fileBytes: stat.size, truncated: stat.size > bytes,
+    return { state: "read" as const, invalidTimestampRows, malformedRows, oversizedRows, outsideWindowRows,
+      windowSelected: Boolean(window), bytesRead: used, fileBytes: stat.size, truncated: stat.size > bytes,
       events: events.slice(-DIAGNOSTIC_LIMITS.events), eventLimitReached: events.length > DIAGNOSTIC_LIMITS.events };
-  } catch { return { state: "unavailable" as const, invalidTimestampRows: 0, bytesRead: 0, fileBytes: 0, truncated: false, events: [] as StructuralDiagnosticEvent[], eventLimitReached: false }; }
+  } catch { return { state: "unavailable" as const, invalidTimestampRows: 0, malformedRows: 0, oversizedRows: 0,
+    outsideWindowRows: 0, windowSelected: Boolean(window), bytesRead: 0, fileBytes: 0, truncated: false, events: [] as StructuralDiagnosticEvent[], eventLimitReached: false }; }
   finally { if (fd !== undefined) closeSync(fd); }
 }
 
-export function readDiagnosticSources(paths: readonly string[]) {
+export function readDiagnosticSources(paths: readonly string[], window?: DiagnosticWindow) {
   const selected = [...new Set(paths)].slice(0, DIAGNOSTIC_LIMITS.sources);
-  const sources = selected.map((path, index) => { const { events, ...coverage } = readDiagnosticTail(path); return { index, coverage, events }; });
+  const sources = selected.map((path, index) => { const { events, ...coverage } = readDiagnosticTail(path, DIAGNOSTIC_LIMITS.tailBytes, window); return { index, coverage, events }; });
   const excluded = new Set<string>();
   for (const parent of new Set(selected.map(path=>dirname(path)))) {
     try {
@@ -73,13 +86,16 @@ export function readDiagnosticSources(paths: readonly string[]) {
   return { events, excludedTestEvents, coverage: sources.map(({ index, coverage }) => ({ source: index, ...coverage })), sourceLimitReached: new Set(paths).size > selected.length };
 }
 
-export const HOST_SYMPTOMS = ["stream-failure", "connection-interrupted", "response-stalled", "additional-review", "response-recovered", "approval-stalled", "missing-models", "startup-stalled", "ui-anomaly", "unknown"] as const;
+export const HOST_SYMPTOMS = ["stream-failure", "connection-interrupted", "response-stalled", "additional-review", "response-recovered", "approval-stalled", "tool-review-blocked", "missing-models", "startup-stalled", "ui-anomaly", "unknown"] as const;
+export const HOST_REPORT_ORIGINS = ["user-observation", "worker-report", "host-error"] as const;
+export type HostReportOrigin = typeof HOST_REPORT_ORIGINS[number];
 export type HostSymptom = typeof HOST_SYMPTOMS[number];
-export function analyzeDiagnosticEvents(input: { events: readonly StructuralDiagnosticEvent[]; atMs: number; minutes?: number; operationFingerprint?: string; symptom?: HostSymptom; recoveredAtMs?: number; outputStartedAtMs?: number }) {
+export function analyzeDiagnosticEvents(input: { events: readonly StructuralDiagnosticEvent[]; atMs: number; minutes?: number; operationFingerprint?: string; symptom?: HostSymptom; reportOrigin?: HostReportOrigin; recoveredAtMs?: number; outputStartedAtMs?: number }) {
   const minutes = input.minutes ?? 5;
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > 120 || !Number.isFinite(input.atMs)) throw new Error("invalid incident window");
   if (input.operationFingerprint !== undefined && !FINGERPRINT.test(input.operationFingerprint)) throw new Error("invalid operation fingerprint");
   if (input.symptom !== undefined && !(HOST_SYMPTOMS as readonly string[]).includes(input.symptom)) throw new Error("invalid host symptom");
+  if (input.reportOrigin !== undefined && !(HOST_REPORT_ORIGINS as readonly string[]).includes(input.reportOrigin)) throw new Error("invalid host report origin");
   for (const time of [input.recoveredAtMs, input.outputStartedAtMs]) if (time !== undefined && (!Number.isFinite(time) || time < input.atMs)) throw new Error("invalid reported recovery/output time");
   const nearby = input.events.filter(event => Math.abs(Date.parse(event.ts) - input.atMs) <= minutes * 60000);
   const keys = ["operation_fingerprint", "request_fingerprint", "parent_fingerprint", "turn_fingerprint"] as const;
@@ -124,10 +140,25 @@ export function analyzeDiagnosticEvents(input: { events: readonly StructuralDiag
   }
   return {
     schemaVersion: 1, privacy: "structural-only", mutating: false, observedAt: new Date(input.atMs).toISOString(),
-    hostReported: { symptom: input.symptom ?? "unknown", ...(input.recoveredAtMs !== undefined ? { recoveredAt: new Date(input.recoveredAtMs).toISOString() } : {}), ...(input.outputStartedAtMs !== undefined ? { outputStartedAt: new Date(input.outputStartedAtMs).toISOString() } : {}) },
+    hostReported: { symptom: input.symptom ?? "unknown", origin: input.reportOrigin ?? "unspecified", originProven: false,
+      ...(input.recoveredAtMs !== undefined ? { recoveredAt: new Date(input.recoveredAtMs).toISOString() } : {}), ...(input.outputStartedAtMs !== undefined ? { outputStartedAt: new Date(input.outputStartedAtMs).toISOString() } : {}) },
     windowMinutes: minutes, selectedOperation: input.operationFingerprint ?? null,
     status: target.length ? "observed" : "not-observed", eventCounts: stages, categories,
     boundaries: { failures: failures.length, localCompletions: completed.length, transportEvents: transport.length,
+      toolEvidence: {
+        correlationSelected: input.operationFingerprint !== undefined,
+        approvalDispatches: before.filter(row => row.stage === "approval_wait_transition" && row.phase === "dispatch_sent").length,
+        approvalInputReceipts: before.filter(row => row.stage === "approval_wait_transition" && row.phase === "input_received").length,
+        approvalCardsCleared: before.filter(row => row.stage === "approval_wait_transition" && row.phase === "card_cleared").length,
+        nativeQueued: before.filter(row => row.stage === "native_tool_queued").length,
+        nativeDelivered: before.filter(row => row.stage === "native_tool_delivery_committed").length,
+        nativeResults: before.filter(row => ["native_tool_result_received", "native_tool_result_error", "native_tool_result_signal_anomaly"].includes(row.stage)).length,
+        reportedErrors: before.filter(row => ["native_tool_result_error", "tool_error", "tool_failed"].includes(row.stage)).length,
+        refusalSignals: before.filter(row => row.message_signal_observed === true).length,
+        incompleteInspections: before.filter(row => row.inspection_complete === false).length,
+        originProven: false, executionProven: false,
+        preDispatchCoverage: "external-host-unobservable",
+      },
       activeToolsAtReport: activeTools.size, activeProcessesAtReport: activeProcesses.size,
       processEvidence: latestProcess ? { stage: latestProcess.stage, at: latestProcess.ts } : null,
       lastLocalBeforeReport: lastBefore?.ts ?? null, firstLocalAfterReport: firstAfter?.ts ?? null,
@@ -135,7 +166,7 @@ export function analyzeDiagnosticEvents(input: { events: readonly StructuralDiag
       localSilenceWhileOthersProgress: observedOtherProgress, instanceCount: instances.length,
       hostContinuation: input.outputStartedAtMs !== undefined ? "host-reported" : "unverified" },
     timeline: target.slice(-DIAGNOSTIC_LIMITS.timeline), nearbyAnomalies: failures.slice(-16),
-    gaps: ["Local response delivery is not proof of host display or model continuation.", "Scope/profile fingerprints are correlation signals, not authenticated account identities.", "Missing, rotated or unreadable evidence is not evidence of success.", "Server-side reasoning and exact Web quota/token accounting are not observable."],
+    gaps: ["Local response delivery is not proof of host display or model continuation.", "Scope/profile fingerprints are correlation signals, not authenticated account identities.", "Missing, rotated or unreadable evidence is not evidence of success.", "External host rejection before Tela ingress has no local tool receipt; a host report does not prove its internal cause.", "Approval acceptance does not grant or prove downstream safety review acceptance.", "Server-side reasoning and exact Web quota/token accounting are not observable."],
   };
 }
 

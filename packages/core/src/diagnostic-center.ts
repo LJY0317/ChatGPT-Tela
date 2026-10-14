@@ -1,5 +1,5 @@
-import { analyzeDiagnosticEvents, HOST_SYMPTOMS, listDiagnosticIncidents, readDiagnosticIncident,
-  readDiagnosticSources, setPrivateDiagnosticCapture, writeDiagnosticIncident, type HostSymptom } from "./diagnostic-store";
+import { analyzeDiagnosticEvents, HOST_SYMPTOMS, HOST_REPORT_ORIGINS, listDiagnosticIncidents, readDiagnosticIncident,
+  readDiagnosticSources, setPrivateDiagnosticCapture, writeDiagnosticIncident, type HostSymptom, type HostReportOrigin } from "./diagnostic-store";
 import { join } from "node:path";
 
 export function diagnosticSourcePaths(logsRoot: string): readonly string[] {
@@ -26,9 +26,15 @@ export function diagnosticCenter(root: string, paths: readonly string[], command
   const symptom = option("--symptom") ?? "unknown";
   if (!(HOST_SYMPTOMS as readonly string[]).includes(symptom)) throw new Error("invalid host symptom");
   const operation = option("--operation"); const recovered = option("--recovered-at"); const output = option("--output-started-at");
-  const source = readDiagnosticSources(paths);
-  const analysis = analyzeDiagnosticEvents({ events: source.events, atMs: at ? Date.parse(at) : Date.now(),
-    minutes: Number(option("--minutes") ?? 5), symptom: symptom as HostSymptom,
+  const reportOrigin = option("--report-origin");
+  if (reportOrigin !== undefined && !(HOST_REPORT_ORIGINS as readonly string[]).includes(reportOrigin)) throw new Error("invalid host report origin");
+  const atMs = at ? Date.parse(at) : Date.now(), minutes = Number(option("--minutes") ?? 5);
+  if (!Number.isFinite(atMs) || !Number.isInteger(minutes) || minutes < 1 || minutes > 120) throw new Error("invalid incident window");
+  // Select the incident interval before the per-source event cap, within the same byte budget.
+  const source = readDiagnosticSources(paths, { fromMs: atMs - minutes * 60000, toMs: atMs + minutes * 60000 });
+  const analysis = analyzeDiagnosticEvents({ events: source.events, atMs,
+    minutes, symptom: symptom as HostSymptom,
+    ...(reportOrigin ? { reportOrigin: reportOrigin as HostReportOrigin } : {}),
     ...(operation ? { operationFingerprint: operation } : {}),
     ...(recovered ? { recoveredAtMs: Date.parse(recovered) } : {}),
     ...(output ? { outputStartedAtMs: Date.parse(output) } : {}),

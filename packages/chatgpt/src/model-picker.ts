@@ -4,7 +4,7 @@ import {
   type BrowserPageAutomation,
   type BrowserSurfaceLease,
 } from "@chatgpt-tela/browser-host";
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { CHATGPT_CURRENT_COMPOSER_SELECTOR } from "./dom-driver";
 
 export const CHATGPT_WEB_MODEL_PREFIX = "chatgpt-tela-web/family/";
@@ -720,7 +720,9 @@ export async function selectChatGptWebModel(
     if (familyReady && effortReady) {
       await page.pressKey("Escape", signal);
       emitDiagnosticEvent("chatgpt_tela_work", "web_model_selected", {
-        effort: input.effort,
+        provider_kind: "web", effort: input.effort,
+        family_fingerprint: diagnosticFingerprint(input.familyKey),
+        family_readback_proven: true, effort_readback_proven: true,
         convergence_attempts: attempt,
       });
       return;

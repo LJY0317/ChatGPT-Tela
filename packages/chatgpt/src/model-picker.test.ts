@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { diagnosticFingerprint, structuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { runInNewContext } from "node:vm";
 import {
   ChatGptWebModelPickerControlUnavailableError,
@@ -35,6 +37,9 @@ describe("ChatGPT Web model route identity", () => {
     await selectChatGptWebModel(surface, { familyKey: chatGptWebFamilyKey("Fixture"), effort: "low" });
     expect(pointerActivations).toBe(1);
     expect(opened).toBe(false);
+    const row = readFileSync(process.env.CHATGPT_TELA_DIAGNOSTIC_FILE!, "utf8").trim().split("\n")
+      .map(line => structuralDiagnosticEvent(JSON.parse(line))).filter(event => event?.stage === "web_model_selected").at(-1);
+    expect(row).toMatchObject({provider_kind:"web",effort:"low",family_fingerprint:diagnosticFingerprint(chatGptWebFamilyKey("Fixture")),family_readback_proven:true,effort_readback_proven:true});
   });
   test("only one visible composer with a missing model control qualifies for a bounded preparation recovery", () => {
     const candidate = new ChatGptWebModelPickerControlUnavailableError();

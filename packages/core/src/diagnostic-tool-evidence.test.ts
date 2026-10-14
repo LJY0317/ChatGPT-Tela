@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { diagnosticToolContract, diagnosticToolFailureEvidence } from "./diagnostic-tool-evidence";
+import { diagnosticToolContract, diagnosticToolFailureEvidence, diagnosticToolResultEvidence } from "./diagnostic-tool-evidence";
 import { traceDiagnosticToolCall } from "./diagnostic-trace";
 import { structuralDiagnosticEvent } from "./diagnostic-store";
 
@@ -45,4 +45,20 @@ test("shared MCP tracing preserves returned and thrown errors, retains structura
     if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;
     await new Promise(resolve=>setImmediate(resolve));rmSync(root,{recursive:true,force:true});
   }
+});
+
+test("unflagged refusal envelopes are signals, not a reclassified host error", () => {
+  for (const value of [signal, "Error: " + signal, { content: [{ type: "text", text: signal }] },
+    JSON.stringify({ isError: true, content: [{type:"text", text:signal}] })]) {
+    expect(diagnosticToolResultEvidence(value, false)).toMatchObject({ error_result_reported:false,
+      message_signal_observed:true, reason_class:"safety_status_undetermined", origin_proven:false, execution_proven:false });
+  }
+  for (const text of ["const example = '" + signal + "';", "tool log:\n" + signal, "ordinary output"]) {
+    expect(diagnosticToolResultEvidence(text, false).message_signal_observed).toBe(false);
+  }
+  expect(diagnosticToolResultEvidence("x".repeat(20000)+signal, false)).toMatchObject({message_signal_observed:false,inspection_complete:false});
+  expect(diagnosticToolResultEvidence(new Proxy({}, {get(){throw Error("private");}}), false).inspection_complete).toBe(false);
+  const cyclic:any={};cyclic.error=cyclic;
+  expect(diagnosticToolResultEvidence(cyclic, false).inspection_complete).toBe(false);
+  expect(JSON.stringify(diagnosticToolResultEvidence(signal+" /private/path secret",false))).not.toMatch(/private|secret|couldn't/);
 });

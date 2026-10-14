@@ -13,6 +13,44 @@ function fixture() { const root = mkdtempSync(join(tmpdir(),"tela-diagnostics-te
 afterEach(async () => { await new Promise<void>(resolve => setImmediate(resolve)); if (original) process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=original; else delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE; for (const root of directories.splice(0)) rmSync(root,{recursive:true,force:true}); });
 const fp = (value: string) => diagnosticFingerprint(value);
 const event = (stage: string, extra: Record<string,unknown> = {}, at = "2026-10-05T00:00:00.000Z") => structuralDiagnosticEvent({ts:at,event:"chatgpt_tela_test",stage,...extra})!;
+test("incident selection preserves early approval evidence despite later unrelated event pressure", () => {
+  const root = fixture(), file = join(root,"events.jsonl"), at = Date.parse("2026-10-05T00:00:00Z");
+  const selected = event("approval_wait_transition",{phase:"input_received",operation_fingerprint:fp("owned")});
+  writeFileSync(file,[selected,...Array.from({length:DIAGNOSTIC_LIMITS.events+5},()=>event("tool_started",{},"2026-10-05T01:00:00Z"))].map(row=>JSON.stringify(row)).join("\n")+"\n");
+  expect(readDiagnosticTail(file).events.some(row=>row.phase==="input_received")).toBe(false);
+  const read=readDiagnosticSources([file],{fromMs:at-1000,toMs:at+1000});
+  expect(read.events).toEqual([selected]);expect(read.coverage[0]).toMatchObject({windowSelected:true,outsideWindowRows:DIAGNOSTIC_LIMITS.events+5,eventLimitReached:false,truncated:false});
+});
+test("coverage records malformed and oversized evidence without leaking skipped content",()=>{
+  const root=fixture(),file=join(root,"events.jsonl");
+  writeFileSync(file,"private malformed\n"+"PRIVATE".repeat(1500)+"\n"+JSON.stringify(event("tool_started"))+"\n");
+  const read=readDiagnosticTail(file);expect(read).toMatchObject({malformedRows:1,oversizedRows:1});expect(read.events).toHaveLength(1);
+  expect(JSON.stringify(read)).not.toMatch(/PRIVATE|private malformed/);
+  expect(()=>readDiagnosticTail(file,1024,{fromMs:2,toMs:1})).toThrow("invalid diagnostic window");
+});
+test("approval and admitted tool receipts do not prove a later host review or execution",()=>{
+  const operation=fp("owned"),other=fp("unrelated"),at=Date.parse("2026-10-05T00:00:10Z");
+  const rows=[event("approval_wait_transition",{operation_fingerprint:operation,phase:"dispatch_sent"}),
+    event("approval_wait_transition",{operation_fingerprint:operation,phase:"input_received"}),
+    event("approval_wait_transition",{operation_fingerprint:operation,phase:"card_cleared"}),
+    event("native_tool_queued",{operation_fingerprint:operation}),event("native_tool_delivery_committed",{operation_fingerprint:operation}),
+    event("native_tool_result_received",{operation_fingerprint:operation}),
+    event("native_tool_result_error",{operation_fingerprint:other,message_signal_observed:true}),
+    event("native_tool_result_error",{operation_fingerprint:operation},"2026-10-05T00:00:11Z")];
+  const report=analyzeDiagnosticEvents({events:rows,atMs:at,operationFingerprint:operation,symptom:"tool-review-blocked",reportOrigin:"worker-report"});
+  expect(report.hostReported).toMatchObject({symptom:"tool-review-blocked",origin:"worker-report",originProven:false});
+  expect(report.boundaries.toolEvidence).toEqual({correlationSelected:true,approvalDispatches:1,approvalInputReceipts:1,approvalCardsCleared:1,
+    nativeQueued:1,nativeDelivered:1,nativeResults:1,reportedErrors:0,refusalSignals:0,incompleteInspections:0,
+    originProven:false,executionProven:false,preDispatchCoverage:"external-host-unobservable"});
+  expect(report.gaps.join()).toContain("before Tela ingress");
+});
+test("unflagged or clipped results remain evidence signals rather than proven review origins",()=>{
+  const report=analyzeDiagnosticEvents({atMs:Date.parse("2026-10-05T00:00:01Z"),events:[
+    event("native_tool_result_signal_anomaly",{message_signal_observed:true,error_result_reported:false,inspection_complete:false}),
+    event("tool_failed",{message_signal_observed:true})]});
+  expect(report.boundaries.toolEvidence).toMatchObject({nativeResults:1,reportedErrors:1,refusalSignals:2,incompleteInspections:1,originProven:false,executionProven:false});
+  expect(()=>analyzeDiagnosticEvents({events:[],atMs:0,reportOrigin:"PRIVATE" as never})).toThrow("invalid host report origin");
+});
 test("ownership and inspection witnesses survive canonical filtering without payload or input details", () => {
   const row = event("web_turn_ownership_observed", { payload_state: "unavailable", anchor_state: "matching",
     author_root_available: false, action: "close_to_hide", owned_input: false, input_count: 1,
@@ -114,4 +152,11 @@ test("explicit private tool evidence redacts credential fields and never enters 
 test("common analysis distinguishes isolated test-origin evidence from runtime incidents",()=>{
   const root=fixture();const file=join(root,"events.jsonl");writeFileSync(file,[event("turn_failed",{environment:"test"}),event("turn_completed",{environment:"runtime"})].map(row=>JSON.stringify(row)).join("\n")+"\n");
   const result=readDiagnosticSources([file]);expect(result.events).toHaveLength(1);expect(result.excludedTestEvents).toBe(1);expect(result.events[0]?.stage).toBe("turn_completed");
+});
+
+test("model selection proof keeps only pseudonymous identity and finite effort categories", () => {
+  const row = event("web_model_selected", { provider_kind:"web", effort:"xhigh", family_fingerprint:fp("private-model-label"), family_readback_proven:true, effort_readback_proven:true, model:"private-model-label" });
+  expect(row).toMatchObject({provider_kind:"web",effort:"xhigh",family_readback_proven:true,effort_readback_proven:true});
+  expect(row.family_fingerprint).toBe(fp("private-model-label"));expect(JSON.stringify(row)).not.toContain("private-model-label");
+  expect(event("web_model_selected",{effort:"private_value"}).effort).toBeUndefined();
 });

@@ -244,6 +244,13 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           executionSignal.throwIfAborted();
           emitDiagnosticEvent("chatgpt_tela_work", "web_turn_plan", {
             ...diagnosticIdentity,
+            provider_kind: "web",
+            ...(typeof nativeRequest === "object" && nativeRequest !== null
+              && typeof (nativeRequest as {model?:unknown}).model === "string"
+              && ((nativeRequest as {model:string}).model).length > 0
+              && ((nativeRequest as {model:string}).model).length <= 512
+              && !((nativeRequest as {model:string}).model).includes("\u0000")
+              ? { model_fingerprint: diagnosticFingerprint((nativeRequest as {model:string}).model) } : {}),
             context_mode: plan.physicalContext.mode,
             logical_estimate: plan.physicalContext.logicalTokens,
             transfer_estimate: plan.physicalContext.transferTokens,

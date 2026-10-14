@@ -24,6 +24,8 @@ export function nativeRequestShape(value: unknown): NativeRequestShape {
   const fields: Fields = { parsed: !!root };
   const items = new Map<string, Item>();
   if (!root) return { fields, items };
+  if (typeof root.model === "string" && root.model.length > 0 && root.model.length <= 512 && !root.model.includes("\u0000"))
+    fields.model_fingerprint = diagnosticFingerprint(root.model);
   fields.policy = root.store === false ? "stateless" : root.store === true ? "stored" : "unspecified";
   fields.previous_reference = typeof root.previous_response_id === "string";
   const input = Array.isArray(root.input) ? root.input : [];
@@ -54,10 +56,9 @@ export function nativeRequestShape(value: unknown): NativeRequestShape {
   return { fields, items };
 }
 
-export function nativeErrorFields(bytes: Uint8Array, shape: NativeRequestShape): Fields {
-  let envelope: unknown;
-  try { envelope = JSON.parse(new TextDecoder().decode(bytes)); } catch { return { reason_class: "unclassified", parsed_error: false }; }
-  const error = object(object(envelope)?.error);
+/** External provider codes never leave this adapter as arbitrary strings. */
+export function nativeProviderErrorFields(value: unknown, shape: NativeRequestShape): Fields {
+  const error = object(value);
   if (!error) return { reason_class: "unclassified", parsed_error: false };
   const message = typeof error.message === "string" ? error.message : "";
   const missing = /Item with id ['"]([^'"\r\n]+)['"] not found/i.exec(message)?.[1];
@@ -72,11 +73,46 @@ export function nativeErrorFields(bytes: Uint8Array, shape: NativeRequestShape):
   } else {
     // External error strings stay inside this adapter; only fixed classes leave it.
     const code = `${typeof error.code === "string" ? error.code : ""} ${typeof error.type === "string" ? error.type : ""}`;
-    fields.reason_class = /context_length|context_window/i.test(code) ? "context_limit"
-      : /rate_limit|quota/i.test(code) ? "rate_limit"
+    fields.reason_class = /server_is_overloaded/i.test(code) ? "server_overloaded"
+      : /context_length|context_window/i.test(code) ? "context_limit"
+      : /quota|usage_limit|credit_balance_exhausted|spend_limit_exceeded|usage_not_included/i.test(code) ? "usage_limit"
+      : /rate_limit|slow_down/i.test(code) ? "rate_limit"
       : /authentication|invalid_api_key/i.test(code) ? "authentication"
       : /permission/i.test(code) ? "permission"
       : /invalid_request/i.test(code) ? "invalid_request" : "unclassified";
+  }
+  const retry = error.retry_after_seconds;
+  if (typeof retry === "number" && Number.isFinite(retry) && retry >= 0 && retry <= 86400)
+    fields.retry_after_ms = Math.round(retry * 1000);
+  else if (fields.reason_class === "rate_limit") {
+    // Match the official engine's rate-limit adapter; export only the numeric delay.
+    const delay = /try again in\s*(\d+(?:\.\d+)?)\s*(ms|seconds?|s)\b/i.exec(message);
+    if (delay) {
+      const ms = Number(delay[1]) * (delay[2]!.toLowerCase() === "ms" ? 1 : 1000);
+      if (Number.isFinite(ms) && ms <= 86400000) fields.retry_after_ms = Math.round(ms);
+    }
+  }
+  return fields;
+}
+
+export function nativeErrorFields(bytes: Uint8Array, shape: NativeRequestShape): Fields {
+  let envelope: unknown;
+  try { envelope = JSON.parse(new TextDecoder().decode(bytes)); }
+  catch { return { reason_class: "unclassified", parsed_error: false }; }
+  return nativeProviderErrorFields(object(envelope)?.error, shape);
+}
+
+/** Numeric seconds or standard HTTP-date only; no raw header value is retained. */
+export function nativeResponseEvidence(upstream: Response, now = Date.now()): Fields {
+  const fields: Fields = { status_code: upstream.status };
+  const serverId = upstream.headers.get("x-request-id");
+  if (opaqueId(serverId)) fields.upstream_fingerprint = diagnosticFingerprint(serverId);
+  const value = upstream.headers.get("retry-after")?.trim();
+  if (value && value.length <= 128) {
+    const seconds = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : undefined;
+    const date = seconds === undefined && /^[A-Za-z]{3}, /.test(value) ? Date.parse(value) : NaN;
+    const ms = seconds === undefined ? date - now : seconds * 1000;
+    if (Number.isFinite(ms) && ms >= 0 && ms <= 86400000) fields.retry_after_ms = Math.round(ms);
   }
   return fields;
 }
@@ -85,9 +121,7 @@ export function nativeErrorFields(bytes: Uint8Array, shape: NativeRequestShape):
 export function diagnoseNativeFailure(upstream: Response, shape: NativeRequestShape, route: string, durationMs: number): ReadableStream<Uint8Array> | null {
   if (upstream.status < 400) return upstream.body;
   const context = diagnosticContext();
-  const base: Fields = { ...shape.fields, route_kind: route.replaceAll("/", "_"), status_code: upstream.status, duration_ms: durationMs };
-  const serverId = upstream.headers.get("x-request-id");
-  if (opaqueId(serverId)) base.upstream_fingerprint = diagnosticFingerprint(serverId);
+  const base: Fields = { ...shape.fields, route_kind: route.replaceAll("/", "_"), phase: "http", ...nativeResponseEvidence(upstream), duration_ms: durationMs };
   const emit = (stage: string, fields: Fields) => {
     try { withDiagnosticContext(context, () =>
       emitDiagnosticEvent("chatgpt_tela_network", stage, { ...base, ...fields })); }

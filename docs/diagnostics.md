@@ -22,9 +22,32 @@ instance changes, local silence, and missing/truncated sources. RPC sequence num
 join unrelated requests. Scope fingerprints are correlation signals, not proven account identities.
 
 Symptoms: `stream-failure`, `connection-interrupted`, `response-stalled`, `additional-review`,
-`response-recovered`, `approval-stalled`, `missing-models`, `startup-stalled`, `ui-anomaly`, `unknown`.
+`response-recovered`, `approval-stalled`, `tool-review-blocked`, `missing-models`, `startup-stalled`, `ui-anomaly`, `unknown`.
 Existing `diagnostics incident`, `trace`, `workload`, `retention-canary`, `doctor` and platform-specific
 `diagnostics desktop` remain focused views; their evidence is not a second authority.
+
+### Tool review reports and observation gaps
+
+Use `diagnostics record --at <ISO-time> --symptom tool-review-blocked --report-origin worker-report`
+when a worker reports rejection outside Tela ingress. Other closed provenance values are
+`user-observation` and `host-error`; omission remains `unspecified`. This records a report, not
+authenticated platform origin, a successful execution or permission to retry. Do not include raw
+error text, commands or identifiers. An external host can refuse a call before any Tela callback:
+local instrumentation cannot manufacture that receipt or recover the host's internal reasoning.
+
+`record`/`activity` select the incident time interval before applying the existing per-source event
+cap, within the unchanged byte budget. Source coverage exposes malformed/oversized rows, skipped
+outside-window rows, unavailable/rotated sources and remaining caps. An absent result is not proof
+of no rejection. `boundaries.toolEvidence` separates observed approval dispatch/input/card-clear,
+Native queue/delivery/result, reported errors, refusal signals and incomplete inspection. Counts
+stop at report time; without an operation selector they are aggregate observations. They never
+establish the cause of a later rejected request. In particular, approval receipt does not prove
+downstream safety review acceptance, and HTTP 200 is transport success, not task success.
+
+This common on-demand analysis is shared by Chat, Work/Codex and delegation incident consumers;
+it merges no mutable service/account authority and adds no polling, model call or raw capture.
+Existing local-only incident/log retention remains unchanged. Source verification and installation
+are separate; no exact pre-ingress host receipt is claimed unless the host exposes one.
 
 ## Optional private evidence
 
@@ -297,8 +320,8 @@ Legacy diagnostic projects should not be deleted until the required live cases h
 ### Native reasoning provenance (opt-in)
 
 The existing expiring `diagnostics capture --minutes 15` policy also enables payload-free Native
-reasoning observation for requests started while it is enabled. Default operation does not parse
-successful streams. Opt-in inspection observes only caller-consumed SSE bytes; no tee, eager drain,
+reasoning observation for requests started while it is enabled. Default operation observes only
+structural failures; opt-in reasoning inspection shares caller-consumed SSE bytes. No tee, eager drain,
 retry, sampler or additional upstream request is introduced. Response bytes, cancellation and transport
 errors remain unchanged. The observer records hashed item identity, added/done phase, presence of
 encrypted recovery data, terminal response event and consumer/transport termination. Subsequent input
@@ -310,7 +333,7 @@ The process-local index retains at most 256 fingerprints for 10 minutes, pruned 
 are capped at 16 matches per request. No text, ciphertext, credentials or raw identifiers are persisted.
 Disabling capture clears the index on the next request; already admitted streams may finish their
 bounded observation, but cannot repopulate a cleared index. Existing log/incident retention applies.
-Opt-in parsing has bounded CPU cost; default-on admission or battery equivalence is not claimed.
+Reasoning inspection remains opt-in and bounded; production battery equivalence is not claimed.
 
 `inspection_complete:false` means an observation limit, invalid framing or partial frame prevented full
 inspection. Missing terminal events, absent prior observation and an evicted index entry are not proof
@@ -353,3 +376,54 @@ A successful socket write does not prove frontend receipt, filtering or renderin
 ### Native response versus task lifetime
 
 `native_execution_failed` records the first bounded execution failure class and phase. `native_outcome_committed` records provider tool/final delivery, not official Native task termination (`native_terminal_observed=false`). `native_replay_rejected` carries pseudonymous scope/turn correlations and `current_authority_proven=false`; it is a negative guard, not a current-task proof. Match these events before attributing a409 to stale new-turn identity. A model response may complete while the official engine still has accepted steering input. These events do not relax retirement or authorize automatic replay.
+
+### Requested route, Web readback and unflagged tool refusals
+
+`web_turn_plan` records `provider_kind:web` and a bounded requested-model fingerprint;
+`native_dispatch_started` records `provider_kind:native`. A model catalog selection or a Desktop
+composer label alone is not execution proof. Correlate the exact Native turn/request with Web
+planning, `web_model_selected`, browser acceptance, tool delivery/results and Native terminal evidence.
+`web_model_selected` stores a pseudonymous family fingerprint, finite effort category, and successful
+family/effort readback booleans. The canonical diagnostic reader now retains those effort values;
+no model labels, account identity or browser content is exported.
+
+Function/custom tool outputs do not carry a reliable error flag in the Native Responses contract.
+`native_tool_result_signal_anomaly` and shared MCP `tool_result_signal_anomaly` observe an unflagged
+host-refusal envelope, separately from `native_tool_result_error`/`tool_error`. The common bounded
+adapter checks only known message/content/text/error fields or a bounded JSON envelope, with a
+16 KiB/32-node/16-array-entry budget. Unflagged text must start with the full known host refusal;
+a sentence embedded in quoted source or a log excerpt does not qualify. No output is reclassified,
+modified, retried or used to grant/revoke execution authority.
+
+`error_result_reported:false` means the received result flag did not identify an error.
+`message_signal_observed:true` is only a textual signal; `origin_proven:false` and
+`execution_proven:false` remain explicit even when the text names a platform. Ordinary content can
+imitate such a prefix, so the signal is never task-failure or policy-origin authority.
+Unknown envelopes or clipped inspection do not prove absence of a refusal. The observer adds no
+upstream request, browser snapshot, timer, private capture or idle work. Existing bounded local
+incident/log retention applies. Shared MCP tracing covers compatible Tela Chat and Codex callers;
+Native tool execution outside these observable boundaries cannot be inferred from those logs.
+
+### Native capacity and streamed failures
+
+The Native passthrough shares one provider-error classifier and stream parser for HTTP failures and
+HTTP200 SSE failures. `native_backend_error_failed` (`phase:http`) and
+`native_backend_stream_failed` (`phase:sse`) distinguish `server_overloaded`, `rate_limit`,
+`usage_limit`, and other fixed error classes. They retain status, elapsed time, a pseudonymous
+upstream request fingerprint, and bounded numeric `retry_after_ms` when the provider actually supplies
+it. No raw code, message, model name, account, prompt, or response content is logged. A UI retry
+countdown or total client attempt count cannot be inferred from this evidence.
+
+Failure observation is enabled when the existing diagnostic sink is configured, independently of
+private capture. It inspects only consumer-pulled bytes: no tee, eager drain, timer, network retry,
+model call, or idle work. Normal completed streams emit no additional failure event. The parser
+retains at most one 64 KiB frame plus a 4 KiB decoding slice, discards oversized frames, and resumes
+at their delimiter. Late failures remain observable after the private reasoning inspection's
+byte/event/time limits. At most one failure and one unproven-end event can be emitted per stream;
+existing local log retention applies. Processing is proportional to consumed bytes; workload/battery
+cost has not been measured in production.
+
+`native_backend_stream_anomaly` distinguishes missing terminal events, cancellation, transport
+interruption, and incomplete inspection from a completed stream. An incomplete observation is not
+proof of absence of a server failure. Diagnostics preserve status, headers, bytes, backpressure,
+cancellation, and original read errors; they neither recover nor retry the user's task.

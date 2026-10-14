@@ -1,6 +1,6 @@
 import { classifyNetworkFailure, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { diagnoseNativeFailure, nativeRequestShape } from "./native-failure-diagnostics";
-import { observeNativeReasoning } from "./native-reasoning-observation";
+import { observeNativeResponse } from "./native-reasoning-observation";
 const DEFAULT_CODEX_BACKEND = "https://chatgpt.com/backend-api/codex";
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -150,7 +150,7 @@ export async function forwardNativeCodexRequest(input: {
     });
     if (input.endpoint === "responses" || input.endpoint === "responses/compact") {
       emitDiagnosticEvent("chatgpt_tela_network", "native_dispatch_started", {
-        ...shape.fields, route_kind: input.endpoint.replaceAll("/", "_"), dispatch_count: 1,
+        ...shape.fields, provider_kind: "native", route_kind: input.endpoint.replaceAll("/", "_"), dispatch_count: 1,
       });
     }
     upstream = await fetchUpstream(outgoing);
@@ -170,7 +170,7 @@ export async function forwardNativeCodexRequest(input: {
   const responseHeaders = forwardedHeaders(upstream.headers, input.runtimeHeaderName);
   if (input.endpoint.startsWith("images/")) responseHeaders.delete("content-encoding");
   // The observer returns error bodies untouched; existing failure inspection remains authoritative.
-  const responseBody = input.endpoint === "responses" ? observeNativeReasoning(upstream, shape) : upstream.body;
+  const responseBody = input.endpoint === "responses" ? observeNativeResponse(upstream, shape) : upstream.body;
   const diagnosedBody = upstream.status >= 400
     ? diagnoseNativeFailure(upstream, shape, input.endpoint, Date.now() - started) : responseBody;
   return new Response(diagnosedBody, {

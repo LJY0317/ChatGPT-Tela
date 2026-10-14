@@ -2,7 +2,7 @@ import {
   transitionTurn,
   diagnosticFingerprint,
   diagnosticToolContract,
-  diagnosticToolFailureEvidence,
+  diagnosticToolResultEvidence,
   type DiagnosticScalar,
   emitDiagnosticEvent,
   type NativeToolCatalogEntry,
@@ -374,7 +374,10 @@ export class RuntimeTurnChannel {
     if (pending.result) throw new Error("native tool result was already received for the outstanding call");
     pending.result = Object.freeze({ ...result });
     this.#move("tool-result-delivered");
-    this.#toolEvidence(result.isError ? "native_tool_result_error" : "native_tool_result_received", pending, result.isError ? diagnosticToolFailureEvidence(result.content) : {});
+    const evidence = diagnosticToolResultEvidence(result.content, result.isError);
+    const signalOnly = !result.isError && evidence.message_signal_observed === true;
+    this.#toolEvidence(result.isError ? "native_tool_result_error" : signalOnly ? "native_tool_result_signal_anomaly" : "native_tool_result_received", pending,
+      result.isError || signalOnly ? evidence : { error_result_reported: false, inspection_complete: evidence.inspection_complete! });
   }
 
   /**

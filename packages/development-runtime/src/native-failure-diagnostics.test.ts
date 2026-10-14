@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { diagnosticFingerprint, structuralDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
-import { diagnoseNativeFailure, nativeErrorFields, nativeRequestShape } from "./native-failure-diagnostics";
+import { diagnoseNativeFailure, nativeErrorFields, nativeRequestShape, nativeResponseEvidence } from "./native-failure-diagnostics";
 import { forwardNativeCodexRequest } from "./native-passthrough";
 
 const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
@@ -103,4 +103,41 @@ describe("bounded Native failure evidence", () => {
       "native_backend_http_failed", "native_backend_body_cancelled",
     ]);
   });
+});
+
+test("capacity, rate and account usage limits remain distinct and payload-free", () => {
+  for (const [code, expected] of [["server_is_overloaded", "server_overloaded"], ["slow_down", "rate_limit"],
+    ["insufficient_quota", "usage_limit"], ["credit_balance_exhausted", "usage_limit"],
+    ["project_spend_limit_exceeded", "usage_limit"], ["usage_not_included", "usage_limit"]]) {
+    const fields = nativeErrorFields(encode({ error: { code, message: "SYNTHETIC_PRIVATE" } }), nativeRequestShape(undefined));
+    expect(fields.reason_class).toBe(expected);
+    expect(JSON.stringify(fields)).not.toContain("SYNTHETIC_PRIVATE");
+  }
+  expect(nativeErrorFields(encode({ error: { code: "rate_limit_exceeded", message: "SYNTHETIC_PRIVATE Try again in 1.25 seconds" } }), nativeRequestShape(undefined)).retry_after_ms).toBe(1250);
+  expect(nativeErrorFields(encode({ error: { code: "slow_down", message: "Try again in 250ms" } }), nativeRequestShape(undefined)).retry_after_ms).toBe(250);
+  expect(nativeErrorFields(encode({ error: { code: "server_is_overloaded", message: "Try again in 110s" } }), nativeRequestShape(undefined)).retry_after_ms).toBeUndefined();
+});
+test("HTTP retry header is bounded and request identity is pseudonymous", () => {
+  const now = Date.UTC(2026, 9, 14);
+  for (const [value, expected] of [["110", 110000], ["Wed, 14 Oct 2026 00:00:02 GMT", 2000], ["SYNTHETIC_PRIVATE", undefined], ["9999999", undefined], ["-3", undefined]] as const) {
+    const fields = nativeResponseEvidence(new Response(null, { status: 503, headers: { "retry-after": value, "x-request-id": "synthetic-upstream" } }), now);
+    expect(fields.retry_after_ms).toBe(expected);
+    expect(fields.upstream_fingerprint).toBe(diagnosticFingerprint("synthetic-upstream"));
+    expect(JSON.stringify(fields)).not.toContain("synthetic-upstream");
+  }
+});
+test("HTTP overload preserves status, headers, body and safe diagnostic classification", async () => {
+  const body = JSON.stringify({ error: { code: "server_is_overloaded", message: "SYNTHETIC_PRIVATE" } });
+  const response = await forwardNativeCodexRequest({ request: new Request("http://localhost/v1/responses", { method: "POST", headers: { authorization: "Bearer synthetic" }, body: "{}" }), endpoint: "responses", runtimeHeaderName: "x-tela",
+    fetchUpstream: async () => new Response(body, { status: 503, headers: { "retry-after": "110" } }) });
+  expect(response.status).toBe(503); expect(response.headers.get("retry-after")).toBe("110");
+  expect(await response.text()).toBe(body);
+  expect(events().at(-1)).toMatchObject({ phase: "http", reason_class: "server_overloaded", retry_after_ms: 110000 });
+});
+
+test("requested model evidence is bounded and never exports the raw model", () => {
+  const shape=nativeRequestShape({model:"private-model",input:[]});
+  expect(shape.fields.model_fingerprint).toBe(diagnosticFingerprint("private-model"));
+  expect(JSON.stringify(shape.fields)).not.toContain("private-model");
+  for(const model of ["", "x".repeat(513), "bad\u0000model", undefined]) expect(nativeRequestShape({model}).fields.model_fingerprint).toBeUndefined();
 });

@@ -153,7 +153,7 @@ test("dispatch evidence correlates exact Native bytes and bounded Tela changes w
       .map(line => JSON.parse(line)).filter(row => row.request_fingerprint === fingerprint);
     expect(rows.map(row => row.stage)).toEqual(["native_dispatch_started", "native_dispatch_headers_received"]);
     expect(rows[0]).toMatchObject({ body_unchanged: fixture.unchanged, received_bytes: Buffer.byteLength(fixture.payload),
-      forwarded_bytes: Buffer.byteLength(received), dispatch_count: 1, route_kind: fixture.endpoint.replaceAll("/", "_") });
+      forwarded_bytes: Buffer.byteLength(received), dispatch_count: 1, provider_kind: "native", route_kind: fixture.endpoint.replaceAll("/", "_") });
     if (fixture.counts) expect([rows[0].removed_reference_count, rows[0].stripped_item_id_count,
       rows[0].removed_display_item_count]).toEqual(fixture.counts);
     expect(rows[1].status_code).toBe(200);

@@ -3,7 +3,7 @@ const toolKey=randomBytes(32);
 import { capturePrivateDiagnosticValue } from "./diagnostic-private";
 import { diagnosticContext, diagnosticSerializedBytes, withDiagnosticContext } from "./diagnostic-context";
 import { diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent } from "./diagnostic-events";
-import { diagnosticToolFailureEvidence } from "./diagnostic-tool-evidence";
+import { diagnosticToolFailureEvidence, diagnosticToolResultEvidence } from "./diagnostic-tool-evidence";
 import { diagnosticFailureClass } from "./diagnostic-failure";
 import { classifyNetworkFailure } from "./network-failure";
 
@@ -31,7 +31,10 @@ export async function traceDiagnosticToolCall<T>(tool: string, arguments_: unkno
     try {
       const result=await invoke(); capturePrivateDiagnosticValue("tool_result",result); resultBytes=diagnosticSerializedBytes(result);
       errorResult=Boolean(result && typeof result === "object" && (result as {isError?:unknown}).isError === true);
-      if (errorResult) emit("tool_error",{error_result:true, delivery:"mcp_callback_returned", ...diagnosticToolFailureEvidence(result)});
+      const evidence = diagnosticToolResultEvidence(result, errorResult);
+      if (errorResult) emit("tool_error",{error_result:true, delivery:"mcp_callback_returned", ...evidence});
+      else if (evidence.message_signal_observed === true) emit("tool_result_signal_anomaly", {
+        error_result: false, delivery: "mcp_callback_returned", ...evidence });
       return result;
     } catch (error) {
       outcome="failed"; emit("tool_failed",{ network_kind:classifyNetworkFailure(error), delivery:"mcp_callback_thrown", status:diagnosticFailureClass(error), ...diagnosticToolFailureEvidence(error) }); throw error;

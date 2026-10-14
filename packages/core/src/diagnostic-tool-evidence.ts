@@ -47,3 +47,35 @@ export function diagnosticToolFailureEvidence(value: unknown): Readonly<Record<s
   return { reason_class: observed ? "safety_status_undetermined" : "unknown", message_signal_observed: observed,
     inspection_complete: complete, origin_proven: false, execution_proven: false };
 }
+
+/** Unflagged function outputs may carry a host refusal. Observe the envelope, never rewrite status. */
+export function diagnosticToolResultEvidence(value: unknown, reportedError: boolean): Readonly<Record<string, DiagnosticScalar>> {
+  if (reportedError) return { ...diagnosticToolFailureEvidence(value), error_result_reported: true };
+  let observed = false, complete = true, nodes = 0, remaining = 16384;
+  const seen = new Set<object>();
+  const refusal = "This tool call was blocked by OpenAI because we couldn't determine the safety status of the request.";
+  const scan = (item: unknown, jsonAllowed = true) => {
+    if (++nodes > 32 || remaining <= 0) { complete = false; return; }
+    if (typeof item === "string") {
+      // Prefix only: quoted source/log text containing the sentence is not a host refusal envelope.
+      const prefix = item.slice(0, Math.min(512, remaining)).trimStart().replace(/^Error: /i, "");
+      if (prefix.startsWith(refusal)) observed = true;
+      const size = Math.min(item.length, remaining); remaining -= size;
+      if (size < item.length) complete = false;
+      // Some function outputs serialize a returned MCP error. Parsing stays in the same byte budget.
+      if (jsonAllowed && prefix.startsWith("{") && item.length <= size) {
+        try { const parsed: unknown = JSON.parse(item); remaining += size; scan(parsed, false); }
+        catch { /* Ordinary non-JSON text is not an error claim. */ }
+      }
+    } else if (item && typeof item === "object") {
+      if (seen.has(item)) { complete = false; return; } seen.add(item);
+      if (Array.isArray(item)) { if (item.length > 16) complete = false; for (const entry of item.slice(0,16)) scan(entry, false); }
+      else for (const name of ["message", "content", "text", "error"]) {
+        const entry = (item as Record<string,unknown>)[name]; if (entry !== undefined) scan(entry, false);
+      }
+    }
+  };
+  try { scan(value); } catch { complete = false; }
+  return { reason_class: observed ? "safety_status_undetermined" : "unknown", message_signal_observed: observed,
+    error_result_reported: false, inspection_complete: complete, origin_proven: false, execution_proven: false };
+}
