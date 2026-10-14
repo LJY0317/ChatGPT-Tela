@@ -402,6 +402,10 @@ while that journal exists. The source service controller uses authenticated owne
 launchd, systemd user units, and Windows per-user Scheduled Tasks; a signed updater UI and real-OS packaged
 E2E validation still need to drive/prove this lifecycle for end users.
 
+The new signed launcher automatically retains a verified source recovery package before stopping
+services. Recoverable failures restore the previous services; uncertain shutdown remains paused with
+its checkpoint. Restoration is reported as an unsuccessful update. See [upgrade recovery](docs/upgrade-recovery.md).
+
 The source launcher also provides `cancel-upgrade` with explicit `--dry-run` or `--apply`,
 `--trusted-public-key`, and `--payload` pointing to the retained signed **source** package. Cancellation
 is allowed only before binary replacement starts and after proving that the source files, installation

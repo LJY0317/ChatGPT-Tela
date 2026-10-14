@@ -81,9 +81,8 @@ Decision observations distinguish unavailable, empty and stale evidence.
 
 Source tests are not a real installed upgrade acceptance. Before rollout,
 combine the current owner's source and diagnostic patches, preserve drafts and
-active work, verify independent installed recovery and intended profile/account readiness, and verify
-previously intended profiles separately after service restoration. Native/Web
-readiness and account binding require their own receipts. A remaining user
+active work and verify independent installed recovery. Previously intended profiles,
+Native/Web readiness and account binding require separate receipts after restoration. A remaining user
 popup must never be automatically clicked to satisfy an installation gate.
 The proactive Web reconnect notice is now a modeless owned AppKit window;
 an unanswered notice does not enter a modal run loop. Exact button/close events
