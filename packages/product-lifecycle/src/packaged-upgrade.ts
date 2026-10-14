@@ -30,6 +30,8 @@ export interface PackagedUpgradeServiceController {
   inspect(service: TelaServiceId): Promise<"running" | "stopped">;
   quiesce(service: TelaServiceId): Promise<void>;
   resume(service: TelaServiceId): Promise<void>;
+  /** Prove prior stop requests cannot outlive restoration. No new stop request. */
+  settleQuiescence?(): Promise<boolean>;
 }
 
 export interface PackagedUpgradePlan {
@@ -504,4 +506,63 @@ export async function cancelSignedPackagedUpgrade(input: Parameters<typeof planS
   await proveSource();
   rmSync(journalPath, { force: false });
   return Object.freeze({ restoredServices: Object.freeze(restored) });
+}
+
+export class PackagedUpgradeRecoveryError extends Error {
+  constructor(readonly recoveryState: "source-restored" | "settlement-required" | "signed-resume-required" | "restoration-incomplete", cause: unknown) {
+    super(`Upgrade did not complete (${recoveryState}); do not replay it automatically`, { cause });
+    this.name = "PackagedUpgradeRecoveryError";
+  }
+}
+
+export interface PackagedUpgradeRecoveryArtifact {
+  readonly sourcePayloadPath: string;
+  readonly trustedKeys: PackagedPayloadTrustedKeys;
+}
+
+export function assertPackagedUpgradeRecoveryArtifact(plan: PackagedUpgradePlan, recovery: PackagedUpgradeRecoveryArtifact): void {
+  const signature = verifyPackagedPayloadSignature({ payloadRoot: recovery.sourcePayloadPath, trustedKeys: recovery.trustedKeys });
+  const source = readPackagedProductManifest(recovery.sourcePayloadPath);
+  if (signature.payloadFingerprint !== plan.sourcePayload.payloadFingerprint
+    || source.productVersion !== plan.fromVersion || source.lifecycle?.sourceCancellation !== 1
+    || source.lifecycle.transitionLaunch !== 1) throw new Error("upgrade restoration artifact does not match the owned source");
+}
+
+/** Run in the independent packaged launcher, never in a service being replaced. */
+export async function applySignedPackagedUpgradeWithRecovery(input: Parameters<typeof applySignedPackagedUpgradeFromPayload>[0] & {
+  readonly recovery: PackagedUpgradeRecoveryArtifact;
+}): ReturnType<typeof applySignedPackagedUpgradeFromPayload> {
+  // Prove the restoration artifact BEFORE stopping the remote ingress.
+  assertPackagedUpgradeRecoveryArtifact(input.plan, input.recovery);
+  const paths = input.plan.targetBlueprint.paths;
+  const restore = async (failure: unknown): Promise<never> => {
+    const journal = readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths));
+    if (!journal || !sameUpgrade(journal, input.plan)) throw failure;
+    if (!["prepared", "quiescing", "quiesced", "restoring-source"].includes(journal.phase)) {
+      throw new PackagedUpgradeRecoveryError("signed-resume-required", failure);
+    }
+    // A missing descriptor, a rejected HTTP call or a settled JS Promise alone
+    // cannot prove an OS/service stop request has finished.
+    if (journal.phase === "quiescing") {
+      let settled = false;
+      try { settled = await input.services.settleQuiescence?.() === true; } catch { /* Unknown stays protected. */ }
+      if (!settled) throw new PackagedUpgradeRecoveryError("settlement-required", failure);
+    }
+    try {
+      await cancelSignedPackagedUpgrade({ sourcePayloadPath: input.recovery.sourcePayloadPath,
+        trustedKeys: input.recovery.trustedKeys, services: input.services,
+        ...(input.platform ? { platform: input.platform } : {}), ...(input.home ? { home: input.home } : {}),
+        ...(input.environment ? { environment: input.environment } : {}), ...(input.runner ? { runner: input.runner } : {}) });
+    } catch (error) { throw new PackagedUpgradeRecoveryError("restoration-incomplete", error); }
+    // Recovery success is not upgrade success. Retain the original failure.
+    throw new PackagedUpgradeRecoveryError("source-restored", failure);
+  };
+  const existing = readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths));
+  if (existing && sameUpgrade(existing, input.plan)
+    && ["prepared", "quiescing", "quiesced", "restoring-source"].includes(existing.phase)) {
+    // Crash resume reconciles/cancels the old transaction; it never repeats quit.
+    return restore(new Error("previous upgrade requires failure settlement"));
+  }
+  try { return await applySignedPackagedUpgradeFromPayload(input); }
+  catch (error) { return restore(error); }
 }

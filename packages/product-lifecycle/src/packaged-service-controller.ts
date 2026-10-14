@@ -73,6 +73,7 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
   readonly #shutdownService: (service: TelaServiceId) => Promise<void>;
   readonly #transitionTimeoutMs: number;
   readonly #userId: number | undefined;
+  readonly #stopDeadlines = new Map<TelaServiceId, number>();
 
   constructor(input: {
     readonly blueprint: PackagedServiceControlIdentity;
@@ -108,8 +109,7 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
     return parseLaunchdState(result.stdout);
   }
 
-  async #waitFor(service: TelaServiceId, expected: "running" | "stopped"): Promise<void> {
-    const deadline = Date.now() + this.#transitionTimeoutMs;
+  async #waitFor(service: TelaServiceId, expected: "running" | "stopped", deadline = Date.now() + this.#transitionTimeoutMs): Promise<void> {
     let lastError: unknown;
     while (Date.now() < deadline) {
       try {
@@ -124,10 +124,25 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
 
   async quiesce(service: TelaServiceId): Promise<void> {
     if (await this.inspect(service) === "stopped") return;
+    const deadline = Date.now() + this.#transitionTimeoutMs;
+    this.#stopDeadlines.set(service, deadline);
     // Service authority, not an OS stop command, decides whether active work may end.
     // Refusal/unreachable identity is final for this attempt: never escalate or bypass it.
     await this.#shutdownService(service);
-    await this.#waitFor(service, "stopped");
+    await this.#waitFor(service, "stopped", deadline);
+  }
+
+  async settleQuiescence(): Promise<boolean> {
+    // Observes only the requested service registrations. Never re-sends quit,
+    // extends their deadlines or starts a replacement over a live old service.
+    if (this.#stopDeadlines.size === 0) return false;
+    for (const [service, deadline] of this.#stopDeadlines) {
+      try {
+        if (await this.inspect(service) === "stopped") continue;
+        await this.#waitFor(service, "stopped", deadline);
+      } catch { return false; }
+    }
+    return true;
   }
 
   async resume(service: TelaServiceId): Promise<void> {

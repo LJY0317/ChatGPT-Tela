@@ -86,14 +86,14 @@ test("product registries may namespace opaque capabilities for cross-process rou
 test("response cycle rotation revokes the old capability and retains Native-wide tool call deduplication", async () => {
   const registry = new ActiveTurnRegistry(), original = binding();
   const bound = { ...original, tools: NativeToolInventory.fromObservations("thread-1", "turn-1", [
-    { source: "fixture", tools: [{ wireName: "fixture_tool", name: "fixture_tool", kind: "function", inputSchema: { type: "object" } }] },
+    { source: "fixture", tools: [{ wireName: "fixture_tool", name: "fixture_tool", description: "Synthetic fixture", kind: "function", inputSchema: { type: "object" } }] },
   ]) };
   const first = registry.register(bound), channel = first.channel;
   channel.markSubmitted(); channel.markAccepted();
   const invocation = { callId: "used-call", wireName: "fixture_tool", mode: "structured" as const, arguments: {} };
   const pending = channel.requestTool(invocation);
   channel.markNativeToolDelivered("used-call");
-  channel.deliverNativeToolResult({ callId: "used-call", content: "synthetic result" });
+  channel.deliverNativeToolResult({ callId: "used-call", content: "synthetic result", isError: false });
   channel.releaseNativeToolResultToWeb("used-call"); await pending;
   channel.markWebContinuation(); channel.complete("done");
   const next = registry.nextCycle(first.capability, bound);

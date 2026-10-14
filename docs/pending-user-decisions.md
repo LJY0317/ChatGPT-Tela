@@ -10,9 +10,13 @@ timeout. The dialogs may have contributed to the stall, but without timestamped
 window evidence causation is not established. Do not infer a dialog from a
 timeout, or a timeout from a dialog.
 
-The source normal-quit implementation also checked for the presence of
-`NSRunningApplication.terminate` without invoking it. Fixing that concrete
-bug is independent of the user's confirmation choices.
+In JXA, accessing a zero-argument Objective-C method executes it. The old
+`app.terminate` expression could already send a quit request; calling
+`app.terminate()` instead can send the request and then throw when calling
+its Boolean result. Source now evaluates `app.terminate` exactly once and
+classifies that request acknowledgement separately from actual process exit.
+A harmless synthetic Objective-C fixture validates this bridge behavior
+without terminating a running app. Historical popup causation remains unknown.
 
 ## Two different observation authorities
 
@@ -98,3 +102,9 @@ diagnostic query, and the explicit macOS normal-quit method call. The external
 Accessibility adapter, secured one-shot remote consent contract, and
 independent crash-resumable upgrade restoration helper remain separate
 implementation work and must not be represented as complete.
+
+The decision reader distinguishes missing/unavailable/invalid evidence from
+valid empty records and expired records. Pending events still do not prove
+current window presence. Guarded signed source restoration is implemented
+behind the independent launcher's explicit recovery-artifact contract; see
+`upgrade-recovery.md` for its conditions and remaining integration gates.

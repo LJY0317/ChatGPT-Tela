@@ -11,6 +11,7 @@ import { applyPackagedInstallFromPayload, planPackagedInstallFromPayload } from 
 import { PACKAGED_PRODUCT_MANIFEST } from "./packaged-manifest";
 import {
   applyPackagedUpgradeFromPayload,
+  applySignedPackagedUpgradeWithRecovery,
   packagedUpgradeJournalPath,
   planPackagedUpgradeFromPayload,
   readPackagedUpgradeJournal,
@@ -73,6 +74,8 @@ class UpgradeServices implements PackagedUpgradeServiceController {
   async inspect(service: TelaServiceId): Promise<"running" | "stopped"> {
     return this.states.get(service)!;
   }
+
+  async settleQuiescence(): Promise<boolean> { return true; }
 
   async quiesce(service: TelaServiceId): Promise<void> {
     this.events.push(`stop:${service}`);
@@ -351,4 +354,54 @@ for (const boundary of ["restore", "interrupted", "replacing", "payload-drift", 
       expect(readFileSync(join(paths.binaryRoot, "tela"))).toEqual(binary);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+}
+
+for(const boundary of ['restore','uncertain','untrusted-source','post-replacement','restoration-interrupted'] as const){
+ test(`automatic signed upgrade recovery: ${boundary}`,async()=>{
+  const root=mkdtempSync(join(tmpdir(),'tela-auto-recover-')),home=join(root,'home');mkdirSync(home);
+  const runner=new SystemdUpgradeRunner(),options={platform:'linux' as const,home,environment:{},runner};
+  try{
+   const keys=generateKeyPairSync('ed25519'),source=createPayload(root,'1.0.0','source'),target=createPayload(root,'2.0.0','target');
+   for(const payload of[source,target]){
+    const manifest=JSON.parse(readFileSync(join(payload,PACKAGED_PRODUCT_MANIFEST),'utf8'));
+    Object.assign(manifest,{launcher:{executable:'tela'},profileRuntime:{executable:'tela',entrypoint:'tela'},lifecycle:{transitionLaunch:1,sourceCancellation:1},integrity:{signature:'ed25519-sha256-tree-v1',keyId:'fixture'}});
+    writeFileSync(join(payload,PACKAGED_PRODUCT_MANIFEST),JSON.stringify(manifest));
+    writePackagedPayloadSignature({payloadRoot:payload,signer:createEd25519PackagedPayloadSigner({keyId:'fixture',privateKey:keys.privateKey})});
+   }
+   const planned=await planPackagedInstallFromPayload({payloadSourcePath:source,...options});
+   await applyPackagedInstallFromPayload({planned,payloadSourcePath:source,...options});
+   const paths=resolveProductPaths(options),plan=await planPackagedUpgradeFromPayload({payloadSourcePath:target,...options});
+   const services=new UpgradeServices(['gateway','chat','codex']);
+   if(boundary==='post-replacement')services.failResumeOnce='gateway';
+   else {const original=services.quiesce.bind(services);services.quiesce=async service=>{await original(service);if(service==='codex')throw Error('fixture shutdown failed after settlement');};}
+   if(boundary==='uncertain')services.settleQuiescence=async()=>false;
+   if(boundary==='restoration-interrupted')services.failResumeOnce='gateway';
+   const invoke=()=>applySignedPackagedUpgradeWithRecovery({plan,payloadSourcePath:target,trustedKeys:{fixture:keys.publicKey},services,...options,
+    recovery:{sourcePayloadPath:source,trustedKeys:boundary==='untrusted-source'?{}:{fixture:keys.publicKey}}});
+   if(boundary==='untrusted-source'){
+    await expect(invoke()).rejects.toThrow('not trusted');expect(services.events).toHaveLength(0);expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))).toBeUndefined();
+   }else if(boundary==='uncertain'){
+    await expect(invoke()).rejects.toMatchObject({recoveryState:'settlement-required'});
+    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))?.phase).toBe('quiescing');
+    expect(services.events.filter(x=>x.startsWith('start:'))).toHaveLength(0);
+   }else if(boundary==='post-replacement'){
+    await expect(invoke()).rejects.toMatchObject({recoveryState:'signed-resume-required'});
+    expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe('2.0.0');
+    expect(readFileSync(join(paths.binaryRoot,'tela'),'utf8')).toBe('target');
+   }else{
+    if(boundary==='restoration-interrupted'){
+     await expect(invoke()).rejects.toMatchObject({recoveryState:'restoration-incomplete'});
+     expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))?.phase).toBe('restoring-source');
+    }
+    const stops=services.events.filter(x=>x.startsWith('stop:')).length;
+    await expect(invoke()).rejects.toMatchObject({recoveryState:'source-restored'});
+    if(boundary==='restoration-interrupted')expect(services.events.filter(x=>x.startsWith('stop:'))).toHaveLength(stops);
+    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))).toBeUndefined();
+    expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe('1.0.0');
+    expect(readFileSync(join(paths.binaryRoot,'tela'),'utf8')).toBe('source');
+    expect([...services.states.values()]).toEqual(['running','running','running']);
+    expect(services.events.filter(x=>x==='start:chat')).toHaveLength(0);
+   }
+  }finally{rmSync(root,{recursive:true,force:true});}
+ });
 }

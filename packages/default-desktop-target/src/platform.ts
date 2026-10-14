@@ -141,9 +141,10 @@ export async function requestDefaultDesktopNormalQuit(
     throw new DesktopNormalQuitError("identity_changed");
   }
   if (installation.platform === "darwin") {
-    // Checking that terminate exists is NOT a termination request. Invoke it
-    // on the exact PID after process-identity proof; never force-quit on refusal.
-    const script = `ObjC.import("AppKit"); const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(${expectedPid}); if (!app || app.isNil()) throw new Error("missing-app"); app.terminate() ? "requested" : "refused";`;
+    // In JXA a zero-argument Objective-C method is evaluated by property access.
+    // Parentheses would attempt to call its BOOL return *after* sending the quit.
+    // Evaluate once on the proved PID; acceptance is not proof of process exit.
+    const script = `ObjC.import("AppKit"); const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(${expectedPid}); if (!app || app.isNil()) throw new Error("missing-app"); const requested = app.terminate; requested ? "requested" : "refused";`;
     let result: DefaultDesktopCommandResult;
     try { result = await runner.run("/usr/bin/osascript", ["-l", "JavaScript", "-e", script]); }
     catch { throw new DesktopNormalQuitError("request_failed"); }

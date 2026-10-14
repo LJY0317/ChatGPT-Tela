@@ -221,3 +221,27 @@ test("service refusal never authorizes an OS kill/stop on any platform", async (
     } finally { rmSync(root, { recursive: true, force: true }); }
   }
 });
+
+test('stop settlement observes eventual registration exit without sending another stop',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'tela-stop-settle-'));let timer:ReturnType<typeof setTimeout>|undefined;
+ try{
+  const built=blueprint(root,'linux'),runner=new LinuxRunner(),id=registration(built,'codex');runner.state.set(id,'running');let sends=0;
+  const controller=new PackagedPlatformServiceController({blueprint:built,runner,transitionTimeoutMs:500,
+   shutdownService:async()=>{sends++;timer=setTimeout(()=>runner.state.set(id,'stopped'),50);throw Error('caller receipt failed');}});
+  await expect(controller.quiesce('codex')).rejects.toThrow('receipt failed');
+  expect(await controller.settleQuiescence()).toBe(true);expect(sends).toBe(1);
+  expect(runner.calls.some(x=>x.includes(' stop '))).toBe(false);
+ }finally{if(timer)clearTimeout(timer);rmSync(root,{recursive:true,force:true});}
+});
+
+test('unknown previous stops and deadline-expired live services cannot authorize restoration',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'tela-stop-unknown-'));
+ try{
+  const built=blueprint(root,'linux'),runner=new LinuxRunner(),id=registration(built,'codex');runner.state.set(id,'running');
+  const controller=new PackagedPlatformServiceController({blueprint:built,runner,transitionTimeoutMs:100,shutdownService:async()=>{throw Error('refused');}});
+  expect(await controller.settleQuiescence()).toBe(false);
+  await expect(controller.quiesce('codex')).rejects.toThrow('refused');
+  expect(await controller.settleQuiescence()).toBe(false);expect(runner.state.get(id)).toBe('running');
+  expect(runner.calls.some(x=>x.includes(' start ')||x.includes(' stop '))).toBe(false);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});

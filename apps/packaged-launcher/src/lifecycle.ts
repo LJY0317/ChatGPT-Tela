@@ -12,6 +12,8 @@ import {
   applySignedPackagedInstallFromPayload,
   applySignedPackagedRepairFromPayload,
   applySignedPackagedUpgradeFromPayload,
+  applySignedPackagedUpgradeWithRecovery,
+  assertPackagedUpgradeRecoveryArtifact,
   PackagedPlatformServiceController,
   planSignedPackagedInstallFromPayload,
   planSignedPackagedRepairFromPayload,
@@ -31,6 +33,8 @@ export interface ParsedPackagedLifecycleCommand {
   readonly mode: PackagedLifecycleMode;
   readonly trustedPublicKeyPath: string;
   readonly payloadSourcePath?: string;
+  readonly recoveryPayloadPath?: string;
+  readonly recoveryPublicKeyPath?: string;
 }
 
 export interface PackagedLifecycleOptions {
@@ -57,6 +61,7 @@ export function parsePackagedLifecycleCommand(arguments_: readonly string[]): Pa
   let mode: PackagedLifecycleMode | undefined;
   let trustedPublicKeyPath: string | undefined;
   let payloadSourcePath: string | undefined;
+  let recoveryPayloadPath: string | undefined, recoveryPublicKeyPath: string | undefined;
   for (let index = 1; index < arguments_.length; index += 1) {
     const item = arguments_[index]!;
     if (item === "--dry-run" || item === "--apply") {
@@ -77,16 +82,30 @@ export function parsePackagedLifecycleCommand(arguments_: readonly string[]): Pa
       index += 1;
       continue;
     }
+    if (item === "--recovery-payload" || item === "--recovery-public-key") {
+      const value = oneValue(arguments_, index, item);
+      if (item === "--recovery-payload") {
+        if (recoveryPayloadPath) throw new Error("duplicate recovery payload");
+        recoveryPayloadPath = value;
+      } else {
+        if (recoveryPublicKeyPath) throw new Error("duplicate recovery public key");
+        recoveryPublicKeyPath = value;
+      }
+      index += 1; continue;
+    }
     throw new Error(`unknown packaged lifecycle argument: ${item}`);
   }
   if (!mode) throw new Error("choose exactly one of --dry-run or --apply");
   if (!trustedPublicKeyPath) throw new Error("--trusted-public-key is required");
   if (command === "cancel-upgrade" && !payloadSourcePath) throw new Error("cancel-upgrade requires --payload for the signed source package");
+  if (Boolean(recoveryPayloadPath) !== Boolean(recoveryPublicKeyPath)
+    || (recoveryPayloadPath && command !== "upgrade")) throw new Error("upgrade recovery requires both signed source payload and public key");
   return Object.freeze({
     command,
     mode,
     trustedPublicKeyPath,
     ...(payloadSourcePath ? { payloadSourcePath } : {}),
+    ...(recoveryPayloadPath ? { recoveryPayloadPath, recoveryPublicKeyPath: recoveryPublicKeyPath! } : {}),
   });
 }
 
@@ -216,6 +235,11 @@ export async function runPackagedLifecycleCommand(
     trustedKeys: keys,
     ...environment,
   });
+  const recovery = parsed.recoveryPayloadPath ? {
+    sourcePayloadPath: realDirectory(parsed.recoveryPayloadPath, "signed recovery payload"),
+    trustedKeys: trustedKeys(parsed.recoveryPayloadPath, parsed.recoveryPublicKeyPath!),
+  } : undefined;
+  if (recovery) assertPackagedUpgradeRecoveryArtifact(plan, recovery);
   if (parsed.mode === "dry-run") {
     return Object.freeze({
       command: parsed.command,
@@ -223,6 +247,7 @@ export async function runPackagedLifecycleCommand(
       installId: plan.installId,
       fromVersion: plan.fromVersion,
       toVersion: plan.toVersion,
+      recoveryVerified: Boolean(recovery),
       payload: Object.freeze({ action: "replace" as const }),
       services: Object.freeze(plan.targetBlueprint.services.map(service => Object.freeze({
         service: service.service,
@@ -236,12 +261,15 @@ export async function runPackagedLifecycleCommand(
     ...(options.runner ? { runner: options.runner } : {}),
     ...(options.userId === undefined ? {} : { userId: options.userId }),
   });
-  const result = await applySignedPackagedUpgradeFromPayload({
+  const upgradeInput = {
     plan,
     payloadSourcePath,
     trustedKeys: keys,
     services,
     ...environment,
-  });
+  };
+  const result = recovery
+    ? await applySignedPackagedUpgradeWithRecovery({ ...upgradeInput, recovery })
+    : await applySignedPackagedUpgradeFromPayload(upgradeInput);
   return Object.freeze({ command: parsed.command, mode: parsed.mode, ...result });
 }

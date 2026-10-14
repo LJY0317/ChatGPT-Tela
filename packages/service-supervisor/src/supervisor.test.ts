@@ -34,47 +34,37 @@ function isolatedProductEnvironment(home: string, installId: string): Record<str
 }
 
 describe("local service supervisor", () => {
-  test("waits beyond 10s for an owned Codex graceful shutdown instead of reporting a false timeout", async () => {
-    const home = mkdtempSync(join(tmpdir(), "tela-codex-drain-"));
-    const descriptorPath = join(home, "codex", "descriptor.json");
-    const installId = "codex-drain-test-install";
-    const instanceId = "codex-drain-test-instance";
-    const token = "d".repeat(48);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch(request) {
-        if (request.headers.get("authorization") !== `Bearer ${token}`) return new Response(null, { status: 401 });
-        const path = new URL(request.url).pathname;
-        if (request.method === "GET" && path === "/v1/status") {
-          return Response.json({ contractVersion: 1, service: "codex", instanceId, state: "ready" });
-        }
-        if (request.method === "POST" && path === "/v1/shutdown") {
-          // Fake a valid, slow close without touching an actual Desktop/profile.
-          timer ??= setTimeout(() => rmSync(descriptorPath), 11_200);
-          return Response.json({});
-        }
-        return new Response(null, { status: 404 });
-      },
-    });
+  async function drainFixture(delayMs: number, replacement = false) {
+    const root=mkdtempSync(join(tmpdir(),"tela-owned-drain-")), descriptorPath=join(root,"descriptor.json");
+    const installId="drain-install", instanceId="drain-instance", token="d".repeat(48);
+    const replacementValue={version:1,service:"codex",installId,instanceId:"replacement",pid:process.pid,endpoint:"http://127.0.0.1:1/",bearerToken:token,startedAt:new Date().toISOString()};
+    const script=`const fs=require('node:fs');const file=process.env.TELA_TEST_DESCRIPTOR;const delay=Number(process.env.TELA_TEST_DELAY);const server=Bun.serve({hostname:'127.0.0.1',port:0,fetch(req){if(req.headers.get('authorization')!=='Bearer '+${JSON.stringify(token)})return new Response(null,{status:401});if(new URL(req.url).pathname==='/v1/status')return Response.json({contractVersion:1,service:'codex',instanceId:${JSON.stringify(instanceId)},state:'ready'});if(req.method==='POST'){if(process.env.TELA_TEST_REPLACEMENT)fs.writeFileSync(file,process.env.TELA_TEST_REPLACEMENT);else fs.rmSync(file,{force:true});setTimeout(()=>{server.stop(true);process.exit(0);},delay);return Response.json({});}return new Response(null,{status:404});}});console.log(JSON.stringify({port:server.port}));`;
+    const child=Bun.spawn([process.execPath,"-e",script],{env:{...process.env,TELA_TEST_DESCRIPTOR:descriptorPath,TELA_TEST_DELAY:String(delayMs),...(replacement?{TELA_TEST_REPLACEMENT:JSON.stringify(replacementValue)}:{})},stdout:"pipe",stderr:"pipe"});
     try {
-      writeServiceRuntimeDescriptor(descriptorPath, {
-        version: 1, service: "codex", instanceId, installId, pid: process.pid,
-        endpoint: `http://127.0.0.1:${server.port}/`, bearerToken: token,
-        startedAt: new Date().toISOString(),
-      });
-      const supervisor = new LocalServiceSupervisor({ installId });
-      const startedAt = performance.now();
-      expect(await supervisor.shutdown({ service: "codex", descriptorPath })).toBe(true);
-      expect(performance.now() - startedAt).toBeGreaterThan(10_000);
-      expect(existsSync(descriptorPath)).toBe(false);
-    } finally {
-      if (timer) clearTimeout(timer);
-      server.stop(true);
-      rmSync(home, { recursive: true, force: true });
-    }
-  }, 25_000);
+      const reader=child.stdout.getReader();let text="";
+      while(!text.includes("\n")){const chunk=await reader.read();if(chunk.done)throw Error("fixture exited before ready");text+=new TextDecoder().decode(chunk.value);if(text.length>4096)throw Error("fixture readiness exceeds limit");}
+      const {port}=JSON.parse(text.trim());reader.releaseLock();
+      writeServiceRuntimeDescriptor(descriptorPath,{version:1,service:"codex",installId,instanceId,pid:child.pid!,endpoint:`http://127.0.0.1:${port}/`,bearerToken:token,startedAt:new Date().toISOString()});
+      return {root,descriptorPath,child,supervisor:new LocalServiceSupervisor({installId})};
+    }catch(e){child.kill();await child.exited;rmSync(root,{recursive:true,force:true});throw e;}
+  }
+
+  test("waits beyond 10s for actual owned Codex exit even when its descriptor disappears early", async () => {
+    const f=await drainFixture(11200);
+    try {
+      const at=performance.now();expect(await f.supervisor.shutdown({service:"codex",descriptorPath:f.descriptorPath})).toBe(true);
+      expect(performance.now()-at).toBeGreaterThan(10000);expect(await f.child.exited).toBe(0);
+      expect(existsSync(f.descriptorPath)).toBe(false);
+    }finally{f.child.kill();await f.child.exited;rmSync(f.root,{recursive:true,force:true});}
+  },25000);
+
+  test("late old-service exit preserves a replacement service descriptor",async()=>{
+    const f=await drainFixture(300,true);
+    try {
+      expect(await f.supervisor.shutdown({service:"codex",descriptorPath:f.descriptorPath})).toBe(true);
+      expect(await f.child.exited).toBe(0);expect(existsSync(f.descriptorPath)).toBe(true);
+    }finally{f.child.kill();await f.child.exited;rmSync(f.root,{recursive:true,force:true});}
+  });
 
   test("starts, reuses, and normally shuts down one exact Chat daemon", async () => {
     const home = mkdtempSync(join(tmpdir(), "tela-supervisor-"));

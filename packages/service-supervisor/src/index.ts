@@ -218,23 +218,31 @@ export class LocalServiceSupervisor {
     readonly stopTimeoutMs?: number;
   }): Promise<boolean> {
     const startedAt = Date.now();
+    const budget = input.stopTimeoutMs ?? (input.service === "codex" ? DEFAULT_CODEX_STOP_TIMEOUT_MS : DEFAULT_STOP_TIMEOUT_MS);
+    if (!Number.isSafeInteger(budget) || budget <= 0) throw new Error("service shutdown budget is invalid");
+    const deadline = startedAt + budget;
     const running = await this.current({ service: input.service, descriptorPath: input.descriptorPath });
     if (!running) {
       emitDiagnosticEvent("chatgpt_tela_service", "shutdown_already_stopped", { service: input.service });
       return false;
     }
     emitDiagnosticEvent("chatgpt_tela_service", "shutdown_start", { service: input.service });
-    const requestDeadline = deadlineSignal(2_000);
+    if (Date.now() >= deadline) throw new Error("service shutdown deadline expired before request");
+    const requestDeadline = deadlineSignal(Math.min(2_000, deadline - Date.now()));
     try {
       await new LocalServiceClient(running.descriptor).shutdown(requestDeadline.signal);
     } finally {
       requestDeadline.close();
     }
-    const deadline = Date.now() + (input.stopTimeoutMs ??
-      (input.service === "codex" ? DEFAULT_CODEX_STOP_TIMEOUT_MS : DEFAULT_STOP_TIMEOUT_MS));
     while (Date.now() < deadline) {
-      if (!existsSync(input.descriptorPath) || !pidAlive(running.descriptor.pid)) {
-        if (!pidAlive(running.descriptor.pid)) removeServiceRuntimeDescriptor(input.descriptorPath);
+      // Descriptor disappearance is not process-exit evidence. A daemon can
+      // still be draining children; never restore over an unfinished shutdown.
+      if (!pidAlive(running.descriptor.pid)) {
+        const current = readServiceRuntimeDescriptor(input.descriptorPath);
+        if (current?.instanceId === running.descriptor.instanceId
+          && current.pid === running.descriptor.pid && current.installId === this.#installId) {
+          removeServiceRuntimeDescriptor(input.descriptorPath);
+        }
         emitDiagnosticEvent("chatgpt_tela_service", "shutdown_complete", {
           service: input.service,
           duration_ms: diagnosticDurationMs(startedAt),

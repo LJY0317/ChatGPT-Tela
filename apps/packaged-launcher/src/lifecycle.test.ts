@@ -133,3 +133,11 @@ describe("packaged lifecycle CLI", () => {
     }
   });
 });
+
+test('upgrade recovery flags form one explicit signed-source contract',()=>{
+ const flags=['upgrade','--apply','--trusted-public-key','target.pem','--recovery-payload','source','--recovery-public-key','source.pem'];
+ expect(parsePackagedLifecycleCommand(flags)).toMatchObject({recoveryPayloadPath:'source',recoveryPublicKeyPath:'source.pem'});
+ expect(()=>parsePackagedLifecycleCommand(flags.slice(0,-2))).toThrow('requires both');
+ expect(()=>parsePackagedLifecycleCommand(['repair',...flags.slice(1)])).toThrow('requires both');
+ expect(()=>parsePackagedLifecycleCommand([...flags,'--recovery-payload','other'])).toThrow('duplicate');
+});

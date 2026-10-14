@@ -5,6 +5,19 @@ import { join } from "node:path";
 import { observeTelaDecisions } from "./decision-observation";
 import { runPackagedDiagnosticsCommand } from "./diagnostics";
 
+test("missing, malformed, stale and genuinely empty decision evidence remain distinct",()=>{
+  const root=mkdtempSync(join(tmpdir(),"tela-decisions-coverage-")),file=join(root,"menu-ui-events.json"),now=Date.now();
+  try{
+    expect(observeTelaDecisions(root,now)).toMatchObject({evidenceState:"unavailable",sourceState:"missing"});
+    writeFileSync(file,"not-json");expect(observeTelaDecisions(root,now)).toMatchObject({evidenceState:"unavailable",sourceState:"invalid"});
+    writeFileSync(file,"[]");expect(observeTelaDecisions(root,now)).toMatchObject({evidenceState:"empty",sourceState:"read"});
+    writeFileSync(file,JSON.stringify([{at:(now-2*86400_000)/1000,slot:1,event:"decision_web_reopen_pending",uiSession:"11111111-1111-4111-8111-111111111111",decision:"22222222-2222-4222-8222-222222222222"}]));
+    expect(observeTelaDecisions(root,now)).toMatchObject({evidenceState:"stale",currentForeignAppPrompts:"not_observable"});
+    writeFileSync(file,JSON.stringify([{at:now/1000,slot:1,event:"decision_web_reopen_pending",decision:"invalid",uiSession:"invalid"}]));
+    expect(observeTelaDecisions(root,now)).toMatchObject({evidenceState:"unavailable",invalidDecisionRows:1});
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
 test("read-only Tela dialog evidence distinguishes unanswered from resolved, without exposing dialog text", () => {
   const root = mkdtempSync(join(tmpdir(), "tela-owned-dialogs-"));
   const time = Date.parse("2026-10-14T12:00:00Z");

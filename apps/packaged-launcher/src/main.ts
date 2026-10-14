@@ -25,7 +25,7 @@ Usage:
   chatgpt-tela chat <allow-root|disallow-root> --path <folder>
   chatgpt-tela install (--dry-run | --apply) --trusted-public-key <release-public-key.pem> [--payload <package-directory>]
   chatgpt-tela repair  (--dry-run | --apply) --trusted-public-key <release-public-key.pem> [--payload <package-directory>]
-  chatgpt-tela upgrade (--dry-run | --apply) --trusted-public-key <release-public-key.pem> [--payload <package-directory>]
+  chatgpt-tela upgrade (--dry-run | --apply) --trusted-public-key <release-public-key.pem> [--payload <package-directory>] [--recovery-payload <signed-source> --recovery-public-key <source-key.pem>]
   chatgpt-tela cancel-upgrade (--dry-run | --apply) --trusted-public-key <release-public-key.pem> --payload <source-package-directory>
   chatgpt-tela uninstall (--dry-run | --apply) [--remove-data]
   chatgpt-tela work [--slot <profile>] [--thread <id>] [--model <id>] [--cwd <folder>]

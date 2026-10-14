@@ -237,8 +237,34 @@ describe("built-in default Desktop installation resolver", () => {
     expect(calls.at(-1)?.command).toBe("/usr/bin/osascript");
     expect(calls.at(-1)?.arguments_.slice(0, 3)).toEqual(["-l", "JavaScript", "-e"]);
     expect(calls.at(-1)?.arguments_.at(-1)).toContain("runningApplicationWithProcessIdentifier(301)");
-    expect(calls.at(-1)?.arguments_.at(-1)).toContain("app.terminate()");
+    expect(calls.at(-1)?.arguments_.at(-1)).toContain("const requested = app.terminate;");
+    expect(calls.at(-1)?.arguments_.at(-1)).not.toContain("app.terminate()");
     expect(calls.at(-1)?.arguments_.at(-1)).not.toContain("tell application");
+  });
+
+  test.skipIf(process.platform !== "darwin")("real JXA bridge sends exactly one zero-argument request and preserves BOOL refusal", async () => {
+    // Capture the actual production script through a fake process inventory.
+    // Substitute a private synthetic NSObject; never target any running app.
+    const installation: DefaultDesktopInstallation = {
+      platform:"darwin",chatGptExecutable:"/fixture/chat",codexExecutable:"/fixture/codex",
+      codexHome:"/fixture/home",userDataDir:"/fixture/data",normalQuitSupported:true,
+    };
+    let script="";
+    await requestDefaultDesktopNormalQuit(installation,301,{runner:{async run(command,args){
+      if(command==="/bin/ps")return{stdout:"301 /fixture/chat\n",stderr:""};
+      script=args.at(-1)!;return{stdout:"requested\n",stderr:""};
+    }}});
+    const target="$.NSRunningApplication.runningApplicationWithProcessIdentifier(301)";
+    expect(script.split(target)).toHaveLength(2);
+    for(const accepted of [true,false]){
+      const fixture=`ObjC.import('Foundation'); var count=0; ObjC.registerSubclass({name:'TelaNormalQuitFixture',superclass:'NSObject',methods:{terminate:{types:['bool',[]],implementation:function(){count++;return ${accepted};}}}}); var fixture=$.TelaNormalQuitFixture.alloc.init; `;
+      const safe=script.replace(target,"fixture");
+      expect(safe).not.toContain("NSRunningApplication");
+      const child=Bun.spawn(["/usr/bin/osascript","-l","JavaScript","-e",fixture+`var ack=(function(){${safe.replace('requested ? "requested" : "refused";', 'return requested ? "requested" : "refused";')}})(); JSON.stringify({ack:ack,count:count});`],{stdout:"pipe",stderr:"pipe"});
+      const stdout=await new Response(child.stdout).text(),stderr=await new Response(child.stderr).text();
+      expect(await child.exited).toBe(0);expect(stderr).toBe("");
+      expect(JSON.parse(stdout)).toEqual({ack:accepted?"requested":"refused",count:1});
+    }
   });
 
   test("macOS normal quit refuses an unacknowledged termination and never falls back to a kill", async () => {
