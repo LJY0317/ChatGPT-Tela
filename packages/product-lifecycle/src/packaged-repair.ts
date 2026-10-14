@@ -1,3 +1,4 @@
+import { withPackagedTransitionOwner } from "./transition-owner";
 import {
   chmodSync,
   existsSync,
@@ -324,7 +325,7 @@ function resultFrom(
   });
 }
 
-export async function applyPackagedRepairFromPayload(input: {
+async function applyPackagedRepairOwned(input: {
   readonly plan: PackagedRepairPlan;
   readonly payloadSourcePath: string;
   readonly services: PackagedRepairServiceController;
@@ -511,4 +512,8 @@ export async function applySignedPackagedRepairFromPayload(input: Parameters<typ
 }): ReturnType<typeof applyPackagedRepairFromPayload> {
   verifyPackagedPayloadSignature({ payloadRoot: input.payloadSourcePath, trustedKeys: input.trustedKeys });
   return applyPackagedRepairFromPayload(input);
+}
+
+export async function applyPackagedRepairFromPayload(input: Parameters<typeof applyPackagedRepairOwned>[0]): ReturnType<typeof applyPackagedRepairOwned> {
+  return withPackagedTransitionOwner({ paths: input.plan.blueprint.paths, installId: input.plan.installId }, () => applyPackagedRepairOwned(input));
 }

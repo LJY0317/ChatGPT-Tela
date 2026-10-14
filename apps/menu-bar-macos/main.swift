@@ -135,7 +135,7 @@ private final class TelaMenuToggleRow: NSView {
 }
 
 @MainActor
-final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
   private var statusItem: NSStatusItem!
   private var statusMenu: NSMenu!
   private var connectionSpinner: NSProgressIndicator?
@@ -157,6 +157,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private var noticePolicy = TelaLaunchNoticePolicy()
   private var pendingLaunchPids = Set<Int>()
   private var showingLaunchNotice = false
+  private var launchNotice: (alert: NSAlert, slot: Int, pid: Int, decisionId: String)?
   private let decisionUiSession = UUID().uuidString
   private let controlCenter = TelaControlCenterController()
   private let fileManager = FileManager.default
@@ -309,28 +310,50 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       showingLaunchNotice = true
       let alert = NSAlert()
       alert.messageText = "Reopen ChatGPT to use Web models"
-      alert.informativeText = "\(profile.targetDisplayName) opened without its Web connection. Reopen it with Tela to use Web models. Finish any ongoing work first. You can keep using ChatGPT if you choose Later."
+      alert.informativeText = "\(profile.targetDisplayName) opened without its Web connection. Reopen it with Tela to use Web models. Finish ongoing work before reopening. Later keeps ChatGPT running."
       alert.addButton(withTitle: "Reopen with Tela")
       alert.addButton(withTitle: "Later")
       alert.window.level = .floating
       NSApp.activate(ignoringOtherApps: true)
       let decisionId = UUID().uuidString
-      // The modal can remain unanswered while the owner is away. Persist
-      // structure only, before entering runModal; never infer a user decision.
-      recordMenuState("decision_web_reopen_pending", slot: profile.slot, decisionId: decisionId)
-      let answer = alert.runModal()
-      recordMenuState(answer == .alertFirstButtonReturn
-        ? "decision_web_reopen_accepted" : "decision_web_reopen_deferred",
-        slot: profile.slot, decisionId: decisionId)
-      showingLaunchNotice = false
-      if answer == .alertFirstButtonReturn {
-        controlCenter.reopenForWeb(slot: profile.slot, expectedDesktopPid: pid)
-      } else {
-        app.activate(options: [])
+      // Keep the menu and other profiles responsive while the owner is away.
+      // Showing a notice never authorizes a restart or acknowledges a decision.
+      launchNotice = (alert, profile.slot, pid, decisionId)
+      alert.window.delegate = self
+      for button in alert.buttons {
+        button.target = self
+        button.action = #selector(respondToLaunchNotice(_:))
       }
+      recordMenuState("decision_web_reopen_pending", slot: profile.slot, decisionId: decisionId)
+      alert.window.makeKeyAndOrderFront(nil)
       // Avoid stacking multiple app notices over the same user's action.
       break
     }
+  }
+
+  @objc private func respondToLaunchNotice(_ sender: NSButton) {
+    guard let notice = launchNotice, notice.alert.buttons.contains(where: { $0 === sender }) else { return }
+    finishLaunchNotice(accepted: sender === notice.alert.buttons.first)
+  }
+
+  private func finishLaunchNotice(accepted: Bool, closeWindow: Bool = true) {
+    guard let notice = launchNotice else { return }
+    // Clear before closing: windowWillClose cannot emit a second decision.
+    launchNotice = nil
+    showingLaunchNotice = false
+    recordMenuState(accepted ? "decision_web_reopen_accepted" : "decision_web_reopen_deferred",
+      slot: notice.slot, decisionId: notice.decisionId)
+    if closeWindow { notice.alert.window.close() }
+    if accepted {
+      controlCenter.reopenForWeb(slot: notice.slot, expectedDesktopPid: notice.pid)
+    } else if let app = NSRunningApplication(processIdentifier: pid_t(notice.pid)), !app.isTerminated {
+      app.activate(options: [])
+    }
+  }
+
+  func windowWillClose(_ notification: Notification) {
+    guard let window = notification.object as? NSWindow, launchNotice?.alert.window === window else { return }
+    finishLaunchNotice(accepted: false, closeWindow: false)
   }
 
   func menuWillOpen(_ menu: NSMenu) {

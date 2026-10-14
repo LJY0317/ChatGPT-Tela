@@ -24,10 +24,14 @@ It reuses the existing signed cancellation journal and service controller.
 
 No new daemon, model request, forced kill, UI click, journal deletion shortcut
 or authority transfer is introduced. The launcher must run independently of
-services being updated. A recovery coordinator must retain a single installation
-owner and reconcile its durable checkpoint before restart; a second process
-must not take over an unknown live owner. This patch does not supply an OS
-watchdog or general coordinator ownership protocol.
+services being updated. Upgrade, repair and signed cancellation share a product-owned SQLite writer lock
+across the entire operation, including awaits and restoration. An OS process exit
+releases this lock; no stale-age/PID takeover or heartbeat is used. An existing
+transition journal is still reconciled by the signed recovery boundary, never
+removed or replayed merely because the lock became available. The coordination
+directory is registered in the install manifest and follows normal data-preserving
+or complete removal policy. Initial install, uninstall and unrelated service
+commands are not yet covered by this transition lock; there is no OS watchdog.
 
 ## Stop evidence
 
@@ -55,10 +59,25 @@ Decision observations distinguish unavailable, empty and stale evidence.
 
 Source tests are not a real installed upgrade acceptance. Before rollout,
 combine the current owner's source and diagnostic patches, preserve drafts and
-active work, prove independent coordinator ownership/crash resume, and verify
+active work, verify the consumer updater
+retains signed recovery artifacts and reconciles interrupted shutdown evidence, and verify
 previously intended profiles separately after service restoration. Native/Web
 readiness and account binding require their own receipts. A remaining user
 popup must never be automatically clicked to satisfy an installation gate.
-Nonblocking proactive notices and consented external-popup observation remain
-separate work. Windows/Linux OS-level live restoration is not proven by fake
+The proactive Web reconnect notice is now a modeless owned AppKit window;
+an unanswered notice does not enter a modal run loop. Exact button/close events
+record one accepted/deferred decision, and only an explicit accepted decision
+calls the existing PID-bound reopen path. This does not observe or approve an
+external ChatGPT Quit warning. Modeless-window live acceptance and consented
+external-popup observation remain separate work. Windows/Linux OS-level live restoration is not proven by fake
 platform runners on macOS.
+
+## Included failure diagnostics
+
+The candidate combines Native capacity/HTTP200 streamed failure diagnostics,
+model route/picker proof, bounded tool refusal signals and incident-window evidence.
+Provider codes classify overload, usage and rate limits; provider retry hints are
+recorded only when actually supplied. Unknown codes, absent receipts and external
+host failures remain unproven. No automatic model resend or switch is introduced.
+See [diagnostics](diagnostics.md) for bounded capture and privacy rules. These
+source changes are not evidence that the installed client emitted the new events.

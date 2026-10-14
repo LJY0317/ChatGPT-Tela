@@ -1,3 +1,4 @@
+import { withPackagedTransitionOwner } from "./transition-owner";
 import { describe, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { cancelSignedPackagedUpgrade } from "./packaged-upgrade";
@@ -120,6 +121,25 @@ async function installV1(root: string, home: string, runner: SystemdUpgradeRunne
   return payload;
 }
 
+test("direct upgrade cannot stop services while another transition owns the installation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-upgrade-competing-owner-")), home = join(root, "home");
+  mkdirSync(home); const runner = new SystemdUpgradeRunner();
+  try {
+    await installV1(root, home, runner);
+    const options = { platform: "linux" as const, home, environment: {}, runner };
+    const target = createPayload(root, "2.0.0", "v2\n");
+    const plan = await planPackagedUpgradeFromPayload({ payloadSourcePath: target, ...options });
+    const services = new UpgradeServices(["gateway", "chat", "codex"]);
+    await withPackagedTransitionOwner({ paths: plan.targetBlueprint.paths, installId: plan.installId }, async () => {
+      await expect(applyPackagedUpgradeFromPayload({ plan, payloadSourcePath: target, services, ...options })).rejects.toThrow("another installer owns");
+      expect(services.events).toEqual([]);
+      expect(existsSync(packagedUpgradeJournalPath(plan.targetBlueprint.paths))).toBe(false);
+      expect(readOwnershipManifest(plan.targetBlueprint.paths.installManifest)?.productVersion).toBe("1.0.0");
+      expect(readFileSync(join(plan.targetBlueprint.paths.binaryRoot, "tela"), "utf8")).toBe("v1\n");
+    });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 describe("packaged upgrade journal", () => {
   test("format changes during shutdown are refused before payload replacement and retain the checkpoint", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-upgrade-storage-drain-")), home = join(root, "home");
@@ -138,6 +158,8 @@ describe("packaged upgrade journal", () => {
         await original(service);
         if (service === "chat") writeFileSync(store, JSON.stringify({ version: 2, nextSessionId: 1024, operations: [] }));
       };
+      // Establish the owned coordinator resource before comparing the protected install bytes.
+      await withPackagedTransitionOwner({ paths, installId: plan.installId }, async () => {});
       const binary = readFileSync(join(paths.binaryRoot, "tela")), manifest = readFileSync(paths.installManifest);
       await expect(applyPackagedUpgradeFromPayload({ plan, payloadSourcePath: target, services, ...options })).rejects.toThrow("cannot read");
       expect(readFileSync(join(paths.binaryRoot, "tela"))).toEqual(binary);

@@ -1,3 +1,4 @@
+import { withPackagedTransitionOwner } from "./transition-owner";
 import {
   chmodSync,
   existsSync,
@@ -251,7 +252,7 @@ function initialJournal(plan: PackagedUpgradePlan): PackagedUpgradeJournal {
   });
 }
 
-export async function applyPackagedUpgradeFromPayload(input: {
+async function applyPackagedUpgradeOwned(input: {
   readonly plan: PackagedUpgradePlan;
   readonly payloadSourcePath: string;
   readonly services: PackagedUpgradeServiceController;
@@ -481,7 +482,7 @@ export async function planSignedPackagedUpgradeCancellation(input: {
 }
 
 /** Explicit pre-replacement cancellation, with one durable restoration checkpoint. */
-export async function cancelSignedPackagedUpgrade(input: Parameters<typeof planSignedPackagedUpgradeCancellation>[0] & {
+async function cancelSignedPackagedUpgradeOwned(input: Parameters<typeof planSignedPackagedUpgradeCancellation>[0] & {
   readonly services: PackagedUpgradeServiceController;
 }): Promise<{ readonly restoredServices: readonly TelaServiceId[] }> {
   const reviewed = await planSignedPackagedUpgradeCancellation(input);
@@ -529,7 +530,7 @@ export function assertPackagedUpgradeRecoveryArtifact(plan: PackagedUpgradePlan,
 }
 
 /** Run in the independent packaged launcher, never in a service being replaced. */
-export async function applySignedPackagedUpgradeWithRecovery(input: Parameters<typeof applySignedPackagedUpgradeFromPayload>[0] & {
+async function applySignedPackagedUpgradeWithRecoveryOwned(input: Parameters<typeof applySignedPackagedUpgradeFromPayload>[0] & {
   readonly recovery: PackagedUpgradeRecoveryArtifact;
 }): ReturnType<typeof applySignedPackagedUpgradeFromPayload> {
   // Prove the restoration artifact BEFORE stopping the remote ingress.
@@ -549,7 +550,7 @@ export async function applySignedPackagedUpgradeWithRecovery(input: Parameters<t
       if (!settled) throw new PackagedUpgradeRecoveryError("settlement-required", failure);
     }
     try {
-      await cancelSignedPackagedUpgrade({ sourcePayloadPath: input.recovery.sourcePayloadPath,
+      await cancelSignedPackagedUpgradeOwned({ sourcePayloadPath: input.recovery.sourcePayloadPath,
         trustedKeys: input.recovery.trustedKeys, services: input.services,
         ...(input.platform ? { platform: input.platform } : {}), ...(input.home ? { home: input.home } : {}),
         ...(input.environment ? { environment: input.environment } : {}), ...(input.runner ? { runner: input.runner } : {}) });
@@ -563,6 +564,26 @@ export async function applySignedPackagedUpgradeWithRecovery(input: Parameters<t
     // Crash resume reconciles/cancels the old transaction; it never repeats quit.
     return restore(new Error("previous upgrade requires failure settlement"));
   }
-  try { return await applySignedPackagedUpgradeFromPayload(input); }
+  try {
+    verifyPackagedPayloadSignature({ payloadRoot: input.payloadSourcePath, trustedKeys: input.trustedKeys });
+    return await applyPackagedUpgradeOwned(input);
+  }
   catch (error) { return restore(error); }
+}
+
+/** Serialize direct and launcher upgrades against the same product-owned lock. */
+export async function applyPackagedUpgradeFromPayload(input: Parameters<typeof applyPackagedUpgradeOwned>[0]): ReturnType<typeof applyPackagedUpgradeOwned> {
+  return withPackagedTransitionOwner({ paths: input.plan.targetBlueprint.paths, installId: input.plan.installId }, () => applyPackagedUpgradeOwned(input));
+}
+
+export async function applySignedPackagedUpgradeWithRecovery(input: Parameters<typeof applySignedPackagedUpgradeWithRecoveryOwned>[0]): ReturnType<typeof applySignedPackagedUpgradeWithRecoveryOwned> {
+  // Invalid artifacts must fail before even registering coordination state.
+  assertPackagedUpgradeRecoveryArtifact(input.plan, input.recovery);
+  verifyPackagedPayloadSignature({ payloadRoot: input.payloadSourcePath, trustedKeys: input.trustedKeys });
+  return withPackagedTransitionOwner({ paths: input.plan.targetBlueprint.paths, installId: input.plan.installId }, () => applySignedPackagedUpgradeWithRecoveryOwned(input));
+}
+
+export async function cancelSignedPackagedUpgrade(input: Parameters<typeof cancelSignedPackagedUpgradeOwned>[0]): ReturnType<typeof cancelSignedPackagedUpgradeOwned> {
+  const reviewed = await planSignedPackagedUpgradeCancellation(input);
+  return withPackagedTransitionOwner({ paths: reviewed.blueprint.paths, installId: reviewed.journal.installId }, () => cancelSignedPackagedUpgradeOwned(input));
 }
