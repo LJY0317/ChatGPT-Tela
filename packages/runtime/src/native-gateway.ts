@@ -162,7 +162,7 @@ export class NativeResponsesGateway {
     if (registered && (JSON.stringify(registered.channel.binding.authority) !== JSON.stringify(binding.authority)
       || registered.channel.binding.canonicalEvidence.parentThreadId !== binding.canonicalEvidence.parentThreadId
       || registered.channel.binding.canonicalEvidence.agentName !== binding.canonicalEvidence.agentName)) {
-      this.#retire(key, new Error("Native owner changed"));
+      this.#retire(key, new Error("Native owner changed"), "owner_changed");
       throw new Error("Native owner changed under the active response cycle");
     }
     let lifetime = this.#lifetimes.get(key);
@@ -208,7 +208,7 @@ export class NativeResponsesGateway {
           lifetime.watch?.signal.throwIfAborted();
           if (lifetime.watch) {
             const signal = lifetime.watch.signal;
-            signal.addEventListener("abort", () => this.#retire(key, signal.reason), { once: true });
+            signal.addEventListener("abort", () => this.#retire(key, signal.reason, "owner_signal"), { once: true });
             for (const input of lifetime.watch.inputs?.() ?? []) {
               if (requestMessages(body).some(message => message.role === "user" && message.hash === input.textHash)) lifetime.consumedInputs.add(input.id);
             }
@@ -219,7 +219,7 @@ export class NativeResponsesGateway {
               error: error instanceof Error ? { name: error.name, message: error.message } : { name: "unknown" } });
             emitDiagnosticEvent("chatgpt_tela_work", "web_preparation_failed", { phase: "native_watch", reason_class: "unclassified", tool_round_count: 0 });
           });
-          this.#retire(key, error); throw error;
+          this.#retire(key, error, "watch_failed"); throw error;
         }
       }
       const owned = registered;
@@ -244,7 +244,7 @@ export class NativeResponsesGateway {
         const authority = owned.channel.binding.authority;
         if (owned.channel.phase !== "completed"
           && this.turns.active(authority.threadId, authority.turnId)?.capability === owned.capability) {
-          this.#retire(key, error);
+          this.#retire(key, error, "execution_failed");
         }
         throw error;
       });
@@ -288,15 +288,38 @@ export class NativeResponsesGateway {
     throw Object.assign(new Error(message), { code: "tela_native_response_cycle_conflict", retryable: false });
   }
 
-  #retire(key: string, reason?: unknown): void {
+  #retire(
+    key: string,
+    reason?: unknown,
+    cause: "owner_changed" | "owner_signal" | "watch_failed" | "execution_failed" | "gateway_closed" = "gateway_closed",
+  ): void {
     const lifetime = this.#lifetimes.get(key);
     if (!lifetime) return;
+    // Snapshot before cancellation; later phases cannot describe the boundary
+    // where original ownership was lost. No Host execution proof is inferred.
+    const priorState = lifetime.current.channel.state();
     this.#lifetimes.delete(key);
     lifetime.controller.abort(reason ?? new Error("Native owner retired"));
     const owned = lifetime.current;
     if (!terminalPhase(owned.channel.phase)) owned.channel.cancel(reason);
     const authority = owned.channel.binding.authority;
-    if (this.turns.active(authority.threadId, authority.turnId)?.capability === owned.capability) this.turns.retire(owned.capability, reason);
+    if (this.turns.active(authority.threadId, authority.turnId)?.capability === owned.capability) {
+      this.turns.retire(owned.capability, reason);
+      withDiagnosticContext({
+        scope_fingerprint: diagnosticFingerprint(authority.threadId),
+        turn_fingerprint: diagnosticFingerprint(authority.turnId),
+      }, () => emitDiagnosticEvent("chatgpt_tela_work", "native_turn_retired", {
+        reason_class: cause,
+        turn_phase: priorState.phase,
+        tool_round_count: priorState.toolRoundCount,
+        tool_pending: priorState.outstandingToolCallId !== undefined,
+        native_delivery_committed: priorState.outstandingNativeDelivery === "delivered",
+        result_received: priorState.nativeResultReady === true,
+        execution_proven: false,
+        retryable: false,
+      }));
+    }
+
     const launch = this.#launches.get(owned.capability);
     this.#launches.delete(owned.capability);
     // Observation owns Native lifetime; Web cleanup still finishes before closing its observer.
@@ -308,7 +331,7 @@ export class NativeResponsesGateway {
 
   async close(): Promise<void> {
     this.#controller.abort(new Error("Native gateway closed"));
-    for (const key of [...this.#lifetimes.keys()]) this.#retire(key, new Error("Native gateway closed"));
+    for (const key of [...this.#lifetimes.keys()]) this.#retire(key, new Error("Native gateway closed"), "gateway_closed");
     await Promise.allSettled([...this.#closingWatches]);
   }
 
@@ -322,6 +345,19 @@ export class NativeResponsesGateway {
     }
     if (outcome.type === "final" && this.#issuedFinals.get(outcome.delivery.capability) !== nativeTextHash(outcome.answer)) throw new Error("final outcome was not issued by this response cycle");
     const authority = channel.binding.authority;
+    channel.commitProgressTransport(outcome.delivery.progressCursor ?? channel.progressTransportCursor);
+    if (outcome.type === "tool-call") {
+      this.turns.resolve(outcome.delivery.capability)
+        .markNativeToolDelivered(outcome.delivery.callId);
+    } else {
+      const key = `${authority.threadId}\u0000${authority.turnId}`;
+      const lifetime = this.#lifetimes.get(key);
+      if (!lifetime || lifetime.current.capability !== outcome.delivery.capability) throw new Error("final delivery does not own the current response cycle");
+      lifetime.delivered = true;
+      lifetime.answerHash = nativeTextHash(outcome.answer);
+    }
+    // Emit only after the corresponding local owner/transport state has been
+    // committed. Rejected/ambiguous deliveries are not success witnesses.
     withDiagnosticContext({
       scope_fingerprint: diagnosticFingerprint(authority.threadId),
       turn_fingerprint: diagnosticFingerprint(authority.turnId),
@@ -331,17 +367,6 @@ export class NativeResponsesGateway {
       tool_round_count: channel.toolRoundCount,
       native_terminal_observed: false,
     }));
-    channel.commitProgressTransport(outcome.delivery.progressCursor ?? channel.progressTransportCursor);
-    if (outcome.type === "tool-call") {
-      this.turns.resolve(outcome.delivery.capability)
-        .markNativeToolDelivered(outcome.delivery.callId);
-      return;
-    }
-    const key = `${authority.threadId}\u0000${authority.turnId}`;
-    const lifetime = this.#lifetimes.get(key);
-    if (!lifetime || lifetime.current.capability !== outcome.delivery.capability) throw new Error("final delivery does not own the current response cycle");
-    lifetime.delivered = true;
-    lifetime.answerHash = nativeTextHash(outcome.answer);
     // Without a lifecycle observer the owner remains uncertain until explicit gateway shutdown.
     // Such inert/test sources can never authorize another response cycle.
   }

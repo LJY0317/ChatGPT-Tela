@@ -11,6 +11,17 @@ const FORBIDDEN = /(prompt|path|url|uri|secret|email|content|command|output|argu
 const FINGERPRINT = /^[a-f0-9]{24}$/;
 const SAFE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const SAFE_PROOF_STAGES = new Set(["account", "model-discovery", "connector", "readiness"]);
+/** Closed, payload-free substage vocabulary for a failed Native-to-Web context plan. */
+export const WEB_CONTEXT_PLANNER_STAGES = [
+  "request_parse", "model_route", "retained_context", "native_continuity",
+  "logical_projection", "checkpoint_lookup", "checkpoint_production",
+  "physical_context_fit", "media_binding", "settlement",
+] as const;
+export type WebContextPlannerStage = typeof WEB_CONTEXT_PLANNER_STAGES[number];
+const SAFE_WEB_CONTEXT_PLANNER_STAGES = new Set<string>(WEB_CONTEXT_PLANNER_STAGES);
+export function isWebContextPlannerStage(value: unknown): value is WebContextPlannerStage {
+  return typeof value === "string" && SAFE_WEB_CONTEXT_PLANNER_STAGES.has(value);
+}
 const STRINGS = new Set(["service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state"]);
 /** Never copies unclassified text, identifiers or payloads from a raw diagnostic file. */
 export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticEvent | undefined {
@@ -23,6 +34,10 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
     if (["ts", "event", "stage"].includes(key) || !SAFE_NAME.test(key) || FORBIDDEN.test(key)) continue;
     if (key === "proof_stage") {
       if (typeof field === "string" && SAFE_PROOF_STAGES.has(field)) safe[key] = field;
+      continue;
+    }
+    if (key === "planner_stage") {
+      if (isWebContextPlannerStage(field)) safe[key] = field;
       continue;
     }
     if (typeof field === "number" && Number.isSafeInteger(field) && Math.abs(field) <= Number.MAX_SAFE_INTEGER) safe[key] = field;

@@ -1,5 +1,5 @@
 import { BROWSER_DOCUMENT_LIFETIME, captureBrowserDiagnosticEvidence, type BrowserHost } from "@chatgpt-tela/browser-host";
-import { classifyNetworkFailure, diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, observeDiagnosticInventory, observeDiagnosticContextPressure, capturePrivateDiagnosticValue } from "@chatgpt-tela/core";
+import { classifyNetworkFailure, diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, observeDiagnosticInventory, observeDiagnosticContextPressure, capturePrivateDiagnosticValue, isWebContextPlannerStage, type WebContextPlannerStage } from "@chatgpt-tela/core";
 import {
   ChatGptSemanticProvider,
   selectChatGptWebModel,
@@ -71,7 +71,12 @@ export interface DevelopmentWebTurnPlan {
 export type DevelopmentWebTurnPlanner = (
   turn: RegisteredTurn,
   nativeRequest: unknown,
-  preparation?: { readonly signal: AbortSignal; readonly onProgress: (summary: string) => void },
+  preparation?: {
+    readonly signal: AbortSignal;
+    readonly onProgress: (summary: string) => void;
+    /** Optional diagnostic observer, not an execution or permission grant. */
+    readonly onPlannerStage?: (stage: WebContextPlannerStage) => void;
+  },
 ) => Promise<DevelopmentWebTurnPlan> | DevelopmentWebTurnPlan;
 
 export type RetiringDevelopmentWebTurnPlanner = DevelopmentWebTurnPlanner & {
@@ -185,12 +190,20 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
       const authority = turn.channel.binding.authority;
       const preparationStartedAt = Date.now();
       let preparationPhase = "native_watch";
+      let plannerStage: WebContextPlannerStage | undefined;
       let executionStarted = false;
       try {
       const nativeSignal = ownerSignal ? AbortSignal.any([abortController.signal, ownerSignal]) : abortController.signal;
       nativeSignal.throwIfAborted();
       preparationPhase = "context_plan";
-      const plan = await input.planWebTurn(turn, nativeRequest, { signal: nativeSignal, onProgress: summary => turn.channel.publishProgress(summary) });
+      const plan = await input.planWebTurn(turn, nativeRequest, {
+        signal: nativeSignal,
+        onProgress: summary => turn.channel.publishProgress(summary),
+        onPlannerStage: stage => {
+          // Custom planners are not trusted to send a valid diagnostic enum.
+          if (isWebContextPlannerStage(stage)) plannerStage = stage;
+        },
+      });
       // Planning may successfully reserve the task's transactional context
       // before the original Native owner revokes its signal. This boundary is
       // still pre-execution, so the browser catch/settlement path has not been
@@ -254,6 +267,11 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             context_mode: plan.physicalContext.mode,
             logical_estimate: plan.physicalContext.logicalTokens,
             transfer_estimate: plan.physicalContext.transferTokens,
+            // This is a projection-only upper-bound proxy, not a billing
+            // receipt or provider-reported input-token saving.
+            estimated_reused_context: plan.physicalContext.mode === "retained-delta"
+              ? Math.max(0, plan.physicalContext.logicalTokens - plan.physicalContext.transferTokens)
+              : 0,
             retained_surface: acquired.reused,
             ...(plan.diagnostics ?? {}),
           });
@@ -353,6 +371,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           });
           emitDiagnosticEvent("chatgpt_tela_work", "web_preparation_failed", {
             phase: preparationPhase, reason_class: classifyWebPreparationFailure(error),
+            ...(preparationPhase === "context_plan" && plannerStage ? { planner_stage: plannerStage } : {}),
             network_kind: classifyNetworkFailure(error),
             duration_ms: diagnosticDurationMs(preparationStartedAt),
             turn_phase: turn.channel.phase, tool_round_count: turn.channel.toolRoundCount,

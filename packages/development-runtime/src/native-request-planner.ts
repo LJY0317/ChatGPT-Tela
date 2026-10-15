@@ -714,6 +714,12 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
   };
   const pendingByTask = new Map<string, symbol>();
   const planningByTask = new Set<string>();
+  // A failed settlement and a retired physical surface must invalidate exactly
+  // the same retained context; an unowned epoch cannot justify a token-saving delta.
+  const clearRetainedContext = (threadId: string): void => {
+    retainedByTask.delete(threadId);
+    hotHistoryByTask.delete(threadId);
+  };
   /** One transactional Web epoch commit/rollback for both retained and fresh plans. */
   const settleOwnedContext = (entry: {
     readonly threadId: string;
@@ -729,13 +735,11 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     if (pendingByTask.get(entry.threadId) !== entry.pending) return;
     pendingByTask.delete(entry.threadId);
     if (outcome.status !== "completed" || outcome.documentGeneration === undefined) {
-      retainedByTask.delete(entry.threadId);
-      hotHistoryByTask.delete(entry.threadId);
+      clearRetainedContext(entry.threadId);
       return;
     }
     if (!outcome.surfaceLeaseId.trim()) {
-      retainedByTask.delete(entry.threadId);
-      hotHistoryByTask.delete(entry.threadId);
+      clearRetainedContext(entry.threadId);
       throw new Error("completed Web context requires a physical surface owner");
     }
     retainedByTask.set(entry.threadId, Object.freeze({
@@ -753,17 +757,25 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     else hotHistoryByTask.delete(entry.threadId);
   };
   const plan = async (turn: RegisteredTurn, nativeRequest: unknown, preparation?: Parameters<DevelopmentWebTurnPlanner>[2]): Promise<DevelopmentWebTurnPlan> => {
+    // Failure-only stage observations are local to this request, not attached to errors.
+    // Observer errors must not replace the original planner exception.
+    const stage = (value: Parameters<NonNullable<NonNullable<Parameters<DevelopmentWebTurnPlanner>[2]>["onPlannerStage"]>>[0]): void => {
+      try { preparation?.onPlannerStage?.(value); } catch { /* Diagnostics are best effort. */ }
+    };
+    stage("request_parse");
     const threadId = turn.channel.binding.authority.threadId;
     if (pendingByTask.has(threadId)) {
       throw new Error("native task already has an unsettled Web context plan");
     }
     const opaque = nativeOpaqueCompaction(nativeRequest);
     const opaqueFingerprint = opaque.fingerprint;
+    stage("model_route");
     const browserModel = nativeRequestBrowserModelRoute(nativeRequest);
     const physicalLimits = browserModel ? chatGptWebPhysicalLimits(browserModel.effort) : undefined;
     const budgetTokens = options.budgetTokens ?? (options.checkpointProducer ? physicalLimits?.rolloverTokenLimit : undefined);
     const currentRouteIdentity = routeIdentity(nativeRequest);
     const committed = retainedByTask.get(threadId);
+    stage("retained_context");
     const ingress = turn.channel.binding.canonicalEvidence.ingressMedia;
     if (ingress && ingress.turnId !== turn.channel.binding.authority.turnId) {
       throw new Error("Native ingress media belongs to a different current turn");
@@ -796,6 +808,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     }
     // The continuity resolver owns all cold-source and checkpoint decisions.
     // Native task authority and Web surface settlement stay in this planner.
+    stage("native_continuity");
     const continuity = await resolveNativeContextContinuity({
       threadId, currentTurnId: turn.channel.binding.authority.turnId,
       authority: turn.channel.binding.authority,
@@ -811,6 +824,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     const historyCheckpointReused = continuity.checkpointReused;
     const historyCheckpointProduced = continuity.checkpointProduced;
     const historyManualHandoff = continuity.manualHandoff;
+    stage("logical_projection");
     const projection = continuity.mode === "retained" && provenRetainedProjection
       ? provenRetainedProjection
       : projectNativeRequestContext(threadId, nativeRequest,
@@ -839,9 +853,11 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       : undefined;
     const pending = Symbol(threadId);
     if (retained && committed) {
+      stage("media_binding");
       const bound = bindNativePhysicalEvidence(projection, retained);
       const media = includedMedia(projection, bound);
       const physicalContext = physicalMediaCost(bound, media);
+      stage("settlement");
       pendingByTask.set(threadId, pending);
       return Object.freeze({
         nativeTaskId: threadId,
@@ -875,6 +891,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       });
     }
     const contentById = new Map(projection.revisions.map(item => [item.revision.id, item.content]));
+    stage("checkpoint_lookup");
     const candidates = await cachedCheckpoints(options.checkpointCache, threadId);
     let selected = activeCheckpoint(projection, candidates, budgetTokens);
     let selectedContent = selected
@@ -892,6 +909,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         return content;
       },
     });
+    stage("physical_context_fit");
     let prepared = await prepareWebContext({
       lineage: projection.lineage,
       headId: projection.headId,
@@ -928,6 +946,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           });
           throw new NativeHistoryBootstrapRequired();
         }
+        stage("checkpoint_production");
         const produced = await options.checkpointProducer(Object.freeze({
           nativeTaskId: threadId,
           sourceRevisionId: anchor.revision.id,
@@ -949,6 +968,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           estimatedTokens: checkpointTokens(content),
         });
         selectedContent = new Map([[selected.checkpoint.id, selected.content]]);
+        stage("physical_context_fit");
         prepared = await prepareWebContext({
           lineage: projection.lineage,
           headId: projection.headId,
@@ -966,11 +986,13 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // A Native source-bound checkpoint/handoff (or exact bounded original
     // history) is atomic transport context. Provider-level assistant
     // presentation trimming must not sever its provenance or limitations.
+    stage("physical_context_fit");
     const providerProjection = physicalLimits
       ? fitFreshWebPhysicalContext(prepared.physicalContext, physicalLimits, projection.protectedRevisionIds)
       : projectFreshWebPhysicalContext(prepared.physicalContext, undefined, {
           protectedRevisionIds: projection.protectedRevisionIds,
         });
+    stage("media_binding");
     const boundContext = bindNativePhysicalEvidence(projection, providerProjection.context);
     const media = includedMedia(projection, boundContext, true);
     const contextAttachment = browserModel && shouldUseChatGptContextAttachment(boundContext)
@@ -990,6 +1012,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       ? `checkpoint:${prepared.plan.checkpointId}`
       : `full:${projection.headId}`;
     const epochId = webEpochId(threadId, transportAnchor, currentRouteIdentity);
+    stage("settlement");
     pendingByTask.set(threadId, pending);
     return Object.freeze({
       nativeTaskId: threadId,
@@ -1054,8 +1077,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
   return Object.assign(planner, {
     retireSurface(threadId: string, surfaceLeaseId: string) {
       if (retainedByTask.get(threadId)?.surfaceLeaseId === surfaceLeaseId) {
-        retainedByTask.delete(threadId);
-        hotHistoryByTask.delete(threadId);
+        clearRetainedContext(threadId);
       }
     },
   });

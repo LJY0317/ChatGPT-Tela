@@ -1191,6 +1191,36 @@ test.each(['native_watch','context_plan'] as const)('preparation failure at %s i
     rmSync(root,{recursive:true,force:true});
   }
 });
+test("context planner stage is recorded only as a verified enum on failed preparation", async () => {
+  const root=mkdtempSync(join(tmpdir(),"tela-planner-substage-"));
+  const file=join(root,"events.jsonl"), previous=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+  const primary=new Error("private source-specific failure");
+  const runtime=await startDevelopmentRuntime({
+    currentTurnSource:source,
+    browserHost:new ControlledBrowserHost(async()=>{ throw Error("browser must not start"); }),
+    mcp:{kind:"external",abi:"stable"},
+    planWebTurn(_turn,_request,preparation) {
+      preparation?.onPlannerStage?.("native_continuity");
+      throw primary;
+    },
+  });
+  try {
+    const response=await post(runtime.responses.baseUrl,runtime.responses.runtimeToken,nativeRequest());
+    expect(response.status).toBe(409);
+    const rows=readFileSync(file,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+    const failure=rows.find(row=>row.stage==="web_preparation_failed");
+    expect(structuralDiagnosticEvent(failure)).toMatchObject({
+      phase:"context_plan",planner_stage:"native_continuity",reason_class:"unclassified",
+    });
+    expect(readFileSync(file,"utf8")).not.toContain(primary.message);
+  } finally {
+    await runtime.stop();
+    if(previous===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;
+    rmSync(root,{recursive:true,force:true});
+  }
+});
 
 test("preparation streams presentation and follows Native owner cancellation before browser execution", async () => {
   const owner = new AbortController();

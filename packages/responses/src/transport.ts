@@ -153,6 +153,14 @@ export async function handleNativeResponsesHttp(
           code: "tela_native_turn_already_retired",
           retryable: false,
           message: "This Native turn is already retired. Repeating it cannot recover missing history. Continue with a new, explicitly authorized Native turn and a verified checkpoint or handoff.",
+          recovery: {
+            kind: "authorized_native_continuation",
+            requires_user_action: true,
+            requires_new_native_turn: true,
+            requires_new_conversation: false,
+            reuse_verified_context_first: true,
+            prior_execution_settled: "unknown",
+          },
         },
       }, { status: 409 });
     }

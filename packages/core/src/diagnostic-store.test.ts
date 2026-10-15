@@ -39,6 +39,24 @@ test("proof stages accept only classified preparation stages", () => {
     expect(event("web_admission_failed", { proof_stage: stage })).not.toHaveProperty("proof_stage");
   }
 });
+test("planner substages survive canonical filtering and reject arbitrary strings", async () => {
+  const root = fixture(), file = join(root, "events.jsonl");
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  emitDiagnosticEvent("chatgpt_tela_work", "web_preparation_failed", {
+    phase: "context_plan", planner_stage: "native_continuity", reason_class: "unclassified",
+  });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(readDiagnosticTail(file).events.at(-1)).toMatchObject({
+    planner_stage: "native_continuity", reason_class: "unclassified",
+  });
+  const incidents = listDiagnosticIncidents(join(root, "diagnostics"));
+  expect(incidents).toHaveLength(1);
+  expect(readDiagnosticIncident(join(root, "diagnostics"), incidents[0]!.ref)).toMatchObject({
+    timeline: expect.arrayContaining([expect.objectContaining({planner_stage: "native_continuity"})]),
+  });
+  expect(event("web_preparation_failed", { planner_stage: "private_source_location" }))
+    .not.toHaveProperty("planner_stage");
+});
 test("incident selection preserves early approval evidence despite later unrelated event pressure", () => {
   const root = fixture(), file = join(root,"events.jsonl"), at = Date.parse("2026-10-05T00:00:00Z");
   const selected = event("approval_wait_transition",{phase:"input_received",operation_fingerprint:fp("owned")});

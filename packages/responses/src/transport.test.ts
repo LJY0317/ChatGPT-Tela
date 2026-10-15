@@ -223,6 +223,32 @@ describe("Native Responses HTTP transport", () => {
       expect(failure.error.code).toBe(code === "tela_web_model_unavailable" ? code : undefined);
     }
   });
+  test("generic retirement preserves its 409 and distinguishes a new turn from a new conversation", async () => {
+    const owner = new AbortController();
+    const watched = { ...source, async watchTurn() { return { signal: owner.signal, async close() {} }; } };
+    let launches = 0;
+    const gateway = new NativeResponsesGateway(watched, new ActiveTurnRegistry(), async turn => {
+      launches++;
+      turn.channel.markSubmitted();
+      turn.channel.markAccepted();
+      turn.channel.complete("fixture answer");
+    });
+    try {
+      const first = await handleNativeResponsesHttp(post(body([], false)), gateway);
+      expect(first.status).toBe(200);
+      await first.json();
+      owner.abort(new Error("fixture owner completed"));
+      const replay = await handleNativeResponsesHttp(post(body([], false)), gateway);
+      expect(replay.status).toBe(409);
+      expect((await replay.json() as { error: unknown }).error).toMatchObject({
+        code: "tela_native_turn_already_retired", retryable: false,
+        recovery: { kind: "authorized_native_continuation", requires_user_action: true,
+          requires_new_native_turn: true, requires_new_conversation: false,
+          reuse_verified_context_first: true, prior_execution_settled: "unknown" },
+      });
+      expect(launches).toBe(1);
+    } finally { await gateway.close(); }
+  });
   test("oversized cold Native history reports a recoverable 422 instead of pretending to be a connection outage", async () => {
     const turns=new ActiveTurnRegistry();
     let starts=0;
@@ -263,6 +289,7 @@ describe("Native Responses HTTP transport", () => {
     expect(retry.error.code).toBe("tela_native_history_checkpoint_required");
     expect(retry.error.retryable).toBe(false);
     expect(retry).toEqual(result);
+
     expect(nativeReads).toBe(1);
     expect(starts).toBe(1);
     expect(turns.size).toBe(0);

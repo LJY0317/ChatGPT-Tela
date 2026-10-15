@@ -1,5 +1,49 @@
 # Diagnostic evidence
 
+## Native-to-Web planner failure substage (source candidate, 2026-10-15)
+
+The existing `web_turn_plan` observation includes `logical_estimate`,
+`transfer_estimate`, and `estimated_reused_context` (only positive for a
+retained-delta projection). These are **estimates**, not measured provider
+input tokens, token-cache hits, monetary savings, or duplicate-context
+charges. A retired Native turn cannot make this estimate into proof of
+retained model context. Real accounting requires a provider-owned usage
+receipt and a separately verified surface/context lineage.
+
+An existing `web_preparation_failed` event may now include a closed,
+payload-free `planner_stage` value when failure occurred during
+`phase=context_plan`: `request_parse`, `model_route`,
+`retained_context`, `native_continuity`, `logical_projection`,
+`checkpoint_lookup`, `checkpoint_production`, `physical_context_fit`,
+`media_binding`, or `settlement`. Unknown or externally injected values
+are omitted. The field is validated by the existing canonical diagnostic
+store and retained in its incident timeline; `proof_stage` remains reserved
+for account/model-discovery/connector/readiness proof.
+
+This observation identifies the most recent planner boundary, not the root
+cause or proof of actual Native execution. The original exception, ownership,
+checkpoint authority, and retry behavior are unchanged. No new model calls,
+session creation, or full-history transfers are triggered by diagnostics.
+Retired-turn HTTP 409 remains non-retryable for the retired turn and must not
+be conflated with an initial context-planning failure or Host safety refusal.
+
+Native tool delivery evidence is deliberately ordered: `native_tool_delivery_committed`
+records the channel's successful local acknowledgement; only after that
+boundary may `native_outcome_committed` describe a tool-call outcome. A
+rejected duplicate commit must not create another success witness. Neither
+event attests Host execution, model continuation, or acceptance by a platform
+safety reviewer.
+
+Retirement emits `native_turn_retired` with a closed `reason_class`
+(`owner_changed`, `owner_signal`, `watch_failed`,
+`execution_failed`, `gateway_closed`) and an immutable pre-cancellation
+phase/tool state snapshot. This is local evidence only; a completed response
+does not imply that the Host executed any requested tool. The 409 transport
+now suggests an explicitly authorized **new Native turn**, retaining the
+existing conversation whenever independently verified. It does not launch a
+new conversation, authorize retry, or assert prior execution settlement;
+`prior_execution_settled` remains `unknown`.
+
 ## Start here
 
 Use `chatgpt-tela diagnostics list`, then `diagnostics inspect --ref <ref>`. The platform-standard

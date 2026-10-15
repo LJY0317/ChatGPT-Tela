@@ -72,6 +72,40 @@ function scratch(): string {
 }
 
 describe("Native request development Web planner", () => {
+  test("request-local stages identify model and continuity failures without modifying exceptions", async () => {
+    const unexpected = new Error("private continuity failure");
+    const stages: string[] = [];
+    const planner = createNativeRequestDevelopmentWebTurnPlanner({
+      compactionAnchor: async () => { throw unexpected; },
+    });
+    await expect(planner(registered(), {
+      model: "browser-model",
+      input: [{ type: "compaction", encrypted_content: "opaque" }, { role: "user", content: "continue" }],
+    }, {
+      signal: new AbortController().signal, onProgress() {},
+      onPlannerStage(stage) { stages.push(stage); },
+    })).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
+    expect(stages).toEqual([
+      "request_parse", "model_route", "retained_context", "native_continuity",
+    ]);
+    expect(Object.keys(unexpected)).toEqual([]);
+    const modelStages: string[] = [];
+    await expect(planner(registered(), { model: "browser-model", input: [] }, {
+      signal: new AbortController().signal, onProgress() {},
+      onPlannerStage(stage) { modelStages.push(stage); },
+    })).rejects.toThrow();
+    expect(modelStages).toContain("logical_projection");
+  });
+  test("diagnostic observer failure cannot alter request planning", async () => {
+    const plan = await createNativeRequestDevelopmentWebTurnPlanner()(registered(), {
+      input: [{ role: "user", content: "safe fixture" }],
+    }, {
+      signal: new AbortController().signal, onProgress() {},
+      onPlannerStage() { throw new Error("observer unavailable"); },
+    });
+    expect(plan.physicalContext.segments.at(-1)).toMatchObject({kind: "user", content: "safe fixture"});
+    plan.settle?.({ status: "failed" });
+  });
   test("cold old Native history accepts ONLY explicit bounded Native model handoff without reading 73MB source", async () => {
     const directory=scratch();
     try {
