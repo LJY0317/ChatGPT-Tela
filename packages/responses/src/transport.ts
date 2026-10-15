@@ -8,6 +8,7 @@ import {
 } from "./protocol";
 import { NativeProgressStream } from "./live-progress";
 import { nativeHistoryRecovery } from "./native-history-recovery";
+import { nativeProjectionRecovery } from "./native-projection-recovery";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -131,6 +132,8 @@ export async function handleNativeResponsesHttp(
       progress.signal.abort();
     } else outcome = await pending;
   } catch (error) {
+    const projectionRecovery = nativeProjectionRecovery(error);
+    if (projectionRecovery) return Response.json({ error: projectionRecovery }, { status: 400 });
     // A bounded Native-history bootstrap is a recoverable *context* limit,
     // not a transient network outage. Do not turn it into an opaque 409 or
     // replay the already-retired Native turn. No private exception payloads
@@ -147,9 +150,10 @@ export async function handleNativeResponsesHttp(
       }, { status: 422 });
     }
     if (record(error)?.code === "tela_native_turn_already_retired") {
+      // Native retries UnexpectedStatus (409) but treats InvalidRequest (400) as terminal.
       return Response.json({
         error: {
-          type: "chatgpt_tela_runtime_error",
+          type: "invalid_request_error",
           code: "tela_native_turn_already_retired",
           retryable: false,
           message: "This Native turn is already retired. Repeating it cannot recover missing history. Continue with a new, explicitly authorized Native turn and a verified checkpoint or handoff.",
@@ -162,7 +166,7 @@ export async function handleNativeResponsesHttp(
             prior_execution_settled: "unknown",
           },
         },
-      }, { status: 409 });
+      }, { status: 400 });
     }
     if (record(error)?.code === "tela_native_response_cycle_conflict") {
       return Response.json({ error: { type: "chatgpt_tela_runtime_error",

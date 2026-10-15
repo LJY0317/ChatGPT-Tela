@@ -163,3 +163,20 @@ test('Native owner cancellation reaches a summary and closes its watch without c
  expect((await router(request(body())))?.status).toBe(400);
  expect(closes).toBe(1);expect(calls).toBe(1);
 });
+
+
+test("local compaction receives attributed inter-agent evidence through the shared projector", async () => {
+  const agent = {type:"agent_message", author:"worker", recipient:"manager",
+    content:[{type:"input_text",text:"Keep this verified task evidence"}]};
+  let calls=0;
+  const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical},summarize:async input=>{
+    calls++;
+    expect(input.physicalContext.segments).toContainEqual(expect.objectContaining({
+      kind:"assistant",content:expect.stringContaining("Keep this verified task evidence")}));
+    const segment=input.physicalContext.segments.find(x=>x.content.includes("Keep this verified task evidence"))!;
+    expect(JSON.parse(segment.content)).toEqual(agent);
+    return "Summary preserves worker evidence";
+  }});
+  const response=await router(request(body({input:[agent,{type:"message",role:"user",content:"Summarize"}]})));
+  expect(response?.status).toBe(200);expect(calls).toBe(1);
+});

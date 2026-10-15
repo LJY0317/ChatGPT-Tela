@@ -55,6 +55,7 @@ function requestMessages(body: unknown): readonly { role: string; hash: string }
   return input.flatMap(raw => {
     if (!raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>;
+    if (item.type !== undefined && item.type !== "message") return [];
     if (item.role !== "user" && item.role !== "assistant") return [];
     let text: string;
     if (typeof item.content === "string") text = item.content;

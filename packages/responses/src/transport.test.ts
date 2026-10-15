@@ -8,6 +8,7 @@ import {
   NativeResponsesGateway,
 } from "@chatgpt-tela/runtime";
 import { handleNativeResponsesHttp } from "./transport";
+import { NativeProjectionUnsupported } from "@chatgpt-tela/core";
 
 const source: CanonicalCurrentTurnSource = {
   async currentTurn(threadId) {
@@ -223,7 +224,7 @@ describe("Native Responses HTTP transport", () => {
       expect(failure.error.code).toBe(code === "tela_web_model_unavailable" ? code : undefined);
     }
   });
-  test("generic retirement preserves its 409 and distinguishes a new turn from a new conversation", async () => {
+  test("generic retirement uses terminal InvalidRequest and distinguishes a new turn from a new conversation", async () => {
     const owner = new AbortController();
     const watched = { ...source, async watchTurn() { return { signal: owner.signal, async close() {} }; } };
     let launches = 0;
@@ -239,7 +240,7 @@ describe("Native Responses HTTP transport", () => {
       await first.json();
       owner.abort(new Error("fixture owner completed"));
       const replay = await handleNativeResponsesHttp(post(body([], false)), gateway);
-      expect(replay.status).toBe(409);
+      expect(replay.status).toBe(400);
       expect((await replay.json() as { error: unknown }).error).toMatchObject({
         code: "tela_native_turn_already_retired", retryable: false,
         recovery: { kind: "authorized_native_continuation", requires_user_action: true,
@@ -489,4 +490,56 @@ test("SSE carries gap progress into the next tool round without repeating commit
   expect(turns.size).toBe(1);
   await gateway.close();
   expect(turns.size).toBe(0);
+});
+
+
+test("projection failure stays sanitized and terminal after retirement without executing twice", async () => {
+  let starts = 0;
+  const registry = new ActiveTurnRegistry();
+  const gateway = new NativeResponsesGateway(source, registry, async () => {
+    starts++;
+    const failure = new NativeProjectionUnsupported();
+    failure.message = "PRIVATE request content";
+    throw failure;
+  });
+  try {
+    let first: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await handleNativeResponsesHttp(post(body([], false)), gateway);
+      expect(response.status).toBe(400);
+      const value = await response.json();
+      expect(value).toMatchObject({ error: { type: "invalid_request_error",
+        code: "tela_native_projection_unsupported", retryable: false,
+        recovery: { kind: "continue_on_native", original_history_preserved: true } } });
+      expect(JSON.stringify(value)).not.toContain("PRIVATE");
+      if (attempt === 0) first = value;
+      else expect(value).toEqual(first);
+    }
+    expect(starts).toBe(1);
+    expect(registry.size).toBe(0);
+  } finally { await gateway.close(); }
+});
+
+test("late streamed projection rejection preserves recovery and the next Native retry is terminal", async () => {
+  let fail!: () => void;
+  const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async turn => {
+    turn.channel.markSubmitted(); turn.channel.markAccepted();
+    turn.channel.publishProgress("Preparing context");
+    await new Promise<void>(resolve => { fail = resolve; });
+    throw new NativeProjectionUnsupported();
+  });
+  try {
+    const response = await handleNativeResponsesHttp(post(body()), gateway);
+    fail();
+    const text = await response.text();
+    expect(text).toContain("response.failed");
+    expect(text).toContain("tela_native_projection_unsupported");
+    expect(text).toContain('"retryable":false');
+    expect(text).not.toContain("response.completed");
+    // Native currently retries unknown response.failed codes regardless of retryable=false.
+    // The retired replay must preserve the projection cause and end that retry as HTTP 400.
+    const replay = await handleNativeResponsesHttp(post(body()), gateway);
+    expect(replay.status).toBe(400);
+    expect(await replay.json()).toMatchObject({error:{code:"tela_native_projection_unsupported"}});
+  } finally { await gateway.close(); }
 });

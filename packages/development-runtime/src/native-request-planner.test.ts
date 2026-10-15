@@ -1550,3 +1550,77 @@ describe("Native request development Web planner", () => {
     }
   });
 });
+
+
+describe("Native inter-agent request projection", () => {
+  const agent = { type: "agent_message", author: "worker", recipient: "manager",
+    content: [{ type: "input_text", text: "First evidence" }, { type: "input_text", text: "Second evidence" }] };
+  test("preserves attribution and part order without user authority or metadata-dependent identity", () => {
+    const result = projectNativeRequestContext("thread", { input: [agent] });
+    const revision = result.revisions[0]!;
+    expect(revision.revision.kind).toBe("assistant");
+    expect(JSON.parse(revision.content)).toEqual(agent);
+    expect(result.protectedRevisionIds).toContain(revision.revision.id);
+    const withMetadata = projectNativeRequestContext("thread", { input: [{ ...agent, id: "incidental-id",
+      internal_chat_message_metadata_passthrough: { turn_id: "incidental-turn" } }] });
+    expect(withMetadata.headId).toBe(result.headId);
+    expect(projectNativeRequestContext("thread", { input: [{ ...agent, author: "another-worker" }] }).headId)
+      .not.toBe(result.headId);
+  });
+  test("opaque, mixed or malformed agent input fails closed with no content in its error", () => {
+    for (const invalid of [
+      { ...agent, author: undefined }, { ...agent, recipient: "" }, { ...agent, content: "plaintext" },
+      { ...agent, content: [...agent.content, { type: "encrypted_content", encrypted_content: "PRIVATE" }] },
+      { ...agent, content: [{ type: "input_text", text: 123 }] },
+      { ...agent, content: [{ type: "future-content", text: "PRIVATE" }] },
+    ]) {
+      try { projectNativeRequestContext("thread", { input: [invalid] }); throw new Error("accepted invalid input"); }
+      catch (error) {
+        expect(error).toMatchObject({ code: "native_projection_unsupported" });
+        expect(String(error)).not.toContain("PRIVATE");
+      }
+    }
+  });
+  test("an agent message following a final cannot be mistaken for retained final-answer proof", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const initial = { type: "message", role: "user", content: "Initial request" };
+    const first = await planner(registered(), { input: [initial] });
+    first.settle?.({ status: "completed", documentGeneration: 1,
+      surfaceLeaseId: "original-page", answer: "Final answer" });
+    const next = await planner(registered(), { input: [initial,
+      { type: "message", role: "assistant", content: "Final answer" }, agent,
+      { type: "message", role: "user", content: "Follow-up" }] });
+    expect(next.retainedSurfaceLeaseId).toBeUndefined();
+    expect(next.physicalContext.mode).toBe("full");
+    expect(JSON.stringify(next.physicalContext.segments)).toContain("First evidence");
+    next.settle?.({ status: "failed" });
+  });
+});
+
+
+test("fresh Web projection preserves a substantive large agent message instead of historical-answer trimming", async () => {
+  const text = "Important verified task evidence. ".repeat(2500);
+  const planner = createNativeRequestDevelopmentWebTurnPlanner();
+  const plan = await planner(registered(), { input: [
+    { type: "agent_message", author: "worker", recipient: "manager", content: [{type:"input_text",text}] },
+    { type: "message", role: "user", content: "Continue using the agent evidence" },
+  ] });
+  const content = plan.physicalContext.segments.find(item => item.content.includes("agent_message"))!.content;
+  expect(JSON.parse(content).content).toEqual([{type:"input_text",text}]);
+  plan.settle?.({status:"failed"});
+});
+
+
+test("an attributed agent JSON matching the prior answer cannot replace Native final-answer proof", async () => {
+  const planner = createNativeRequestDevelopmentWebTurnPlanner();
+  const agent = {type:"agent_message",author:"worker",recipient:"manager",content:[{type:"input_text",text:"evidence"}]};
+  const serialized = projectNativeRequestContext("thread-1", {input:[agent]}).revisions[0]!.content;
+  const initial = {type:"message",role:"user",content:"Initial"};
+  const first = await planner(registered(), {input:[initial]});
+  first.settle?.({status:"completed",documentGeneration:1,surfaceLeaseId:"page",answer:serialized});
+  const next = await planner(registered(), {input:[initial,agent,{type:"message",role:"user",content:"Next"}]});
+  expect(next.retainedSurfaceLeaseId).toBeUndefined();
+  expect(next.physicalContext.mode).toBe("full");
+  expect(next.physicalContext.segments.some(item=>item.content===serialized)).toBe(true);
+  next.settle?.({status:"failed"});
+});

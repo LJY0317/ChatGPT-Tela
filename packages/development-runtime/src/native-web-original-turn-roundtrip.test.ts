@@ -169,6 +169,8 @@ test("readable original Legacy turn keeps one owner through Web progress, authen
       { type: "context_compaction" },
       { type: "message", role: "user", content: "Fully readable synthetic compaction summary and verified constraints" },
       { type: "message", role: "user", content: "Continue the original Native task using its tool" },
+      { type: "agent_message", author: "analysis-worker", recipient: "native-manager",
+        content: [{ type: "input_text", text: "Verified inter-agent task evidence" }] },
     ]);
     const first = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, original);
     expect(first.status).toBe(200);
@@ -177,6 +179,7 @@ test("readable original Legacy turn keeps one owner through Web progress, authen
     expect(firstOutput).toContain('"name":"fixture_native_tool"');
     expect(firstOutput).toContain("Web accepted the original task");
     expect(provider.submissions).toHaveLength(1);
+    expect(JSON.stringify(provider.submissions[0]?.physicalContext)).toContain("Verified inter-agent task evidence");
     expect(provider.submissions[0]?.nativeTurnId).toBe(turnId);
     expect(JSON.stringify(provider.submissions[0]?.physicalContext)).toContain("Fully readable synthetic compaction summary");
     expect(JSON.stringify(provider.submissions[0]?.physicalContext)).not.toContain("superseded-private-old-tool-output");
@@ -285,7 +288,7 @@ test("losing the original Native ACK while its Web tool is pending revokes the w
     expect(runtime.turns.size).toBe(0);
     const replay = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken,
       nativeRequest(turnId, [{ type: "function_call_output", call_id: "synthetic-call-1", output: TOOL_RESULT }], false));
-    expect(replay.status).toBe(409);
+    expect(replay.status).toBe(400);
     expect(await replay.text()).toContain("tela_native_turn_already_retired");
     expect(provider.events).not.toContain("web-final");
     expect(provider.submissions).toHaveLength(1);

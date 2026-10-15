@@ -19,3 +19,9 @@ test("preparation diagnostics classify known boundaries without returning arbitr
   expect(classifyWebPreparationFailure({message:"Native compaction history includes unsupported user content"})).toBe("unclassified");
   expect(classifyWebPreparationFailure(new Error("toString"))).toBe("unclassified");
 });
+
+
+test("typed projection failure is classified without exposing private exception text", () => {
+  const error = Object.assign(new Error("PRIVATE message"), { code: "native_projection_unsupported" });
+  expect(classifyWebPreparationFailure(error)).toBe("request_projection_unsupported");
+});
