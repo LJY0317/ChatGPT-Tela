@@ -8,6 +8,7 @@ import {
   type NativeHistoricalImageCandidate,
   type NativeReadableHistoryAnchor,
   type NativeWebHandoff,
+  type NativeVisiblePrefixSnapshot,
 } from "@chatgpt-tela/codex";
 import type {
   NativeEvidenceReference,
@@ -21,6 +22,7 @@ import { readNativeHistoryCheckpoint, maybeProduceNativeHistoryCheckpoint } from
 import { manualHandoffText, recentManualHandoff, storeManualHandoff } from "./native-manual-handoff-cache";
 import { recentAutomaticNativeHandoff, storeAutomaticNativeHandoff } from "./native-automatic-handoff-cache";
 import type { NativeRequestCheckpointProducer } from "./native-request-planner";
+import { produceNativeVisiblePrefixCheckpoint, type NativeVisiblePrefixStageJournal } from "./native-visible-prefix-checkpoint";
 
 /** The public adapter may initially return a bounded source without resolved local media. */
 export type NativeHistorySource = Pick<NativeCompactionHistoryProjection,
@@ -32,6 +34,12 @@ export type NativeHistorySource = Pick<NativeCompactionHistoryProjection,
 };
 
 export interface NativeContinuitySources {
+  /** One complete public indexed source, independent of optional UI compaction markers. */
+  readonly visiblePrefix?: {
+    readonly read: (threadId: string, turnId: string, signal?: AbortSignal) => Promise<NativeVisiblePrefixSnapshot>;
+    readonly accountNamespace: string;
+    readonly journal: NativeVisiblePrefixStageJournal;
+  };
   readonly compactionHistory?: (threadId: string, turnId: string) => Promise<NativeHistorySource>;
   readonly compactionAnchor?: (threadId: string, turnId: string, signal?: AbortSignal) =>
     Promise<NativeReadableHistoryAnchor>;
@@ -65,7 +73,7 @@ export interface NativeContinuitySources {
 export type NativeContinuityMode =
   | "current-input" | "retained" | "readable-checkpoint" | "cached-handoff"
   | "explicit-handoff" | "bounded-source" | "produced-checkpoint"
-  | "automatic-handoff" | "cached-automatic-handoff";
+  | "automatic-handoff" | "cached-automatic-handoff" | "visible-prefix-checkpoint";
 
 export interface NativeContinuityDecision {
   readonly mode: NativeContinuityMode;
@@ -110,7 +118,7 @@ function resolved(mode: NativeContinuityMode, visibleHistory?: string,
     ...(historyReferences !== undefined ? { historyReferences } : {}),
     checkpointReused: mode === "retained" || mode === "readable-checkpoint"
       || mode === "cached-handoff" || mode === "cached-automatic-handoff",
-    checkpointProduced: mode === "produced-checkpoint",
+    checkpointProduced: mode === "produced-checkpoint" || mode === "visible-prefix-checkpoint",
     manualHandoff: mode === "explicit-handoff",
   });
 }
@@ -134,11 +142,24 @@ export async function resolveNativeContextContinuity(input: {
   /** Validated by the caller against active retained lineage, route and Web epoch pressure. */
   readonly retainedHistory?: string;
   readonly effort?: ChatGptWebEffort;
+  readonly browserModel?: { readonly familyKey: string; readonly effort: ChatGptWebEffort };
   readonly options: NativeContinuitySources;
   readonly preparation?: Parameters<NativeRequestCheckpointProducer>[1];
 }): Promise<NativeContinuityDecision> {
   const { threadId, currentTurnId, opaque, options, preparation } = input;
   const signal = preparation?.signal;
+  const probe = async <T>(phase: "anchor" | "handoff" | "handoff_verification" | "history" | "visible_prefix", read: () => Promise<T>): Promise<T> => {
+    try { return await read(); }
+    catch (error) {
+      if (error instanceof NativeHistoryBootstrapRequired) {
+        emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_rejected", {
+          phase, reason_class: error.recoveryReason === "unindexed_history"
+            ? "history_mode_unindexed" : "history_bootstrap_required",
+        });
+      }
+      throw error;
+    }
+  };
   signal?.throwIfAborted();
   // Only the canonical in-process Native turn authority may select a Web
   // projection. The duplicate IDs are adapter inputs, NOT a second source
@@ -219,7 +240,7 @@ export async function resolveNativeContextContinuity(input: {
         }
       }
     }
-    const handoff = await options.nativeWebHandoff?.(threadId, currentTurnId, signal);
+    const handoff = await probe("handoff", async () => options.nativeWebHandoff?.(threadId, currentTurnId, signal));
     if (!handoff) return undefined;
     if (handoff.threadId !== threadId || handoff.currentTurnId !== currentTurnId
       || !handoff.handoffTurnId || !handoff.handoffItemId
@@ -234,9 +255,9 @@ export async function resolveNativeContextContinuity(input: {
     if (!options.verifyNativeWebHandoff) {
       throw new NativeHistoryBootstrapRequired();
     }
-    const verified = await options.verifyNativeWebHandoff(
+    const verified = await probe("handoff_verification", () => options.verifyNativeWebHandoff!(
       threadId, currentTurnId, handoff.handoffTurnId, handoff.answerDigest, signal,
-    );
+    ));
     signal?.throwIfAborted();
     if (!verified || verified.threadId !== threadId
       || verified.currentTurnId !== currentTurnId
@@ -271,10 +292,37 @@ export async function resolveNativeContextContinuity(input: {
   const cachedAutomatic = await automatic(false);
   if (cachedAutomatic) return cachedAutomatic;
 
+  // The installed path uses this explicit source contract. A UI compaction
+  // marker is not guaranteed to exist, so it cannot be the bootstrap authority.
+  if (options.visiblePrefix) {
+    const handoff = await manual();
+    if (handoff) return handoff;
+    if (!options.checkpointProducer || !input.effort) throw new NativeHistoryBootstrapRequired();
+    const sourceAdapter = options.visiblePrefix;
+    const source = await probe("visible_prefix", () => sourceAdapter.read(threadId, currentTurnId, signal));
+    if (source.threadId !== threadId || source.currentTurnId !== currentTurnId) {
+      throw new Error("Native visible prefix belongs to a different current turn");
+    }
+    let producedStages = 0;
+    const checkpoint = await produceNativeVisiblePrefixCheckpoint({
+      source, accountNamespace: sourceAdapter.accountNamespace,
+      journal: sourceAdapter.journal, producer: async (...args) => {
+        producedStages++;
+        return options.checkpointProducer!(...args);
+      },
+      effort: input.effort,
+      ...(input.browserModel ? { browserModel: input.browserModel } : {}),
+      confirmSource: () => sourceAdapter.read(threadId, currentTurnId, signal),
+      ...(signal ? { signal } : {}), ...(preparation ? { preparation } : {}),
+    });
+    return Object.freeze({ ...resolved("visible-prefix-checkpoint", checkpoint, [], source.references),
+      checkpointProduced: producedStages > 0, checkpointReused: producedStages === 0 });
+  }
+
   let anchor: NativeReadableHistoryAnchor | undefined;
   let anchorLimit: NativeHistoryBootstrapRequired | undefined;
   if (options.compactionAnchor && cache) {
-    try { anchor = await options.compactionAnchor(threadId, currentTurnId, signal); }
+    try { anchor = await probe("anchor", () => options.compactionAnchor!(threadId, currentTurnId, signal)); }
     catch (error) {
       if (!(error instanceof NativeHistoryBootstrapRequired)) throw error;
       anchorLimit = error;
@@ -309,7 +357,7 @@ export async function resolveNativeContextContinuity(input: {
   }
 
   let history: NativeHistorySource;
-  try { history = await options.compactionHistory(threadId, currentTurnId); }
+  try { history = await probe("history", () => options.compactionHistory!(threadId, currentTurnId)); }
   catch (error) {
     if (!(error instanceof NativeHistoryBootstrapRequired)) throw error;
     try {
@@ -356,6 +404,11 @@ export async function resolveNativeContextContinuity(input: {
   if (input.effort
     && Math.ceil(Buffer.byteLength(history.content, "utf8") / 4)
       > chatGptWebCheckpointSourceTokenLimit(input.effort)) {
+    emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_rejected", {
+      phase: "history_budget", reason_class: "source_exceeds_web_budget",
+      source_estimate: Math.ceil(Buffer.byteLength(history.content, "utf8") / 4),
+      input_budget: chatGptWebCheckpointSourceTokenLimit(input.effort),
+    });
     try {
       const generated = await automatic(true);
       if (generated) return generated;

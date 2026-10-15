@@ -294,6 +294,9 @@ export async function startCodexServiceHttpServer(input: {
           return Response.json({ result: await input.service.tools.invoke(parsed.turnCapability, parsed.invocation) });
         }
         if (request.method === "POST" && url.pathname === "/v1/shutdown") {
+          // Acknowledgement authorizes payload replacement. A refused child
+          // cleanup must return failure while service/control ownership survives.
+          await input.service.close();
           lifecycle.afterResponse(resolveShutdown);
           return Response.json({ status: "shutting-down" });
         }

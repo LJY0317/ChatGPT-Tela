@@ -15,8 +15,11 @@ import {createProfileSupervisorLifecycle} from ${JSON.stringify(supervisionModul
 const lifecycle=await createProfileSupervisorLifecycle();
 const server=await startCodexBridgeMcpHttpServer({bridge:{inventory(){return []},async invoke(){throw new Error('unused')}},authentication:{kind:'bearer',token:process.env.CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN}});
 console.log(JSON.stringify({stage:"product-profile-ready",routeId:"stdout-is-not-authority"}));
-await lifecycle.publishReady({stage:'product-profile-ready',runtimeProcessId:process.pid,slot:1,routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:'fixture',nativeTargetKind:'multi-profile',nativeReady:true,webState:'preparing',profileId:'fixture',internalMcpUrl:server.endpointUrl.href,bridgePreviewUrl:'http://127.0.0.1:1',responsesUrl:'http://127.0.0.1:1',responsesRouteFingerprint:'a'.repeat(64)});
-await lifecycle.shutdownRequested;await server.stop();lifecycle.dispose();
+const preview=Bun.serve({hostname:'127.0.0.1',port:0,fetch(request){
+if(request.method==='POST'&&new URL(request.url).pathname==='/v1/profile-stop'&&request.headers.get('authorization')==='Bearer '+process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN)return Response.json({contractVersion:1,slot:1,phase:'cleanup-complete',responsesRouteFingerprint:'a'.repeat(64)});
+return new Response(null,{status:404});}});
+await lifecycle.publishReady({stage:'product-profile-ready',runtimeProcessId:process.pid,slot:1,routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:'fixture',nativeTargetKind:'multi-profile',nativeReady:true,webState:'preparing',profileId:'fixture',internalMcpUrl:server.endpointUrl.href,bridgePreviewUrl:preview.url.href,responsesUrl:'http://127.0.0.1:1',responsesRouteFingerprint:'a'.repeat(64)});
+await lifecycle.shutdownRequested;await server.stop();await preview.stop(true);lifecycle.dispose();
 `);
   const lifecycle=new AbortController();let started=false;let quits=0;
   const target={slot:1,adapterKind:'multi-profile' as const,id:'fixture',displayName:'Fixture',state:'stopped',managed:true};

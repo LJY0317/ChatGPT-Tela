@@ -2,6 +2,41 @@ import { describe, expect, test } from "bun:test";
 import { startProfileBridgePreviewServer } from "./bridge-preview-server";
 
 describe("profile bridge preview server", () => {
+  test("shutdown requires owned auth, coalesces cleanup and retains a receipt without closing control", async () => {
+    const token = "s".repeat(48); let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const server = await startProfileBridgePreviewServer({ slot: 1, bearerToken: token,
+      async observe() { return { activeSurfaceCount: 0 }; },
+      async shutdownProfile() { calls++; await gate; return { responsesRouteFingerprint: "a".repeat(64) }; },
+    });
+    const url = new URL("v1/profile-stop", server.endpoint), headers = { authorization: `Bearer ${token}` };
+    try {
+      expect((await fetch(url, { method: "POST" })).status).toBe(401);
+      expect((await fetch(url, { method: "POST", headers: { ...headers, origin: "https://chatgpt.com" } })).status).toBe(403);
+      expect((await fetch(url, { headers })).status).toBe(404);
+      const one = fetch(url, { method: "POST", headers }), two = fetch(url, { method: "POST", headers });
+      await Bun.sleep(10); expect(calls).toBe(1); release();
+      const expected = { contractVersion: 1, slot: 1, phase: "cleanup-complete", responsesRouteFingerprint: "a".repeat(64) };
+      expect(await (await one).json()).toEqual(expected); expect(await (await two).json()).toEqual(expected);
+      expect(await (await fetch(url, { method: "POST", headers })).json()).toEqual(expected);
+      expect(calls).toBe(1);
+    } finally { release(); await server.close(); }
+  });
+  test("refused cleanup preserves control and may be explicitly requested again", async () => {
+    let refuse = true, calls = 0; const token = "q".repeat(48);
+    const server = await startProfileBridgePreviewServer({ slot: 2, bearerToken: token,
+      async observe() { return { activeSurfaceCount: 0 }; },
+      async shutdownProfile() { calls++; if (refuse) throw Error("PRIVATE quit dialog detail"); return { responsesRouteFingerprint: "b".repeat(64) }; },
+    });
+    const url = new URL("v1/profile-stop", server.endpoint), headers = { authorization: `Bearer ${token}` };
+    try {
+      const rejected = await fetch(url, { method: "POST", headers });
+      expect(rejected.status).toBe(409); expect(await rejected.text()).not.toContain("PRIVATE"); expect(calls).toBe(1);
+      refuse = false;
+      expect((await fetch(url, { method: "POST", headers })).status).toBe(200); expect(calls).toBe(2);
+    } finally { await server.close(); }
+  });
   test("synthetic saved cleanup is separately authenticated, deletion-only and strips internal errors", async () => {
     let calls = 0;
     const token = "u".repeat(48);

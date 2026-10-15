@@ -185,6 +185,52 @@ test('paginated Native history finds an indexed compaction marker without full-t
  expect(closed).toBe(1);
 });
 
+test('anchor discovery uses bounded indexed data rather than a 192-item correctness cutoff',async()=>{
+ for(const markerPresent of [true,false]){
+  let pages=0,closed=0,metadataReads=0;
+  const rpc={
+   async request(method:string,params:any){
+    if(method==='thread/read'){
+     metadataReads++;
+     expect(params.includeTurns).toBe(false);
+     return {thread:{id:'thread',historyMode:'paginated',status:{type:'active'}}};
+    }
+    if(method==='thread/turns/list')return {data:[
+     {id:'current',status:'inProgress',itemsView:'notLoaded',items:[]},
+    ]};
+    if(method!=='thread/items/list')throw Error('Unexpected source');
+    const start=pages++*4;
+    const data=Array.from({length:Math.min(4,245-start)},(_,i)=>({
+     turnId:'prior',item:{id:`item-${start+i}`,
+      type:markerPresent&&start+i===244?'contextCompaction':'commandExecution'},
+    }));
+    return {data,nextCursor:start+4<245?String(pages):null};
+   },async close(){closed++;},
+  };
+  const pending=new AppServerCompactionHistorySource(async()=>rpc).latestAnchor('thread','current');
+  if(markerPresent)expect((await pending).compactionItemId).toBe('item-244');
+  else await expect(pending).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
+  expect(pages).toBe(62);
+  expect(metadataReads).toBe(markerPresent?2:1);
+  expect(closed).toBe(1);
+ }
+});
+
+test('indexed anchor search still stops at its aggregate byte budget without guessing a marker',async()=>{
+ let pages=0,closed=0;
+ const rpc={async request(method:string){
+  if(method==='thread/read')return {thread:{id:'thread',historyMode:'paginated',status:{type:'active'}}};
+  if(method==='thread/turns/list')return {data:[{id:'current',status:'inProgress',itemsView:'notLoaded',items:[]}]};
+  if(method!=='thread/items/list')throw Error('Unexpected source');
+  pages++;
+  return {data:[{turnId:'prior',item:{id:`item-${pages}`,type:'commandExecution',aggregatedOutput:'x'.repeat(1024*1024)}}],nextCursor:String(pages)};
+ },async close(){closed++;}};
+ await expect(new AppServerCompactionHistorySource(async()=>rpc).latestAnchor('thread','current'))
+  .rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
+ expect(pages).toBe(4);
+ expect(closed).toBe(1);
+});
+
 test('Legacy Native anchor discovery fails before replaying even a shallow server-side page',async()=>{
  const old:any=snapshot();
  old.thread.historyMode='legacy';
@@ -455,4 +501,142 @@ test('latest checkpoint preserves visible intervening history across repeated co
  const data=JSON.parse(result.content);expect(data.items).toHaveLength(3);
  expect(result.content).toContain('Intervening task');
  expect(data.items.some((x:any)=>x.item.type==='contextCompaction')).toBe(false);
+});
+
+function prefixSource(options: {
+ entries?: any[]; mode?: string;
+ change?: (method: string, result: any, call: number) => any;
+} = {}) {
+ const calls: string[] = [];
+ let closed = 0;
+ const entries = options.entries ?? [];
+ const rpc = {
+  async request(method: string, params: any) {
+   calls.push(method);
+   let result: any;
+   if (method === 'thread/read') {
+    expect(params.includeTurns).toBe(false);
+    result = {thread:{id:'thread',status:{type:'active'},historyMode:options.mode ?? 'paginated',
+      cwd:'/fixture',source:'appServer',environments:[]}};
+   } else if (method === 'thread/turns/list') {
+    expect(params).toEqual({threadId:'thread',sortDirection:'desc',itemsView:'notLoaded',limit:1});
+    result = {data:[{id:'current',status:'inProgress',itemsView:'notLoaded',items:[]}]};
+   } else if (method === 'thread/items/list') {
+    expect(params.limit).toBe(4);
+    expect(params.sortDirection).toBe('desc');
+    const offset = params.cursor ? Number(params.cursor) : 0;
+    result = {data:entries.slice(offset,offset+4),nextCursor:offset+4<entries.length?String(offset+4):null};
+   } else throw Error('Unexpected public source');
+   return options.change?.(method,result,calls.filter(x=>x===method).length) ?? result;
+  }, async close() { closed++; },
+ };
+ return {reader:new AppServerCompactionHistorySource(async()=>rpc),calls,closed:()=>closed};
+}
+const prefixEntry = (id:string, turnId='prior', text=id) => ({turnId,
+ item:{id,type:'agentMessage',text}});
+
+test('complete visible prefix exhausts more than 192 indexed items without requiring any marker',async()=>{
+ const entries=Array.from({length:245},(_,i)=>prefixEntry(`item-${244-i}`));
+ const f=prefixSource({entries});
+ const result=await f.reader.completeVisiblePrefix('thread','current');
+ expect(result.kind).toBe('native-visible-prefix');
+ expect(result.sourceItemCount).toBe(245);
+ const parsed=JSON.parse(result.content);
+ expect(parsed.items[0].item.id).toBe('item-0');
+ expect(parsed.items.at(-1).item.id).toBe('item-244');
+ expect(result).not.toHaveProperty('compactionItemId');
+ expect(result.digest).toMatch(/^[0-9a-f]{64}$/);
+ expect(f.calls.filter(x=>x==='thread/items/list')).toHaveLength(62);
+ expect(f.calls.filter(x=>x==='thread/turns/list')).toHaveLength(2);
+ expect(f.closed()).toBe(1);
+});
+
+test('complete prefix excludes all current-turn evidence and hidden reasoning, preserving real markers and sanitized assets',async()=>{
+ const entries=[prefixEntry('current-answer','current','not historical'),
+  {turnId:'current',item:{id:'current-tool',type:'commandExecution',aggregatedOutput:'current output'}},
+  prefixEntry('old'),{turnId:'prior',item:{id:'reason',type:'reasoning',rawContent:'hidden'}},
+  {turnId:'prior',item:{id:'real-marker',type:'contextCompaction'}},
+  {turnId:'prior',item:{id:'image',type:'userMessage',content:[{type:'localImage',path:'/private/image.png'}]}}];
+ const result=await prefixSource({entries}).reader.completeVisiblePrefix('thread','current');
+ expect(result.sourceItemCount).toBe(3);
+ expect(result.content).not.toContain('not historical');
+ expect(result.content).not.toContain('current output');
+ expect(result.content).not.toContain('hidden');
+ expect(result.content).not.toContain('/private/image.png');
+ expect(JSON.parse(result.content).items[1].item).toEqual({id:'real-marker',type:'contextCompaction'});
+ expect(result.localImageCandidates).toHaveLength(1);
+ expect(result.references).toHaveLength(1);
+});
+
+test('empty complete prefix is valid and stable; digest binds source and owner but not current turn identity',async()=>{
+ const first=await prefixSource().reader.completeVisiblePrefix('thread','current');
+ const repeat=await prefixSource().reader.completeVisiblePrefix('thread','current');
+ expect(first.sourceItemCount).toBe(0);
+ expect(JSON.parse(first.content).items).toEqual([]);
+ expect(first.digest).toBe(repeat.digest);
+ const otherTurn=prefixSource({change(method,result){
+  if(method==='thread/turns/list')result.data[0].id='next';
+  return result;
+ }});
+ expect((await otherTurn.reader.completeVisiblePrefix('thread','next')).digest).toBe(first.digest);
+ const owner=prefixSource({change(method,result){
+  if(method==='thread/read')result.thread.cwd='/other';
+  return result;
+ }});
+ expect((await owner.reader.completeVisiblePrefix('thread','current')).digest).not.toBe(first.digest);
+ const source=await prefixSource({entries:[prefixEntry('old')]}).reader.completeVisiblePrefix('thread','current');
+ expect(source.digest).not.toBe(first.digest);
+});
+
+test('prefix rejects foreign ownership, head changes, legacy mode, and incomplete indexed streams',async()=>{
+ for(const broken of ['foreign-owner','owner-change','foreign-turn','head-change','legacy','duplicate','cursor','empty-page','order'] as const){
+  const entries=broken==='duplicate'?[prefixEntry('same'),prefixEntry('same')]
+   :broken==='order'?[prefixEntry('old'),prefixEntry('new','current')]
+   :Array.from({length:8},(_,i)=>prefixEntry(`item-${i}`));
+  const f=prefixSource({entries,mode:broken==='legacy'?'legacy':'paginated',change(method,result,call){
+   if(method==='thread/read'&&broken==='foreign-owner')result.thread.id='foreign';
+   if(method==='thread/read'&&broken==='owner-change'&&call===2)result.thread.cwd='/changed';
+   if(method==='thread/turns/list'&&(broken==='foreign-turn'||broken==='head-change'&&call===2))result.data[0].id='foreign';
+   if(method==='thread/items/list'&&broken==='cursor')result.nextCursor='same';
+   if(method==='thread/items/list'&&broken==='empty-page')result.data=[];
+   return result;
+  }});
+  await expect(f.reader.completeVisiblePrefix('thread','current')).rejects.toThrow();
+  expect(f.closed()).toBe(1);
+  if(broken==='legacy'||broken==='foreign-owner'||broken==='foreign-turn')
+   expect(f.calls.includes('thread/items/list')).toBe(false);
+ }
+});
+
+test('prefix enforces per-response and aggregate byte budgets and caller cancellation',async()=>{
+ for(const size of [2*1024*1024,1024*1024]){
+  const entries=Array.from({length:12},(_,i)=>prefixEntry(`item-${i}`,'prior','x'.repeat(size)));
+  const f=prefixSource({entries,change(method,result){
+   // Single-item pages exercise the aggregate limit independently of page limit.
+   if(method==='thread/items/list'&&size===1024*1024){
+    const index=Number(result.data[0].item.id.slice(5));
+    return {data:[result.data[0]],nextCursor:index+1<entries.length?String(index+1):null};
+   }
+   return result;
+  }});
+  await expect(f.reader.completeVisiblePrefix('thread','current')).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
+  expect(f.closed()).toBe(1);
+ }
+ const f=prefixSource();
+ const abort=new AbortController();abort.abort();
+ await expect(f.reader.completeVisiblePrefix('thread','current',abort.signal)).rejects.toThrow();
+ expect(f.calls).toHaveLength(0);
+});
+
+test('prefix digest is independent of JSON member order but changes for visible evidence',async()=>{
+ const first=await prefixSource({entries:[prefixEntry('old')]}).reader.completeVisiblePrefix('thread','current');
+ const reordered=await prefixSource({entries:[{item:{text:'old',type:'agentMessage',id:'old'},turnId:'prior'}],
+  change(method,result){
+   if(method==='thread/read')result.thread={source:'appServer',cwd:'/fixture',environments:[],
+    status:{type:'active'},historyMode:'paginated',id:'thread'};
+   return result;
+  }}).reader.completeVisiblePrefix('thread','current');
+ expect(reordered.digest).toBe(first.digest);
+ const changed=await prefixSource({entries:[prefixEntry('old','prior','different')]}).reader.completeVisiblePrefix('thread','current');
+ expect(changed.digest).not.toBe(first.digest);
 });

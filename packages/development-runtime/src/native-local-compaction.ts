@@ -69,7 +69,14 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
           const continuity = await resolveNativeContextContinuity({
             threadId: claim.threadId, currentTurnId: claim.turnId,
             authority: historicalTurnAuthority(activeOwner),
-            opaque, effort: browserModel.effort, options: input,
+            opaque, effort: browserModel.effort, browserModel, options: {
+              ...input,
+              checkpointProducer: async (request, preparation) => ({
+                nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId,
+                content: await input.summarize({ ...request, browserModel,
+                  ...(preparation ? { signal: preparation.signal } : {}) }),
+              }),
+            },
             ...(watch ? { preparation: {
               signal: watch.signal, onProgress: (_summary: string) => {},
             } } : {}),

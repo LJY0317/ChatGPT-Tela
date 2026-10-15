@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
+import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
 import { RuntimeTurnChannel } from "./turn-channel";
 
 export interface TurnCapabilityResolver {
@@ -51,7 +52,8 @@ export class ActiveTurnRegistry {
   readonly #byCapability = new Map<string, RuntimeTurnChannel>();
   readonly #nativeCallIdsByTurn = new Map<string, Set<string>>();
   readonly #capabilityByTurn = new Map<string, string>();
-  readonly #retiredTurns = new Map<string, true>();
+  // A fixed recovery classification only; never retain raw exceptions or request content.
+  readonly #retiredTurns = new Map<string, true | NativeHistoryBootstrapRequired["recoveryReason"]>();
   static readonly MAX_RETIRED_TURNS = 256;
   readonly #routeId: string | undefined;
 
@@ -62,7 +64,7 @@ export class ActiveTurnRegistry {
   register(binding: NativeTurnBinding): RegisteredTurn {
     const key = turnKey(binding);
     if (this.#retiredTurns.has(key)) {
-      throw new NativeTurnAlreadyRetired();
+      throw this.retiredError(binding.authority.threadId, binding.authority.turnId);
     }
     if (this.#capabilityByTurn.has(key)) {
       throw new Error("native turn already has an active runtime owner");
@@ -85,6 +87,12 @@ export class ActiveTurnRegistry {
   /** Only for rejecting a previously canonically proven, retired turn. */
   isRetired(threadId: string, turnId: string): boolean {
     return this.#retiredTurns.has(threadId + "\u0000" + turnId);
+  }
+
+  retiredError(threadId: string, turnId: string): Error {
+    const reason = this.#retiredTurns.get(threadId + "\u0000" + turnId);
+    return reason !== undefined && reason !== true
+      ? new NativeHistoryBootstrapRequired(reason) : new NativeTurnAlreadyRetired();
   }
 
   resolve(token: string): RuntimeTurnChannel {
@@ -116,7 +124,7 @@ export class ActiveTurnRegistry {
     return Object.freeze({ capability: nextToken, channel });
   }
 
-  retire(token: string): void {
+  retire(token: string, failure?: unknown): void {
     const channel = this.resolve(token);
     const key = turnKey(channel.binding);
     channel.releaseProgress();
@@ -124,7 +132,12 @@ export class ActiveTurnRegistry {
     this.#capabilityByTurn.delete(key);
     this.#nativeCallIdsByTurn.delete(key);
     this.#retiredTurns.delete(key);
-    this.#retiredTurns.set(key, true);
+    const error = failure && typeof failure === "object"
+      ? failure as { code?: unknown; recoveryReason?: unknown } : undefined;
+    this.#retiredTurns.set(key, error?.code === "native_history_bootstrap_required"
+      ? error.recoveryReason === "checkpoint_interrupted" ? "checkpoint_interrupted"
+        : error.recoveryReason === "unindexed_history" ? "unindexed_history" : "source_unavailable"
+      : true);
     while (this.#retiredTurns.size > ActiveTurnRegistry.MAX_RETIRED_TURNS) {
       const oldest = this.#retiredTurns.keys().next().value as string | undefined;
       if (!oldest) break;

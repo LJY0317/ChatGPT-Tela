@@ -152,7 +152,7 @@ export class NativeResponsesGateway {
         current_authority_proven: false,
         retryable: false,
       }));
-      throw new NativeTurnAlreadyRetired();
+      throw this.turns.retiredError(identity.threadId, identity.turnId);
     }
     const binding = await bindNativeTurnRequest(body, this.source);
     this.#controller.signal.throwIfAborted();
@@ -296,7 +296,7 @@ export class NativeResponsesGateway {
     const owned = lifetime.current;
     if (!terminalPhase(owned.channel.phase)) owned.channel.cancel(reason);
     const authority = owned.channel.binding.authority;
-    if (this.turns.active(authority.threadId, authority.turnId)?.capability === owned.capability) this.turns.retire(owned.capability);
+    if (this.turns.active(authority.threadId, authority.turnId)?.capability === owned.capability) this.turns.retire(owned.capability, reason);
     const launch = this.#launches.get(owned.capability);
     this.#launches.delete(owned.capability);
     // Observation owns Native lifetime; Web cleanup still finishes before closing its observer.

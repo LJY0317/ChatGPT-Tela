@@ -3,7 +3,8 @@ import { runInNewContext } from 'node:vm';
 import { expect, test } from 'bun:test';
 import type { BrowserSurfaceLease } from '@chatgpt-tela/browser-host';
 import type { WebContextCheckpointRequest, WebTurnRequest } from './index';
-import { ChatGptContextCheckpointProvider } from './checkpoint-provider';
+import { ChatGptContextCheckpointProvider, chatGptCheckpointInputTokens } from './checkpoint-provider';
+import { serializeChatGptContextAttachment } from './context-attachment';
 import { decodeNativeInlineEvidence, nativeEvidenceRef } from '@chatgpt-tela/core';
 import { webEvidenceFilename } from './turn-media';
 import { assistantMarkdown } from './answer-markdown';
@@ -154,4 +155,17 @@ test('checkpoint forwards only proven public progress, preserving the source/res
   expect(progress).toEqual(['Checking the prior decisions']);
   expect(result.state).toBe('proven');
   expect(f.submitted().toolBridge).toBeUndefined();
+});
+
+test('checkpoint budget measurement equals effective serialized UTF8 input including escaped source and repeated policies',async()=>{
+ const f=fixture();
+ const request={...source,physicalContext:{...source.physicalContext,segments:source.physicalContext.segments.map(segment=>({
+  ...segment,content:'한글😀\\\"\n'.repeat(1000),
+ }))}};
+ await f.provider.createContextCheckpoint(surface,request);
+ const physical=f.submitted().physicalContext;
+ const actual=Math.ceil(Buffer.byteLength(serializeChatGptContextAttachment(physical),'utf8')/4);
+ expect(physical.transferTokens).toBe(actual);
+ expect(chatGptCheckpointInputTokens(request.physicalContext)).toBe(actual);
+ expect(actual).toBeGreaterThan(Math.ceil(serializeChatGptContextAttachment(request.physicalContext).length/4));
 });

@@ -22,7 +22,7 @@ const family = { key: chatGptWebFamilyKey("Fixture Web"), label: "Fixture Web", 
 const model = chatGptWebModelId(family.key);
 const metadata = { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "thread-1", turn_id: "turn-1" } };
 
-async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
+async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly context?: import("./electron").ElectronDevelopmentRuntimeOptions["context"]; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-native-first-"));
   const config = loadProductProfileRuntimeConfig({
     CHATGPT_TELA_PROFILE_ROOT: root, CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "1", CHATGPT_TELA_PRODUCT_ROUTE_ID: "fixture123",
@@ -204,7 +204,7 @@ async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean
 }
 
 test("ordinary product tasks have no implicit Native fork, no elapsed-time deadline and require lifecycle authority", async () => {
-  let contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown } | undefined;
+  let contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly context?: import("./electron").ElectronDevelopmentRuntimeOptions["context"]; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown } | undefined;
   const f = await fixture({ noLifecycle: true, onExecutionContract: value => { contract = value; } });
   try {
     await f.runtime.prepareWeb();
@@ -214,6 +214,11 @@ test("ordinary product tasks have no implicit Native fork, no elapsed-time deadl
     // The real product must still omit both optional model-backed hooks.
     expect(contract).not.toHaveProperty("automaticNativeHandoff");
     expect(contract).not.toHaveProperty("verifyAutomaticNativeHandoff");
+    expect(contract?.context?.visiblePrefix?.accountNamespace).toBe("a".repeat(64));
+    expect(contract?.context?.visiblePrefix?.journal).toBeDefined();
+    expect(contract?.context?.visiblePrefix?.read).toBeTypeOf("function");
+    expect(contract).not.toHaveProperty("compactionAnchor");
+    expect(contract).not.toHaveProperty("compactionHistory");
     if (!contract?.currentTurnSource.watchTurn) throw new Error("missing product lifecycle adapter");
     // The synthetic Native source has no lifecycle contract. It must fail before browser submission.
     await expect(contract.currentTurnSource.watchTurn("thread-1", "turn-1"))
@@ -516,6 +521,7 @@ test("stop closes Web admission before late completion and releases each owned h
   const f = await fixture({ holdCreation: true });
   try {
     const stop = f.runtime.stop(); expect(f.runtime.stop()).toBe(stop);
+    await Promise.resolve();
     expect(f.runtime.webState).toBe("closed");
     f.gate.resolve(); await stop;
     expect(f.nativeStops).toBe(1); expect(f.browserStops).toBe(1); expect(f.webGenerations).toBe(0);
@@ -529,7 +535,8 @@ test("failed normal Native quit keeps transport usable until explicit retry", as
     await f.runtime.prepareWeb();
     await expect(f.runtime.stop()).rejects.toThrow("normal quit refused");
     expect((await f.post("native-fixture")).status).toBe(200);
-    expect((await f.post(model)).status).toBe(400);
+    expect(f.runtime.webState).toBe("ready");
+    expect((await f.post(model)).status).toBe(200);
     expect(f.browserStops).toBe(0);
     f.fix(); await f.runtime.stop(); expect(f.browserStops).toBe(1);
   } finally { await f.cleanup(); }

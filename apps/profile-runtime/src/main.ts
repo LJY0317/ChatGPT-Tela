@@ -38,6 +38,7 @@ async function main(): Promise<void> {
   });
   let preview: ProfileBridgePreviewServer;
   let accountRevision = 0;
+  let drain: (() => Promise<void>) | undefined;
   const readNativeAccount = async (signal: AbortSignal) => {
     const rpc = await connectCodexAppServerWebSocket(runtime.routedTarget.session.endpoint, { signal });
     try { return await rpc.request("account/read", { refreshToken: false }, signal); }
@@ -70,6 +71,11 @@ async function main(): Promise<void> {
         ...(runtime.accountManagementActive ? { accountManagementActive: true } : {}) }),
       waitForWeb: () => runtime.waitForWeb(),
       reconnectWeb: () => runtime.reconnectWeb(),
+      shutdownProfile: async () => {
+        if (!drain) throw new Error("Profile lifecycle is not ready for shutdown");
+        await drain();
+        return { responsesRouteFingerprint: runtime.routedTarget.session.responsesRouteFingerprint };
+      },
       openAccountBrowser: () => runtime.openWebAccountBrowser(),
       closeAccountBrowser: () => runtime.closeWebAccountBrowser(),
       inspectHistoryUi: () => runtime.inspectWebHistoryUi(),
@@ -134,15 +140,21 @@ async function main(): Promise<void> {
   });
 
   let stopping: Promise<void> | undefined;
+  let draining: Promise<void> | undefined;
+  drain = () => {
+    draining ??= (async () => {
+      // A refusal to quit must leave account observation and private control
+      // alive. Only successful target cleanup permits their teardown.
+      await runtime.stop();
+      await accountLifecycle.stop();
+    })().catch(error => { draining = undefined; throw error; });
+    return draining;
+  };
   const stop = () => {
     if (!stopping) {
       stopping = (async () => {
-        // A broken account-observer connection must not prevent normal owned runtime cleanup.
-        const failures: unknown[] = [];
-        for (const close of [() => accountLifecycle.stop(), () => preview.close(), () => runtime.stop()]) {
-          try { await close(); } catch (error) { failures.push(error); }
-        }
-        if (failures.length) throw new AggregateError(failures, "Profile cleanup incomplete");
+        await drain!();
+        await preview.close();
         app.removeListener("window-all-closed", keepAliveWithoutWindows);
         lifecycle.dispose();
         app.quit();

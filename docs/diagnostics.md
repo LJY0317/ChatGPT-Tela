@@ -427,3 +427,5 @@ cost has not been measured in production.
 interruption, and incomplete inspection from a completed stream. An incomplete observation is not
 proof of absence of a server failure. Diagnostics preserve status, headers, bytes, backpressure,
 cancellation, and original read errors; they neither recover nor retry the user's task.
+
+| Native visible-prefix checkpoint | `native_visible_prefix_checkpoint_started`, `native_visible_prefix_stage_settled`, `native_visible_prefix_stage_rejected` | Complete indexed visible history can bootstrap Web without an optional UI compaction marker. Records bounded source bytes/item count, fragment/stage counts, fixed fragment/merge phase and completed/reused/uncertain outcome. No historical text or source identifiers. The account-scoped execution journal owns submitted-stage receipts; disposable caches do not authorize reuse or retries. An uncertain submission returns `tela_native_checkpoint_reconciliation_required` with `retryable=false`; subsequent retired-turn retries preserve that recovery decision. |

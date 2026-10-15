@@ -31,6 +31,9 @@ export async function startProfileBridgePreviewServer(input: {
   readonly webState?: () => unknown;
   readonly waitForWeb?: () => Promise<void>;
   readonly reconnectWeb?: () => Promise<void>;
+  /** Cleanup receipt only. Keep this control endpoint and supervision lease
+   * alive until the parent receives it and releases its lease. */
+  readonly shutdownProfile?: () => Promise<{ readonly responsesRouteFingerprint: string }>;
   readonly openAccountBrowser?: () => Promise<void>;
   readonly closeAccountBrowser?: () => Promise<void>;
   readonly inspectHistoryUi?: () => Promise<Omit<CodexHistoryUiContract, "slot">>;
@@ -53,6 +56,7 @@ export async function startProfileBridgePreviewServer(input: {
     throw new Error("profile bridge preview slot must be 1-99");
   }
   if (input.bearerToken.length < 32) throw new Error("profile bridge preview bearer is too short");
+  let shutdown: Promise<{ readonly responsesRouteFingerprint: string }> | undefined;
   const server: WebHttpServer = await startWebHttpServer({
     hostname: "127.0.0.1",
     port: 0,
@@ -61,6 +65,19 @@ export async function startProfileBridgePreviewServer(input: {
       if (request.headers.has("origin")) return new Response(null, { status: 403 });
       if (!sameSecret(bearer(request), input.bearerToken)) return new Response(null, { status: 401 });
       const url = new URL(request.url);
+      if (request.method === "POST" && url.pathname === "/v1/profile-stop" && input.shutdownProfile) {
+        try {
+          shutdown ??= input.shutdownProfile().catch(error => { shutdown = undefined; throw error; });
+          const receipt = await shutdown;
+          return Response.json({ contractVersion: 1, slot: input.slot,
+            phase: "cleanup-complete", responsesRouteFingerprint: receipt.responsesRouteFingerprint },
+          { headers: { "cache-control": "no-store" } });
+        } catch {
+          return Response.json({ error: { code: "tela_profile_shutdown_blocked",
+            message: "The owned app has not completed normal shutdown. Its control connection is preserved." } },
+          { status: 409, headers: { "cache-control": "no-store" } });
+        }
+      }
       if (request.method === "GET" && url.pathname === "/v1/account-display" && input.accountDisplay) {
         return Response.json(parseCodexAccountDisplayContract({ contractVersion: 1, slot: input.slot, ...await input.accountDisplay() }),
           { headers: { "cache-control": "no-store" } });

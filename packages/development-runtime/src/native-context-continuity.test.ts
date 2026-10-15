@@ -10,6 +10,8 @@ import {
 import { createHash } from "node:crypto";
 import { FileContextCheckpointCache } from "./context-cache";
 import { nativeOpaqueCompaction, resolveNativeContextContinuity } from "./native-context-continuity";
+import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
+import type { NativeVisiblePrefixSnapshot } from "@chatgpt-tela/codex";
 
 const authority = defineNativeTurnAuthority({
   threadId: "task-1", turnId: "web-current",
@@ -41,6 +43,44 @@ function input(overrides: Partial<Parameters<typeof resolveNativeContextContinui
     options: {},
     ...overrides };
 }
+
+test("marker-free opaque continuity consumes complete public prefix, revalidates and resumes durable stages", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "native-prefix-continuity-"));
+  try {
+    const content = JSON.stringify({ type: "tela_native_visible_prefix_v1", items: [
+      { turnId: "prior", item: { type: "agentMessage", id: "prior-answer", text: "한글 visible historical tool result ".repeat(45_000) } },
+    ] });
+    const source: NativeVisiblePrefixSnapshot = { kind: "native-visible-prefix", threadId: "task-1", currentTurnId: "web-current",
+      digest: createHash("sha256").update(content).digest("hex"), sourceItemCount: 1, content,
+      inlineAssets: [], references: [], localImageCandidates: [] };
+    const journalOptions = { directory: join(directory, "ledger"), initializationPath: join(directory, "receipt") };
+    let reads = 0, calls = 0;
+    const options = {
+      historyCheckpointCache: new FileContextCheckpointCache({ directory: join(directory, "cache") }),
+      visiblePrefix: { accountNamespace: "verified-fixture-account", journal: new FileNativeVisiblePrefixStageJournal(journalOptions),
+        read: async () => { reads++; return source; } },
+      checkpointProducer: async (request: import("./native-request-planner").NativeRequestCheckpointProductionRequest) => {
+        calls++; expect(request.browserModel).toEqual({ familyKey: "discovered-family", effort: "medium" });
+        return { nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId, content: "Source-bound derived fixture checkpoint." };
+      },
+      compactionAnchor: async () => { throw Error("UI markers are not required by this source contract"); },
+    };
+    const first = await resolveNativeContextContinuity(input({ options, effort: "medium", browserModel: { familyKey: "discovered-family", effort: "medium" } }));
+    expect(first.mode).toBe("visible-prefix-checkpoint"); expect(first.checkpointProduced).toBe(true);
+    expect(calls).toBeGreaterThan(1); expect(reads).toBe(3);
+    const previousCalls = calls;
+    const again = await resolveNativeContextContinuity(input({ options: { ...options,
+      visiblePrefix: { ...options.visiblePrefix, journal: new FileNativeVisiblePrefixStageJournal(journalOptions) },
+    }, effort: "medium", browserModel: { familyKey: "discovered-family", effort: "medium" } }));
+    expect(again.visibleHistory).toBe(first.visibleHistory); expect(calls).toBe(previousCalls);
+    expect(again.checkpointReused).toBe(true); expect(again.checkpointProduced).toBe(false);
+    expect(reads).toBe(6);
+    const envelope = JSON.parse(first.visibleHistory!);
+    expect(envelope.sourceDigest).toBe(source.digest);
+    expect(envelope.coverage).toBe("complete-visible-prefix-before-current-native-turn");
+    expect(envelope).not.toHaveProperty("compactionItemId");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+}, 30_000);
 
 test("foreign turn or thread cannot select retained, current or cached Native-to-Web context", async () => {
   let touches = 0;

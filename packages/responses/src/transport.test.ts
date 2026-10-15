@@ -53,6 +53,40 @@ function post(value: unknown): Request {
 }
 
 describe("Native Responses HTTP transport", () => {
+  test("retries preserve the original history recovery without restoring execution authority", async () => {
+    for (const recoveryReason of ["unindexed_history", "source_unavailable", "checkpoint_interrupted"] as const) {
+      let reads = 0;
+      let launches = 0;
+      const turns = new ActiveTurnRegistry();
+      const gateway = new NativeResponsesGateway({
+        async currentTurn(threadId) { reads++; return source.currentTurn(threadId); },
+      }, turns, async () => {
+        launches++;
+        throw Object.assign(new Error("PRIVATE HISTORY AND ORIGINAL EXCEPTION"), {
+          code: "native_history_bootstrap_required", recoveryReason,
+        });
+      });
+      const first = await handleNativeResponsesHttp(post(body()), gateway);
+      expect(first.status).toBe(422);
+      const expected = await first.json();
+      if (recoveryReason === "checkpoint_interrupted") expect(expected.error).toMatchObject({
+        code: "tela_native_checkpoint_reconciliation_required", retryable: false,
+        recovery: { kind: "reconcile_checkpoint", requires_new_native_turn: true },
+      });
+      expect(turns.size).toBe(0);
+      for (let retry = 0; retry < 5; retry++) {
+        const response = await handleNativeResponsesHttp(post(body()), gateway);
+        expect(response.status).toBe(422);
+        expect(await response.json()).toEqual(expected);
+        expect(turns.size).toBe(0);
+      }
+      expect(JSON.stringify(expected)).not.toContain("PRIVATE HISTORY");
+      expect(launches).toBe(1);
+      expect(reads).toBe(1);
+      await gateway.close();
+    }
+  });
+
   test("delivers public progress before final without committing it as an outcome", async () => {
     const turns = new ActiveTurnRegistry();
     let channel: import("@chatgpt-tela/runtime").RuntimeTurnChannel | undefined;
@@ -224,11 +258,11 @@ describe("Native Responses HTTP transport", () => {
     expect(JSON.stringify(result)).not.toContain("Private source contents");
     expect(starts).toBe(1);
     const replay=await handleNativeResponsesHttp(post(body([],false)),gateway);
-    expect(replay.status).toBe(409);
+    expect(replay.status).toBe(422);
     const retry = await replay.json() as {error:{code?:string;retryable?:boolean;message:string}};
-    expect(retry.error.code).toBe("tela_native_turn_already_retired");
+    expect(retry.error.code).toBe("tela_native_history_checkpoint_required");
     expect(retry.error.retryable).toBe(false);
-    expect(retry.error.message).toContain("new, explicitly authorized Native turn");
+    expect(retry).toEqual(result);
     expect(nativeReads).toBe(1);
     expect(starts).toBe(1);
     expect(turns.size).toBe(0);

@@ -79,6 +79,23 @@ procedure as package smoke; no security setting or existing app is changed.
 
 ## Stop evidence
 
+Codex profile shutdown first obtains a successful, authenticated cleanup receipt
+bound to the exact profile and Responses route. Only then may the controller
+unmount the route, release supervision, and require a successful child exit.
+Cleanup refusal leaves the control endpoint and owner available; it does not
+acknowledge daemon shutdown. Concurrent requests share the same cleanup, and a
+lost acknowledgement can read its completed receipt without repeating quit.
+The Codex HTTP acknowledgement consumes the existing service shutdown budget.
+
+On macOS, the LaunchServices `open -W` process is a launcher, not the app.
+Normal quit waits for the exact owned application PID to disappear and preserves
+replacement processes. A normal Desktop quit timeout fails instead of escalating
+to a forced quit. An owned Native backend receives at most one stop signal, with
+no forced-exit escalation on retry; POSIX engines may drain after that signal.
+Windows backend termination follows Node's process contract and does not prove
+POSIX-style draining. Startup rollback is a separate cleanup path. These source
+contracts require installed, real-OS acceptance before release claims.
+
 Supervisor admission, stop request and process-exit wait consume one deadline.
 Descriptor loss is not process exit. An old process exiting cannot remove a
 replacement instance's descriptor. The journal writes a service stop intent before sending it, and clears that

@@ -321,7 +321,7 @@ export async function startCodexService(input: {
   });
   const routedBridge = new RoutedCodexTurnBridge();
   const owned = new Map<number, OwnedProfile>();
-  const starting = new Set<number>();
+  const starting = new Map<number, Promise<void>>();
   let closing: Promise<void> | undefined;
   let stopping = false;
 
@@ -348,11 +348,26 @@ export async function startCodexService(input: {
         const afterQuit = await targets.quit(profile.target.id);
         if (afterQuit.state === "ready") throw new Error("native target remained ready after normal quit");
       }
+      // Process exit alone cannot attest successful Desktop cleanup. Keep the
+      // exact control/supervision owner until its authenticated runtime receipt.
+      const response = await fetch(new URL("v1/profile-stop", profile.bridgePreviewUrl), {
+        method: "POST", headers: { authorization: `Bearer ${profile.uiToken}` },
+        signal: AbortSignal.timeout(CHILD_STOP_TIMEOUT_MS),
+      });
+      if (!response.ok) throw new Error("Profile normal shutdown was not acknowledged; owner preserved");
+      const receipt = await response.json() as { contractVersion?: unknown; slot?: unknown; phase?: unknown; responsesRouteFingerprint?: unknown };
+      if (receipt.contractVersion !== 1 || receipt.slot !== profile.slot || receipt.phase !== "cleanup-complete"
+        || receipt.responsesRouteFingerprint !== profile.responsesRouteFingerprint) {
+        throw new Error("Profile shutdown receipt does not match its owned route");
+      }
       profile.unmount();
       await profile.bridge.close().catch(() => {});
       await profile.supervisor.close();
       if (!await waitForExit(profile.child, CHILD_STOP_TIMEOUT_MS)) {
         throw new Error(`Tela Codex profile ${profile.slot} child did not exit after its target closed`);
+      }
+      if (profile.child.exitCode !== 0 || profile.child.signalCode !== null) {
+        throw new Error("Profile child did not exit successfully after acknowledged cleanup");
       }
       await profile.supervisor.close().catch(() => {});
       owned.delete(profile.slot);
@@ -439,7 +454,8 @@ export async function startCodexService(input: {
       if (stopping || input.signal?.aborted) throw new Error("Tela Codex is stopping");
       const slot = slotNumber(slotValue);
       if (starting.has(slot)) throw new Error("A connection operation is already running for this profile; wait for it to finish");
-      starting.add(slot);
+      let settleStart!: () => void;
+      starting.set(slot, new Promise<void>(resolve => { settleStart = resolve; }));
       let phase: ProfileConnectionPhase = "checking";
       const progress = (value: ProfileConnectionPhase) => {
         phase = value;
@@ -607,7 +623,7 @@ export async function startCodexService(input: {
       } catch (cause) {
         emitDiagnosticEvent("chatgpt_tela_codex", "profile_connection_failed", { slot, phase });
         throw new ProfileConnectionError(phase, { cause });
-      } finally { starting.delete(slot); }
+      } finally { starting.delete(slot); settleStart(); }
     },
     async stopProfile(slotValue: number) {
       const slot = slotNumber(slotValue);
@@ -825,6 +841,9 @@ export async function startCodexService(input: {
       if (closing) return closing;
       stopping = true;
       closing = (async () => {
+        // Admission is closed before taking this snapshot. An already-admitted
+        // start may publish its child late; drain it before enumerating owners.
+        await Promise.all([...starting.values()]);
         const failures: unknown[] = [];
         for (const profile of [...owned.values()]) {
           try { await stopOwned(profile); }

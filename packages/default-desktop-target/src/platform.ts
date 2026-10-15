@@ -173,6 +173,24 @@ export async function requestDefaultDesktopNormalQuit(
   throw new Error(`normal default Desktop quit is unsupported on ${installation.platform}`);
 }
 
+/** The macOS LaunchServices waiter is not the app. Observe the exact owned
+ * application PID under a finite quit budget; never treat waiter exit as proof. */
+export async function waitForDefaultDesktopExit(
+  installation: DefaultDesktopInstallation,
+  expectedPid: number,
+  options: { readonly timeoutMs: number; readonly processIds?: typeof defaultDesktopProcessIds },
+): Promise<boolean> {
+  if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 0) throw new Error("Desktop exit wait requires a finite budget");
+  const read = options.processIds ?? defaultDesktopProcessIds;
+  const deadline = Date.now() + options.timeoutMs;
+  for (;;) {
+    if (!(await read(installation)).includes(expectedPid)) return true;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    await new Promise<void>(resolve => setTimeout(resolve, Math.min(100, remaining)));
+  }
+}
+
 function regularExecutable(path: string, field: string): string {
   if (!isAbsolute(path) || !existsSync(path)) throw new Error(`${field} does not exist: ${path}`);
   const stat = lstatSync(path);

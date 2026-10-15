@@ -12,6 +12,7 @@ import { ActiveTurnRegistry } from "@chatgpt-tela/runtime";
 import { MultiProfileControlClient } from "@chatgpt-tela/setup";
 import { createDefaultProfileCompositeProviderRouter } from "./composite-provider-router";
 import { FileContextCheckpointCache } from "./context-cache";
+import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 import { readChatGptTelaAccountBinding } from "./browser-profile";
 import { startModelListOverlayServer } from "./model-list-overlay-server";
 import { readWebModelDisplayCache, writeWebModelDisplayCache } from "./web-model-display-cache";
@@ -207,6 +208,7 @@ export async function startNativeFirstProductProfileRuntime(
   let displayed = readWebModelDisplayCache(config.browserProfile);
   let preparation: Promise<void> | undefined;
   let accountInvalidation: Promise<void> | undefined;
+  let stopping: Promise<void> | undefined;
   let controller: AbortController | undefined;
   let native: NativeFirstTarget | undefined;
   let webRequests = 0;
@@ -237,6 +239,8 @@ export async function startNativeFirstProductProfileRuntime(
     runtimeToken: config.responsesToken,
     authentication: { kind: "header", name: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER },
     async requestRouter(request) {
+      if (stopping) return Response.json({ error: { code: "tela_profile_stopping",
+        message: "The profile is completing normal shutdown." } }, { status: 503 });
       const routed = await router.route(request);
       if (routed) return routed;
       if (request.method !== "POST" || new URL(request.url).pathname !== "/v1/responses") return undefined;
@@ -361,14 +365,22 @@ export async function startNativeFirstProductProfileRuntime(
                 directory: resolve(config.browserProfile.userDataDir,
                   "native-history-checkpoints", account.accountFingerprint),
               }),
+              visiblePrefix: {
+                accountNamespace: account.accountFingerprint,
+                journal: new FileNativeVisiblePrefixStageJournal({
+                  directory: resolve(config.browserProfile.userDataDir,
+                    "native-visible-prefix-executions", account.accountFingerprint),
+                  initializationPath: `${config.browserProfile.accountBindingPath}.native-prefix-${account.accountFingerprint}`,
+                }),
+                read: (threadId: string, turnId: string, signal?: AbortSignal) => {
+                  if (!native) throw new Error("Native context authority is not ready");
+                  return appServerCompactionHistorySource(native.routedTarget.session.endpoint)
+                    .completeVisiblePrefix(threadId, turnId, signal);
+                },
+              },
             } : {};
           })(),
           checkpointProvider: new ChatGptContextCheckpointProvider(),
-          compactionAnchor: (threadId, turnId, signal) => {
-            if (!native) throw new Error("Native context authority is not ready");
-            return appServerCompactionHistorySource(native.routedTarget.session.endpoint)
-              .latestAnchor(threadId, turnId, signal);
-          },
           nativeWebHandoff: (threadId, turnId, signal) => {
             if (!native) throw new Error("Native context authority is not ready");
             return appServerNativeHandoffSource(native.routedTarget.session.endpoint)
@@ -385,10 +397,6 @@ export async function startNativeFirstProductProfileRuntime(
           // Do not wire even a default-denied probe into normal product
           // sessions: explicit source/owner capability must be implemented
           // and reviewed before future production opt-in.
-          compactionHistory: (threadId, turnId) => {
-            if (!native) throw new Error("Native context authority is not ready");
-            return appServerCompactionHistorySource(native.routedTarget.session.endpoint).project(threadId, turnId);
-          },
           responses: { port: 0, runtimeToken: config.responsesToken,
             authentication: { kind: "header", name: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER } },
           electron: { ...options.electron, userDataDir: config.browserProfile.userDataDir },
@@ -470,7 +478,6 @@ export async function startNativeFirstProductProfileRuntime(
   }
   const target = native!;
   const mcp = internalMcp;
-  let stopping: Promise<void> | undefined;
   const result: NativeFirstProfileRuntime = {
     config, responses, internalMcp: mcp, routedTarget: target.routedTarget,
     get webState() { return state; },
@@ -673,15 +680,17 @@ export async function startNativeFirstProductProfileRuntime(
     },
     stop() {
       if (stopping) return stopping;
-      setState("closed");
-      admitted = [];
-      accountBrowser?.detach();
-      const accountBrowserFallback = accountBrowser?.fallback;
-      accountBrowser = undefined;
-      accountBrowserBlocked = false;
-      controller?.abort(new Error("Native-first profile stopped"));
       stopping = (async () => {
         await target.stop();
+        // A normal quit may be refused. Preserve Web state/drafts/control until
+        // Native target cleanup has actually succeeded, rather than before it.
+        setState("closed");
+        admitted = [];
+        accountBrowser?.detach();
+        const accountBrowserFallback = accountBrowser?.fallback;
+        accountBrowser = undefined;
+        accountBrowserBlocked = false;
+        controller?.abort(new Error("Native-first profile stopped"));
         await accountBrowserFallback?.stop();
         await preparation?.catch(() => {});
         await accountInvalidation;

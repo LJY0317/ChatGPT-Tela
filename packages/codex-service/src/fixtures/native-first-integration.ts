@@ -16,8 +16,11 @@ import { createProfileSupervisorLifecycle } from ${JSON.stringify(resolve("apps/
 const lifecycle = await createProfileSupervisorLifecycle();
 const mcp = await startCodexBridgeMcpHttpServer({bridge:{inventory(){return []},async invoke(){throw new Error('unused')}},authentication:{kind:'bearer',token:process.env.CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN}});
 const server = Bun.serve({hostname:'127.0.0.1',port:0,fetch(){return new Response(null,{status:404})}});
-await lifecycle.publishReady({stage:'product-profile-ready',runtimeProcessId:process.pid,slot:1,routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:'fixture',nativeTargetKind:'multi-profile',nativeReady:true,webState:'preparing',profileId:'fixture',internalMcpUrl:mcp.endpointUrl.href,bridgePreviewUrl:process.env.FIXTURE_CONTROL_URL,terminalEndpoint:process.env.FIXTURE_RPC_URL,responsesUrl:server.url.href,responsesRouteFingerprint:'a'.repeat(64)});
-await lifecycle.shutdownRequested;await mcp.stop();await server.stop(true);lifecycle.dispose();
+const preview=Bun.serve({hostname:'127.0.0.1',port:0,fetch(request){const url=new URL(request.url);
+if(request.method==='POST'&&url.pathname==='/v1/profile-stop'&&request.headers.get('authorization')==='Bearer '+process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN)return Response.json({contractVersion:1,slot:1,phase:'cleanup-complete',responsesRouteFingerprint:'a'.repeat(64)});
+return fetch(new URL(url.pathname+url.search,process.env.FIXTURE_CONTROL_URL),{method:request.method});}});
+await lifecycle.publishReady({stage:'product-profile-ready',runtimeProcessId:process.pid,slot:1,routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:'fixture',nativeTargetKind:'multi-profile',nativeReady:true,webState:'preparing',profileId:'fixture',internalMcpUrl:mcp.endpointUrl.href,bridgePreviewUrl:preview.url.href,terminalEndpoint:process.env.FIXTURE_RPC_URL,responsesUrl:server.url.href,responsesRouteFingerprint:'a'.repeat(64)});
+await lifecycle.shutdownRequested;await mcp.stop();await server.stop(true);await preview.stop(true);lifecycle.dispose();
 `);
   let state = "preparing";
   let release!: () => void;

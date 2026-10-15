@@ -5,11 +5,13 @@ import { dirname, join } from "node:path";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
+import { createOwnedBackendStop, waitForOwnedProcessExit as waitForExit } from "./owned-process";
 import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import {
   createDefaultDesktopLaunch,
   defaultDesktopProcessIds,
   requestDefaultDesktopNormalQuit,
+  waitForDefaultDesktopExit,
   DesktopNormalQuitError,
   type DefaultDesktopInstallation,
 } from "./platform";
@@ -47,23 +49,6 @@ function sleep(ms: number): Promise<void> {
 
 function alive(child: ChildProcess): boolean {
   return child.exitCode === null && child.signalCode === null;
-}
-
-async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (!alive(child)) return true;
-  return new Promise(resolvePromise => {
-    let settled = false;
-    const finish = (value: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.removeListener("exit", exited);
-      resolvePromise(value);
-    };
-    const exited = () => finish(true);
-    child.once("exit", exited);
-    const timer = setTimeout(() => finish(false), timeoutMs);
-  });
 }
 
 async function terminateOwned(child: ChildProcess): Promise<void> {
@@ -304,6 +289,7 @@ export async function startDefaultDesktopTargetRuntime(input: {
     step("ready");
     diagnostic("desktop_start_complete");
     const normalQuit = input.normalQuit ?? requestDefaultDesktopNormalQuit;
+    const stopBackend = createOwnedBackendStop(backend, STOP_TIMEOUT_MS);
     let stopping: Promise<void> | undefined;
     return Object.freeze({
       installation: input.installation,
@@ -321,7 +307,7 @@ export async function startDefaultDesktopTargetRuntime(input: {
         let stopFailureReason = "unknown";
         diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: 0 });
         stopping = (async () => {
-          if (desktop && alive(desktop)) {
+          if (desktop && (alive(desktop) || input.installation.platform === "darwin")) {
             // Re-prove that the exact Desktop pid spawned by this runtime still exists as the
             // configured official Desktop before asking the OS to quit it. If the user/OS has
             // already replaced that process, preserve the replacement and tear down only Tela's
@@ -337,23 +323,26 @@ export async function startDefaultDesktopTargetRuntime(input: {
                 stopFailureReason = error instanceof DesktopNormalQuitError ? error.reasonClass : "request_failed";
                 throw error;
               }
-              if (!await waitForExit(desktop, STOP_TIMEOUT_MS)) {
-                // Discovery still proves this exact pid as the configured Desktop child, so the
-                // bounded fallback cannot target an unrelated replacement process.
-                if (input.installation.platform === "darwin") {
+              if (input.installation.platform === "darwin") {
+                if (!await waitForDefaultDesktopExit(input.installation, desktopPid!, {
+                  timeoutMs: STOP_TIMEOUT_MS, processIds,
+                })) {
                   stopFailureReason = "exit_timeout";
                   throw new Error("ChatGPT did not close after normal quit; owned app preserved");
                 }
-                desktop.kill("SIGTERM");
-                if (!await waitForExit(desktop, 2_000)) desktop.kill("SIGKILL");
-                await waitForExit(desktop, 1_000);
+                // Only the helper we spawned may now be reaped. The actual
+                // app's disappearance was independently proved above.
+                await terminateOwned(desktop);
+              } else if (!await waitForExit(desktop, STOP_TIMEOUT_MS)) {
+                stopFailureReason = "exit_timeout";
+                throw new Error("ChatGPT did not close after normal quit; owned app preserved");
               }
             }
           }
           stopPhase = "transport_cleanup";
           diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: Math.round(performance.now() - stopStarted) });
           await proxy!.close();
-          await terminateOwned(backend);
+          await stopBackend();
           if (catalogDirectory) rmSync(catalogDirectory, { recursive: true, force: true });
           diagnostic("desktop_stop_complete", { phase: "closed", duration_ms: Math.round(performance.now() - stopStarted) });
         })().catch(error => {

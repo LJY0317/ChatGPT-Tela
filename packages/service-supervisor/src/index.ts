@@ -228,7 +228,8 @@ export class LocalServiceSupervisor {
     }
     emitDiagnosticEvent("chatgpt_tela_service", "shutdown_start", { service: input.service });
     if (Date.now() >= deadline) throw new Error("service shutdown deadline expired before request");
-    const requestDeadline = deadlineSignal(Math.min(2_000, deadline - Date.now()));
+    const requestDeadline = deadlineSignal(input.service === "codex"
+      ? deadline - Date.now() : Math.min(2_000, deadline - Date.now()));
     try {
       await new LocalServiceClient(running.descriptor).shutdown(requestDeadline.signal);
     } finally {

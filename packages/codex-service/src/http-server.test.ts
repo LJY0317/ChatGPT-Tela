@@ -57,6 +57,21 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("shutdown does not acknowledge or stop the service when child cleanup is refused", async () => {
+    const service = fixtureService(); let refuse = true, calls = 0, signaled = false;
+    service.close = async () => { calls++; if (refuse) throw Error("normal owned quit refused"); };
+    const token = "q".repeat(48), server = await startCodexServiceHttpServer({ service, bearerToken: token });
+    void server.shutdownRequested.then(() => { signaled = true; });
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      expect((await fetch(new URL("v1/shutdown", server.endpoint), { method: "POST", headers })).status).toBe(409);
+      expect(calls).toBe(1); expect(signaled).toBe(false);
+      expect((await fetch(new URL("v1/status", server.endpoint), { headers })).status).toBe(200);
+      refuse = false;
+      expect((await fetch(new URL("v1/shutdown", server.endpoint), { method: "POST", headers })).status).toBe(200);
+      await server.shutdownRequested; expect(signaled).toBe(true); expect(calls).toBe(2);
+    } finally { await server.close(); }
+  });
   test("synthetic cleanup rejects browser-origin callers and mismatched profile receipts", async () => {
     const service = fixtureService();
     let invoked = 0, wrongSlot = false;

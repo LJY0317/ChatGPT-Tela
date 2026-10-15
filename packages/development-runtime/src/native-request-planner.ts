@@ -5,6 +5,7 @@ import {
 } from "@chatgpt-tela/codex";
 import {
   RevisionLineage,
+  emitDiagnosticEvent,
   planPhysicalContext,
   type ContextCheckpoint,
   type LogicalRevision,
@@ -77,6 +78,7 @@ export interface NativeRequestCheckpointProductionRequest {
   readonly sourceRevisionId: string;
   readonly physicalContext: WebPhysicalContext;
   readonly media?: readonly WebTurnMedia[];
+  readonly browserModel?: { readonly familyKey: string; readonly effort: ChatGptWebEffort };
 }
 
 export interface NativeRequestCheckpointProductionResult {
@@ -799,7 +801,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       authority: turn.channel.binding.authority,
       opaque,
       ...(retainedHistory !== undefined ? { retainedHistory } : {}),
-      ...(browserModel ? { effort: browserModel.effort } : {}),
+      ...(browserModel ? { effort: browserModel.effort, browserModel } : {}),
       options,
       ...(preparation ? { preparation } : {}),
     });
@@ -920,12 +922,17 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         // recursive compressor with unlimited input. Prevent the old
         // "compress -> immediately overflow -> compress again" cycle.
         if (!bounded) {
+          emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_rejected", {
+            phase: "checkpoint_budget", reason_class: "source_exceeds_web_budget",
+            source_estimate: checkpointPhysicalContext.transferTokens,
+          });
           throw new NativeHistoryBootstrapRequired();
         }
         const produced = await options.checkpointProducer(Object.freeze({
           nativeTaskId: threadId,
           sourceRevisionId: anchor.revision.id,
           physicalContext: bounded,
+          ...(browserModel ? { browserModel } : {}),
           ...(checkpointMedia.length ? { media: checkpointMedia } : {}),
         }), preparation);
         preparation?.signal.throwIfAborted();

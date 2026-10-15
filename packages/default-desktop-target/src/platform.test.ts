@@ -6,6 +6,7 @@ import {
   createDefaultDesktopLaunch,
   defaultDesktopProcessIds,
   requestDefaultDesktopNormalQuit,
+  waitForDefaultDesktopExit,
   resolveDefaultDesktopInstallation,
   type DefaultDesktopCommandRunner,
   type DefaultDesktopDiscoveryRunner,
@@ -16,6 +17,17 @@ function executable(path: string): void {
   writeFileSync(path, "fixture", { mode: 0o700 });
   chmodSync(path, 0o700);
 }
+
+test("normal app exit proof tracks the exact app PID, preserving replacements and refusing a still-live owner", async () => {
+  const installation = { platform: "darwin", chatGptExecutable: "/fixture/app", codexExecutable: "/fixture/codex",
+    codexHome: "/fixture/home", userDataDir: "/fixture/data", normalQuitSupported: true } as const;
+  expect(await waitForDefaultDesktopExit(installation, 123, { timeoutMs: 0, processIds: async () => [123] })).toBe(false);
+  expect(await waitForDefaultDesktopExit(installation, 123, { timeoutMs: 0, processIds: async () => [456] })).toBe(true);
+  let reads = 0;
+  expect(await waitForDefaultDesktopExit(installation, 123, { timeoutMs: 500,
+    processIds: async () => ++reads === 1 ? [123] : [] })).toBe(true);
+  expect(reads).toBe(2);
+});
 
 describe("built-in default Desktop installation resolver", () => {
   test("derives the normal one-account macOS roots without Multi-Profile state", () => {

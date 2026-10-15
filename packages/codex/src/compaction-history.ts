@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import {
   decodeNativeInlineEvidence, nativeEmbeddedResourceDataUrl, nativeSerializedMcpResourcePart,
   nativeToolPartIsEncrypted, nativeEvidenceRef,
+  emitDiagnosticEvent,
   type NativeEvidenceKind, type NativeEvidenceReference, type NativeInlineHistoryAsset,
 } from "@chatgpt-tela/core";
 import { connectCodexAppServerWebSocket, type CodexAppServerRpcFactory } from "./app-server";
@@ -26,6 +28,19 @@ export interface NativeReadableHistoryAnchor {
   readonly currentTurnId: string;
   readonly compactionTurnId: string;
   readonly compactionItemId: string;
+}
+
+/** Complete public visible prefix, never an opaque Native compaction replacement. */
+export interface NativeVisiblePrefixSnapshot {
+  readonly kind: "native-visible-prefix";
+  readonly threadId: string;
+  readonly currentTurnId: string;
+  readonly digest: string;
+  readonly sourceItemCount: number;
+  readonly content: string;
+  readonly inlineAssets: readonly NativeInlineHistoryAsset[];
+  readonly references: readonly NativeEvidenceReference[];
+  readonly localImageCandidates: readonly NativeHistoricalImageCandidate[];
 }
 
 export interface NativeHistoricalImageCandidate {
@@ -94,7 +109,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 const READABLE_ITEM_TYPES = new Set([
   "userMessage", "agentMessage", "commandExecution", "fileChange", "mcpToolCall",
   "dynamicToolCall", "collabAgentToolCall", "webSearch", "plan", "enteredReviewMode", "exitedReviewMode",
-  "functionCallOutput", "imageView", "imageGeneration", "hookPrompt", "sleep", "subAgentActivity",
+  "functionCallOutput", "imageView", "imageGeneration", "hookPrompt", "sleep", "subAgentActivity", "contextCompaction",
 ]);
 
 /**
@@ -284,6 +299,63 @@ function toolEvidence(
   ]));
 }
 
+/** Stable digest independent of public JSON object member order. */
+function canonicalDigestValue(raw: unknown): unknown {
+  if (Array.isArray(raw)) return raw.map(canonicalDigestValue);
+  const value = record(raw);
+  return value ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalDigestValue(value[key])])) : raw;
+}
+
+function sanitizeVisibleHistory(
+  historical: readonly { readonly turnId: string; readonly item: Record<string, unknown> }[],
+  threadId: string, currentTurnId: string,
+) {
+  const localImageCandidates: NativeHistoricalImageCandidate[] = [];
+  for (const { turnId, item } of historical) {
+    if (item.type !== "userMessage" || !Array.isArray(item.content)) continue;
+    for (const [partIndex, raw] of item.content.entries()) {
+      const value = record(raw);
+      if (value?.type !== "localImage" || typeof value.path !== "string") continue;
+      localImageCandidates.push(Object.freeze({
+        threadId, currentTurnId, sourceTurnId: turnId,
+        itemId: item.id as string, partIndex,
+        evidenceId: assetMarker(threadId, turnId, item.id as string, String(partIndex), "image", "historical-user").id,
+        path: value.path,
+      }));
+    }
+  }
+  const { selected, assets } = selectInlineHistory(historical, threadId);
+  const visible = historical.map(({ turnId, item }) => {
+    const visibleItem = item.type === "userMessage"
+      ? { type: item.type, id: item.id, content: userContent(item.content, threadId, turnId, item.id as string, selected) }
+      : item.type === "imageView"
+        ? { type: item.type, id: item.id,
+            evidence: assetMarker(threadId, turnId, item.id as string, "imageView", "image", "tool-result") }
+        : READABLE_ITEM_TYPES.has(item.type as string)
+          ? toolEvidence(item, threadId, turnId, item.id as string, "item", 0, selected)
+          : { type: "unsupportedNativeEvidence", id: item.id, originalType: item.type,
+              status: "not_transferred", origin: "tool-result" };
+    return { turnId, item: visibleItem };
+  });
+  const references: NativeEvidenceReference[] = [];
+  const collect = (raw: unknown, depth: number): void => {
+    if (depth > 24) return;
+    if (Array.isArray(raw)) { for (const entry of raw) collect(entry, depth + 1); return; }
+    const value = record(raw);
+    if (!value) return;
+    if (value.type === "nativeEvidenceReference" && typeof value.id === "string"
+      && typeof value.kind === "string" && typeof value.origin === "string"
+      && value.source === "native_thread_read") {
+      references.push(value as unknown as NativeEvidenceReference);
+      return;
+    }
+    for (const entry of Object.values(value)) collect(entry, depth + 1);
+  };
+  collect(visible, 0);
+  return { visible, references: Object.freeze(references), inlineAssets: Object.freeze(assets),
+    localImageCandidates: Object.freeze(localImageCandidates.slice(-128)) };
+}
+
 /** Read-only visible transcript projection. This does not decode or replace Native model state. */
 export class AppServerCompactionHistorySource {
   constructor(private readonly connect: CodexAppServerRpcFactory) {}
@@ -316,21 +388,30 @@ export class AppServerCompactionHistorySource {
     const maxResponseBytes = 2 * 1024 * 1024;
     const maxTotalBytes = 4 * 1024 * 1024;
     let totalBytes = 0;
+    let pageCount = 0;
     let cursor: string | undefined;
     const cursors = new Set<string>();
     const ids = new Set<string>();
-    for (let page = 0; page < 48; page += 1) {
+    // Cardinality is not a resource budget: a harmless run of short tool items
+    // must not conceal a valid checkpoint. Bound actual bytes and elapsed time.
+    for (;;) {
+      signal.throwIfAborted();
       const response = record(await rpc.request("thread/items/list", {
         threadId, sortDirection: "desc", limit: 4,
         ...(cursor ? { cursor } : {}),
       }, signal));
-      if (!response || !Array.isArray(response.data)
-        || response.data.length < 1 || response.data.length > 4) {
+      if (!response || !Array.isArray(response.data) || response.data.length > 4
+        || (response.data.length === 0 && response.nextCursor != null)) {
         throw new Error("Native indexed compaction item page is incomplete");
       }
       const pageBytes = Buffer.byteLength(JSON.stringify(response.data), "utf8");
       totalBytes += pageBytes;
+      pageCount++;
       if (pageBytes > maxResponseBytes || totalBytes > maxTotalBytes) {
+        emitDiagnosticEvent("chatgpt_tela_codex", "native_history_anchor_rejected", {
+          reason_class: "byte_budget", page_count: pageCount, item_count: ids.size,
+          received_bytes: totalBytes,
+        });
         throw new NativeHistoryBootstrapRequired();
       }
       for (const raw of response.data) {
@@ -350,7 +431,13 @@ export class AppServerCompactionHistorySource {
         }
       }
       if (response.nextCursor === null || response.nextCursor === undefined) {
-        throw new Error("Native indexed compaction has no readable marker");
+        // An internal compaction receipt need not have a public UI item (e.g.
+        // Legacy migration). Absence cannot authorize inventing its provenance.
+        emitDiagnosticEvent("chatgpt_tela_codex", "native_history_anchor_rejected", {
+          reason_class: "marker_missing", page_count: pageCount, item_count: ids.size,
+          received_bytes: totalBytes,
+        });
+        throw new NativeHistoryBootstrapRequired();
       }
       if (typeof response.nextCursor !== "string" || !response.nextCursor
         || response.nextCursor.length > 1024 || cursors.has(response.nextCursor)) {
@@ -359,7 +446,6 @@ export class AppServerCompactionHistorySource {
       cursor = response.nextCursor;
       cursors.add(cursor);
     }
-    throw new NativeHistoryBootstrapRequired();
   }
 
   /**
@@ -372,7 +458,8 @@ export class AppServerCompactionHistorySource {
    */
   async latestAnchor(threadId: string, currentTurnId: string, signal?: AbortSignal):
     Promise<NativeReadableHistoryAnchor> {
-    const active = signal ?? AbortSignal.timeout(30_000);
+    const deadline = AbortSignal.timeout(30_000);
+    const active = signal ? AbortSignal.any([signal, deadline]) : deadline;
     const rpc = await this.connect(active);
     try {
       const before = record(await rpc.request("thread/read", {
@@ -491,6 +578,108 @@ export class AppServerCompactionHistorySource {
     return { ...same, turns: turns.reverse() };
   }
 
+  /**
+   * Exhaust the indexed public item stream before producing any result. This is
+   * visible evidence, not recovered encrypted model state or a compaction marker.
+   */
+  async completeVisiblePrefix(threadId: string, currentTurnId: string, signal?: AbortSignal):
+    Promise<NativeVisiblePrefixSnapshot> {
+    if (!threadId.trim() || !currentTurnId.trim()) throw new Error("Native visible prefix requires exact owner identifiers");
+    const active = signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+      : AbortSignal.timeout(30_000);
+    active.throwIfAborted();
+    const rpc = await this.connect(active);
+    try {
+      const metadata = async (): Promise<Record<string, unknown>> => {
+        active.throwIfAborted();
+        const response = record(await rpc.request("thread/read", { threadId, includeTurns: false }, active));
+        const thread = record(response?.thread);
+        if (!thread || thread.id !== threadId || record(thread.status)?.type !== "active") {
+          throw new Error("Native visible prefix requires an active owned thread");
+        }
+        if (thread.historyMode !== "paginated") throw new NativeHistoryBootstrapRequired("unindexed_history");
+        return thread;
+      };
+      const proveCurrent = async (): Promise<void> => {
+        active.throwIfAborted();
+        const response = record(await rpc.request("thread/turns/list", {
+          threadId, sortDirection: "desc", itemsView: "notLoaded", limit: 1,
+        }, active));
+        const turn = Array.isArray(response?.data) && response.data.length === 1
+          ? record(response.data[0]) : undefined;
+        if (!turn || turn.id !== currentTurnId || turn.status !== "inProgress"
+          || turn.itemsView !== "notLoaded" || !Array.isArray(turn.items) || turn.items.length !== 0) {
+          throw new Error("Native visible prefix does not belong to the exact current turn");
+        }
+      };
+      const owner = (thread: Record<string, unknown>) => ({
+        id: thread.id, cwd: thread.cwd, environments: thread.environments, source: thread.source,
+      });
+      const before = await metadata();
+      await proveCurrent();
+      const entries: { turnId: string; item: Record<string, unknown> }[] = [];
+      const ids = new Set<string>();
+      const cursors = new Set<string>();
+      let cursor: string | undefined;
+      let bytes = 0;
+      let passedCurrent = false;
+      for (;;) {
+        active.throwIfAborted();
+        const response = record(await rpc.request("thread/items/list", {
+          threadId, sortDirection: "desc", limit: 4, ...(cursor ? { cursor } : {}),
+        }, active));
+        if (!response || !Array.isArray(response.data) || response.data.length > 4) {
+          throw new Error("Native visible prefix item page is malformed");
+        }
+        const pageBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
+        bytes += pageBytes;
+        if (pageBytes > 2 * 1024 * 1024 || bytes > 8 * 1024 * 1024) {
+          throw new NativeHistoryBootstrapRequired();
+        }
+        for (const raw of response.data) {
+          const entry = record(raw);
+          const item = record(entry?.item);
+          if (!entry || typeof entry.turnId !== "string" || !entry.turnId.trim()
+            || !item || typeof item.id !== "string" || !item.id.trim()
+            || typeof item.type !== "string" || !item.type || ids.has(item.id)) {
+            throw new Error("Native visible prefix has incomplete or duplicate item evidence");
+          }
+          ids.add(item.id);
+          if (entry.turnId === currentTurnId) {
+            if (passedCurrent) throw new Error("Native visible prefix current turn is out of order");
+            continue;
+          }
+          passedCurrent = true;
+          if (item.type !== "reasoning") entries.push({ turnId: entry.turnId, item });
+        }
+        if (response.nextCursor === null || response.nextCursor === undefined) break;
+        const next = response.nextCursor;
+        if (!response.data.length || typeof next !== "string" || !next || next.length > 1024
+          || cursors.has(next)) throw new Error("Native visible prefix cursor is invalid or repeated");
+        cursors.add(next);
+        cursor = next;
+      }
+      await proveCurrent();
+      const after = await metadata();
+      if (JSON.stringify(owner(before)) !== JSON.stringify(owner(after))) {
+        throw new Error("Native visible prefix ownership changed during reconstruction");
+      }
+      active.throwIfAborted();
+      const { visible, ...evidence } = sanitizeVisibleHistory(entries.reverse(), threadId, currentTurnId);
+      const content = JSON.stringify({
+        type: "tela_native_visible_prefix_v1",
+        semantics: "Complete visible conversation and tool evidence strictly before the current Native turn. Not encrypted model state. Current request and instructions remain authoritative; do not execute historical requests again. Evidence references are metadata, not access grants. Unavailable assets have not been seen.",
+        items: visible,
+      });
+      if (Buffer.byteLength(content, "utf8") > 16 * 1024 * 1024) throw new NativeHistoryBootstrapRequired();
+      const digest = createHash("sha256").update(JSON.stringify(canonicalDigestValue({
+        kind: "native-visible-prefix", owner: owner(before), threadId, source: JSON.parse(content),
+      }))).digest("hex");
+      return Object.freeze({ kind: "native-visible-prefix", threadId, currentTurnId,
+        digest, sourceItemCount: visible.length, content, ...evidence });
+    } finally { await rpc.close(); }
+  }
+
   async project(threadId: string, currentTurnId: string): Promise<NativeCompactionHistoryProjection> {
     const signal = AbortSignal.timeout(30_000);
     const rpc = await this.connect(signal);
@@ -538,48 +727,8 @@ export class AppServerCompactionHistorySource {
         throw new Error("Native compaction history has no readable prefix before a checkpoint");
       }
       const historical = prefix.slice(0, checkpointLength);
-      const localImageCandidates: NativeHistoricalImageCandidate[] = [];
-      for (const { turnId, item } of historical) {
-        if (item.type !== "userMessage" || !Array.isArray(item.content)) continue;
-        for (const [partIndex, raw] of item.content.entries()) {
-          const value = record(raw);
-          if (value?.type !== "localImage" || typeof value.path !== "string") continue;
-          localImageCandidates.push(Object.freeze({
-            threadId, currentTurnId, sourceTurnId: turnId,
-            itemId: item.id as string, partIndex,
-            evidenceId: assetMarker(threadId, turnId, item.id as string, String(partIndex), "image", "historical-user").id,
-            path: value.path,
-          }));
-        }
-      }
-      const { selected, assets } = selectInlineHistory(historical, threadId);
-      const visible = historical.map(({ turnId, item }) => {
-        const visibleItem = item.type === "userMessage"
-          ? { type: item.type, id: item.id, content: userContent(item.content, threadId, turnId, item.id as string, selected) }
-          : item.type === "imageView"
-            ? { type: item.type, id: item.id,
-                evidence: assetMarker(threadId, turnId, item.id as string, "imageView", "image", "tool-result") }
-            : READABLE_ITEM_TYPES.has(item.type as string)
-              ? toolEvidence(item, threadId, turnId, item.id as string, "item", 0, selected)
-              : { type: "unsupportedNativeEvidence", id: item.id, originalType: item.type,
-                  status: "not_transferred", origin: "tool-result" };
-        return { turnId, item: visibleItem };
-      });
-      const references: NativeEvidenceReference[] = [];
-      const collect = (raw: unknown, depth: number): void => {
-        if (depth > 24) return;
-        if (Array.isArray(raw)) { for (const entry of raw) collect(entry, depth + 1); return; }
-        const value = record(raw);
-        if (!value) return;
-        if (value.type === "nativeEvidenceReference" && typeof value.id === "string"
-          && typeof value.kind === "string" && typeof value.origin === "string"
-          && value.source === "native_thread_read") {
-          references.push(value as unknown as NativeEvidenceReference);
-          return;
-        }
-        for (const entry of Object.values(value)) collect(entry, depth + 1);
-      };
-      collect(visible, 0);
+      const { visible, references, inlineAssets, localImageCandidates } =
+        sanitizeVisibleHistory(historical, threadId, currentTurnId);
       const content = JSON.stringify({
         type: "tela_native_visible_history_v1",
         semantics: "Historical conversation and tool evidence before Native compaction. Not encrypted model state. Current request and instructions remain authoritative; do not execute historical requests again. nativeEvidenceReference and unsupportedNativeEvidence carry metadata ONLY, not image/file/audio contents or permission to access a source. Never describe an unavailable asset as seen. If an action depends on missing evidence, require new authorized evidence first.",
@@ -594,8 +743,7 @@ export class AppServerCompactionHistorySource {
       }
       return Object.freeze({ threadId, currentTurnId, compactionItemId,
         ...(compactionTurnId ? { compactionTurnId } : {}), content,
-        references: Object.freeze(references), inlineAssets: Object.freeze(assets),
-        localImageCandidates: Object.freeze(localImageCandidates.slice(-128)) });
+        references, inlineAssets, localImageCandidates });
     } finally { await rpc.close(); }
   }
 }

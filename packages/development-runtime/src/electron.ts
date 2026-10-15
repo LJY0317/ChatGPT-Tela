@@ -106,6 +106,7 @@ export interface ElectronDevelopmentRuntimeOptions {
   readonly context?: {
     readonly checkpointCache?: ContextCheckpointCache;
     readonly historyCheckpointCache?: ContextCheckpointCache;
+    readonly visiblePrefix?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["visiblePrefix"];
     readonly budgetTokens?: number;
   };
   readonly provider?: WebConversationProvider;
@@ -204,6 +205,7 @@ export async function startElectronDevelopmentRuntime(
 
   const localCompactionRouter = input.checkpointProvider ? createNativeLocalCompactionRouter({
     source: input.currentTurnSource,
+    ...(input.context?.visiblePrefix ? { visiblePrefix: input.context.visiblePrefix } : {}),
     ...(input.compactionHistory ? { compactionHistory: input.compactionHistory } : {}),
     ...(input.compactionAnchor ? { compactionAnchor: input.compactionAnchor } : {}),
     ...(input.nativeWebHandoff ? { nativeWebHandoff: input.nativeWebHandoff } : {}),
@@ -230,6 +232,7 @@ export async function startElectronDevelopmentRuntime(
     ...(input.turns ? { turns: input.turns } : {}),
     mcp: input.mcp,
     planWebTurn: input.planWebTurn ?? createNativeRequestDevelopmentWebTurnPlanner({
+      ...(input.context?.visiblePrefix ? { visiblePrefix: input.context.visiblePrefix } : {}),
       ...(input.compactionHistory ? { compactionHistory: input.compactionHistory } : {}),
       ...(input.compactionAnchor ? { compactionAnchor: input.compactionAnchor } : {}),
       ...(input.nativeWebHandoff ? { nativeWebHandoff: input.nativeWebHandoff } : {}),
@@ -246,6 +249,9 @@ export async function startElectronDevelopmentRuntime(
           const result = await runOwnedContextCheckpoint({
             browserHost,
             provider: input.checkpointProvider!,
+            ...(request.browserModel ? {
+              prepareForSubmit: (surface, signal) => selectChatGptWebModel(surface, request.browserModel!, signal),
+            } : {}),
             ...(input.webTurnTimeoutMs !== undefined
               ? { signal: AbortSignal.any([...(preparation ? [preparation.signal] : []), AbortSignal.timeout(input.webTurnTimeoutMs)]) }
               : preparation ? { signal: preparation.signal } : {}),
