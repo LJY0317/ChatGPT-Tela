@@ -12,21 +12,30 @@ function executable(path: string, content: string): void {
 
 describe("built-in default Desktop target runtime", () => {
   const executableFixtureTest = process.platform === "win32" ? test.skip : test;
-  executableFixtureTest("owns app-server/proxy/Desktop without putting the Responses secret on argv", async () => {
+  executableFixtureTest.each(["paginated", "legacy"] as const)("settles owned %s Native work before Desktop/backend shutdown without exposing Responses secrets", async historyMode => {
     const root = mkdtempSync(join(tmpdir(), "tela-default-runtime-"));
     const home = join(root, "home");
     mkdirSync(home);
     const logPath = join(root, "backend.json");
+    const statePath = join(root, "native-state");
+    writeFileSync(statePath, "active");
     const codex = join(root, "fake-codex");
     const chat = join(root, "fake-chatgpt");
     executable(codex, `#!/usr/bin/env bun
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 const args=process.argv.slice(2);
+const active=()=>readFileSync(process.env.TELA_FIXTURE_STATE,"utf8")==="active";
 writeFileSync(process.env.TELA_FIXTURE_LOG, JSON.stringify({args, secret:process.env.CHATGPT_TELA_RUNTIME_TOKEN ?? null}));
-const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(req,s){return s.upgrade(req)?undefined:new Response(null,{status:400})},websocket:{message(ws,msg){if(typeof msg!=="string")return;const v=JSON.parse(msg);if(v.method==="initialize")ws.send(JSON.stringify({id:v.id,result:{}}));}}});
+const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(req,s){return s.upgrade(req)?undefined:new Response(null,{status:400})},websocket:{message(ws,msg){if(typeof msg!=="string")return;const v=JSON.parse(msg);let result;
+if(v.method==="initialize")result={};
+else if(v.method==="thread/loaded/list")result={data:["fixture-thread"],nextCursor:null};
+else if(v.method==="thread/read")result={thread:{id:"fixture-thread",cwd:"/fixture",historyMode:process.env.TELA_FIXTURE_HISTORY_MODE,status:{type:active()?"active":"idle"}}};
+else if(v.method==="thread/turns/list")result={data:[{id:"fixture-turn",status:"inProgress",itemsView:"notLoaded",items:[]}],nextCursor:null};
+else if(v.method==="turn/interrupt"){writeFileSync(process.env.TELA_FIXTURE_STATE,"idle");writeFileSync(process.env.TELA_FIXTURE_LOG,JSON.stringify({args,secret:process.env.CHATGPT_TELA_RUNTIME_TOKEN??null,nativeInterrupted:true}));result={};}
+if(v.id!==undefined&&result!==undefined)ws.send(JSON.stringify({id:v.id,result}));}}});
 console.error("codex app-server (WebSockets)");
 console.error("  listening on: ws://127.0.0.1:"+server.port);
-const stop=()=>{server.stop(true);process.exit(0)};process.on("SIGTERM",stop);process.on("SIGINT",stop);await new Promise(()=>{});
+const stop=()=>{if(active())return;server.stop(true);process.exit(0)};process.on("SIGTERM",stop);process.on("SIGINT",stop);await new Promise(()=>{});
 `);
     executable(chat, `#!/usr/bin/env bun
 const ws=new WebSocket(process.env.CODEX_APP_SERVER_WS_URL);await new Promise((resolve,reject)=>{ws.addEventListener("open",resolve,{once:true});ws.addEventListener("error",reject,{once:true})});
@@ -38,6 +47,7 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       credential: "r".repeat(48),
     });
     let fixtureDesktopPid: number | undefined;
+    let normalQuitCalls = 0;
     const runtime = await startDefaultDesktopTargetRuntime({
       installation: {
         platform: "linux",
@@ -49,10 +59,10 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       },
       route,
       credential: "r".repeat(48),
-      environment: { TELA_FIXTURE_LOG: logPath, OPENAI_ORGANIZATION: "r".repeat(48) },
+      environment: { TELA_FIXTURE_LOG: logPath, TELA_FIXTURE_STATE: statePath, TELA_FIXTURE_HISTORY_MODE: historyMode, OPENAI_ORGANIZATION: "r".repeat(48) },
       // The shebang fixture is a Bun process, unlike the real native executable.
       processIds: async () => fixtureDesktopPid === undefined ? [] : [fixtureDesktopPid],
-      normalQuit: async (_installation, pid) => { process.kill(pid, "SIGTERM"); },
+      normalQuit: async (_installation, pid) => { normalQuitCalls++; process.kill(pid, "SIGTERM"); },
     });
     fixtureDesktopPid = runtime.desktopPid;
     try {
@@ -65,9 +75,20 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       expect(log.secret).toBe("r".repeat(48));
       expect(log.args.join(" ")).not.toContain("r".repeat(48));
       expect(log.args).toContain("ws://127.0.0.1:0");
+      if (historyMode === "legacy") {
+        await expect(runtime.stop()).rejects.toThrow("unindexed active turn");
+        expect(normalQuitCalls).toBe(0);
+        expect(readFileSync(statePath, "utf8")).toBe("active");
+        expect(() => process.kill(runtime.desktopPid, 0)).not.toThrow();
+        // Independent canonical settlement permits the same owned stop to resume.
+        writeFileSync(statePath, "idle");
+      }
     } finally {
       await runtime.stop();
       expect(() => process.kill(runtime.desktopPid, 0)).toThrow();
+      expect(() => process.kill(runtime.backendPid, 0)).toThrow();
+      expect(normalQuitCalls).toBe(1);
+      expect(JSON.parse(readFileSync(logPath, "utf8")).nativeInterrupted === true).toBe(historyMode === "paginated");
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -79,7 +100,7 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
     const codex = join(root, "fake-codex");
     const chat = join(root, "fake-chatgpt");
     executable(codex, `#!/usr/bin/env bun
-const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(req,s){return s.upgrade(req)?undefined:new Response(null,{status:400})},websocket:{message(ws,msg){if(typeof msg!=="string")return;const v=JSON.parse(msg);if(v.method==="initialize")ws.send(JSON.stringify({id:v.id,result:{}}));}}});
+const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(req,s){return s.upgrade(req)?undefined:new Response(null,{status:400})},websocket:{message(ws,msg){if(typeof msg!=="string")return;const v=JSON.parse(msg);if(v.method==="initialize")ws.send(JSON.stringify({id:v.id,result:{}}));else if(v.method==="thread/loaded/list")ws.send(JSON.stringify({id:v.id,result:{data:[],nextCursor:null}}));}}});
 console.error("codex app-server (WebSockets)");console.error("  listening on: ws://127.0.0.1:"+server.port);
 const stop=()=>{server.stop(true);process.exit(0)};process.on("SIGTERM",stop);process.on("SIGINT",stop);await new Promise(()=>{});
 `);

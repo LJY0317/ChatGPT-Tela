@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { createOwnedBackendStop, waitForOwnedProcessExit as waitForExit } from "./owned-process";
-import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
+import { connectCodexAppServerWebSocket, interruptLoadedAppServerTurns } from "@chatgpt-tela/codex";
 import {
   createDefaultDesktopLaunch,
   defaultDesktopProcessIds,
@@ -291,6 +291,7 @@ export async function startDefaultDesktopTargetRuntime(input: {
     const normalQuit = input.normalQuit ?? requestDefaultDesktopNormalQuit;
     const stopBackend = createOwnedBackendStop(backend, STOP_TIMEOUT_MS);
     let stopping: Promise<void> | undefined;
+    let nativeWorkSettled = false;
     return Object.freeze({
       installation: input.installation,
       desktopPid: desktopPid!,
@@ -307,6 +308,15 @@ export async function startDefaultDesktopTargetRuntime(input: {
         let stopFailureReason = "unknown";
         diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: 0 });
         stopping = (async () => {
+          // Prove and settle work before closing Desktop or its owner proxy. SIGTERM alone
+          // drains Native turns and can otherwise leave the old backend holding chat locks.
+          if (!nativeWorkSettled && alive(backend)) {
+            stopPhase = "native_work_settlement";
+            diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: Math.round(performance.now() - stopStarted) });
+            const count = await interruptLoadedAppServerTurns(appServerEndpoint, { signal: AbortSignal.timeout(STOP_TIMEOUT_MS) });
+            nativeWorkSettled = true;
+            diagnostic("desktop_native_work_settled", { phase: stopPhase, count });
+          }
           if (desktop && (alive(desktop) || input.installation.platform === "darwin")) {
             // Re-prove that the exact Desktop pid spawned by this runtime still exists as the
             // configured official Desktop before asking the OS to quit it. If the user/OS has
@@ -339,15 +349,17 @@ export async function startDefaultDesktopTargetRuntime(input: {
               }
             }
           }
-          stopPhase = "transport_cleanup";
+          stopPhase = "proxy_cleanup";
           diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: Math.round(performance.now() - stopStarted) });
           await proxy!.close();
+          stopPhase = "backend_cleanup";
+          diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: Math.round(performance.now() - stopStarted) });
           await stopBackend();
           if (catalogDirectory) rmSync(catalogDirectory, { recursive: true, force: true });
           diagnostic("desktop_stop_complete", { phase: "closed", duration_ms: Math.round(performance.now() - stopStarted) });
         })().catch(error => {
           diagnostic("desktop_stop_failed", { phase: stopPhase,
-            reason_class: stopFailureReason === "unknown" && stopPhase === "transport_cleanup" ? "cleanup_failed" : stopFailureReason,
+            reason_class: stopFailureReason === "unknown" && ["proxy_cleanup", "backend_cleanup"].includes(stopPhase) ? "cleanup_failed" : stopFailureReason,
             duration_ms: Math.round(performance.now() - stopStarted) });
           stopping = undefined;
           throw error;

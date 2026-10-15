@@ -491,7 +491,7 @@ export async function startCodexService(input: {
           throw new Error("ChatGPT connection ownership changed; the current app was kept open");
         }
         progress("closing");
-        await stopOwned(existing);
+        await stopOwned(existing, true);
       }
       if (existing) {
         existing.unmount();
@@ -846,7 +846,7 @@ export async function startCodexService(input: {
         await Promise.all([...starting.values()]);
         const failures: unknown[] = [];
         for (const profile of [...owned.values()]) {
-          try { await stopOwned(profile); }
+          try { await stopOwned(profile, true); }
           catch (error) { failures.push(error); }
         }
         if (failures.length > 0) throw new AggregateError(failures, "Tela Codex could not normally stop every profile");

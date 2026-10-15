@@ -79,6 +79,13 @@ procedure as package smoke; no security setting or existing app is changed.
 
 ## Stop evidence
 
+The default Desktop target settles canonically proven active Native turns through the public
+app-server protocol before asking Desktop to quit or closing its proxy/backend. Unproven active
+history stops before the first app quit. Backend draining alone is insufficient: it can retain
+the old conversation writer and leave a reopened app reporting ownership by another app.
+Service shutdown and explicit replacement also request this same work settlement for owned
+multi-profile targets. A replacement Desktop never inherits the previous process ownership.
+
 Codex profile shutdown first obtains a successful, authenticated cleanup receipt
 bound to the exact profile and Responses route. Only then may the controller
 unmount the route, release supervision, and require a successful child exit.
