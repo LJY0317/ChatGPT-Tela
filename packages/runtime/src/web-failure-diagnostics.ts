@@ -1,7 +1,8 @@
+import { webRetainedContextFailureReason } from "@chatgpt-tela/core";
+
 /** Classify only owned failure boundaries; exception prose and identifiers never leave this adapter. */
 export function webExecutionFailureFields(error: unknown, signal?: AbortSignal) {
   const exact: Readonly<Record<string, string>> = {
-    "retained ChatGPT conversation no longer contains its committed answer": "retained_answer_mismatch",
     "Native turn terminated": "native_terminated",
     "Native lifecycle observation disconnected": "native_observer_disconnected",
     "Native turn no longer active": "native_inactive",
@@ -20,6 +21,8 @@ export function webExecutionFailureFields(error: unknown, signal?: AbortSignal) 
     "consequential action requires proven state; observed ambiguous": "observation_ambiguous",
   };
   const kind = (value: unknown) => {
+    const retainedReason = webRetainedContextFailureReason(value);
+    if (retainedReason) return retainedReason;
     if (!(value instanceof Error)) return "non_error";
     if (Object.hasOwn(exact, value.message)) return exact[value.message]!;
     if (value.name === "AbortError") return "aborted";

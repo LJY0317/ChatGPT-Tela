@@ -3,6 +3,7 @@ import type { NativeGatewayOutcome, NativeResponsesGateway } from "@chatgpt-tela
 import { encodeNativeResponsesOutcome, nativeResponsesSsePlan } from "./protocol";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { nativeHistoryRecovery } from "./native-history-recovery";
+import { webContinuityRecovery } from "./web-continuity-recovery";
 
 /** A request-local, bounded presentation stream. Only pulled outcome frames commit execution. */
 export class NativeProgressStream {
@@ -74,13 +75,14 @@ export class NativeProgressStream {
 
   fail(error: unknown): void {
     if (this.#ended || this.signal.signal.aborted) return;
-    const recovery = nativeHistoryRecovery(error);
+    const recovery = nativeHistoryRecovery(error) ?? webContinuityRecovery(error);
     if (recovery) {
       // HTTP status is already committed as 200 once an SSE progress frame
       // leaves. Preserve typed nonretryable recovery in response.failed.
       // The exception itself may contain private Native history or tool text.
       emitDiagnosticEvent("chatgpt_tela_work", "native_context_recovery_streamed", {
-        reason_class: recovery.recovery.kind === "continue_on_native"
+        reason_class: recovery.code === "tela_web_retained_context_unproven" ? "retained_context_unproven"
+          : recovery.recovery.kind === "continue_on_native"
           ? "history_mode_unindexed" : "history_bootstrap_required",
         transport_phase: "sse_after_progress",
       });

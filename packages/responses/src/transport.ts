@@ -8,6 +8,7 @@ import {
 } from "./protocol";
 import { NativeProgressStream } from "./live-progress";
 import { nativeHistoryRecovery } from "./native-history-recovery";
+import { webContinuityRecovery } from "./web-continuity-recovery";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -135,7 +136,7 @@ export async function handleNativeResponsesHttp(
     // not a transient network outage. Do not turn it into an opaque 409 or
     // replay the already-retired Native turn. No private exception payloads
     // or historical text are returned to the caller.
-    const historyRecovery = nativeHistoryRecovery(error);
+    const historyRecovery = nativeHistoryRecovery(error) ?? webContinuityRecovery(error);
     if (historyRecovery) {
       // Keep the HTTP and already-started SSE recovery decisions identical;
       // neither transport may repeat a private Native exception.

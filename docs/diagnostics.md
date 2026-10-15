@@ -46,6 +46,20 @@ new conversation, authorize retry, or assert prior execution settlement;
 
 ## Start here
 
+Native response-cycle rejection now records `native_cycle_proof_rejected` before the existing
+replay denial. Its fixed reason separates a missing prior final, no new user message, and a
+missing or mismatched canonical input witness. Counts and exact-request equality are structural
+evidence; no input text, hashes, or identifiers are added.
+
+Retained Web context failures distinguish unavailable committed proof, missing/incomplete observed
+body proof, and semantic mismatch. Equal presentation text does not establish semantic equality.
+The closed renderer reason is reported separately from the continuity reason. The typed
+`tela_web_retained_context_unproven` recovery survives retirement and is identical for initial HTTP
+422 and `response.failed` after SSE starts. Retired retries neither reread Native history nor launch
+Web execution. This does not prove the client stops retrying, recover missing body proof, or authorize
+an automatic resend. These changes require installation and real-profile acceptance before claiming
+that an installed incident is fixed.
+
 Use `chatgpt-tela diagnostics list`, then `diagnostics inspect --ref <ref>`. The platform-standard
 Tela logs directory contains `diagnostics/START-HERE.md`, a rebuildable `INDEX.json`, canonical
 `incidents/`, and separately protected `private/`. No reference checkout is a runtime dependency.

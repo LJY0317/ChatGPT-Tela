@@ -8,6 +8,7 @@ import {
   NativeResponsesGateway,
 } from "@chatgpt-tela/runtime";
 import { handleNativeResponsesHttp } from "./transport";
+import { WebRetainedContextUnproven, WEB_RETAINED_CONTEXT_REASONS } from "@chatgpt-tela/core";
 
 const source: CanonicalCurrentTurnSource = {
   async currentTurn(threadId) {
@@ -53,6 +54,48 @@ function post(value: unknown): Request {
 }
 
 describe("Native Responses HTTP transport", () => {
+  test("retained-context failure survives retirement without replaying execution or losing its cause", async () => {
+    for (const reason of WEB_RETAINED_CONTEXT_REASONS) {
+      let reads = 0, launches = 0;
+      const turns = new ActiveTurnRegistry();
+      const gateway = new NativeResponsesGateway({ async currentTurn(threadId) {
+        reads++; return source.currentTurn(threadId);
+      } }, turns, async () => { launches++; throw new WebRetainedContextUnproven(reason); });
+      const first = await handleNativeResponsesHttp(post(body()), gateway);
+      expect(first.status).toBe(422);
+      const expected = await first.json();
+      expect(expected.error).toMatchObject({ code: "tela_web_retained_context_unproven", reason,
+        retryable: false, recovery: { requires_new_native_turn: true, original_history_preserved: true } });
+      for (let retry = 0; retry < 2; retry++) {
+        const response = await handleNativeResponsesHttp(post(body()), gateway);
+        expect(response.status).toBe(422); expect(await response.json()).toEqual(expected);
+      }
+      expect(turns.size).toBe(0); expect(reads).toBe(1); expect(launches).toBe(1);
+      await gateway.close();
+    }
+  });
+
+  test("retained-context failure after progress has the same safe recovery as HTTP", async () => {
+    let reject!: (reason: unknown) => void;
+    const pending = new Promise<void>((_resolve, fail) => { reject = fail; });
+    const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async turn => {
+      turn.channel.markSubmitted(); turn.channel.publishProgress("Checking context"); await pending;
+    });
+    const response = await handleNativeResponsesHttp(post(body()), gateway);
+    reject(new WebRetainedContextUnproven("observed_body_incomplete"));
+    const text = await response.text();
+    const failed = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)))
+      .find(event => event.type === "response.failed");
+    expect(failed.response.error).toMatchObject({ code: "tela_web_retained_context_unproven",
+      reason: "observed_body_incomplete", retryable: false });
+    const replay = await handleNativeResponsesHttp(post(body()), gateway);
+    expect(replay.status).toBe(422);
+    const recovered = await replay.json();
+    const { type: _httpType, ...recoveryFields } = recovered.error;
+    expect(failed.response.error).toEqual(recoveryFields);
+    await gateway.close();
+  });
+
   test("retries preserve the original history recovery without restoring execution authority", async () => {
     for (const recoveryReason of ["unindexed_history", "source_unavailable", "checkpoint_interrupted"] as const) {
       let reads = 0;

@@ -455,11 +455,15 @@ describe("ChatGPT semantic provider", () => {
       expect(driver.activated).toHaveLength(1);
     } finally { await surface.host.close(); }
   });
-  test.each(["preserved", "presentation-change", "semantic-change", "missing", "changed-answer", "changed-lineage", "unreadable-answer"] as const)(
+  test.each(["preserved", "presentation-change", "semantic-change", "missing", "changed-answer", "changed-lineage", "unreadable-answer", "committed-body-unavailable", "observed-body-unavailable", "untrusted-body-reason"] as const)(
     "retained submission proves prior semantic answer when conversation is %s", async mode => {
       const driver = new FixtureDriver(fixture("ready-new-chat"));
       const {host, lease} = await leaseFor(driver);
       const provider = new ChatGptSemanticProvider();
+      const scratch = mkdtempSync(join(tmpdir(), "tela-retained-proof-"));
+      const file = join(scratch, "events.jsonl");
+      const priorDiagnosticFile = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
       try {
         const submitting = provider.submitTurn(lease, request());
         while (driver.current.revision === "r1") await Promise.resolve();
@@ -469,7 +473,8 @@ describe("ChatGPT semantic provider", () => {
         expect(submitted.state).toBe("proven");
         if (submitted.state !== "proven") throw new Error("fixture acceptance");
         driver.queued.push({ ...accepted, revision: "complete", turns: [
-          ...accepted.turns, { key: "answer-1", role: "assistant", parentUserTurnKey: "user-turn-1", phase: "complete", text: "Exact prior answer", contentFingerprint: hash("Exact prior answer") },
+          ...accepted.turns, { key: "answer-1", role: "assistant", parentUserTurnKey: "user-turn-1", phase: "complete", text: "Exact prior answer", contentFingerprint: hash("Exact prior answer"),
+            ...(mode === "committed-body-unavailable" ? { bodyProof: { version: 1 as const, reason: "unsupported_node" } } : {}) },
         ] });
         expect((await provider.waitForTurnEvent(lease, submitted.value)).state).toBe("proven");
         driver.current = { ...driver.current, revision: "next-ready",
@@ -479,6 +484,8 @@ describe("ChatGPT semantic provider", () => {
             const { text: priorAnswer, ...identity } = turn;
             return {
               ...identity, ...(mode === "changed-answer" || mode === "semantic-change" ? {contentFingerprint: hash("Other answer")} : {}), phase: "streaming" as const, // global page activity must not change prefix identity
+              ...(mode === "observed-body-unavailable" || mode === "untrusted-body-reason"
+                ? { bodyProof: { version: 1 as const, reason: mode === "untrusted-body-reason" ? "SYNTHETIC_PRIVATE_BROWSER_TEXT" : "unsupported_node" } } : {}),
               ...(mode === "unreadable-answer" ? {} : { text: mode === "changed-answer" ? "Other answer" : mode === "presentation-change" ? "**Exact prior answer**" : priorAnswer! }),
               parentUserTurnKey: mode === "changed-lineage" ? "other-user" : turn.parentUserTurnKey!,
             };
@@ -491,10 +498,29 @@ describe("ChatGPT semantic provider", () => {
           driver.queued.push({ ...driver.current, revision: "accepted-2", turns: [...driver.current.turns, {key:"user-turn-next",role:"user",contentFingerprint: driver.current.composers[0]!.textFingerprint!}] });
           expect((await continuing).state).toBe("proven");
         } else {
-          await expect(provider.submitTurn(lease, retained)).rejects.toThrow("committed answer");
+          await expect(provider.submitTurn(lease, retained)).rejects.toMatchObject({
+            code: "tela_web_retained_context_unproven", retryable: false,
+            reason: mode === "committed-body-unavailable" ? "committed_semantic_unavailable"
+              : mode === "observed-body-unavailable" || mode === "untrusted-body-reason" ? "observed_body_incomplete"
+              : mode === "missing" || mode === "changed-lineage" ? "lineage_not_unique"
+              : mode === "unreadable-answer" ? "observed_body_missing" : "semantic_digest_mismatch",
+          });
           expect(driver.activated).toHaveLength(1);
+          if (mode === "committed-body-unavailable" || mode === "observed-body-unavailable" || mode === "untrusted-body-reason") {
+            const log = readFileSync(file, "utf8");
+            const rejected = log.trim().split("\n").map(line => JSON.parse(line)).find(row => row.stage === "web_retained_anchor_rejected");
+            expect(rejected).toMatchObject({ committed_semantic_available: mode !== "committed-body-unavailable",
+              observed_semantic_available: false, presentation_matches: true,
+              phase: mode === "untrusted-body-reason" ? "unclassified" : "unsupported_node" });
+            expect(log).not.toMatch(/SYNTHETIC_PRIVATE_BROWSER_TEXT|Exact prior answer/);
+          }
         }
-      } finally { await host.close(); }
+      } finally {
+        await host.close();
+        if (priorDiagnosticFile === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+        else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = priorDiagnosticFile;
+        rmSync(scratch, { recursive: true, force: true });
+      }
     },
   );
 

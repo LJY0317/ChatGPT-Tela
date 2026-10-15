@@ -6,7 +6,7 @@ import {
   captureBrowserDiagnosticCheckpoint,
   type BrowserSurfaceLease,
 } from "@chatgpt-tela/browser-host";
-import { capturePrivateDiagnosticValue, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
+import { WebRetainedContextUnproven, capturePrivateDiagnosticValue, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, type WebRetainedContextReason } from "@chatgpt-tela/core";
 import { ChatGptDomSurfaceDriver } from "./dom-driver";
 import { decideChatGptApproval, type ChatGptApprovalAutomationMode } from "./approval-policy";
 import { ChatGptApprovalObservation, approvalObservationSummary, type ApprovalObservationTransition } from "./approval-observation";
@@ -569,6 +569,18 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const assistants = anchor ? assistantFor(snapshot, anchor.userTurnKey) : [];
     const assistant = assistants.length === 1 ? assistants[0] : undefined;
     const sameKey = !!anchor && assistant?.key === anchor.assistantKey;
+    const committedSemanticAvailable = anchor?.assistantFingerprint !== undefined;
+    const observedSemanticAvailable = assistant?.bodyProof?.version === 1 && assistant.bodyProof.digest !== undefined;
+    const reason: WebRetainedContextReason = !anchor ? "anchor_missing"
+      : !assistant ? "lineage_not_unique" : !sameKey ? "assistant_identity_changed"
+      : !committedSemanticAvailable ? "committed_semantic_unavailable"
+      : !assistant.bodyProof ? "observed_body_missing"
+      : assistant.bodyProof.version !== 1 ? "observed_body_version_unsupported"
+      : !observedSemanticAvailable ? "observed_body_incomplete"
+      : assistant.text === undefined ? "answer_unavailable" : "semantic_digest_mismatch";
+    // The renderer reason is untrusted. Keep only the codec's closed vocabulary.
+    const bodyReason = ["body_empty", "body_budget", "unsupported_node", "unsupported_link", "unsupported_list", "unsupported_table"]
+      .find(value => value === assistant?.bodyProof?.reason) ?? "unclassified";
     const sameAnswer = !!anchor && !!assistant && assistant.text !== undefined
       && anchor.assistantFingerprint !== undefined
       && committedAnswerFingerprint(assistant) === anchor.assistantFingerprint;
@@ -577,21 +589,25 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       if (!this.#retainedBodyPending.has(surface)) {
         this.#retainedBodyPending.add(surface);
         emitDiagnosticEvent("chatgpt_tela_work", "web_retained_body_pending", {
-          reason_class: "body_unavailable", assistant_key_matches: true,
+          reason_class: reason, assistant_key_matches: true,
+          committed_semantic_available: committedSemanticAvailable,
+          observed_semantic_available: observedSemanticAvailable,
         });
       }
       return false;
     }
     if (!anchor || !assistant || !sameKey || !sameAnswer) {
       emitDiagnosticEvent("chatgpt_tela_work", "web_retained_anchor_rejected", {
-        reason_class: !anchor ? "anchor_missing" : !assistant ? "lineage_not_unique"
-          : !sameKey ? "assistant_identity_changed" : "answer_changed_or_unavailable",
+        reason_class: reason,
+        phase: bodyReason,
         anchor_present: !!anchor,
         matched_assistant_count: assistants.length,
         assistant_key_matches: sameKey,
         answer_present: assistant?.text !== undefined,
         answer_matches: sameAnswer,
         semantic_answer_available: assistant?.bodyProof?.digest !== undefined,
+        committed_semantic_available: committedSemanticAvailable,
+        observed_semantic_available: observedSemanticAvailable,
         presentation_matches: !!anchor && !!assistant && fingerprint(assistant.text ?? "") === anchor.presentationFingerprint,
         committed_answer_characters: anchor?.answerCharacters ?? 0,
         observed_answer_characters: assistant?.text?.length ?? 0,
@@ -603,7 +619,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         afterDigest: assistant ? committedAnswerFingerprint(assistant) ?? null : null,
         assistantKeyMatches: sameKey,
       });
-      throw new Error("retained ChatGPT conversation no longer contains its committed answer");
+      throw new WebRetainedContextUnproven(reason);
     }
     if (this.#retainedBodyPending.delete(surface)) {
       emitDiagnosticEvent("chatgpt_tela_work", "web_retained_body_recovered", { reason_class: "body_proven" });

@@ -2,7 +2,7 @@ import {expect,test} from "bun:test";
 import {mkdtempSync,readFileSync,rmSync} from "node:fs";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
-import {diagnosticFingerprint} from "@chatgpt-tela/core";
+import {diagnosticFingerprint, nativeInputReceipt} from "@chatgpt-tela/core";
 import type {CanonicalCurrentTurnSource} from "@chatgpt-tela/codex";
 import {NativeResponsesGateway} from "./native-gateway";
 import {ActiveTurnRegistry} from "./registry";
@@ -72,4 +72,36 @@ test("duplicate local tool commit is rejected without another success witness",a
   expect(rows.filter(row=>row.stage==="native_outcome_committed"&&row.outcome==="tool_call")).toHaveLength(1);
   expect(rows.filter(row=>row.stage==="native_tool_delivery_committed")).toHaveLength(1);
   expect(JSON.stringify(rows)).not.toMatch(/private-call|private|fixture_tool/);
+});
+
+test("cycle failure evidence separates prior final, new message and canonical input proof without payloads", async () => {
+  for (const scenario of ["prior_final_missing", "new_input_missing", "input_witness_missing", "input_witness_mismatch"] as const) {
+    const rows = await captured(async () => {
+      const inputs: NonNullable<ReturnType<typeof nativeInputReceipt>>[] = [];
+      const owner = new AbortController();
+      let launches = 0;
+      const gateway = new NativeResponsesGateway({ ...source, async watchTurn() {
+        return { signal: owner.signal, inputs: () => inputs, async close() {} };
+      } }, new ActiveTurnRegistry(), async turn => {
+        launches++; turn.channel.markSubmitted(); turn.channel.markAccepted(); turn.channel.complete("PRIVATE ANSWER");
+      });
+      const first = await gateway.handle(request()); gateway.commit(first);
+      if (scenario === "input_witness_mismatch") inputs.push(nativeInputReceipt({
+        type: "userMessage", id: "PRIVATE ID", content: [{ type: "text", text: "PRIVATE FOLLOWUP" }],
+      })!);
+      const messages = [
+        ...(scenario === "prior_final_missing" ? [] : [{ role: "assistant", content: "PRIVATE ANSWER" }]),
+        ...(scenario === "new_input_missing" ? [] : [{ role: "user", content: "PRIVATE FOLLOWUP" }]),
+        ...(scenario === "input_witness_mismatch" ? [{ role: "user", content: "PRIVATE UNPROVEN" }] : []),
+      ];
+      await expect(gateway.handle({ ...request(), input: messages })).rejects.toMatchObject({ code: "tela_native_response_cycle_conflict" });
+      expect(launches).toBe(1);
+      await gateway.close();
+    });
+    expect(rows.find(row => row.stage === "native_cycle_proof_rejected")).toMatchObject({
+      reason_class: scenario, prior_final_present: scenario !== "prior_final_missing",
+      fresh_input_count: scenario === "input_witness_mismatch" ? 1 : 0,
+    });
+    expect(JSON.stringify(rows)).not.toContain("PRIVATE");
+  }
 });

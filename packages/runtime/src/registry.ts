@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
 import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
+import { WebRetainedContextUnproven, webRetainedContextFailureReason, type WebRetainedContextReason } from "@chatgpt-tela/core";
 import { RuntimeTurnChannel } from "./turn-channel";
 
 export interface TurnCapabilityResolver {
@@ -53,7 +54,7 @@ export class ActiveTurnRegistry {
   readonly #nativeCallIdsByTurn = new Map<string, Set<string>>();
   readonly #capabilityByTurn = new Map<string, string>();
   // A fixed recovery classification only; never retain raw exceptions or request content.
-  readonly #retiredTurns = new Map<string, true | NativeHistoryBootstrapRequired["recoveryReason"]>();
+  readonly #retiredTurns = new Map<string, true | NativeHistoryBootstrapRequired["recoveryReason"] | { readonly retainedContext: WebRetainedContextReason }>();
   static readonly MAX_RETIRED_TURNS = 256;
   readonly #routeId: string | undefined;
 
@@ -91,6 +92,7 @@ export class ActiveTurnRegistry {
 
   retiredError(threadId: string, turnId: string): Error {
     const reason = this.#retiredTurns.get(threadId + "\u0000" + turnId);
+    if (reason && typeof reason === "object") return new WebRetainedContextUnproven(reason.retainedContext);
     return reason !== undefined && reason !== true
       ? new NativeHistoryBootstrapRequired(reason) : new NativeTurnAlreadyRetired();
   }
@@ -134,7 +136,10 @@ export class ActiveTurnRegistry {
     this.#retiredTurns.delete(key);
     const error = failure && typeof failure === "object"
       ? failure as { code?: unknown; recoveryReason?: unknown } : undefined;
-    this.#retiredTurns.set(key, error?.code === "native_history_bootstrap_required"
+    const retainedContext = webRetainedContextFailureReason(failure);
+    this.#retiredTurns.set(key, retainedContext
+      ? { retainedContext }
+      : error?.code === "native_history_bootstrap_required"
       ? error.recoveryReason === "checkpoint_interrupted" ? "checkpoint_interrupted"
         : error.recoveryReason === "unindexed_history" ? "unindexed_history" : "source_unavailable"
       : true);
