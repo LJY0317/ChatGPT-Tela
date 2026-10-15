@@ -43,14 +43,39 @@ It reuses the existing signed cancellation journal and service controller.
 
 No new daemon, model request, forced kill, UI click, journal deletion shortcut
 or authority transfer is introduced. The launcher must run independently of
-services being updated. Upgrade, repair and signed cancellation share a product-owned SQLite writer lock
+services being updated. Initial install, upgrade, repair, signed cancellation, removal
+and installed service controls share a product-owned SQLite writer lock
 across the entire operation, including awaits and restoration. An OS process exit
 releases this lock; no stale-age/PID takeover or heartbeat is used. An existing
 transition journal is still reconciled by the signed recovery boundary, never
 removed or replayed merely because the lock became available. The coordination
 directory is registered in the install manifest and follows normal data-preserving
-or complete removal policy. Initial install, uninstall and unrelated service
-commands are not yet covered by this transition lock; there is no OS watchdog.
+or complete removal policy. This does not serialize external platform commands or
+original ChatGPT actions; there is no OS watchdog.
+
+## Removal and finalization
+
+A removal checkpoint protects the namespace before shutdown/resource changes and
+remains visible while the coordinator database closes, its directory is removed
+and the install manifest is removed. Install, update, repair, cancellation and
+installed service launch/control refuse this checkpoint. This closes the interval
+where deleting a lock file alone could admit a new installer. Read-only inspection
+does not create state.
+
+Only final metadata cleanup may resume after its former process is proven absent;
+PID reuse or inaccessible liveness conservatively blocks takeover. A tiny exclusive
+finalization claim prevents competing cleanup. Unknown abandoned claims, unexpected
+files, ownership drift or interrupted service/resource removal remain protected for
+inspection: the client does not guess or replay shutdown. A normal data-preserving
+removal retains the coordinator; complete removal deletes it after database close.
+An owned directory enclosing active coordination metadata is preserved rather than
+recursively deleting the live authority boundary.
+
+Fixtures use a fake service-registration runner and disposable identities. The
+compiled lifecycle fixture proves install, failed update/source restoration, a
+successful update and complete removal while preserving external synthetic data.
+On macOS the compiled fixture uses the same normal ad-hoc signing/verification
+procedure as package smoke; no security setting or existing app is changed.
 
 ## Stop evidence
 

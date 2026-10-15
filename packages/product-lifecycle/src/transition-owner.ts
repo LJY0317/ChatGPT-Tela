@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { prepareOwnedDirectory } from "./directory-registration";
 import { readOwnershipManifest } from "./ownership";
 import type { ProductPaths } from "./layout";
+import { assertNoPackagedUninstall } from "./packaged-transition";
 
 const APPLICATION_ID = 0x54454c41;
 
@@ -16,6 +17,7 @@ export async function withPackagedTransitionOwner<T>(input: {
   readonly paths: ProductPaths;
   readonly installId: string;
 }, action: () => Promise<T>): Promise<T> {
+  assertNoPackagedUninstall(input.paths);
   const manifest = readOwnershipManifest(input.paths.installManifest);
   if (!manifest || manifest.installId !== input.installId) throw new Error("transition coordinator install ownership changed");
   const directory = join(input.paths.stateRoot, "install", "coordinator");
@@ -53,6 +55,7 @@ export async function withPackagedTransitionOwner<T>(input: {
     catch (error) { throw new Error("another installer owns this transition; do not retry or replace its lock", { cause: error }); }
     const current = lstatSync(path);
     if (current.dev !== stat.dev || current.ino !== stat.ino || current.isSymbolicLink()) throw new Error("transition coordinator database was replaced");
+    assertNoPackagedUninstall(input.paths);
     return await action();
   } finally {
     if (locked) database.exec("ROLLBACK");

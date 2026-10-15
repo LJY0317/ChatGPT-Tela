@@ -129,6 +129,13 @@ async function main(): Promise<void> {
       if (exportProbe.error || exportProbe.status !== 0 || exportProbe.stdout !== "1\n") throw new Error("packaged file export protocol check failed");
     }
     smokeLauncher(launcherPath);
+    const lifecycleFixture = join(root, executableName("compiled-lifecycle"));
+    run(process.execPath, ["build", "--compile", "apps/package-smoke/src/compiled-lifecycle.ts", "--outfile", lifecycleFixture]);
+    if (process.platform === "darwin") {
+      run("/usr/bin/codesign", ["--force", "--sign", "-", lifecycleFixture]);
+      run("/usr/bin/codesign", ["--verify", "--strict", lifecycleFixture]);
+    }
+    run(lifecycleFixture, []);
 
     console.log(JSON.stringify({
       platform: process.platform,

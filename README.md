@@ -402,6 +402,9 @@ while that journal exists. The source service controller uses authenticated owne
 launchd, systemd user units, and Windows per-user Scheduled Tasks; a signed updater UI and real-OS packaged
 E2E validation still need to drive/prove this lifecycle for end users.
 
+Install, update, repair, removal and installed service controls share one mutation owner. Interrupted
+removal blocks new mutations; proven final metadata cleanup can resume without repeating shutdown.
+
 The new signed launcher automatically retains a verified source recovery package before stopping
 services. Recoverable failures restore the previous services; uncertain shutdown remains paused with
 its checkpoint. Restoration is reported as an unsuccessful update. See [upgrade recovery](docs/upgrade-recovery.md).

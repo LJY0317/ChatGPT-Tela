@@ -13,6 +13,8 @@ import {
 } from "./packaged-install";
 import { PACKAGED_PRODUCT_MANIFEST } from "./packaged-manifest";
 import { packagedRepairJournalPath, packagedUpgradeJournalPath } from "./packaged-transition";
+import { packagedUninstallJournalPath } from "./packaged-transition";
+import { withPackagedTransitionOwner } from "./transition-owner";
 import type { ServiceRegistrationCommandResult, ServiceRegistrationCommandRunner } from "./service-registration";
 
 class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
@@ -41,6 +43,27 @@ class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
     throw new Error(`unexpected systemctl args ${arguments_.join(" ")}`);
   }
 }
+
+test("initial install shares the transition lock and preserves an active removal checkpoint", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-first-install-owner-")), home = join(root, "home"); mkdirSync(home);
+  const runner = new SystemdFixtureRunner(), spec = fixture(root), options = { platform: "linux" as const, home, environment: {}, runner };
+  try {
+    const planned = await planPackagedInstall({ spec, ...options });
+    writeOwnershipManifest(planned.blueprint.paths.installManifest, planned.manifest);
+    await withPackagedTransitionOwner({ paths: planned.blueprint.paths, installId: planned.manifest.installId }, async () => {
+      const before = runner.calls.length;
+      await expect(applyPackagedInstall({ planned, spec, ...options })).rejects.toThrow("another installer owns");
+      expect(runner.calls).toHaveLength(before);
+      expect(existsSync(planned.blueprint.paths.binaryRoot)).toBe(false);
+    });
+    const path = packagedUninstallJournalPath(planned.blueprint.paths);
+    writeFileSync(path, "unreadable removal checkpoint");
+    await expect(planPackagedInstall({ spec, ...options })).rejects.toThrow("uninstall is incomplete");
+    await expect(applyPackagedInstall({ planned, spec, ...options })).rejects.toThrow("uninstall is incomplete");
+    expect(readFileSync(path, "utf8")).toBe("unreadable removal checkpoint");
+    expect(existsSync(planned.blueprint.paths.binaryRoot)).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 class LaunchctlFixtureRunner implements ServiceRegistrationCommandRunner {
   readonly loaded = new Set<string>();
@@ -167,7 +190,9 @@ describe("packaged product install", () => {
       expect(applied.apply.createdCount).toBe(4);
       expect(applied.apply.failedCount).toBe(0);
       expect(applied.verify.ready).toBe(true);
-      expect(readOwnershipManifest(planned.blueprint.paths.installManifest)?.resources).toHaveLength(4);
+      const owned = readOwnershipManifest(planned.blueprint.paths.installManifest)!.resources;
+      expect(owned.filter(resource => resource.id !== "transition-coordinator")).toHaveLength(4);
+      expect(owned.find(resource => resource.id === "transition-coordinator")).toMatchObject({ kind: "directory", owner: "product", dataClass: "state" });
       expect(runner.calls.some(([, args]) => args.includes("enable") && !args.includes("--now"))).toBe(true);
       expect(runner.calls.some(([, args]) => args.includes("start") || args.includes("--now"))).toBe(false);
 

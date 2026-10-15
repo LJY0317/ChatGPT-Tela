@@ -1,3 +1,4 @@
+import { withPackagedTransitionOwner } from "./transition-owner";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createOwnershipManifest, readOwnershipManifest, type OwnedResource, type OwnershipManifest } from "./ownership";
@@ -423,7 +424,21 @@ export async function planPackagedInstall(input: {
   return Object.freeze({ manifest, blueprint, plan });
 }
 
-export async function applyPackagedInstall(input: {
+function admittedInstallManifest(current: OwnershipManifest, planned: PlannedPackagedInstall, productVersion: string): OwnershipManifest {
+  if (current.productVersion !== planned.manifest.productVersion) {
+    throw new Error("install manifest product version changed after planning");
+  }
+  if (current.productVersion !== productVersion) {
+    // Source runtimes can own data before any product is installed. Preserve that
+    // identity, but recheck under the manifest lock before its first binary install.
+    if (hasProductInstallation(current)) throw new Error("product installation appeared after planning");
+    if (planned.plan.preservedCount !== 0) throw new Error("first product install has unresolved ownership conflicts");
+    return { ...current, productVersion };
+  }
+  return current;
+}
+
+async function applyPackagedInstallOwned(input: {
   readonly planned: PlannedPackagedInstall;
   readonly spec: PackagedProductInstallSpec;
   readonly platform?: NodeJS.Platform;
@@ -445,17 +460,7 @@ export async function applyPackagedInstall(input: {
     installId: input.planned.manifest.installId,
     productVersion: input.planned.manifest.productVersion,
     mutate(current) {
-      if (current.productVersion !== input.planned.manifest.productVersion) {
-        throw new Error("install manifest product version changed after planning");
-      }
-      if (current.productVersion !== input.spec.productVersion) {
-        // Source runtimes can own data before any product is installed. Preserve that
-        // identity, but recheck under the manifest lock before its first binary install.
-        if (hasProductInstallation(current)) throw new Error("product installation appeared after planning");
-        if (input.planned.plan.preservedCount !== 0) throw new Error("first product install has unresolved ownership conflicts");
-        return { ...current, productVersion: input.spec.productVersion };
-      }
-      return current;
+      return admittedInstallManifest(current, input.planned, input.spec.productVersion);
     },
   });
   const desiredById = new Map(blueprint.desiredResources.map(resource => [resource.id, resource] as const));
@@ -543,4 +548,17 @@ export async function applySignedPackagedInstallFromPayload(input: {
 }): ReturnType<typeof applyPackagedInstallFromPayload> {
   verifyPackagedPayloadSignature({ payloadRoot: input.payloadSourcePath, trustedKeys: input.trustedKeys });
   return applyPackagedInstallFromPayload(input);
+}
+
+/** Persist only the reviewed identity before acquiring the shared initial-install lock. */
+export async function applyPackagedInstall(input: Parameters<typeof applyPackagedInstallOwned>[0]): ReturnType<typeof applyPackagedInstallOwned> {
+  const blueprint = createPackagedInstallBlueprint(input);
+  assertNoActivePackagedTransition(blueprint.paths, "install");
+  if (blueprint.payloadFingerprint !== input.planned.blueprint.payloadFingerprint) throw new Error("packaged payload bytes changed after planning");
+  await mutateOwnershipManifest({ path: blueprint.paths.installManifest, installId: input.planned.manifest.installId,
+    productVersion: input.planned.manifest.productVersion, mutate(current) {
+      admittedInstallManifest(current, input.planned, input.spec.productVersion);
+      return current;
+    } });
+  return withPackagedTransitionOwner({ paths: blueprint.paths, installId: input.planned.manifest.installId }, () => applyPackagedInstallOwned(input));
 }

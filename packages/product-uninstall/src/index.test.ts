@@ -7,9 +7,12 @@ import {
   prepareOwnedDirectory,
   resolveProductPaths,
   writeOwnershipManifest,
+  withPackagedTransitionOwner,
+  packagedUninstallJournalPath,
   type OwnedResource,
 } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "./index";
+import { startUninstallCheckpoint, writeUninstallCheckpoint } from "./coordination";
 
 async function binaryFixture(root: string) {
   const home = join(root, "home");
@@ -33,6 +36,67 @@ async function binaryFixture(root: string) {
   });
   return { home, paths, options };
 }
+
+test("uninstall cannot remove binaries or start shutdown under another transition owner", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-uninstall-competing-"));
+  try {
+    const f = await binaryFixture(root);
+    await withPackagedTransitionOwner({ paths: f.paths, installId: "install-uninstall-fixture" }, async () => {
+      await expect(runProductUninstall({ mode: "apply", removeData: true, ...f.options })).rejects.toThrow("another installer owns");
+      expect(existsSync(f.paths.binaryRoot)).toBe(true);
+      expect(existsSync(packagedUninstallJournalPath(f.paths))).toBe(false);
+    });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const phase of ["finalizing", "removing"] as const) test(`interrupted uninstall ${phase} reconciles only proven metadata cleanup`, async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-uninstall-interrupted-")), home = join(root, "home"); mkdirSync(home);
+  const options = { platform: "linux" as const, home, environment: {} }, paths = resolveProductPaths(options);
+  const manifest = createOwnershipManifest("fixture"); writeOwnershipManifest(paths.installManifest, manifest);
+  const child = Bun.spawn([process.execPath, "--eval", "process.exit(0)"], { stdout: "ignore", stderr: "ignore" });
+  expect(await child.exited).toBe(0);
+  try {
+    await withPackagedTransitionOwner({ paths, installId: manifest.installId }, async () => {
+      const checkpoint = startUninstallCheckpoint(paths, manifest.installId);
+      writeUninstallCheckpoint(paths, { ...checkpoint, phase, ownerPid: child.pid });
+    });
+    let serviceCalls = 0;
+    const invoke = () => runProductUninstall({ mode: "apply", removeData: true, ...options,
+      serviceRegistrationRunner: { async run() { serviceCalls++; throw new Error("service actions forbidden"); } } });
+    if (phase === "finalizing") {
+      expect(await invoke()).toMatchObject({ manifestRemoved: true, resumedMetadataCleanup: true });
+      expect(existsSync(paths.installManifest)).toBe(false);
+      expect(existsSync(join(paths.stateRoot, "install", "coordinator"))).toBe(false);
+      expect(existsSync(packagedUninstallJournalPath(paths))).toBe(false);
+    } else {
+      const before = readFileSync(packagedUninstallJournalPath(paths));
+      await expect(invoke()).rejects.toThrow("reconcile its effects");
+      expect(readFileSync(packagedUninstallJournalPath(paths))).toEqual(before);
+      expect(existsSync(paths.installManifest)).toBe(true);
+    }
+    expect(serviceCalls).toBe(0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const state of ["live", "unknown-claim"] as const) test(`uninstall finalization preserves ${state} ownership`, async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-uninstall-live-finalizer-")), home = join(root, "home"); mkdirSync(home);
+  const options = { platform: "linux" as const, home, environment: {} }, paths = resolveProductPaths(options);
+  const manifest = createOwnershipManifest("fixture"); writeOwnershipManifest(paths.installManifest, manifest);
+  const child = Bun.spawn([process.execPath, "--eval", "process.exit(0)"], { stdout: "ignore", stderr: "ignore" });
+  expect(await child.exited).toBe(0);
+  try {
+    await withPackagedTransitionOwner({ paths, installId: manifest.installId }, async () => {
+      const checkpoint = startUninstallCheckpoint(paths, manifest.installId);
+      writeUninstallCheckpoint(paths, { ...checkpoint, phase: "finalizing", ownerPid: state === "live" ? process.pid : child.pid });
+    });
+    const claim = `${packagedUninstallJournalPath(paths)}.finalizing`;
+    if (state === "unknown-claim") { mkdirSync(claim); writeFileSync(join(claim, "evidence"), "preserve"); }
+    await expect(runProductUninstall({ mode: "apply", removeData: true, ...options })).rejects.toThrow(state === "live" ? "still active" : "already claimed");
+    if (state === "unknown-claim") expect(readFileSync(join(claim, "evidence"), "utf8")).toBe("preserve");
+    expect(existsSync(paths.installManifest)).toBe(true);
+    expect(await runProductUninstall({ mode: "dry-run", removeData: true, ...options })).toMatchObject({ status: "uninstall-incomplete", destructiveActions: 0 });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 describe("shared product uninstall runtime", () => {
   test("self-removal guard resolves physical aliases before service-manager access", async () => {

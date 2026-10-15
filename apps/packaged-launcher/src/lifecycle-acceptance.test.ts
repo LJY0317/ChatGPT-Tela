@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildPackagedPayload, createEd25519PackagedPayloadSigner, prepareOwnedDirectory, CURRENT_PACKAGED_LIFECYCLE,
-  readOwnershipManifest, resolveProductPaths,
+  readOwnershipManifest, resolveProductPaths, packagedUninstallJournalPath, withPackagedTransitionOwner,
   type ServiceRegistrationCommandResult, type ServiceRegistrationCommandRunner,
 } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
@@ -103,6 +103,18 @@ test("signed install -> update -> keep-data removal -> reinstall -> complete rem
     expect(readFileSync(join(project,"notes.txt"),"utf8")).toBe("user data");
     await expect(runPackagedChatCommand(["chat","allow-root","--path","relative"],bootstrap)).rejects.toThrow("absolute");
 
+    await withPackagedTransitionOwner({ paths, installId: manifest.installId }, async () => {
+      const calls = runner.calls.length;
+      await expect(runPackagedServicesCommand(["services", "start"], controls)).rejects.toThrow("another installer owns");
+      expect(runner.calls).toHaveLength(calls);
+    });
+    const removalCheckpoint = packagedUninstallJournalPath(paths);
+    writeFileSync(removalCheckpoint, "unfinished removal");
+    try {
+      const calls = runner.calls.length;
+      await expect(runPackagedServicesCommand(["services", "start"], controls)).rejects.toThrow("uninstall is incomplete");
+      expect(runner.calls).toHaveLength(calls);
+    } finally { rmSync(removalCheckpoint); }
     expect((await runPackagedServicesCommand(["services", "start"], controls)).success).toBe(true);
     expect(runner.running.size).toBe(3);
     const codexRegistration = manifest.resources.find(resource => resource.id === "codex-service");

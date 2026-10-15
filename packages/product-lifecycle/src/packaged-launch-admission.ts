@@ -4,7 +4,7 @@ import type { OwnershipManifest } from "./ownership";
 import type { PackagedPayloadReceipt } from "./packaged-payload";
 import { readPackagedUpgradeJournal } from "./packaged-upgrade";
 import { readPackagedRepairJournal } from "./packaged-repair";
-import { packagedRepairJournalPath, packagedUpgradeJournalPath } from "./packaged-transition";
+import { assertNoPackagedUninstall, packagedRepairJournalPath, packagedUpgradeJournalPath } from "./packaged-transition";
 
 /** Called only after the physical installed payload/receipt has been re-proven. */
 export function assertPackagedLaunchAdmission(input: {
@@ -13,6 +13,7 @@ export function assertPackagedLaunchAdmission(input: {
   readonly receipt: PackagedPayloadReceipt;
   readonly service?: TelaServiceId;
 }): void {
+  assertNoPackagedUninstall(input.paths);
   const upgradePath = packagedUpgradeJournalPath(input.paths), repairPath = packagedRepairJournalPath(input.paths);
   const upgradeExists = existsSync(upgradePath), repairExists = existsSync(repairPath);
   if (!upgradeExists && !repairExists) return;

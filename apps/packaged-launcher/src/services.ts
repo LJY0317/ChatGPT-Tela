@@ -1,12 +1,12 @@
 import { ownedServiceShutdown } from "./service-shutdown";
 import {
-  PackagedPlatformServiceController, ServiceRegistrationManager, resolveProductPaths,
+  PackagedPlatformServiceController, ServiceRegistrationManager, resolveProductPaths, withPackagedTransitionOwner,
   type ProductPathOptions, type ServiceRegistrationCommandRunner, type PackagedServiceControlIdentity, type TelaServiceId,
 } from "@chatgpt-tela/product-lifecycle";
 import { verifyInstalledPackage } from "./runtime";
 
 /** UI and CLI service controls share receipt, registration and platform lifecycle proof. */
-export async function runPackagedServicesCommand(args: readonly string[], input: {
+async function runPackagedServicesOwned(args: readonly string[], input: {
   readonly payloadRoot: string;
   readonly launcherExecutablePath?: string;
   readonly pathOptions?: ProductPathOptions;
@@ -64,4 +64,10 @@ export async function runPackagedServicesCommand(args: readonly string[], input:
     }
   }
   return { action, success: services.every(service => service.state !== "failed"), services };
+}
+
+export async function runPackagedServicesCommand(args: Parameters<typeof runPackagedServicesOwned>[0], input: Parameters<typeof runPackagedServicesOwned>[1]): ReturnType<typeof runPackagedServicesOwned> {
+  const { ownership } = verifyInstalledPackage(input);
+  const paths = resolveProductPaths(input.pathOptions);
+  return withPackagedTransitionOwner({ paths, installId: ownership.installId }, () => runPackagedServicesOwned(args, input));
 }

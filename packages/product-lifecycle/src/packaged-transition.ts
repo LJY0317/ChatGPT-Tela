@@ -31,10 +31,19 @@ export function packagedRepairJournalPath(paths: ProductPaths): string {
   return join(paths.stateRoot, "install", "packaged-repair-v1.json");
 }
 
+export function packagedUninstallJournalPath(paths: ProductPaths): string {
+  return join(paths.stateRoot, "install", "packaged-uninstall-v1.json");
+}
+
+export function assertNoPackagedUninstall(paths: ProductPaths): void {
+  if (existsSync(packagedUninstallJournalPath(paths))) throw new Error("packaged uninstall is incomplete; inspect its checkpoint before another mutation");
+}
+
 export function assertNoConflictingPackagedTransition(
   paths: ProductPaths,
   requested: "upgrade" | "repair",
 ): void {
+  assertNoPackagedUninstall(paths);
   const conflicting = requested === "upgrade" ? packagedRepairJournalPath(paths) : packagedUpgradeJournalPath(paths);
   if (existsSync(conflicting)) {
     throw new Error(`cannot start packaged ${requested} while the other packaged transition has an incomplete journal`);
@@ -45,6 +54,7 @@ export function assertNoActivePackagedTransition(
   paths: ProductPaths,
   requested: string,
 ): void {
+  assertNoPackagedUninstall(paths);
   if (existsSync(packagedUpgradeJournalPath(paths)) || existsSync(packagedRepairJournalPath(paths))) {
     throw new Error(`cannot start packaged ${requested} while a packaged transition journal is incomplete`);
   }

@@ -1,3 +1,4 @@
+import { coordinatorResource, finalizeUninstall, readUninstallCheckpoint, startUninstallCheckpoint, clearUninstallCheckpoint, writeUninstallCheckpoint } from "./coordination";
 import { existsSync, realpathSync, rmSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
@@ -11,6 +12,7 @@ import {
 } from "@chatgpt-tela/credential-store";
 import {
   applyUninstallPlan,
+  withPackagedTransitionOwner,
   FilesystemOwnershipObserver,
   observeProductActivity,
   packagedRepairJournalPath,
@@ -97,7 +99,7 @@ export function profileSetupActivityBlockers(paths: ProductPaths, installId: str
   return Object.freeze(blockers);
 }
 
-export async function runProductUninstall(input: ProductUninstallOptions): Promise<Readonly<Record<string, unknown>>> {
+async function runProductUninstallOwned(input: ProductUninstallOptions): Promise<Readonly<Record<string, unknown>>> {
   const platform = input.platform ?? process.platform;
   const environment = input.environment ?? process.env;
   const paths = input.paths ?? resolveProductPaths({
@@ -175,6 +177,8 @@ export async function runProductUninstall(input: ProductUninstallOptions): Promi
   const codexActivityBlocked = activityBlockers.length > 0;
   const observer = {
     observe(resource: OwnedResource, currentManifest: OwnershipManifest) {
+      if (resource.kind === "directory" && resource.id !== "transition-coordinator"
+        && inside(resource.path, coordinatorResource(paths).path)) return "dirty" as const;
       if (resource.kind === "directory" && hasPendingFileImports(join(paths.serviceState("chat"), "imports-v2"))
         && (inside(resource.path, join(paths.serviceState("chat"), "imports-v2")) || inside(resource.path, paths.installManifest))) {
         return "dirty" as const;
@@ -214,7 +218,8 @@ export async function runProductUninstall(input: ProductUninstallOptions): Promi
     }
   }
 
-  const plan = await planUninstall({ manifest, observer, removeData });
+  // Coordination metadata is finalized only after releasing the OS writer lock.
+  const plan = await planUninstall({ manifest: { ...manifest, resources: manifest.resources.filter(row => row.id !== "transition-coordinator") }, observer, removeData });
   const recoveryNotice = hasPendingFileImports(join(paths.serviceState("chat"), "imports-v2"))
     ? { fileImportRecoveryPending: true, recoveryNotice: "Resolve pending file imports in Tela before removing saved data; recovery records are preserved." } : {};
   if (input.mode === "dry-run") {
@@ -276,8 +281,7 @@ export async function runProductUninstall(input: ProductUninstallOptions): Promi
   const canRemoveManifest = removeData
     && result.failedCount === 0
     && result.preservedCount === 0
-    && (remaining?.resources.length ?? 0) === 0;
-  if (canRemoveManifest) rmSync(paths.installManifest, { force: true });
+    && (remaining?.resources.filter(row => row.id !== "transition-coordinator").length ?? 0) === 0;
   return Object.freeze({
     applied: true,
     ...recoveryNotice,
@@ -285,6 +289,45 @@ export async function runProductUninstall(input: ProductUninstallOptions): Promi
     activityBlockers,
     shutdownFailures,
     ...result,
-    manifestRemoved: canRemoveManifest,
+    manifestRemoved: false,
+    coordinatorCleanupReady: canRemoveManifest,
   });
+}
+
+/** One mutation owner from admission through service/resource removal. */
+export async function runProductUninstall(input: ProductUninstallOptions): Promise<Readonly<Record<string, unknown>>> {
+  const paths = input.paths ?? resolveProductPaths(input);
+  const checkpoint = readUninstallCheckpoint(paths);
+  if (checkpoint) {
+    if (input.mode === "dry-run") return Object.freeze({ dryRun: true, status: "uninstall-incomplete", phase: checkpoint.phase, destructiveActions: 0 });
+    if (checkpoint.phase !== "finalizing") throw new Error("uninstall removal was interrupted; reconcile its effects before retrying shutdown");
+    await finalizeUninstall(paths, checkpoint);
+    return Object.freeze({ applied: true, manifestRemoved: true, resumedMetadataCleanup: true });
+  }
+  const manifest = readOwnershipManifest(paths.installManifest);
+  if (input.mode === "dry-run" || !manifest) return runProductUninstallOwned(input);
+  assertExternalUninstaller(manifest, input.executingBinaryPath);
+  let finalizing: ReturnType<typeof startUninstallCheckpoint> | undefined;
+  const result = await withPackagedTransitionOwner({ paths, installId: manifest.installId }, async () => {
+    // Recheck under the same lock used by install, update, repair and cancellation.
+    const current = readOwnershipManifest(paths.installManifest);
+    if (!current || current.installId !== manifest.installId || current.productVersion !== manifest.productVersion) throw new Error("uninstall ownership changed while awaiting admission");
+    if (readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths)) || readPackagedRepairJournal(packagedRepairJournalPath(paths))) {
+      throw new Error("packaged transition is incomplete; restore it before uninstall apply");
+    }
+    const owned = startUninstallCheckpoint(paths, manifest.installId);
+    const removed = await runProductUninstallOwned(input);
+    if (removed.coordinatorCleanupReady === true) {
+      finalizing = { ...owned, phase: "finalizing" };
+      writeUninstallCheckpoint(paths, finalizing);
+    } else if (!Array.isArray(removed.shutdownFailures) || removed.shutdownFailures.length === 0) {
+      clearUninstallCheckpoint(paths, owned);
+    }
+    return removed;
+  });
+  if (finalizing) {
+    await finalizeUninstall(paths, finalizing, true);
+    return Object.freeze({ ...result, manifestRemoved: true, coordinatorCleanupReady: false });
+  }
+  return result;
 }
