@@ -10,6 +10,7 @@ const SAFE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const FORBIDDEN = /(prompt|path|url|uri|secret|email|content|command|output|argument|authorization|cookie|raw_|token|workspace_id|account_id|user_id|session_id|turn_id|thread_id)/i;
 const FINGERPRINT = /^[a-f0-9]{24}$/;
 const SAFE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const SAFE_PROOF_STAGES = new Set(["account", "model-discovery", "connector", "readiness"]);
 const STRINGS = new Set(["service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state"]);
 /** Never copies unclassified text, identifiers or payloads from a raw diagnostic file. */
 export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticEvent | undefined {
@@ -20,6 +21,10 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
   const safe: Record<string, string | number | boolean> = { ts: new Date(row.ts).toISOString(), event: row.event, stage: row.stage };
   for (const [key, field] of Object.entries(row).slice(0, 64)) {
     if (["ts", "event", "stage"].includes(key) || !SAFE_NAME.test(key) || FORBIDDEN.test(key)) continue;
+    if (key === "proof_stage") {
+      if (typeof field === "string" && SAFE_PROOF_STAGES.has(field)) safe[key] = field;
+      continue;
+    }
     if (typeof field === "number" && Number.isSafeInteger(field) && Math.abs(field) <= Number.MAX_SAFE_INTEGER) safe[key] = field;
     else if (typeof field === "boolean") safe[key] = field;
     else if (typeof field === "string" && ((key.endsWith("_fingerprint") && FINGERPRINT.test(field))

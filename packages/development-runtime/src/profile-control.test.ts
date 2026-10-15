@@ -1,7 +1,7 @@
 import {expect, test} from 'bun:test';
 import {ControlledBrowserHost} from '@chatgpt-tela/browser-host';
 import {ChatGptConnectorCatalogUnavailableError,ChatGptWebModelPickerControlUnavailableError} from '@chatgpt-tela/chatgpt';
-import {createChatGptProfileControl} from './profile-control';
+import {createChatGptProfileControl, webPreparationFailureDetail} from './profile-control';
 
 test('account-only observation needs no composer, submits nothing and releases its hidden page on failure',async()=>{
   let created=0,closed=0,observed=0;
@@ -175,4 +175,32 @@ test('the picker retry does not authorize a changed Web account', async () => {
   expect(f.created).toBe(2);
   expect(f.closed).toBe(2);
   expect(f.order).toEqual(['readiness','account','models','readiness','account']);
+});
+
+
+test('unknown catalog exception retains its original identity with bounded discovery provenance', async () => {
+  const failure = new Error('fixture confidential detail');
+  let closed = 0;
+  const host = new ControlledBrowserHost(async () => ({
+    async navigate() {}, async reveal() { throw Error('hidden'); },
+    async hide() {}, async close() { closed++; },
+  }));
+  const control = createChatGptProfileControl({
+    browserHost: host,
+    accountIdentityObserver: async () => ({
+      accountFingerprint: 'a'.repeat(64), containerFingerprint: 'container',
+      accountStructure: 'personal',
+    }),
+    modelFamilyDiscovery: async () => { throw failure; },
+    provider: {
+      async observeCapabilities() {
+        return { state: 'proven', value: { observed: new Set(['composer', 'send']) }, evidence: ['fixture'] };
+      },
+      async probeConnector() { throw Error('must not reach connector'); },
+    },
+  });
+  await expect(control.prepareChatGptWebSession({ onProfile() {} })).rejects.toBe(failure);
+  expect(webPreparationFailureDetail(failure)).toEqual({ stage: 'model-discovery', reasonClass: 'unknown' });
+  expect(host.activeSurfaceCount).toBe(0);
+  expect(closed).toBe(1);
 });

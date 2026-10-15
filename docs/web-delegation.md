@@ -32,6 +32,11 @@ final failure/partial/blockage report must not be counted as task success. Older
 evidence cannot be returned as verified results. It never sends the prompt again. Lost creation/submission acknowledgements
 without an exact turn identity remain uncertain and require inspection.
 
+Tool counts describe observed supported Native items, including collaboration calls. Their coverage
+is reported as live events, limited history summary, or unverified for older records. Zero is never
+proof of no execution: summaries can omit tools and child-agent activity has separate ownership.
+History recovery preserves already observed counts rather than replacing them with summary zeroes.
+
 The selected model comes from the current complete Web catalog. The isolated release-label policy
 selects the highest unambiguous numeric release, prefers Extra high, and permits High only on that
 same model. Unknown naming, tied releases, missing efforts or incomplete catalogs fail before Send.

@@ -16,7 +16,7 @@ import { readChatGptTelaAccountBinding } from "./browser-profile";
 import { startModelListOverlayServer } from "./model-list-overlay-server";
 import { readWebModelDisplayCache, writeWebModelDisplayCache } from "./web-model-display-cache";
 import { startElectronDevelopmentRuntime, type ElectronDevelopmentRuntime, type ElectronDevelopmentRuntimeOptions } from "./electron";
-import type { ElectronProfileSetupSurface } from "./profile-control";
+import { webPreparationFailureDetail, type ElectronProfileSetupSurface } from "./profile-control";
 import { startElectronProfileSetupRuntime, type ElectronProfileSetupRuntime } from "./profile-setup";
 import type { NativeCodexFetch } from "./native-passthrough";
 import { prepareProductWebDiscovery, productPublicMcpIdentity, PRODUCT_RESPONSES_ENV_KEY, type ProductProfileRuntimeConfig, type ProductProfileRoutedTarget } from "./product-profile";
@@ -421,8 +421,11 @@ export async function startNativeFirstProductProfileRuntime(
         signal.throwIfAborted();
         setState("ready");
       } catch (error) {
+        const failure = webPreparationFailureDetail(error);
         emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_admission_failed", {
-          phase: webPhase, reason_class: signal.aborted ? "cancelled" : "proof_failed",
+          phase: webPhase,
+          reason_class: signal.aborted ? "cancelled" : failure?.reasonClass ?? "unknown",
+          ...(failure ? { proof_stage: failure.stage } : {}),
           duration_ms: Math.max(0, Math.round(performance.now() - startedAt)),
         });
         admitted = [];

@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { runReadOnlyWebDelegation, WebDelegationStore, reconcileWebDelegation } from "./web-delegation";
 
-async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string } = {}) {
+async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
   const calls: Array<{ method: string; params: unknown }> = [];
@@ -25,6 +25,7 @@ async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; f
         // Synchronously complete BEFORE turn/start's ACK, exercising the real notification race.
         notify("item/completed", { threadId: options.foreignFinal ? randomUUID() : threadId, turnId, item: { id: "final", type: "agentMessage", ...(options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified design" } });
         notify("item/completed", { threadId, turnId, item: { id: "read", type: "commandExecution" } });
+        if (options.collaboration) notify("item/completed", { threadId, turnId, item: { id: "collab", type: "collabAgentToolCall" } });
         notify("turn/completed", { threadId, turn: { id: turnId, status: "completed" } });
         return { turn: { id: turnId } };
       }
@@ -109,5 +110,21 @@ test("an explicit final blockage report is an execution result with task success
   const f = await fixture({ answer: "Blocked by the permission check; implementation remains incomplete." });
   try {
     expect(await f.run()).toMatchObject({ state: "completed", finalEvidence: "explicit-final-phase", taskOutcome: "unassessed" });
+  } finally { f.cleanup(); }
+});
+test("collaboration calls are observed without claiming complete execution coverage", async () => {
+  const f = await fixture({ collaboration: true });
+  try {
+    expect(await f.run()).toMatchObject({ toolItems: 2, toolItemCoverage: "live-events" });
+  } finally { f.cleanup(); }
+});
+test("summary recovery preserves earlier observations and marks its limited coverage", async () => {
+  const f = await fixture({ silent: true });
+  try {
+    await expect(f.run()).rejects.toThrow();
+    const prior = f.store.get(f.id)!;
+    f.store.save({ ...prior, toolItems: 3 });
+    expect(await f.reconcile()).toMatchObject({ toolItems: 3, toolItemCoverage: "history-summary" });
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
   } finally { f.cleanup(); }
 });

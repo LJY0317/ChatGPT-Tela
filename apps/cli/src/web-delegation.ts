@@ -25,7 +25,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     if (subcommand === "result") {
       if (record.state !== "completed" || record.finalEvidence !== "explicit-final-phase" || !record.answer) throw Error("No verified final result; inspect job status");
       console.log(record.answer);
-    } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", selection: record.selection, toolItems: record.toolItems ?? 0, failure: record.failure }, null, 2));
+    } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure }, null, 2));
     return;
   }
   if (subcommand !== "start" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|start|status|result|reconcile>");

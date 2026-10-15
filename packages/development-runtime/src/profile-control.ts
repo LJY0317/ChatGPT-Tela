@@ -48,6 +48,24 @@ export interface ElectronProfileSetupSurface {
   close(): Promise<void>;
 }
 
+export type WebPreparationFailureStage = "account" | "model-discovery" | "connector" | "readiness";
+export type WebPreparationFailureReason = "model_picker_control_unavailable" | "connector_catalog_unavailable" | "unknown";
+export interface WebPreparationFailureDetail {
+  readonly stage: WebPreparationFailureStage;
+  readonly reasonClass: WebPreparationFailureReason;
+}
+const preparationFailures = new WeakMap<object, WebPreparationFailureDetail>();
+export function webPreparationFailureDetail(error: unknown): WebPreparationFailureDetail | undefined {
+  return typeof error === "object" && error !== null ? preparationFailures.get(error) : undefined;
+}
+function recordPreparationFailure(error: unknown, stage: WebPreparationFailureStage): void {
+  if (typeof error !== "object" || error === null) return;
+  const reasonClass: WebPreparationFailureReason =
+    error instanceof ChatGptWebModelPickerControlUnavailableError ? "model_picker_control_unavailable"
+    : error instanceof ChatGptConnectorCatalogUnavailableError ? "connector_catalog_unavailable" : "unknown";
+  preparationFailures.set(error, Object.freeze({ stage, reasonClass }));
+}
+
 export interface ChatGptWebPreparationOptions {
   readonly signal?: AbortSignal;
   readonly onProfile: (profile: ChatGptProfileObservation) => void;
@@ -220,6 +238,7 @@ export function createChatGptProfileControl(input: {
             // or connector operation was sent on the failed first page.
             continue;
           }
+          recordPreparationFailure(error, stage);
           if (!(error instanceof ChatGptConnectorCatalogUnavailableError) || attempt >= 2 || signal?.aborted) throw error;
           emitDiagnosticEvent("chatgpt_tela_connector", "catalog_refresh", { attempt });
         } finally {

@@ -13,6 +13,32 @@ function fixture() { const root = mkdtempSync(join(tmpdir(),"tela-diagnostics-te
 afterEach(async () => { await new Promise<void>(resolve => setImmediate(resolve)); if (original) process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=original; else delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE; for (const root of directories.splice(0)) rmSync(root,{recursive:true,force:true}); });
 const fp = (value: string) => diagnosticFingerprint(value);
 const event = (stage: string, extra: Record<string,unknown> = {}, at = "2026-10-05T00:00:00.000Z") => structuralDiagnosticEvent({ts:at,event:"chatgpt_tela_test",stage,...extra})!;
+test("preparation provenance survives emitted failure and canonical incident inspection", async () => {
+  const root = fixture(), file = join(root, "events.jsonl");
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_admission_failed", {
+    proof_stage: "model-discovery", reason_class: "unknown",
+  });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(readDiagnosticTail(file).events.at(-1)).toMatchObject({
+    stage: "web_admission_failed", proof_stage: "model-discovery", reason_class: "unknown",
+  });
+  const center = join(root, "diagnostics");
+  const records = listDiagnosticIncidents(center);
+  expect(records).toHaveLength(1);
+  const inspected = readDiagnosticIncident(center, records[0]!.ref);
+  expect(inspected).toMatchObject({ timeline: expect.arrayContaining([expect.objectContaining({
+    stage: "web_admission_failed", proof_stage: "model-discovery", reason_class: "unknown",
+  })]) });
+});
+test("proof stages accept only classified preparation stages", () => {
+  for (const stage of ["account", "model-discovery", "connector", "readiness"]) {
+    expect(event("web_admission_failed", { proof_stage: stage }).proof_stage).toBe(stage);
+  }
+  for (const stage of ["unclassified_private_detail", "/private/fixture", true, 1, null]) {
+    expect(event("web_admission_failed", { proof_stage: stage })).not.toHaveProperty("proof_stage");
+  }
+});
 test("incident selection preserves early approval evidence despite later unrelated event pressure", () => {
   const root = fixture(), file = join(root,"events.jsonl"), at = Date.parse("2026-10-05T00:00:00Z");
   const selected = event("approval_wait_transition",{phase:"input_received",operation_fingerprint:fp("owned")});

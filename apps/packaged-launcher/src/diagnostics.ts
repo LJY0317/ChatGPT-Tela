@@ -8,8 +8,8 @@ const OPTIONS: Readonly<Record<string, readonly string[]>> = {
   decisions: [],
   inspect: ["--ref"],
   capture: ["--minutes", "--mode"],
-  activity: ["--at", "--minutes", "--symptom", "--operation", "--recovered-at", "--output-started-at"],
-  record: ["--at", "--minutes", "--symptom", "--operation", "--recovered-at", "--output-started-at"],
+  activity: ["--at", "--minutes", "--symptom", "--report-origin", "--operation", "--recovered-at", "--output-started-at"],
+  record: ["--at", "--minutes", "--symptom", "--report-origin", "--operation", "--recovered-at", "--output-started-at"],
 };
 
 /** Local bounded diagnostics; never starts services or embeds private artifacts. */

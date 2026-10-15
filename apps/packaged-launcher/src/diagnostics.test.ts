@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { privateDiagnosticCaptureEnabled } from "@chatgpt-tela/core";
@@ -44,5 +44,30 @@ test("packaged incidents use bounded product sources and never embed private pay
     expect(inspected).not.toContain(logsRoot);
     const list = runPackagedDiagnosticsCommand(["diagnostics"], { logsRoot }) as { incidents: unknown[] };
     expect(list.incidents).toHaveLength(1);
+  } finally { rmSync(logsRoot, { recursive: true, force: true }); }
+});
+
+
+test("packaged report origins are bounded and never claim host proof", () => {
+  const logsRoot = mkdtempSync(join(tmpdir(), "tela-report-origin-"));
+  const at = "2026-10-15T01:00:00.000Z";
+  try {
+    for (const [origin, expected] of [["worker-report", "worker-report"], ["user-observation", "user-observation"], ["host-error", "host-error"], [undefined, "unspecified"]] as const) {
+      const args = ["diagnostics", "record", "--at", at, "--symptom", "tool-review-blocked"];
+      if (origin) args.push("--report-origin", origin);
+      const record = runPackagedDiagnosticsCommand(args, { logsRoot }) as { ref: string };
+      const inspection = runPackagedDiagnosticsCommand(["diagnostics", "inspect", "--ref", record.ref], { logsRoot });
+      expect(inspection).toMatchObject({ hostReported: { origin: expected, originProven: false } });
+      const activity = runPackagedDiagnosticsCommand(["diagnostics", "activity", "--at", at, ...(origin ? ["--report-origin", origin] : [])], { logsRoot });
+      expect(activity).toMatchObject({ hostReported: { origin: expected, originProven: false } });
+    }
+    expect((runPackagedDiagnosticsCommand(["diagnostics", "list"], { logsRoot }) as { incidents: unknown[] }).incidents.length).toBeGreaterThan(0);
+    const before = readdirSync(join(logsRoot, "diagnostics", "incidents")).sort();
+    for (const tail of [["--report-origin", "incorrect"], ["--report-origin"], ["--report-origin", "worker-report", "--report-origin", "host-error"]]) {
+      expect(() => runPackagedDiagnosticsCommand(["diagnostics", "record", "--at", at, ...tail], { logsRoot })).toThrow();
+    }
+    expect(() => runPackagedDiagnosticsCommand(["diagnostics", "inspect", "--report-origin", "worker-report"], { logsRoot })).toThrow();
+    expect(readdirSync(join(logsRoot, "diagnostics", "incidents")).sort()).toEqual(before);
+    expect(existsSync(join(logsRoot, "diagnostics", "capture-policy.json"))).toBe(false);
   } finally { rmSync(logsRoot, { recursive: true, force: true }); }
 });

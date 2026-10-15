@@ -8,6 +8,8 @@ import { selectDelegationWebModel, type DelegationWebModel } from "./web-delegat
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RESULT_BYTES = 512 * 1024;
+// Counts are observations of supported Native item kinds, never proof of all execution.
+const TOOL_ITEM_TYPES = new Set(["commandExecution", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall"]);
 export type WebDelegationState = "reserved" | "creating" | "created" | "submitting" | "running" | "completed" | "failed" | "uncertain";
 export interface WebDelegationRecord {
   readonly id: string;
@@ -26,6 +28,7 @@ export interface WebDelegationRecord {
   readonly finalEvidence?: "explicit-final-phase";
   readonly answer?: string;
   readonly toolItems?: number;
+  readonly toolItemCoverage?: "live-events" | "history-summary";
   readonly failure?: "owner_changed" | "transport_or_ack" | "turn_failed" | "result_unavailable";
 }
 
@@ -144,7 +147,7 @@ export async function runReadOnlyWebDelegation(adapters: WebDelegationAdapters, 
           const totalBytes = [...messages].filter(([id]) => id !== item.id).reduce((sum, [, message]) => sum + Buffer.byteLength(message.text), Buffer.byteLength(item.text));
           if (totalBytes > MAX_RESULT_BYTES) { rejectDone(Error("Web job answer bound exceeded")); return; }
           messages.set(item.id, { text: item.text, ...(typeof item.phase === "string" ? { phase: item.phase } : {}) });
-        } else if (item?.type === "commandExecution" || item?.type === "mcpToolCall" || item?.type === "dynamicToolCall") toolItems++;
+        } else if (typeof item?.type === "string" && TOOL_ITEM_TYPES.has(item.type)) toolItems++;
       }
       if (method === "turn/completed") {
         const turn = object(event.turn);
@@ -176,7 +179,7 @@ export async function runReadOnlyWebDelegation(adapters: WebDelegationAdapters, 
       const final = [...messages.values()].filter(message => message.phase === "finalAnswer" || message.phase === "final_answer");
       const answer = final.at(-1)?.text;
       if (!answer?.trim()) throw Error("Web job completed without a proven final answer");
-      update({ state: "completed", taskOutcome: "unassessed", finalEvidence: "explicit-final-phase", answer, toolItems });
+      update({ state: "completed", taskOutcome: "unassessed", finalEvidence: "explicit-final-phase", answer, toolItems, toolItemCoverage: "live-events" });
       return record;
     } finally { input.signal.removeEventListener("abort", abort); }
   } catch (error) {
@@ -217,7 +220,8 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
     const answer = final.at(-1)?.text;
     if (typeof answer !== "string" || !answer.trim() || Buffer.byteLength(answer) > MAX_RESULT_BYTES) throw Error("Web final answer is not bounded and proven");
     return adapters.store.save({ ...record, state: "completed", taskOutcome: "unassessed", finalEvidence: "explicit-final-phase", answer,
-      toolItems: items.filter(item => item?.type === "commandExecution" || item?.type === "mcpToolCall" || item?.type === "dynamicToolCall").length,
+      toolItems: Math.max(record.toolItems ?? 0, items.filter(item => typeof item?.type === "string" && TOOL_ITEM_TYPES.has(item.type)).length),
+      toolItemCoverage: record.toolItemCoverage ?? "history-summary",
     });
   } finally { await rpc.close(); }
 }
