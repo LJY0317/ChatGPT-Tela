@@ -491,3 +491,20 @@ the next request receives the preserved HTTP 400 recovery and stops.
 Generic retired turns likewise use HTTP 400: Native maps 409 to a retryable unexpected-status error,
 regardless of a JSON `retryable=false` field. These terminal responses never restore execution authority.
 A new Web turn alone cannot repair unsupported context; use Native until support is available.
+
+
+### Native result handoff and pending approval
+
+Semantic lifecycle precedence is shared: failed assistant first, pending approval before
+presentation completion. Copy/turn-action controls can coexist with a still-pending decision.
+An exact Native-result handoff may record its observation baseline during that wait; it does not
+click a card, grant tool authority, or prove a completed action. No continuation/final is committed
+while approval remains unresolved, and card clearance alone is not assistant progression.
+
+`web_tool_handoff_rejected` records fixed `assistant_completed` / `assistant_failed` reasons and
+structural counts when an already terminal assistant prevents handoff. Ambiguous or probable
+handoff evidence remains rejected by the runtime, emits `handoff_proof_unavailable`, and returns
+terminal HTTP 400 `tela_native_handoff_reconciliation_required`. The same sanitized advice survives
+retirement and streamed failures. Native may retry an already-started streamed failure once;
+the following HTTP 400 ends the retry. Preserve/reconcile the existing Native result before a
+new authorized turn; neither a retry nor this recovery code authorizes executing the tool twice.

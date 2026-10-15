@@ -334,6 +334,33 @@ function acceptedSnapshot(
   };
 }
 
+describe("terminal assistant tool handoff", () => {
+  for (const phase of ["complete", "failed"] as const) {
+    for (const approval of [false, true]) {
+      if (phase === "complete" && approval) continue;
+      test(`${phase} remains unproven with approval=${approval}`, async () => {
+        const driver = new FixtureDriver(fixture("ready-new-chat"));
+        const surface = await leaseFor(driver);
+        const provider = new ChatGptSemanticProvider({approvalAutomationMode:"off"});
+        try {
+          const submitting=provider.submitTurn(surface.lease,request());
+          while(driver.current.revision==="r1")await Promise.resolve();
+          driver.queued.push(acceptedSnapshot(driver));
+          const submitted=await submitting;
+          if(submitted.state!=="proven")throw Error("expected proven fixture submit");
+          driver.current={...driver.current,revision:"terminal-before-handoff",
+            ...(approval?{approval:recognizedApproval}:{}),
+            turns:[...driver.current.turns,{key:"assistant",role:"assistant",parentUserTurnKey:"user-turn-1",phase,text:"Synthetic terminal reply"}]};
+          const observation=await provider.observeTurn(surface.lease,submitted.value);
+          expect(observation.state==="proven"&&observation.value.phase).toBe(phase==="complete"?"completed":"failed");
+          expect((await provider.armToolContinuation(surface.lease,submitted.value,"call-terminal")).state).toBe("probable");
+          expect(driver.approvalCalls).toBe(0);
+        } finally {await surface.host.close();}
+      });
+    }
+  }
+});
+
 describe("ChatGPT semantic provider", () => {
   function withMedia(): WebTurnRequest {
     const bytes=Buffer.from("89504e470d0a1a0a00000000","hex");
@@ -2023,7 +2050,6 @@ describe("ChatGPT semantic provider", () => {
         driver.queued.push(acceptedSnapshot(driver));
         const submitted = await submitting;
         if (submitted.state !== "proven") throw new Error("expected proven submit fixture");
-        await provider.armToolContinuation(surface.lease, submitted.value, "call-approval");
         const waiting: ChatGptSurfaceSnapshot = {
           ...driver.current, revision: "approval-and-copy-controls",
           approval: { cardCount: 1, denyCount: 0, allowCount: 0, allowOnceCount: 0,
@@ -2034,13 +2060,26 @@ describe("ChatGPT semantic provider", () => {
         driver.current = waiting;
         const state = await provider.observeTurn(surface.lease, submitted.value);
         expect(state.state === "proven" && state.value.phase).toBe("tool-wait");
+        const handoff = await provider.armToolContinuation(surface.lease, submitted.value, "call-approval");
+        expect(handoff.state).toBe("proven");
+        expect(driver.approvalCalls).toBe(0);
+        driver.queued.push({...waiting,revision:"still-pending"});
+        const pending=await provider.waitForTurnEvent(surface.lease,submitted.value);
+        expect(pending.state==="proven"&&pending.value.kind).toBe("progress");
         const { approval: _approval, ...cleared } = waiting;
+        driver.queued.push({...cleared,revision:"card-cleared-only"});
         driver.queued.push({ ...cleared, revision: "work-really-finished",
           turns: [...waiting.turns.filter(row => row.role !== "assistant"), { key: "assistant-1", role: "assistant",
             parentUserTurnKey: "user-turn-1", phase: "complete", text: "Verified result" }],
         });
+        const clearedProgress=await provider.waitForTurnEvent(surface.lease,submitted.value);
+        expect(clearedProgress.state==="proven"&&clearedProgress.value.kind).toBe("progress");
+        expect(driver.current.revision).toBe("card-cleared-only");
+        const changedProgress=await provider.waitForTurnEvent(surface.lease,submitted.value);
+        expect(changedProgress.state==="proven"&&changedProgress.value.kind).toBe("progress");
         const continuing = await provider.waitForTurnEvent(surface.lease, submitted.value);
         expect(continuing.state === "proven" && continuing.value.kind).toBe("continuing");
+        expect(driver.current.revision).toBe("work-really-finished");
         const final = await provider.waitForTurnEvent(surface.lease, submitted.value);
         expect(final.state === "proven" && final.value).toMatchObject({ kind: "completed", answer: "Verified result" });
         expect(driver.current.revision).toBe("work-really-finished");
@@ -2243,4 +2282,26 @@ describe("ChatGPT semantic provider", () => {
       await surface.host.close();
     }
   });
+});
+
+
+test("failed assistant supersedes a cached post-tool final even with a pending approval",async()=>{
+ const driver=new FixtureDriver(fixture("ready-new-chat"));const surface=await leaseFor(driver);
+ const provider=new ChatGptSemanticProvider({approvalAutomationMode:"off"});
+ try{
+  const submitting=provider.submitTurn(surface.lease,request());
+  while(driver.current.revision==="r1")await Promise.resolve();
+  driver.queued.push(acceptedSnapshot(driver));const submitted=await submitting;
+  if(submitted.state!=="proven")throw Error("expected fixture submit");
+  await provider.armToolContinuation(surface.lease,submitted.value,"cached-final-call");
+  driver.queued.push({...driver.current,revision:"completed",turns:[...driver.current.turns,
+   {key:"assistant",role:"assistant",parentUserTurnKey:"user-turn-1",phase:"complete",text:"Synthetic answer"}]});
+  const continuing=await provider.waitForTurnEvent(surface.lease,submitted.value);
+  expect(continuing.state==="proven"&&continuing.value.kind).toBe("continuing");
+  driver.current={...driver.current,revision:"failed-after-completion",approval:recognizedApproval,
+   turns:driver.current.turns.map(t=>t.role==="assistant"?{...t,phase:"failed",failureDetail:"Synthetic failure"}:t)};
+  const failed=await provider.waitForTurnEvent(surface.lease,submitted.value);
+  expect(failed.state==="proven"&&failed.value).toMatchObject({kind:"failed",detail:"Synthetic failure"});
+  expect(driver.approvalCalls).toBe(0);
+ }finally{await surface.host.close();}
 });

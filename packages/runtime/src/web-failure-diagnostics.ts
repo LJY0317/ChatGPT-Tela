@@ -21,6 +21,7 @@ export function webExecutionFailureFields(error: unknown, signal?: AbortSignal) 
   };
   const kind = (value: unknown) => {
     if (!(value instanceof Error)) return "non_error";
+    if ((value as Error & {code?: unknown}).code === "native_web_handoff_unproven") return "handoff_proof_unavailable";
     if (Object.hasOwn(exact, value.message)) return exact[value.message]!;
     if (value.name === "AbortError") return "aborted";
     if (value.name === "TimeoutError") return "deadline";

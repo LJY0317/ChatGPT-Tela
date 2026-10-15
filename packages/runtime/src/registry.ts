@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { NativeProjectionUnsupported } from "@chatgpt-tela/core";
+import { NativeProjectionUnsupported, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
 import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
 import { RuntimeTurnChannel } from "./turn-channel";
@@ -54,7 +54,7 @@ export class ActiveTurnRegistry {
   readonly #nativeCallIdsByTurn = new Map<string, Set<string>>();
   readonly #capabilityByTurn = new Map<string, string>();
   // A fixed recovery classification only; never retain raw exceptions or request content.
-  readonly #retiredTurns = new Map<string, true | "projection_unsupported" | NativeHistoryBootstrapRequired["recoveryReason"]>();
+  readonly #retiredTurns = new Map<string, true | "handoff_probable" | "handoff_ambiguous" | "projection_unsupported" | NativeHistoryBootstrapRequired["recoveryReason"]>();
   static readonly MAX_RETIRED_TURNS = 256;
   readonly #routeId: string | undefined;
 
@@ -92,6 +92,7 @@ export class ActiveTurnRegistry {
 
   retiredError(threadId: string, turnId: string): Error {
     const reason = this.#retiredTurns.get(threadId + "\u0000" + turnId);
+    if (reason === "handoff_probable" || reason === "handoff_ambiguous") return new NativeWebHandoffUnproven(reason === "handoff_ambiguous" ? "ambiguous" : "probable");
     if (reason === "projection_unsupported") return new NativeProjectionUnsupported();
     return reason !== undefined && reason !== true
       ? new NativeHistoryBootstrapRequired(reason) : new NativeTurnAlreadyRetired();
@@ -135,11 +136,12 @@ export class ActiveTurnRegistry {
     this.#nativeCallIdsByTurn.delete(key);
     this.#retiredTurns.delete(key);
     const error = failure && typeof failure === "object"
-      ? failure as { code?: unknown; recoveryReason?: unknown } : undefined;
+      ? failure as { code?: unknown; recoveryReason?: unknown; proofState?: unknown } : undefined;
     this.#retiredTurns.set(key, error?.code === "native_history_bootstrap_required"
       ? error.recoveryReason === "checkpoint_interrupted" ? "checkpoint_interrupted"
         : error.recoveryReason === "unindexed_history" ? "unindexed_history" : "source_unavailable"
-      : error?.code === "native_projection_unsupported" ? "projection_unsupported" : true);
+      : error?.code === "native_projection_unsupported" ? "projection_unsupported"
+      : error?.code === "native_web_handoff_unproven" ? error.proofState === "ambiguous" ? "handoff_ambiguous" : "handoff_probable" : true);
     while (this.#retiredTurns.size > ActiveTurnRegistry.MAX_RETIRED_TURNS) {
       const oldest = this.#retiredTurns.keys().next().value as string | undefined;
       if (!oldest) break;

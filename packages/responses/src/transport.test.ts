@@ -8,7 +8,7 @@ import {
   NativeResponsesGateway,
 } from "@chatgpt-tela/runtime";
 import { handleNativeResponsesHttp } from "./transport";
-import { NativeProjectionUnsupported } from "@chatgpt-tela/core";
+import { NativeProjectionUnsupported, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
 
 const source: CanonicalCurrentTurnSource = {
   async currentTurn(threadId) {
@@ -542,4 +542,44 @@ test("late streamed projection rejection preserves recovery and the next Native 
     expect(replay.status).toBe(400);
     expect(await replay.json()).toMatchObject({error:{code:"tela_native_projection_unsupported"}});
   } finally { await gateway.close(); }
+});
+
+
+test("unproven post-result handoff preserves safe terminal recovery after retirement", async () => {
+  for(const proof of ["probable","ambiguous"] as const) {
+    let launches=0;
+    const gateway=new NativeResponsesGateway(source,new ActiveTurnRegistry(),async turn=>{
+      launches++;turn.channel.markSubmitted();turn.channel.markAccepted();
+      const error=new NativeWebHandoffUnproven(proof);error.message="PRIVATE upstream evidence";throw error;
+    });
+    try {
+      let prior:unknown;
+      for(let attempt=0;attempt<2;attempt++) {
+        const response=await handleNativeResponsesHttp(post(body([],false)),gateway);
+        expect(response.status).toBe(400);
+        const json=await response.json();
+        expect(json).toMatchObject({error:{code:"tela_native_handoff_reconciliation_required",retryable:false,
+          recovery:{kind:"reconcile_tool_handoff",requires_new_native_turn:true,prior_execution_settled:"unknown"}}});
+        expect(JSON.stringify(json)).not.toContain("PRIVATE");
+        if(attempt===0)prior=json;else expect(json).toEqual(prior);
+      }
+      expect(launches).toBe(1);
+    } finally {await gateway.close();}
+  }
+});
+
+
+test("streamed handoff failure keeps reconciliation advice and a terminal retired retry",async()=>{
+ let fail!:()=>void;
+ const gateway=new NativeResponsesGateway(source,new ActiveTurnRegistry(),async turn=>{
+  turn.channel.markSubmitted();turn.channel.markAccepted();turn.channel.publishProgress("Waiting for tool result");
+  await new Promise<void>(resolve=>{fail=resolve;});throw new NativeWebHandoffUnproven("probable");
+ });
+ try{
+  const response=await handleNativeResponsesHttp(post(body()),gateway);fail();const text=await response.text();
+  expect(text).toContain("response.failed");expect(text).toContain("tela_native_handoff_reconciliation_required");
+  expect(text).not.toContain("response.completed");
+  const retry=await handleNativeResponsesHttp(post(body()),gateway);expect(retry.status).toBe(400);
+  expect(await retry.json()).toMatchObject({error:{code:"tela_native_handoff_reconciliation_required"}});
+ }finally{await gateway.close();}
 });

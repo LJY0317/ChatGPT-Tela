@@ -1,3 +1,4 @@
+import { nativeHandoffRecovery } from "./native-handoff-recovery";
 import type {
   NativeGatewayOutcome,
   NativeResponsesGateway,
@@ -132,6 +133,8 @@ export async function handleNativeResponsesHttp(
       progress.signal.abort();
     } else outcome = await pending;
   } catch (error) {
+    const handoffRecovery = nativeHandoffRecovery(error);
+    if (handoffRecovery) return Response.json({ error: handoffRecovery }, { status: 400 });
     const projectionRecovery = nativeProjectionRecovery(error);
     if (projectionRecovery) return Response.json({ error: projectionRecovery }, { status: 400 });
     // A bounded Native-history bootstrap is a recoverable *context* limit,

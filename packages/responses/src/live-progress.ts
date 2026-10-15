@@ -1,3 +1,4 @@
+import { nativeHandoffRecovery } from "./native-handoff-recovery";
 import { randomBytes } from "node:crypto";
 import type { NativeGatewayOutcome, NativeResponsesGateway } from "@chatgpt-tela/runtime";
 import { encodeNativeResponsesOutcome, nativeResponsesSsePlan } from "./protocol";
@@ -76,13 +77,14 @@ export class NativeProgressStream {
   fail(error: unknown): void {
     if (this.#ended || this.signal.signal.aborted) return;
     const projectionRecovery = nativeProjectionRecovery(error);
-    const recovery = projectionRecovery ?? nativeHistoryRecovery(error);
+    const handoffRecovery = nativeHandoffRecovery(error);
+    const recovery = handoffRecovery ?? projectionRecovery ?? nativeHistoryRecovery(error);
     if (recovery) {
       // HTTP status is already committed as 200 once an SSE progress frame
       // leaves. Preserve typed nonretryable recovery in response.failed.
       // The exception itself may contain private Native history or tool text.
       emitDiagnosticEvent("chatgpt_tela_work", "native_context_recovery_streamed", {
-        reason_class: projectionRecovery ? "request_projection_unsupported" : recovery.recovery.kind === "continue_on_native"
+        reason_class: handoffRecovery ? "handoff_proof_unavailable" : projectionRecovery ? "request_projection_unsupported" : recovery.recovery.kind === "continue_on_native"
           ? "history_mode_unindexed" : "history_bootstrap_required",
         transport_phase: "sse_after_progress",
       });

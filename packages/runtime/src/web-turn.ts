@@ -1,3 +1,4 @@
+import { NativeWebHandoffUnproven } from "@chatgpt-tela/core";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { capturePrivateDiagnosticValue, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
@@ -209,12 +210,14 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
           && state.nativeResultReady === true
           && state.outstandingToolCallId) {
           boundary = "tool_handoff";
-          const continuation = requireProven(await input.provider.armToolContinuation(
+          const observation = await input.provider.armToolContinuation(
             surface,
             handle,
             state.outstandingToolCallId,
             input.signal,
-          ));
+          );
+          if (observation.state !== "proven") throw new NativeWebHandoffUnproven(observation.state);
+          const continuation = observation.value;
           if (continuation.providerTurnId !== handle.providerTurnId
             || continuation.callId !== state.outstandingToolCallId) {
             throw new Error("Web provider armed the wrong tool continuation boundary");
