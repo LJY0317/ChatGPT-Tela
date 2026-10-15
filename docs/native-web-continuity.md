@@ -125,14 +125,14 @@ handoff is available on **Paginated** history, initial Web preparation
 returns `tela_native_history_checkpoint_required` (HTTP 422).
 Legacy/missing/unknown indexed mode instead returns
 `tela_native_history_indexed_source_required` (HTTP 422) and
-`continue_on_native`. The old Native turn is retired on failure; 409
-on repeating it protects against duplicate execution and is not a
+`continue_on_native`. The old Native turn is retired on failure. A known history recovery retains its original
+422 classification on replay; other retired turns return terminal HTTP 400 to prevent duplicate execution and is not a
 reason to retry blindly.
 
 The 422 includes nonretryable recovery metadata identifying the explicit
 Native turn fallback **only after automatic source recovery was unavailable**.
 A retired turn
-replay returns 409 with code tela_native_turn_already_retired and
+replay returns terminal HTTP 400 with code tela_native_turn_already_retired and
 retryable=false. Replays rejected from the same runtime's known-retired
 registry no longer repeatedly fetch Native Desktop history. This is
 negative-only rejection, not a new authority grant, and cannot force an

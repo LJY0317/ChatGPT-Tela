@@ -24,7 +24,7 @@ This observation identifies the most recent planner boundary, not the root
 cause or proof of actual Native execution. The original exception, ownership,
 checkpoint authority, and retry behavior are unchanged. No new model calls,
 session creation, or full-history transfers are triggered by diagnostics.
-Retired-turn HTTP 409 remains non-retryable for the retired turn and must not
+Retired-turn HTTP 400 is terminal for Native clients and must not
 be conflated with an initial context-planning failure or Host safety refusal.
 
 Native tool delivery evidence is deliberately ordered: `native_tool_delivery_committed`
@@ -38,7 +38,7 @@ Retirement emits `native_turn_retired` with a closed `reason_class`
 (`owner_changed`, `owner_signal`, `watch_failed`,
 `execution_failed`, `gateway_closed`) and an immutable pre-cancellation
 phase/tool state snapshot. This is local evidence only; a completed response
-does not imply that the Host executed any requested tool. The 409 transport
+does not imply that the Host executed any requested tool. The retired-turn transport
 now suggests an explicitly authorized **new Native turn**, retaining the
 existing conversation whenever independently verified. It does not launch a
 new conversation, authorize retry, or assert prior execution settlement;
@@ -55,10 +55,11 @@ Retained Web context failures distinguish unavailable committed proof, missing/i
 body proof, and semantic mismatch. Equal presentation text does not establish semantic equality.
 The closed renderer reason is reported separately from the continuity reason. The typed
 `tela_web_retained_context_unproven` recovery survives retirement and is identical for initial HTTP
-422 and `response.failed` after SSE starts. Retired retries neither reread Native history nor launch
+400 and `response.failed` after SSE starts. Retired retries neither reread Native history nor launch
 Web execution. This does not prove the client stops retrying, recover missing body proof, or authorize
 an automatic resend. These changes require installation and real-profile acceptance before claiming
-that an installed incident is fixed.
+that an installed incident is fixed. Cycle conflicts likewise use terminal HTTP 400: the Native client
+can treat an unexpected HTTP 409 as reconnectable despite a retryable=false JSON field.
 
 Use `chatgpt-tela diagnostics list`, then `diagnostics inspect --ref <ref>`. The platform-standard
 Tela logs directory contains `diagnostics/START-HERE.md`, a rebuildable `INDEX.json`, canonical
@@ -487,3 +488,38 @@ proof of absence of a server failure. Diagnostics preserve status, headers, byte
 cancellation, and original read errors; they neither recover nor retry the user's task.
 
 | Native visible-prefix checkpoint | `native_visible_prefix_checkpoint_started`, `native_visible_prefix_stage_settled`, `native_visible_prefix_stage_rejected` | Complete indexed visible history can bootstrap Web without an optional UI compaction marker. Records bounded source bytes/item count, fragment/stage counts, fixed fragment/merge phase and completed/reused/uncertain outcome. No historical text or source identifiers. The account-scoped execution journal owns submitted-stage receipts; disposable caches do not authorize reuse or retries. An uncertain submission returns `tela_native_checkpoint_reconciliation_required` with `retryable=false`; subsequent retired-turn retries preserve that recovery decision. |
+
+
+### Unsupported Native projection and terminal retry semantics
+
+Native `agent_message` input is attributed inter-agent communication, not a user instruction
+or final-answer witness. The shared Web/Native local-compaction projector preserves its author,
+recipient and ordered plaintext content; incidental IDs/metadata do not affect semantic identity.
+Agent revisions remain protected from historical assistant truncation. Opaque/encrypted or malformed
+agent content fails closed before Web submission.
+
+`request_projection_unsupported` classifies this preparation boundary without logging input types,
+agent text or identifiers. HTTP 400 `tela_native_projection_unsupported` preserves the same sanitized
+recovery after retirement. Late streaming failures use the same code in `response.failed`.
+Native currently retries unknown streamed failure codes once despite `retryable=false`;
+the next request receives the preserved HTTP 400 recovery and stops.
+Generic retired turns likewise use HTTP 400: Native maps 409 to a retryable unexpected-status error,
+regardless of a JSON `retryable=false` field. These terminal responses never restore execution authority.
+A new Web turn alone cannot repair unsupported context; use Native until support is available.
+
+
+### Native result handoff and pending approval
+
+Semantic lifecycle precedence is shared: failed assistant first, pending approval before
+presentation completion. Copy/turn-action controls can coexist with a still-pending decision.
+An exact Native-result handoff may record its observation baseline during that wait; it does not
+click a card, grant tool authority, or prove a completed action. No continuation/final is committed
+while approval remains unresolved, and card clearance alone is not assistant progression.
+
+`web_tool_handoff_rejected` records fixed `assistant_completed` / `assistant_failed` reasons and
+structural counts when an already terminal assistant prevents handoff. Ambiguous or probable
+handoff evidence remains rejected by the runtime, emits `handoff_proof_unavailable`, and returns
+terminal HTTP 400 `tela_native_handoff_reconciliation_required`. The same sanitized advice survives
+retirement and streamed failures. Native may retry an already-started streamed failure once;
+the following HTTP 400 ends the retry. Preserve/reconcile the existing Native result before a
+new authorized turn; neither a retry nor this recovery code authorizes executing the tool twice.

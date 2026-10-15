@@ -17,3 +17,6 @@ export * from "./diagnostic-private";
 export * from "./diagnostic-center";
 export * from "./diagnostic-tool-evidence";
 export * from "./web-retained-context";
+export * from "./native-projection-error";
+
+export * from "./native-web-handoff-error";

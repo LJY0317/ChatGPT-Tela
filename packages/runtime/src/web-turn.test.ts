@@ -226,7 +226,7 @@ describe("browser turn runner", () => {
     await expect(run).rejects.toBe(failure);
     expect(observations).toBe(1); expect(submissions).toBe(1);
     expect(released).toEqual(["surface-1"]);
-    expect(channel.phase).toBe("indeterminate-after-acceptance");
+    expect(String(channel.phase)).toBe("indeterminate-after-acceptance");
   });
   test("receipt-proven context preload completes before the real Native execution submit", async () => {
     const events = new EventQueue();
@@ -544,4 +544,23 @@ describe("browser turn runner", () => {
     expect(String(channel.phase)).toBe("completed");
     expect(released).toEqual(["surface-1"]);
   });
+});
+
+
+test("unproven handoff never releases the exact Native result or submits twice",async()=>{
+ for(const proof of ["probable","ambiguous"] as const){
+  const channel=new RuntimeTurnChannel(binding());const fixture=provider(new EventQueue());let submits=0,released=false;
+  const wrapped:WebConversationProvider={...fixture,async submitTurn(...args){submits++;return fixture.submitTurn(...args);},
+   async armToolContinuation(_surface,turn,callId){return proof==="probable"
+    ?{state:proof,value:{providerTurnId:turn.providerTurnId,callId},evidence:["synthetic terminal assistant"]}
+    :{state:proof,candidates:[],evidence:["synthetic ambiguous lineage"]};}};
+  const run=runBrowserTurn({browserHost:browserHost([]),provider:wrapped,channel,nativeTaskId:"task-1",webEpochId:"epoch-1",physicalContext});
+  void run.catch(()=>{});
+  while(channel.phase!=="accepted")await Promise.resolve();
+  const waiting=channel.requestTool({callId:"handoff-call",wireName:"exec_command",mode:"structured",arguments:{}});
+  void waiting.then(()=>{released=true;},()=>{});
+  channel.deliverNativeToolResult({callId:"handoff-call",content:"Synthetic result",isError:false});
+  await expect(run).rejects.toMatchObject({code:"native_web_handoff_unproven",proofState:proof});
+  expect(released).toBe(false);expect(submits).toBe(1);expect(String(channel.phase)).toBe("indeterminate-after-acceptance");
+ }
 });

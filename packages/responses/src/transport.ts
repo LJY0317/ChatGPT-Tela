@@ -1,3 +1,4 @@
+import { nativeHandoffRecovery } from "./native-handoff-recovery";
 import type {
   NativeGatewayOutcome,
   NativeResponsesGateway,
@@ -9,6 +10,7 @@ import {
 import { NativeProgressStream } from "./live-progress";
 import { nativeHistoryRecovery } from "./native-history-recovery";
 import { webContinuityRecovery } from "./web-continuity-recovery";
+import { nativeProjectionRecovery } from "./native-projection-recovery";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -132,11 +134,17 @@ export async function handleNativeResponsesHttp(
       progress.signal.abort();
     } else outcome = await pending;
   } catch (error) {
+    const handoffRecovery = nativeHandoffRecovery(error);
+    if (handoffRecovery) return Response.json({ error: handoffRecovery }, { status: 400 });
+    const projectionRecovery = nativeProjectionRecovery(error);
+    if (projectionRecovery) return Response.json({ error: projectionRecovery }, { status: 400 });
     // A bounded Native-history bootstrap is a recoverable *context* limit,
     // not a transient network outage. Do not turn it into an opaque 409 or
     // replay the already-retired Native turn. No private exception payloads
     // or historical text are returned to the caller.
-    const historyRecovery = nativeHistoryRecovery(error) ?? webContinuityRecovery(error);
+    const continuityRecovery = webContinuityRecovery(error);
+    if (continuityRecovery) return Response.json({ error: continuityRecovery }, { status: 400 });
+    const historyRecovery = nativeHistoryRecovery(error);
     if (historyRecovery) {
       // Keep the HTTP and already-started SSE recovery decisions identical;
       // neither transport may repeat a private Native exception.
@@ -148,9 +156,10 @@ export async function handleNativeResponsesHttp(
       }, { status: 422 });
     }
     if (record(error)?.code === "tela_native_turn_already_retired") {
+      // Native retries UnexpectedStatus (409) but treats InvalidRequest (400) as terminal.
       return Response.json({
         error: {
-          type: "chatgpt_tela_runtime_error",
+          type: "invalid_request_error",
           code: "tela_native_turn_already_retired",
           retryable: false,
           message: "This Native turn is already retired. Repeating it cannot recover missing history. Continue with a new, explicitly authorized Native turn and a verified checkpoint or handoff.",
@@ -163,13 +172,13 @@ export async function handleNativeResponsesHttp(
             prior_execution_settled: "unknown",
           },
         },
-      }, { status: 409 });
+      }, { status: 400 });
     }
     if (record(error)?.code === "tela_native_response_cycle_conflict") {
-      return Response.json({ error: { type: "chatgpt_tela_runtime_error",
+      return Response.json({ error: { type: "invalid_request_error",
         code: "tela_native_response_cycle_conflict", retryable: false,
-        message: error instanceof Error ? error.message : "Native response cycle ownership was not proven",
-      } }, { status: 409 });
+        message: "This completed response cycle has no proven new input. Do not retry it; continue with a new authorized turn and verified context.",
+      } }, { status: 400 });
     }
     const message = error instanceof Error ? error.message : String(error);
     return Response.json({

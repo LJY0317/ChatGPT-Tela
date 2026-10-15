@@ -5,6 +5,7 @@ export function webContinuityRecovery(error: unknown) {
   const reason = webRetainedContextFailureReason(error);
   if (!reason) return undefined;
   return {
+    type: "invalid_request_error" as const,
     code: "tela_web_retained_context_unproven" as const,
     reason,
     retryable: false as const,

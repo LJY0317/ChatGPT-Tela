@@ -476,6 +476,14 @@ function committedAnswerFingerprint(assistant: ChatGptTurnObservation): string |
     assistant.bodyProof.version, assistant.bodyProof.digest]));
 }
 
+/** Pending decisions outrank presentation completion; failure always remains terminal. */
+function assistantLifecyclePhase(snapshot: ChatGptSurfaceSnapshot, assistant: ChatGptTurnObservation | undefined): WebTurnState["phase"] {
+  if (assistant?.phase === "failed") return "failed";
+  if (snapshot.approval?.cardCount || assistant?.phase === "tool-wait") return "tool-wait";
+  if (assistant?.phase === "complete") return "completed";
+  return assistant ? "continuing" : "accepted";
+}
+
 function stateFromSnapshot(
   snapshot: ChatGptSurfaceSnapshot,
   tracked: TrackedTurn,
@@ -514,15 +522,7 @@ function stateFromSnapshot(
       evidence: evidence("accepted user turn has no assistant descendant yet"),
     };
   }
-  const phase = snapshot.approval?.cardCount && assistant.phase !== "failed"
-    ? "tool-wait"
-    : assistant.phase === "tool-wait"
-    ? "tool-wait"
-    : assistant.phase === "complete"
-      ? "completed"
-      : assistant.phase === "failed"
-        ? "failed"
-        : "continuing";
+  const phase = assistantLifecyclePhase(snapshot, assistant);
   return {
     state: "proven",
     value: { providerTurnId: tracked.handle.providerTurnId, phase },
@@ -1479,11 +1479,16 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       };
     }
     const assistant = assistants[0];
-    if (assistant?.phase === "complete" || assistant?.phase === "failed") {
+    const phase = assistantLifecyclePhase(snapshot, assistant);
+    if (phase === "completed" || phase === "failed") {
+      emitDiagnosticEvent("chatgpt_tela_work", "web_tool_handoff_rejected", {
+        ...turnObservationFields(snapshot, tracked), assistant_phase: assistant!.phase!,
+        reason_class: phase === "failed" ? "assistant_failed" : "assistant_completed",
+      });
       return {
         state: "probable",
         value: { providerTurnId: tracked.handle.providerTurnId, callId },
-        evidence: evidence(`assistant was already ${assistant.phase} before MCP result handoff`),
+        evidence: evidence(`assistant was already ${assistant!.phase} before MCP result handoff`),
       };
     }
     tracked.revision = snapshot.revision;
@@ -1528,6 +1533,13 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       const answer = tracked.pendingCompletedAnswer;
       delete tracked.pendingCompletedAnswer;
       // A new approval can render after completion controls. It still blocks final delivery.
+      if (assistantLifecyclePhase(snapshot, ownership.assistants[0]) === "failed") {
+        await this.#recordApprovalResolution(surface, tracked, "failed");
+        this.#turns.delete(surface);
+        return { state: "proven", value: { kind: "failed", providerTurnId: tracked.handle.providerTurnId,
+          detail: ownership.assistants[0]!.failureDetail ?? "ChatGPT turn failed" },
+          evidence: evidence("assistant failure superseded pending completion") };
+      }
       if (!snapshot.approval?.cardCount) {
         await this.#recordApprovalResolution(surface, tracked, "completed");
         this.#turns.delete(surface);
@@ -1644,7 +1656,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       // Pending authority decisions dominate display completion controls. Never commit a
       // progress message or clear a tool continuation while its approval remains unresolved.
-      if (snapshot.approval?.cardCount && assistant?.phase !== "failed") continue;
+      if (snapshot.approval?.cardCount && assistantLifecyclePhase(snapshot, assistant) !== "failed") continue;
       if (!assistant) continue;
       const boundary = tracked.continuationBoundary;
       if (boundary) {

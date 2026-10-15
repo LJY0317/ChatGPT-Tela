@@ -1,6 +1,9 @@
 /** Fixed categories for Tela-owned preparation errors. Never return exception prose or identifiers. */
 export function classifyWebPreparationFailure(error: unknown): string {
   if (!(error instanceof Error)) return "unclassified";
+  if ((error as Error & { readonly code?: unknown }).code === "native_projection_unsupported") {
+    return "request_projection_unsupported";
+  }
   // Own typed cold-history recovery before matching message prose. A future
   // wording change must not turn a real historical bootstrap failure into
   // an unclassified 409-like incident in routine telemetry.

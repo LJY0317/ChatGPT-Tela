@@ -5,6 +5,7 @@ import {
 } from "@chatgpt-tela/codex";
 import {
   RevisionLineage,
+  NativeProjectionUnsupported,
   emitDiagnosticEvent,
   planPhysicalContext,
   type ContextCheckpoint,
@@ -302,6 +303,9 @@ function retainedDelta(
     const kind = projection.revisions[index]!.revision.kind;
     if (kind === "user" || kind === "steering") break;
     if (kind === "assistant") {
+      // Attributed agent data and source-bound summaries cannot witness our final,
+      // even if their serialized text happens to equal its answer fingerprint.
+      if (projection.protectedRevisionIds.includes(projection.revisions[index]!.revision.id)) return undefined;
       // Ambiguous multi-message Native completion has no single proven
       // committed answer boundary. Rebuild from canonical history.
       if (assistantIndex >= 0) return undefined;
@@ -511,6 +515,25 @@ export function projectNativeRequestContext(
         continue;
       }
 
+      if (type === "agent_message") {
+        // Native inter-agent communication is attributed task data, never a user request,
+        // high-priority instruction, or evidence of a completed Web answer. Do not copy
+        // Native metadata or opaque/encrypted agent state into the Web transcript.
+        if (typeof item.author !== "string" || !item.author.trim()
+          || typeof item.recipient !== "string" || !item.recipient.trim()
+          || !Array.isArray(item.content)) throw new NativeProjectionUnsupported();
+        const content = item.content.map(raw => {
+          const part = record(raw);
+          if (part?.type !== "input_text" || typeof part.text !== "string") {
+            throw new NativeProjectionUnsupported();
+          }
+          return { type: "input_text", text: part.text };
+        });
+        append("assistant", stableJson({ type, author: item.author, recipient: item.recipient, content }));
+        protectedRevisionIds.push(projected.at(-1)!.revision.id);
+        continue;
+      }
+
       if (type === "function_call" || type === "custom_tool_call" || type === "tool_search_call") {
         const tool = projectNativeToolEvidence(item, taskId, `input:${index}`);
         append("tool-call", stableJson(tool.item), tool.media);
@@ -542,7 +565,7 @@ export function projectNativeRequestContext(
       // not copied into the Web prompt and are never treated as user-visible logical context.
       if (type === "reasoning" || type === "additional_tools") continue;
 
-      throw new Error(`unsupported Native request input type at index ${index}: ${type ?? "unknown"}`);
+      throw new NativeProjectionUnsupported();
     }
     if (awaitingCompactionSummary) {
       throw new Error("Native local compaction marker requires a following readable user summary");

@@ -9,6 +9,7 @@ import {
 } from "@chatgpt-tela/runtime";
 import { handleNativeResponsesHttp } from "./transport";
 import { WebRetainedContextUnproven, WEB_RETAINED_CONTEXT_REASONS } from "@chatgpt-tela/core";
+import { NativeProjectionUnsupported, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
 
 const source: CanonicalCurrentTurnSource = {
   async currentTurn(threadId) {
@@ -54,6 +55,23 @@ function post(value: unknown): Request {
 }
 
 describe("Native Responses HTTP transport", () => {
+  test("completed-cycle continuation without proven new input is terminal rather than a reconnectable 409", async () => {
+    let launches = 0;
+    const owner = new AbortController();
+    const gateway = new NativeResponsesGateway({ ...source, async watchTurn() {
+      return { signal: owner.signal, inputs: () => [], async close() {} };
+    } }, new ActiveTurnRegistry(), async turn => {
+      launches++; turn.channel.markSubmitted(); turn.channel.markAccepted(); turn.channel.complete("final");
+    });
+    const initial = await handleNativeResponsesHttp(post(body([], false)), gateway);
+    expect(initial.status).toBe(200); await initial.text();
+    const response = await handleNativeResponsesHttp(post(body([], false)), gateway);
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatchObject({ type: "invalid_request_error",
+      code: "tela_native_response_cycle_conflict", retryable: false });
+    expect(launches).toBe(1); await gateway.close();
+  });
+
   test("retained-context failure survives retirement without replaying execution or losing its cause", async () => {
     for (const reason of WEB_RETAINED_CONTEXT_REASONS) {
       let reads = 0, launches = 0;
@@ -62,13 +80,13 @@ describe("Native Responses HTTP transport", () => {
         reads++; return source.currentTurn(threadId);
       } }, turns, async () => { launches++; throw new WebRetainedContextUnproven(reason); });
       const first = await handleNativeResponsesHttp(post(body()), gateway);
-      expect(first.status).toBe(422);
+      expect(first.status).toBe(400);
       const expected = await first.json();
       expect(expected.error).toMatchObject({ code: "tela_web_retained_context_unproven", reason,
         retryable: false, recovery: { requires_new_native_turn: true, original_history_preserved: true } });
       for (let retry = 0; retry < 2; retry++) {
         const response = await handleNativeResponsesHttp(post(body()), gateway);
-        expect(response.status).toBe(422); expect(await response.json()).toEqual(expected);
+        expect(response.status).toBe(400); expect(await response.json()).toEqual(expected);
       }
       expect(turns.size).toBe(0); expect(reads).toBe(1); expect(launches).toBe(1);
       await gateway.close();
@@ -89,10 +107,9 @@ describe("Native Responses HTTP transport", () => {
     expect(failed.response.error).toMatchObject({ code: "tela_web_retained_context_unproven",
       reason: "observed_body_incomplete", retryable: false });
     const replay = await handleNativeResponsesHttp(post(body()), gateway);
-    expect(replay.status).toBe(422);
+    expect(replay.status).toBe(400);
     const recovered = await replay.json();
-    const { type: _httpType, ...recoveryFields } = recovered.error;
-    expect(failed.response.error).toEqual(recoveryFields);
+    expect(failed.response.error).toEqual(recovered.error);
     await gateway.close();
   });
 
@@ -266,7 +283,7 @@ describe("Native Responses HTTP transport", () => {
       expect(failure.error.code).toBe(code === "tela_web_model_unavailable" ? code : undefined);
     }
   });
-  test("generic retirement preserves its 409 and distinguishes a new turn from a new conversation", async () => {
+  test("generic retirement uses terminal InvalidRequest and distinguishes a new turn from a new conversation", async () => {
     const owner = new AbortController();
     const watched = { ...source, async watchTurn() { return { signal: owner.signal, async close() {} }; } };
     let launches = 0;
@@ -282,7 +299,7 @@ describe("Native Responses HTTP transport", () => {
       await first.json();
       owner.abort(new Error("fixture owner completed"));
       const replay = await handleNativeResponsesHttp(post(body([], false)), gateway);
-      expect(replay.status).toBe(409);
+      expect(replay.status).toBe(400);
       expect((await replay.json() as { error: unknown }).error).toMatchObject({
         code: "tela_native_turn_already_retired", retryable: false,
         recovery: { kind: "authorized_native_continuation", requires_user_action: true,
@@ -532,4 +549,96 @@ test("SSE carries gap progress into the next tool round without repeating commit
   expect(turns.size).toBe(1);
   await gateway.close();
   expect(turns.size).toBe(0);
+});
+
+
+test("projection failure stays sanitized and terminal after retirement without executing twice", async () => {
+  let starts = 0;
+  const registry = new ActiveTurnRegistry();
+  const gateway = new NativeResponsesGateway(source, registry, async () => {
+    starts++;
+    const failure = new NativeProjectionUnsupported();
+    failure.message = "PRIVATE request content";
+    throw failure;
+  });
+  try {
+    let first: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await handleNativeResponsesHttp(post(body([], false)), gateway);
+      expect(response.status).toBe(400);
+      const value = await response.json();
+      expect(value).toMatchObject({ error: { type: "invalid_request_error",
+        code: "tela_native_projection_unsupported", retryable: false,
+        recovery: { kind: "continue_on_native", original_history_preserved: true } } });
+      expect(JSON.stringify(value)).not.toContain("PRIVATE");
+      if (attempt === 0) first = value;
+      else expect(value).toEqual(first);
+    }
+    expect(starts).toBe(1);
+    expect(registry.size).toBe(0);
+  } finally { await gateway.close(); }
+});
+
+test("late streamed projection rejection preserves recovery and the next Native retry is terminal", async () => {
+  let fail!: () => void;
+  const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async turn => {
+    turn.channel.markSubmitted(); turn.channel.markAccepted();
+    turn.channel.publishProgress("Preparing context");
+    await new Promise<void>(resolve => { fail = resolve; });
+    throw new NativeProjectionUnsupported();
+  });
+  try {
+    const response = await handleNativeResponsesHttp(post(body()), gateway);
+    fail();
+    const text = await response.text();
+    expect(text).toContain("response.failed");
+    expect(text).toContain("tela_native_projection_unsupported");
+    expect(text).toContain('"retryable":false');
+    expect(text).not.toContain("response.completed");
+    // Native currently retries unknown response.failed codes regardless of retryable=false.
+    // The retired replay must preserve the projection cause and end that retry as HTTP 400.
+    const replay = await handleNativeResponsesHttp(post(body()), gateway);
+    expect(replay.status).toBe(400);
+    expect(await replay.json()).toMatchObject({error:{code:"tela_native_projection_unsupported"}});
+  } finally { await gateway.close(); }
+});
+
+
+test("unproven post-result handoff preserves safe terminal recovery after retirement", async () => {
+  for(const proof of ["probable","ambiguous"] as const) {
+    let launches=0;
+    const gateway=new NativeResponsesGateway(source,new ActiveTurnRegistry(),async turn=>{
+      launches++;turn.channel.markSubmitted();turn.channel.markAccepted();
+      const error=new NativeWebHandoffUnproven(proof);error.message="PRIVATE upstream evidence";throw error;
+    });
+    try {
+      let prior:unknown;
+      for(let attempt=0;attempt<2;attempt++) {
+        const response=await handleNativeResponsesHttp(post(body([],false)),gateway);
+        expect(response.status).toBe(400);
+        const json=await response.json();
+        expect(json).toMatchObject({error:{code:"tela_native_handoff_reconciliation_required",retryable:false,
+          recovery:{kind:"reconcile_tool_handoff",requires_new_native_turn:true,prior_execution_settled:"unknown"}}});
+        expect(JSON.stringify(json)).not.toContain("PRIVATE");
+        if(attempt===0)prior=json;else expect(json).toEqual(prior);
+      }
+      expect(launches).toBe(1);
+    } finally {await gateway.close();}
+  }
+});
+
+
+test("streamed handoff failure keeps reconciliation advice and a terminal retired retry",async()=>{
+ let fail!:()=>void;
+ const gateway=new NativeResponsesGateway(source,new ActiveTurnRegistry(),async turn=>{
+  turn.channel.markSubmitted();turn.channel.markAccepted();turn.channel.publishProgress("Waiting for tool result");
+  await new Promise<void>(resolve=>{fail=resolve;});throw new NativeWebHandoffUnproven("probable");
+ });
+ try{
+  const response=await handleNativeResponsesHttp(post(body()),gateway);fail();const text=await response.text();
+  expect(text).toContain("response.failed");expect(text).toContain("tela_native_handoff_reconciliation_required");
+  expect(text).not.toContain("response.completed");
+  const retry=await handleNativeResponsesHttp(post(body()),gateway);expect(retry.status).toBe(400);
+  expect(await retry.json()).toMatchObject({error:{code:"tela_native_handoff_reconciliation_required"}});
+ }finally{await gateway.close();}
 });
