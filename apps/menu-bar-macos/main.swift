@@ -244,6 +244,16 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     if !menuOpen { rebuildMenu(loading: snapshot == nil) }
   }
 
+  @objc private func signInWebProfile(_ sender: NSMenuItem) {
+    statusMenu.cancelTracking()
+    controlCenter.openWebAccount(slot: sender.tag)
+  }
+
+  @objc private func finishWebAccountProfile(_ sender: NSMenuItem) {
+    statusMenu.cancelTracking()
+    controlCenter.finishWebAccount(slot: sender.tag)
+  }
+
   @objc private func reconnectWebProfile(_ sender: NSMenuItem) { controlCenter.reconnectWeb(slot: sender.tag) }
 
   private func updateProfileProgress() {
@@ -563,6 +573,17 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         profileToggleRows[profile.slot] = row
         menu.addItem(item)
         addProfileOpen(profile.slot, name: profile.targetDisplayName, to: menu)
+        if profile.accountManagementActive == true {
+          let done = actionItem("Done — check Web connection", action: #selector(finishWebAccountProfile(_:)))
+          done.tag = profile.slot
+          done.isEnabled = !controlCenter.connectionOperationInProgress && workInventory.error == nil
+          menu.addItem(done)
+        } else if profile.needsWebSignIn {
+          let login = actionItem("Sign in to Web…", action: #selector(signInWebProfile(_:)))
+          login.tag = profile.slot
+          login.isEnabled = !controlCenter.connectionOperationInProgress && workInventory.error == nil
+          menu.addItem(login)
+        }
         if profile.needsWebReconnect {
           let retry = actionItem("Reconnect Web", action: #selector(reconnectWebProfile(_:)))
           retry.tag = profile.slot

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL, chatGptWebFamilyKey, chatGptWebModelId, ChatGptWebModelUnavailableError } from "@chatgpt-tela/chatgpt";
+import { CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL, chatGptWebFamilyKey, chatGptWebModelId, ChatGptWebModelUnavailableError, ChatGptWebLoginRequiredError } from "@chatgpt-tela/chatgpt";
 import { NativeResponsesGateway } from "@chatgpt-tela/runtime";
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 import { bindChatGptTelaAccount } from "./browser-profile";
@@ -22,7 +22,7 @@ const family = { key: chatGptWebFamilyKey("Fixture Web"), label: "Fixture Web", 
 const model = chatGptWebModelId(family.key);
 const metadata = { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "thread-1", turn_id: "turn-1" } };
 
-async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean; holdCreation?: boolean; fail?: "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly context?: import("./electron").ElectronDevelopmentRuntimeOptions["context"]; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
+async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean; holdCreation?: boolean; fail?: "login" | "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly context?: import("./electron").ElectronDevelopmentRuntimeOptions["context"]; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-native-first-"));
   const config = loadProductProfileRuntimeConfig({
     CHATGPT_TELA_PROFILE_ROOT: root, CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "1", CHATGPT_TELA_PRODUCT_ROUTE_ID: "fixture123",
@@ -122,6 +122,7 @@ async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean
         } },
         async stop() { browserStops++; input.onBrowserStopped?.(); await responses.stop(); await gateway.close(); },
         async prepareChatGptWebSession(preparation: import("./profile-control").ChatGptWebPreparationOptions) {
+          if (fail === "login") throw new ChatGptWebLoginRequiredError();
           preparation.onProfile({ capabilities: { observed: new Set(["composer", "send"]) }, account: { accountFingerprint: fail === "account" ? "b".repeat(64) : "a".repeat(64), accountStructure: "personal", containerFingerprint: "fixture" } });
           if (fail === "discovery") throw new Error("discovery incomplete");
           preparation.onFamilies?.([family]);
@@ -776,4 +777,23 @@ test("profile stop joins pending account cleanup and closes the late browser onc
     expect(f.nativeStops).toBe(1);
     expect(f.creations).toBe(1);
   } finally { f.gate.resolve(); await f.cleanup(); }
+});
+
+
+test("signed-out Web exposes login-required while Native keeps working, then owner login restores admission", async () => {
+  const f = await fixture({ fail: "login", accountBrowserFallback: true });
+  try {
+    await f.runtime.waitForWeb();
+    expect(f.runtime.webState).toBe("login-required");
+    expect(f.runtime.webModelIds).toEqual([]);
+    expect((await f.post("native-fixture")).status).toBe(200);
+    expect(f.nativeStops).toBe(0);
+    await f.runtime.openWebAccountBrowser();
+    expect(f.runtime.accountManagementActive).toBe(true);
+    f.fix();
+    await f.runtime.closeWebAccountBrowser();
+    expect(f.runtime.webState).toBe("ready");
+    expect(f.runtime.webModelIds).toEqual([model]);
+    expect(f.nativeStops).toBe(0);
+  } finally { await f.cleanup(); }
 });

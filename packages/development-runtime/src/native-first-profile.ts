@@ -22,7 +22,7 @@ import { startElectronProfileSetupRuntime, type ElectronProfileSetupRuntime } fr
 import type { NativeCodexFetch } from "./native-passthrough";
 import { prepareProductWebDiscovery, productPublicMcpIdentity, PRODUCT_RESPONSES_ENV_KEY, type ProductProfileRuntimeConfig, type ProductProfileRoutedTarget } from "./product-profile";
 
-export type NativeFirstWebState = "preparing" | "ready" | "failed" | "closed";
+export type NativeFirstWebState = "preparing" | "ready" | "login-required" | "failed" | "closed";
 export interface NativeFirstTarget {
   readonly routedTarget: ProductProfileRoutedTarget;
   readonly localCompaction?: boolean;
@@ -439,7 +439,7 @@ export async function startNativeFirstProductProfileRuntime(
         admitted = [];
         displayed = [];
         await router.refreshWebModelFamilies();
-        if (!isClosed()) setState("failed");
+        if (!isClosed()) setState(!signal.aborted && failure?.reasonClass === "login_required" ? "login-required" : "failed");
         // Includes late browser creation after cancellation; never leaves an orphan or admits it.
         await closeBrowser();
         throw error;
@@ -491,7 +491,8 @@ export async function startNativeFirstProductProfileRuntime(
       if (accountBrowserSettling) return Promise.reject(new Error("Finish Web account revalidation before reopening its browser"));
       if (accountBrowserOpening) return accountBrowserOpening;
       if (accountBrowser) return accountBrowser.surface.reveal();
-      if (accountBrowserBlocked || !((state === "ready" && browser) || (state === "failed" && !browser))) {
+      if (accountBrowserBlocked || !((state === "ready" && browser)
+        || ((state === "failed" || state === "login-required") && !browser))) {
         return Promise.reject(new Error("Finish Web preparation before opening the account browser"));
       }
       // A manual account change can invalidate context and an unfinished

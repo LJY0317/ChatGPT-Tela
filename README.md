@@ -799,7 +799,11 @@ Startup makes Native available first. The owned engine uses its official Native 
 cache and refresh path. Web preparation runs independently and adds only browser-discovered families after
 account binding, exact connector selection and a second fresh ChatGPT surface have been verified without
 sending a message. Work and the menu show Native readiness while Web prepares. A Web preparation failure
-keeps Native available; **Reconnect Web** retries that connection without reopening the Native app. Finish
+keeps Native available. If the Web session is signed out, Tela shows **Web sign-in required**
+and **Sign in to Web…** opens that profile’s browser. Sign in and close the browser window;
+Tela checks the connection and restores Web models. You can also choose **Done — check Web connection**
+in Tela’s menu or profile settings. Native and Web sign-ins are separate.
+For other connection failures, **Reconnect Web** retries without reopening the Native app. Finish
 or stop an active Web turn before reconnecting. Failed submissions are never automatically resent.
 
 Existing non-empty ChatGPT drafts are preserved. Clear or finish the draft with `bun run cli setup` for the

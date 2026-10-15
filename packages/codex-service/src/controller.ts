@@ -169,7 +169,7 @@ function childReady(value: unknown, expected: {
     || string("targetId") !== expected.targetId
     || item.nativeTargetKind !== expected.nativeTargetKind
     || item.nativeReady !== true
-    || !["preparing", "ready", "failed", "closed"].includes(item.webState as string)) {
+    || !["preparing", "ready", "login-required", "failed", "closed"].includes(item.webState as string)) {
     throw new Error("profile child readiness identity does not match the requested profile");
   }
   const internalMcpUrl = new URL(string("internalMcpUrl"));

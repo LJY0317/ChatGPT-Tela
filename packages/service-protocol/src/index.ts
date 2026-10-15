@@ -47,7 +47,7 @@ export interface CodexToolInvokeResponse {
   readonly result: NativeToolResult;
 }
 
-export type CodexWebState = "preparing" | "ready" | "failed" | "closed";
+export type CodexWebState = "preparing" | "ready" | "login-required" | "failed" | "closed";
 
 export interface CodexAccountCheckContract {
   readonly contractVersion: 1;
@@ -175,7 +175,7 @@ export function parseCodexProfileStatusContract(value: unknown): CodexProfileSta
   if (item.desktopProcessId !== undefined && (!Number.isSafeInteger(item.desktopProcessId) || (item.desktopProcessId as number) < 1)) {
     throw new Error("Codex profile Desktop process id is invalid");
   }
-  if (item.webState !== undefined && !["preparing", "ready", "failed", "closed"].includes(item.webState as string)) throw new Error("invalid Web connection state");
+  if (item.webState !== undefined && !["preparing", "ready", "login-required", "failed", "closed"].includes(item.webState as string)) throw new Error("invalid Web connection state");
   if (item.webModelsReady !== undefined && typeof item.webModelsReady !== "boolean") throw new Error("invalid Web model readiness");
   if (item.accountManagementActive !== undefined && typeof item.accountManagementActive !== "boolean") {
     throw new Error("invalid account management state");
@@ -600,7 +600,7 @@ export interface CodexWebStateContract {
 export function parseCodexWebStateContract(value: unknown): CodexWebStateContract {
   const item = object(value, "Codex Web state");
   if (item.contractVersion !== 1 || !Number.isSafeInteger(item.slot) || (item.slot as number) < 1 || (item.slot as number) > 99
-    || !["preparing", "ready", "failed", "closed"].includes(item.webState as string)
+    || !["preparing", "ready", "login-required", "failed", "closed"].includes(item.webState as string)
     || !Array.isArray(item.webModelIds) || item.webModelIds.length > 128
     || item.webModelIds.some(id => typeof id !== "string" || id.length > 256 || !id.startsWith("chatgpt-tela-web/"))
     || new Set(item.webModelIds).size !== item.webModelIds.length

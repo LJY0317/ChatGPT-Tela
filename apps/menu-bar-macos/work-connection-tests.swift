@@ -73,6 +73,10 @@ precondition(!accountBrowserWeb.needsWebReconnect && accountBrowserWeb.connected
 var failedWeb = preparingWeb; failedWeb.webState = "failed"
 precondition(failedWeb.connected && failedWeb.needsWebReconnect && failedWeb.connectionLabel == "Connection failed")
 precondition(!TelaProfilePresentation(profile: failedWeb, inventoryError: nil, localProgress: nil).busy)
+var signedOutWeb = preparingWeb; signedOutWeb.webState = "login-required"
+precondition(signedOutWeb.connected && signedOutWeb.needsWebSignIn && !signedOutWeb.needsWebReconnect)
+precondition(signedOutWeb.connectionLabel == "Web sign-in required")
+precondition(!TelaProfilePresentation(profile: signedOutWeb, inventoryError: nil, localProgress: nil).busy)
 var readyWeb = preparingWeb; readyWeb.webState = "ready"; readyWeb.webModelsReady = true
 precondition(readyWeb.connectionLabel == "Connected" && !readyWeb.needsWebReconnect)
 precondition(!TelaProfilePresentation(profile: readyWeb, inventoryError: nil, localProgress: nil).busy)

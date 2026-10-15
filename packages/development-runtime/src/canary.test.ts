@@ -644,6 +644,7 @@ describe("development canary runtime", () => {
       await expect(startDevelopmentCanary(config, {
         fetch: rewriteFetch,
         provider: capabilityProvider(false),
+        accountIdentityObserver: fixtureAccountIdentityObserver,
         electron: {
           async loadRuntime() {
             return {

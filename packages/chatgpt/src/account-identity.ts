@@ -12,6 +12,18 @@ export interface ChatGptAccountIdentity {
   readonly accountStructure: "personal" | "workspace" | "unknown";
 }
 
+/** Explicit unauthenticated session shapes; transport/unknown responses stay unavailable. */
+const SIGNED_OUT_SESSION = `(value) => value === null || (typeof value === "object" && !Array.isArray(value)
+  && (value.user === null || Object.keys(value).length === 0))`;
+
+export class ChatGptWebLoginRequiredError extends Error {
+  readonly code = "tela_web_login_required";
+  constructor() {
+    super("Sign in to ChatGPT in this profile's Web browser, then close the window to reconnect Web models.");
+    this.name = "ChatGptWebLoginRequiredError";
+  }
+}
+
 const ACCOUNT_IDENTITY_PROBE = `async () => {
   if (location.origin !== "https://chatgpt.com") {
     throw new Error("ChatGPT account identity requires the chatgpt.com origin");
@@ -25,10 +37,13 @@ const ACCOUNT_IDENTITY_PROBE = `async () => {
       signal: controller.signal,
     });
     const url = new URL(response.url);
-    if (!response.ok || url.origin !== "https://chatgpt.com" || url.pathname !== "/api/auth/session") {
+    if (url.origin !== "https://chatgpt.com" || url.pathname !== "/api/auth/session") {
       throw new Error("ChatGPT account identity could not verify the current session");
     }
+    if (response.status === 401) return { state: "signed-out" };
+    if (!response.ok) throw new Error("ChatGPT account identity could not verify the current session");
     const session = await response.json();
+    if ((${SIGNED_OUT_SESSION})(session)) return { state: "signed-out" };
     const userId = session && session.user && session.user.id;
     const accountId = session && session.account && session.account.id;
     if (typeof userId !== "string" || !userId || userId.length > 256
@@ -61,7 +76,7 @@ const ACCOUNT_DISPLAY_PROBE = `async () => {
     if (response.status === 401) return { state: "signed-out" };
     if (!response.ok) throw new Error("Account display unavailable");
     const value = await response.json();
-    if (value && value.user === null) return { state: "signed-out" };
+    if ((${SIGNED_OUT_SESSION})(value)) return { state: "signed-out" };
     if (!value || !value.user || typeof value.user.id !== "string" || !value.user.id) throw new Error("Account display unavailable");
     const email = value.user.email;
     return { state: "signed-in", ...(typeof email === "string" ? { email } : {}) };
@@ -87,7 +102,8 @@ export async function observeChatGptAccountIdentity(
 ): Promise<ChatGptAccountIdentity> {
   const page = surface.capability(BROWSER_PAGE_AUTOMATION);
   if (!page) throw new Error("browser surface does not expose page automation for ChatGPT account identity");
-  const identity = await page.evaluate<null, { accountFingerprint: string; containerFingerprint: string; accountStructure: string }>(ACCOUNT_IDENTITY_PROBE, null, signal);
+  const identity = await page.evaluate<null, { state?: string; accountFingerprint: string; containerFingerprint: string; accountStructure: string }>(ACCOUNT_IDENTITY_PROBE, null, signal);
+  if (identity?.state === "signed-out") throw new ChatGptWebLoginRequiredError();
   if (!/^[a-f0-9]{64}$/.test(identity.accountFingerprint)) {
     throw new Error("ChatGPT account identity probe returned an invalid fingerprint");
   }

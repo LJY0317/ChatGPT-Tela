@@ -12,6 +12,7 @@ import type {
 import {
   ChatGptConnectorCatalogUnavailableError,
   ChatGptWebModelPickerControlUnavailableError,
+  ChatGptWebLoginRequiredError,
   observeChatGptAccountIdentity,
   observeChatGptAccountDisplay,
   observeChatGptHistoryUi,
@@ -49,19 +50,22 @@ export interface ElectronProfileSetupSurface {
 }
 
 export type WebPreparationFailureStage = "account" | "model-discovery" | "connector" | "readiness";
-export type WebPreparationFailureReason = "model_picker_control_unavailable" | "connector_catalog_unavailable" | "unknown";
+export type WebPreparationFailureReason = "login_required" | "model_picker_control_unavailable" | "connector_catalog_unavailable" | "unknown";
 export interface WebPreparationFailureDetail {
   readonly stage: WebPreparationFailureStage;
   readonly reasonClass: WebPreparationFailureReason;
 }
 const preparationFailures = new WeakMap<object, WebPreparationFailureDetail>();
 export function webPreparationFailureDetail(error: unknown): WebPreparationFailureDetail | undefined {
-  return typeof error === "object" && error !== null ? preparationFailures.get(error) : undefined;
+  const recorded = typeof error === "object" && error !== null ? preparationFailures.get(error) : undefined;
+  return recorded ?? (error instanceof ChatGptWebLoginRequiredError
+    ? { stage: "account", reasonClass: "login_required" } : undefined);
 }
 function recordPreparationFailure(error: unknown, stage: WebPreparationFailureStage): void {
   if (typeof error !== "object" || error === null) return;
   const reasonClass: WebPreparationFailureReason =
-    error instanceof ChatGptWebModelPickerControlUnavailableError ? "model_picker_control_unavailable"
+    error instanceof ChatGptWebLoginRequiredError ? "login_required"
+    : error instanceof ChatGptWebModelPickerControlUnavailableError ? "model_picker_control_unavailable"
     : error instanceof ChatGptConnectorCatalogUnavailableError ? "connector_catalog_unavailable" : "unknown";
   preparationFailures.set(error, Object.freeze({ stage, reasonClass }));
 }
@@ -120,8 +124,10 @@ async function proveProfile(
   accountIdentityObserver: ChatGptAccountIdentityObserver,
   signal?: AbortSignal,
 ): Promise<ChatGptProfileObservation> {
-  const capabilities = await proveReadiness(surface, provider, signal);
+  // Authentication has its own contract and does not require an editable composer.
+  // Prove it first so a signed-out page cannot become a generic hydration timeout.
   const account = await accountIdentityObserver(surface, signal);
+  const capabilities = await proveReadiness(surface, provider, signal);
   return Object.freeze({ capabilities, account });
 }
 

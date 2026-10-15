@@ -4,7 +4,34 @@ import {
   type BrowserPageAutomation,
   type BrowserSurfaceLease,
 } from "@chatgpt-tela/browser-host";
-import { observeChatGptAccountDisplay, observeChatGptAccountIdentity } from "./account-identity";
+import { ChatGptWebLoginRequiredError, observeChatGptAccountDisplay, observeChatGptAccountIdentity } from "./account-identity";
+
+test("session authentication is explicit, bounded and never inferred from transport failure", async () => {
+  let status = 200, body: unknown = {}, url = "https://chatgpt.com/api/auth/session";
+  const page = { async evaluate(source: string) {
+    const run = new Function("fetch", "location", "crypto", `return (${source})();`);
+    return run(async () => ({ status, ok: status >= 200 && status < 300, url, async json() { return body; } }),
+      { origin: "https://chatgpt.com" }, crypto);
+  } } as unknown as BrowserPageAutomation;
+  const surface = { capability: () => page } as unknown as BrowserSurfaceLease;
+  for (const signedOut of [{}, null, { user: null }]) {
+    body = signedOut;
+    await expect(observeChatGptAccountIdentity(surface)).rejects.toBeInstanceOf(ChatGptWebLoginRequiredError);
+    expect(await observeChatGptAccountDisplay(surface)).toEqual({ state: "signed-out" });
+  }
+  status = 401; body = { ignored: true };
+  await expect(observeChatGptAccountIdentity(surface)).rejects.toBeInstanceOf(ChatGptWebLoginRequiredError);
+  for (const unavailable of [429, 503]) {
+    status = unavailable;
+    await expect(observeChatGptAccountIdentity(surface)).rejects.not.toBeInstanceOf(ChatGptWebLoginRequiredError);
+    await expect(observeChatGptAccountDisplay(surface)).rejects.toThrow();
+  }
+  status = 200; body = { unexpected: true };
+  await expect(observeChatGptAccountIdentity(surface)).rejects.not.toBeInstanceOf(ChatGptWebLoginRequiredError);
+  url = "https://example.invalid/api/auth/session"; status = 401;
+  await expect(observeChatGptAccountIdentity(surface)).rejects.not.toBeInstanceOf(ChatGptWebLoginRequiredError);
+  await expect(observeChatGptAccountDisplay(surface)).rejects.toThrow();
+});
 
 test("display-only email observation never changes authentication and rejects unsafe renderer values", async () => {
   let value: unknown = { state: "signed-in", email: "user@example.invalid" };

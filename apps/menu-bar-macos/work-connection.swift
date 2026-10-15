@@ -43,6 +43,7 @@ struct TelaWorkProfile: Decodable, Equatable {
   var webModelsReady: Bool? = nil
   var webState: String? = nil
   var accountManagementActive: Bool? = nil
+  var needsWebSignIn: Bool { connected && webState == "login-required" }
   var canReconnectWeb: Bool { connected && (webState == "failed" || webState == "ready") }
   var needsWebReconnect: Bool { canReconnectWeb && (webState == "failed" || webModelsReady == false) }
   var connected: Bool { controlState == "running" && targetSessionState == "ready" }
@@ -50,6 +51,7 @@ struct TelaWorkProfile: Decodable, Equatable {
   var connectionLabel: String {
     if connected && accountManagementActive == true { return "Finish account management" }
     if connected && webState == "preparing" { return "Connecting…" }
+    if needsWebSignIn { return "Web sign-in required" }
     if connected && webState == "failed" { return "Connection failed" }
     if connected && webState == "ready" && webModelsReady != false { return "Connected" }
     return connected && webModelsReady == false ? "Models unavailable" : connected ? "Connected" : (action == "restart" ? "Reconnect required" : "Off")

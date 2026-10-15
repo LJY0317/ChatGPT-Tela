@@ -53,7 +53,9 @@ poll, blindly lengthen timeouts, reload a live draft, restart Native, switch
 accounts, or replay an uncertain model submission. A fresh disposable
 preparation session is allowed only if the prior one is provably released
 and no active/draft work can be disturbed. If the bounded safe attempt still
-fails, keep Native available and show only a contextual `Reconnect Web`
+fails, keep Native available. Proven signed-out sessions expose `login-required` in the
+authenticated profile contract, `login_required` in bounded structural diagnostics, and a
+`Sign in to Web…` action. Other failures show a contextual `Reconnect Web`
 action. Log the precise non-sensitive failure class and proven profile
 scope; a nearby Native model-list timeout is separate evidence, not an
 assumed cause.

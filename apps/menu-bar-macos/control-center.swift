@@ -706,6 +706,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         } else {
           append(secondary(profile.connected ? "Checking accounts…" : "Web models off"), to: profileCard)
         }
+        if profile.needsWebSignIn {
+          append(secondary("Native models are available. Sign in to ChatGPT in this profile’s Web browser, then close that window to restore Web models."), to: profileCard)
+        }
         if profile.needsWebReconnect {
           let retry = actionButton("Reconnect Web", action: #selector(reconnectWebButton(_:)))
           retry.tag = profile.slot
@@ -717,8 +720,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           append(secondary(message), to: profileCard)
           profileCard.addArrangedSubview(actionButton("Open logs", action: #selector(openLogs)))
         }
-        if installedServiceControlsAvailable() {
-          let login = actionButton(profile.connected ? "Manage Web account…" : "Sign in / manage connection…",
+        if profile.accountManagementActive == true {
+          append(secondary("When sign-in is complete, choose Done to close the Web browser and check your connection."), to: profileCard)
+          let done = actionButton("Done — check Web connection", action: #selector(finishWebAccountButton(_:)))
+          done.tag = profile.slot
+          done.isEnabled = !operationInProgress && workInventory.error == nil
+          profileCard.addArrangedSubview(done)
+        } else if installedServiceControlsAvailable() {
+          let login = actionButton(profile.needsWebSignIn ? "Sign in to Web…" : profile.connected ? "Manage Web account…" : "Sign in / manage connection…",
                                    action: #selector(openLoginSetup(_:)))
           login.tag = profile.slot
           login.isEnabled = !operationInProgress && workInventory.error == nil
@@ -1085,8 +1094,36 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   @objc private func openLoginSetup(_ sender: NSButton) {
+    openWebAccount(slot: sender.tag)
+  }
+
+  @objc private func finishWebAccountButton(_ sender: NSButton) {
+    finishWebAccount(slot: sender.tag)
+  }
+
+  func finishWebAccount(slot: Int) {
+    guard !operationInProgress, workInventory.error == nil,
+          profiles.contains(where: { $0.slot == slot && $0.connected && $0.accountManagementActive == true }) else { return }
+    connectionProfileSlot = slot
+    profileFailure = nil
+    changingProfile = true
+    profileProgress = "Checking Web sign-in…"
+    renderCurrentPage()
+    Task {
+      do {
+        guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "TelaWork", code: 11) }
+        _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/account-browser-close", method: "POST")
+      } catch {
+        profileFailure = "Couldn't finish Web sign-in. Check this profile's connection status."
+      }
+      profileProgress = nil
+      changingProfile = false
+      await refreshCurrentPage()
+    }
+  }
+
+  func openWebAccount(slot: Int) {
     guard !operationInProgress else { return }
-    let slot = sender.tag
     if let profile = profiles.first(where: { $0.slot == slot }) {
       if profile.controlState == "orphaned" {
         connectionProfileSlot = slot

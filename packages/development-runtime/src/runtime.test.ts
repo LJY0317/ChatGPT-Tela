@@ -1174,7 +1174,7 @@ test.each(['native_watch','context_plan'] as const)('preparation failure at %s i
     const response=await post(runtime.responses.baseUrl,runtime.responses.runtimeToken,request);
     expect(response.status).toBe(409);expect(await response.text()).toContain(error.message);
     const replay=await post(runtime.responses.baseUrl,runtime.responses.runtimeToken,request);
-    expect(replay.status).toBe(409);expect(await replay.text()).toContain('already retired');
+    expect(replay.status).toBe(400);expect(await replay.text()).toContain('already retired');
     const raw=readFileSync(file,'utf8');const events=raw.trim().split('\n').map(line=>JSON.parse(line));
     const preparation=events.filter(event=>event.stage==='web_preparation_failed');
     expect(preparation).toHaveLength(1);
@@ -1346,7 +1346,7 @@ test("same Native turn continuation runs two settled Web cycles through the real
     expect(submitted[1]!.physicalContext.mode).toBe("retained-delta");
     expect(JSON.stringify(submitted[1]!.physicalContext)).toContain("followup");
     const duplicate = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, secondBody);
-    expect(duplicate.status).toBe(409);
+    expect(duplicate.status).toBe(400);
     expect(await duplicate.json()).toMatchObject({ error: { code: "tela_native_response_cycle_conflict", retryable: false } });
     expect(submitted).toHaveLength(2);
     owner.abort(new Error("Native completed")); expect(runtime.turns.size).toBe(0);
