@@ -35,3 +35,9 @@ Source tests cover completeness, runtime availability filtering, legacy compatib
 validation and delivery through the Chat service/protocol/Gateway. They do not establish real-model
 success, cost superiority, or Native recovery. Result-schema metadata, task-scoped broker policies,
 logical checkpoint persistence and matched end-to-end parity measurement remain separate work.
+
+Metadata adds inventory bytes, not a model inference or execution call. Query only the capabilities
+needed for the current action using the existing catalog filter. The source fixture's 31-entry
+catalog adds 5,578 UTF-8 bytes; its single `exec_command` query is 743 bytes including the input
+schema. Regression ceilings are 6 KiB of full-catalog metadata and 1 KiB for that query. These are
+local serialized-byte budgets, not provider-billed tokens, measured model savings or parity proof.

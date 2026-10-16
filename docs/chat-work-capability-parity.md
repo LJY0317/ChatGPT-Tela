@@ -39,3 +39,8 @@ Maintain single-writer-per-checkout, exact operation identity, provenance/owners
 Regression gates: missing authority must cause no effect; safety refusal must not reroute; transport uncertainty must not duplicate writes; dirty/unknown checkout owners must prevent concurrent writes; physical replacement must revoke old capability while preserving verified logical context; truncation must remain visible; model switches must preserve scope; cleanup/restarts must touch only exactly owned resources.
 
 Separate source, tests, real-model behavior, installed verification and platform parity in status reporting. Previous `7f5e93a.1` and `16f6d5d.1` installation reports do not prove that full Native Web-model acceptance or Chat parity is completed.
+
+
+The initial optional capability effect/replay/verification descriptors are implemented and covered
+by source regressions; see [capability discovery](chat-capability-discovery.md). This does not
+complete task authority, durable logical work records, result schemas or model-verified parity.

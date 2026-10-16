@@ -72,3 +72,13 @@ describe("Tela Chat capability contracts", () => {
     expect(JSON.stringify(parsed)).not.toContain("discard-me");
   });
 });
+
+// Discovery metadata is model-visible when requested. Keep its cost bounded and queryable.
+test("semantic discovery stays within the reviewed inventory budget", () => {
+  const full = chatCapabilityCatalog(TELA_CHAT_CAPABILITIES);
+  const oldShape = full.map(({ semantics, ...contract }) => contract);
+  expect(Buffer.byteLength(JSON.stringify(full)) - Buffer.byteLength(JSON.stringify(oldShape))).toBeLessThanOrEqual(6 * 1024);
+  const requested = chatCapabilityCatalog(TELA_CHAT_CAPABILITIES, "exec_command");
+  expect(requested).toHaveLength(1);
+  expect(Buffer.byteLength(JSON.stringify(requested))).toBeLessThanOrEqual(1024);
+});
