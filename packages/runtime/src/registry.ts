@@ -144,10 +144,7 @@ export class ActiveTurnRegistry {
     const retainedContext = webRetainedContextFailureReason(failure);
     const submission = webSubmissionFailureReason(failure);
     this.#retiredTurns.set(key, submission ? { submission } : retainedContext ? { retainedContext } : error?.code === "native_history_bootstrap_required"
-      ? error.recoveryReason === "checkpoint_rejected" ? "checkpoint_rejected"
-        : error.recoveryReason === "checkpoint_interrupted" ? "checkpoint_interrupted"
-        : error.recoveryReason === "source_budget" ? "source_budget"
-        : error.recoveryReason === "unindexed_history" ? "unindexed_history" : "source_unavailable"
+      ? NativeHistoryBootstrapRequired.normalizeRecoveryReason(error.recoveryReason)
       : error?.code === "native_projection_unsupported" ? "projection_unsupported"
       : error?.code === "native_web_handoff_unproven" ? error.proofState === "ambiguous" ? "handoff_ambiguous" : "handoff_probable" : true);
     while (this.#retiredTurns.size > ActiveTurnRegistry.MAX_RETIRED_TURNS) {

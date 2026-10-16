@@ -48,7 +48,7 @@ export interface NativeVisiblePrefixStageJournal {
   settleClosed?(input: NativeVisiblePrefixStageIdentity & { readonly claimId: string; readonly ownerFingerprint: string }): Promise<void>;
 }
 export class NativePrefixCheckpointInterrupted extends NativeHistoryBootstrapRequired {
-  constructor(readonly stage: NativeVisiblePrefixStageIdentity, options?: ErrorOptions, reason: "checkpoint_interrupted" | "checkpoint_rejected" = "checkpoint_interrupted") {
+  constructor(readonly stage: NativeVisiblePrefixStageIdentity, options?: ErrorOptions, reason: "checkpoint_interrupted" | "checkpoint_closed" | "checkpoint_rejected" = "checkpoint_interrupted") {
     super(reason, options);
     this.name = "NativePrefixCheckpointInterrupted";
   }
@@ -270,7 +270,7 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
       });
       if (!producerInvoked && locallySettled && cause instanceof CheckpointPreparationBudgetExceeded) throw cause;
       throw new NativePrefixCheckpointInterrupted(identity, { cause },
-        locallySettled && receipt?.disposition === "completed_unusable" ? "checkpoint_rejected" : "checkpoint_interrupted");
+        locallySettled ? receipt?.disposition === "completed_unusable" ? "checkpoint_rejected" : "checkpoint_closed" : "checkpoint_interrupted");
     }
     if (result.nativeTaskId !== source.threadId || result.sourceRevisionId !== physical.headRevisionId
       || typeof result.content !== "string" || !result.content.trim()

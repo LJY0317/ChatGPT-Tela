@@ -134,15 +134,13 @@ export async function runBrowserContextCheckpoint(
     && failure.receipt.sourceRevisionId === input.request.sourceRevisionId
     && failure.receipt.webEpochId === input.request.webEpochId
     && !!failure.receipt.providerOperationId.trim();
-  const locallyCancelled = input.signal?.aborted === true
-    || (inputBoundary?.available === true && inputBoundary.signal.aborted);
-  if (failed && (!invoked || locallyCancelled || completedUnusable)) {
-    const disposition = completedUnusable ? "completed_unusable" : invoked ? "cancelled_locally" : "not_invoked";
-    emitDiagnosticEvent("chatgpt_tela_work", "context_checkpoint_closed", {
-      phase: disposition, surface_released: true, remote_terminal_proven: false,
-    });
-    throw new WebCheckpointOperationClosed({ nativeTaskId: input.request.nativeTaskId,
-      sourceRevisionId: input.request.sourceRevisionId, webEpochId: input.request.webEpochId, disposition }, { cause: failure });
-  }
-  throw failure;
+  // Reaching this boundary means any acquired physical lease was successfully
+  // released. Settlement follows that lifecycle fact, not the exception category.
+  // The journal retains unknown remote outcome and fences the retired Native owner.
+  const disposition = !invoked ? "not_invoked" : completedUnusable ? "completed_unusable" : "released_locally";
+  emitDiagnosticEvent("chatgpt_tela_work", "context_checkpoint_closed", {
+    phase: disposition, surface_released: surface !== undefined, provider_invoked: invoked, remote_terminal_proven: false,
+  });
+  throw new WebCheckpointOperationClosed({ nativeTaskId: input.request.nativeTaskId,
+    sourceRevisionId: input.request.sourceRevisionId, webEpochId: input.request.webEpochId, disposition }, { cause: failure });
 }
