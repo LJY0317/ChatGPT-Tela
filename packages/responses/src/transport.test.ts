@@ -54,6 +54,31 @@ function post(value: unknown): Request {
   });
 }
 
+test("HTTP disconnect aborts its observer while a subsequent request reuses the single Web execution", async () => {
+  let release!: () => void, ready!: () => void, launches = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { ready = resolve; });
+  const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async registered => {
+    launches++; ready(); await gate;
+    registered.channel.markSubmitted(); registered.channel.markAccepted(); registered.channel.complete("preserved execution");
+  });
+  const controller = new AbortController();
+  const first = handleNativeResponsesHttp(new Request("http://127.0.0.1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(body([], false)), signal: controller.signal,
+  }), gateway);
+  try {
+    await started; controller.abort();
+    const old = await Promise.race([first, Bun.sleep(100).then(() => null)]);
+    expect(old).not.toBeNull();
+    const fresh = handleNativeResponsesHttp(post(body([], false)), gateway);
+    release(); const response = await fresh;
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await response.json())).toContain("preserved execution");
+    expect(launches).toBe(1);
+  } finally { release(); await gateway.close(); }
+});
+
 describe("Native Responses HTTP transport", () => {
   test("completed-cycle continuation without proven new input is terminal rather than a reconnectable 409", async () => {
     let launches = 0;

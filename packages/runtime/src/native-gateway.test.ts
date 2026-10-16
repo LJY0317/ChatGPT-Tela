@@ -37,6 +37,48 @@ const source: CanonicalCurrentTurnSource = {
 };
 
 describe("Native Responses semantic gateway", () => {
+  test("reconnection replaces the old response waiter without restarting or cancelling Web execution", async () => {
+    let release!: () => void, ready!: () => void;
+    const prepared = new Promise<void>(r => { ready = r; });
+    const gate = new Promise<void>(r => { release = r; });
+    const turns = new ActiveTurnRegistry(); let launches = 0, executionAborted = false;
+    const gateway = new NativeResponsesGateway(source, turns, async (registered, _body, signal) => {
+      launches++; signal?.addEventListener("abort", () => { executionAborted = true; });
+      ready(); await gate; registered.channel.markSubmitted(); registered.channel.markAccepted();
+      await registered.channel.requestTool({ callId: "reconnect-call", wireName: "exec_command", mode: "structured", arguments: {} });
+    });
+    const old = gateway.handle(request("turn-1"));
+    const oldResult = old.then(() => "unexpected outcome", e => e.name);
+    try {
+      await prepared; await new Promise(r => setImmediate(r));
+      const fresh = gateway.handle(request("turn-1"));
+      await new Promise(r => setImmediate(r));
+      release();
+      const outcome = await fresh;
+      expect(outcome.type).toBe("tool-call");
+      expect(await oldResult).toBe("AbortError");
+      expect(launches).toBe(1); expect(executionAborted).toBe(false);
+    } finally { release(); await gateway.close(); }
+  });
+
+  test("disconnect releases only the transport wait and permits a later exact request", async () => {
+    let finish!: () => void, ready!: () => void;
+    const gate = new Promise<void>(r => { finish = r; });
+    const prepared = new Promise<void>(r => { ready = r; });
+    const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async registered => {
+      ready(); await gate; registered.channel.markSubmitted(); registered.channel.markAccepted(); registered.channel.complete("done once");
+    });
+    const abort = new AbortController();
+    const first = gateway.handle(request("turn-1"), { onProgress() {}, signal: abort.signal });
+    const old = first.then(() => "unexpected outcome", e => e.name);
+    try {
+      await prepared; abort.abort();
+      // Abort must settle the old transport before the provider produces any result.
+      expect(await Promise.race([old, Bun.sleep(100).then(() => "still waiting")])).toBe("AbortError");
+      const fresh = gateway.handle(request("turn-1")); finish();
+      expect(await fresh).toMatchObject({ type: "final", answer: "done once" });
+    } finally { finish(); await gateway.close(); }
+  });
   test("failed preparation releases authority without replaying the failed Native turn", async () => {
     const turns = new ActiveTurnRegistry();
     let currentTurnId = "turn-1";

@@ -95,6 +95,7 @@ export class NativeResponsesGateway {
   readonly #closingWatches = new Set<Promise<void>>();
   readonly #issuedFinals = new Map<string, string>();
   readonly #admissions = new Map<string, Promise<unknown>>();
+  readonly #responseObservers = new Map<string, AbortController>();
 
   constructor(
     readonly source: CanonicalCurrentTurnSource,
@@ -103,7 +104,7 @@ export class NativeResponsesGateway {
   ) {}
 
   async handle(body: unknown, presentation?: {
-    readonly onProgress: (summary: string) => void | boolean;
+    readonly onProgress?: (summary: string) => void | boolean;
     readonly signal?: AbortSignal;
   }): Promise<NativeGatewayOutcome> {
     this.#controller.signal.throwIfAborted();
@@ -116,22 +117,42 @@ export class NativeResponsesGateway {
     try { registered = await admission; }
     finally { if (this.#admissions.get(key) === admission) this.#admissions.delete(key); }
 
+    // Native turn execution outlives HTTP/SSE connections. Only one connection may own
+    // its response waiter; a canonically admitted reconnect supersedes that observation.
+    const observer = new AbortController();
+    const previous = this.#responseObservers.get(registered.capability);
+    previous?.abort(new DOMException("Native response observer replaced", "AbortError"));
+    this.#responseObservers.set(registered.capability, observer);
+    const signal = AbortSignal.any([observer.signal, this.#controller.signal,
+      ...(presentation?.signal ? [presentation.signal] : [])]);
+    if (previous) {
+      const authority = registered.channel.binding.authority;
+      withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(authority.threadId),
+        turn_fingerprint: diagnosticFingerprint(authority.turnId) }, () =>
+        emitDiagnosticEvent("chatgpt_tela_work", "native_response_observer_replaced", {
+          turn_phase: registered.channel.phase, execution_restarted: false,
+        }));
+    }
     let progressCursor = registered.channel.progressTransportCursor;
-    const unsubscribe = presentation && !presentation.signal?.aborted
+    const unsubscribe = presentation?.onProgress && !signal.aborted
       ? registered.channel.subscribeProgress((summary, sequence) => {
-        if (presentation.onProgress(summary) === false) throw new Error("progress transport did not accept event");
+        if (presentation.onProgress!(summary) === false) throw new Error("progress transport did not accept event");
         progressCursor = sequence;
       }) : () => {};
-    presentation?.signal?.addEventListener("abort", unsubscribe, { once: true });
+    signal.addEventListener("abort", unsubscribe, { once: true });
     try {
-      const outcome = await this.#nextOutcome(registered);
+      signal.throwIfAborted();
+      const outcome = await this.#nextOutcome(registered, signal);
+      signal.throwIfAborted();
       return outcome.type === "tool-call"
         ? { ...outcome, delivery: { ...outcome.delivery, progressCursor } }
         : { ...outcome, delivery: { ...outcome.delivery, progressCursor } };
     }
     finally {
       unsubscribe();
-      presentation?.signal?.removeEventListener("abort", unsubscribe);
+      signal.removeEventListener("abort", unsubscribe);
+      observer.abort();
+      if (this.#responseObservers.get(registered.capability) === observer) this.#responseObservers.delete(registered.capability);
     }
   }
 
@@ -385,9 +406,9 @@ export class NativeResponsesGateway {
     // Such inert/test sources can never authorize another response cycle.
   }
 
-  async #nextOutcome(registered: RegisteredTurn): Promise<NativeGatewayOutcome> {
+  async #nextOutcome(registered: RegisteredTurn, signal: AbortSignal): Promise<NativeGatewayOutcome> {
     const channel = registered.channel;
-    const final = channel.waitForFinal().then(answer => {
+    const final = channel.waitForFinal(signal).then(answer => {
       this.#issuedFinals.set(registered.capability, nativeTextHash(answer));
       while (this.#issuedFinals.size > ActiveTurnRegistry.MAX_RETIRED_TURNS) this.#issuedFinals.delete(this.#issuedFinals.keys().next().value!);
       return Object.freeze({
@@ -398,7 +419,7 @@ export class NativeResponsesGateway {
     });
     if (terminalPhase(channel.phase)) return final;
 
-    const tool = nextNativeResponsesToolCall(channel)
+    const tool = nextNativeResponsesToolCall(channel, signal)
       .then(item => Object.freeze({
         type: "tool-call" as const,
         item,

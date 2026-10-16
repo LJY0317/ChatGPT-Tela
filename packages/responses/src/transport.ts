@@ -122,7 +122,10 @@ export async function handleNativeResponsesHttp(
   const createdAt = Math.floor((options.now?.() ?? Date.now()) / 1000);
   const progress = body.stream === true ? new NativeProgressStream(body.model, createdAt) : undefined;
   try {
-    const pending = gateway.handle(body, progress ? { onProgress: progress.progress, signal: progress.signal.signal } : undefined);
+    const pending = gateway.handle(body, {
+      ...(progress ? { onProgress: progress.progress } : {}),
+      signal: progress ? AbortSignal.any([request.signal, progress.signal.signal]) : request.signal,
+    });
     if (progress) {
       const first = await Promise.race([pending.then(value => ({ value })), progress.firstProgress.then(() => null)]);
       if (first === null) {
