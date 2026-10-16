@@ -249,6 +249,9 @@ export async function startElectronDevelopmentRuntime(
           const result = await runOwnedContextCheckpoint({
             browserHost,
             provider: input.checkpointProvider!,
+            ...(request.persistResult ? { persistResult: async result => request.persistResult!({
+              nativeTaskId: result.nativeTaskId, sourceRevisionId: result.sourceRevisionId, content: result.content,
+            })} : {}),
             ...(request.browserModel ? {
               prepareForSubmit: (surface, signal) => selectChatGptWebModel(surface, request.browserModel!, signal),
             } : {}),

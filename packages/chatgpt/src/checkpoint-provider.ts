@@ -1,3 +1,4 @@
+import { WebCheckpointResponseRejected, type CheckpointResponseRejection as CompletedResponseRejection } from "./checkpoint-settlement";
 import { createHash, randomUUID, randomBytes } from "node:crypto";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import type { BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
@@ -10,9 +11,9 @@ import {
   type SemanticObservation,
   type WebPhysicalContext,
 } from "./index";
-import { ChatGptSemanticProvider } from "./semantic-provider";
+import { ChatGptSemanticProvider, formatWebPhysicalContext } from "./semantic-provider";
 import { createChatGptContextAttachment, shouldUseChatGptContextAttachment, serializeChatGptContextAttachment, formatInertSourceAttachment } from "./context-attachment";
-import { prepareWebTurnMedia } from "./turn-media";
+import { prepareWebTurnMedia, type WebTurnMedia } from "./turn-media";
 
 type CheckpointTransport = Pick<WebConversationProvider,
   "observeCapabilities" | "submitTurn" | "waitForTurnEvent">;
@@ -23,14 +24,17 @@ const FILE_RECEIPT_POLICY = "In the same JSON object include receipt: the exact 
 type CheckpointResponseRejection = "plain_body_unavailable" | "json_invalid" | "envelope_invalid"
   | "operation_mismatch" | "source_mismatch" | "receipt_mismatch" | "summary_empty" | "summary_budget"
   | "completion_identity_mismatch" | "browser_failed";
-function rejectCheckpointResponse(reason: CheckpointResponseRejection, message: string): never {
+function rejectCheckpointResponse(reason: CheckpointResponseRejection, message: string,
+  receipt?: ConstructorParameters<typeof WebCheckpointResponseRejected>[0]): never {
   emitDiagnosticEvent("chatgpt_tela_work", "checkpoint_response_rejected", { reason_class: reason });
+  if (receipt) throw new WebCheckpointResponseRejected(receipt, message);
   throw new Error(message);
 }
 
 function checkpointInput(context: WebPhysicalContext, operation: string,
   evidence?: readonly import("@chatgpt-tela/core").NativeEvidenceReference[],
   receipt = `ctxr_${"0".repeat(32)}`,
+  media: readonly WebTurnMedia[] = [],
 ) {
   const source = serializeChatGptContextAttachment(context);
   const sourceDigest = createHash("sha256").update(source).digest("hex");
@@ -63,8 +67,10 @@ function checkpointInput(context: WebPhysicalContext, operation: string,
     ] };
   }
   const fileBytes = attachment ? formatInertSourceAttachment(attachment, receipt).file.bytes.byteLength : 0;
+  const reboundMedia = media.map(item => ({ ...item, revisionId: `checkpoint-source-${operation}` }));
+  const upload = prepareWebTurnMedia(physicalContext, reboundMedia);
   physicalContext = { ...physicalContext, transferTokens:
-    Math.ceil((Buffer.byteLength(serializeChatGptContextAttachment(physicalContext), "utf8") + fileBytes) / 4) };
+    Math.ceil((Buffer.byteLength(formatWebPhysicalContext(physicalContext, undefined, undefined, reboundMedia), "utf8") + fileBytes + upload.statistics.uniqueBytes) / 4) };
   return { physicalContext, sourceDigest, attachment, receipt };
 }
 
@@ -76,8 +82,10 @@ export function chatGptCheckpointPolicyFingerprint(): string {
 }
 
 /** Actual source/file/wrapper transfer estimate; never adds a separate ACK inference. */
-export function chatGptCheckpointInputTokens(context: WebPhysicalContext): number {
-  return checkpointInput(context, "00000000-0000-0000-0000-000000000000").physicalContext.transferTokens;
+export function chatGptCheckpointInputTokens(context: WebPhysicalContext, media: readonly WebTurnMedia[] = []): number {
+  prepareWebTurnMedia(context, media);
+  return checkpointInput(context, "00000000-0000-0000-0000-000000000000",
+    media.map(item => item.evidence), undefined, media).physicalContext.transferTokens;
 }
 
 /** Transport choice is monotonic in source size; token cost may drop at this boundary. */
@@ -110,7 +118,7 @@ export class ChatGptContextCheckpointProvider implements WebContextCheckpointPro
     prepareWebTurnMedia(request.physicalContext, request.media ?? []);
     const operation = randomUUID();
     const { physicalContext, sourceDigest, attachment, receipt } = checkpointInput(request.physicalContext, operation,
-      request.media?.map(item => item.evidence), `ctxr_${randomBytes(16).toString("hex")}`);
+      request.media?.map(item => item.evidence), `ctxr_${randomBytes(16).toString("hex")}`, request.media);
     const media = request.media?.map(item => Object.freeze({
       ...item, revisionId: `checkpoint-source-${operation}`,
     }));
@@ -145,13 +153,17 @@ export class ChatGptContextCheckpointProvider implements WebContextCheckpointPro
         continue;
       }
       if (event.kind !== "completed") continue;
+      const rejectCompleted = (reason: CompletedResponseRejection, message: string): never => rejectCheckpointResponse(reason, message, {
+        nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId, webEpochId: request.webEpochId,
+        providerOperationId: handle.providerTurnId, reason,
+      });
       // The checkpoint envelope is a machine protocol. Markdown escaping, code fences and
       // presentation controls must not be decoded heuristically into authoritative content.
       if (typeof event.plainAnswer !== "string") {
-        rejectCheckpointResponse("plain_body_unavailable", "checkpoint completion has no proven unformatted body");
+        return rejectCompleted("plain_body_unavailable", "checkpoint completion has no proven unformatted body");
       }
       let parsed: unknown;
-      try { parsed = JSON.parse(event.plainAnswer); } catch { rejectCheckpointResponse("json_invalid", "checkpoint response is not an exact JSON envelope"); }
+      try { parsed = JSON.parse(event.plainAnswer); } catch { rejectCompleted("json_invalid", "checkpoint response is not an exact JSON envelope"); }
       const result = parsed as Record<string, unknown> | null;
       const rejection = !result || Array.isArray(result) || result.type !== "tela_context_checkpoint_v1" ? "envelope_invalid"
         : result.operation !== operation ? "operation_mismatch"
@@ -159,7 +171,7 @@ export class ChatGptContextCheckpointProvider implements WebContextCheckpointPro
         : attachment !== undefined && result.receipt !== `TELA_CONTEXT_ACK ${receipt}` ? "receipt_mismatch"
         : typeof result.summary !== "string" || !result.summary.trim() ? "summary_empty"
         : Buffer.byteLength(result.summary, "utf8") > MAX_SUMMARY_BYTES ? "summary_budget" : undefined;
-      if (rejection) rejectCheckpointResponse(rejection, "checkpoint response does not prove a bounded summary of this source");
+      if (rejection) rejectCompleted(rejection, "checkpoint response does not prove a bounded summary of this source");
       return { state: "proven", value: {
         nativeTaskId: request.nativeTaskId, webEpochId: request.webEpochId,
         sourceRevisionId: request.sourceRevisionId, providerOperationId: handle.providerTurnId,

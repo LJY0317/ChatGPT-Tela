@@ -7,6 +7,7 @@ import { ChatGptContextCheckpointProvider, chatGptCheckpointInputTokens } from '
 import { serializeChatGptContextAttachment } from './context-attachment';
 import { decodeNativeInlineEvidence, nativeEvidenceRef } from '@chatgpt-tela/core';
 import { webEvidenceFilename } from './turn-media';
+import { formatWebPhysicalContext } from './semantic-provider';
 import { assistantMarkdown } from './answer-markdown';
 
 const surface = {} as BrowserSurfaceLease;
@@ -138,6 +139,10 @@ test('checkpoint source rebinds media references to the inert summary request wi
  expect(f.submitted().media![0]!.evidence.id).toBe(evidence.id);
  expect(f.submitted().media![0]!.file.bytes).toEqual(inline.bytes);
  expect(f.submitted().toolBridge).toBeUndefined();
+ const sent=f.submitted();
+ const actualTransfer=Math.ceil((Buffer.byteLength(formatWebPhysicalContext(sent.physicalContext,undefined,undefined,sent.media),'utf8')+inline.bytes.byteLength)/4);
+ expect(sent.physicalContext.transferTokens).toBe(actualTransfer);
+ expect(chatGptCheckpointInputTokens(withImage.physicalContext,withImage.media)).toBe(actualTransfer);
  expect(f.submitted().physicalContext.segments[1]!.content).not.toContain(data);
  const foreign=fixture();
  await expect(foreign.provider.createContextCheckpoint(surface,{
@@ -181,7 +186,7 @@ test('inline checkpoint budget measures serialized UTF8 including escaped source
  }))}};
  await f.provider.createContextCheckpoint(surface,request);
  const physical=f.submitted().physicalContext;
- const actual=Math.ceil(Buffer.byteLength(serializeChatGptContextAttachment(physical),'utf8')/4);
+ const actual=Math.ceil(Buffer.byteLength(formatWebPhysicalContext(physical,undefined),'utf8')/4);
  expect(physical.transferTokens).toBe(actual);
  expect(chatGptCheckpointInputTokens(request.physicalContext)).toBe(actual);
  expect(actual).toBeGreaterThan(Math.ceil(serializeChatGptContextAttachment(request.physicalContext).length/4));

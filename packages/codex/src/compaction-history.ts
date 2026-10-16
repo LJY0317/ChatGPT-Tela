@@ -35,7 +35,9 @@ export interface NativeVisiblePrefixSnapshot {
   readonly kind: "native-visible-prefix";
   readonly threadId: string;
   readonly currentTurnId: string;
+  /** Canonical source and owner identity; distinct from exact transport bytes. */
   readonly digest: string;
+  readonly contentDigest: string;
   readonly sourceItemCount: number;
   readonly content: string;
   readonly inlineAssets: readonly NativeInlineHistoryAsset[];
@@ -676,7 +678,8 @@ export class AppServerCompactionHistorySource {
         kind: "native-visible-prefix", owner: owner(before), threadId, source: JSON.parse(content),
       }))).digest("hex");
       return Object.freeze({ kind: "native-visible-prefix", threadId, currentTurnId,
-        digest, sourceItemCount: visible.length, content, ...evidence });
+        digest, contentDigest: createHash("sha256").update(content).digest("hex"),
+        sourceItemCount: visible.length, content, ...evidence });
     } finally { await rpc.close(); }
   }
 

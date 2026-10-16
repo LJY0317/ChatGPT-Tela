@@ -196,3 +196,55 @@ describe("browser context checkpoint runner", () => {
     }
   });
 });
+
+describe("durable checkpoint settlement", () => {
+  test.each([false, true])("persists validated output before physical release (close fails=%s)", async failClose => {
+    const events: string[] = [];
+    const host = new ControlledBrowserHost(async () => ({
+      async navigate() {}, async reveal() {}, async hide() {},
+      async close() { events.push("close"); if (failClose) throw Error("release failed"); },
+    }));
+    try {
+      const run = runBrowserContextCheckpoint({ browserHost: host, request: request(), provider: provider(),
+        persistResult: async result => { expect(result.content).toBe("compact canonical prefix"); events.push("persist"); } });
+      if (failClose) await expect(run).rejects.toThrow("release failed"); else await run;
+      expect(events).toEqual(["persist", "close"]);
+    } finally { await host.close().catch(() => {}); }
+  });
+  test("failed persistence cannot report successful preparation", async () => {
+    const host = new ControlledBrowserHost(async () => ({ async navigate() {}, async reveal() {}, async hide() {}, async close() {} }));
+    try {
+      await expect(runBrowserContextCheckpoint({ browserHost:host, request:request(), provider:provider(),
+        persistResult:async()=>{throw Error("durable write failed");} })).rejects.toThrow("durable write failed");
+    } finally { await host.close(); }
+  });
+  test("foreign results never reach persistence", async()=>{
+    let writes=0;
+    const host = new ControlledBrowserHost(async () => ({ async navigate() {}, async reveal() {}, async hide() {}, async close() {} }));
+    try {
+      await expect(runBrowserContextCheckpoint({browserHost:host,request:request(),persistResult:async()=>{writes++;},
+        provider:provider({async createContextCheckpoint(){return {state:"proven",evidence:["fixture"],value:{
+          nativeTaskId:"foreign",sourceRevisionId:"revision-2",webEpochId:"checkpoint-epoch-1",providerOperationId:"op",content:"summary"}};}})})).rejects.toThrow("different causal source");
+      expect(writes).toBe(0);
+    } finally {await host.close();}
+  });
+  test("only exact terminal rejection plus successful release closes the operation",async()=>{
+    const {WebCheckpointResponseRejected}=await import("@chatgpt-tela/chatgpt");
+    for(const scenario of ["exact","task","source","epoch","empty-operation","generic","close-failed"]){
+      const receipt={nativeTaskId:"task-1",sourceRevisionId:"revision-2",webEpochId:"checkpoint-epoch-1",providerOperationId:"op",reason:"json_invalid" as const};
+      if(scenario==="task")receipt.nativeTaskId="foreign";
+      if(scenario==="source")receipt.sourceRevisionId="foreign";
+      if(scenario==="epoch")receipt.webEpochId="foreign";
+      if(scenario==="empty-operation")receipt.providerOperationId="";
+      const host=new ControlledBrowserHost(async()=>({async navigate(){},async reveal(){},async hide(){},
+        async close(){if(scenario==="close-failed")throw Error("release failed");}}));
+      let caught:unknown;
+      try{await runBrowserContextCheckpoint({browserHost:host,request:request(),provider:provider({
+        async createContextCheckpoint(){throw scenario==="generic"?Error("unknown"):new WebCheckpointResponseRejected(receipt,"invalid");}
+      })});}catch(error){caught=error;}
+      if(scenario==="exact")expect(caught).toMatchObject({name:"WebCheckpointOperationClosed",receipt:{disposition:"completed_unusable"}});
+      else expect(caught).not.toBeInstanceOf(WebCheckpointOperationClosed);
+      await host.close().catch(()=>{});
+    }
+  });
+});

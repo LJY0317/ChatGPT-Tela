@@ -141,7 +141,8 @@ export class ActiveTurnRegistry {
       ? failure as { code?: unknown; recoveryReason?: unknown; proofState?: unknown } : undefined;
     const retainedContext = webRetainedContextFailureReason(failure);
     this.#retiredTurns.set(key, retainedContext ? { retainedContext } : error?.code === "native_history_bootstrap_required"
-      ? error.recoveryReason === "checkpoint_interrupted" ? "checkpoint_interrupted"
+      ? error.recoveryReason === "checkpoint_rejected" ? "checkpoint_rejected"
+        : error.recoveryReason === "checkpoint_interrupted" ? "checkpoint_interrupted"
         : error.recoveryReason === "source_budget" ? "source_budget"
         : error.recoveryReason === "unindexed_history" ? "unindexed_history" : "source_unavailable"
       : error?.code === "native_projection_unsupported" ? "projection_unsupported"

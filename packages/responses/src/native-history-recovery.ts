@@ -2,7 +2,7 @@
  * already begun. Never copy an upstream/adapter exception message into it. */
 export function nativeHistoryRecovery(error: unknown): {
   readonly type: "invalid_request_error";
-  readonly code: "tela_native_history_indexed_source_required" | "tela_native_history_checkpoint_required" | "tela_native_checkpoint_reconciliation_required" | "tela_native_context_checkpoint_required";
+  readonly code: "tela_native_checkpoint_response_rejected" | "tela_native_history_indexed_source_required" | "tela_native_history_checkpoint_required" | "tela_native_checkpoint_reconciliation_required" | "tela_native_context_checkpoint_required";
   readonly retryable: false;
   readonly recovery: {
     readonly kind: "continue_on_native" | "explicit_native_handoff" | "reconcile_checkpoint";
@@ -16,12 +16,13 @@ export function nativeHistoryRecovery(error: unknown): {
     || (error as { code?: unknown }).code !== "native_history_bootstrap_required") {
     return undefined;
   }
+  const rejected = (error as { recoveryReason?: unknown }).recoveryReason === "checkpoint_rejected";
   const unindexed = (error as { recoveryReason?: unknown }).recoveryReason === "unindexed_history";
   const interrupted = (error as { recoveryReason?: unknown }).recoveryReason === "checkpoint_interrupted";
   const sourceBudget = (error as { recoveryReason?: unknown }).recoveryReason === "source_budget";
   return {
     type: "invalid_request_error" as const,
-    code: sourceBudget ? "tela_native_context_checkpoint_required"
+    code: rejected ? "tela_native_checkpoint_response_rejected" : sourceBudget ? "tela_native_context_checkpoint_required"
       : interrupted ? "tela_native_checkpoint_reconciliation_required"
       : unindexed ? "tela_native_history_indexed_source_required"
       : "tela_native_history_checkpoint_required",
@@ -32,7 +33,9 @@ export function nativeHistoryRecovery(error: unknown): {
       requires_new_native_turn: !unindexed,
       original_history_preserved: true,
     },
-    message: sourceBudget
+    message: rejected
+      ? "A proven Web context-summary response was unusable and its isolated operation was released. This Native turn will not resend it. Continue in a newly authorized Native turn or provide a verified handoff. Completed checkpoint stages and original history are preserved; no task answer or tool execution was committed by this request."
+      : sourceBudget
       ? "This conversation's readable context exceeds the Web checkpoint input budget. Continue on Native or provide an explicitly authorized verified checkpoint or handoff. Original history is preserved; no Web answer or tool execution was committed by this request."
       : interrupted
       ? "A Web context-summary submission has an uncertain outcome and was not resent. Reconcile the owned checkpoint operation or provide an explicitly authorized verified handoff before a new Native turn continues. Original history is preserved; no task answer or tool execution was committed by this request."

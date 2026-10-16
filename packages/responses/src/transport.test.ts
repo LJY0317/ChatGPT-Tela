@@ -139,7 +139,7 @@ describe("Native Responses HTTP transport", () => {
   });
 
   test("retries preserve the original history recovery without restoring execution authority", async () => {
-    for (const recoveryReason of ["unindexed_history", "source_unavailable", "checkpoint_interrupted", "source_budget"] as const) {
+    for (const recoveryReason of ["unindexed_history", "source_unavailable", "checkpoint_interrupted", "checkpoint_rejected", "source_budget"] as const) {
       let reads = 0;
       let launches = 0;
       const turns = new ActiveTurnRegistry();
@@ -154,6 +154,10 @@ describe("Native Responses HTTP transport", () => {
       const first = await handleNativeResponsesHttp(post(body()), gateway);
       expect(first.status).toBe(400);
       const expected = await first.json();
+      if (recoveryReason === "checkpoint_rejected") expect(expected.error).toMatchObject({
+        code: "tela_native_checkpoint_response_rejected", retryable: false,
+        recovery: { kind: "explicit_native_handoff", requires_new_native_turn: true },
+      });
       if (recoveryReason === "source_budget") expect(expected.error).toMatchObject({
         code: "tela_native_context_checkpoint_required", type: "invalid_request_error", retryable: false,
       });

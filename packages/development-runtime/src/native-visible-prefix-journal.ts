@@ -16,6 +16,7 @@ interface Entry extends NativeVisiblePrefixStageIdentity {
   status: "pending" | "completed" | "closed";
   ownerFingerprint?: string;
   sourceRootDigest?: string;
+  scopeFingerprint?: string;
   reconciliationFingerprint?: string;
   remoteOutcome?: "unknown";
   claimId: string;
@@ -45,6 +46,7 @@ function validate(value: unknown): State {
       || entry.updatedAt < 0 || !["pending", "completed", "closed"].includes(entry.status)
       || (entry.status === "completed" ? !summaryValid(entry.summary) : entry.summary !== undefined)
       || (entry.ownerFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(entry.ownerFingerprint))
+      || (entry.scopeFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(entry.scopeFingerprint))
       || (entry.sourceRootDigest !== undefined && !/^[a-f0-9]{64}$/.test(entry.sourceRootDigest))
       || (entry.key.startsWith("native-visible-stage-v2-") && !entry.sourceRootDigest)
       || (entry.reconciliationFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(entry.reconciliationFingerprint))
@@ -177,25 +179,32 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     void run.finally(() => { if (queues.get(this.directory) === run) queues.delete(this.directory); }).catch(() => {});
     return run;
   }
-  async claim(identity: NativeVisiblePrefixStageIdentity, ownerFingerprint?: string, sourceRootDigest?: string) {
+  async claim(identity: NativeVisiblePrefixStageIdentity, ownerFingerprint?: string, sourceRootDigest?: string, scopeFingerprint?: string) {
     if (!validIdentity(identity)) throw new Error("Invalid Native checkpoint stage identity");
     if (ownerFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(ownerFingerprint)) throw Error("Invalid Native checkpoint owner");
+    if (scopeFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(scopeFingerprint)) throw Error("Invalid checkpoint execution scope");
     if (sourceRootDigest !== undefined && !/^[a-f0-9]{64}$/.test(sourceRootDigest)) throw Error("Invalid checkpoint source root");
     if (identity.key.startsWith("native-visible-stage-v2-") && !sourceRootDigest) throw Error("Checkpoint v2 requires source-root admission proof");
     return this.#transaction(async state => {
+      const entry = state.entries.find(value => value.key === identity.key);
+      if (entry && !same(entry, identity)) throw new Error("Native checkpoint stage source changed");
+      if (entry?.status === "completed") return { ...identity, status: "completed" as const, summary: entry.summary! };
       if (sourceRootDigest && state.entries.some(entry => entry.status === "pending"
         && !entry.key.startsWith("native-visible-stage-v2-") && entry.sourceDigest === sourceRootDigest)) {
         return { status: "unknown" as const };
       }
-      const entry = state.entries.find(value => value.key === identity.key);
+      // Stable account/thread admission is independent of model, policy, source growth and nonce.
+      // Older pending records without this proof cannot be presumed to belong to a foreign task.
+      if (scopeFingerprint && state.entries.some(value => value.status === "pending"
+        && (value.scopeFingerprint === undefined || value.scopeFingerprint === scopeFingerprint))) {
+        return { status: "unknown" as const };
+      }
       if (entry) {
-        if (!same(entry, identity)) throw new Error("Native checkpoint stage source changed");
-        if (entry.status === "completed") return { ...identity, status: "completed" as const, summary: entry.summary! };
         if (entry.status !== "closed" || !ownerFingerprint || entry.ownerFingerprint === ownerFingerprint) return { status: "unknown" as const };
         // Explicitly new Native authority may replace a locally closed, isolated
         // tool-free operation. Pending/legacy unknown records NEVER take this path.
         const claimId = randomUUID();
-        Object.assign(entry, { status: "pending", claimId, ownerFingerprint, updatedAt: Date.now(), ...(sourceRootDigest ? { sourceRootDigest } : {}) });
+        Object.assign(entry, { status: "pending", claimId, ownerFingerprint, updatedAt: Date.now(), ...(sourceRootDigest ? { sourceRootDigest } : {}), ...(scopeFingerprint ? { scopeFingerprint } : {}) });
         await this.#write(state);
         return { status: "claimed" as const, claimId };
       }
@@ -211,7 +220,7 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
       }
       const claimId = randomUUID();
       state.entries.push({ ...identity, claimId, status: "pending", updatedAt: now, ...(ownerFingerprint ? { ownerFingerprint } : {}),
-        ...(sourceRootDigest ? { sourceRootDigest } : {}) });
+        ...(sourceRootDigest ? { sourceRootDigest } : {}), ...(scopeFingerprint ? { scopeFingerprint } : {}) });
       if (state.entries.length * RESERVED_ENTRY_BYTES > MAX_BYTES) throw new Error("Native checkpoint journal cannot reserve completion capacity");
       await this.#write(state);
       return { status: "claimed" as const, claimId };

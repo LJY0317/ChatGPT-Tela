@@ -81,8 +81,21 @@ export interface NativeRequestCheckpointProductionRequest {
   readonly nativeTaskId: string;
   readonly sourceRevisionId: string;
   readonly physicalContext: WebPhysicalContext;
+  /** Local durable settlement only; never serialized into model input. */
+  readonly persistResult?: (result: NativeRequestCheckpointProductionResult) => Promise<void>;
   readonly media?: readonly WebTurnMedia[];
   readonly browserModel?: { readonly familyKey: string; readonly effort: ChatGptWebEffort };
+}
+
+/** Semantic source excludes a changing outer head marker; ordered revisions already bind it. */
+export function nativeRequestPrefixSnapshot(threadId: string, currentTurnId: string,
+  physicalContext: WebPhysicalContext): NativeRequestPrefixSnapshot {
+  const content = JSON.stringify({ type: "tela_native_request_prefix_v1", items: physicalContext.segments });
+  const digest = createHash("sha256").update(content).digest("hex");
+  return Object.freeze({ kind: "native-request-prefix", threadId, currentTurnId,
+    digest, contentDigest: digest, content, sourceItemCount: physicalContext.segments.length,
+    inlineAssets: [], references: physicalContext.segments.flatMap(segment =>
+      segment.type === "revision" ? segment.evidence ?? [] : []), localImageCandidates: [] });
 }
 
 export interface NativeRequestCheckpointProductionResult {
@@ -991,15 +1004,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           // Reuse the existing account-owned durable stage ledger, not a second
           // compressor or an unbounded retry of the same summarization request.
           // The exact immutable request prefix is the source; no history RPC is needed.
-          const content = JSON.stringify({ type: "tela_native_request_prefix_v1",
-            sourceRevisionId: anchor.revision.id, items: checkpointPhysicalContext.segments });
-          const source: NativeRequestPrefixSnapshot = Object.freeze({
-            kind: "native-request-prefix", threadId, currentTurnId: turn.channel.binding.authority.turnId,
-            digest: createHash("sha256").update(content).digest("hex"), content,
-            sourceItemCount: checkpointPhysicalContext.segments.length,
-            inlineAssets: [], references: checkpointPhysicalContext.segments.flatMap(segment =>
-              segment.type === "revision" ? segment.evidence ?? [] : []), localImageCandidates: [],
-          });
+          const source = nativeRequestPrefixSnapshot(threadId, turn.channel.binding.authority.turnId, checkpointPhysicalContext);
           const summary = await produceNativePrefixCheckpoint({
             source, accountNamespace: stageOwner.accountNamespace, journal: stageOwner.journal,
             producer: options.checkpointProducer, effort: browserModel?.effort ?? "medium",

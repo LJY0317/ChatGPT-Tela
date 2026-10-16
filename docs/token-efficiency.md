@@ -69,7 +69,11 @@ implementation changes; passing fixtures do not establish real model comprehensi
 
 The v2 fragment identity separates exact stage content from whole-source provenance. Account,
 Native thread, model/effort and semantic summary policy still scope reuse. The journal checks
-pending v1 operations of the current source atomically before granting a v2 claim. Completed
+pending operations atomically before granting new work. Admission uses a stable account/thread
+scope independent of source growth, model, effort and summary policy; those dimensions still
+restrict completed-summary reuse. Older pending records without a scope cannot be proven foreign
+and conservatively block new claims in their account ledger. Exact completed receipts remain
+readable without authorizing another send. Completed
 whole-source checkpoint caches remain readable; older fragment receipts cannot be reinterpreted
 as v2 semantic receipts. A first v2 preparation may therefore incur a cold cost. Older binaries
 do not understand v2 journal keys: downgrades must preserve the journal and use compatible recovery,
@@ -94,3 +98,27 @@ using executable tool authority retains its separate existing admission/receipt 
 This is a project-wide design constraint, not a claim of globally optimal token use. An intentional
 increase in model work needs a concrete correctness/quality requirement, measured alternatives and
 reviewable acceptance evidence; update this contract and regression budgets with that decision.
+
+
+## Production source and settlement boundaries
+
+Canonical provenance and payload integrity are separate: the public history reader binds its
+owner/source digest and independently hashes the exact serialized content. The compressor verifies
+payload bytes without substituting that hash for canonical provenance. Request-prefix serialization
+keeps ordered revision identities inside the source, and excludes the changing outer head field so
+that appending a revision leaves earlier fragment bytes unchanged. This format correction can
+require a first preparation for older completed request-prefix inputs; it never discards or bypasses
+an older pending operation.
+
+Persist each validated bounded summary under its exact journal claim before releasing the isolated
+browser surface. Release/cancellation failures must fail the current run, but cannot erase a completed
+receipt or force the next owner to summarize those bytes again. A failed durable write stays unknown.
+
+Distinguish an uncertain submission from a proven same-operation completion whose machine response
+is unusable. The latter closes only after successful physical release; it does not commit a summary
+or authorize replay by the same Native owner. A separately authorized new Native turn may claim a
+new isolated operation. Foreign identities, unproven completion and failed release remain unknown.
+This proof path applies to newly observed operations; missing historical evidence cannot be
+manufactured retroactively. Local transfer estimates include the actual formatted transport
+contract, source bytes, receipt footer, media manifest and deduplicated media bytes; estimates
+remain distinct from billed tokens.

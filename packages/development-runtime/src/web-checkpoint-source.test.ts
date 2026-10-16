@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chatGptWebCheckpointSourceTokenLimit, type WebPhysicalContext } from "@chatgpt-tela/chatgpt";
+import { chatGptWebCheckpointSourceTokenLimit, chatGptCheckpointInputTokens, type WebPhysicalContext } from "@chatgpt-tela/chatgpt";
 import { boundedWebCheckpointSource } from "./web-checkpoint-source";
 
 function context(tokens: number): WebPhysicalContext {
@@ -15,6 +15,6 @@ test("the shared checkpoint-source budget keeps summarizer input plus output hea
   const atLimit = boundedWebCheckpointSource(context(limit), [], "medium");
   expect(atLimit?.transferTokens).toBe(limit);
   expect(boundedWebCheckpointSource(context(limit + 1), [], "medium")).toBeUndefined();
-  expect(boundedWebCheckpointSource(context(0), [], "medium")?.transferTokens).toBe(0);
+  expect(boundedWebCheckpointSource(context(0), [], "medium")?.transferTokens).toBe(chatGptCheckpointInputTokens(context(0)));
   expect(boundedWebCheckpointSource(context(Number.MAX_SAFE_INTEGER), [], "medium")).toBeUndefined();
 });

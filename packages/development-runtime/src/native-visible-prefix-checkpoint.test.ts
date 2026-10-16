@@ -30,7 +30,7 @@ class Journal implements NativeVisiblePrefixStageJournal {
 function fixture(text='visible prior answer') {
  const content=JSON.stringify({type:'tela_native_visible_prefix_v1',items:[{turnId:'prior',item:{id:'old',type:'agentMessage',text}}]});
  const source:NativeVisiblePrefixSnapshot={kind:'native-visible-prefix',threadId:'thread',currentTurnId:'current',
-  digest:createHash('sha256').update(content).digest('hex'),sourceItemCount:1,content,
+  contentDigest: createHash('sha256').update(content).digest('hex'), digest:createHash('sha256').update(content).digest('hex'),sourceItemCount:1,content,
   inlineAssets:[],references:[],localImageCandidates:[]};
  const calls:any[]=[];
  const journal=new Journal();

@@ -3,6 +3,7 @@ import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   requireProven,
   WebCheckpointOperationClosed,
+  WebCheckpointResponseRejected,
   type WebContextCheckpointProvider,
   type WebContextCheckpointRequest,
   type WebContextCheckpointResult,
@@ -14,6 +15,8 @@ export interface BrowserContextCheckpointRunInput {
   readonly request: WebContextCheckpointRequest;
   readonly signal?: AbortSignal;
   readonly onProgress?: (summary: string) => void;
+  /** Persist a validated derived result before releasing its last physical observation owner. */
+  readonly persistResult?: (result: WebContextCheckpointResult) => Promise<void>;
   readonly prepareForSubmit?: (surface: BrowserSurfaceLease, signal?: AbortSignal) => Promise<void>;
 }
 
@@ -84,7 +87,9 @@ export async function runBrowserContextCheckpoint(
     ));
     // A proven result that races cancellation is useful only as a durable derived
     // checkpoint. The caller persists it before checking its Native owner again.
-    return validateResult(input.request, result);
+    const verified = validateResult(input.request, result);
+    await input.persistResult?.(verified);
+    return verified;
   } catch (error) {
     failed = true; failure = error;
     emitDiagnosticEvent("chatgpt_tela_work", "context_checkpoint_failed", {
@@ -100,8 +105,13 @@ export async function runBrowserContextCheckpoint(
     // attempt while the old isolated operation's physical ownership is uncertain.
     if (surface) await input.browserHost.release(surface.leaseId);
   }
-  if (failed && (!invoked || input.signal?.aborted)) {
-    const disposition = invoked ? "cancelled_locally" : "not_invoked";
+  const completedUnusable = failure instanceof WebCheckpointResponseRejected
+    && failure.receipt.nativeTaskId === input.request.nativeTaskId
+    && failure.receipt.sourceRevisionId === input.request.sourceRevisionId
+    && failure.receipt.webEpochId === input.request.webEpochId
+    && !!failure.receipt.providerOperationId.trim();
+  if (failed && (!invoked || input.signal?.aborted || completedUnusable)) {
+    const disposition = completedUnusable ? "completed_unusable" : invoked ? "cancelled_locally" : "not_invoked";
     emitDiagnosticEvent("chatgpt_tela_work", "context_checkpoint_closed", {
       phase: disposition, surface_released: true, remote_terminal_proven: false,
     });

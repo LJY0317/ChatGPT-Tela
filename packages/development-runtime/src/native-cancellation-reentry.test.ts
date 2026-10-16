@@ -32,11 +32,12 @@ for (const replacement of ["new message", "edited original message"]) {
         if (!signal) throw Error("fixture requires Native lifetime signal");
         const content = JSON.stringify({ type: "tela_native_visible_prefix_v1", items: [{ type: "agentMessage", text: "Unchanged historical prefix." }] });
         const snapshot: NativeVisiblePrefixSnapshot = { kind: "native-visible-prefix", threadId: "thread", currentTurnId: current,
-          digest: hash(content), sourceItemCount: 1, content, inlineAssets: [], references: [], localImageCandidates: [] };
+          contentDigest: hash(content), digest: hash(content), sourceItemCount: 1, content, inlineAssets: [], references: [], localImageCandidates: [] };
         await produceNativePrefixCheckpoint({ source: snapshot, accountNamespace: "fixture", journal, effort: "medium", signal,
           confirmSource: async () => ({ ...snapshot, currentTurnId: turn.channel.binding.authority.turnId }),
           producer: async request => {
             const result = await runBrowserContextCheckpoint({ browserHost: host, signal,
+              ...(request.persistResult ? { persistResult: request.persistResult } : {}),
               request: { ...request, webEpochId: "isolated-checkpoint" },
               provider: {
                 async observeCapabilities() {

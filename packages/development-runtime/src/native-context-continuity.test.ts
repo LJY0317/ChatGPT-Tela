@@ -51,7 +51,7 @@ test("marker-free opaque continuity consumes complete public prefix, revalidates
       { turnId: "prior", item: { type: "agentMessage", id: "prior-answer", text: "한글 visible historical tool result ".repeat(45_000) } },
     ] });
     const source: NativeVisiblePrefixSnapshot = { kind: "native-visible-prefix", threadId: "task-1", currentTurnId: "web-current",
-      digest: createHash("sha256").update(content).digest("hex"), sourceItemCount: 1, content,
+      contentDigest: createHash("sha256").update(content).digest("hex"), digest: createHash("sha256").update(content).digest("hex"), sourceItemCount: 1, content,
       inlineAssets: [], references: [], localImageCandidates: [] };
     const journalOptions = { directory: join(directory, "ledger"), initializationPath: join(directory, "receipt") };
     let reads = 0, calls = 0;

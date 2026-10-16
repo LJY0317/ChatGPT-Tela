@@ -5,10 +5,12 @@
  */
 export class NativeHistoryBootstrapRequired extends Error {
   readonly code = "native_history_bootstrap_required" as const;
-  readonly recoveryReason: "source_unavailable" | "unindexed_history" | "checkpoint_interrupted" | "source_budget";
+  readonly recoveryReason: "source_unavailable" | "unindexed_history" | "checkpoint_interrupted" | "checkpoint_rejected" | "source_budget";
 
   constructor(recoveryReason: NativeHistoryBootstrapRequired["recoveryReason"] = "source_unavailable", options?: ErrorOptions) {
-    super(recoveryReason === "checkpoint_interrupted"
+    super(recoveryReason === "checkpoint_rejected"
+      ? "A proven Web context checkpoint response was unusable; a new Native turn or verified handoff is required"
+      : recoveryReason === "checkpoint_interrupted"
       ? "A Web context checkpoint has an uncertain submitted outcome and requires reconciliation"
       : recoveryReason === "unindexed_history"
       ? "Native indexed current-turn proof unavailable; unindexed history was not paged"

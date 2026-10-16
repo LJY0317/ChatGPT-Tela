@@ -1,6 +1,6 @@
 import {
   chatGptWebCheckpointSourceTokenLimit,
-  prepareWebTurnMedia,
+  chatGptCheckpointInputTokens,
   type ChatGptWebEffort,
   type WebPhysicalContext,
   type WebTurnMedia,
@@ -20,9 +20,7 @@ export function boundedWebCheckpointSource(
   media: readonly WebTurnMedia[],
   effort: ChatGptWebEffort,
 ): WebPhysicalContext | undefined {
-  const upload = prepareWebTurnMedia(physicalContext, media);
-  const transferTokens = physicalContext.transferTokens
-    + Math.ceil(upload.statistics.uniqueBytes / 4);
+  const transferTokens = Math.max(physicalContext.transferTokens, chatGptCheckpointInputTokens(physicalContext, media));
   if (!Number.isSafeInteger(transferTokens) || transferTokens < 0
     || transferTokens > chatGptWebCheckpointSourceTokenLimit(effort)) {
     return undefined;
