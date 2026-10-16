@@ -15,6 +15,7 @@ export * from "./native-live-turn";
 export * from "./diagnostic-inventory";
 export * from "./diagnostic-private";
 export * from "./diagnostic-center";
+export * from "./diagnostic-context-continuity";
 export * from "./diagnostic-tool-evidence";
 export * from "./web-retained-context";
 export * from "./native-projection-error";

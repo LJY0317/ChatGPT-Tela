@@ -8,8 +8,40 @@ request/header/socket timeout values, local `socket_write_count`/`socket_write_b
 `last_socket_write_at_ms`/`last_socket_write_age_ms`. Writes attest only local socket acceptance,
 never host display. A configured timeout does not prove that it fired. Client cancellation and a
 network disconnect remain combined when the transport supplies no finer evidence; only observed
-socket errors distinguish connection reset, broken pipe and timeout. No heartbeat or extra model call
-is introduced.
+socket errors distinguish connection reset, broken pipe and timeout.
+
+While an admitted response is actively being read, an idle stream emits a protocol
+`response.in_progress` envelope every 30 seconds. The pinned Native SSE consumer waits for
+parsed events, so comment-only keepalives do not satisfy its idle contract. This event asserts
+transport liveness, without reasoning text, progress percentages, tool authority or final commit.
+Its single timer is cleared on data, cancellation or completion; it does not run for idle services
+and makes no model calls. It does not reduce cold-checkpoint inference time.
+
+## Per-turn context evidence
+
+```sh
+chatgpt-tela diagnostics context --scope <24-character-scope-fingerprint> --minutes 120
+```
+
+This on-demand, read-only report joins bounded structural logs by scope/turn and unambiguous
+request fingerprints. `--at <ISO-time>` selects an earlier window. It reports checkpoint fragment
+and merge activity, preparation duration, request-checkpoint production/reuse, logical/transfer
+token estimates, projection omission/truncation counts, reconnect write gaps and local final
+commit versus retirement without an observed final. Older logs may lack new fields.
+
+`web_turn_plan` now fingerprints epoch, surface, physical head/base revisions and checkpoint set,
+plus document generation. `web_context_settled` records successful local settlement separately.
+A retained delta is `verified_local_link` only when its planner-proven retained input head matches
+a prior locally settled input head on the same epoch, surface and document generation. The delta's
+base is the subsequent assistant revision, so it is recorded separately. Settlement is emitted by
+the planner only after its retained-owner transaction commits. Missing evidence stays `incomplete_evidence`;
+an unmatched link is diagnostic evidence requiring inspection, not proof of semantic forgetting.
+New request-checkpoint flags are separate from the older history-checkpoint flags.
+
+The report exposes event/turn/plan/transport caps and source coverage. It never reads private
+captures or conversation bodies, changes capture policy, writes incidents or sends model requests.
+Token estimates, local lineage and local final commit cannot prove exact billed usage, summary
+quality, semantic recall or host display. Repeated file reads alone do not prove lost context.
 
 `native_response_observer_replaced` means a canonically admitted reconnect replaced the previous
 response wait without restarting Web execution. `native_checkpoint_model_started` and the matching

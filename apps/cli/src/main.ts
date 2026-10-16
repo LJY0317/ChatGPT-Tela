@@ -838,7 +838,7 @@ async function main(): Promise<void> {
       }), null, 2));
       return;
     }
-    if (subcommand !== undefined) throw new Error("usage: chatgpt-tela diagnostics [list|inspect|record|activity|capture|workload|incident|trace] [--minutes <1-120>] | desktop [--seconds <5-60>]");
+    if (subcommand !== undefined) throw new Error("usage: chatgpt-tela diagnostics [list|inspect|record|activity|context|capture|workload|incident|trace] [--minutes <1-120>] | desktop [--seconds <5-60>]");
     console.log(JSON.stringify(diagnosticsSummary(productPaths), null, 2));
     return;
   }
@@ -1046,6 +1046,7 @@ async function main(): Promise<void> {
     + "  doctor\n"
     + "  diagnostics\n"
     + "  diagnostics workload [--minutes <1-120>]\n"
+    + "  diagnostics context [--scope <fingerprint>] [--at <ISO-time>] [--minutes <1-120>]\n"
     + "  diagnostics incident [--minutes <1-120>]\n"
     + "  diagnostics trace [--minutes <1-120>]\n"
     + "  diagnostics desktop [--seconds <5-60>] (macOS)\n"

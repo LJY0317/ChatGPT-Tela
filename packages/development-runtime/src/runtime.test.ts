@@ -1317,6 +1317,10 @@ test("Native cancellation immediately after context planning releases its pendin
 });
 
 test("same Native turn continuation runs two settled Web cycles through the real planner and retained browser owner", async () => {
+  const diagnosticDirectory = mkdtempSync(join(tmpdir(), "tela-context-link-proof-"));
+  const diagnosticFile = join(diagnosticDirectory, "events.jsonl");
+  const previousDiagnosticFile = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = diagnosticFile;
   const owner = new AbortController();
   const inputs: NonNullable<ReturnType<typeof nativeInputReceipt>>[] = [];
   const provider = new ExternalContractProvider();
@@ -1345,10 +1349,25 @@ test("same Native turn continuation runs two settled Web cycles through the real
     expect(submitted[1]!.toolBridge?.turnCapability).not.toBe(submitted[0]!.toolBridge?.turnCapability);
     expect(submitted[1]!.physicalContext.mode).toBe("retained-delta");
     expect(JSON.stringify(submitted[1]!.physicalContext)).toContain("followup");
+    const rows = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    const plans = rows.filter(row => row.stage === "web_turn_plan");
+    const settled = rows.filter(row => row.stage === "web_context_settled");
+    expect(plans).toHaveLength(2); expect(settled).toHaveLength(2);
+    expect(plans[1]).toMatchObject({ context_mode: "retained-delta", document_generation: 1,
+      retained_input_head_fingerprint: settled[0].head_revision_fingerprint,
+      surface_fingerprint: settled[0].surface_fingerprint, epoch_fingerprint: settled[0].epoch_fingerprint });
+    expect(plans[0].head_revision_fingerprint).toMatch(/^[a-f0-9]{24}$/);
+    expect(rows.some(row => row.stage === "native_response_observer_started")).toBe(true);
+    expect(rows.filter(row => row.stage === "native_outcome_committed" && row.outcome === "final")).toHaveLength(2);
     const duplicate = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, secondBody);
     expect(duplicate.status).toBe(400);
     expect(await duplicate.json()).toMatchObject({ error: { code: "tela_native_response_cycle_conflict", retryable: false } });
     expect(submitted).toHaveLength(2);
     owner.abort(new Error("Native completed")); expect(runtime.turns.size).toBe(0);
-  } finally { await runtime.stop(); }
+  } finally {
+    await runtime.stop();
+    if (previousDiagnosticFile === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previousDiagnosticFile;
+    rmSync(diagnosticDirectory, { recursive: true, force: true });
+  }
 });

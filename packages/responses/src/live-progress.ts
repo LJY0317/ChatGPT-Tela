@@ -22,7 +22,8 @@ export class NativeProgressStream {
   #ended = false;
   #wake: (() => void) | undefined;
 
-  constructor(readonly model: string, readonly createdAt: number) {
+  constructor(readonly model: string, readonly createdAt: number, private readonly idleEventIntervalMs = 30_000) {
+    if (!Number.isFinite(idleEventIntervalMs) || idleEventIntervalMs < 1) throw Error("invalid active stream interval");
     let ready!: () => void;
     this.firstProgress = new Promise<void>(resolve => { ready = resolve; });
     this.#ready = ready;
@@ -106,7 +107,22 @@ export class NativeProgressStream {
     return new Response(new ReadableStream<Uint8Array>({
       pull: async controller => {
         while (!this.#frames.length && !this.#ended && !this.signal.signal.aborted) {
-          await new Promise<void>(resolve => { this.#wake = resolve; });
+          // The Native client times out while waiting for a parsed SSE event; comments alone
+          // do not satisfy that contract. A real in-progress envelope conveys transport liveness,
+          // without invented reasoning, model progress, tool authority or a commit cursor.
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await new Promise<void>(resolve => {
+              this.#wake = resolve;
+              timer = setTimeout(() => {
+                if (!this.#ended && !this.signal.signal.aborted && !this.#frames.length) {
+                  this.#event("response.in_progress", { response: this.#envelope("in_progress") });
+                }
+                resolve();
+              }, this.idleEventIntervalMs);
+              timer.unref?.();
+            });
+          } finally { if (timer) clearTimeout(timer); }
           this.#wake = undefined;
         }
         if (this.signal.signal.aborted) return;

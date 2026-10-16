@@ -1,6 +1,7 @@
 import { analyzeDiagnosticEvents, HOST_SYMPTOMS, HOST_REPORT_ORIGINS, listDiagnosticIncidents, readDiagnosticIncident,
   readDiagnosticSources, setPrivateDiagnosticCapture, writeDiagnosticIncident, type HostSymptom, type HostReportOrigin } from "./diagnostic-store";
 import { join } from "node:path";
+import { summarizeContextContinuity } from "./diagnostic-context-continuity";
 
 export function diagnosticSourcePaths(logsRoot: string): readonly string[] {
   return Object.freeze(["gateway", "chat", "codex"].flatMap(service => {
@@ -15,6 +16,14 @@ export function diagnosticCenter(root: string, paths: readonly string[], command
   option: (name: string) => string | undefined): unknown {
   if (command === "list") return { privacy: "structural-only", incidents: listDiagnosticIncidents(root) };
   if (command === "inspect") return readDiagnosticIncident(root, option("--ref") ?? "");
+  if (command === "context") {
+    const atMs = option("--at") ? Date.parse(option("--at")!) : Date.now();
+    const minutes = Number(option("--minutes") ?? 120), scope = option("--scope");
+    if (!Number.isFinite(atMs) || !Number.isInteger(minutes) || minutes < 1 || minutes > 120) throw Error("invalid context report window");
+    const source = readDiagnosticSources(paths, { fromMs: atMs - minutes * 60000, toMs: atMs });
+    return { ...summarizeContextContinuity({ events: source.events, atMs, ...(scope ? { scope } : {}) }),
+      sourceCoverage: source.coverage, sourceLimitReached: source.sourceLimitReached, excludedTestEvents: source.excludedTestEvents };
+  }
   if (command === "capture") {
     const mode = option("--mode"), minutes = option("--minutes");
     if (mode !== undefined && (mode !== "until-disabled" || minutes !== undefined)) throw new Error("capture requires --minutes 0..60 or --mode until-disabled, not both");

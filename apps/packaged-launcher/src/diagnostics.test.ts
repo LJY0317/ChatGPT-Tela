@@ -5,6 +5,29 @@ import { join } from "node:path";
 import { privateDiagnosticCaptureEnabled } from "@chatgpt-tela/core";
 import { runPackagedDiagnosticsCommand } from "./diagnostics";
 
+test("packaged context report is scoped, structural and read-only", () => {
+  const logsRoot = mkdtempSync(join(tmpdir(), "tela-context-report-"));
+  try {
+    const scope = "1".repeat(24), other = "2".repeat(24);
+    writeFileSync(join(logsRoot, "codex.diagnostics.jsonl"), [scope, other].map(scope_fingerprint => JSON.stringify({
+      ts: "2026-10-16T00:00:00Z", event: "chatgpt_tela_work", stage: "web_turn_plan",
+      scope_fingerprint, turn_fingerprint: "3".repeat(24), context_mode: "checkpoint-delta",
+      logical_estimate: 200000, transfer_estimate: 8000, prompt: "PRIVATE_CONTENT",
+    })).join("\n") + "\n");
+    const before = readdirSync(logsRoot).sort();
+    const report = runPackagedDiagnosticsCommand(["diagnostics", "context", "--scope", scope,
+      "--at", "2026-10-16T00:01:00Z", "--minutes", "2"], { logsRoot }) as any;
+    expect(report.turns).toHaveLength(1);
+    expect(report.turns[0].scopeFingerprint).toBe(scope);
+    expect(report.turns[0].plans[0].transferTokenEstimate).toBe(8000);
+    expect(report.semanticRecall).toBe("not_evaluated");
+    expect(JSON.stringify(report)).not.toContain("PRIVATE_CONTENT");
+    expect(readdirSync(logsRoot).sort()).toEqual(before);
+    expect(() => runPackagedDiagnosticsCommand(["diagnostics", "context", "--scope", "invalid"], { logsRoot })).toThrow();
+    expect(() => runPackagedDiagnosticsCommand(["diagnostics", "context", "--minutes", "121"], { logsRoot })).toThrow();
+  } finally { rmSync(logsRoot, { recursive: true, force: true }); }
+});
+
 test("packaged diagnostics rejects malformed capture without changing capture policy", () => {
   const logsRoot = mkdtempSync(join(tmpdir(), "tela-packaged-diagnostics-"));
   try {

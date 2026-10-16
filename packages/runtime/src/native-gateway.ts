@@ -123,6 +123,12 @@ export class NativeResponsesGateway {
     const previous = this.#responseObservers.get(registered.capability);
     previous?.abort(new DOMException("Native response observer replaced", "AbortError"));
     this.#responseObservers.set(registered.capability, observer);
+    const authority = registered.channel.binding.authority;
+    withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(authority.threadId),
+      turn_fingerprint: diagnosticFingerprint(authority.turnId) }, () =>
+      emitDiagnosticEvent("chatgpt_tela_work", "native_response_observer_started", {
+        turn_phase: registered.channel.phase, current_authority_proven: true,
+      }));
     const signal = AbortSignal.any([observer.signal, this.#controller.signal,
       ...(presentation?.signal ? [presentation.signal] : [])]);
     if (previous) {

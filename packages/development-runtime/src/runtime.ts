@@ -255,8 +255,21 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           }
           const executionSignal = document ? AbortSignal.any([signal, document.signal]) : signal;
           executionSignal.throwIfAborted();
+          const checkpoints = plan.physicalContext.segments.filter(segment => segment.type === "checkpoint");
+          const contextEvidence = {
+            epoch_fingerprint: diagnosticFingerprint(plan.webEpochId),
+            surface_fingerprint: diagnosticFingerprint(acquired.surface.leaseId),
+            ...(document ? { document_generation: document.generation } : {}),
+            head_revision_fingerprint: diagnosticFingerprint(plan.physicalContext.headRevisionId),
+            ...(plan.physicalContext.baseRevisionId ? { base_revision_fingerprint: diagnosticFingerprint(plan.physicalContext.baseRevisionId) } : {}),
+            checkpoint_count: checkpoints.length,
+            ...(checkpoints.length ? { checkpoint_fingerprint: diagnosticFingerprint(JSON.stringify(checkpoints.map(s => s.checkpointId))) } : {}),
+            physical_revision_count: plan.physicalContext.segments.filter(s => s.type === "revision").length,
+            ...(plan.physicalContext.activeRequestRevisionId ? { active_request_inline: plan.physicalContext.segments.some(s => s.type === "revision" && s.revisionId === plan.physicalContext.activeRequestRevisionId) } : {}),
+          };
           emitDiagnosticEvent("chatgpt_tela_work", "web_turn_plan", {
             ...diagnosticIdentity,
+            ...contextEvidence,
             provider_kind: "web",
             ...(typeof nativeRequest === "object" && nativeRequest !== null
               && typeof (nativeRequest as {model?:unknown}).model === "string"

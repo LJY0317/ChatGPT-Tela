@@ -217,13 +217,21 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
   if (fragments.length * 2 - 1 > maxStages) throw new Error("Native visible-prefix checkpoint merge exceeds its finite stage budget");
   emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_checkpoint_started", {
     source_kind: source.kind,
+    source_fingerprint: source.digest.slice(0, 24),
     source_bytes: sourceBytes, source_item_count: source.sourceItemCount,
     fragment_count: fragments.length, stage_budget: maxStages,
   });
   let nodes: Node[] = [];
-  for (const fragment of fragments) nodes.push({ startByte: fragment.startByte, endByte: fragment.endByte,
-    summary: await run(fragment.physical, "fragment") });
+  const progress = (message: string) => {
+    try { input.preparation?.onProgress?.(message); } catch { /* Presentation cannot alter checkpoint authority. */ }
+  };
+  for (const [index, fragment] of fragments.entries()) {
+    progress(`Preparing conversation context (${index + 1}/${fragments.length}).`);
+    nodes.push({ startByte: fragment.startByte, endByte: fragment.endByte,
+      summary: await run(fragment.physical, "fragment") });
+  }
   while (nodes.length > 1) {
+    progress("Combining prepared conversation context.");
     const merged: Node[] = [];
     for (let start = 0; start < nodes.length;) {
       check();
@@ -246,6 +254,7 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     nodes = merged;
   }
   await confirm();
+  progress("Conversation context prepared.");
   return JSON.stringify({ type: requestPrefix ? "tela_native_request_prefix_checkpoint_v1" : "tela_native_visible_prefix_checkpoint_v1", sourceDigest: source.digest,
     sourceItemCount: source.sourceItemCount, sourceBytes, coverage: requestPrefix
       ? "complete-canonical-request-prefix-through-checkpoint-anchor" : "complete-visible-prefix-before-current-native-turn",

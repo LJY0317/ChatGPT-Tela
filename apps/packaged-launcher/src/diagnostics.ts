@@ -7,6 +7,7 @@ const OPTIONS: Readonly<Record<string, readonly string[]>> = {
   list: [],
   decisions: [],
   inspect: ["--ref"],
+  context: ["--scope", "--at", "--minutes"],
   capture: ["--minutes", "--mode"],
   activity: ["--at", "--minutes", "--symptom", "--report-origin", "--operation", "--recovered-at", "--output-started-at"],
   record: ["--at", "--minutes", "--symptom", "--report-origin", "--operation", "--recovered-at", "--output-started-at"],
@@ -17,7 +18,7 @@ export function runPackagedDiagnosticsCommand(args: readonly string[],
   paths: Pick<ReturnType<typeof resolveProductPaths>, "logsRoot"> = resolveProductPaths()): unknown {
   const command = args[1] ?? "list";
   if (args[0] !== "diagnostics" || !Object.hasOwn(OPTIONS, command)) {
-    throw new Error("usage: diagnostics [list|decisions|inspect|record|activity|capture]");
+    throw new Error("usage: diagnostics [list|decisions|inspect|record|activity|context|capture]");
   }
   const flags = new Map<string, string>();
   for (let i = 2; i < args.length; i += 2) {

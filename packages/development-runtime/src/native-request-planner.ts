@@ -7,6 +7,7 @@ import {
   RevisionLineage,
   NativeProjectionUnsupported,
   emitDiagnosticEvent,
+  diagnosticFingerprint,
   planPhysicalContext,
   type ContextCheckpoint,
   type LogicalRevision,
@@ -780,6 +781,11 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     }));
     if (entry.hotHistory) keepHotHistory(entry.threadId, entry.hotHistory);
     else hotHistoryByTask.delete(entry.threadId);
+    emitDiagnosticEvent("chatgpt_tela_work", "web_context_settled", {
+      status: "completed", epoch_fingerprint: diagnosticFingerprint(entry.webEpochId),
+      surface_fingerprint: diagnosticFingerprint(outcome.surfaceLeaseId), document_generation: outcome.documentGeneration,
+      head_revision_fingerprint: diagnosticFingerprint(entry.inputHeadRevisionId),
+    });
   };
   const plan = async (turn: RegisteredTurn, nativeRequest: unknown, preparation?: Parameters<DevelopmentWebTurnPlanner>[2]): Promise<DevelopmentWebTurnPlan> => {
     // Failure-only stage observations are local to this request, not attached to errors.
@@ -895,6 +901,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         diagnostics: Object.freeze({
           provider_projection: false,
           retained_delta: true,
+          retained_input_head_fingerprint: diagnosticFingerprint(committed.inputHeadRevisionId),
           history_checkpoint_reused: historyCheckpointReused,
           history_checkpoint_produced: historyCheckpointProduced,
           history_manual_handoff: historyManualHandoff,
@@ -919,6 +926,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     stage("checkpoint_lookup");
     const candidates = await cachedCheckpoints(options.checkpointCache, threadId);
     let selected = activeCheckpoint(projection, candidates, budgetTokens);
+    const requestCheckpointFromCache = selected !== undefined;
+    let requestCheckpointProduced = false;
     let selectedContent = selected
       ? new Map([[selected.checkpoint.id, selected.content]])
       : new Map<string, string>();
@@ -1019,6 +1028,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           content,
           estimatedTokens: checkpointTokens(content),
         });
+        requestCheckpointProduced = true;
         selectedContent = new Map([[selected.checkpoint.id, selected.content]]);
         stage("physical_context_fit");
         prepared = await prepareWebContext({
@@ -1082,6 +1092,10 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         history_manual_handoff: historyManualHandoff,
         continuity_source: continuity.mode,
         retained_delta: false,
+        request_checkpoint_reused: requestCheckpointFromCache && physicalContext.segments.some(s => s.type === "checkpoint"),
+        request_checkpoint_produced: requestCheckpointProduced,
+        checkpoint_candidate_count: candidates.length,
+        logical_revision_count: projection.revisions.length,
         physical_rollover: pressure?.shouldRollover === true,
         ...(pressure ? {
           previous_epoch_input_estimate: pressure.estimatedEpochInputTokens,

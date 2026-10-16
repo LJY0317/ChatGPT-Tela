@@ -45,6 +45,16 @@ function fixture(text='visible prior answer') {
 }
 function payload(request:any){return JSON.parse(request.physicalContext.segments[0].content);}
 
+test('checkpoint presentation follows real phases and observer failure cannot authorize extra calls',async()=>{
+ const f=fixture(),messages:string[]=[];
+ const preparation={signal:new AbortController().signal,onProgress:(message:string)=>{messages.push(message);throw Error('presentation observer unavailable');}};
+ await produceNativePrefixCheckpoint({...f.input,preparation});
+ expect(messages).toEqual(['Preparing conversation context (1/1).','Conversation context prepared.']);
+ expect(f.calls).toHaveLength(1);
+ await produceNativePrefixCheckpoint({...f.input,preparation});
+ expect(f.calls).toHaveLength(1);
+});
+
 test('large Korean and escaped source has exact contiguous UTF8 byte coverage and bounded ordered merge',async()=>{
  const f=fixture(('한글😀\\\"\n').repeat(80_000));
  const result=JSON.parse(await produceNativePrefixCheckpoint(f.input));

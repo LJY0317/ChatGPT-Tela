@@ -1,0 +1,62 @@
+import { expect, test } from "bun:test";
+import { summarizeContextContinuity } from "./diagnostic-context-continuity";
+import type { StructuralDiagnosticEvent } from "./diagnostic-store";
+
+const scope = "1".repeat(24), turn1 = "2".repeat(24), turn2 = "3".repeat(24), request = "4".repeat(24);
+const epoch = "5".repeat(24), surface = "6".repeat(24), head = "7".repeat(24), operation = "8".repeat(24);
+let n = 0;
+function event(stage: string, fields: object = {}): StructuralDiagnosticEvent {
+  return { ts: new Date(1000 + n++).toISOString(), event: "chatgpt_tela_work", stage,
+    scope_fingerprint: scope, turn_fingerprint: turn1, ...fields };
+}
+function plan(mode: string, fields: object = {}) {
+  return event("web_turn_plan", { context_mode: mode, operation_fingerprint: operation,
+    epoch_fingerprint: epoch, surface_fingerprint: surface, head_revision_fingerprint: head, retained_input_head_fingerprint: head,
+    document_generation: 1, logical_estimate: 200000, transfer_estimate: 8000, ...fields });
+}
+function settled(fields: object = {}) {
+  return event("web_context_settled", { operation_fingerprint: operation, status: "completed",
+    epoch_fingerprint: epoch, surface_fingerprint: surface, head_revision_fingerprint: head, document_generation: 1, ...fields });
+}
+
+test("context reuse links only to an exact locally committed predecessor without claiming semantic recall", () => {
+  const rows = [plan("checkpoint-delta"), settled(), plan("retained-delta", {
+    turn_fingerprint: turn2, base_revision_fingerprint: head, head_revision_fingerprint: "9".repeat(24), transfer_estimate: 50,
+  })];
+  const r = summarizeContextContinuity({ events: rows, atMs: 5000, scope });
+  expect(r.turns[1].plans[0].retentionLink).toBe("verified_local_link");
+  expect(r.turns[1].plans[0].transferTokenEstimate).toBe(50);
+  expect(r.semanticRecall).toBe("not_evaluated"); expect(r.tokenAccounting).toBe("local_estimates_only");
+  const missing = summarizeContextContinuity({ events: [rows[0]!, rows[2]!], atMs: 5000 });
+  expect(missing.turns[1].plans[0].retentionLink).toBe("incomplete_evidence");
+  const changed = summarizeContextContinuity({ events: [rows[0]!, rows[1]!, plan("retained-delta", {
+    turn_fingerprint: turn2, base_revision_fingerprint: head, document_generation: 2,
+  })], atMs: 5000 });
+  expect(changed.turns[1].plans[0].retentionLink).toBe("unmatched_local_link");
+});
+
+test("early checkpoint and reconnect transport evidence join through an unambiguous request only", () => {
+  const early = event("native_visible_prefix_checkpoint_started", { request_fingerprint: request, source_bytes: 1098833, fragment_count: 5 });
+  delete (early as any).scope_fingerprint; delete (early as any).turn_fingerprint;
+  const rows = [early, event("native_response_observer_started", { request_fingerprint: request }),
+    event("http_transport_closed", { request_fingerprint: request, last_socket_write_age_ms: 300006, socket_write_count: 6 }),
+    event("native_turn_retired")];
+  const report = summarizeContextContinuity({ events: rows, atMs: 5000, scope });
+  expect(report.turns[0].checkpoint.sourceBytes).toBe(1098833);
+  expect(report.turns[0].disconnects[0].idleSinceLocalWriteMs).toBe(300006);
+  expect(report.turns[0].outcome).toBe("retired_without_observed_final");
+  const ambiguous = summarizeContextContinuity({ events: [...rows, event("native_response_observer_started", {
+    request_fingerprint: request, scope_fingerprint: "a".repeat(24), turn_fingerprint: turn2,
+  })], atMs: 5000, scope });
+  expect(ambiguous.evidenceLimits.ambiguousRequests).toBe(1);
+  expect(ambiguous.turns[0].checkpoint.sourceBytes).toBeUndefined();
+});
+
+test("reports omit unclassified private payloads, exclude test origins and expose clipping", () => {
+  const row = plan("retained-delta", { prompt: "PRIVATE_TEXT", surface_fingerprint: "PRIVATE_ID", context_mode: "PRIVATE_MODE" });
+  const report = summarizeContextContinuity({ events: [row, event("web_turn_plan", { environment: "test", turn_fingerprint: turn2 })], atMs: 5000 });
+  expect(report.turns).toHaveLength(1); expect(JSON.stringify(report)).not.toContain("PRIVATE");
+  expect(report.turns[0].plans[0].mode).toBe("unknown");
+  expect(summarizeContextContinuity({ events: Array.from({ length: 4097 }, () => event("unrelated")), atMs: 100000 }).evidenceLimits.eventLimitReached).toBe(true);
+  expect(() => summarizeContextContinuity({ events: [], atMs: 5000, scope: "private account" })).toThrow();
+});
