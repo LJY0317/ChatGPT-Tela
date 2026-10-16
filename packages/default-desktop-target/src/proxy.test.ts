@@ -10,6 +10,32 @@ function openSocket(url: string): Promise<WebSocket> {
   });
 }
 
+test("official Remote replies pass unchanged and failures remain visible after history diagnostic saturation", async () => {
+  const events: { stage: string; fields: any }[] = [];
+  const reply = '{"id":"remote-private-id","result":{"status":"errored","installationId":"private-enrollment"}}';
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0,
+    fetch(r, s) { return s.upgrade(r) ? undefined : new Response(null, { status: 400 }); },
+    websocket: { message(socket, raw) {
+      const request = JSON.parse(String(raw));
+      socket.send(request.method === "remoteControl/enable" ? reply : JSON.stringify({ id: request.id, result: { thread: { turns: [] } } }));
+    } },
+  });
+  const proxy = await startDefaultDesktopAppServerProxy({ upstreamEndpoint: `ws://127.0.0.1:${upstream.port}/`,
+    route: createDefaultDesktopResponsesRoute({ baseUrl: "http://127.0.0.1:18741/v1", envKey: "TEST_KEY", credential: "s".repeat(48) }),
+    onDiagnostic: (stage, fields) => events.push({ stage, fields }),
+  });
+  const client = await openSocket(proxy.endpoint);
+  const exchange = (request: unknown) => { const response = new Promise<string>(resolve => client.addEventListener("message", e => resolve(String(e.data)), { once: true })); client.send(JSON.stringify(request)); return response; };
+  try {
+    for (let i = 0; i < 70; i++) await exchange({ id: i, method: "thread/read", params: { threadId: "private-history", includeTurns: false } });
+    expect(await exchange({ id: "remote-private-id", method: "remoteControl/enable", params: {} })).toBe(reply);
+    expect(events.filter(e => e.stage === "desktop_remote_control_failed")).toEqual([
+      { stage: "desktop_remote_control_failed", fields: expect.objectContaining({ kind: "enable", status: "errored" }) },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("private");
+  } finally { client.close(); await proxy.close(); upstream.stop(true); }
+});
+
 describe("default Desktop route-preserving app-server proxy", () => {
   test("a reused JSON-RPC turn/start id cannot bind a delayed old engine ACK to a new Legacy thread", async () => {
     const diagnostics: Array<{ stage: string; reason: unknown }> = [];

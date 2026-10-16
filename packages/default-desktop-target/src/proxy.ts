@@ -5,6 +5,7 @@ import {
   type NativeIngressPendingMedia, type DiagnosticScalar,
 } from "@chatgpt-tela/core";
 import { once } from "node:events";
+import { remoteControlDiagnostics } from "./remote-control-diagnostics";
 import {
   WebSocket,
   WebSocketServer,
@@ -195,13 +196,17 @@ export async function startDefaultDesktopAppServerProxy(input: {
     let transportFailureRecorded = false;
     const diagnostic = (stage: string, fields: Readonly<Record<string, DiagnosticScalar>> = {}) => {
       // Bounded per-connection logging, no timer/watcher; never change transport behavior.
-      if (++diagnosticCount > 64 && stage !== "desktop_catalog_connection_closed" && stage !== "desktop_transport_failed") return;
+      if (++diagnosticCount > 64 && stage !== "desktop_catalog_connection_closed" && stage !== "desktop_transport_failed"
+        && stage !== "desktop_remote_control_status" && stage !== "desktop_remote_control_failed") return;
       try {
         const structural = { connection_fingerprint: connectionFingerprint, kind: clientKind, ...fields };
         if (input.onDiagnostic) input.onDiagnostic(stage, structural);
         else emitDiagnosticEvent("chatgpt_tela_codex", stage, structural);
       } catch { /* A failed optional sink cannot block Native traffic. */ }
     };
+    // Remote has its own small transition budget so earlier history traffic cannot hide its failure.
+    const remote = remoteControlDiagnostics(fields => diagnostic(
+      fields.status === "errored" || fields.status === "rpc_error" ? "desktop_remote_control_failed" : "desktop_remote_control_status", fields));
     const transportFailure = (direction: "client_to_server" | "server_to_client", category: string, closeCode: number) => {
       if (state.closed || closing || transportFailureRecorded) return;
       transportFailureRecorded = true;
@@ -222,6 +227,7 @@ export async function startDefaultDesktopAppServerProxy(input: {
         upstream_received_bytes: upstreamReceivedBytes, client_written_count: clientWrittenCount,
         client_written_bytes: clientWrittenBytes, delivery: "socket_write_only" });
       pendingCatalog.clear(); pendingModelLists.clear(); pendingHistory.clear();
+      remote.close();
       pendingMedia.clear();
       pendingLiveTurns.clear(); seenLiveRpcIds.clear();
       finishedLiveTurns.clear(); startedLiveTurns.clear();
@@ -262,6 +268,7 @@ export async function startDefaultDesktopAppServerProxy(input: {
       // acknowledged turn identity. No bytes enter normal diagnostics or a file.
       try {
         const parsed = JSON.parse(message);
+        remote.response(parsed);
         const key = jsonRpcIdKey(parsed?.id);
         if (key) {
           const pendingLive = pendingLiveTurns.get(key);
@@ -421,6 +428,7 @@ export async function startDefaultDesktopAppServerProxy(input: {
       try {
         let handshake: any;
         try { handshake = JSON.parse(message); } catch { /* Preserve unrelated upstream bytes. */ }
+        remote.request(handshake);
         if (handshake?.method === "initialize") {
           permissionProfiles = handshake.params?.capabilities?.experimentalApi === true;
           clientKind = handshake.params?.clientInfo?.name === "chatgpt-tela" ? "tela_client" : "external_client";

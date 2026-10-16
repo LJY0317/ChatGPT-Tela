@@ -194,6 +194,17 @@ conflict and partial-write guarantees. Keep DevSpace available until replacement
 
 ### 4. Complete product lifecycle and reduce integration debt
 
+**Required: reconcile Native backend ownership across parent loss.** Normal shutdown alone does not
+cover a crashed or replaced owner. Retain bounded durable process-start and Native-home ownership proof
+until the exact backend has exited; reconcile it before admitting a replacement for the same home.
+Use the official managed lifecycle and preserve active work. If ownership or termination is uncertain,
+stop with an actionable checkpoint rather than spawn another owner, clear a lock or send arbitrary signals.
+Acceptance must include parent disappearance, interrupted upgrade, PID reuse, concurrent starts and
+remote enrollment exclusivity. Remote registration and chat writer ownership are separate checks.
+Service-to-profile supervision already requests normal teardown on lease loss. Durable backend
+reconciliation after loss of the owning runtime is still missing; passive remote status diagnostics
+do not satisfy this gate.
+
 **Planned: automatic menu-bar replacement during maintenance.** The independently owned updater must
 request normal termination from the exact old menu-bar instance, wait for its exit and singleton-lock
 release, then launch and verify the menu bar from the newly verified installed payload. Include this
