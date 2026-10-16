@@ -1021,11 +1021,14 @@ mapping on the same owned surface. Missing frames remain pending within the obse
 route/document changes require renewed ownership proof, never an implicit resend.
 
 Payload extraction must distinguish author content from wrapper decoration through an evidenced
-structural contract. The current adapter supports one payload root or one equal-text containment
-chain. Unequal nested roots remain unsupported: do not assume the inner or outer candidate is correct,
-strip arbitrary text, or weaken validation until it passes. Before extending this contract, capture
-bounded content-free structural evidence and reproduce the observed shape in a sanitized fixture.
-Expected-payload comparison is useful evidence only within the proven causal message boundary.
+structural contract. The adapter supports one root or one equal-text containment chain. Unequal
+endpoints of one chain expose bounded alternative fingerprints without selecting an author root.
+The shared identity resolver accepts an alternative only with a logical anchor and exactly one
+full expected-payload match, inside the caller's proven causal message boundary. A primary
+conflicting payload takes precedence; siblings, branches, missing anchors and unmatched alternatives
+remain unproven. This is independent of which endpoint contains the expected author text. Do not
+strip arbitrary text, use a substring or guess an intermediate candidate. Extend structural support
+only with bounded evidence and sanitized fixtures, never per-UI-version fallback branches.
 
 Cancellation revokes further commit/tool authority; it does not assert remote termination or undo
 completed effects. An edited resend starts from the new canonical ancestry after the old owner's
@@ -1053,8 +1056,10 @@ Implementation sequence and acceptance gates:
    Verify useful final delivery in the affected installed profile separately from fixture success.
 
 These are design/acceptance requirements, not a claim that reconciliation or every extraction shape
-is implemented. Current known gap: unequal nested payload candidates and disappearance before acceptance;
-the installed equal-wrapper repair does not resolve it. Token-cost gates live in
+is implemented. Exact anchored endpoint resolution and bounded acceptance transitions are implemented;
+unknown endpoints still fail closed. The earlier incident did not record endpoint matches, so its
+successful live recovery remains unverified. No read-only durable post-timeout reconciliation was added.
+Token-cost gates live in
 `docs/token-efficiency.md`; adapter changes must preserve those independent gates.
 
 ## Browser host and Codex launcher

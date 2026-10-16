@@ -22,7 +22,7 @@ test("one equivalent containment chain is the same author payload regardless of 
 
 test("different nested text, sibling duplicates and branching roots cannot supply author proof", () => {
   for (const texts of [["prefix request", "request"], ["request suffix", "request"], [" request", "request"], ["Ａ", "A"]]) {
-    expect(userPayload(bubble(chain(texts)))).toEqual({ reason: "ambiguous_author_root", rootCount: 2,
+    expect(userPayload(bubble(chain(texts)))).toMatchObject({ reason: "ambiguous_author_root", rootCount: 2,
       nestedRoots: true, equivalentRoots: false });
   }
   const candidate = () => ({ get textContent(): string { throw Error("must not read separate candidates"); }, contains: () => false });

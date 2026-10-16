@@ -1,3 +1,4 @@
+import { authorFingerprint } from "./turn-ownership";
 import { createHash } from "node:crypto";
 import { BROWSER_PAGE_AUTOMATION, type BrowserPageAutomation, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
@@ -282,7 +283,7 @@ export async function recoverAndDeleteSyntheticSavedChat(
       sawPersonalContent = true;
       break;
     }
-    if (observed.url === target && user.length === 1 && user[0]?.contentFingerprint === digest) {
+    if (observed.url === target && user.length === 1 && authorFingerprint(user[0], digest) === digest) {
       verified = true;
       break;
     }

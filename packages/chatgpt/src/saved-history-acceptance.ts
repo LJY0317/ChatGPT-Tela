@@ -1,3 +1,4 @@
+import { authorFingerprint } from "./turn-ownership";
 import { createHash, randomBytes } from "node:crypto";
 import { BROWSER_PAGE_AUTOMATION, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
@@ -193,7 +194,7 @@ export async function exerciseSavedChatCreateAndDelete(
     const userTurns = seen.turns.filter(t => t.role === "user");
     if (userTurns.length > 1) throw new Error("Unexpected extra user turn after test send");
     const path = savedChatRoute(seen.url);
-    if (path && userTurns.length === 1 && userTurns[0]!.contentFingerprint === markerDigest) {
+    if (path && userTurns.length === 1 && authorFingerprint(userTurns[0], markerDigest) === markerDigest) {
       if (historyHashes.includes(createHash("sha256").update(baselineSalt + path).digest("hex"))) {
         throw new Error("New synthetic test route was present before the send");
       }

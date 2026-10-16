@@ -2,6 +2,20 @@ import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import type { ChatGptSurfaceSnapshot, ChatGptTurnObservation } from "./surface";
 import { isChatGptProvisionalConversationUrl } from "./session";
 
+/** Exact expected text resolves alternatives only inside a unique logical user boundary.
+ * Callers must still prove causal ownership, route and uniqueness; hashes alone grant none.
+ */
+export function authorFingerprint(turn: ChatGptTurnObservation | undefined, expected: string): string | undefined {
+  if (!turn || turn.role !== "user") return undefined;
+  if (turn.contentFingerprint !== undefined) return turn.contentFingerprint;
+  const roots = turn.userPayloadStructure, candidates = turn.candidateFingerprints;
+  return turn.lineageAnchor && turn.userPayloadReason === "ambiguous_author_root"
+    && roots?.nestedRoots === true && roots.equivalentRoots === false
+    && Number.isSafeInteger(roots.rootCount) && roots.rootCount >= 2 && roots.rootCount <= 64
+    && candidates?.length === 2 && candidates[0] !== candidates[1]
+    && candidates.filter(value => value === expected).length === 1 ? expected : undefined;
+}
+
 export interface TurnOwnership {
   userTurnKey: string;
   readonly acceptedUserFingerprint: string;
@@ -39,8 +53,8 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
   const route = new URL(snapshot.url).origin + new URL(snapshot.url).pathname;
   const users = snapshot.turns.filter(item => item.role === "user" && item.key === tracked.userTurnKey);
   const current = users[0];
-  const payloadState = !current ? "unmounted" : current.contentFingerprint === undefined ? "unavailable"
-    : current.contentFingerprint === tracked.acceptedUserFingerprint ? "matching" : "changed";
+  const payloadState = !current ? "unmounted" : authorFingerprint(current, tracked.acceptedUserFingerprint) === undefined ? "unavailable"
+    : authorFingerprint(current, tracked.acceptedUserFingerprint) === tracked.acceptedUserFingerprint ? "matching" : "changed";
   const anchorState = !current?.lineageAnchor || !tracked.acceptedLineageAnchor ? "unavailable"
     : current.lineageAnchor === tracked.acceptedLineageAnchor ? "matching" : "changed";
   const proofReason = current?.userPayloadReason;
@@ -56,7 +70,7 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
       contract_version: 1, payload_state: payloadState, anchor_state: anchorState,
       accepted_key_count: users.length, route_matches: route === tracked.conversationRoute,
       reason_class: reasonClass,
-      author_root_available: current?.contentFingerprint !== undefined, witness_count: count,
+      author_root_available: authorFingerprint(current, tracked.acceptedUserFingerprint) !== undefined, witness_count: count,
     });
     else if (count === 65) emitDiagnosticEvent("chatgpt_tela_work", "web_turn_ownership_budget_reached", { witness_count: 64 });
   }
@@ -67,7 +81,7 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
     throw new Error("ChatGPT accepted user identity changed during the active Web turn");
   }
   const accepted = snapshot.turns.filter(item => item.role === "user"
-    && item.contentFingerprint === tracked.acceptedUserFingerprint);
+    && authorFingerprint(item, tracked.acceptedUserFingerprint) === tracked.acceptedUserFingerprint);
   // Pin the first canonical candidate without committing it. A second navigation,
   // including back to the provisional route, cannot borrow this pending proof.
   if (tracked.pendingConversationRoute && route !== tracked.pendingConversationRoute) {
@@ -158,12 +172,12 @@ export function resolveAssistantLineage(
     });
     throw new Error("ChatGPT opened another user turn during the active Web turn");
   }
-  if (!acceptedUserPresent && newUsers.some(item => item.contentFingerprint !== undefined
-    && item.contentFingerprint !== tracked.acceptedUserFingerprint)) {
+  if (!acceptedUserPresent && newUsers.some(item => authorFingerprint(item, tracked.acceptedUserFingerprint) !== undefined
+    && authorFingerprint(item, tracked.acceptedUserFingerprint) !== tracked.acceptedUserFingerprint)) {
     emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rejected", { reason_class: "foreign_request" });
     throw new Error("ChatGPT renderer request identity conflicts with the accepted request");
   }
-  const rekeyCandidate = newUsers.length === 1 && newUsers[0]!.contentFingerprint === tracked.acceptedUserFingerprint;
+  const rekeyCandidate = newUsers.length === 1 && authorFingerprint(newUsers[0], tracked.acceptedUserFingerprint) === tracked.acceptedUserFingerprint;
   const identityPending = !routeProven || !acceptedUserPresent && !anchored && !rekeyCandidate;
   if (tracked.identityPending !== identityPending) {
     tracked.identityPending = identityPending;
@@ -185,7 +199,7 @@ export function resolveAssistantLineage(
   if (direct.length > 0) {
     const users = snapshot.turns.filter(item => item.role === "user" && item.key === tracked.userTurnKey);
     if (users.length === 0 && anchored) return { assistants: direct, ambiguous: false };
-    if (users.length !== 1 || users[0]!.contentFingerprint !== tracked.acceptedUserFingerprint) {
+    if (users.length !== 1 || authorFingerprint(users[0], tracked.acceptedUserFingerprint) !== tracked.acceptedUserFingerprint) {
       emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rejected", { reason_class: "unproven_parent" });
       throw new Error("ChatGPT assistant parent does not prove the accepted request identity");
     }
@@ -208,11 +222,11 @@ export function resolveAssistantLineage(
   const [nextKey, assistants] = byParent.entries().next().value!;
   const user = snapshot.turns.find(item => item.role === "user" && item.key === nextKey);
   const matchingUsers = snapshot.turns.filter(item => item.role === "user"
-    && item.contentFingerprint === tracked.acceptedUserFingerprint);
-  if (!user || user.contentFingerprint !== tracked.acceptedUserFingerprint || matchingUsers.length !== 1) {
+    && authorFingerprint(item, tracked.acceptedUserFingerprint) === tracked.acceptedUserFingerprint);
+  if (!user || authorFingerprint(user, tracked.acceptedUserFingerprint) !== tracked.acceptedUserFingerprint || matchingUsers.length !== 1) {
     emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rejected", {
       reason_class: "unproven_rekey", parent_user_present: user !== undefined,
-      parent_fingerprint_matches: user?.contentFingerprint === tracked.acceptedUserFingerprint,
+      parent_fingerprint_matches: authorFingerprint(user, tracked.acceptedUserFingerprint) === tracked.acceptedUserFingerprint,
       matching_user_count: matchingUsers.length,
       user_count: snapshot.turns.filter(item => item.role === "user").length,
       prior_user_present: snapshot.turns.some(item => item.role === "user" && item.key === tracked.userTurnKey),

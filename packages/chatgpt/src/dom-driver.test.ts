@@ -13,6 +13,7 @@ import {
   CHATGPT_CURRENT_COMPOSER_SELECTOR,
   ChatGptDomSurfaceDriver,
 } from "./dom-driver";
+import { authorFingerprint } from "./turn-ownership";
 import { ChatGptSemanticProvider } from "./semantic-provider";
 
 type RawSnapshot = {
@@ -309,13 +310,14 @@ describe("current ChatGPT DOM surface driver", () => {
     expect((await driver.observe()).turns[0]!.contentFingerprint).toBeUndefined();
     expect((await driver.observe()).turns[0]!.userPayloadStructure).toEqual({ rootCount: 2, nestedRoots: false });
   });
-  test("serialized renderer keeps author identity across equivalent nested wrappers and rejects divergent text", async () => {
+  test("serialized renderer separates unequal nested alternatives from proven author identity", async () => {
     const outer = new FixtureElement(), inner = new FixtureElement();
     outer.textContent = inner.textContent = "Full author text\n한글 😀";
     outer.contains = node => node === outer || node === inner;
     const user = new FixtureElement({}, { '[data-search-result-target]': [inner] });
-    const group = new FixtureElement({ 'data-turn-key': 'owned' }, { '[data-user-message-bubble]': [user] });
-    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
+    const anchor = new FixtureElement({ 'data-content-search-turn-key': 'logical-owned' });
+    const group = new FixtureElement({ 'data-turn-key': 'owned' }, { '[data-user-message-bubble]': [user], '[data-content-search-turn-key]': [anchor] });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({ 'data-page-load-id': 'document-owned' }, { '[data-turn-key]': [group] })));
     const original = (await driver.observe()).turns[0]!.contentFingerprint;
     expect(original).toBeDefined();
     user.selectors['[data-search-result-target]'] = [inner, outer];
@@ -325,7 +327,11 @@ describe("current ChatGPT DOM surface driver", () => {
     outer.textContent += " Edit";
     const divergent = (await driver.observe()).turns[0]!;
     expect(divergent.contentFingerprint).toBeUndefined();
-    expect(divergent.userPayloadStructure).toEqual({ rootCount: 2, nestedRoots: true, equivalentRoots: false });
+    expect(divergent.userPayloadStructure).toMatchObject({ rootCount: 2, nestedRoots: true, equivalentRoots: false });
+    expect(divergent.candidateFingerprints).toContain(original!);
+    expect(divergent.candidateFingerprints).toHaveLength(2);
+    expect(authorFingerprint(divergent, original!)).toBe(original!);
+    expect(authorFingerprint(divergent, "foreign-expected")).toBeUndefined();
     outer.textContent = inner.textContent = "Edited author text";
     expect((await driver.observe()).turns[0]!.contentFingerprint).not.toBe(original);
   });

@@ -2388,23 +2388,26 @@ test("a visible final without author proof cannot leave submit waiting forever o
       { key: "user", role: "user", userPayloadReason: "ambiguous_author_root",
         userPayloadStructure: { rootCount: 2, nestedRoots: true } },
       { key: "assistant", role: "assistant", parentUserTurnKey: "user", phase: "complete", text: "Visible final" },
-    ] });
+    ] }, { ...driver.current, revision: "author-disappeared", turns: [] });
     await expect(pending).rejects.toMatchObject({ code: "tela_web_submission_unproven",
       reason: "ambiguous_author_root", retryable: false });
     expect(driver.activated).toHaveLength(1);
   } finally { await surface.host.close(); }
 }, 35000);
 
-test("canonical nested author proof accepts one send, delivers its own final, and retires the completed handle", async () => {
+test.each(["equivalent", "expected-inner", "expected-outer"] as const)("nested author proof %s accepts one send, delivers its own final, and retires the completed handle", async mode => {
   const driver = new FixtureDriver(fixture("ready-new-chat"));
   const surface = await leaseFor(driver); const provider = new ChatGptSemanticProvider();
   try {
     const pending = provider.submitTurn(surface.lease, request());
     while (!driver.activated.length) await Promise.resolve();
     const accepted = acceptedSnapshot(driver);
-    driver.queued.push({ ...accepted, turns: accepted.turns.map(turn => ({ ...turn,
-      userPayloadReason: "author_payload", userPayloadStructure: { rootCount: 2, nestedRoots: true, equivalentRoots: true },
-    })) });
+    driver.queued.push({ ...accepted, turns: accepted.turns.map(turn => { const { contentFingerprint, ...withoutPayload } = turn; return ({ ...withoutPayload,
+      lineageAnchor: "owned-document-turn",
+      ...(mode === "equivalent" ? { contentFingerprint: contentFingerprint!, userPayloadReason: "author_payload", userPayloadStructure: { rootCount: 2, nestedRoots: true, equivalentRoots: true } }
+        : { candidateFingerprints: mode === "expected-inner" ? [hash("wrapper decoration"), turn.contentFingerprint!] : [turn.contentFingerprint!, hash("wrapper decoration")],
+          userPayloadReason: "ambiguous_author_root", userPayloadStructure: { rootCount: 2, nestedRoots: true, equivalentRoots: false } }),
+    }); }) });
     const submitted = await pending;
     expect(submitted.state).toBe("proven");
     if (submitted.state !== "proven") throw Error("fixture did not accept canonical author");

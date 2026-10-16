@@ -38,9 +38,11 @@ export interface ChatGptTurnObservation {
   readonly lineageAnchor?: string;
   /** Author payload only, never whole-bubble innerText; absent means proof unavailable. */
   readonly contentFingerprint?: string;
+  /** Bounded unequal-chain endpoints; alternatives only, never standalone author proof. */
+  readonly candidateFingerprints?: readonly string[];
   readonly userPayloadReason?: string;
   /** Content-free adapter witness, count saturated at 65; never acceptance authority. */
-  readonly userPayloadStructure?: { readonly rootCount: number; readonly nestedRoots?: boolean; readonly equivalentRoots?: boolean };
+  readonly userPayloadStructure?: { readonly rootCount: number; readonly nestedRoots?: boolean; readonly equivalentRoots?: boolean; readonly outerLength?: number; readonly innerLength?: number };
   readonly bodyProof?: { readonly version: 1; readonly digest?: string; readonly reason?: string };
   /** Opt-in bounded diagnostic witness; never authority or public progress. */
   readonly privateBodyEvidence?: { readonly chunks: readonly string[]; readonly complete: boolean };

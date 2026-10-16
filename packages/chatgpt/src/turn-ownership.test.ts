@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { resolveAssistantLineage, type TurnOwnership } from "./turn-ownership";
+import { authorFingerprint, resolveAssistantLineage, type TurnOwnership } from "./turn-ownership";
 import type { ChatGptSurfaceSnapshot, ChatGptTurnObservation } from "./surface";
 
 const user: ChatGptTurnObservation = { role: "user", key: "user:owned", contentFingerprint: "author-payload", lineageAnchor: "document/owned" };
@@ -9,6 +9,37 @@ const { lineageAnchor: _answerAnchor, ...unanchoredAnswer } = answer;
 const owner = (): TurnOwnership => ({ userTurnKey: user.key, acceptedUserFingerprint: user.contentFingerprint!, acceptedLineageAnchor: user.lineageAnchor!,
   conversationRoute: "https://chatgpt.com/c/owned", baselineUserLineageKeys: new Set() });
 const snapshot = (turns: readonly ChatGptTurnObservation[], url = "https://chatgpt.com/c/owned"): ChatGptSurfaceSnapshot => ({ revision: "fixture", url, turns, composers: [], sendControls: [] });
+
+function alternatives(values: string[]): ChatGptTurnObservation {
+  return { ...unavailableUser, userPayloadReason: "ambiguous_author_root", candidateFingerprints: values,
+    userPayloadStructure: { rootCount: 2, nestedRoots: true, equivalentRoots: false } };
+}
+test("exact expected endpoint plus causal identity survives wrapper decoration and endpoint order", () => {
+  for (const values of [["decoration", "author-payload"], ["author-payload", "decoration"]]) {
+    const observed = alternatives(values);
+    expect(authorFingerprint(observed, "author-payload")).toBe("author-payload");
+    const tracked = owner();
+    expect(resolveAssistantLineage(snapshot([observed, answer]), tracked).assistants).toEqual([answer]);
+    expect(resolveAssistantLineage(snapshot([unavailableUser, answer]), tracked).identityPending).toBe(true);
+    expect(resolveAssistantLineage(snapshot([observed, answer]), tracked).assistants).toEqual([answer]);
+    expect(() => resolveAssistantLineage(snapshot([observed, { ...user, key: "competing" }, answer]), tracked)).toThrow();
+  }
+});
+test("alternatives never grant proof without exact expected content and logical chain evidence", () => {
+  const valid = alternatives(["decoration", "author-payload"]);
+  const { lineageAnchor: _anchor, ...withoutAnchor } = valid;
+  for (const invalid of [
+    withoutAnchor, { ...valid, role: "assistant" as const },
+    { ...valid, candidateFingerprints: ["prefix-author-payload", "other"] },
+    { ...valid, candidateFingerprints: ["author-payload", "author-payload"] },
+    { ...valid, candidateFingerprints: ["author-payload"] },
+    { ...valid, userPayloadStructure: { rootCount: 2, nestedRoots: false, equivalentRoots: false } },
+    { ...valid, userPayloadStructure: { rootCount: 65, nestedRoots: true, equivalentRoots: false } },
+  ]) expect(authorFingerprint(invalid, "author-payload")).toBeUndefined();
+  expect(authorFingerprint(valid, "edited-author-payload")).toBeUndefined();
+  expect(() => resolveAssistantLineage(snapshot([{ ...valid, lineageAnchor: "foreign-document" }, answer]), owner())).toThrow();
+  expect(() => resolveAssistantLineage(snapshot([valid, answer], "https://chatgpt.com/c/foreign"), owner())).toThrow();
+});
 
 test("unavailable author projection blocks delivery and recovers without retiring ownership", () => {
   const tracked = owner();

@@ -1,5 +1,5 @@
 import { WebSubmissionUnproven, type WebSubmissionProofReason } from "@chatgpt-tela/core";
-import { assistantFor, baselineUserLineageKeys, resolveAssistantLineage, type TurnOwnership, type AssistantLineageResolution } from "./turn-ownership";
+import { authorFingerprint, assistantFor, baselineUserLineageKeys, resolveAssistantLineage, type TurnOwnership, type AssistantLineageResolution } from "./turn-ownership";
 import { createHash } from "node:crypto";
 import {
   BROWSER_PAGE_AUTOMATION,
@@ -149,6 +149,8 @@ function acceptanceStructure(turn: ChatGptTurnObservation | undefined) {
   return witness && Number.isSafeInteger(witness.rootCount) && witness.rootCount >= 0 ? {
     author_root_count: Math.min(witness.rootCount, 65),
     ...(typeof witness.nestedRoots === "boolean" ? { author_roots_nested: witness.nestedRoots } : {}),
+    ...(Number.isSafeInteger(witness.outerLength) && witness.outerLength! >= 0 && witness.outerLength! <= 1_048_576 ? { author_outer_length: witness.outerLength! } : {}),
+    ...(Number.isSafeInteger(witness.innerLength) && witness.innerLength! >= 0 && witness.innerLength! <= 1_048_576 ? { author_inner_length: witness.innerLength! } : {}),
     ...(typeof witness.equivalentRoots === "boolean" ? { author_roots_equivalent: witness.equivalentRoots } : {}),
   } : {};
 }
@@ -1387,12 +1389,26 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const acceptance = timeoutSignal(signal, CHATGPT_READINESS_TIMEOUT_MS);
     let snapshot = filled;
     let acceptancePendingRecorded = false;
+    let firstProofReason: WebSubmissionProofReason | undefined;
+    let lastWitness = "", witnessCount = 0;
     try {
       snapshot = await driver.waitForChange(filled.revision, acceptance.combined);
       for (;;) {
         const newUserTurns = snapshot.turns.filter(turn => (
           turn.role === "user" && !baselineTurnKeys.has(turn.key)
         ));
+        const candidate = newUserTurns.length === 1 ? newUserTurns[0] : undefined;
+        const reason = candidate ? acceptanceProofReason(candidate.userPayloadReason) : "new_author_unavailable";
+        const fields = { reason_class: reason, user_count: newUserTurns.length,
+          logical_anchor_present: candidate?.lineageAnchor !== undefined,
+          expected_payload_matches: authorFingerprint(candidate, expectedFingerprint) === expectedFingerprint,
+          route_matches: new URL(snapshot.url).origin + new URL(snapshot.url).pathname === new URL(filled.url).origin + new URL(filled.url).pathname,
+          ...acceptanceStructure(candidate) };
+        const witness = JSON.stringify(fields);
+        if (lastWitness !== witness && witnessCount < 16) {
+          lastWitness = witness; witnessCount++;
+          emitDiagnosticEvent("chatgpt_tela_work", "web_turn_acceptance_observed", { ...fields, witness_count: witnessCount });
+        }
         if (newUserTurns.length > 1) {
           return {
             state: "ambiguous",
@@ -1405,8 +1421,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             evidence: evidence("multiple new user turns appeared after one exact send activation"),
           };
         }
-        if (newUserTurns.length === 1 && newUserTurns[0]!.contentFingerprint !== undefined) {
+        if (newUserTurns.length === 1 && authorFingerprint(newUserTurns[0], expectedFingerprint) !== undefined) {
           const userTurn = newUserTurns[0]!;
+          const acceptedFingerprint = authorFingerprint(userTurn, expectedFingerprint)!;
           const handle = Object.freeze({
             nativeTaskId: request.nativeTaskId,
             nativeTurnId: request.nativeTurnId,
@@ -1420,7 +1437,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             surfaceLeaseId: surface.leaseId,
             retainedContext: request.physicalContext.mode === "retained-delta",
             userTurnKey: userTurn.key,
-            acceptedUserFingerprint: userTurn.contentFingerprint!,
+            acceptedUserFingerprint: acceptedFingerprint,
             ...(userTurn.lineageAnchor ? { acceptedLineageAnchor: userTurn.lineageAnchor } : {}),
             conversationRoute: new URL(snapshot.url).origin + new URL(snapshot.url).pathname,
             baselineUserLineageKeys: preSubmitUserLineageKeys,
@@ -1434,7 +1451,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
               : /^\/c\/[^/]+$/.test(acceptedRoute.pathname) ? "conversation" : "other",
             user_count: snapshot.turns.filter(turn => turn.role === "user").length,
             baseline_lineage_count: preSubmitUserLineageKeys.size,
-            accepted_fingerprint_matches: userTurn.contentFingerprint === expectedFingerprint,
+            accepted_fingerprint_matches: acceptedFingerprint === expectedFingerprint,
             logical_anchor_present: userTurn.lineageAnchor !== undefined,
             ...acceptanceStructure(userTurn),
           });
@@ -1442,7 +1459,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             state: "proven",
             value: handle,
             evidence: evidence(
-              userTurn.contentFingerprint === expectedFingerprint
+              acceptedFingerprint === expectedFingerprint
                 ? "one new stable user turn acknowledges the exact submitted payload fingerprint"
                 : "one new stable user turn acknowledges the exact pre-send composer readback and send activation",
             ),
@@ -1450,6 +1467,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         }
         if (newUserTurns.length === 1 && !acceptancePendingRecorded) {
           acceptancePendingRecorded = true;
+          firstProofReason = acceptanceProofReason(newUserTurns[0]!.userPayloadReason);
           emitDiagnosticEvent("chatgpt_tela_work", "web_turn_acceptance_pending", {
             reason_class: acceptanceProofReason(newUserTurns[0]!.userPayloadReason), user_count: 1,
             ...acceptanceStructure(newUserTurns[0]),
@@ -1463,12 +1481,14 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       const users = snapshot.turns.filter(turn => turn.role === "user" && !baselineTurnKeys.has(turn.key));
       emitDiagnosticEvent("chatgpt_tela_work", "web_turn_acceptance_timeout", {
         reason_class: users.length === 1 ? acceptanceProofReason(users[0]!.userPayloadReason) : "new_author_unavailable",
+        ...(firstProofReason ? { first_reason_class: firstProofReason } : {}),
+        witness_count: witnessCount,
         user_count: users.length, accepted: false, remote_terminal_proven: false,
         ...acceptanceStructure(users.length === 1 ? users[0] : undefined),
         assistant_complete_observed: snapshot.turns.some(turn => turn.role === "assistant" && turn.phase === "complete"),
       });
-      throw new WebSubmissionUnproven(users.length === 1
-        ? acceptanceProofReason(users[0]!.userPayloadReason) : "new_author_unavailable");
+      throw new WebSubmissionUnproven(firstProofReason ?? (users.length === 1
+        ? acceptanceProofReason(users[0]!.userPayloadReason) : "new_author_unavailable"));
     }
   }
 

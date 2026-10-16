@@ -9,10 +9,15 @@ replacement, route/document continuity and monotonic stage durations. Comparison
 never export candidate text, HTML, raw anchors, URLs or message bodies. Limit candidates, transitions
 and retention; coalesce identical observations and capture on failure rather than idle polling.
 
-These fields are a design requirement, not all current emitted fields. Existing root count/nesting/
-equivalence evidence distinguishes equal wrappers from unsupported unequal text, but cannot explain
-which structural branch added text or why a subsequent frame lost the user candidate. Add sanitized
-fixture coverage before changing payload selection. Diagnostic observations never grant acceptance,
+`web_turn_acceptance_observed` now coalesces at most16 structural transitions per submission: reason,
+new-user count, logical-anchor presence, expected-payload match, initial-route continuity, root
+count/nesting/equivalence and unequal endpoint lengths. Timeout retains the first author-proof
+failure separately from the last observation; the public nonretryable failure preserves that first
+reason even if the author later disappears. Candidate fingerprints and raw identifiers are not logged.
+Document/key transition history is not yet a complete diagnostic field set; existing ongoing
+ownership observations remain separate. These records cannot explain which DOM branch added text
+or prove remote termination. Add sanitized fixture coverage before extending payload selection.
+Diagnostic observations never grant acceptance,
 release, replay, tool or delivery authority. See the change-resilient design in `docs/architecture.md`.
 
 ## Cancellation, edited requests and steering
