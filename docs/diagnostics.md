@@ -570,6 +570,24 @@ A successful socket write does not prove frontend receipt, filtering or renderin
 
 `inspection_window_action` distinguishes reveal, hide, close-to-hide and owned release, including document generation/live state. `inspection_mode_changed` records mode changes; `inspection_input_observed` records at most64 activation categories per surface with owned-input/mode flags, never keys, coordinates or target text. These observations establish timing and input source, not approval acceptance or causality. Existing structural incident limits/private capture consent and retention apply; no sampler or model request is added.
 
+### Hidden-window approval preparation
+
+Approval preparation records `approval_preparation_started`, `approval_preparation_target` and
+`approval_preparation_settled` or `approval_preparation_failed`. These contain duration, consent delay,
+allowlisted outcome/reason and disposable identity fingerprints, never card text or coordinates.
+A host-owned deadline bounds preparation to five seconds plus the configured consent delay, including
+renderer evaluations that ignore cancellation. Timeout or owner cancellation cannot dispatch input;
+late preparation completion is discarded. The timer and abort listeners are removed on settlement.
+
+Instant scrolling and synchronous geometry/hit testing avoid animation-frame waits, which may pause
+in hidden windows. Preparation revalidates the original card and revision after scrolling; changed,
+disabled, ambiguous, occluded or offscreen targets remain unapproved. Background throttling stays at
+its default; no continuous rendering, sampler or model request is introduced.
+
+`approval_dispatch_started` marks the separate input boundary. Its outcome remains one-shot: an
+uncertain dispatch is never automatically retried against the same card. Preparation completion or
+`approval_activated` alone does not prove input receipt, card clearance, tool execution or task success.
+
 ### Native response versus task lifetime
 
 `native_execution_failed` records the first bounded execution failure class and phase. `native_outcome_committed` records provider tool/final delivery, not official Native task termination (`native_terminal_observed=false`). `native_replay_rejected` carries pseudonymous scope/turn correlations and `current_authority_proven=false`; it is a negative guard, not a current-task proof. Match these events before attributing a409 to stale new-turn identity. A model response may complete while the official engine still has accepted steering input. These events do not relax retirement or authorize automatic replay.
