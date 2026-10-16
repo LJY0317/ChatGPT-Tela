@@ -157,6 +157,9 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
       throw new Error("Native visible-prefix checkpoint exhausted its model-stage budget");
     }
     let result: Awaited<ReturnType<NativeRequestCheckpointProducer>>;
+    const stageStarted = Date.now();
+    const stageEvidence = { phase, stage_index: modelStages, stage_fingerprint: sha(identity.key).slice(0, 24) };
+    emitDiagnosticEvent("chatgpt_tela_codex", "native_checkpoint_model_started", stageEvidence);
     try {
       check();
       result = await input.producer({ nativeTaskId: source.threadId,
@@ -164,6 +167,10 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
         ...(input.browserModel ? { browserModel: input.browserModel } : {}) },
       signal ? { signal, onProgress: input.preparation?.onProgress ?? (() => {}) } : undefined);
     } catch (cause) {
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_checkpoint_model_failed", {
+        ...stageEvidence, duration_ms: Math.max(0, Date.now() - stageStarted),
+        reason_class: signal?.aborted ? "owner_cancelled" : "producer_failed", submission_state_proven: false,
+      });
       throw new NativePrefixCheckpointInterrupted(identity, { cause });
     }
     if (result.nativeTaskId !== source.threadId || result.sourceRevisionId !== physical.headRevisionId
@@ -176,7 +183,9 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     try { await input.journal.complete({ ...receipt, claimId: claim.claimId }); }
     catch (cause) { throw new NativePrefixCheckpointInterrupted(identity, { cause }); }
     check();
-    emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_stage_settled", { phase, outcome: "completed" });
+    emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_stage_settled", {
+      ...stageEvidence, outcome: "completed", duration_ms: Math.max(0, Date.now() - stageStarted),
+    });
     return receipt.summary;
   };
   const fragments: { startByte: number; endByte: number; physical: WebPhysicalContext }[] = [];

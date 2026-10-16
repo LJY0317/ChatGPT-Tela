@@ -3,6 +3,38 @@ import { startWebHttpServer } from "./server";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { structuralDiagnosticEvent } from "@chatgpt-tela/core";
+
+test("stream disconnect preserves last local write and cancellation origin without copying payloads", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "tela-http-last-write-"));
+  const file = join(directory, "events.jsonl"), previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  const controller = new AbortController();
+  const payload = "private-stream-payload";
+  const server = await startWebHttpServer({ hostname: "127.0.0.1", maxRequestBodyBytes: 1024,
+    fetch() { return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(payload)); } })); } });
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.port}/private-route`, { signal: controller.signal });
+    const reader = response.body!.getReader(); await reader.read(); controller.abort();
+    const deadline = Date.now() + 1500;
+    let closed: any;
+    while (Date.now() < deadline) {
+      closed = readFileSync(file, "utf8").trim().split("\n").map(l => JSON.parse(l)).find(r => r.stage === "http_transport_closed");
+      if (closed) break; await Bun.sleep(5);
+    }
+    expect(closed).toMatchObject({ socket_write_count: 1, socket_write_bytes: payload.length, delivery: "socket_write_only" });
+    expect(closed.last_socket_write_at_ms).toBeGreaterThan(0);
+    expect(closed.last_socket_write_age_ms).toBeGreaterThanOrEqual(0);
+    const canonical = structuralDiagnosticEvent(closed)!;
+    expect(canonical.close_source).toBe(closed.close_source);
+    expect(canonical.last_socket_write_at_ms).toBe(closed.last_socket_write_at_ms);
+    expect(readFileSync(file, "utf8")).not.toContain("private");
+  } finally {
+    controller.abort(); await server.stop();
+    if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE; else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("client closure before response headers records the transport boundary and preserves peer service", async () => {
   const directory = mkdtempSync(join(tmpdir(), "tela-http-close-evidence-"));

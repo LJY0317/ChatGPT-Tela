@@ -61,7 +61,7 @@ function localRequestUrl(request: IncomingMessage, hostname: string, port: numbe
   return new URL(request.url ?? "/", `http://${host}:${port}/`);
 }
 
-async function writeResponse(response: Response, output: ServerResponse, signal: AbortSignal): Promise<void> {
+async function writeResponse(response: Response, output: ServerResponse, signal: AbortSignal, written?: (bytes: number) => void): Promise<void> {
   output.statusCode = response.status;
   output.statusMessage = response.statusText;
   response.headers.forEach((value, name) => output.setHeader(name, value));
@@ -82,7 +82,9 @@ async function writeResponse(response: Response, output: ServerResponse, signal:
       const value = await reader.read();
       if (signal.aborted || output.destroyed) return;
       if (value.done) break;
-      if (!output.write(Buffer.from(value.value))) await once(output, "drain", { signal });
+      const writable = output.write(Buffer.from(value.value));
+      written?.(value.value.byteLength);
+      if (!writable) await once(output, "drain", { signal });
     }
     output.end();
   } finally {
@@ -117,11 +119,16 @@ export async function startWebHttpServer(input: {
   }, async () => {
     const startedAt = Date.now();
     const origin = diagnosticContext();
+    let writeCount = 0, writeBytes = 0, lastWriteAt = 0;
+    const transportEvidence = () => ({ socket_write_count: writeCount, socket_write_bytes: writeBytes,
+      last_socket_write_at_ms: lastWriteAt, last_socket_write_age_ms: lastWriteAt ? Math.max(0, Date.now() - lastWriteAt) : -1,
+      delivery: "socket_write_only" });
+    const written = (bytes: number) => { writeCount++; writeBytes += bytes; lastWriteAt = Date.now(); };
     emitDiagnosticEvent("chatgpt_tela_http", "http_request_start", {
       method_class: ["GET", "POST", "DELETE", "OPTIONS"].includes(incoming.method ?? "") ? incoming.method!.toLowerCase() : "other",
     });
     outgoing.once("finish", () => withDiagnosticContext(origin, () => emitDiagnosticEvent("chatgpt_tela_http", "http_response_finished", {
-      duration_ms: diagnosticDurationMs(startedAt), status: outgoing.statusCode,
+      duration_ms: diagnosticDurationMs(startedAt), status: outgoing.statusCode, ...transportEvidence(),
     })));
     const controller = new AbortController();
     activeRequests.add(controller);
@@ -130,15 +137,32 @@ export async function startWebHttpServer(input: {
         withDiagnosticContext(origin, () => emitDiagnosticEvent("chatgpt_tela_http", "http_transport_closed", {
           duration_ms: diagnosticDurationMs(startedAt), reason_class: "remote_cancel_or_disconnect",
           close_source: source, headers_sent: outgoing.headersSent, request_complete: incoming.complete,
+          ...transportEvidence(),
+          request_timeout_ms: server.requestTimeout, headers_timeout_ms: server.headersTimeout,
+          socket_timeout_ms: incoming.socket.timeout ?? 0,
         }));
         controller.abort(new Error("HTTP client disconnected"));
       }
     };
     const requestAborted = () => disconnected("request_aborted");
     const responseClosed = () => disconnected("response_closed");
+    const responseError = (error: Error & { code?: string }) => withDiagnosticContext(origin, () =>
+      emitDiagnosticEvent("chatgpt_tela_http", "http_transport_error", {
+        duration_ms: diagnosticDurationMs(startedAt), headers_sent: outgoing.headersSent,
+        reason_class: error.code === "ECONNRESET" ? "connection_reset" : error.code === "EPIPE" ? "broken_pipe"
+          : error.code === "ETIMEDOUT" ? "socket_timeout" : "socket_error", ...transportEvidence(),
+      }));
     incoming.once("aborted", requestAborted);
     outgoing.once("close", responseClosed);
-    const cancelled = () => { if (!outgoing.writableFinished) outgoing.destroy(); };
+    outgoing.once("error", responseError);
+    const cancelled = () => {
+      withDiagnosticContext(origin, () => emitDiagnosticEvent("chatgpt_tela_http", "http_request_observer_aborted", {
+        duration_ms: diagnosticDurationMs(startedAt), headers_sent: outgoing.headersSent,
+        reason_class: controller.signal.reason instanceof Error && controller.signal.reason.message === "HTTP server stopped"
+          ? "server_shutdown" : "remote_cancel_or_disconnect", ...transportEvidence(),
+      }));
+      if (!outgoing.writableFinished) outgoing.destroy();
+    };
     controller.signal.addEventListener("abort", cancelled, { once: true });
     try {
       const contentLength = incoming.headers["content-length"];
@@ -173,9 +197,9 @@ export async function startWebHttpServer(input: {
         afterResponse(callback) { outgoing.once("finish", callback); },
       });
       emitDiagnosticEvent("chatgpt_tela_http", response.status >= 400 ? "http_response_error" : "http_response_ready", { status: response.status, duration_ms: diagnosticDurationMs(startedAt) });
-      await writeResponse(response, outgoing, controller.signal);
+      await writeResponse(response, outgoing, controller.signal, written);
     } catch (error) {
-      emitDiagnosticEvent("chatgpt_tela_http", "http_request_failed", { duration_ms: diagnosticDurationMs(startedAt), network_kind: classifyNetworkFailure(error), abort_observed: controller.signal.aborted });
+      emitDiagnosticEvent("chatgpt_tela_http", "http_request_failed", { duration_ms: diagnosticDurationMs(startedAt), network_kind: classifyNetworkFailure(error), abort_observed: controller.signal.aborted, ...transportEvidence() });
       if (outgoing.destroyed) return;
       if (outgoing.headersSent) {
         outgoing.destroy(error instanceof Error ? error : new Error(String(error)));

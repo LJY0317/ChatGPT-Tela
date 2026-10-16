@@ -40,6 +40,10 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
       if (field === "native-visible-prefix" || field === "native-request-prefix") safe[key] = field;
       continue;
     }
+    if (key === "close_source") {
+      if (field === "request_aborted" || field === "response_closed") safe[key] = field;
+      continue;
+    }
     if (key === "planner_stage") {
       if (isWebContextPlannerStage(field)) safe[key] = field;
       continue;
