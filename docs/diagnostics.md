@@ -789,3 +789,14 @@ but Chat tasks and directly forwarded official Native responses do not acquire a
 or authority merely by sharing logging utilities. Missing receipts on those uninstrumented paths are
 coverage gaps, not failures. Do not import peer service runtimes or invent Native identifiers to make
 an aggregate appear complete.
+
+### Inspection input revocation evidence
+
+`inspection_ownership_revoked` records only a fixed input category (pointer, modifier, navigation,
+editing, activation, other), revision and interaction mode. All external key-downs retain the same
+ownership fence, including modifiers; classification grants no authority. Switching to interact alone
+does not revoke input ownership. `inspection_owner_disposed` identifies subsequent surface release
+and whether external input was previously observed, without claiming that it caused the release.
+Browser lifecycle events carry a disposable surface fingerprint because their creation-time request
+context may differ from the request currently reusing that surface. Existing event caps and retention
+apply; actual keys, shortcut combinations and text are never recorded.

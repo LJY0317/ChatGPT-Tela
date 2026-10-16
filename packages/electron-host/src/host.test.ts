@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { BROWSER_DOCUMENT_LIFETIME, BROWSER_INPUT_OWNERSHIP, BROWSER_PAGE_AUTOMATION, BROWSER_READ_ONLY_PREVIEW } from "@chatgpt-tela/browser-host";
 import type { BrowserWindowConstructorOptions } from "electron";
 import { createElectronBrowserHost, type ElectronBrowserWindowLike } from "./host";
@@ -338,4 +340,31 @@ test("user-hide observation requires a removable exact-window close listener", a
   expect(surface.capability(BROWSER_USER_HIDE)).toBeUndefined();
   await host.release(surface.leaseId);
   await host.close();
+});
+
+test("browser lifecycle and input events retain one private surface identity across request reuse", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "tela-surface-evidence-")), file = join(scratch, "events.jsonl");
+  const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  const host = createElectronBrowserHost({ profileId: "PRIVATE_PROFILE", createWindow: () => new FakeWindow() });
+  try {
+    for (const taskId of ["PRIVATE_FIRST_TASK", "PRIVATE_SECOND_TASK"]) {
+      const surface = await host.acquire({ taskId, epochId: "PRIVATE_EPOCH" });
+      await surface.reveal();
+      await host.release(surface.leaseId);
+    }
+    const raw = readFileSync(file, "utf8"), events = raw.trim().split("\n").map(line => JSON.parse(line));
+    const reveals = events.filter(row => row.stage === "inspection_window_action" && row.action === "reveal");
+    const disposals = events.filter(row => row.stage === "inspection_owner_disposed");
+    expect(reveals).toHaveLength(2); expect(disposals).toHaveLength(2);
+    expect(reveals[0].surface_fingerprint).toMatch(/^[a-f0-9]{24}$/);
+    expect(reveals[1].surface_fingerprint).not.toBe(reveals[0].surface_fingerprint);
+    expect(disposals.map(row => row.surface_fingerprint)).toEqual(reveals.map(row => row.surface_fingerprint));
+    expect(raw).not.toContain("PRIVATE_");
+  } finally {
+    await host.close();
+    if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });

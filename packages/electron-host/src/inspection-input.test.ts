@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { InspectionInput } from "./inspection-input";
 function fixture() {
   const listeners = new Map<string, (...args: any[]) => void>();
@@ -62,4 +65,33 @@ test("host input evidence survives owned input and viewing but fences external i
   const last=f.gate.current();
   f.gate.dispose(); expect(f.gate.current().available).toBe(false);
   expect(last.signal.aborted).toBe(true);
+});
+
+test("external input diagnostics classify keys without changing authority or recording private input", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "tela-input-kind-")), file = join(scratch, "events.jsonl");
+  const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  try {
+    const f = fixture(), original = f.gate.current();
+    f.gate.setInteractive(true);
+    expect(original.signal.aborted).toBe(false); // Reveal/interact alone does not revoke ownership.
+    for (const key of ["Shift", "ArrowDown", "Enter", "PRIVATE_KEY", "x"]) {
+      const before = f.gate.current();
+      f.contents.sendInputEvent({ type: "keyDown", key });
+      expect(before.signal.aborted).toBe(true);
+    }
+    f.contents.sendInputEvent(down);
+    f.gate.dispose(); f.gate.dispose();
+    const raw = readFileSync(file, "utf8"), events = raw.trim().split("\n").map(line => JSON.parse(line));
+    expect(events.filter(row => row.stage === "inspection_ownership_revoked").map(row => row.kind))
+      .toEqual(["modifier", "navigation", "activation", "other", "editing", "pointer"]);
+    expect(events.filter(row => row.stage === "inspection_owner_disposed")).toHaveLength(1);
+    expect(events.find(row => row.stage === "inspection_owner_disposed"))
+      .toMatchObject({ reason_class: "surface_release", external_input_observed: true, input_revision: 6 });
+    expect(raw).not.toMatch(/PRIVATE_KEY|ArrowDown|Shift|Enter/);
+  } finally {
+    if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });

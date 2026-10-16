@@ -92,7 +92,8 @@ export function createElectronBrowserHost(input: {
       throw new Error("Electron window factory returned a destroyed surface");
     }
 
-    const origin = { ...diagnosticContext(), profile_fingerprint: diagnosticFingerprint(input.profileId) };
+    const origin = { ...diagnosticContext(), profile_fingerprint: diagnosticFingerprint(input.profileId),
+      surface_fingerprint: diagnosticFingerprint(JSON.stringify([input.profileId, taskId, epochId])) };
     const emitter = window.webContents as typeof window.webContents & {
       on?: (event: string, listener: (...args: unknown[]) => void) => void;
       removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;

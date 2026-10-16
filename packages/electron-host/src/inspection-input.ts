@@ -2,6 +2,14 @@ import type { ElectronWebContentsLike } from "./page-automation";
 import { diagnosticContext, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 
 type Input = Parameters<NonNullable<ElectronWebContentsLike["sendInputEvent"]>>[0];
+// Closed semantic categories only; actual keys and shortcut combinations are never logged.
+function keyKind(input: any): "modifier" | "navigation" | "editing" | "activation" | "other" {
+  if (["Shift", "Control", "Alt", "Meta", "OS", "Super"].includes(input.key)) return "modifier";
+  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End"].includes(input.key)) return "navigation";
+  if (["Enter", " ", "Space", "Tab", "Escape"].includes(input.key)) return "activation";
+  if (["Backspace", "Delete"].includes(input.key) || (typeof input.key === "string" && [...input.key].length === 1)) return "editing";
+  return "other";
+}
 type Pending = { revision: number; down: Input; up?: Input; move?: Input };
 type Emitter = ElectronWebContentsLike & {
   on?: (name: string, listener: (...args: any[]) => void) => void;
@@ -22,10 +30,10 @@ export class InspectionInput {
   #inputCount = 0;
   #unownedRevision = 0;
   #inputAbort = new AbortController();
-  #invalidateInput(): void {
+  #invalidateInput(kind: "pointer" | "modifier" | "navigation" | "editing" | "activation" | "other"): void {
     this.#unownedRevision++;
     if (this.#unownedRevision <= 16) withDiagnosticContext(this.#origin, () =>
-      emitDiagnosticEvent("chatgpt_tela_browser", "inspection_ownership_revoked", { input_revision: this.#unownedRevision }));
+      emitDiagnosticEvent("chatgpt_tela_browser", "inspection_ownership_revoked", { input_revision: this.#unownedRevision, kind, interactive: !this.#observing }));
     this.#inputAbort.abort(new Error("browser input ownership changed"));
     this.#inputAbort = new AbortController();
   }
@@ -67,7 +75,7 @@ export class InspectionInput {
     try { this.contents.sendInputEvent(input); } finally { this.#owned = previous; }
   };
   mouse = (event: { preventDefault(): void }, input: any): void => {
-    if (!this.#owned && !this.#observing && input.type === "mouseDown") this.#invalidateInput();
+    if (!this.#owned && !this.#observing && input.type === "mouseDown") this.#invalidateInput("pointer");
     if (input.type === "mouseDown") this.#recordInput("pointer_activation");
     if (!this.#observing || this.#owned) return;
     if (input.type === "mouseWheel") return;
@@ -101,7 +109,7 @@ export class InspectionInput {
     }).catch(() => {}).finally(() => { if (this.#pending === pending) this.#pending = undefined; });
   };
   key = (event: { preventDefault(): void }, input: any): void => {
-    if (!this.#owned && !this.#observing && input.type === "keyDown") this.#invalidateInput();
+    if (!this.#owned && !this.#observing && input.type === "keyDown") this.#invalidateInput(keyKind(input));
     if (input.type === "keyDown") this.#recordInput("key_activation");
     if (!this.#observing || this.#owned) return;
     event.preventDefault();
@@ -125,6 +133,11 @@ export class InspectionInput {
   };
   documentChanged = (): void => { this.reset(); };
   dispose(): void {
+    if (this.#disposed) return;
+    withDiagnosticContext(this.#origin, () => emitDiagnosticEvent("chatgpt_tela_browser", "inspection_owner_disposed", {
+      reason_class: "surface_release", input_revision: this.#unownedRevision, interactive: !this.#observing,
+      external_input_observed: this.#unownedRevision > 0,
+    }));
     this.#inputAbort.abort(new Error("browser input owner disposed"));
     this.#disposed = true; this.reset();
     this.contents.removeListener?.("before-mouse-event", this.mouse);
