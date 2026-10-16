@@ -2430,6 +2430,75 @@ function causalSnapshot(driver: FixtureDriver): ChatGptSurfaceSnapshot {
       {key:'causal-assistant',role:'assistant',parentUserTurnKey:userKey,lineageAnchor:anchor,phase:'streaming'}] };
 }
 
+test.each(['matching', 'normalized', 'matching-revoked', 'normalized-revoked'] as const)('readable submission retains independent causal proof after preview changes: %s', async mode => {
+  const driver = new FixtureDriver(fixture('ready-new-chat'));
+  const inputAbort = new AbortController();
+  const surface = await leaseFor(driver, {current: () => ({revision: 0, available: true, signal: inputAbort.signal})});
+  const provider = new ChatGptSemanticProvider();
+  const scratch = mkdtempSync(join(tmpdir(), 'tela-readable-proof-'));
+  const file = join(scratch, 'events.jsonl'), prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  try {
+    const sending = provider.submitTurn(surface.lease, request());
+    while (!driver.activated.length) await Promise.resolve();
+    const receipt = causalSnapshot(driver), exact = acceptedSnapshot(driver).turns[0]!;
+    driver.queued.push({...receipt, turns: [{...receipt.turns[0]!,
+      contentFingerprint: mode.startsWith('matching') ? exact.contentFingerprint! : hash('normalized preview')}, receipt.turns[1]!]});
+    const submitted = await sending;
+    if (submitted.state !== 'proven') throw Error('expected accepted submission');
+    driver.current = {...receipt, revision: 'changed-display', turns: [
+      {...receipt.turns[0]!, contentFingerprint: hash('expanded display')},
+      {...receipt.turns[1]!, phase: 'complete', text: 'owned final'},
+    ]};
+    const revoked = mode.endsWith('-revoked');
+    if (revoked) {
+      // An unchanged host revision must not hide its aborted input boundary.
+      inputAbort.abort(new Error('host input revoked'));
+      await expect(provider.waitForTurnEvent(surface.lease, submitted.value)).rejects
+        .toMatchObject({code: 'tela_web_submission_unproven', retryable: false});
+    } else {
+      const completed = await provider.waitForTurnEvent(surface.lease, submitted.value);
+      expect(completed.state === 'proven' && completed.value).toMatchObject({kind: 'completed', answer: 'owned final'});
+    }
+    expect(driver.activated).toHaveLength(1);
+    const rows = readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    expect(rows.find(row => row.stage === 'web_turn_identity_accepted')).toMatchObject({causal_receipt: true});
+    if (revoked) expect(rows.find(row => row.stage === 'web_submission_input_revoked')).toMatchObject({input_aborted: true});
+    else expect(rows.find(row => row.stage === 'web_turn_ownership_observed' && row.rendered_payload_state === 'changed'))
+      .toMatchObject({payload_state: 'causal', anchor_state: 'matching'});
+  } finally {
+    await surface.host.close();
+    if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+    rmSync(scratch, {recursive: true, force: true});
+  }
+});
+
+test.each(['missing-host', 'unavailable-host', 'unconsumed', 'wrong-anchor', 'competing-parent'] as const)(
+  'readable payload alone cannot authorize ignoring a changed body: %s', async mode => {
+    const driver = new FixtureDriver(fixture('ready-new-chat')), inputAbort = new AbortController();
+    const surface = await leaseFor(driver, mode === 'missing-host' ? undefined
+      : {current: () => ({revision: 0, available: mode !== 'unavailable-host', signal: inputAbort.signal})});
+    const provider = new ChatGptSemanticProvider();
+    try {
+      const sending = provider.submitTurn(surface.lease, request());
+      while (!driver.activated.length) await Promise.resolve();
+      const receipt = causalSnapshot(driver), exact = acceptedSnapshot(driver).turns[0]!;
+      let accepted: ChatGptSurfaceSnapshot = {...receipt, turns: [{...receipt.turns[0]!, contentFingerprint: exact.contentFingerprint!}, receipt.turns[1]!]};
+      if (mode === 'unconsumed') accepted = {...accepted, composers: driver.current.composers};
+      if (mode === 'wrong-anchor') accepted = {...accepted, turns: accepted.turns.map(turn => turn.role === 'assistant' ? {...turn, lineageAnchor: 'foreign'} : turn)};
+      if (mode === 'competing-parent') accepted = {...accepted, turns: [...accepted.turns, {key: 'other-assistant', role: 'assistant', parentUserTurnKey: 'foreign', phase: 'streaming'}]};
+      driver.queued.push(accepted);
+      const submitted = await sending;
+      if (submitted.state !== 'proven') throw Error('expected readable acceptance');
+      driver.current = {...accepted, revision: 'changed-display', turns: accepted.turns.map(turn => turn.role === 'user'
+        ? {...turn, contentFingerprint: hash('different body')} : turn)};
+      await expect(provider.observeTurn(surface.lease, submitted.value)).rejects.toThrow('identity changed');
+      expect(driver.activated).toHaveLength(1);
+    } finally { await surface.host.close(); }
+  },
+);
+
 test.each(['present', 'unmounted', 'external-input', 'across-frames', 'provisional', 'presentation-change'] as const)('causal receipt separates long composer from renderer preview: %s', async mode => {
   const driver = new FixtureDriver(fixture('ready-new-chat'));
   let revision = 0; const inputAbort = new AbortController();

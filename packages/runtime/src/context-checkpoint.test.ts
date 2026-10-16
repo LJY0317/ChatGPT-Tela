@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { BROWSER_PAGE_AUTOMATION, ControlledBrowserHost } from "@chatgpt-tela/browser-host";
+import { BROWSER_INPUT_OWNERSHIP, BROWSER_PAGE_AUTOMATION, ControlledBrowserHost } from "@chatgpt-tela/browser-host";
 import type {
   WebContextCheckpointProvider,
   WebContextCheckpointRequest,
 } from "@chatgpt-tela/chatgpt";
 import { WebCheckpointOperationClosed } from "@chatgpt-tela/chatgpt";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runBrowserContextCheckpoint } from "./context-checkpoint";
@@ -55,6 +55,52 @@ function provider(overrides: Partial<WebContextCheckpointProvider> = {}): WebCon
 }
 
 describe("browser context checkpoint runner", () => {
+  test.each(["revoked", "unknown", "release-failed"] as const)("input ownership cancellation has an exact local closure boundary: %s", async scenario => {
+    const inputOwner = new AbortController(), nativeOwner = new AbortController();
+    const primary = new Error("private provider detail must not enter diagnostics");
+    const scratch = mkdtempSync(join(tmpdir(), "tela-checkpoint-input-"));
+    const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    const file = join(scratch, "events.jsonl");
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+    let calls = 0, closes = 0;
+    const host = new ControlledBrowserHost(async () => ({
+      async navigate() {}, async reveal() {}, async hide() {},
+      async close() { closes++; if (scenario === "release-failed") throw Error("close failed"); },
+      capability(cap) { return cap === BROWSER_INPUT_OWNERSHIP
+        ? {current: () => ({revision: 0, available: true, signal: inputOwner.signal})} as any : undefined; },
+    }));
+    try {
+      let caught: unknown;
+      try { await runBrowserContextCheckpoint({browserHost: host, request: request(), signal: nativeOwner.signal,
+        provider: provider({async createContextCheckpoint(_surface, _request, signal) {
+          calls++;
+          if (scenario !== "unknown") inputOwner.abort(primary);
+          expect(signal?.aborted).toBe(scenario !== "unknown");
+          throw primary;
+        }}),
+      }); } catch (error) { caught = error; }
+      if (scenario === "revoked") expect(caught).toMatchObject({name: "WebCheckpointOperationClosed", cause: primary,
+        receipt: {disposition: "cancelled_locally"}});
+      else {
+        expect(caught).not.toBeInstanceOf(WebCheckpointOperationClosed);
+        if (scenario === "unknown") expect(caught).toBe(primary);
+      }
+      expect(nativeOwner.signal.aborted).toBe(false);
+      expect(calls).toBe(1); expect(closes).toBe(1);
+      const rows = readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(rows.find(row => row.stage === "context_checkpoint_failed")).toMatchObject({
+        reason_class: scenario === "unknown" ? "provider_error" : "input_revoked",
+      });
+      expect(rows.some(row => row.stage === "context_checkpoint_closed")).toBe(scenario === "revoked");
+      expect(rows.some(row => row.stage === "context_checkpoint_release_failed")).toBe(scenario === "release-failed");
+      expect(JSON.stringify(rows)).not.toContain("private provider detail");
+    } finally {
+      await host.close().catch(() => {});
+      if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+      rmSync(scratch, {recursive: true, force: true});
+    }
+  });
   test("cancellation receipt requires successful physical close; a failed close stays uncertain", async () => {
     for (const failClose of [false, true]) {
       const abort = new AbortController(); let invoked = 0;
@@ -198,6 +244,29 @@ describe("browser context checkpoint runner", () => {
 });
 
 describe("durable checkpoint settlement", () => {
+  test("a proven result racing host revocation is persisted before release", async () => {
+    const inputOwner = new AbortController(), events: string[] = [];
+    const host = new ControlledBrowserHost(async () => ({
+      async navigate() {}, async reveal() {}, async hide() {},
+      async close() { events.push("close"); },
+      capability(cap) { return cap === BROWSER_INPUT_OWNERSHIP
+        ? {current: () => ({revision: 0, available: true, signal: inputOwner.signal})} as any : undefined; },
+    }));
+    const completed = provider();
+    try {
+      const result = await runBrowserContextCheckpoint({browserHost: host, request: request(),
+        provider: provider({async createContextCheckpoint(surface, request, signal) {
+          const result = await completed.createContextCheckpoint(surface, request, signal);
+          inputOwner.abort();
+          return result;
+        }}),
+        persistResult: async result => { expect(result.sourceRevisionId).toBe("revision-2"); events.push("persist"); },
+      });
+      expect(result.content).toBe("compact canonical prefix");
+      expect(events).toEqual(["persist", "close"]);
+      expect(host.activeSurfaceCount).toBe(0);
+    } finally { await host.close(); }
+  });
   test.each([false, true])("persists validated output before physical release (close fails=%s)", async failClose => {
     const events: string[] = [];
     const host = new ControlledBrowserHost(async () => ({

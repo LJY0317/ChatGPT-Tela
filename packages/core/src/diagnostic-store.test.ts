@@ -109,6 +109,16 @@ test("ownership and inspection witnesses survive canonical filtering without pay
     action: "close_to_hide", owned_input: false, input_count: 1, first_reason_class: "ambiguous_author_root" });
   expect(JSON.stringify(row)).not.toContain("private");
 });
+test("rendered author state and checkpoint lifecycle remain distinct structural evidence", () => {
+  const row = event("web_turn_ownership_observed", {payload_state: "causal", rendered_payload_state: "changed",
+    causal_receipt: true, anchor_state: "matching", input_boundary_available: true,
+    submission_accepted: true, completion_observed: false, result_persisted: false, surface_released: true,
+    prompt: "private prompt", body: "private body", providerOperationId: "private operation"});
+  expect(row).toMatchObject({payload_state: "causal", rendered_payload_state: "changed", causal_receipt: true,
+    submission_accepted: true, completion_observed: false, result_persisted: false, surface_released: true});
+  expect(JSON.stringify(row)).not.toContain("private");
+  expect(event("web_turn_ownership_observed", {rendered_payload_state: "arbitrary_display"}).rendered_payload_state).toBeUndefined();
+});
 test("bounded reader explicitly reports truncation and never follows source symlinks", () => {
   const root=fixture(); const file=join(root,"events.jsonl"); const row=JSON.stringify(event("completed", {prompt:"private", path:"/private/path", count:1}))+"\n";
   writeFileSync(file,row.repeat(50)); const result=readDiagnosticTail(file,512);

@@ -129,54 +129,73 @@ export class ChatGptContextCheckpointProvider implements WebContextCheckpointPro
       source_bytes: Buffer.byteLength(serializeChatGptContextAttachment(request.physicalContext), "utf8"),
       transfer_estimate: physicalContext.transferTokens,
     });
-    const handle = requireProven(await transport.submitTurn(surface, {
-      nativeTaskId: request.nativeTaskId, nativeTurnId: operation,
-      webEpochId: request.webEpochId, physicalContext,
-      ...(media?.length ? { media } : {}),
-      ...(attachment ? { inertSourceAttachment: { attachment, receipt } } : {}),
-    }, signal));
-    if (handle.nativeTaskId !== request.nativeTaskId || handle.nativeTurnId !== operation
-      || handle.webEpochId !== request.webEpochId || !handle.providerTurnId.trim()) {
-      throw new Error("checkpoint submission names a different operation");
-    }
-    for (;;) {
-      signal?.throwIfAborted();
-      const observation = await transport.waitForTurnEvent(surface, handle, signal);
-      if (observation.state !== "proven") {
-        emitDiagnosticEvent("chatgpt_tela_work", "checkpoint_response_rejected", { reason_class: "completion_unproven", state: observation.state });
+    let phase: "submitting" | "accepted" | "completed" = "submitting";
+    try {
+      const handle = requireProven(await transport.submitTurn(surface, {
+        nativeTaskId: request.nativeTaskId, nativeTurnId: operation,
+        webEpochId: request.webEpochId, physicalContext,
+        ...(media?.length ? { media } : {}),
+        ...(attachment ? { inertSourceAttachment: { attachment, receipt } } : {}),
+      }, signal));
+      if (handle.nativeTaskId !== request.nativeTaskId || handle.nativeTurnId !== operation
+        || handle.webEpochId !== request.webEpochId || !handle.providerTurnId.trim()) {
+        throw new Error("checkpoint submission names a different operation");
       }
-      const event = requireProven(observation);
-      if (event.providerTurnId !== handle.providerTurnId) rejectCheckpointResponse("completion_identity_mismatch", "checkpoint completion names a different operation");
-      if (event.kind === "failed") rejectCheckpointResponse("browser_failed", "checkpoint browser operation failed");
-      if (event.kind === "progress") {
-        onProgress?.(event.summary);
-        continue;
-      }
-      if (event.kind !== "completed") continue;
-      const rejectCompleted = (reason: CompletedResponseRejection, message: string): never => rejectCheckpointResponse(reason, message, {
-        nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId, webEpochId: request.webEpochId,
-        providerOperationId: handle.providerTurnId, reason,
+      phase = "accepted";
+      emitDiagnosticEvent("chatgpt_tela_work", "checkpoint_operation_observed", {
+        phase, submission_accepted: true, completion_observed: false,
       });
-      // The checkpoint envelope is a machine protocol. Markdown escaping, code fences and
-      // presentation controls must not be decoded heuristically into authoritative content.
-      if (typeof event.plainAnswer !== "string") {
-        return rejectCompleted("plain_body_unavailable", "checkpoint completion has no proven unformatted body");
+      for (;;) {
+        signal?.throwIfAborted();
+        const observation = await transport.waitForTurnEvent(surface, handle, signal);
+        if (observation.state !== "proven") {
+          emitDiagnosticEvent("chatgpt_tela_work", "checkpoint_response_rejected", { reason_class: "completion_unproven", state: observation.state });
+        }
+        const event = requireProven(observation);
+        if (event.providerTurnId !== handle.providerTurnId) rejectCheckpointResponse("completion_identity_mismatch", "checkpoint completion names a different operation");
+        if (event.kind === "failed") rejectCheckpointResponse("browser_failed", "checkpoint browser operation failed");
+        if (event.kind === "progress") {
+          onProgress?.(event.summary);
+          continue;
+        }
+        if (event.kind !== "completed") continue;
+        phase = "completed";
+        emitDiagnosticEvent("chatgpt_tela_work", "checkpoint_operation_observed", {
+          phase, submission_accepted: true, completion_observed: true,
+        });
+        const rejectCompleted = (reason: CompletedResponseRejection, message: string): never => rejectCheckpointResponse(reason, message, {
+          nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId, webEpochId: request.webEpochId,
+          providerOperationId: handle.providerTurnId, reason,
+        });
+        // The checkpoint envelope is a machine protocol. Markdown escaping, code fences and
+        // presentation controls must not be decoded heuristically into authoritative content.
+        if (typeof event.plainAnswer !== "string") {
+          return rejectCompleted("plain_body_unavailable", "checkpoint completion has no proven unformatted body");
+        }
+        let parsed: unknown;
+        try { parsed = JSON.parse(event.plainAnswer); } catch { rejectCompleted("json_invalid", "checkpoint response is not an exact JSON envelope"); }
+        const result = parsed as Record<string, unknown> | null;
+        const rejection = !result || Array.isArray(result) || result.type !== "tela_context_checkpoint_v1" ? "envelope_invalid"
+          : result.operation !== operation ? "operation_mismatch"
+          : result.sourceDigest !== sourceDigest ? "source_mismatch"
+          : attachment !== undefined && result.receipt !== `TELA_CONTEXT_ACK ${receipt}` ? "receipt_mismatch"
+          : typeof result.summary !== "string" || !result.summary.trim() ? "summary_empty"
+          : Buffer.byteLength(result.summary, "utf8") > MAX_SUMMARY_BYTES ? "summary_budget" : undefined;
+        if (rejection) rejectCompleted(rejection, "checkpoint response does not prove a bounded summary of this source");
+        return { state: "proven", value: {
+          nativeTaskId: request.nativeTaskId, webEpochId: request.webEpochId,
+          sourceRevisionId: request.sourceRevisionId, providerOperationId: handle.providerTurnId,
+          content: (result!.summary as string).trim(),
+        }, evidence: ["exact tool-free checkpoint operation completed with matching source envelope"] };
       }
-      let parsed: unknown;
-      try { parsed = JSON.parse(event.plainAnswer); } catch { rejectCompleted("json_invalid", "checkpoint response is not an exact JSON envelope"); }
-      const result = parsed as Record<string, unknown> | null;
-      const rejection = !result || Array.isArray(result) || result.type !== "tela_context_checkpoint_v1" ? "envelope_invalid"
-        : result.operation !== operation ? "operation_mismatch"
-        : result.sourceDigest !== sourceDigest ? "source_mismatch"
-        : attachment !== undefined && result.receipt !== `TELA_CONTEXT_ACK ${receipt}` ? "receipt_mismatch"
-        : typeof result.summary !== "string" || !result.summary.trim() ? "summary_empty"
-        : Buffer.byteLength(result.summary, "utf8") > MAX_SUMMARY_BYTES ? "summary_budget" : undefined;
-      if (rejection) rejectCompleted(rejection, "checkpoint response does not prove a bounded summary of this source");
-      return { state: "proven", value: {
-        nativeTaskId: request.nativeTaskId, webEpochId: request.webEpochId,
-        sourceRevisionId: request.sourceRevisionId, providerOperationId: handle.providerTurnId,
-        content: (result!.summary as string).trim(),
-      }, evidence: ["exact tool-free checkpoint operation completed with matching source envelope"] };
+    } catch (error) {
+      emitDiagnosticEvent("chatgpt_tela_work", "checkpoint_operation_failed", {
+        phase, submission_accepted: phase !== "submitting", completion_observed: phase === "completed",
+        operation_cancelled: signal?.aborted === true,
+        reason_class: error instanceof WebCheckpointResponseRejected ? error.receipt.reason
+          : signal?.aborted ? "cancelled" : "provider_error",
+      });
+      throw error;
     }
   }
 }

@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import { expect, test } from 'bun:test';
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import type { BrowserSurfaceLease } from '@chatgpt-tela/browser-host';
 import type { WebContextCheckpointRequest, WebTurnRequest, WebContextAttachmentPreloadRequest } from './index';
 import { ChatGptContextCheckpointProvider, chatGptCheckpointInputTokens } from './checkpoint-provider';
@@ -17,6 +20,42 @@ const source: WebContextCheckpointRequest = {
     segments:[{type:'revision',revisionId:'r1',kind:'user',content:'Keep identifier abc; do not edit.'},
       {type:'revision',revisionId:'r2',kind:'assistant',content:'Observed result; next action remains pending.'}] },
 };
+
+test.each(['submitting', 'accepted', 'completed'] as const)('checkpoint failure preserves the observed operation phase without resending: %s', async phase => {
+  const root = mkdtempSync(join(tmpdir(), 'tela-checkpoint-phase-'));
+  const file = join(root, 'events.jsonl'), prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  let submissions = 0;
+  const provider = new ChatGptContextCheckpointProvider(() => ({
+    async observeCapabilities() { return {state: 'proven', value: {observed: new Set(['composer'])}, evidence: []}; },
+    async submitTurn(_surface, request) {
+      submissions++;
+      if (phase === 'submitting') throw Error('private submission detail');
+      return {state: 'proven', value: {nativeTaskId: request.nativeTaskId, nativeTurnId: request.nativeTurnId,
+        webEpochId: request.webEpochId, providerTurnId: 'synthetic-operation'}, evidence: []};
+    },
+    async waitForTurnEvent(_surface, handle) {
+      if (phase === 'accepted') throw Error('private observation detail');
+      return {state: 'proven', value: {kind: 'completed', providerTurnId: handle.providerTurnId,
+        answer: 'private response', plainAnswer: '{}'}, evidence: []};
+    },
+  }));
+  try {
+    await expect(provider.createContextCheckpoint(surface, source)).rejects.toThrow();
+    expect(submissions).toBe(1);
+    const rows = readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    expect(rows.find(row => row.stage === 'checkpoint_operation_failed')).toMatchObject({
+      phase, submission_accepted: phase !== 'submitting', completion_observed: phase === 'completed',
+      reason_class: phase === 'completed' ? 'envelope_invalid' : 'provider_error',
+    });
+    expect(JSON.stringify(rows)).not.toContain('private');
+    expect(JSON.stringify(rows)).not.toContain('synthetic-operation');
+  } finally {
+    if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+    rmSync(root, {recursive: true, force: true});
+  }
+});
 function presentation(plain: string): string {
   class Element {
     readonly childNodes = [{nodeType:3,textContent:plain}];

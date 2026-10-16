@@ -1047,6 +1047,12 @@ and commit boundaries recheck ownership after asynchronous work. Native cancella
 document lifetime, lease/account and assistant-body completion contracts remain mandatory. Causal
 receipts bind intended local sends, not provider-billed usage or a server proof of every received byte.
 
+Establish and retain this receipt independently of initial author-body readability. A readable or
+normalized preview must not select a weaker lifetime rule or discard the host input fence. When
+causality is proven, pin the exact submitted composer fingerprint; keep rendered-body comparisons
+as separate structural evidence. Without the full causal proof, the existing payload proof path
+still applies. Do not turn a failed observation into an invented receipt or a new model request.
+
 Once causally bound, displayed author hashes are advisory; the same logical document/parent and
 unchanged input/Native owner retain identity through preview changes. A different anchor, foreign
 route, competing user/parent or revoked owner cannot borrow the receipt. Primary payload comparison
@@ -1064,6 +1070,13 @@ read-only owned observations, then resume delivery only if its identity and comp
 A timeout, adapter update or cache miss alone proves neither remote failure nor safe replay. If proof
 cannot be recovered, preserve the unresolved receipt and completed checkpoints and report one actionable
 blocked state. A new authorized operation still needs the established release/ownership rules.
+
+The isolated checkpoint runner owns one cancellation scope spanning its Native owner and the
+host input boundary. Either owner can cancel local observation. Successful physical release then
+permits the existing local-cancellation settlement, never a claim that remote generation stopped.
+A release failure or generic observation error without cancellation remains unresolved. Completed
+validated results persist before release, including cancellation races. No path resends automatically;
+future execution still requires the existing authorized Native lifecycle and compatible source proof.
 
 Implementation sequence and acceptance gates:
 
