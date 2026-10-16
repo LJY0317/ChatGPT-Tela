@@ -186,3 +186,34 @@ test('inline checkpoint budget measures serialized UTF8 including escaped source
  expect(chatGptCheckpointInputTokens(request.physicalContext)).toBe(actual);
  expect(actual).toBeGreaterThan(Math.ceil(serializeChatGptContextAttachment(request.physicalContext).length/4));
 });
+
+test('checkpoint rejection diagnostics distinguish validation causes without saving source or summary', async () => {
+  const {mkdtempSync,readFileSync,rmSync}=await import('node:fs');
+  const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+  const root=mkdtempSync(join(tmpdir(),'tela-checkpoint-rejection-'));
+  const file=join(root,'events.jsonl');const previous=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  const large={...source,physicalContext:{...source.physicalContext,segments:[
+    {type:'revision' as const,revisionId:'r2',kind:'user' as const,content:'private-source-marker'.repeat(12000)}]}};
+  try {
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+    const cases:[string,(value:any)=>any][]=[
+      ['envelope_invalid',v=>({...v,type:'foreign'})],
+      ['operation_mismatch',v=>({...v,operation:'foreign'})],
+      ['source_mismatch',v=>({...v,sourceDigest:'foreign'})],
+      ['receipt_mismatch',v=>({...v,receipt:'foreign'})],
+      ['summary_empty',v=>({...v,summary:''})],
+      ['summary_budget',v=>({...v,summary:'private-summary-marker'.repeat(2000)})],
+    ];
+    for(const [,change] of cases){
+      const f=fixture(change);
+      await expect(f.provider.createContextCheckpoint(surface,large)).rejects.toThrow('does not prove');
+      expect(f.submits()).toBe(1);expect(f.preloads()).toBe(0);
+    }
+    const lines=readFileSync(file,'utf8');
+    expect(lines.split('\n').filter(Boolean).map(s=>JSON.parse(s)).filter(d=>d.stage==='checkpoint_response_rejected').map(d=>d.reason_class)).toEqual(cases.map(([reason])=>reason));
+    expect(lines).not.toContain('private-source-marker');expect(lines).not.toContain('private-summary-marker');
+  } finally {
+    if(previous===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;
+    rmSync(root,{recursive:true,force:true});
+  }
+});
