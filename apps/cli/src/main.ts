@@ -1046,7 +1046,7 @@ async function main(): Promise<void> {
     + "  doctor\n"
     + "  diagnostics\n"
     + "  diagnostics workload [--minutes <1-120>]\n"
-    + "  diagnostics context [--scope <fingerprint>] [--at <ISO-time>] [--minutes <1-120>]\n"
+    + "  diagnostics context [--scope <fingerprint>] [--at <ISO-time>] [--minutes <1-120>] [--view summary|full] [--limit <1-64>]\n"
     + "  diagnostics incident [--minutes <1-120>]\n"
     + "  diagnostics trace [--minutes <1-120>]\n"
     + "  diagnostics desktop [--seconds <5-60>] (macOS)\n"

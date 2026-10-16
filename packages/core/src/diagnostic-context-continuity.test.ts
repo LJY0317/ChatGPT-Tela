@@ -25,6 +25,7 @@ test("context reuse links only to an exact locally committed predecessor without
   })];
   const r = summarizeContextContinuity({ events: rows, atMs: 5000, scope });
   expect(r.turns[1].plans[0].retentionLink).toBe("verified_local_link");
+  expect(r.turns[1].summary.context.retentionLink).toBe("verified_local_link");
   expect(r.turns[1].plans[0].transferTokenEstimate).toBe(50);
   expect(r.semanticRecall).toBe("not_evaluated"); expect(r.tokenAccounting).toBe("local_estimates_only");
   const missing = summarizeContextContinuity({ events: [rows[0]!, rows[2]!], atMs: 5000 });
@@ -59,4 +60,27 @@ test("reports omit unclassified private payloads, exclude test origins and expos
   expect(report.turns[0].plans[0].mode).toBe("unknown");
   expect(summarizeContextContinuity({ events: Array.from({ length: 4097 }, () => event("unrelated")), atMs: 100000 }).evidenceLimits.eventLimitReached).toBe(true);
   expect(() => summarizeContextContinuity({ events: [], atMs: 5000, scope: "private account" })).toThrow();
+});
+
+test('tool projection links through unique operation, contradictory owners stay unassigned',()=>{
+ const projected=event('mcp_native_result_projected',{operation_fingerprint:operation,text_bytes:42});
+ delete (projected as any).scope_fingerprint;delete (projected as any).turn_fingerprint;
+ const native=event('native_tool_result_received',{operation_fingerprint:operation});
+ const r=summarizeContextContinuity({events:[projected,native],atMs:100000});
+ expect(r.turns[0].summary.cost.toolText).toMatchObject({total:42,complete:true});
+ const conflict=event('native_tool_result_received',{operation_fingerprint:operation,turn_fingerprint:turn2});
+ const ambiguous=summarizeContextContinuity({events:[projected,native,conflict],atMs:100000});
+ expect(ambiguous.evidenceLimits.ambiguousOperations).toBe(1);
+ expect(ambiguous.turns[0].summary.cost.toolText.complete).toBe(false);
+});
+test('a bounded terminal receipt survives missing raw final without pretending its bytes were measured',()=>{
+ const r=summarizeContextContinuity({events:[event('native_cycle_summary',{contract_version:1,state:'completed',local_final_committed:true,summary_complete:true,composer_measured:false,composer_wire_bytes:0})],atMs:100000});
+ expect(r.turns[0].completionEvidence).toBe('cycle_receipt');expect(r.turns[0].outcome).toBe('local_final_committed');
+ expect(r.turns[0].cycleReceipts[0].composerBytes).toBeUndefined();
+ expect(r.turns[0].summary.evidence.hostDisplay).toBe('not_observed');
+});
+
+test('previous cycle summary cannot mark a newly started cycle complete',()=>{
+ const r=summarizeContextContinuity({events:[event('native_cycle_summary',{contract_version:1,state:'completed',local_final_committed:true,summary_complete:true}),event('native_cycle_observation_started')],atMs:100000});
+ expect(r.turns[0].completionEvidence).toBe('not_observed');expect(r.turns[0].summary.state).toBe('in_progress');
 });

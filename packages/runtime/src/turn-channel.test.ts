@@ -315,10 +315,11 @@ test("Native diagnostic witnesses correlate a queued call, local delivery and er
     expect(await wait).toEqual(result);channel.markWebContinuation();channel.complete("done");expect(await channel.waitForFinal()).toBe("done");
     const raw=readFileSync(file,"utf8");expect(raw).not.toMatch(/PRIVATE_|\/workspace|couldn't determine/);
     const rows=raw.trim().split("\n").map(x=>JSON.parse(x)).filter(x=>x.stage.startsWith("native_tool_"));
-    expect(rows.map(x=>x.stage)).toEqual(["native_tool_queued","native_tool_delivery_committed","native_tool_result_error"]);
+    expect(rows.map(x=>x.stage)).toEqual(["native_tool_queued","native_tool_delivery_committed","native_tool_result_error","native_tool_result_released"]);
     expect(new Set(rows.map(x=>x.operation_fingerprint)).size).toBe(1);expect(new Set(rows.map(x=>x.schema_fingerprint)).size).toBe(1);
     expect(rows[0]).toMatchObject({policy:"read-only",root_count:1,native_delivery_committed:false,result_received:false});
     expect(rows[2]).toMatchObject({native_delivery_committed:true,result_received:true,execution_proven:false,origin_proven:false,reason_class:"safety_status_undetermined"});
+    expect(rows[3]).toMatchObject({native_delivery_committed:true,result_received:true,execution_proven:false,origin_proven:false});
   }finally{
     if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;
     await new Promise(resolve=>setImmediate(resolve));rmSync(scratch,{recursive:true,force:true});

@@ -1,3 +1,4 @@
+import { summarizeTurnDiagnostics } from "./diagnostic-turn-summary";
 import { structuralDiagnosticEvent, type StructuralDiagnosticEvent } from "./diagnostic-store";
 
 const FP = /^[a-f0-9]{24}$/;
@@ -12,21 +13,31 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
     const safe = structuralDiagnosticEvent(row); return safe && safe.environment !== "test" && Date.parse(safe.ts) <= input.atMs ? [safe] : [];
   }).sort((a, b) => a.ts.localeCompare(b.ts));
   const requests = new Map<string, Set<string>>();
+  const operations = new Map<string, Set<string>>();
   for (const row of rows) {
     const scope = fp(row.scope_fingerprint), turn = fp(row.turn_fingerprint), request = fp(row.request_fingerprint);
-    if (!scope || !turn || !request) continue;
-    const owners = requests.get(request) ?? new Set<string>(); owners.add(`${scope}:${turn}`); requests.set(request, owners);
+    if (!scope || !turn) continue;
+    if (request) { const owners = requests.get(request) ?? new Set<string>(); owners.add(`${scope}:${turn}`); requests.set(request, owners); }
+    const operation = fp(row.operation_fingerprint);
+    if (operation) { const owners=operations.get(operation)??new Set<string>(); owners.add(`${scope}:${turn}`);operations.set(operation,owners); }
   }
   const turns = new Map<string, any>();
+  const attributedRows = new Map<string, StructuralDiagnosticEvent[]>();
   const priorSettled = new Map<string, any>();
   const stages = new Map<string, Set<string>>();
   const pendingPlans = new Map<string, any>();
+  let unattributedOperationEvents=0,conflictingLinks=0;
   let unattributedEvents = 0, omittedTurns = 0, planLimitReached = false, disconnectLimitReached = false;
   for (const row of rows) {
     const directScope = fp(row.scope_fingerprint), directTurn = fp(row.turn_fingerprint);
     const linked = fp(row.request_fingerprint) ? requests.get(String(row.request_fingerprint)) : undefined;
-    const key = directScope && directTurn ? `${directScope}:${directTurn}` : linked?.size === 1 ? [...linked][0] : undefined;
-    if (!key) { if (/checkpoint|web_turn_plan|http_transport_closed/.test(row.stage)) unattributedEvents++; continue; }
+    const operationLinked = fp(row.operation_fingerprint) ? operations.get(String(row.operation_fingerprint)) : undefined;
+    const requestOwner = linked?.size===1?[...linked][0]:undefined;
+    const operationOwner = operationLinked?.size===1?[...operationLinked][0]:undefined;
+    if(requestOwner&&operationOwner&&requestOwner!==operationOwner)conflictingLinks++;
+    const inferred = requestOwner&&operationOwner&&requestOwner!==operationOwner ? undefined : requestOwner??operationOwner;
+    const key = directScope && directTurn ? `${directScope}:${directTurn}` : inferred;
+    if (!key) { if(fp(row.operation_fingerprint)&&/^(mcp_native_result_projected|tool_settled)$/.test(row.stage))unattributedOperationEvents++; if (/checkpoint|web_turn_plan|http_transport_closed/.test(row.stage)) unattributedEvents++; continue; }
     const [scope, turn] = key.split(":");
     if (input.scope && scope !== input.scope) continue;
     let state = turns.get(key);
@@ -37,7 +48,9 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
         plans: [], disconnects: [], responseObservers: 0, outcome: "not_observed", semanticRecall: "not_evaluated" };
       turns.set(key, state);
     }
+    const attributed=attributedRows.get(key)??[];attributed.push(row);attributedRows.set(key,attributed);
     state.lastObservedAt = row.ts;
+    if (row.stage === "native_cycle_observation_started" || row.stage === "native_steering_cycle_started") state.outcome="not_observed";
     if (row.stage === "native_response_observer_started") state.responseObservers++;
     if (row.stage === "native_visible_prefix_checkpoint_started") {
       state.checkpoint.firstStartedAt ??= row.ts;
@@ -111,10 +124,36 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
     if (row.stage === "native_outcome_committed" && row.outcome === "final") state.outcome = "local_final_committed";
     if (row.stage === "native_turn_retired" && state.outcome !== "local_final_committed") state.outcome = "retired_without_observed_final";
   }
-  return { privacy: "structural-only", generatedAt: new Date(input.atMs).toISOString(),
+  for (const [key,state] of turns) {
+    const observations=attributedRows.get(key)??[];
+    state.summary=summarizeTurnDiagnostics(observations);
+    const latestPlan=state.plans.at(-1);
+    state.summary.context.retentionLink=latestPlan?.retentionLink??"incomplete_evidence";
+    state.summary.context.projection=latestPlan?{
+      omittedAssistant:latestPlan.projectionOmittedAssistant,omittedToolResults:latestPlan.projectionOmittedToolResults,
+      truncatedAssistant:latestPlan.projectionTruncatedAssistant,truncatedToolResults:latestPlan.projectionTruncatedToolResults,
+    }:undefined;
+    state.cycleReceipts=observations.filter(row=>row.stage==="native_cycle_summary"&&row.contract_version===1).slice(-16).map(row=>({
+      at:row.ts,state:row.state,firstFailure:row.first_reason_class??row.reason_class,localFinalCommitted:row.local_final_committed===true,complete:row.summary_complete===true,
+      coverage:"process_local_observation",observedEvents:count(row.observed_event_count),durationMs:count(row.duration_ms),
+      webSends:count(row.web_send_count),accepted:count(row.web_accept_count),causal:row.causal_receipt===true,
+      toolQueued:count(row.tool_queued_count),toolResults:count(row.tool_result_count),toolReleased:count(row.tool_release_count),
+      summaryAttempts:count(row.summary_attempt_count),summaryReuse:count(row.summary_reuse_count),checkpointReused:row.request_checkpoint_reused,
+      mode:MODES.has(String(row.context_mode))?row.context_mode:"unknown",
+      logicalEstimate:count(row.logical_estimate),transferEstimate:count(row.transfer_estimate),
+      composerBytes:row.composer_measured===true?count(row.composer_wire_bytes):undefined,
+      protocolBytes:row.protocol_measured===true?count(row.protocol_wire_bytes):undefined,
+      contextBytes:row.composer_measured===true?count(row.context_wire_bytes):undefined,
+    }));
+    const latestBegin=observations.filter(e=>e.stage==="native_cycle_observation_started"||e.stage==="native_steering_cycle_started").at(-1)?.ts;
+    const finalReceipt=state.cycleReceipts.some((r:any)=>r.localFinalCommitted&&r.state==="completed"&&(!latestBegin||r.at>=latestBegin));
+    state.completionEvidence=state.outcome==="local_final_committed"?"raw_final_event":finalReceipt?"cycle_receipt":"not_observed";
+    if(finalReceipt)state.outcome="local_final_committed";
+  }
+  return { contractVersion: 2, privacy: "structural-only", generatedAt: new Date(input.atMs).toISOString(),
     tokenAccounting: "local_estimates_only", semanticRecall: "not_evaluated", turns: [...turns.values()],
     evidenceLimits: { eventLimitReached: input.events.length > 4096, turnLimitReached: omittedTurns > 0, planLimitReached, disconnectLimitReached, unattributedEvents,
-      ambiguousRequests: [...requests.values()].filter(v => v.size > 1).length },
+      ambiguousRequests: [...requests.values()].filter(v => v.size > 1).length, ambiguousOperations:[...operations.values()].filter(v=>v.size>1).length,unattributedOperationEvents,conflictingLinks },
     limitations: ["Fingerprints correlate evidence, not authenticated account identity.",
       "Missing, clipped or rotated evidence is unknown, not success or context loss.",
       "Reconstruction and repeated file reads do not by themselves prove semantic forgetting.",

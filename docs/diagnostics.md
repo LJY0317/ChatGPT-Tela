@@ -671,3 +671,74 @@ Owned maintenance settlement emits `native_checkpoint_operation_reconciled` with
 fingerprint, original owner kind, `released_locally`, `remote_outcome=unknown` and zero model calls.
 It requires verified physical-owner release and exact journal selection; it does not report a
 successful summary, proven remote cancellation or a resumed task. Completed summaries are preserved.
+
+## Turn summaries and measurement coverage
+
+`diagnostics context` contract version2 retains its existing plans and continuity links and adds
+`summary`, `cycleReceipts` and `completionEvidence` per Native turn. A Native turn may contain more
+than one authorized response cycle: a fresh cycle cannot inherit a prior cycle's final. The current
+summary follows the latest observed cycle boundary, not every late browser event bearing an old
+origin fingerprint. `completedAt` and duration stop at the final/retirement boundary;
+`observationThrough` and `postTerminalEvents` retain subsequent observation separately.
+
+The summary distinguishes one Web activation, exact/causal acceptance, transient identity waits,
+Native tool queue/result/Web-release, observer replacement, transport disconnect, context settlement
+and local final commit. Observer count is not reconnect count; incomplete bounded refusal inspection
+is not a tool error; unavailable rendered author text is not a failed causal receipt. Repeated
+activation of the same known operation/phase is a warning, not proof of duplicate server execution.
+
+The runtime emits `native_cycle_observation_started` and one `native_cycle_summary` per observed
+planner cycle. It uses the same sanitized event path, with at most32 process-local subscribers and
+512 relevant events per cycle. It unsubscribes on final commit or retirement; no timer, log scan,
+model request or idle polling is added. Terminal duration uses a monotonic clock. Summary rows share
+existing bounded rotating-log retention; they are not an unlimited audit store. `summary_complete`
+attests only an unclipped process-local window, never all services, host display or remote execution.
+A retained receipt can establish observed local completion after raw rows rotate; its coverage and
+byte-measurement flags remain visible. Unsupported/missing receipts do not establish success.
+
+Byte measurements are separated from local token estimates:
+
+- `composer` measures Tela-authored text at the local activation boundary; `preparedComposer` counts
+  preparation separately, so a failed draft is not a transmitted message.
+- `context` is encoded inline context JSONL; `protocol` is the remaining header/instructions/envelope.
+  These two sum to composer bytes. This partition is a transport measurement, not billed tokens.
+- Attachment counts cover observed upload attempts. Native MCP text parts, image bytes and existing
+  serialized MCP request/result envelope measurements are separate observations. Text/image values
+  overlap their envelope; do not sum them into a fictitious total. Opaque resource/model overhead and
+  unlinked inventory work are not assumed measured.
+- `observed`, `total` and `complete` describe only observed contributions. Zero observed with
+  `complete=false` is unknown actual cost, not zero actual cost. Tool coverage checks known Native
+  result operations; missing projected results cannot masquerade as a complete measurement.
+  New MCP text-byte inspection scans at most1MiB of UTF-16 characters per result; larger results
+  preserve their original payload and expose character counts with byte measurement unavailable.
+
+Only unambiguous request or operation fingerprints join cross-service observations. Conflicting
+links and ambiguous/unattributed operations are counted rather than guessed. Native operation
+fingerprints bind projected MCP byte counters without hashing capabilities, arguments or bodies.
+The same Native result records `native_tool_result_released` immediately before its existing Web
+release; this diagnostic changes no execution, permission or replay decision. Old logs lacking this
+stage show unmeasured release coverage, not a newly invented failure.
+
+Do not evaluate semantic recall with extra model calls just for monitoring. Reuse, source coverage,
+new summary attempts, transfer estimates, useful local completion and user-confirmed effects are
+separate evidence. Provider billing/actual inference count remain unmeasured unless an authoritative
+provider contract supplies them. These diagnostics never become correctness or recovery authority.
+
+For routine agent diagnosis, request one concise turn first:
+
+```sh
+chatgpt-tela diagnostics context --scope <24-character-scope-fingerprint> --view summary --limit 1
+```
+
+`--view full` preserves detailed plans and continuity links; summary view defaults to eight turns
+and retains only the latest receipt per turn. `--limit` is bounded1–64. Explicit selection omissions,
+source coverage and evidence caps remain present in both views. Use full details only to resolve a
+specific gap rather than repeatedly injecting complete diagnostic timelines into an agent context.
+
+Coverage follows ownership boundaries: planner-cycle receipts instrument Tela's Native-to-Web runtime;
+projected-result counters instrument both public and private Native MCP servers through their shared
+registration code. Existing MCP trace-envelope measurements remain available to compatible Chat tools,
+but Chat tasks and directly forwarded official Native responses do not acquire a Native-to-Web receipt
+or authority merely by sharing logging utilities. Missing receipts on those uninstrumented paths are
+coverage gaps, not failures. Do not import peer service runtimes or invent Native identifiers to make
+an aggregate appear complete.

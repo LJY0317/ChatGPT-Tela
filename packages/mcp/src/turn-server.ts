@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { traceDiagnosticToolCall } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, traceDiagnosticToolCall } from "@chatgpt-tela/core";
 import type { TurnBridgeBackend } from "./turn-bridge";
 import { nativeToolResultToMcpContent } from "./native-tool-content";
 
@@ -62,7 +62,7 @@ export function registerTurnBridgeTools(
       arguments: z.record(z.string(), z.unknown()).optional(),
       input: z.string().optional(),
     }),
-  }, async (request, extra) => traceDiagnosticToolCall(names.call, request, extra, async () => {
+  }, async (request, extra) => withDiagnosticContext({operation_fingerprint:diagnosticFingerprint(request.call_id)},()=>traceDiagnosticToolCall(names.call, request, extra, async () => {
     const { turn_capability, call_id, wire_name, mode, arguments: args, input } = request;
     const invocation = mode === "structured"
       ? {
@@ -79,9 +79,22 @@ export function registerTurnBridgeTools(
         };
     const result = await bridge.invoke(turn_capability, invocation);
     const mapped = nativeToolResultToMcpContent(result.content);
+    let textBytes=0,textCharacters=0,textMeasured=true;
+    try {
+      for(const part of mapped.content)if(part.type==="text") {
+        if(typeof part.text!=="string"){textMeasured=false;continue;}
+        textCharacters+=part.text.length;
+        if(textCharacters>1_048_576){textMeasured=false;continue;}
+        textBytes+=Buffer.byteLength(part.text);
+      }
+    }catch{textMeasured=false;}
+    emitDiagnosticEvent("chatgpt_tela_work","mcp_native_result_projected",{
+      ...(textMeasured?{text_bytes:textBytes}:{}),text_characters:textCharacters,text_measurement_complete:textMeasured,
+      part_count:mapped.content.length, image_bytes:mapped.uniqueImageBytes, error_result_reported:result.isError===true,
+    });
     return {
       content: [...mapped.content],
       ...(result.isError ? { isError: true } : {}),
     };
-  }));
+  })));
 }
