@@ -15,6 +15,8 @@ const queues = new Map<string, Promise<unknown>>();
 interface Entry extends NativeVisiblePrefixStageIdentity {
   status: "pending" | "completed" | "closed";
   ownerFingerprint?: string;
+  reconciliationFingerprint?: string;
+  remoteOutcome?: "unknown";
   claimId: string;
   updatedAt: number;
   summary?: string;
@@ -42,6 +44,8 @@ function validate(value: unknown): State {
       || entry.updatedAt < 0 || !["pending", "completed", "closed"].includes(entry.status)
       || (entry.status === "completed" ? !summaryValid(entry.summary) : entry.summary !== undefined)
       || (entry.ownerFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(entry.ownerFingerprint))
+      || (entry.reconciliationFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(entry.reconciliationFingerprint))
+      || (entry.remoteOutcome !== undefined && entry.remoteOutcome !== "unknown")
       || (entry.status === "closed" && !entry.ownerFingerprint)) {
       throw new Error("Invalid Native checkpoint execution journal entry");
     }
@@ -221,6 +225,42 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
       if (!entry || !same(entry, input) || entry.status !== "pending" || entry.claimId !== input.claimId
         || entry.ownerFingerprint !== input.ownerFingerprint) throw Error("Checkpoint closure has no matching owned claim");
       entry.status = "closed"; entry.updatedAt = Date.now();
+      await this.#write(state);
+    });
+  }
+  /** Bounded maintenance metadata only; never returns derived summary contents. */
+  async pendingOperations(): Promise<readonly (NativeVisiblePrefixStageIdentity & { claimId: string; updatedAt: number; legacy: boolean })[]> {
+    return this.#transaction(async state => state.entries.filter(entry => entry.status === "pending").map(entry => ({
+      key: entry.key, sourceDigest: entry.sourceDigest, inputDigest: entry.inputDigest,
+      claimId: entry.claimId, updatedAt: entry.updatedAt, legacy: entry.ownerFingerprint === undefined,
+    })));
+  }
+  /** Maintenance-only legacy recovery. The authenticated owner adapter must stop
+   * the exact profile, prove all its Native work idle and original physical owners
+   * absent. Logs/timeouts/changed nonces are NOT quiescence proof. No model is sent.
+   * The original unknown remote outcome and claim remain preserved. */
+  async reconcileQuiescentLegacy(input: NativeVisiblePrefixStageIdentity & {
+    claimId: string;
+    terminalOwnerFingerprint: string;
+    reconciliationFingerprint: string;
+    assertQuiescent: () => Promise<void>;
+  }): Promise<void> {
+    if (!validIdentity(input) || !/^[a-f0-9]{64}$/.test(input.terminalOwnerFingerprint)
+      || !/^[a-f0-9]{64}$/.test(input.reconciliationFingerprint)) throw Error("Invalid checkpoint reconciliation identity");
+    await this.#transaction(async state => {
+      await input.assertQuiescent();
+      const entry = state.entries.find(value => value.key === input.key);
+      if (!entry || !same(entry, input) || entry.claimId !== input.claimId) throw Error("Checkpoint reconciliation selection changed");
+      if (entry.status === "closed" && entry.reconciliationFingerprint === input.reconciliationFingerprint
+        && entry.ownerFingerprint === input.terminalOwnerFingerprint) return;
+      if (entry.status !== "pending" || entry.ownerFingerprint !== undefined) throw Error("Checkpoint reconciliation requires an unchanged legacy pending operation");
+      // Recheck immediately before the durable mutation, under the writer lock.
+      await input.assertQuiescent();
+      entry.status = "closed";
+      entry.ownerFingerprint = input.terminalOwnerFingerprint;
+      entry.reconciliationFingerprint = input.reconciliationFingerprint;
+      entry.remoteOutcome = "unknown";
+      entry.updatedAt = Date.now();
       await this.#write(state);
     });
   }

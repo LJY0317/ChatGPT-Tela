@@ -47,6 +47,35 @@ test("locally closed operations need new Native authority and reject stale compl
   await journal.complete({ ...id, claimId: next.claimId, status: "completed", summary: "new proven summary" });
   expect(await journal.claim(id, owner)).toMatchObject({ status: "completed", summary: "new proven summary" });
 }));
+test("legacy recovery requires repeated owner quiescence, exact selection and a new Native authority", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options), id = identity();
+  const claim = await journal.claim(id); if (claim.status !== "claimed") throw Error("fixture");
+  let checks = 0;
+  const recovery = { ...id, claimId: claim.claimId, terminalOwnerFingerprint: hash("terminal Native turn"),
+    reconciliationFingerprint: hash("owned profile quiescence receipt"), assertQuiescent: async () => { checks++; } };
+  await expect(journal.reconcileQuiescentLegacy({ ...recovery, assertQuiescent: async () => { throw Error("profile owner still alive"); } })).rejects.toThrow("still alive");
+  expect(await journal.claim(id, hash("new turn"))).toEqual({ status: "unknown" });
+  await expect(journal.reconcileQuiescentLegacy({ ...recovery, claimId: "foreign" })).rejects.toThrow("selection changed");
+  await journal.reconcileQuiescentLegacy(recovery);
+  expect(checks).toBe(3);
+  await journal.reconcileQuiescentLegacy(recovery); // Same receipt is an idempotent inspection, no resend.
+  expect(await journal.claim(id, recovery.terminalOwnerFingerprint)).toEqual({ status: "unknown" });
+  const next = await journal.claim(id, hash("new turn")); expect(next.status).toBe("claimed");
+  await expect(journal.complete({ ...id, claimId: claim.claimId, status: "completed", summary: "late old summary" })).rejects.toThrow("owned claim");
+}));
+test("reconciliation refuses modern owners and a changed quiescence observation without mutation", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options), id = identity();
+  const claim = await journal.claim(id); if (claim.status !== "claimed") throw Error("fixture");
+  const recovery = { ...id, claimId: claim.claimId, terminalOwnerFingerprint: hash("terminal"),
+    reconciliationFingerprint: hash("receipt") };
+  let checks = 0;
+  await expect(journal.reconcileQuiescentLegacy({ ...recovery, assertQuiescent: async () => { if (++checks === 2) throw Error("owner changed"); } })).rejects.toThrow("owner changed");
+  expect(await journal.claim(id)).toEqual({ status: "unknown" });
+  const modern = identity(1), owner = hash("modern");
+  const modernClaim = await journal.claim(modern, owner); if (modernClaim.status !== "claimed") throw Error("fixture");
+  await expect(journal.reconcileQuiescentLegacy({ ...recovery, ...modern, claimId: modernClaim.claimId,
+    assertQuiescent: async () => {} })).rejects.toThrow("legacy pending");
+}));
 test("missing whole storage, missing state and interrupted writes never reinitialize execution", async () => {
   for (const failure of ["directory", "file", "incomplete", "corrupt", "lock"] as const) await fixture(async options => {
     const journal = new FileNativeVisiblePrefixStageJournal(options);

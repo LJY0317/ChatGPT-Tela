@@ -21,6 +21,25 @@ does not retroactively reconcile older incidents lacking an owned closure receip
 entries extend the local journal format; older runtimes reject them safely rather than replay them.
 Settled entries have bounded retention/capacity; pending unknown operations are never evicted.
 
+An explicitly requested maintenance recovery may reconcile one exact legacy pending operation
+through `reconcileQuiescentLegacy`. Its authenticated lifecycle adapter must select the owned
+profile/account and unchanged claim, prove no active Native work through public metadata, obtain
+the official profile cleanup acknowledgement, and independently prove its original runtime and
+Desktop process owners absent. Under the journal writer lock it rechecks stopped profile ownership,
+account/installation binding and process absence twice before writing. The record retains its
+source, claim, reconciliation fingerprint and `remoteOutcome=unknown`; `closed` attests only local
+quiescence. A terminal Native owner fingerprint fences off the existing failed turn. Only a later
+canonically proven Native turn may claim a new operation. No old response, tools or generation are
+replayed. `pendingOperations` exposes bounded selection metadata, never summary contents.
+
+This is an explicit privileged maintenance action, not an automatic startup migration or an
+inference from diagnostic timestamps. Active work, changed ownership, modern pending records,
+failed cleanup, live old processes and changed selections refuse mutation. Acknowledged recovery
+is idempotent for its exact receipt; interrupted maintenance must inspect its operation checkpoint
+before taking further action. The profile is restored through the same official lifecycle. The
+existing cancellation-lifecycle runtime understands the resulting closed entry, so this recovery
+does not require replacing binaries or restarting another profile.
+
 Structural stages now include `context_checkpoint_provider_invoked`, `web_send_activation_started`
 (phase `context_preload` or `turn`), local `web_send_activation_settled`,
 `context_checkpoint_closed`, `native_checkpoint_stage_closed`, `native_prior_execution_settled`,
