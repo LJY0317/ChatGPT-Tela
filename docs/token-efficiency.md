@@ -30,6 +30,12 @@ changes and avoid model-backed rechecking. Do not substitute arbitrary DOM selec
 visible answers or uncertain sends for those proofs. Distinguish an actual completed answer blocked
 by observation from preparation-only work or an unaccepted request.
 
+Retain causal submission proof independently of rendered-body availability. Display expansion must
+not force cold reconstruction when the exact composer/send, logical parent and unchanged host input
+still prove the owned request. Distinguish display evidence from ownership evidence in diagnostics.
+Host-input cancellation settles only after physical release; a generic observation failure remains
+unresolved. Preserve compatible completed checkpoint stages without resending the uncertain stage.
+
 ## Capacity, ownership and preparation policy
 
 Native owns canonical task history, edits, authorization and compaction. Preserve logical/physical

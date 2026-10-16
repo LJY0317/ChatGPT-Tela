@@ -1254,7 +1254,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const assertCausalInputUnchanged = inputBaseline?.available && inputBaseline.signal && !inputBaseline.signal.aborted && Number.isSafeInteger(inputBaseline.revision)
       ? () => {
         const now = inputOwner!.current();
-        if (!now.available || now.revision !== inputBaseline.revision) {
+        if (!now.available || now.revision !== inputBaseline.revision || inputBaseline.signal.aborted) {
+          emitDiagnosticEvent("chatgpt_tela_work", "web_submission_input_revoked", {
+            host_available: now.available, revision_matches: now.revision === inputBaseline.revision,
+            input_aborted: inputBaseline.signal.aborted,
+          });
           throw new WebSubmissionUnproven("author_payload_unavailable");
         }
       } : undefined;
@@ -1439,7 +1443,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           && turn.parentUserTurnKey && !preSubmitUserLineageKeys.has(turn.parentUserTurnKey) ? [turn.parentUserTurnKey] : []));
         const composerConsumed = snapshot.composers.filter(item => item.key === composer.key).length === 1
           && snapshot.composers.find(item => item.key === composer.key)!.textLength === 0;
-        const causalReceipt = observedFingerprint === undefined && !!assertCausalInputUnchanged
+        // Causality is independent of whether the initial renderer happens to expose
+        // the body. Preserve the stronger host fence for readable submissions too;
+        // a later preview expansion cannot replace the submitted composer identity.
+        const causalReceipt = !!assertCausalInputUnchanged
           && !!candidate?.lineageAnchor && !filled.turns.some(turn => turn.lineageAnchor === candidate.lineageAnchor)
           && composerConsumed && (sameRoute || canonicalHydration) && pairedAssistants.length === 1
           && newAssistantParents.size === 1
@@ -1455,6 +1462,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           logical_anchor_present: candidate?.lineageAnchor !== undefined,
           expected_payload_matches: authorFingerprint(candidate, expectedFingerprint) === expectedFingerprint,
           causal_receipt: causalReceipt, composer_consumed: composerConsumed,
+          input_boundary_available: assertCausalInputUnchanged !== undefined,
           paired_assistant_count: pairedAssistants.length,
           paired_anchor_matches: !!candidate?.lineageAnchor && pairedAssistants.length === 1
             && pairedAssistants[0]!.lineageAnchor === candidate.lineageAnchor,
@@ -1479,7 +1487,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         }
         if (newUserTurns.length === 1 && (observedFingerprint !== undefined || causalReceipt)) {
           const userTurn = newUserTurns[0]!;
-          const acceptedFingerprint = observedFingerprint ?? expectedFingerprint;
+          const acceptedFingerprint = causalReceipt ? expectedFingerprint : observedFingerprint!;
           const handle = Object.freeze({
             nativeTaskId: request.nativeTaskId,
             nativeTurnId: request.nativeTurnId,

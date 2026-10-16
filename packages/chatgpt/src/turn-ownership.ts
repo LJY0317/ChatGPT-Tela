@@ -67,25 +67,29 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
   const route = new URL(snapshot.url).origin + new URL(snapshot.url).pathname;
   const users = snapshot.turns.filter(item => item.role === "user" && item.key === tracked.userTurnKey);
   const current = users[0];
-  const payloadObserved = authorFingerprint(current, tracked.acceptedUserFingerprint) !== undefined;
-  const payloadState = !current ? "unmounted" : ownedAuthorFingerprint(current, tracked) === undefined ? "unavailable"
-    : ownedAuthorFingerprint(current, tracked) === tracked.acceptedUserFingerprint ? (tracked.assertCausalInputUnchanged ? "causal" : "matching") : "changed";
+  const renderedFingerprint = authorFingerprint(current, tracked.acceptedUserFingerprint);
+  const renderedState = !current ? "unmounted" : renderedFingerprint === undefined ? "unavailable"
+    : renderedFingerprint === tracked.acceptedUserFingerprint ? "matching" : "changed";
+  const ownedFingerprint = ownedAuthorFingerprint(current, tracked);
+  const payloadState = !current ? "unmounted" : ownedFingerprint === undefined ? "unavailable"
+    : ownedFingerprint === tracked.acceptedUserFingerprint ? (tracked.assertCausalInputUnchanged ? "causal" : "matching") : "changed";
   const anchorState = !current?.lineageAnchor || !tracked.acceptedLineageAnchor ? "unavailable"
     : current.lineageAnchor === tracked.acceptedLineageAnchor ? "matching" : "changed";
   const proofReason = current?.userPayloadReason;
   const reasonClass = proofReason && ["author_payload", "author_root_missing", "ambiguous_author_root", "author_payload_empty", "author_payload_budget"].includes(proofReason)
     ? proofReason : "unclassified";
   // One bounded witness per structural transition, never text, raw identifiers or polling.
-  const witness = JSON.stringify([payloadState, anchorState, reasonClass, users.length, route === tracked.conversationRoute,
+  const witness = JSON.stringify([payloadState, renderedState, anchorState, reasonClass, users.length, route === tracked.conversationRoute,
     snapshot.turns.filter(item => item.role === "assistant").length]);
   if (tracked.ownershipWitness !== witness) {
     tracked.ownershipWitness = witness;
     const count = tracked.ownershipWitnessCount = (tracked.ownershipWitnessCount ?? 0) + 1;
     if (count <= 64) emitDiagnosticEvent("chatgpt_tela_work", "web_turn_ownership_observed", {
       contract_version: 1, payload_state: payloadState, anchor_state: anchorState,
+      rendered_payload_state: renderedState,
       accepted_key_count: users.length, route_matches: route === tracked.conversationRoute,
       reason_class: reasonClass,
-      author_root_available: payloadObserved, causal_receipt: tracked.assertCausalInputUnchanged !== undefined, witness_count: count,
+      author_root_available: renderedFingerprint !== undefined, causal_receipt: tracked.assertCausalInputUnchanged !== undefined, witness_count: count,
     });
     else if (count === 65) emitDiagnosticEvent("chatgpt_tela_work", "web_turn_ownership_budget_reached", { witness_count: 64 });
   }

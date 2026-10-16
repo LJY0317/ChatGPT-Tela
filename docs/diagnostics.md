@@ -568,6 +568,23 @@ A successful socket write does not prove frontend receipt, filtering or renderin
 
 `web_turn_ownership_observed` records transition-only author-payload/anchor states, accepted-key count and route-match booleans (64 witnesses per turn). Missing author projection is distinguished from confirmed conflicting identity; the first acceptance wait and recovery have separate events. It stores no body or raw identifiers.
 
+Author ownership witnesses also separate `rendered_payload_state` (unmounted/unavailable/matching/changed)
+from `payload_state` and `causal_receipt`. A changed preview under a valid causal receipt is not an
+ownership rejection. Acceptance records host input-boundary availability; `web_submission_input_revoked`
+records availability, revision equality and abort state without keys, positions or text. Existing
+transition caps still apply; no observer or polling loop is added.
+
+Checkpoint diagnostics span the same operation: `checkpoint_operation_observed` records accepted and
+completed phases, while `checkpoint_operation_failed` retains the phase reached and whether submission
+and completion were observed. Completion does not imply a valid envelope or durable summary.
+`context_checkpoint_failed` distinguishes Native-owner cancellation, host-input revocation and provider
+errors. `context_checkpoint_released` records physical release and persistence separately; a failed
+release has its own event and cannot produce a local-close receipt. Generic observation errors remain
+unresolved even after release. Successful release after proven local cancellation uses the existing
+local-close settlement; it proves neither remote termination nor permission to replay a request.
+No exception messages, message digests, source bodies, raw operation identities or private captures
+are added. Existing structured incident/log retention bounds apply.
+
 `inspection_window_action` distinguishes reveal, hide, close-to-hide and owned release, including document generation/live state. `inspection_mode_changed` records mode changes; `inspection_input_observed` records at most64 activation categories per surface with owned-input/mode flags, never keys, coordinates or target text. These observations establish timing and input source, not approval acceptance or causality. Existing structural incident limits/private capture consent and retention apply; no sampler or model request is added.
 
 ### Native response versus task lifetime
