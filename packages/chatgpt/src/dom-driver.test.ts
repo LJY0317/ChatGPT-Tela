@@ -307,6 +307,7 @@ describe("current ChatGPT DOM surface driver", () => {
     expect((await driver.observe()).turns[0]!.contentFingerprint).toBeUndefined();
     user.selectors['[data-search-result-target]'] = [author, new FixtureElement()];
     expect((await driver.observe()).turns[0]!.contentFingerprint).toBeUndefined();
+    expect((await driver.observe()).turns[0]!.userPayloadStructure).toEqual({ rootCount: 2, nestedRoots: false });
   });
   test("actual renderer separates exact plain-body receipt proof from Markdown escaping", async () => {
     const receipt = "TELA_CONTEXT_ACK ctxr_" + "a".repeat(32);

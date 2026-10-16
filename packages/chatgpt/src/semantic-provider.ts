@@ -1,3 +1,4 @@
+import { WebSubmissionUnproven, type WebSubmissionProofReason } from "@chatgpt-tela/core";
 import { assistantFor, baselineUserLineageKeys, resolveAssistantLineage, type TurnOwnership, type AssistantLineageResolution } from "./turn-ownership";
 import { createHash } from "node:crypto";
 import {
@@ -137,9 +138,18 @@ function surfaceDiagnostic(stage: string, snapshot: ChatGptSurfaceSnapshot, extr
   });
 }
 
-function acceptanceProofReason(reason: string | undefined): string {
+function acceptanceProofReason(reason: string | undefined): WebSubmissionProofReason {
   return reason && ["author_root_missing", "ambiguous_author_root", "author_payload_empty", "author_payload_budget"].includes(reason)
-    ? reason : "author_payload_unavailable";
+    ? reason as WebSubmissionProofReason : "author_payload_unavailable";
+}
+
+/** Validate even injected drivers; no unknown strings or content enter diagnostics. */
+function acceptanceStructure(turn: ChatGptTurnObservation | undefined) {
+  const witness = turn?.userPayloadStructure;
+  return witness && Number.isSafeInteger(witness.rootCount) && witness.rootCount >= 0 ? {
+    author_root_count: Math.min(witness.rootCount, 65),
+    ...(typeof witness.nestedRoots === "boolean" ? { author_roots_nested: witness.nestedRoots } : {}),
+  } : {};
 }
 
 function driverFor(surface: BrowserSurfaceLease): ChatGptSurfaceDriver {
@@ -1440,6 +1450,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           acceptancePendingRecorded = true;
           emitDiagnosticEvent("chatgpt_tela_work", "web_turn_acceptance_pending", {
             reason_class: acceptanceProofReason(newUserTurns[0]!.userPayloadReason), user_count: 1,
+            ...acceptanceStructure(newUserTurns[0]),
             logical_anchor_present: newUserTurns[0]!.lineageAnchor !== undefined,
           });
         }
@@ -1451,9 +1462,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       emitDiagnosticEvent("chatgpt_tela_work", "web_turn_acceptance_timeout", {
         reason_class: users.length === 1 ? acceptanceProofReason(users[0]!.userPayloadReason) : "new_author_unavailable",
         user_count: users.length, accepted: false, remote_terminal_proven: false,
+        ...acceptanceStructure(users.length === 1 ? users[0] : undefined),
         assistant_complete_observed: snapshot.turns.some(turn => turn.role === "assistant" && turn.phase === "complete"),
       });
-      throw new Error("Web submission outcome is uncertain: local acceptance proof timed out; do not resend this operation", { cause: error });
+      throw new WebSubmissionUnproven(users.length === 1
+        ? acceptanceProofReason(users[0]!.userPayloadReason) : "new_author_unavailable");
     }
   }
 

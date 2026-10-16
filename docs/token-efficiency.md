@@ -17,6 +17,20 @@ change the selected model/effort, weaken cancellation, or replay an uncertain op
 5. Bound and expose remaining preparation cost. A transport file is not compression or proof that
    all of its contents were understood. Estimates are not provider-billed token measurements.
 
+A lower call count is not sufficient if it increases duplicated source or loses necessary context.
+Cold preparation needs an economic admission plan based on compatible completed receipts, remaining
+new calls, estimated transfer and elapsed-time bounds before sending. Source-byte and emergency
+stage ceilings alone do not satisfy that target. Prefer incremental checkpoints over repeated
+whole-history reconstruction. Current implementation has a 16 MiB source limit and a 128-stage
+ceiling; these are finite safety bounds, not a claim that that amount of preparation is acceptable
+for ordinary interaction. A tighter cost admission policy remains required.
+
+Validation must establish the specific evidence needed for request ownership, causal lineage,
+completion and delivery. Perform deterministic checks locally; ignore irrelevant presentation
+changes and avoid model-backed rechecking. Do not substitute arbitrary DOM selection, unrelated
+visible answers or uncertain sends for those proofs. Distinguish an actual completed answer blocked
+by observation from preparation-only work or an unaccepted request.
+
 ## Reuse and provenance
 
 Reusable units are content-addressed within account, Native conversation, selected model/effort,
@@ -43,6 +57,15 @@ A visible Web answer is not proof that it belongs to the accepted Native operati
 observation has a bounded deadline even when the browser stops changing; missing author proof
 must produce a diagnostic failure, not an endless working indicator, a fabricated final answer or
 an automatic resend. Mechanical receipt observation must not add a model call.
+
+An activated send whose acceptance remains unproven uses the closed
+`tela_web_submission_unproven` classification. Preserve that first structural reason across
+retirement, HTTP rejection and an already-started progress stream; reconnects must not launch a
+second execution. Reconcile the existing submission before a new authorized turn continues.
+Ambiguous author roots supply no content identity: record only a saturated candidate count and
+bounded nesting witness, never browser text or an arbitrarily selected root. This evidence adds
+zero model calls, context injection or successful-turn prompt bytes. Completed preparation receipts
+remain available under their original source/account/model/policy identity.
 
 ## Regression and review gates
 

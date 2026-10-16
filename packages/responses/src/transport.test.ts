@@ -1,3 +1,4 @@
+import { WebSubmissionUnproven, WEB_SUBMISSION_PROOF_REASONS } from "@chatgpt-tela/core";
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -95,6 +96,50 @@ describe("Native Responses HTTP transport", () => {
     expect((await response.json()).error).toMatchObject({ type: "invalid_request_error",
       code: "tela_native_response_cycle_conflict", retryable: false });
     expect(launches).toBe(1); await gateway.close();
+  });
+
+  test("unproven submission preserves the first cause across retirement and cannot send twice", async () => {
+    for (const reason of WEB_SUBMISSION_PROOF_REASONS) {
+      let reads = 0, sends = 0;
+      const gateway = new NativeResponsesGateway({ async currentTurn(threadId) {
+        reads++; return source.currentTurn(threadId);
+      } }, new ActiveTurnRegistry(), async turn => {
+        sends++; turn.channel.markSubmitted(); throw new WebSubmissionUnproven(reason);
+      });
+      try {
+        const first = await handleNativeResponsesHttp(post(body()), gateway);
+        expect(first.status).toBe(400);
+        const receipt = await first.json();
+        expect(receipt.error).toMatchObject({ code: "tela_web_submission_unproven", reason,
+          retryable: false, recovery: { kind: "reconcile_web_submission", requires_new_native_turn: true } });
+        for (let i = 0; i < 2; i++) {
+          const replay = await handleNativeResponsesHttp(post(body()), gateway);
+          expect(replay.status).toBe(400); expect(await replay.json()).toEqual(receipt);
+        }
+        expect(reads).toBe(1); expect(sends).toBe(1);
+      } finally { await gateway.close(); }
+    }
+  });
+
+  test("unproven submission after preparation progress has identical SSE and replay recovery", async () => {
+    let fail!: (error: unknown) => void;
+    const pending = new Promise<void>((_, reject) => { fail = reject; });
+    let sends = 0;
+    const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async turn => {
+      turn.channel.publishProgress("Prepared context"); sends++; turn.channel.markSubmitted(); await pending;
+    });
+    try {
+      const response = await handleNativeResponsesHttp(post(body()), gateway);
+      fail(new WebSubmissionUnproven("ambiguous_author_root"));
+      const events = (await response.text()).split("\n").filter(line => line.startsWith("data: {"))
+        .map(line => JSON.parse(line.slice(6)));
+      const error = events.find(event => event.type === "response.failed").response.error;
+      expect(error).toMatchObject({ code: "tela_web_submission_unproven", reason: "ambiguous_author_root", retryable: false });
+      expect(events.some(event => event.type === "response.completed")).toBe(false);
+      const replay = await handleNativeResponsesHttp(post(body()), gateway);
+      expect(replay.status).toBe(400); expect((await replay.json()).error).toEqual(error);
+      expect(sends).toBe(1);
+    } finally { await gateway.close(); }
   });
 
   test("retained-context failure survives retirement without replaying execution or losing its cause", async () => {

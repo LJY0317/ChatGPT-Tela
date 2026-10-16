@@ -2385,10 +2385,12 @@ test("a visible final without author proof cannot leave submit waiting forever o
     const pending = new ChatGptSemanticProvider().submitTurn(surface.lease, request());
     while (!driver.activated.length) await Promise.resolve();
     driver.queued.push({ ...driver.current, revision: "final-without-author-proof", turns: [
-      { key: "user", role: "user", userPayloadReason: "author_root_missing" },
+      { key: "user", role: "user", userPayloadReason: "ambiguous_author_root",
+        userPayloadStructure: { rootCount: 2, nestedRoots: true } },
       { key: "assistant", role: "assistant", parentUserTurnKey: "user", phase: "complete", text: "Visible final" },
     ] });
-    await expect(pending).rejects.toThrow("local acceptance proof timed out");
+    await expect(pending).rejects.toMatchObject({ code: "tela_web_submission_unproven",
+      reason: "ambiguous_author_root", retryable: false });
     expect(driver.activated).toHaveLength(1);
   } finally { await surface.host.close(); }
 }, 35000);

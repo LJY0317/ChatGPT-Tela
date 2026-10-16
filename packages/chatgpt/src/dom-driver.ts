@@ -41,6 +41,8 @@ interface RawTurn {
   readonly lineageAnchor?: string;
   readonly contentText?: string;
   readonly userPayloadReason?: string;
+  /** Content-free adapter witness, count saturated at 65; never acceptance authority. */
+  readonly userPayloadStructure?: { readonly rootCount: number; readonly nestedRoots?: boolean };
   readonly bodyProof?: { readonly version: 1; readonly value?: string; readonly reason?: string };
   readonly plainBodyText?: string;
   readonly phase?: ChatGptAssistantPhase;
@@ -556,6 +558,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         ...(lineageAnchor ? { lineageAnchor } : {}),
         ...(payload.value !== undefined ? { contentText: payload.value } : {}),
         userPayloadReason: payload.reason,
+        userPayloadStructure: { rootCount: payload.rootCount, ...(payload.nestedRoots !== undefined ? { nestedRoots: payload.nestedRoots } : {}) },
       });
     }
     // The current renderer identifies assistant bodies directly, without the role wrapper.
@@ -1653,6 +1656,7 @@ function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
     ...(anchor ? { lineageAnchor: anchor } : {}),
     ...(raw.contentText !== undefined ? { contentFingerprint: fingerprint(raw.contentText) } : {}),
     ...(raw.userPayloadReason ? { userPayloadReason: raw.userPayloadReason } : {}),
+    ...(raw.userPayloadStructure ? { userPayloadStructure: raw.userPayloadStructure } : {}),
     ...(raw.bodyProof ? { bodyProof: raw.bodyProof.value !== undefined
       ? { version: raw.bodyProof.version, digest: fingerprint(raw.bodyProof.value) }
       : { version: raw.bodyProof.version, reason: raw.bodyProof.reason ?? "body_unavailable" } } : {}),

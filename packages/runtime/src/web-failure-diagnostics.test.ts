@@ -1,3 +1,4 @@
+import { WebSubmissionUnproven, WEB_SUBMISSION_PROOF_REASONS } from "@chatgpt-tela/core";
 import { expect, test } from "bun:test";
 import { webExecutionFailureFields } from "./web-failure-diagnostics";
 import { WebRetainedContextUnproven, WEB_RETAINED_CONTEXT_REASONS } from "@chatgpt-tela/core";
@@ -31,4 +32,13 @@ test("untrusted exception prose never becomes routine diagnostic data", () => {
   expect(webExecutionFailureFields(error)).toEqual({ reason_class: "unclassified", owner_aborted: false, abort_reason_class: "none" });
   expect(webExecutionFailureFields("private non-error").reason_class).toBe("non_error");
   expect(webExecutionFailureFields(Object.assign(error, { code: "tela_web_retained_context_unproven", reason: "PRIVATE BROWSER TEXT" })).reason_class).toBe("unclassified");
+});
+
+test("submission proof diagnostics keep only closed structural reasons", () => {
+  for (const reason of WEB_SUBMISSION_PROOF_REASONS) {
+    expect(webExecutionFailureFields(new WebSubmissionUnproven(reason)).reason_class).toBe(reason);
+  }
+  expect(webExecutionFailureFields(Object.assign(new Error("private text"), {
+    code: "tela_web_submission_unproven", reason: "private browser content",
+  })).reason_class).toBe("unclassified");
 });

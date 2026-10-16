@@ -177,6 +177,18 @@ test("production request-prefix serialization reuses unchanged fragments across 
   const changed=calls.filter(x=>x.mode==="fragment");expect(changed.length).toBeLessThan(cold);
   expect(changed.every(x=>x.startByte>0)).toBe(true);
   calls.length=0;await run(grown);expect(calls).toHaveLength(0);
+  // A genuine edited branch replaces the suffix under new Native authority.
+  // It must neither resend the unchanged prefix nor reuse the old suffix/merge.
+  const edited=nativeRequestPrefixSnapshot("thread","edited-owner",{...base,headRevisionId:"edited",
+   segments:[...base.segments,{type:"revision",kind:"user",revisionId:"edited",content:"replacement suffix"}]});
+  calls.length=0;await run(edited);
+  const editedFragments=calls.filter(x=>x.mode==="fragment");
+  expect(editedFragments.length).toBeGreaterThan(0);expect(editedFragments.length).toBeLessThan(cold);
+  expect(editedFragments.every(x=>x.startByte>0)).toBe(true);
+  expect(editedFragments.map(x=>x.fragment).join("")).toContain("replacement suffix");
+  expect(editedFragments.map(x=>x.fragment).join("")).not.toContain("new suffix");
+  expect(calls.filter(x=>x.mode==="merge")).toHaveLength(1);
+  calls.length=0;await run({...edited,currentTurnId:"another-proven-owner"});expect(calls).toHaveLength(0);
  }finally{await rm(root,{recursive:true,force:true});}
 },30000);
 

@@ -21,3 +21,5 @@ export * from "./web-retained-context";
 export * from "./native-projection-error";
 
 export * from "./native-web-handoff-error";
+
+export * from "./web-submission-error";

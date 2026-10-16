@@ -39,6 +39,8 @@ export interface ChatGptTurnObservation {
   /** Author payload only, never whole-bubble innerText; absent means proof unavailable. */
   readonly contentFingerprint?: string;
   readonly userPayloadReason?: string;
+  /** Content-free adapter witness, count saturated at 65; never acceptance authority. */
+  readonly userPayloadStructure?: { readonly rootCount: number; readonly nestedRoots?: boolean };
   readonly bodyProof?: { readonly version: 1; readonly digest?: string; readonly reason?: string };
   /** Opt-in bounded diagnostic witness; never authority or public progress. */
   readonly privateBodyEvidence?: { readonly chunks: readonly string[]; readonly complete: boolean };

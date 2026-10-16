@@ -1,3 +1,4 @@
+import { WebSubmissionUnproven, webSubmissionFailureReason, type WebSubmissionProofReason } from "@chatgpt-tela/core";
 import { randomBytes } from "node:crypto";
 import { NativeProjectionUnsupported, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
@@ -55,7 +56,7 @@ export class ActiveTurnRegistry {
   readonly #nativeCallIdsByTurn = new Map<string, Set<string>>();
   readonly #capabilityByTurn = new Map<string, string>();
   // A fixed recovery classification only; never retain raw exceptions or request content.
-  readonly #retiredTurns = new Map<string, true | "handoff_probable" | "handoff_ambiguous" | "projection_unsupported" | NativeHistoryBootstrapRequired["recoveryReason"] | { readonly retainedContext: WebRetainedContextReason }>();
+  readonly #retiredTurns = new Map<string, true | "handoff_probable" | "handoff_ambiguous" | "projection_unsupported" | NativeHistoryBootstrapRequired["recoveryReason"] | { readonly retainedContext: WebRetainedContextReason } | { readonly submission: WebSubmissionProofReason }>();
   static readonly MAX_RETIRED_TURNS = 256;
   readonly #routeId: string | undefined;
 
@@ -93,7 +94,8 @@ export class ActiveTurnRegistry {
 
   retiredError(threadId: string, turnId: string): Error {
     const reason = this.#retiredTurns.get(threadId + "\u0000" + turnId);
-    if (reason && typeof reason === "object") return new WebRetainedContextUnproven(reason.retainedContext);
+    if (reason && typeof reason === "object") return "submission" in reason
+      ? new WebSubmissionUnproven(reason.submission) : new WebRetainedContextUnproven(reason.retainedContext);
     if (reason === "handoff_probable" || reason === "handoff_ambiguous") return new NativeWebHandoffUnproven(reason === "handoff_ambiguous" ? "ambiguous" : "probable");
     if (reason === "projection_unsupported") return new NativeProjectionUnsupported();
     return reason !== undefined && reason !== true
@@ -140,7 +142,8 @@ export class ActiveTurnRegistry {
     const error = failure && typeof failure === "object"
       ? failure as { code?: unknown; recoveryReason?: unknown; proofState?: unknown } : undefined;
     const retainedContext = webRetainedContextFailureReason(failure);
-    this.#retiredTurns.set(key, retainedContext ? { retainedContext } : error?.code === "native_history_bootstrap_required"
+    const submission = webSubmissionFailureReason(failure);
+    this.#retiredTurns.set(key, submission ? { submission } : retainedContext ? { retainedContext } : error?.code === "native_history_bootstrap_required"
       ? error.recoveryReason === "checkpoint_rejected" ? "checkpoint_rejected"
         : error.recoveryReason === "checkpoint_interrupted" ? "checkpoint_interrupted"
         : error.recoveryReason === "source_budget" ? "source_budget"
