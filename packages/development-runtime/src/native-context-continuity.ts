@@ -1,3 +1,4 @@
+import { CheckpointPreparationBudget, type CheckpointPreparationPolicy } from "./checkpoint-preparation-budget";
 import { createHash } from "node:crypto";
 import {
   NativeHistoryBootstrapRequired,
@@ -34,6 +35,7 @@ export type NativeHistorySource = Pick<NativeCompactionHistoryProjection,
 };
 
 export interface NativeContinuitySources {
+  readonly checkpointPreparationPolicy?: CheckpointPreparationPolicy;
   /** One complete public indexed source, independent of optional UI compaction markers. */
   readonly visiblePrefix?: {
     readonly read: (threadId: string, turnId: string, signal?: AbortSignal) => Promise<NativeVisiblePrefixSnapshot>;
@@ -144,9 +146,14 @@ export async function resolveNativeContextContinuity(input: {
   readonly effort?: ChatGptWebEffort;
   readonly browserModel?: { readonly familyKey: string; readonly effort: ChatGptWebEffort };
   readonly options: NativeContinuitySources;
+  readonly preparationBudget?: CheckpointPreparationBudget;
   readonly preparation?: Parameters<NativeRequestCheckpointProducer>[1];
 }): Promise<NativeContinuityDecision> {
-  const { threadId, currentTurnId, opaque, options, preparation } = input;
+  const { threadId, currentTurnId, opaque, preparation } = input;
+  const preparationBudget = input.preparationBudget ?? new CheckpointPreparationBudget(
+    chatGptWebCheckpointSourceTokenLimit(input.effort ?? "medium"), input.options.checkpointPreparationPolicy);
+  const options = { ...input.options, ...(input.options.checkpointProducer
+    ? { checkpointProducer: preparationBudget.producer(input.options.checkpointProducer) } : {}) };
   const signal = preparation?.signal;
   const probe = async <T>(phase: "anchor" | "handoff" | "handoff_verification" | "history" | "visible_prefix", read: () => Promise<T>): Promise<T> => {
     try { return await read(); }
@@ -303,20 +310,18 @@ export async function resolveNativeContextContinuity(input: {
     if (source.threadId !== threadId || source.currentTurnId !== currentTurnId) {
       throw new Error("Native visible prefix belongs to a different current turn");
     }
-    let producedStages = 0;
+    const previousCalls = preparationBudget.modelCalls;
     const checkpoint = await produceNativePrefixCheckpoint({
       source, accountNamespace: sourceAdapter.accountNamespace,
-      journal: sourceAdapter.journal, producer: async (...args) => {
-        producedStages++;
-        return options.checkpointProducer!(...args);
-      },
+      preparationBudget,
+      journal: sourceAdapter.journal, producer: options.checkpointProducer,
       effort: input.effort,
       ...(input.browserModel ? { browserModel: input.browserModel } : {}),
       confirmSource: () => sourceAdapter.read(threadId, currentTurnId, signal),
       ...(signal ? { signal } : {}), ...(preparation ? { preparation } : {}),
     });
     return Object.freeze({ ...resolved("visible-prefix-checkpoint", checkpoint, [], source.references),
-      checkpointProduced: producedStages > 0, checkpointReused: producedStages === 0 });
+      checkpointProduced: preparationBudget.modelCalls > previousCalls, checkpointReused: preparationBudget.modelCalls === previousCalls });
   }
 
   let anchor: NativeReadableHistoryAnchor | undefined;

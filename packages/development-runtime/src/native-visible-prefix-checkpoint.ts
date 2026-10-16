@@ -1,3 +1,4 @@
+import { CheckpointPreparationBudget, CheckpointPreparationBudgetExceeded, type CheckpointPreparationPolicy } from "./checkpoint-preparation-budget";
 import { createHash } from "node:crypto";
 import { NativeHistoryBootstrapRequired, type NativeVisiblePrefixSnapshot } from "@chatgpt-tela/codex";
 import {
@@ -12,7 +13,6 @@ import { emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 
 const MAX_SUMMARY_BYTES = 32 * 1024;
 const MAX_SOURCE_BYTES = 16 * 1024 * 1024;
-const DEFAULT_MAX_MODEL_STAGES = 128;
 const STAGE_TYPE = "tela_native_visible_prefix_stage_v2";
 function sha(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 function tokens(value: string): number { return Math.ceil(Buffer.byteLength(value, "utf8") / 4); }
@@ -34,6 +34,8 @@ export interface NativeVisiblePrefixStageReceipt extends NativeVisiblePrefixStag
  * Completed receipts retain bounded summaries independently from the disposable cache.
  */
 export interface NativeVisiblePrefixStageJournal {
+  /** Bounded immutable derived results only; never claims work or grants send authority. */
+  completedReceipts(): Promise<readonly NativeVisiblePrefixStageReceipt[]>;
   /** v2 claims must atomically refuse pending v1 executions of sourceRootDigest. */
   claim(identity: NativeVisiblePrefixStageIdentity, ownerFingerprint?: string, sourceRootDigest?: string, scopeFingerprint?: string): Promise<
     | { readonly status: "claimed"; readonly claimId: string }
@@ -67,8 +69,9 @@ export interface NativePrefixCheckpointInput {
   readonly confirmSource: () => Promise<Pick<NativeVisiblePrefixSnapshot, "threadId" | "currentTurnId" | "digest">>;
   readonly signal?: AbortSignal;
   readonly preparation?: Parameters<NativeRequestCheckpointProducer>[1];
-  /** Finite explicit model-call authority budget, not permission to truncate evidence. */
-  readonly maxModelStages?: number;
+  readonly preparationPolicy?: CheckpointPreparationPolicy;
+  /** Shared by all phases of this owned Native preparation; never Native authority. */
+  readonly preparationBudget?: CheckpointPreparationBudget;
   /** Semantic summarizer policy identity; transport-only changes must not invalidate content. */
   readonly summaryPolicyFingerprint?: string;
 }
@@ -93,10 +96,6 @@ function validateReceipt(receipt: NativeVisiblePrefixStageReceipt, identity: Nat
 /** Complete contiguous UTF-8 source coverage, followed by strictly reducing ordered merges. */
 export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpointInput): Promise<string> {
   const { source } = input;
-  const maxStages = input.maxModelStages ?? DEFAULT_MAX_MODEL_STAGES;
-  if (!Number.isSafeInteger(maxStages) || maxStages < 1 || maxStages > 4096) {
-    throw new Error("Native visible-prefix checkpoint requires a finite model-stage budget");
-  }
   if (input.browserModel && (!input.browserModel.familyKey.trim() || input.browserModel.effort !== input.effort)) {
     throw new Error("Native visible-prefix checkpoint model does not match its input budget");
   }
@@ -134,6 +133,8 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     input.browserModel?.familyKey ?? null, input.effort, policy]));
   const sourceBytes = raw.byteLength;
   const limit = chatGptWebCheckpointSourceTokenLimit(input.effort);
+  const budget = input.preparationBudget ?? new CheckpointPreparationBudget(limit, input.preparationPolicy);
+  const completed = new Map((await input.journal.completedReceipts()).map(receipt => [receipt.key, receipt]));
   let modelStages = 0;
   let reusedStages = 0;
   let transferEstimate = 0;
@@ -165,13 +166,45 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     }
     return best;
   };
+  // One grouping algorithm owns both preflight and execution; policy patches cannot make them drift.
+  function mergeGroups<T extends { startByte: number; endByte: number; summary?: string | undefined }>(nodes: readonly T[]) {
+    const groups: { start: number; end: number; physical?: WebPhysicalContext }[] = [];
+    for (let start = 0; start < nodes.length;) {
+      check();
+      const best = largestFit(start + 1, nodes.length, end => {
+        const group = nodes.slice(start, end);
+        return stageContext({ mode: "merge", startByte: group[0]!.startByte,
+          endByte: group.at(-1)!.endByte, summaries: group });
+      });
+      const end = best?.at ?? start;
+      if (end - start === 1 && end === nodes.length) { groups.push({ start, end }); break; }
+      if (!best || end - start < 2) throw new Error("Web checkpoint summaries cannot be merged within the bounded input budget");
+      groups.push({ start, end, physical: best.physical }); start = end;
+    }
+    if (groups.length >= nodes.length) throw new Error("Native visible-prefix checkpoint merge made no progress");
+    return groups;
+  }
+  const stageIdentity = (physical: WebPhysicalContext): NativeVisiblePrefixStageIdentity => Object.freeze({
+    key: physical.headRevisionId, sourceDigest: sha(physical.segments[0]!.content),
+    inputDigest: sha(serializeChatGptContextAttachment(physical)),
+  });
+  const completedSummary = (physical: WebPhysicalContext): string | undefined => {
+    const identity = stageIdentity(physical), receipt = completed.get(identity.key);
+    return receipt ? validateReceipt(receipt, identity) : undefined;
+  };
   const run = async (physical: WebPhysicalContext, phase: "fragment" | "merge"): Promise<string> => {
     check();
     if (!fits(physical)) throw new Error("Native visible-prefix checkpoint stage exceeds its actual Web input budget");
-    const identity: NativeVisiblePrefixStageIdentity = Object.freeze({
-      key: physical.headRevisionId, sourceDigest: sha(physical.segments[0]!.content),
-      inputDigest: sha(serializeChatGptContextAttachment(physical)),
-    });
+    const identity = stageIdentity(physical);
+    const cached = completedSummary(physical);
+    if (cached !== undefined) {
+      reusedStages++;
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_stage_settled", { phase, outcome: "reused" });
+      return cached;
+    }
+    const inputTokens = chatGptCheckpointInputTokens(physical);
+    // Economic admission precedes durable execution ownership. A rejected plan is not an unknown send.
+    budget.beforeClaim(inputTokens);
     let claim: Awaited<ReturnType<NativeVisiblePrefixStageJournal["claim"]>>;
     const ownerFingerprint = sha(JSON.stringify([source.threadId, source.currentTurnId]));
     try { claim = await input.journal.claim(identity, ownerFingerprint, source.digest, scopeFingerprint); }
@@ -189,10 +222,7 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
       return summary;
     }
     if (typeof claim.claimId !== "string" || !claim.claimId.trim()) throw new Error("Checkpoint journal did not grant an owned claim");
-    if (++modelStages > maxStages) {
-      // Never claim work beyond the explicit call budget. Preflight below prevents this path.
-      throw new Error("Native visible-prefix checkpoint exhausted its model-stage budget");
-    }
+    modelStages++;
     let result: Awaited<ReturnType<NativeRequestCheckpointProducer>>;
     let producerInvoked = false;
     let persistedSummary: string | undefined;
@@ -214,9 +244,8 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     emitDiagnosticEvent("chatgpt_tela_codex", "native_checkpoint_model_started", stageEvidence);
     try {
       check();
-      transferEstimate += chatGptCheckpointInputTokens(physical);
-      producerInvoked = true;
-      result = await withDiagnosticContext({ operation_fingerprint: stageEvidence.operation_fingerprint }, () => input.producer({ nativeTaskId: source.threadId,
+      const producer = budget.producer(input.producer, () => { producerInvoked = true; transferEstimate += inputTokens; });
+      result = await withDiagnosticContext({ operation_fingerprint: stageEvidence.operation_fingerprint }, () => producer({ nativeTaskId: source.threadId,
         sourceRevisionId: physical.headRevisionId, physicalContext: physical, persistResult,
         ...(input.browserModel ? { browserModel: input.browserModel } : {}) },
       signal ? { signal, onProgress: input.preparation?.onProgress ?? (() => {}) } : undefined));
@@ -239,6 +268,7 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
         reason_class: signal?.aborted ? "owner_cancelled" : "producer_failed", submission_state_proven: false,
         local_operation_settled: locallySettled, completed_result_preserved: persistedSummary !== undefined,
       });
+      if (!producerInvoked && locallySettled && cause instanceof CheckpointPreparationBudgetExceeded) throw cause;
       throw new NativePrefixCheckpointInterrupted(identity, { cause },
         locallySettled && receipt?.disposition === "completed_unusable" ? "checkpoint_rejected" : "checkpoint_interrupted");
     }
@@ -276,15 +306,41 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     if (!best || end === undefined || end === offset && raw.length > offset) throw new Error("Web checkpoint budget cannot hold the next source code point");
     fragments.push({ startByte: offset, endByte: end, physical: best.physical });
     offset = end;
-    if (fragments.length > maxStages) throw new Error("Native visible-prefix checkpoint source exceeds its finite stage budget");
   } while (offset < raw.length);
-  // In the worst case every merge combines only two nodes: <=2N-1 model stages.
-  if (fragments.length * 2 - 1 > maxStages) throw new Error("Native visible-prefix checkpoint merge exceeds its finite stage budget");
+  // Resolve exact completed inputs locally before admitting new model work.
+  // Unknown summaries reserve the worst reducing binary merge tree; they are never fabricated.
+  let plannedCalls = 0, plannedInput = 0;
+  let plannedNodes = fragments.map(fragment => {
+    const summary = completedSummary(fragment.physical);
+    if (summary === undefined) { plannedCalls++; plannedInput += chatGptCheckpointInputTokens(fragment.physical); }
+    return { startByte: fragment.startByte, endByte: fragment.endByte, summary };
+  });
+  while (plannedNodes.length > 1) {
+    if (plannedNodes.some(node => node.summary === undefined)) {
+      plannedCalls += plannedNodes.length - 1;
+      plannedInput += (plannedNodes.length - 1) * limit;
+      break;
+    }
+    const next: typeof plannedNodes = [];
+    for (const { start, end, physical } of mergeGroups(plannedNodes)) {
+      if (!physical) { next.push(plannedNodes[start]!); continue; }
+      const summary = completedSummary(physical);
+      if (summary === undefined) { plannedCalls++; plannedInput += chatGptCheckpointInputTokens(physical); }
+      next.push({ startByte: plannedNodes[start]!.startByte, endByte: plannedNodes[end - 1]!.endByte, summary });
+    }
+    plannedNodes = next;
+  }
+  emitDiagnosticEvent("chatgpt_tela_codex", "native_checkpoint_preparation_planned", {
+    planned_model_calls: plannedCalls, planned_transfer_estimate: plannedInput,
+    model_call_budget: budget.policy.maxModelCalls, transfer_budget: budget.policy.maxInputTokens,
+    elapsed_budget_ms: budget.policy.maxElapsedMs, completed_receipt_count: completed.size,
+  });
+  budget.admitPlan(plannedCalls, plannedInput);
   emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_checkpoint_started", {
     source_kind: source.kind,
     source_fingerprint: source.digest.slice(0, 24),
     source_bytes: sourceBytes, source_item_count: source.sourceItemCount,
-    fragment_count: fragments.length, stage_budget: maxStages,
+    fragment_count: fragments.length, stage_budget: budget.policy.maxModelCalls,
   });
   let nodes: Node[] = [];
   const progress = (message: string) => {
@@ -298,21 +354,10 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
   while (nodes.length > 1) {
     progress("Combining prepared conversation context.");
     const merged: Node[] = [];
-    for (let start = 0; start < nodes.length;) {
-      check();
-      const best = largestFit(start + 1, nodes.length, end => {
-        const group = nodes.slice(start, end);
-        return stageContext({ mode: "merge", startByte: group[0]!.startByte,
-          endByte: group.at(-1)!.endByte, summaries: group });
-      });
-      const end = best?.at ?? start, selected = best?.physical;
-      if (end - start === 1 && end === nodes.length) { merged.push(nodes[start]!); start = end; continue; }
-      if (!selected || end - start < 2) throw new Error("Web checkpoint summaries cannot be merged within the bounded input budget");
-      merged.push({ startByte: nodes[start]!.startByte, endByte: nodes[end - 1]!.endByte,
-        summary: await run(selected, "merge") });
-      start = end;
+    for (const { start, end, physical } of mergeGroups(nodes)) {
+      merged.push(physical ? { startByte: nodes[start]!.startByte, endByte: nodes[end - 1]!.endByte,
+        summary: await run(physical, "merge") } : nodes[start]!);
     }
-    if (merged.length >= nodes.length) throw new Error("Native visible-prefix checkpoint merge made no progress");
     nodes = merged;
   }
   await confirm();

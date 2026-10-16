@@ -108,6 +108,7 @@ export interface ElectronDevelopmentRuntimeOptions {
     readonly historyCheckpointCache?: ContextCheckpointCache;
     readonly visiblePrefix?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["visiblePrefix"];
     readonly budgetTokens?: number;
+    readonly checkpointPreparationPolicy?: import("./checkpoint-preparation-budget").CheckpointPreparationPolicy;
   };
   readonly provider?: WebConversationProvider;
   readonly approvalAutomationMode?: import("@chatgpt-tela/chatgpt").ChatGptApprovalAutomationMode;
@@ -243,6 +244,7 @@ export async function startElectronDevelopmentRuntime(
       ...(checkpointCache ? { checkpointCache } : {}),
       ...(historyCheckpointCache ? { historyCheckpointCache } : {}),
       ...(input.context?.budgetTokens !== undefined ? { budgetTokens: input.context.budgetTokens } : {}),
+      ...(input.context?.checkpointPreparationPolicy ? { checkpointPreparationPolicy: input.context.checkpointPreparationPolicy } : {}),
       ...(checkpointCache && input.checkpointProvider ? {
         checkpointProducer: async (request, preparation) => {
           const webEpochId = `checkpoint-${randomUUID()}`;

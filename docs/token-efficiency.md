@@ -21,15 +21,59 @@ A lower call count is not sufficient if it increases duplicated source or loses 
 Cold preparation needs an economic admission plan based on compatible completed receipts, remaining
 new calls, estimated transfer and elapsed-time bounds before sending. Source-byte and emergency
 stage ceilings alone do not satisfy that target. Prefer incremental checkpoints over repeated
-whole-history reconstruction. Current implementation has a 16 MiB source limit and a 128-stage
-ceiling; these are finite safety bounds, not a claim that that amount of preparation is acceptable
-for ordinary interaction. A tighter cost admission policy remains required.
+whole-history reconstruction. The source-byte ceiling remains 16 MiB; preparation is now admitted
+against a separate owned cost policy, rather than the previous 128-stage emergency ceiling.
 
 Validation must establish the specific evidence needed for request ownership, causal lineage,
 completion and delivery. Perform deterministic checks locally; ignore irrelevant presentation
 changes and avoid model-backed rechecking. Do not substitute arbitrary DOM selection, unrelated
 visible answers or uncertain sends for those proofs. Distinguish an actual completed answer blocked
 by observation from preparation-only work or an unaccepted request.
+
+## Capacity, ownership and preparation policy
+
+Native owns canonical task history, edits, authorization and compaction. Preserve logical/physical
+context separation: the Web window is a projection, not a replacement authority. Obtain effective
+Native settings and usage through the public Native adapter where available; never copy Native's
+window size or opaque compaction state into a Web capacity claim. Model capacity, message/file
+transport limits, the user's working-context preference and preparation cost are distinct inputs.
+Reserve output/reasoning headroom and account for accumulated Web context separately from newly
+transferred deltas. Unknown usage remains an estimate. The current Web physical-limit adapter still
+uses isolated conservative calibration; dynamic capability/usage resolution remains unimplemented.
+
+One `CheckpointPreparationBudget` belongs to one Native planner invocation. Continuity recovery,
+fragmented request/history preparation and single checkpoint producers share it. No phase creates
+fresh allowance; same-budget producer decoration is idempotent. The independent policy module owns
+validation, cost admission and monotonic elapsed time. Logical lineage, durable execution claims and
+browser acceptance retain their separate owners. Cost admission grants none of those authorities.
+
+Defaults are at most 8 new provider attempts, estimated input no greater than eight fitted checkpoint
+source windows, and no new attempt after 10 minutes of preparation. These are configurable Tela
+product defaults, not OpenAI model limits, a response deadline or guaranteed billed-token counts.
+An in-flight attempt is allowed to settle; total wall time may exceed the admission deadline by that
+attempt. Reused completed receipts consume no attempt/input allowance and remain readable after the
+admission deadline. A budget rejection is a nonretryable context-preparation limit, not evidence that
+a send occurred or permission to retry a retired Native turn.
+
+The durable ledger exposes bounded completed receipts without making execution claims. Verify their
+exact stage/source/input identity, then estimate unresolved work before the first claim. Unknown
+summaries reserve a conservative reducing binary merge tree; this upper bound can decline a tight
+budget even if actual summaries would have merged more cheaply. Preflight and execution share one
+merge-grouping implementation. Recheck remaining actual allowance before each new claim and before
+entering the provider. If allowance expires while acquiring a claim, an identity-bound, proven
+uninvoked stage is closed; a genuinely uncertain send remains pending. Completed summaries and
+original claim identities are never deleted to make a plan admissible.
+
+Admission policy does not participate in semantic stage identity: changing a cost budget must not
+invalidate compatible completed summaries or bypass an unresolved send. The actual next context is
+still the latest valid checkpoint plus its active suffix; edits exclude abandoned descendants.
+Summary quality, real browser capacity and useful task completion need separate acceptance evidence.
+
+Regression ownership: `checkpoint-preparation-budget.test.ts` covers accounting, time and producer
+decoration; `native-context-continuity.test.ts` covers shared-phase allowance; checkpoint/journal and
+`native-context-efficiency.test.ts` cover zero-budget durable reuse, cold rejection without claims,
+late admission closure, real unknown-send fencing and continuation. Planner/product tests preserve
+routing, Native ownership and policy propagation. Future policy patches must preserve these tests.
 
 ## Reuse and provenance
 

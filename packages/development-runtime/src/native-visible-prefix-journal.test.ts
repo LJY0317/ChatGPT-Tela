@@ -131,3 +131,17 @@ test("released modern operation retains original claim and unknown outcome witho
   expect((await journal.claim(changed, hash("new Native turn"), hash("grown source"), scope)).status).toBe("claimed");
   await expect(journal.complete({ ...id, status: "completed", claimId: claim.claimId, summary: "late old result" })).rejects.toThrow("owned claim");
 }));
+
+test("completed receipt snapshots are immutable reads and never admit a pending send", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options), id = identity();
+  expect(await journal.completedReceipts()).toEqual([]);
+  const claim = await journal.claim(id);
+  if (claim.status !== "claimed") throw Error("fixture");
+  expect(await journal.completedReceipts()).toEqual([]);
+  expect(await journal.pendingOperations()).toHaveLength(1);
+  await journal.complete({ ...id, status: "completed", claimId: claim.claimId, summary: "verified" });
+  const receipts = await new FileNativeVisiblePrefixStageJournal(options).completedReceipts();
+  expect(receipts).toEqual([{ ...id, status: "completed", summary: "verified" }]);
+  expect(Object.isFrozen(receipts[0])).toBe(true);
+  expect(await journal.pendingOperations()).toHaveLength(0);
+}));

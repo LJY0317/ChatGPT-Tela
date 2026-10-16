@@ -180,6 +180,11 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     void run.finally(() => { if (queues.get(this.directory) === run) queues.delete(this.directory); }).catch(() => {});
     return run;
   }
+  async completedReceipts(): Promise<readonly NativeVisiblePrefixStageReceipt[]> {
+    return this.#transaction(async state => state.entries.filter(entry => entry.status === "completed")
+      .map(entry => Object.freeze({ key: entry.key, sourceDigest: entry.sourceDigest,
+        inputDigest: entry.inputDigest, status: "completed" as const, summary: entry.summary! })));
+  }
   async claim(identity: NativeVisiblePrefixStageIdentity, ownerFingerprint?: string, sourceRootDigest?: string, scopeFingerprint?: string) {
     if (!validIdentity(identity)) throw new Error("Invalid Native checkpoint stage identity");
     if (ownerFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(ownerFingerprint)) throw Error("Invalid Native checkpoint owner");

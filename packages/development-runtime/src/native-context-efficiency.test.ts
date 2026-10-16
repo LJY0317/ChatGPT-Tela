@@ -20,6 +20,7 @@ test("durable unchanged-fragment reuse survives cache loss, appended history and
   const calls:any[]=[];
   const original=source("한글😀\\\"\n".repeat(60000));
   const produce=async(snapshot:NativeVisiblePrefixSnapshot,extra:Partial<NativePrefixCheckpointInput>={})=>produceNativePrefixCheckpoint({source:snapshot,journal:journal(),accountNamespace:"account",effort:"medium",
+    preparationPolicy:{maxModelCalls:128,maxInputTokens:20_000_000,maxElapsedMs:600_000},
     confirmSource:async()=>extra.source??snapshot,producer:async r=>{const body=JSON.parse(r.physicalContext.segments[0]!.content);calls.push(body);
       return {nativeTaskId:r.nativeTaskId,sourceRevisionId:r.sourceRevisionId,content:`Bounded derived summary ${hash(JSON.stringify(body)).slice(0,16)}`};},...extra});
   try {
@@ -231,5 +232,31 @@ test("foreign closure receipt cannot classify the owned stage as a settled rejec
    producer:async r=>{throw new WebCheckpointOperationClosed({nativeTaskId:"foreign",sourceRevisionId:r.sourceRevisionId,
     webEpochId:"epoch",disposition:"completed_unusable"});}})).rejects.toMatchObject({recoveryReason:"checkpoint_interrupted"});
   expect(await new FileNativeVisiblePrefixStageJournal(options).pendingOperations()).toHaveLength(1);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test("deadline crossing during claim closes a proven uninvoked stage, preserving safe new-owner continuation",async()=>{
+ const {CheckpointPreparationBudget}=await import("./checkpoint-preparation-budget");
+ const root=await mkdtemp(join(tmpdir(),"tela-preparation-admission-"));
+ const options={directory:join(root,"journal"),initializationPath:join(root,"receipt")};
+ const journal=new FileNativeVisiblePrefixStageJournal(options),snapshot=source("bounded exact source");
+ let now=0,sends=0;
+ const budget=new CheckpointPreparationBudget(100000,{maxModelCalls:1,maxInputTokens:100000,maxElapsedMs:10},()=>now);
+ const delayedClaim={completedReceipts:()=>journal.completedReceipts(),complete:journal.complete.bind(journal),
+  settleClosed:journal.settleClosed.bind(journal),claim:async(...args:Parameters<typeof journal.claim>)=>{
+   const result=await journal.claim(...args);now=11;return result;
+  }};
+ try{
+  await expect(produceNativePrefixCheckpoint({source:snapshot,accountNamespace:"account",effort:"medium",
+   journal:delayedClaim,preparationBudget:budget,confirmSource:async()=>snapshot,
+   producer:async r=>{sends++;return {...r,content:"not reached"};}})).rejects.toMatchObject({
+    recoveryReason:"source_budget",budgetReason:"elapsed_time",
+   });
+  expect(sends).toBe(0);expect(await journal.pendingOperations()).toHaveLength(0);
+  const next={...snapshot,currentTurnId:"new-proven-owner"};
+  await expect(produceNativePrefixCheckpoint({source:next,accountNamespace:"account",effort:"medium",
+   journal:new FileNativeVisiblePrefixStageJournal(options),confirmSource:async()=>next,
+   producer:async r=>{sends++;return {...r,content:"verified continuation"};}})).resolves.toContain("verified continuation");
+  expect(sends).toBe(1);expect(await journal.pendingOperations()).toHaveLength(0);
  }finally{await rm(root,{recursive:true,force:true});}
 });

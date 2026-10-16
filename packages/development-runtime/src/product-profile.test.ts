@@ -222,3 +222,18 @@ for (const outcome of ["complete", "account-mismatch", "cleanup-failed"] as cons
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 }
+
+test("preparation policy is explicit and distinct from the whole-task diagnostic timeout", () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-preparation-policy-"));
+  try {
+    const policy = { maxModelCalls: 3, maxInputTokens: 200_000, maxElapsedMs: 120_000 };
+    const config = loadProductProfileRuntimeConfig({ ...common(root),
+      CHATGPT_TELA_CHECKPOINT_PREPARATION_POLICY: JSON.stringify(policy) });
+    expect(config.checkpointPreparationPolicy).toEqual(policy);
+    expect(config).not.toHaveProperty("webTurnTimeoutMs");
+    for (const bad of [{ maxModelCalls: 1 }, { ...policy, maxElapsedMs: -1 }, { ...policy, misspelledLimit: 8 }]) {
+      expect(() => loadProductProfileRuntimeConfig({ ...common(root),
+        CHATGPT_TELA_CHECKPOINT_PREPARATION_POLICY: JSON.stringify(bad) })).toThrow("Invalid checkpoint preparation policy");
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

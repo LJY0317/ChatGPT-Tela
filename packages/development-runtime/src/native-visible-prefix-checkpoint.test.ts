@@ -9,6 +9,7 @@ import {
 } from "./native-visible-prefix-checkpoint";
 
 class Journal implements NativeVisiblePrefixStageJournal {
+ async completedReceipts() { return [...this.records.values()].flatMap(record => record.receipt ? [record.receipt] : []); }
  readonly records = new Map<string, {identity:NativeVisiblePrefixStageIdentity;claimId:string;receipt?:NativeVisiblePrefixStageReceipt}>();
  async claim(identity:NativeVisiblePrefixStageIdentity) {
   const old=this.records.get(identity.key);
@@ -35,7 +36,7 @@ function fixture(text='visible prior answer') {
  const calls:any[]=[];
  const journal=new Journal();
  let confirmations=0;
- const input:NativePrefixCheckpointInput={source,accountNamespace:'account-fixture',journal,effort:'medium',
+ const input:NativePrefixCheckpointInput={preparationPolicy:{maxModelCalls:128,maxInputTokens:20_000_000,maxElapsedMs:600_000},source,accountNamespace:'account-fixture',journal,effort:'medium',
   confirmSource:async()=>{confirmations++;return source;},producer:async request=>{
    calls.push(request);
    expect(chatGptCheckpointInputTokens(request.physicalContext)).toBeLessThanOrEqual(chatGptWebCheckpointSourceTokenLimit('medium'));
@@ -141,7 +142,7 @@ test('cancellation and journal uncertainty do not grant permission to resubmit',
  expect(g.calls).toHaveLength(calls);
  const unknown=fixture();
  await expect(produceNativePrefixCheckpoint({...unknown.input,journal:{
-  claim:async()=>({status:'unknown'}),complete:async()=>{throw Error('unreachable');},
+  completedReceipts:()=>unknown.journal.completedReceipts(),claim:async()=>({status:'unknown'}),complete:async()=>{throw Error('unreachable');},
  }})).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
  expect(unknown.calls).toHaveLength(0);
 });
@@ -151,7 +152,7 @@ test('inline media and insufficient finite call budgets are explicit failures be
  await expect(produceNativePrefixCheckpoint({...f.input,source:{...f.source,inlineAssets:[{} as any]}})).rejects.toThrow('inline media');
  expect(f.calls).toHaveLength(0);
  const large=fixture('x'.repeat(1_400_000));
- await expect(produceNativePrefixCheckpoint({...large.input,maxModelStages:1})).rejects.toThrow('stage budget');
+ await expect(produceNativePrefixCheckpoint({...large.input,preparationPolicy:{maxModelCalls:1,maxInputTokens:1_000_000,maxElapsedMs:600_000}})).rejects.toMatchObject({budgetReason:'model_calls'});
  expect(large.calls).toHaveLength(0);
  expect(large.journal.records.size).toBe(0);
 });
@@ -162,7 +163,7 @@ test('journal receipt binding is strict and account namespaces cannot reuse subm
  await produceNativePrefixCheckpoint({...f.input,accountNamespace:'different-account'});
  expect(f.calls.length).toBeGreaterThan(first);
  const other=fixture();
- await expect(produceNativePrefixCheckpoint({...other.input,journal:{claim:async identity=>({
+ await expect(produceNativePrefixCheckpoint({...other.input,journal:{completedReceipts:async()=>[],claim:async identity=>({
   ...identity,status:'completed',sourceDigest:'0'.repeat(64),summary:'foreign summary',
  }),complete:async()=>{throw Error('unreachable');}}})).rejects.toThrow('foreign or invalid receipt');
  expect(other.calls).toHaveLength(0);
@@ -171,7 +172,8 @@ test('journal receipt binding is strict and account namespaces cannot reuse subm
 test('large escaped summaries require bounded multi-level hierarchical merges with strict coverage reduction',async()=>{
  const f=fixture('x'.repeat(8_000_000));
  const producer=f.input.producer;
- const result=await produceNativePrefixCheckpoint({...f.input,producer:async request=>{
+ const result=await produceNativePrefixCheckpoint({...f.input,
+  preparationPolicy:{maxModelCalls:128,maxInputTokens:20_000_000,maxElapsedMs:600_000},producer:async request=>{
   await producer(request);
   return {nativeTaskId:request.nativeTaskId,sourceRevisionId:request.sourceRevisionId,content:'"'.repeat(16*1024)};
  }});
@@ -185,9 +187,39 @@ test('large escaped summaries require bounded multi-level hierarchical merges wi
 test('failed journal completion remains explicitly uncertain and never authorizes replay',async()=>{
  const f=fixture();
  await expect(produceNativePrefixCheckpoint({...f.input,journal:{
-  claim:identity=>f.journal.claim(identity),complete:async()=>{throw Error('durable write failure');},
+  completedReceipts:()=>f.journal.completedReceipts(),claim:identity=>f.journal.claim(identity),complete:async()=>{throw Error('durable write failure');},
  }})).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
  expect(f.calls).toHaveLength(1);
  await expect(produceNativePrefixCheckpoint(f.input)).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
  expect(f.calls).toHaveLength(1);
+});
+
+test('preflight rejects costly cold preparation without claiming or sending; exact warm reuse costs zero',async()=>{
+ const f=fixture('x'.repeat(900_000));
+ const zero={maxModelCalls:0,maxInputTokens:0,maxElapsedMs:0};
+ await expect(produceNativePrefixCheckpoint({...f.input,preparationPolicy:zero}))
+  .rejects.toMatchObject({recoveryReason:'source_budget',budgetReason:'model_calls'});
+ expect(f.journal.records.size).toBe(0);expect(f.calls).toHaveLength(0);
+ const result=await produceNativePrefixCheckpoint(f.input);const calls=f.calls.length;
+ expect(calls).toBeGreaterThan(1);
+ expect(await produceNativePrefixCheckpoint({...f.input,preparationPolicy:zero})).toBe(result);
+ expect(f.calls).toHaveLength(calls);
+});
+test('transfer and elapsed admission stop before a durable claim, preserving completed work',async()=>{
+ const f=fixture();
+ await expect(produceNativePrefixCheckpoint({...f.input,preparationPolicy:{
+  maxModelCalls:8,maxInputTokens:0,maxElapsedMs:600_000,
+ }})).rejects.toMatchObject({budgetReason:'input_tokens'});
+ await expect(produceNativePrefixCheckpoint({...f.input,preparationPolicy:{
+  maxModelCalls:8,maxInputTokens:1_000_000,maxElapsedMs:0,
+ }})).rejects.toMatchObject({budgetReason:'elapsed_time'});
+ expect(f.calls).toHaveLength(0);expect(f.journal.records.size).toBe(0);
+ await produceNativePrefixCheckpoint(f.input);
+ expect(await f.journal.completedReceipts()).toHaveLength(1);
+});
+test('default preparation policy refuses oversized cold work instead of launching a long stage chain',async()=>{
+ const f=fixture('x'.repeat(2_000_000));
+ const {preparationPolicy:_,...productionDefaults}=f.input;
+ await expect(produceNativePrefixCheckpoint(productionDefaults)).rejects.toMatchObject({budgetReason:'model_calls'});
+ expect(f.calls).toHaveLength(0);expect(f.journal.records.size).toBe(0);
 });

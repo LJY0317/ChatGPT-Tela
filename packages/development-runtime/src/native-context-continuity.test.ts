@@ -56,6 +56,7 @@ test("marker-free opaque continuity consumes complete public prefix, revalidates
     const journalOptions = { directory: join(directory, "ledger"), initializationPath: join(directory, "receipt") };
     let reads = 0, calls = 0;
     const options = {
+      checkpointPreparationPolicy:{maxModelCalls:128,maxInputTokens:20_000_000,maxElapsedMs:600_000},
       historyCheckpointCache: new FileContextCheckpointCache({ directory: join(directory, "cache") }),
       visiblePrefix: { accountNamespace: "verified-fixture-account", journal: new FileNativeVisiblePrefixStageJournal(journalOptions),
         read: async () => { reads++; return source; } },
@@ -537,4 +538,23 @@ test("injecting a model-backed handoff callback alone never authorizes an extra 
    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;
    rmSync(root,{recursive:true,force:true});
  }
+});
+
+test("continuity cannot reset an earlier phase's preparation budget",async()=>{
+ const {CheckpointPreparationBudget}=await import("./checkpoint-preparation-budget");
+ const directory=mkdtempSync(join(tmpdir(),"native-shared-preparation-"));
+ const content=JSON.stringify({type:"tela_native_visible_prefix_v1",items:[]});
+ const digest=createHash("sha256").update(content).digest("hex");
+ const source:NativeVisiblePrefixSnapshot={kind:"native-visible-prefix",threadId:"task-1",currentTurnId:"web-current",
+  contentDigest:digest,digest,sourceItemCount:0,content,inlineAssets:[],references:[],localImageCandidates:[]};
+ const journal=new FileNativeVisiblePrefixStageJournal({directory:join(directory,"ledger"),initializationPath:join(directory,"receipt")});
+ const budget=new CheckpointPreparationBudget(100000,{maxModelCalls:1,maxInputTokens:100000,maxElapsedMs:60000});
+ budget.recordInvocation(1);let sends=0;
+ try{
+  await expect(resolveNativeContextContinuity(input({effort:"medium",preparationBudget:budget,options:{
+   visiblePrefix:{accountNamespace:"account",journal,read:async()=>source},
+   checkpointProducer:async r=>{sends++;return {...r,content:"unreachable"};},
+  }}))).rejects.toMatchObject({recoveryReason:"source_budget",budgetReason:"model_calls"});
+  expect(sends).toBe(0);expect(await journal.pendingOperations()).toHaveLength(0);
+ }finally{rmSync(directory,{recursive:true,force:true});}
 });

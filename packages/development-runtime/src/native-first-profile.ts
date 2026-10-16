@@ -358,6 +358,7 @@ export async function startNativeFirstProductProfileRuntime(
           context: (() => {
             const account = readChatGptTelaAccountBinding(config.browserProfile);
             return account ? {
+              ...(config.checkpointPreparationPolicy ? { checkpointPreparationPolicy: config.checkpointPreparationPolicy } : {}),
               checkpointCache: new FileContextCheckpointCache({
                 directory: resolve(config.browserProfile.userDataDir,
                   "context-checkpoints", account.accountFingerprint),

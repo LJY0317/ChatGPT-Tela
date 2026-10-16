@@ -989,6 +989,16 @@ model is selected. Model-list registration and direct thread execution do not pr
 submission. A live routed Web turn completed with Native quota exhausted; submission through
 the official Desktop composer under that condition remains unresolved.
 
+Long-chat preparation reuses saved summaries before starting new model work. The source runtime
+limits new preparation work separately from the model's context capacity; reaching that budget
+preserves completed preparation and original history. It does not stop an ordinary task after a
+fixed response time. Advanced runtime callers may supply `checkpointPreparationPolicy`; product
+profile processes accept `CHATGPT_TELA_CHECKPOINT_PREPARATION_POLICY` as a JSON object with all three
+nonnegative integer fields: `maxModelCalls`, `maxInputTokens` (estimated) and `maxElapsedMs` (new-call
+admission only). For example: `{"maxModelCalls":4,"maxInputTokens":300000,"maxElapsedMs":300000}`.
+These settings control Tela preparation costs and do not enlarge a model's context window. Defaults
+and exact behavior are documented in [the efficiency contract](docs/token-efficiency.md#capacity-ownership-and-preparation-policy).
+
 #### Terminal Work preview
 
 After connecting a profile in Tela, the installed `chatgpt-tela work` command opens the official

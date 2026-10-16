@@ -1,3 +1,4 @@
+import { checkpointPreparationPolicy, type CheckpointPreparationPolicy } from "./checkpoint-preparation-budget";
 import { verifyWebModelReadiness } from "./web-model-readiness";
 import { existsSync } from "node:fs";
 import { resolveOwnedNativeEngine, acquireNativeBackendOwnership } from "@chatgpt-tela/product-lifecycle";
@@ -91,6 +92,7 @@ export interface ProductProfileRuntimeConfig {
   readonly acceptanceSavedChat: boolean;
   /** Explicit diagnostic deadline only. Normal task lifetime belongs to Native turn authority. */
   readonly webTurnTimeoutMs?: number;
+  readonly checkpointPreparationPolicy?: CheckpointPreparationPolicy;
 }
 
 export interface ProductProfileRoutedTarget {
@@ -237,6 +239,9 @@ export function loadProductProfileRuntimeConfig(
       0,
       15_000,
     ),
+    ...(optional(env, "CHATGPT_TELA_CHECKPOINT_PREPARATION_POLICY") !== undefined ? {
+      checkpointPreparationPolicy: checkpointPreparationPolicy(JSON.parse(required(env, "CHATGPT_TELA_CHECKPOINT_PREPARATION_POLICY"))),
+    } : {}),
     ...(optional(env, "CHATGPT_TELA_PRODUCT_WEB_TURN_TIMEOUT_MS") !== undefined ? {
       webTurnTimeoutMs: positiveInteger(required(env, "CHATGPT_TELA_PRODUCT_WEB_TURN_TIMEOUT_MS"),
         "CHATGPT_TELA_PRODUCT_WEB_TURN_TIMEOUT_MS"),
@@ -386,6 +391,7 @@ export async function startProductProfileRuntime(
       turns,
       mcp: { kind: "external", abi: publicIdentity.webContract },
       context: {
+        ...(config.checkpointPreparationPolicy ? { checkpointPreparationPolicy: config.checkpointPreparationPolicy } : {}),
         checkpointCache: new FileContextCheckpointCache({
           directory: resolve(config.browserProfile.userDataDir, "context-checkpoints"),
         }),

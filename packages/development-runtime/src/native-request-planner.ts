@@ -1,3 +1,4 @@
+import { CheckpointPreparationBudget } from "./checkpoint-preparation-budget";
 import { createHash } from "node:crypto";
 import {
   NativeHistoryBootstrapRequired,
@@ -815,8 +816,11 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     const opaqueFingerprint = opaque.fingerprint;
     stage("model_route");
     const browserModel = nativeRequestBrowserModelRoute(nativeRequest);
+    const preparationBudget = new CheckpointPreparationBudget(
+      chatGptWebCheckpointSourceTokenLimit(browserModel?.effort ?? "medium"), options.checkpointPreparationPolicy);
+    const checkpointProducer = options.checkpointProducer ? preparationBudget.producer(options.checkpointProducer) : undefined;
     const physicalLimits = browserModel ? chatGptWebPhysicalLimits(browserModel.effort) : undefined;
-    const budgetTokens = options.budgetTokens ?? (options.checkpointProducer ? physicalLimits?.rolloverTokenLimit : undefined);
+    const budgetTokens = options.budgetTokens ?? (checkpointProducer ? physicalLimits?.rolloverTokenLimit : undefined);
     const currentRouteIdentity = routeIdentity(nativeRequest);
     const committed = retainedByTask.get(threadId);
     stage("retained_context");
@@ -859,7 +863,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       opaque,
       ...(retainedHistory !== undefined ? { retainedHistory } : {}),
       ...(browserModel ? { effort: browserModel.effort, browserModel } : {}),
-      options,
+      options: { ...options, ...(checkpointProducer ? { checkpointProducer } : {}) },
+      preparationBudget,
       ...(preparation ? { preparation } : {}),
     });
     const visibleHistory = continuity.visibleHistory;
@@ -966,7 +971,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     });
     if (prepared.status === "checkpoint-required"
       && options.checkpointCache
-      && options.checkpointProducer) {
+      && checkpointProducer) {
       const anchor = checkpointAnchor(projection);
       if (!anchor) {
         throw new Error(
@@ -1007,13 +1012,14 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           const source = nativeRequestPrefixSnapshot(threadId, turn.channel.binding.authority.turnId, checkpointPhysicalContext);
           const summary = await produceNativePrefixCheckpoint({
             source, accountNamespace: stageOwner.accountNamespace, journal: stageOwner.journal,
-            producer: options.checkpointProducer, effort: browserModel?.effort ?? "medium",
+            preparationBudget,
+            producer: checkpointProducer, effort: browserModel?.effort ?? "medium",
             ...(browserModel ? { browserModel } : {}),
             confirmSource: async () => { preparation?.signal.throwIfAborted(); return source; },
             ...(preparation ? { preparation, signal: preparation.signal } : {}),
           });
           produced = { nativeTaskId: threadId, sourceRevisionId: anchor.revision.id, content: summary };
-        } else produced = await options.checkpointProducer(Object.freeze({
+        } else produced = await checkpointProducer(Object.freeze({
           nativeTaskId: threadId,
           sourceRevisionId: anchor.revision.id,
           physicalContext: bounded!,

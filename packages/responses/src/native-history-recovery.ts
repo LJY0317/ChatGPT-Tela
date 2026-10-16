@@ -36,7 +36,7 @@ export function nativeHistoryRecovery(error: unknown): {
     message: rejected
       ? "A proven Web context-summary response was unusable and its isolated operation was released. This Native turn will not resend it. Continue in a newly authorized Native turn or provide a verified handoff. Completed checkpoint stages and original history are preserved; no task answer or tool execution was committed by this request."
       : sourceBudget
-      ? "This conversation's readable context exceeds the Web checkpoint input budget. Continue on Native or provide an explicitly authorized verified checkpoint or handoff. Original history is preserved; no Web answer or tool execution was committed by this request."
+      ? "This conversation's readable context cannot be prepared within the Web input or preparation budget. Continue on Native or provide an explicitly authorized verified checkpoint or handoff. Original history is preserved; no Web answer or tool execution was committed by this request."
       : interrupted
       ? "A Web context-summary submission has an uncertain outcome and was not resent. Reconcile the owned checkpoint operation or provide an explicitly authorized verified handoff before a new Native turn continues. Original history is preserved; no task answer or tool execution was committed by this request."
       : unindexed

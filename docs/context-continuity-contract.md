@@ -243,6 +243,12 @@ canonical Native logical revision lineage, then selects:
   requests). Only a separately proven `retained-delta` plan may reuse an
   existing physical surface. Matching epoch IDs alone do not prove ancestry.
 
+Preparation cost and model capacity have separate owners. Ordinary Web planning shares one
+preparation budget across continuity and checkpoint phases; completed receipt reuse does not
+consume it. See [the cost and capacity contract](token-efficiency.md#capacity-ownership-and-preparation-policy)
+for admission order, elapsed-time semantics, defaults and regression ownership. A cost-policy
+change must not change stage identity, Native authority or unknown-send settlement.
+
 All actual Web summarizers, including Native local compaction, use
 `web-checkpoint-source.ts` to enforce one source-plus-media budget with reserved
 model-output headroom. If source cannot fit, no extra model call is made to
