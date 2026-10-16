@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPackagedPayload, createEd25519PackagedPayloadSigner, resolveProductPaths, readOwnershipManifest, prepareOwnedDirectory,
-  packagedUpgradeJournalPath, readPackagedUpgradeJournal, type ServiceRegistrationCommandRunner } from "@chatgpt-tela/product-lifecycle";
+  packagedUpgradeJournalPath, readPackagedUpgradeJournal, planSignedPackagedUpgradeFromPayload, type PackagedUpgradeJournal, type ServiceRegistrationCommandRunner } from "@chatgpt-tela/product-lifecycle";
 import { runPackagedLifecycleCommand } from "./lifecycle";
 import { cleanupMaintenanceWindow, runMaintenanceCommand, stageMaintenanceWindow, resolveMaintenanceWindowSource } from "./maintenance";
 
@@ -141,10 +141,19 @@ for (const supported of [true, false]) test(`maintenance cancellation review bin
     await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first, "--trusted-public-key", f.key], options);
     const paths = resolveProductPaths(options), manifest = readFileSync(paths.installManifest);
     f.runner.running.add("chatgpt-tela-chat.service");
-    await expect(runPackagedLifecycleCommand(["upgrade", "--apply", "--payload", f.second, "--trusted-public-key", f.key], {
-      ...options, shutdownService: async () => { throw new Error("synthetic active service refuses update"); },
-    })).rejects.toThrow("refuses update");
-    const journalPath = packagedUpgradeJournalPath(paths), journal = readFileSync(journalPath);
+    // Model a settled pre-replacement process interruption. Normal upgrades now
+    // recover automatically, so a refused shutdown is no longer a journal fixture.
+    const plan = await planSignedPackagedUpgradeFromPayload({ ...options, payloadSourcePath: f.second,
+      trustedKeys: { fixture: readFileSync(f.key) } });
+    const journalPath = packagedUpgradeJournalPath(paths);
+    const checkpoint: PackagedUpgradeJournal = {
+      version: 1, installId: plan.installId, fromVersion: plan.fromVersion, toVersion: plan.toVersion,
+      sourcePayloadFingerprint: plan.sourcePayload.payloadFingerprint, targetPayloadFingerprint: plan.targetPayloadFingerprint,
+      phase: "quiescing", resumeServices: ["chat"], quiescedServices: ["gateway"], resumedServices: [],
+      stopEvidenceVersion: 1, pendingStop: null,
+    };
+    writeFileSync(journalPath, JSON.stringify(checkpoint));
+    const journal = readFileSync(journalPath);
     const status = await runMaintenanceCommand(["maintenance", "status"], options) as any;
     expect(status.pendingTransition).toBe("upgrade");
     const args = ["--payload", f.first, "--trusted-public-key", f.key];
