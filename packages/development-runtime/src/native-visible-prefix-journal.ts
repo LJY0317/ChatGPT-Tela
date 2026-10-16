@@ -13,7 +13,8 @@ const RESERVED_ENTRY_BYTES = 32 * 1024 * 6 + 1024;
 const RETENTION_MS = 28 * 24 * 60 * 60 * 1000;
 const queues = new Map<string, Promise<unknown>>();
 interface Entry extends NativeVisiblePrefixStageIdentity {
-  status: "pending" | "completed";
+  status: "pending" | "completed" | "closed";
+  ownerFingerprint?: string;
   claimId: string;
   updatedAt: number;
   summary?: string;
@@ -38,8 +39,10 @@ function validate(value: unknown): State {
   for (const entry of state.entries) {
     if (!entry || !validIdentity(entry) || keys.has(entry.key)
       || !/^[a-f0-9-]{36}$/.test(entry.claimId) || !Number.isSafeInteger(entry.updatedAt)
-      || entry.updatedAt < 0 || (entry.status !== "pending" && entry.status !== "completed")
-      || (entry.status === "completed" ? !summaryValid(entry.summary) : entry.summary !== undefined)) {
+      || entry.updatedAt < 0 || !["pending", "completed", "closed"].includes(entry.status)
+      || (entry.status === "completed" ? !summaryValid(entry.summary) : entry.summary !== undefined)
+      || (entry.ownerFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(entry.ownerFingerprint))
+      || (entry.status === "closed" && !entry.ownerFingerprint)) {
       throw new Error("Invalid Native checkpoint execution journal entry");
     }
     keys.add(entry.key);
@@ -167,27 +170,34 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     void run.finally(() => { if (queues.get(this.directory) === run) queues.delete(this.directory); }).catch(() => {});
     return run;
   }
-  async claim(identity: NativeVisiblePrefixStageIdentity) {
+  async claim(identity: NativeVisiblePrefixStageIdentity, ownerFingerprint?: string) {
     if (!validIdentity(identity)) throw new Error("Invalid Native checkpoint stage identity");
+    if (ownerFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(ownerFingerprint)) throw Error("Invalid Native checkpoint owner");
     return this.#transaction(async state => {
       const entry = state.entries.find(value => value.key === identity.key);
       if (entry) {
         if (!same(entry, identity)) throw new Error("Native checkpoint stage source changed");
-        return entry.status === "pending" ? { status: "unknown" as const }
-          : { ...identity, status: "completed" as const, summary: entry.summary! };
+        if (entry.status === "completed") return { ...identity, status: "completed" as const, summary: entry.summary! };
+        if (entry.status !== "closed" || !ownerFingerprint || entry.ownerFingerprint === ownerFingerprint) return { status: "unknown" as const };
+        // Explicitly new Native authority may replace a locally closed, isolated
+        // tool-free operation. Pending/legacy unknown records NEVER take this path.
+        const claimId = randomUUID();
+        Object.assign(entry, { status: "pending", claimId, ownerFingerprint, updatedAt: Date.now() });
+        await this.#write(state);
+        return { status: "claimed" as const, claimId };
       }
       const now = Date.now();
       state.entries = state.entries.filter(value => value.status === "pending" || now - value.updatedAt <= RETENTION_MS);
       // Drop only completed receipts for capacity. Unknown submissions retain
       // their identity indefinitely within the fixed admission bound.
       while (state.entries.length >= MAX_RECORDS) {
-        const oldest = state.entries.filter(value => value.status === "completed")
+        const oldest = state.entries.filter(value => value.status !== "pending")
           .sort((a, b) => a.updatedAt - b.updatedAt)[0];
         if (!oldest) throw new Error("Native checkpoint execution journal requires pending-stage reconciliation");
         state.entries.splice(state.entries.indexOf(oldest), 1);
       }
       const claimId = randomUUID();
-      state.entries.push({ ...identity, claimId, status: "pending", updatedAt: now });
+      state.entries.push({ ...identity, claimId, status: "pending", updatedAt: now, ...(ownerFingerprint ? { ownerFingerprint } : {}) });
       if (state.entries.length * RESERVED_ENTRY_BYTES > MAX_BYTES) throw new Error("Native checkpoint journal cannot reserve completion capacity");
       await this.#write(state);
       return { status: "claimed" as const, claimId };
@@ -201,6 +211,16 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
         throw new Error("Native checkpoint stage completion has no matching owned claim");
       }
       entry.status = "completed"; entry.summary = input.summary; entry.updatedAt = Date.now();
+      await this.#write(state);
+    });
+  }
+  async settleClosed(input: NativeVisiblePrefixStageIdentity & { claimId: string; ownerFingerprint: string }): Promise<void> {
+    if (!validIdentity(input) || !/^[a-f0-9]{64}$/.test(input.ownerFingerprint)) throw Error("Invalid checkpoint closure");
+    await this.#transaction(async state => {
+      const entry = state.entries.find(value => value.key === input.key);
+      if (!entry || !same(entry, input) || entry.status !== "pending" || entry.claimId !== input.claimId
+        || entry.ownerFingerprint !== input.ownerFingerprint) throw Error("Checkpoint closure has no matching owned claim");
+      entry.status = "closed"; entry.updatedAt = Date.now();
       await this.#write(state);
     });
   }

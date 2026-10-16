@@ -1,4 +1,5 @@
 import type { BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+export { WebCheckpointOperationClosed } from "./checkpoint-settlement";
 import type {
   ChatGptContextAttachment,
   ChatGptContextAttachmentReference,

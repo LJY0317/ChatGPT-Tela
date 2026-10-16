@@ -34,6 +34,32 @@ function fixture(run?: StartWebTurn) {
     changeTurn: () => { current = "two"; }, changeOwner: () => { cwd = "/different"; }, loseProof: () => { proven = false; } };
 }
 
+test("a new canonical turn waits for the old tool owner to close, even before its interrupt notification", async () => {
+  let calls = 0, release!: () => void, closing!: () => void;
+  const closed = new Promise<void>(resolve => { release = resolve; });
+  const enteredClose = new Promise<void>(resolve => { closing = resolve; });
+  const f = fixture(async turn => {
+    calls++; turn.channel.markSubmitted(); turn.channel.markAccepted();
+    if (calls === 1) {
+      try { await turn.channel.requestTool({ callId: "old-call", wireName: "fixture", mode: "structured", arguments: {} }); }
+      finally { closing(); await closed; }
+    } else turn.channel.complete("new owner answer");
+  });
+  try {
+    const tools = [{ type: "function", name: "fixture", parameters: { type: "object" } }];
+    const old = await f.gateway.handle({ ...f.request(), tools }); expect(old.type).toBe("tool-call"); f.gateway.commit(old);
+    f.changeTurn();
+    const next = f.gateway.handle({ ...f.request([{ role: "user", content: "edited" }]), tools });
+    await enteredClose;
+    expect(calls).toBe(1);
+    expect(() => f.gateway.commit(old)).toThrow();
+    release();
+    const answer = await next;
+    expect(answer).toMatchObject({ type: "final", answer: "new owner answer" });
+    expect(calls).toBe(2); f.gateway.commit(answer);
+  } finally { release(); await f.gateway.close(); }
+});
+
 test("final delivery keeps Native live; proven steering rotates response capability and terminal evidence retires it", async () => {
   const f = fixture();
   const first = await f.gateway.handle(f.request());
@@ -53,6 +79,27 @@ test("final delivery keeps Native live; proven steering rotates response capabil
   f.gateway.commit(second); // Native completion can beat the final local transport ACK.
   await expect(f.gateway.handle(followup)).rejects.toMatchObject({ code: "tela_native_turn_already_retired" });
   await f.gateway.close(); expect(f.closes()).toBe(1);
+});
+
+test("steering accepted during generation waits for the safe next response cycle and is consumed once", async () => {
+  let finish!: () => void, entered!: () => void, calls = 0;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  const f = fixture(async turn => {
+    calls++; turn.channel.markSubmitted(); turn.channel.markAccepted();
+    if (calls === 1) { entered(); await gate; }
+    turn.channel.complete(`answer ${calls}`);
+  });
+  try {
+    const first = f.gateway.handle(f.request()); await ready;
+    const followup = f.steer(); // Official Native input accepted while Web is generating.
+    expect(calls).toBe(1);
+    finish(); const answer = await first; f.gateway.commit(answer);
+    const second = await f.gateway.handle(followup);
+    expect(second).toMatchObject({ type: "final", answer: "answer 2" }); f.gateway.commit(second);
+    await expect(f.gateway.handle(followup)).rejects.toThrow("proven new input");
+    expect(calls).toBe(2);
+  } finally { finish(); await f.gateway.close(); }
 });
 
 test("body mutation, stale request and wrong-input witness never authorize another response", async () => {

@@ -4,6 +4,7 @@ import type {
   WebContextCheckpointProvider,
   WebContextCheckpointRequest,
 } from "@chatgpt-tela/chatgpt";
+import { WebCheckpointOperationClosed } from "@chatgpt-tela/chatgpt";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,6 +55,23 @@ function provider(overrides: Partial<WebContextCheckpointProvider> = {}): WebCon
 }
 
 describe("browser context checkpoint runner", () => {
+  test("cancellation receipt requires successful physical close; a failed close stays uncertain", async () => {
+    for (const failClose of [false, true]) {
+      const abort = new AbortController(); let invoked = 0;
+      const host = new ControlledBrowserHost(async () => ({ async navigate() {}, async reveal() {}, async hide() {},
+        async close() { if (failClose) throw Error("physical close failed"); },
+      }));
+      let caught: unknown;
+      try { await runBrowserContextCheckpoint({ browserHost: host, request: request(), signal: abort.signal,
+        provider: provider({ async observeCapabilities() { abort.abort(); throw Error("stopped before provider invocation"); },
+          async createContextCheckpoint() { invoked++; throw Error("unreachable"); } }),
+      }); } catch (error) { caught = error; }
+      expect(invoked).toBe(0);
+      if (failClose) { expect(caught).not.toBeInstanceOf(WebCheckpointOperationClosed); expect(String(caught)).toContain("physical close failed"); }
+      else expect(caught).toMatchObject({ receipt: { disposition: "not_invoked" } });
+      await host.close();
+    }
+  });
   test("accepts only one proven dedicated result and always releases its isolated surface", async () => {
     const events: string[] = [];
     const host = new ControlledBrowserHost(async input => ({
@@ -143,7 +161,8 @@ describe("browser context checkpoint runner", () => {
       await expect(runBrowserContextCheckpoint({ browserHost: host, signal: controller.signal,
         request: { ...request(), webEpochId: `failed-${broken}` },
         provider: provider({ async createContextCheckpoint() { controller.abort(); throw primary; } }),
-      })).rejects.toBe(primary);
+      })).rejects.toMatchObject({ name: "WebCheckpointOperationClosed", cause: primary,
+        receipt: { disposition: "cancelled_locally" } });
       expect(events).toEqual(["capture", "close"]);
       expect(host.activeSurfaceCount).toBe(0);
     } finally {

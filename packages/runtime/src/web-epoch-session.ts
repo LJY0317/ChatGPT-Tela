@@ -4,6 +4,7 @@ interface RetainedEpoch {
   readonly epochId: string;
   readonly surface: BrowserSurfaceLease;
   busy: boolean;
+  retiring?: boolean;
   lastCompleted: number;
 }
 
@@ -41,6 +42,7 @@ export class RetainedBrowserEpochRegistry {
   }> {
     if (!taskId.trim() || !epochId.trim()) throw new Error("retained browser task/epoch ids must be non-empty");
     const current = this.#byTask.get(taskId);
+    if (current?.retiring) throw new Error("prior Web surface retirement is unresolved");
     if (current?.busy || this.#acquiring.has(taskId)) {
       throw new Error("native task already has an active retained Web turn");
     }
@@ -96,9 +98,11 @@ export class RetainedBrowserEpochRegistry {
   }
 
   async #release(taskId: string, current: RetainedEpoch): Promise<void> {
-    this.#byTask.delete(taskId);
+    if (current.retiring) throw new Error("prior Web surface retirement is unresolved");
+    current.retiring = true;
     this.#onRetire?.(taskId, current.surface.leaseId);
     await this.#browserHost.release(current.surface.leaseId);
+    if (this.#byTask.get(taskId) === current) this.#byTask.delete(taskId);
   }
 
   get size(): number {

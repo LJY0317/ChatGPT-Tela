@@ -3,6 +3,19 @@ import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
 import { RetainedBrowserEpochRegistry } from "./web-epoch-session";
 
 describe("retained browser epoch registry", () => {
+  test("failed physical retirement blocks reuse and new epochs until ownership is reconciled", async () => {
+    let closes = 0, creates = 0;
+    const host = new ControlledBrowserHost(async () => { creates++; return {
+      async navigate() {}, async reveal() {}, async hide() {}, async close() { closes++; throw Error("close unproven"); },
+    }; });
+    const registry = new RetainedBrowserEpochRegistry(host);
+    await registry.acquire("task", "old");
+    await expect(registry.fail("task", "old")).rejects.toThrow("close unproven");
+    for (const epoch of ["old", "new"]) await expect(registry.acquire("task", epoch)).rejects.toThrow("retirement is unresolved");
+    await expect(registry.fail("task", "old")).rejects.toThrow("retirement is unresolved");
+    expect(closes).toBe(1); expect(creates).toBe(1); expect(registry.size).toBe(1);
+    await host.close();
+  });
   test("bounded idle retirement invalidates the matching anchor before close and never evicts busy tasks", async () => {
     const events: string[] = [];
     const host = new ControlledBrowserHost(async ({ taskId }) => ({

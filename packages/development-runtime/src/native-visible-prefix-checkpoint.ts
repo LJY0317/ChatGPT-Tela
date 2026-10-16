@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { NativeHistoryBootstrapRequired, type NativeVisiblePrefixSnapshot } from "@chatgpt-tela/codex";
 import {
   chatGptCheckpointInputTokens, chatGptWebCheckpointSourceTokenLimit,
+  WebCheckpointOperationClosed,
   serializeChatGptContextAttachment, type ChatGptWebEffort, type WebPhysicalContext,
 } from "@chatgpt-tela/chatgpt";
 import type { NativeRequestCheckpointProducer } from "./native-request-planner";
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 
 const MAX_SUMMARY_BYTES = 32 * 1024;
 const MAX_SOURCE_BYTES = 16 * 1024 * 1024;
@@ -31,12 +32,15 @@ export interface NativeVisiblePrefixStageReceipt extends NativeVisiblePrefixStag
  * Completed receipts retain bounded summaries independently from the disposable cache.
  */
 export interface NativeVisiblePrefixStageJournal {
-  claim(identity: NativeVisiblePrefixStageIdentity): Promise<
+  claim(identity: NativeVisiblePrefixStageIdentity, ownerFingerprint?: string): Promise<
     | { readonly status: "claimed"; readonly claimId: string }
     | { readonly status: "unknown" }
     | NativeVisiblePrefixStageReceipt
   >;
   complete(input: NativeVisiblePrefixStageReceipt & { readonly claimId: string }): Promise<void>;
+  /** Local closure permits a DIFFERENT proven Native turn to start a new operation;
+   * it never proves remote cancellation or authorizes replay of this turn. */
+  settleClosed?(input: NativeVisiblePrefixStageIdentity & { readonly claimId: string; readonly ownerFingerprint: string }): Promise<void>;
 }
 export class NativePrefixCheckpointInterrupted extends NativeHistoryBootstrapRequired {
   constructor(readonly stage: NativeVisiblePrefixStageIdentity, options?: ErrorOptions) {
@@ -138,7 +142,8 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
       inputDigest: sha(serializeChatGptContextAttachment(physical)),
     });
     let claim: Awaited<ReturnType<NativeVisiblePrefixStageJournal["claim"]>>;
-    try { claim = await input.journal.claim(identity); check(); }
+    const ownerFingerprint = sha(JSON.stringify([source.threadId, source.currentTurnId]));
+    try { claim = await input.journal.claim(identity, ownerFingerprint); }
     catch (cause) { throw new NativePrefixCheckpointInterrupted(identity, { cause }); }
     if (claim.status === "unknown") {
       emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_stage_rejected", {
@@ -157,19 +162,34 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
       throw new Error("Native visible-prefix checkpoint exhausted its model-stage budget");
     }
     let result: Awaited<ReturnType<NativeRequestCheckpointProducer>>;
+    let producerInvoked = false;
     const stageStarted = Date.now();
-    const stageEvidence = { phase, stage_index: modelStages, stage_fingerprint: sha(identity.key).slice(0, 24) };
+    const stageEvidence = { phase, stage_index: modelStages, stage_fingerprint: sha(identity.key).slice(0, 24),
+      operation_fingerprint: sha(claim.claimId).slice(0, 24) };
     emitDiagnosticEvent("chatgpt_tela_codex", "native_checkpoint_model_started", stageEvidence);
     try {
       check();
-      result = await input.producer({ nativeTaskId: source.threadId,
+      producerInvoked = true;
+      result = await withDiagnosticContext({ operation_fingerprint: stageEvidence.operation_fingerprint }, () => input.producer({ nativeTaskId: source.threadId,
         sourceRevisionId: physical.headRevisionId, physicalContext: physical,
         ...(input.browserModel ? { browserModel: input.browserModel } : {}) },
-      signal ? { signal, onProgress: input.preparation?.onProgress ?? (() => {}) } : undefined);
+      signal ? { signal, onProgress: input.preparation?.onProgress ?? (() => {}) } : undefined));
     } catch (cause) {
+      const receipt = !producerInvoked ? { nativeTaskId: source.threadId, sourceRevisionId: physical.headRevisionId, disposition: "not_invoked" }
+        : cause instanceof WebCheckpointOperationClosed ? cause.receipt : undefined;
+      if (receipt && receipt.nativeTaskId === source.threadId && receipt.sourceRevisionId === physical.headRevisionId
+        && input.journal.settleClosed) {
+        try {
+          await input.journal.settleClosed({ ...identity, claimId: claim.claimId, ownerFingerprint });
+          emitDiagnosticEvent("chatgpt_tela_codex", "native_checkpoint_stage_closed", {
+            ...stageEvidence, phase: receipt.disposition, local_operation_settled: true, remote_terminal_proven: false,
+          });
+        } catch (settlementFailure) { throw new NativePrefixCheckpointInterrupted(identity, { cause: settlementFailure }); }
+      }
       emitDiagnosticEvent("chatgpt_tela_codex", "native_checkpoint_model_failed", {
         ...stageEvidence, duration_ms: Math.max(0, Date.now() - stageStarted),
         reason_class: signal?.aborted ? "owner_cancelled" : "producer_failed", submission_state_proven: false,
+        local_operation_settled: receipt !== undefined,
       });
       throw new NativePrefixCheckpointInterrupted(identity, { cause });
     }
@@ -182,10 +202,10 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     // If this write fails, the journal remains uncertain and no next invocation may resubmit it.
     try { await input.journal.complete({ ...receipt, claimId: claim.claimId }); }
     catch (cause) { throw new NativePrefixCheckpointInterrupted(identity, { cause }); }
-    check();
     emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_stage_settled", {
       ...stageEvidence, outcome: "completed", duration_ms: Math.max(0, Date.now() - stageStarted),
     });
+    check();
     return receipt.summary;
   };
   const fragments: { startByte: number; endByte: number; physical: WebPhysicalContext }[] = [];

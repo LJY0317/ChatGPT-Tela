@@ -995,6 +995,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     }
 
     this.#assertTemporaryChatSurface(surface, prepared);
+    deadline.combined.throwIfAborted();
+    emitDiagnosticEvent("chatgpt_tela_work", "web_send_activation_started", { phase: "context_preload" });
     await driver.activateSend(sends[0]!.key, deadline.combined);
     this.#temporaryChatSurfaces.add(surface);
     emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_send_activated");
@@ -1336,8 +1338,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       this.#assertTemporaryChatSurface(surface, filled);
       if (request.physicalContext.mode === "retained-delta") this.#assertRetainedConversation(surface, filled);
       await captureBrowserDiagnosticCheckpoint(surface,"before_submit");
+      signal?.throwIfAborted();
       sendActivationAttempted = true;
+      emitDiagnosticEvent("chatgpt_tela_work", "web_send_activation_started", { phase: "turn" });
       await driver.activateSend(sendAfterFill.key, signal);
+      emitDiagnosticEvent("chatgpt_tela_work", "web_send_activation_settled", { phase: "turn", remote_terminal_proven: false });
       this.#temporaryChatSurfaces.add(surface);
     } catch (error) {
       if (!sendActivationAttempted && !cleanupAttempted) {

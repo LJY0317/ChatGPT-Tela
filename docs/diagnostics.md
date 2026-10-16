@@ -1,5 +1,40 @@
 # Diagnostic evidence
 
+## Cancellation, edited requests and steering
+
+Native admission is serialized per conversation, including transitions to a new Native turn.
+A newly proven canonical owner revokes an older owner and waits for its execution/physical cleanup
+to settle before starting another planner. Late old tool acknowledgements and answers cannot
+commit through the new capability. A transport reconnect still only replaces the response observer.
+
+Checkpoint journal entries distinguish pending, completed and locally closed operations. A dedicated
+tool-free checkpoint runner issues a closure receipt only after its provider call has returned and
+its isolated surface has successfully released (or before the provider was invoked). The receipt
+identifies the exact source and local operation; it does **not** prove remote generation stopped or
+that no quota was consumed. Only a different proven Native turn can replace that closed operation.
+The old claim nonce cannot complete the replacement. A proven summary racing cancellation is
+persisted before the cancelled Native owner is checked again, permitting exact-source reuse.
+
+Legacy pending entries, lost responses, failed journal writes and failed surface closure remain
+unknown. A new turn ID, timeout, log inference or deleted cache never clears them. This change
+does not retroactively reconcile older incidents lacking an owned closure receipt. New closed
+entries extend the local journal format; older runtimes reject them safely rather than replay them.
+Settled entries have bounded retention/capacity; pending unknown operations are never evicted.
+
+Structural stages now include `context_checkpoint_provider_invoked`, `web_send_activation_started`
+(phase `context_preload` or `turn`), local `web_send_activation_settled`,
+`context_checkpoint_closed`, `native_checkpoint_stage_closed`, `native_prior_execution_settled`,
+`native_steering_deferred` and `native_steering_cycle_started`. Claimed checkpoint attempts have
+distinct operation fingerprints. Send activation is not server acceptance or completion; use
+the matching semantic acceptance/result evidence. No raw message, account or tool body is added.
+
+Native-witnessed steering is consumed exactly once at the next permitted response cycle, after
+the prior final is locally committed. It is not injected into a running Web generation, and it
+does not repeat a tool already delivered. Edits invalidate changed source ancestry; unchanged,
+completed checkpoint sources can be reused. Cancelling a turn revokes further tool authority;
+it does not undo effects of tools already executed. A failed retained-surface close keeps a local
+retirement fence, preventing both reuse and a new epoch from bypassing unresolved ownership.
+
 ## Native response reconnect and idle boundaries
 
 Correlate the request fingerprint across `http_transport_closed`, `http_transport_error`, and

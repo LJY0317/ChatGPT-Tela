@@ -33,7 +33,7 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
     if (!state) {
       if (turns.size >= 64) { omittedTurns++; continue; }
       state = { scopeFingerprint: scope, turnFingerprint: turn, firstObservedAt: row.ts, lastObservedAt: row.ts,
-        checkpoint: { started: 0, completed: 0, reused: 0, failed: 0, observedModelDurationMs: 0 },
+        checkpoint: { started: 0, completed: 0, reused: 0, failed: 0, locallyClosed: 0, observedModelDurationMs: 0 },
         plans: [], disconnects: [], responseObservers: 0, outcome: "not_observed", semanticRecall: "not_evaluated" };
       turns.set(key, state);
     }
@@ -59,6 +59,7 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
       state.checkpoint.observedModelDurationMs += count(row.duration_ms) ?? 0;
     }
     if (row.stage === "native_checkpoint_model_failed") state.checkpoint.failed++;
+    if (row.stage === "native_checkpoint_stage_closed") state.checkpoint.locallyClosed++;
     if (row.stage === "http_transport_closed" && state.disconnects.length >= 16) disconnectLimitReached = true;
     if (row.stage === "web_turn_plan" && state.plans.length >= 128) planLimitReached = true;
     if (row.stage === "http_transport_closed" && state.disconnects.length < 16) state.disconnects.push({

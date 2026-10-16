@@ -96,6 +96,7 @@ export class NativeResponsesGateway {
   readonly #issuedFinals = new Map<string, string>();
   readonly #admissions = new Map<string, Promise<unknown>>();
   readonly #responseObservers = new Map<string, AbortController>();
+  readonly #settlingByTask = new Map<string, Promise<unknown>>();
 
   constructor(
     readonly source: CanonicalCurrentTurnSource,
@@ -110,12 +111,15 @@ export class NativeResponsesGateway {
     this.#controller.signal.throwIfAborted();
     const identity = parseNativeTurnReplayIdentity(body);
     const key = `${identity.threadId}\u0000${identity.turnId}`;
-    const prior = this.#admissions.get(key) ?? Promise.resolve();
+    // Admission is serialized by conversation, including cancel/edit into a NEW
+    // Native turn. Response observation remains independently reconnectable.
+    const admissionKey = identity.threadId;
+    const prior = this.#admissions.get(admissionKey) ?? Promise.resolve();
     const admission = prior.catch(() => {}).then(() => this.#admit(body, key));
-    this.#admissions.set(key, admission);
+    this.#admissions.set(admissionKey, admission);
     let registered: RegisteredTurn;
     try { registered = await admission; }
-    finally { if (this.#admissions.get(key) === admission) this.#admissions.delete(key); }
+    finally { if (this.#admissions.get(admissionKey) === admission) this.#admissions.delete(admissionKey); }
 
     // Native turn execution outlives HTTP/SSE connections. Only one connection may own
     // its response waiter; a canonically admitted reconnect supersedes that observation.
@@ -182,8 +186,27 @@ export class NativeResponsesGateway {
       }));
       throw this.turns.retiredError(identity.threadId, identity.turnId);
     }
-    const binding = await bindNativeTurnRequest(body, this.source);
+    let binding = await bindNativeTurnRequest(body, this.source);
     this.#controller.signal.throwIfAborted();
+    const priorRuns: Promise<unknown>[] = [];
+    for (const [oldKey, old] of this.#lifetimes) {
+      if (oldKey === key || old.current.channel.binding.authority.threadId !== binding.authority.threadId) continue;
+      const running = this.#launches.get(old.current.capability);
+      if (running) priorRuns.push(running);
+      this.#retire(oldKey, new Error("A new canonical Native turn superseded this owner"), "owner_changed");
+    }
+    const cleanup = this.#settlingByTask.get(binding.authority.threadId);
+    if (cleanup) priorRuns.push(cleanup);
+    if (priorRuns.length) {
+      await Promise.allSettled(priorRuns);
+      // Authority may change while old physical cleanup is finishing.
+      binding = await bindNativeTurnRequest(body, this.source);
+      this.#controller.signal.throwIfAborted();
+      withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(binding.authority.threadId),
+        turn_fingerprint: diagnosticFingerprint(binding.authority.turnId) }, () =>
+        emitDiagnosticEvent("chatgpt_tela_work", "native_prior_execution_settled", { prior_run_count: priorRuns.length,
+          execution_restarted: false, current_authority_proven: true }));
+    }
     let registered = this.turns.active(binding.authority.threadId, binding.authority.turnId);
 
     // Canonical environment/lineage cannot change under an existing Native owner.
@@ -231,6 +254,9 @@ export class NativeResponsesGateway {
       delete lifetime.answerHash;
       lifetime.requestHash = requestHash(body);
       for (const input of fresh) lifetime.consumedInputs.add(input.id);
+      withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId), turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () =>
+        emitDiagnosticEvent("chatgpt_tela_work", "native_steering_cycle_started", { input_count: fresh.length,
+          current_authority_proven: true, prior_final_present: true }));
     } else if (registered && terminalPhase(registered.channel.phase)) {
       if (!lifetime || lifetime.requestHash !== requestHash(body)) {
         this.#rejectCycle(identity, "uncommitted_delivery", "Completed response may only replay its exact uncommitted request");
@@ -315,6 +341,10 @@ export class NativeResponsesGateway {
       } else {
         registered = this.turns.refresh(binding);
         if (lifetime) lifetime.requestHash = requestHash(body);
+        const waitingInputs = lifetime?.watch?.inputs?.().filter(input => !lifetime!.consumedInputs.has(input.id)).length ?? 0;
+        if (waitingInputs) withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId), turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () =>
+          emitDiagnosticEvent("chatgpt_tela_work", "native_steering_deferred", { input_count: waitingInputs,
+            turn_phase: registered!.channel.phase, execution_restarted: false }));
       }
     }
 
@@ -363,6 +393,12 @@ export class NativeResponsesGateway {
 
     const launch = this.#launches.get(owned.capability);
     this.#launches.delete(owned.capability);
+    const previousSettlement = this.#settlingByTask.get(authority.threadId);
+    const settlement = Promise.allSettled([...(previousSettlement ? [previousSettlement] : []), ...(launch ? [launch] : [])]);
+    this.#settlingByTask.set(authority.threadId, settlement);
+    void settlement.finally(() => {
+      if (this.#settlingByTask.get(authority.threadId) === settlement) this.#settlingByTask.delete(authority.threadId);
+    });
     // Observation owns Native lifetime; Web cleanup still finishes before closing its observer.
     const closing = (launch ?? Promise.resolve()).catch(() => {})
       .then(() => lifetime.watch?.close()).then(() => {});
