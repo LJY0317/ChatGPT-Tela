@@ -194,6 +194,15 @@ conflict and partial-write guarantees. Keep DevSpace available until replacement
 
 ### 4. Complete product lifecycle and reduce integration debt
 
+**Planned: automatic menu-bar replacement during maintenance.** The independently owned updater must
+request normal termination from the exact old menu-bar instance, wait for its exit and singleton-lock
+release, then launch and verify the menu bar from the newly verified installed payload. Include this
+surface in upgrade, repair and source-restoration checkpoints without turning it into a backend service.
+Preserve active work, connection choices and accounts; an uncertain quit or ownership change must leave
+a resumable checkpoint. Acceptance must cover an open Control Center, interrupted replacement/rollback,
+and restored UI/version freshness with no manual Quit/Open step, forced signal, stale process or duplicate
+menu icon. Use on-demand lifecycle events, not an idle polling daemon. This remains unimplemented.
+
 Verify installation, login, interrupted update/recovery and removal for Tela alone, Plura alone and their
 optional versioned integration. Preserve original apps, default config, Native history and other-product
 ownership. Prefer stable public API and discovered capabilities; retain only necessary versioned patches
