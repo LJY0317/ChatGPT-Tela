@@ -12,7 +12,7 @@ const messages: Record<ProfileConnectionPhase, string> = {
   models: "Couldn’t load the model catalog. Check Work and try again.",
   opening: "Couldn’t open ChatGPT. Check its app status before trying again.",
   checking: "Couldn't connect to this ChatGPT app. Check its status in Work before trying again.",
-  closing: "ChatGPT is waiting to close. Finish any ongoing work and respond to its quit confirmation, then try again.",
+  closing: "ChatGPT couldn’t close. Finish your work and confirm Quit in ChatGPT, then try again.",
   preparing: "Couldn't get Web models ready. Open Work to check your connection.",
   connecting: "Couldn't finish connecting ChatGPT. Open Work to check your connection.",
   ready: "Couldn't save your connection choice. Check Tela settings before trying again.",

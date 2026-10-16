@@ -161,6 +161,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   var connectionOperationInProgress: Bool { operationInProgress }
   var connectionProgressSlot: Int? { connectionProfileSlot }
   func workInventoryDidChange() {
+    clearResolvedProfileFailure()
     rememberRunningProfileApps(profiles)
     if accountInventory != profiles {
       accountInventory = profiles
@@ -197,12 +198,21 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var accountRefreshPending = false
   private var refreshing = false
   private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
-  private var changingProfile = false { didSet { onConnectionProgressChanged?(profileProgress) } }
+  private var changingProfile = false { didSet {
+    clearResolvedProfileFailure()
+    onConnectionProgressChanged?(profileProgress)
+  } }
   private var connectionProfileSlot: Int? { didSet { onConnectionProgressChanged?(profileProgress) } }
   private var profileProgress: String? {
     didSet { if profileProgress != oldValue { onConnectionProgressChanged?(profileProgress) } }
   }
-  private var profileFailure: String?
+  private var profileFailure: String? { didSet { profileConnectionFailure = nil } }
+  private var profileConnectionFailure: TelaProfileConnectionFailure?
+  private func clearResolvedProfileFailure() {
+    if profileConnectionFailure?.resolved(in: workInventory, operationInProgress: changingProfile) == true {
+      profileFailure = nil
+    }
+  }
   private var changingServices = false
   private var serviceAction: String?
   private var previewLoads = 0
@@ -700,8 +710,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
             let warning = secondary("Different email addresses. Turn off Web, then sign in to its browser with your Work account.")
             warning.textColor = .systemOrange
             append(warning, to: profileCard)
-          } else if account.comparison == "matching" {
-            append(secondary("Email addresses match"), to: profileCard)
           }
         } else {
           append(secondary(profile.connected ? "Checking accounts…" : "Web models off"), to: profileCard)
@@ -718,7 +726,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
         if connectionProfileSlot == profile.slot, let message = profileFailure {
           append(secondary(message), to: profileCard)
-          profileCard.addArrangedSubview(actionButton("Open logs", action: #selector(openLogs)))
         }
         if profile.accountManagementActive == true {
           append(secondary("When sign-in is complete, choose Done to close the Web browser and check your connection."), to: profileCard)
@@ -736,9 +743,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
             : "Sign in to the selected Tela Web profile."
           profileCard.addArrangedSubview(login)
         }
-      }
-      if profiles.contains(where: { $0.connected && $0.webState == "ready" && $0.webModelsReady != false }) {
-        append(secondary("New models may take a few minutes to appear in ChatGPT."), to: profileCard)
       }
       let preview = card("Web activity")
       let runningProfiles = profiles.filter { $0.controlState == "running" }
@@ -1465,6 +1469,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       } catch {
         profileFailure = (error as? TelaConnectionFailure)?.message
           ?? "Couldn't connect ChatGPT. Check its status in Work before trying again."
+        if let targetId = profile.targetId {
+          profileConnectionFailure = TelaProfileConnectionFailure(slot: slot, targetId: targetId,
+            goal: action == "stop" ? .stopped : .connected)
+        }
       }
       profileProgress = nil
       changingProfile = false

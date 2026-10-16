@@ -91,6 +91,27 @@ struct TelaWorkInventory {
   }
 }
 
+// A failed connection action is obsolete only when fresh inventory proves its
+// intended result for the same target. Native-only readiness cannot settle a Web start.
+struct TelaProfileConnectionFailure {
+  enum Goal { case connected, stopped }
+  let slot: Int
+  let targetId: String
+  let goal: Goal
+  func resolved(in inventory: TelaWorkInventory, operationInProgress: Bool) -> Bool {
+    guard !operationInProgress, inventory.error == nil,
+          let profile = inventory.profiles.first(where: { $0.slot == slot && $0.targetId == targetId }),
+          profile.connectionInProgress != true else { return false }
+    switch goal {
+    case .connected:
+      return profile.connected && profile.webState == "ready" && profile.webModelsReady == true
+        && profile.accountManagementActive != true
+    case .stopped:
+      return profile.controlState == "stopped" && profile.targetSessionState == "available"
+    }
+  }
+}
+
 // Inventory launches bounded platform discovery; quick health checks must not set its budget.
 enum TelaRequestBudget {
   static func seconds(path: String, method: String) -> TimeInterval {

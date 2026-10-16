@@ -80,6 +80,27 @@ precondition(!TelaProfilePresentation(profile: signedOutWeb, inventoryError: nil
 var readyWeb = preparingWeb; readyWeb.webState = "ready"; readyWeb.webModelsReady = true
 precondition(readyWeb.connectionLabel == "Connected" && !readyWeb.needsWebReconnect)
 precondition(!TelaProfilePresentation(profile: readyWeb, inventoryError: nil, localProgress: nil).busy)
-print("launch notices, shared presentation and stale read exclusion passed")
+var recoveredProfile = readyWeb; recoveredProfile.targetId = "default"
+let startFailure = TelaProfileConnectionFailure(slot: 1, targetId: "default", goal: .connected)
+var recoveryInventory = TelaWorkInventory(); recoveryInventory.loaded([recoveredProfile])
+precondition(startFailure.resolved(in: recoveryInventory, operationInProgress: false))
+precondition(!startFailure.resolved(in: recoveryInventory, operationInProgress: true))
+recoveryInventory.failed(NSError(domain: "fixture", code: 1))
+precondition(!startFailure.resolved(in: recoveryInventory, operationInProgress: false))
+var nativeOnlyProfile = recoveredProfile; nativeOnlyProfile.webState = "login-required"; nativeOnlyProfile.webModelsReady = false
+recoveryInventory.loaded([nativeOnlyProfile])
+precondition(!startFailure.resolved(in: recoveryInventory, operationInProgress: false))
+var otherTarget = recoveredProfile; otherTarget.targetId = "replacement"
+recoveryInventory.loaded([otherTarget])
+precondition(!startFailure.resolved(in: recoveryInventory, operationInProgress: false))
+recoveredProfile.connectionInProgress = true; recoveryInventory.loaded([recoveredProfile])
+precondition(!startFailure.resolved(in: recoveryInventory, operationInProgress: false))
+let stopFailure = TelaProfileConnectionFailure(slot: 1, targetId: "default", goal: .stopped)
+recoveredProfile.connectionInProgress = false; recoveryInventory.loaded([recoveredProfile])
+precondition(!stopFailure.resolved(in: recoveryInventory, operationInProgress: false))
+let stoppedProfile = TelaWorkProfile(slot: 1, targetDisplayName: "ChatGPT", targetState: "stopped", targetSessionState: "available", controlState: "stopped", targetId: "default")
+recoveryInventory.loaded([stoppedProfile])
+precondition(stopFailure.resolved(in: recoveryInventory, operationInProgress: false))
+print("launch notices, shared presentation, connection recovery and stale read exclusion passed")
 
 } }
