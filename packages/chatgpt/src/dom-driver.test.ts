@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "bun:test";
+import { structuralDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   BROWSER_PAGE_AUTOMATION,
   ControlledBrowserHost,
@@ -267,7 +268,7 @@ class FixtureElement {
 class RendererFixturePage extends FakePage {
   readonly rendererState: Record<string | symbol, unknown> = {};
   animationFrame: (callback: () => void) => void = callback => callback();
-  hitTest = () => this.document.querySelectorAll('[data-codex-approval-surface="true"]')[0]
+  hitTest: () => FixtureElement | null | undefined = () => this.document.querySelectorAll('[data-codex-approval-surface="true"]')[0]
     ?.querySelectorAll("button").find(b => b.textContent.startsWith("Allow once"));
   constructor(readonly document: FixtureElement) { super(); }
   override async evaluate<Argument, Result>(source: string, argument: Argument): Promise<Result> {
@@ -275,7 +276,7 @@ class RendererFixturePage extends FakePage {
       return runInNewContext(`(${source})(argument)`, Object.assign(this.rendererState, {
         argument, innerWidth: 800, innerHeight: 600, requestAnimationFrame: (callback: () => void) => this.animationFrame(callback),
         document: Object.assign(this.document, { documentElement: this.document, elementFromPoint: this.hitTest }), HTMLElement: FixtureElement, HTMLButtonElement: FixtureElement,
-        getComputedStyle: (element: FixtureElement) => ({ display: element.getAttribute("data-fixture-display") ?? "block", visibility: element.getAttribute("data-fixture-visibility") ?? "visible", opacity: element.getAttribute("data-fixture-opacity") ?? "1" }),
+        getComputedStyle: (element: FixtureElement) => ({ display: element.getAttribute("data-fixture-display") ?? "block", visibility: element.getAttribute("data-fixture-visibility") ?? "visible", opacity: element.getAttribute("data-fixture-opacity") ?? "1", pointerEvents: element.getAttribute("data-fixture-pointer-events") ?? "auto" }),
         location: { href: "https://chatgpt.com/" }, crypto: { randomUUID: () => "synthetic-card" },
       })) as Result;
     }
@@ -755,6 +756,50 @@ describe("current ChatGPT DOM surface driver", () => {
       expect(clicks).toEqual([{ x: 20, y: 30 }]);
     } finally { clearTimeout(timer); owner.abort(); }
   });
+  test.each(["none", "document", "dialog", "control", "other"] as const)(
+    "obstructed approval records bounded content-free %s evidence without input", async kind => {
+      const scratch = mkdtempSync(join(tmpdir(), "tela-approval-obstruction-"));
+      const file = join(scratch, "events.jsonl");
+      const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+      try {
+        const deny = new FixtureElement(); deny.textContent = "Deny";
+        const allow = new FixtureElement({ "data-fixture-pointer-events": "none" }); allow.textContent = "Allow once";
+        const card = new FixtureElement(); card.textContent = "PRIVATE_CARD_CONTENT";
+        card.selectors.button = [deny, allow];
+        const document = Object.assign(new FixtureElement({}, { '[data-codex-approval-surface="true"]': [card] }), { visibilityState: "hidden" });
+        const blocker = kind === "none" ? null : kind === "document" ? document : new FixtureElement({ id: "PRIVATE_BLOCKER" });
+        if (blocker && kind !== "document") {
+          blocker.textContent = "PRIVATE_BLOCKER_CONTENT";
+          blocker.closest = (selector?: string) =>
+            (kind === "dialog" && selector?.startsWith("dialog")) || (kind === "control" && selector?.startsWith("button")) ? blocker : null;
+        }
+        allow.closest = () => allow; // Target is inert; no alternate target is authorized.
+        card.contains = element => element === card || element === blocker;
+        const page = new RendererFixturePage(document); page.hitTest = () => blocker;
+        let clicks = 0; page.pointerClick = async () => { clicks++; };
+        const driver = new ChatGptDomSurfaceDriver(page);
+        expect((await driver.processApprovalCard("recognized_once")).status).toBe("none");
+        expect((await driver.processApprovalCard("recognized_once")).status).toBe("none");
+        let raw = readFileSync(file, "utf8");
+        const witnesses = () => raw.trim().split("\n").map(line => JSON.parse(line)).filter(event => event.stage === "approval_target_failed");
+        expect(witnesses()).toHaveLength(1);
+        expect(structuralDiagnosticEvent(witnesses()[0])).toEqual(witnesses()[0]);
+        expect(witnesses()[0]).toMatchObject({ reason_class: "occluded", dispatch_started: false,
+          target_kind: kind, hit_in_card: blocker !== null, target_pointer_events_none: true, target_inert: true, document_hidden: true });
+        card.textContent += " changed revision";
+        expect((await driver.processApprovalCard("recognized_once")).status).toBe("none");
+        raw = readFileSync(file, "utf8");
+        expect(witnesses()).toHaveLength(2);
+        expect(raw).not.toMatch(/PRIVATE_|elementFromPoint|selector/);
+        expect(clicks).toBe(0);
+      } finally {
+        if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+        else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    },
+  );
   test.each(["replaced", "proof_changed", "disabled", "occluded", "outside", "ambiguous"])(
     "frame-independent approval still rejects a changed or unproven target (%s)", async mutation => {
       const deny = new FixtureElement(); deny.textContent = "Deny";

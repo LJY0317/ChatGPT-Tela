@@ -161,7 +161,20 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       || Math.round(target.x) >= innerWidth || Math.round(target.y) >= innerHeight) return result;
     const hit = document.elementFromPoint(Math.round(target.x), Math.round(target.y));
     result.targetState = "occluded";
-    if (hit !== allowOnceButton && !allowOnceButton.contains(hit)) return result;
+    if (hit !== allowOnceButton && !allowOnceButton.contains(hit)) {
+      // Content-free witness at the failed hit-test boundary, never authority to click.
+      // DOM labels, selectors, coordinates and element references stay in the renderer.
+      result.obstruction = {
+        kind: !hit ? "none" : hit === document.documentElement || hit === document.body ? "document"
+          : hit.closest('dialog,[role="dialog"],[aria-modal="true"]') ? "dialog"
+          : hit.closest('button,a,input,select,textarea,[role="button"]') ? "control" : "other",
+        inCard: !!hit && cards[0].contains(hit),
+        pointerEventsNone: getComputedStyle(allowOnceButton).pointerEvents === "none",
+        inert: !!allowOnceButton.closest('[inert]'),
+        documentHidden: document.visibilityState === "hidden",
+      };
+      return result;
+    }
     // Passive, card-local receipt of actual browser input. No click, authority or polling here.
     if (prior.receiptButton !== allowOnceButton && typeof allowOnceButton.addEventListener === "function") {
       prior.receiptButton = allowOnceButton;
@@ -1686,6 +1699,7 @@ function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
  */
 export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
   #activatedApprovalCardKey: string | undefined;
+  #lastObstructionRevision: string | undefined;
   #progressProbeTurnKey: string | undefined;
   readonly #progressProbeStates = new Set<string>();
   constructor(readonly page: BrowserPageAutomation) {}
@@ -1897,6 +1911,13 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
   ) {
     type ApprovalObservation = {
       readonly targetState?: "unprepared" | "changed" | "outside_viewport" | "occluded" | "ready";
+      readonly obstruction?: {
+        readonly kind: string;
+        readonly inCard: boolean;
+        readonly pointerEventsNone: boolean;
+        readonly inert: boolean;
+        readonly documentHidden: boolean;
+      };
       readonly cardCount: number;
       readonly denyCount: number;
       readonly allowCount: number;
@@ -1963,6 +1984,24 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     observed = prepared;
     const target = observed.allowOncePoint;
     if (!target) {
+      const obstruction = observed.obstruction;
+      const revision = fingerprint(JSON.stringify([observed.cardKey, observed.proofKey]));
+      if (observed.targetState === "occluded" && obstruction && revision !== this.#lastObstructionRevision) {
+        // One retained revision, no growing history or retry loop. Only new revisions
+        // produce another canonical incident while the same target stays obstructed.
+        this.#lastObstructionRevision = revision;
+        this.#diagnostic("approval_target_failed", {
+          reason_class: "occluded", dispatch_started: false,
+          card_fingerprint: diagnosticFingerprint(observed.cardKey!),
+          proof_fingerprint: diagnosticFingerprint(observed.proofKey!),
+          target_kind: ["none", "document", "dialog", "control", "other"].includes(obstruction.kind)
+            ? obstruction.kind : "unknown",
+          hit_in_card: obstruction.inCard === true,
+          target_pointer_events_none: obstruction.pointerEventsNone === true,
+          target_inert: obstruction.inert === true,
+          document_hidden: obstruction.documentHidden === true,
+        });
+      }
       this.#diagnostic("approval_target_missing", { preferred: decision.preferredChoice,
         reason_class: observed.targetState ?? "target_missing" });
       return Object.freeze({ status: "none" as const, reason: "target_missing" });

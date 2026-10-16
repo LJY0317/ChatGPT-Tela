@@ -605,6 +605,14 @@ in hidden windows. Preparation revalidates the original card and revision after 
 disabled, ambiguous, occluded or offscreen targets remain unapproved. Background throttling stays at
 its default; no continuous rendering, sampler or model request is introduced.
 
+An obstructed target also emits `approval_target_failed` with a fixed hit kind (`none`, `document`,
+`dialog`, `control`, `other`) and booleans for same-card hit, target pointer-events/inert and document
+visibility. A null hit is distinct from a different element; neither proves a particular overlay.
+Only the last reported card revision is retained for deduplication. Repeated preparation of that
+unchanged revision adds no incident; a changed revision may record a new one. Existing bounded
+incident retention applies. No text, DOM identifiers, coordinates, capture or extra polling is added;
+this evidence never changes approval authority or selects another click target.
+
 `approval_dispatch_started` marks the separate input boundary. Its outcome remains one-shot: an
 uncertain dispatch is never automatically retried against the same card. Preparation completion or
 `approval_activated` alone does not prove input receipt, card clearance, tool execution or task success.
