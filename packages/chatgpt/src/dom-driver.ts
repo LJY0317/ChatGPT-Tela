@@ -42,7 +42,7 @@ interface RawTurn {
   readonly contentText?: string;
   readonly userPayloadReason?: string;
   /** Content-free adapter witness, count saturated at 65; never acceptance authority. */
-  readonly userPayloadStructure?: { readonly rootCount: number; readonly nestedRoots?: boolean };
+  readonly userPayloadStructure?: { readonly rootCount: number; readonly nestedRoots?: boolean; readonly equivalentRoots?: boolean };
   readonly bodyProof?: { readonly version: 1; readonly value?: string; readonly reason?: string };
   readonly plainBodyText?: string;
   readonly phase?: ChatGptAssistantPhase;
@@ -558,7 +558,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         ...(lineageAnchor ? { lineageAnchor } : {}),
         ...(payload.value !== undefined ? { contentText: payload.value } : {}),
         userPayloadReason: payload.reason,
-        userPayloadStructure: { rootCount: payload.rootCount, ...(payload.nestedRoots !== undefined ? { nestedRoots: payload.nestedRoots } : {}) },
+        userPayloadStructure: { rootCount: payload.rootCount, ...(payload.nestedRoots !== undefined ? { nestedRoots: payload.nestedRoots } : {}), ...(payload.equivalentRoots !== undefined ? { equivalentRoots: payload.equivalentRoots } : {}) },
       });
     }
     // The current renderer identifies assistant bodies directly, without the role wrapper.

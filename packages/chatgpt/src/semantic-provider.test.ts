@@ -2394,3 +2394,25 @@ test("a visible final without author proof cannot leave submit waiting forever o
     expect(driver.activated).toHaveLength(1);
   } finally { await surface.host.close(); }
 }, 35000);
+
+test("canonical nested author proof accepts one send, delivers its own final, and retires the completed handle", async () => {
+  const driver = new FixtureDriver(fixture("ready-new-chat"));
+  const surface = await leaseFor(driver); const provider = new ChatGptSemanticProvider();
+  try {
+    const pending = provider.submitTurn(surface.lease, request());
+    while (!driver.activated.length) await Promise.resolve();
+    const accepted = acceptedSnapshot(driver);
+    driver.queued.push({ ...accepted, turns: accepted.turns.map(turn => ({ ...turn,
+      userPayloadReason: "author_payload", userPayloadStructure: { rootCount: 2, nestedRoots: true, equivalentRoots: true },
+    })) });
+    const submitted = await pending;
+    expect(submitted.state).toBe("proven");
+    if (submitted.state !== "proven") throw Error("fixture did not accept canonical author");
+    driver.current = { ...driver.current, revision: "own-final", turns: [...driver.current.turns,
+      { key: "assistant", role: "assistant", parentUserTurnKey: "user-turn-1", phase: "complete", text: "Synthetic final" }] };
+    const event = await provider.waitForTurnEvent(surface.lease, submitted.value);
+    expect(event.state === "proven" && event.value).toMatchObject({ kind: "completed", answer: "Synthetic final" });
+    expect(driver.activated).toHaveLength(1);
+    await expect(provider.observeTurn(surface.lease, submitted.value)).rejects.toThrow("not bound");
+  } finally { await surface.host.close(); }
+});

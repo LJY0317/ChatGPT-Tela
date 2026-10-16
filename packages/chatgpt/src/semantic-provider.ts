@@ -149,6 +149,7 @@ function acceptanceStructure(turn: ChatGptTurnObservation | undefined) {
   return witness && Number.isSafeInteger(witness.rootCount) && witness.rootCount >= 0 ? {
     author_root_count: Math.min(witness.rootCount, 65),
     ...(typeof witness.nestedRoots === "boolean" ? { author_roots_nested: witness.nestedRoots } : {}),
+    ...(typeof witness.equivalentRoots === "boolean" ? { author_roots_equivalent: witness.equivalentRoots } : {}),
   } : {};
 }
 
@@ -1435,6 +1436,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             baseline_lineage_count: preSubmitUserLineageKeys.size,
             accepted_fingerprint_matches: userTurn.contentFingerprint === expectedFingerprint,
             logical_anchor_present: userTurn.lineageAnchor !== undefined,
+            ...acceptanceStructure(userTurn),
           });
           return {
             state: "proven",

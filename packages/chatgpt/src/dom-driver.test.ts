@@ -309,6 +309,26 @@ describe("current ChatGPT DOM surface driver", () => {
     expect((await driver.observe()).turns[0]!.contentFingerprint).toBeUndefined();
     expect((await driver.observe()).turns[0]!.userPayloadStructure).toEqual({ rootCount: 2, nestedRoots: false });
   });
+  test("serialized renderer keeps author identity across equivalent nested wrappers and rejects divergent text", async () => {
+    const outer = new FixtureElement(), inner = new FixtureElement();
+    outer.textContent = inner.textContent = "Full author text\n한글 😀";
+    outer.contains = node => node === outer || node === inner;
+    const user = new FixtureElement({}, { '[data-search-result-target]': [inner] });
+    const group = new FixtureElement({ 'data-turn-key': 'owned' }, { '[data-user-message-bubble]': [user] });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
+    const original = (await driver.observe()).turns[0]!.contentFingerprint;
+    expect(original).toBeDefined();
+    user.selectors['[data-search-result-target]'] = [inner, outer];
+    user.innerText = "folded preview Show more Copy Edit";
+    expect((await driver.observe()).turns[0]!).toMatchObject({ contentFingerprint: original,
+      userPayloadStructure: { rootCount: 2, nestedRoots: true, equivalentRoots: true } });
+    outer.textContent += " Edit";
+    const divergent = (await driver.observe()).turns[0]!;
+    expect(divergent.contentFingerprint).toBeUndefined();
+    expect(divergent.userPayloadStructure).toEqual({ rootCount: 2, nestedRoots: true, equivalentRoots: false });
+    outer.textContent = inner.textContent = "Edited author text";
+    expect((await driver.observe()).turns[0]!.contentFingerprint).not.toBe(original);
+  });
   test("actual renderer separates exact plain-body receipt proof from Markdown escaping", async () => {
     const receipt = "TELA_CONTEXT_ACK ctxr_" + "a".repeat(32);
     const body = new FixtureElement({ 'data-markdown-text-style': 'assistant-message' });

@@ -106,8 +106,14 @@ An activated send whose acceptance remains unproven uses the closed
 `tela_web_submission_unproven` classification. Preserve that first structural reason across
 retirement, HTTP rejection and an already-started progress stream; reconnects must not launch a
 second execution. Reconcile the existing submission before a new authorized turn continues.
-Ambiguous author roots supply no content identity: record only a saturated candidate count and
-bounded nesting witness, never browser text or an arbitrarily selected root. This evidence adds
+Author candidates forming one containment chain may collapse to one payload only when the
+outermost and innermost complete text agree under the existing line-ending normalization. This
+preserves the original fingerprint across redundant wrappers without model calls or DOM mutation.
+Sibling/branching candidates and unequal nested text remain ambiguous; never select a candidate
+by position, preview visibility or matching only a substring. Inspect at most64candidates and read
+at most two endpoint payloads under the existing payload bound. Structural diagnostics may report
+only candidate count, nesting and endpoint equivalence, never the candidate text.
+Ambiguous author roots supply no content identity. This evidence adds
 zero model calls, context injection or successful-turn prompt bytes. Completed preparation receipts
 remain available under their original source/account/model/policy identity.
 
