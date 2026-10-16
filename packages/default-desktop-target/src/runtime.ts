@@ -43,6 +43,13 @@ export interface DefaultDesktopTargetRuntime {
   stop(): Promise<void>;
 }
 
+interface BackendOwnership {
+  beginSpawn(): void;
+  attachBackend(pid: number): void;
+  proveBackendExit(): void;
+  cancelBeforeSpawn(): void;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise(resolvePromise => setTimeout(resolvePromise, ms));
 }
@@ -167,11 +174,13 @@ export async function startDefaultDesktopTargetRuntime(input: {
   readonly nativeCatalog?: Promise<unknown>;
   /** Prepare the backend in parallel, but admit Desktop only after caller proofs complete. */
   readonly beforeDesktopLaunch?: () => Promise<void>;
+  readonly acquireBackendOwnership?: () => Promise<BackendOwnership | undefined>;
   readonly onDiagnostic?: (stage: string, fields: Readonly<Record<string, DiagnosticScalar>>) => void;
 }): Promise<DefaultDesktopTargetRuntime> {
   const started = performance.now();
   const fingerprint = randomBytes(12).toString("hex");
   let phase = "checking";
+  let backendOwnership: BackendOwnership | undefined;
   const diagnostic = (stage: string, fields: Readonly<Record<string, DiagnosticScalar>> = {}) => {
     try {
       const structural = { operation_fingerprint: fingerprint, phase, platform: input.installation.platform,
@@ -195,6 +204,9 @@ export async function startDefaultDesktopTargetRuntime(input: {
     throw new Error("official ChatGPT Desktop is already running outside Tela; quit it normally once before starting the default Tela profile");
   }
   if (input.credential.length < 32) throw new Error("default Desktop Responses credential is too short");
+
+  step("backend_ownership");
+  backendOwnership = await input.acquireBackendOwnership?.();
 
   const backendEnvironment: NodeJS.ProcessEnv = {
     ...process.env,
@@ -221,6 +233,7 @@ export async function startDefaultDesktopTargetRuntime(input: {
     catalogArguments = ["-c", `model_catalog_json=${JSON.stringify(path)}`];
     if (input.catalogMode === "seeded-remote") catalogArguments.push("-c", "features.tela_seeded_model_catalog=true");
   }
+  backendOwnership?.beginSpawn();
   step("backend");
   const backend = spawn(input.installation.codexExecutable, [
     "app-server",
@@ -241,6 +254,14 @@ export async function startDefaultDesktopTargetRuntime(input: {
   let desktop: ChildProcess | undefined;
   let desktopPid: number | undefined;
   try {
+    backend.once("exit", () => {
+      try { backendOwnership?.proveBackendExit(); }
+      catch { diagnostic("desktop_backend_ownership_failed", { reason_class: "exit_checkpoint_retained" }); }
+    });
+    backend.once("error", () => {
+      if (!backend.pid) try { backendOwnership?.proveBackendExit(); } catch { /* Retain uncertain ownership. */ }
+    });
+    if (backend.pid) backendOwnership?.attachBackend(backend.pid);
     const appServerEndpoint = await waitForAppServerEndpoint(backend);
     backend.stderr.resume();
     step("handshake");
@@ -368,6 +389,7 @@ export async function startDefaultDesktopTargetRuntime(input: {
       },
     });
   } catch (error) {
+    try { backendOwnership?.cancelBeforeSpawn(); } catch { /* Keep the checkpoint on uncertainty. */ }
     diagnostic("desktop_rollback_begin");
     const failures: unknown[] = [error];
     if (desktop && alive(desktop)) {
@@ -389,6 +411,7 @@ export async function startDefaultDesktopTargetRuntime(input: {
   }
   } catch (error) {
     diagnostic("desktop_start_failed");
+    try { backendOwnership?.cancelBeforeSpawn(); } catch { /* Keep the checkpoint on uncertainty. */ }
     throw error;
   }
 }

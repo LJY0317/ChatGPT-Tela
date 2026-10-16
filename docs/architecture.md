@@ -201,9 +201,13 @@ Use the official managed lifecycle and preserve active work. If ownership or ter
 stop with an actionable checkpoint rather than spawn another owner, clear a lock or send arbitrary signals.
 Acceptance must include parent disappearance, interrupted upgrade, PID reuse, concurrent starts and
 remote enrollment exclusivity. Remote registration and chat writer ownership are separate checks.
-Service-to-profile supervision already requests normal teardown on lease loss. Durable backend
-reconciliation after loss of the owning runtime is still missing; passive remote status diagnostics
-do not satisfy this gate.
+Service-to-profile supervision requests normal teardown on lease loss. The built-in Desktop now
+records backend admission in an install-owned SQLite ledger keyed by canonical Native home. A live
+owner/backend or uncertain spawn blocks another start; an exact child-exit receipt releases authority.
+After owner loss, only proven absence permits reclamation. Transactions serialize admission without
+heartbeats or age-based lock stealing. Historical backends predating this ledger are not silently
+adopted, and optional providers retain their independent lifecycle authority. A complete recovery UX
+for a surviving backend remains a separate follow-up; passive Remote diagnostics alone are insufficient.
 
 **Planned: automatic menu-bar replacement during maintenance.** The independently owned updater must
 request normal termination from the exact old menu-bar instance, wait for its exit and singleton-lock

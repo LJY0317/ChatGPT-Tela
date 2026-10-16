@@ -7,7 +7,7 @@ import { chatGptWebModelId, CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL, 
 import { createDefaultDesktopResponsesRoute, resolveDefaultDesktopInstallation, startDefaultDesktopTargetRuntime, TELA_DEFAULT_DESKTOP_RUNTIME_HEADER } from "@chatgpt-tela/default-desktop-target";
 import { startLocalResponsesServer, type LocalResponsesServer } from "@chatgpt-tela/local-server";
 import { startCodexBridgeMcpHttpServer, type CodexBridgeMcpHttpServer } from "@chatgpt-tela/mcp";
-import { resolveOwnedNativeEngine } from "@chatgpt-tela/product-lifecycle";
+import { resolveOwnedNativeEngine, acquireNativeBackendOwnership } from "@chatgpt-tela/product-lifecycle";
 import { ActiveTurnRegistry } from "@chatgpt-tela/runtime";
 import { MultiProfileControlClient } from "@chatgpt-tela/setup";
 import { createDefaultProfileCompositeProviderRouter } from "./composite-provider-router";
@@ -106,6 +106,7 @@ async function startNativeTarget(config: ProductProfileRuntimeConfig, url: URL, 
     const official = resolveDefaultDesktopInstallation({ environment: process.env });
     const host = await startDefaultDesktopTargetRuntime({
       installation: nativeEngine ? { ...official, codexExecutable: nativeEngine.executable } : official,
+      acquireBackendOwnership: () => acquireNativeBackendOwnership({ nativeHome: official.codexHome }),
       route: createDefaultDesktopResponsesRoute({ baseUrl: url, envKey: PRODUCT_RESPONSES_ENV_KEY, credential: config.responsesToken }),
       credential: config.responsesToken,
       environment: { ...process.env, OPENAI_ORGANIZATION: config.responsesToken },

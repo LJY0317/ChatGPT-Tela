@@ -48,6 +48,7 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
     });
     let fixtureDesktopPid: number | undefined;
     let normalQuitCalls = 0;
+    const ownershipEvents: string[] = [];
     const runtime = await startDefaultDesktopTargetRuntime({
       installation: {
         platform: "linux",
@@ -59,6 +60,15 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       },
       route,
       credential: "r".repeat(48),
+      acquireBackendOwnership: async () => {
+        ownershipEvents.push("claimed");
+        return {
+          beginSpawn() { ownershipEvents.push("spawning"); },
+          attachBackend(pid) { expect(pid).toBeGreaterThan(0); ownershipEvents.push("attached"); },
+          proveBackendExit() { ownershipEvents.push("exited"); },
+          cancelBeforeSpawn() {},
+        };
+      },
       environment: { TELA_FIXTURE_LOG: logPath, TELA_FIXTURE_STATE: statePath, TELA_FIXTURE_HISTORY_MODE: historyMode, OPENAI_ORGANIZATION: "r".repeat(48) },
       // The shebang fixture is a Bun process, unlike the real native executable.
       processIds: async () => fixtureDesktopPid === undefined ? [] : [fixtureDesktopPid],
@@ -78,6 +88,7 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       if (historyMode === "legacy") {
         await expect(runtime.stop()).rejects.toThrow("unindexed active turn");
         expect(normalQuitCalls).toBe(0);
+        expect(ownershipEvents).toEqual(["claimed", "spawning", "attached"]);
         expect(readFileSync(statePath, "utf8")).toBe("active");
         expect(() => process.kill(runtime.desktopPid, 0)).not.toThrow();
         // Independent canonical settlement permits the same owned stop to resume.
@@ -88,6 +99,7 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       expect(() => process.kill(runtime.desktopPid, 0)).toThrow();
       expect(() => process.kill(runtime.backendPid, 0)).toThrow();
       expect(normalQuitCalls).toBe(1);
+      expect(ownershipEvents).toEqual(["claimed", "spawning", "attached", "exited"]);
       expect(JSON.parse(readFileSync(logPath, "utf8")).nativeInterrupted === true).toBe(historyMode === "paginated");
       rmSync(root, { recursive: true, force: true });
     }
@@ -141,6 +153,20 @@ ws.addEventListener("close",()=>process.exit(0),{once:true});setInterval(()=>{},
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+test("backend ownership refusal occurs before any backend executable can be spawned", async () => {
+  const events: { stage: string; fields: any }[] = [];
+  await expect(startDefaultDesktopTargetRuntime({
+    installation: { platform: "linux", chatGptExecutable: "/missing/chat", codexExecutable: "/missing/backend", codexHome: "/private/home", userDataDir: "/private/data", normalQuitSupported: true },
+    route: createDefaultDesktopResponsesRoute({ baseUrl: "http://127.0.0.1:18741/v1", envKey: "TEST_KEY", credential: "s".repeat(48) }),
+    credential: "s".repeat(48), processIds: async () => [],
+    acquireBackendOwnership: async () => { throw Error("Previous Native backend is still running"); },
+    onDiagnostic: (stage, fields) => events.push({ stage, fields }),
+  })).rejects.toThrow("Previous Native backend is still running");
+  expect(events.at(-1)).toMatchObject({ stage: "desktop_start_failed", fields: { phase: "backend_ownership" } });
+  expect(events.some(e => e.fields.phase === "backend")).toBe(false);
+  expect(JSON.stringify(events)).not.toContain("private");
 });
 
 test("startup refusal emits a payload-free checking phase without launching processes",async()=>{

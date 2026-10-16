@@ -1,6 +1,6 @@
 import { verifyWebModelReadiness } from "./web-model-readiness";
 import { existsSync } from "node:fs";
-import { resolveOwnedNativeEngine } from "@chatgpt-tela/product-lifecycle";
+import { resolveOwnedNativeEngine, acquireNativeBackendOwnership } from "@chatgpt-tela/product-lifecycle";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import {
@@ -456,6 +456,7 @@ export async function startProductProfileRuntime(
       const startDefault = options.defaultDesktopTargetStarter ?? startDefaultDesktopTargetRuntime;
       defaultDesktopTarget = await startDefault({
         installation,
+        acquireBackendOwnership: () => acquireNativeBackendOwnership({ nativeHome: installation.codexHome }),
         ...(nativeCatalog ? { nativeCatalog } : {}),
         beforeDesktopLaunch: async () => {
           nativePreparationSignal.throwIfAborted();
