@@ -42,6 +42,9 @@ Checkpoint local settlement follows proven physical release, not exception categ
 matching closure receipt, failed observations remain unresolved. Completed stages stay reusable and
 retired owners cannot resend. A new independently authorized Native owner may replace a locally
 closed claim; this is never an automatic retry or a cold reset of the completed prefix.
+Regression reviews must also check that a previously closed operation does not
+trigger a fresh summary, cold session, repeated source transfer or unnecessary
+manual reconciliation merely because its failure classification changed.
 
 ## Capacity, ownership and preparation policy
 

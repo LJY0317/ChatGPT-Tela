@@ -1084,6 +1084,16 @@ Native turn may reuse completed stages and replace a locally closed claim. Recov
 manual reconciliation. Cross-layer regressions must exercise provider failure → physical release →
 durable settlement → old-owner replay denial → new-owner continuation, with counted calls and reuse.
 
+Refactoring regression exemplar (2026-10-17): a checkpoint producer had physically
+released its owned surface, yet an error-category-dependent closure path left its
+durable journal claim pending. A later Native turn was blocked even though no new
+Web model request had been made. Do not solve this by enumerating more exception
+types or forcing a retry. The shared contract is: prove exact physical release,
+emit the matching closure receipt, settle the original durable claim, fence the
+retired owner, and admit only a separately authorized successor. Keep the remote
+outcome unknown unless independently proven. Verify both successful and failed
+release, journal persistence, public status, and zero unexpected model calls.
+
 Implementation sequence and acceptance gates:
 
 1. Preserve first failure and last observation separately; add bounded structural identity transitions
