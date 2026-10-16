@@ -17,6 +17,11 @@ change the selected model/effort, weaken cancellation, or replay an uncertain op
 5. Bound and expose remaining preparation cost. A transport file is not compression or proof that
    all of its contents were understood. Estimates are not provider-billed token measurements.
 
+Approval preparation is deterministic local work. Hidden-window progress must not depend on
+animation frames or disabling background throttling. Use current geometry and exact revision proof,
+a transient host deadline and the existing one-shot input boundary; do not add model calls, repeated
+clicks or idle rendering to recover a stalled preparation.
+
 A lower call count is not sufficient if it increases duplicated source or loses necessary context.
 Cold preparation needs an economic admission plan based on compatible completed receipts, remaining
 new calls, estimated transfer and elapsed-time bounds before sending. Source-byte and emergency

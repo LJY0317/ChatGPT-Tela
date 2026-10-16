@@ -1,3 +1,4 @@
+import { prepareApprovalWithinDeadline } from "./approval-preparation";
 import { createHash } from "node:crypto";
 import { setTimeout as waitForDelay } from "node:timers/promises";
 import type { BrowserPageAutomation } from "@chatgpt-tela/browser-host";
@@ -145,11 +146,11 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       || result.unknownCount !== 0 || !allowOnceButton || allowOnceButton.disabled
       || allowOnceButton.getAttribute("aria-disabled") === "true") return result;
     allowOnceButton.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
-    // Trusted input uses the compositor coordinates; let the requested scroll
-    // reach a rendered frame before proving the final hit target.
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    // Instant scroll plus synchronous geometry/hit testing flushes current layout.
+    // Frame callbacks may stop in hidden windows and must never gate approval.
+    // This preparation performs no input; dispatch remains on the host boundary.
     const after = await inspectApproval();
-    if (after.cardKey !== prior.cardKey || after.proofKey !== prior.proofKey
+    if (after.cardKey !== prepare.cardKey || after.proofKey !== prepare.proofKey
       || after.cardCount !== 1 || after.denyCount !== 1 || after.allowCount !== 0
       || after.allowOnceCount !== 1 || after.unknownCount !== 0
       || !allowOnceButton.isConnected || allowOnceButton.disabled
@@ -1888,15 +1889,12 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     return true;
   }
 
-  async processApprovalCard(
+  async #prepareApprovalCard(
     mode: ChatGptApprovalAutomationMode,
-    signal?: AbortSignal,
-    delayMs = 0,
+    signal: AbortSignal,
+    delayMs: number,
     expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
-  ): ReturnType<NonNullable<ChatGptSurfaceDriver["processApprovalCard"]>> {
-    if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 15_000) {
-      throw new Error("ChatGPT approval delay must be 0-15000ms");
-    }
+  ) {
     type ApprovalObservation = {
       readonly targetState?: "unprepared" | "changed" | "outside_viewport" | "occluded" | "ready";
       readonly cardCount: number;
@@ -1950,6 +1948,10 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
         return Object.freeze({ status: "none" as const, reason: "card_changed" });
       }
     }
+    this.#diagnostic("approval_preparation_target", {
+      card_fingerprint: diagnosticFingerprint(observed.cardKey!),
+      proof_fingerprint: diagnosticFingerprint(observed.proofKey!),
+    });
     const prepared = await this.page.evaluate<{ cardKey: string; proofKey: string }, ApprovalObservation>(
       INSPECT_APPROVAL_CARD, { cardKey: observed.cardKey!, proofKey: observed.proofKey! }, signal,
     );
@@ -1970,23 +1972,62 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
         card_fingerprint: diagnosticFingerprint(observed.cardKey), proof_fingerprint: diagnosticFingerprint(observed.proofKey ?? "") });
       return Object.freeze({ status: "none" as const, reason: "already_activated" });
     }
-    // An ambiguous activation must never be retried against the same card.
-    this.#activatedApprovalCardKey = observed.cardKey ?? undefined;
+    return { status: "ready" as const, target, cardKey: observed.cardKey!, proofKey: observed.proofKey! };
+  }
+
+  async processApprovalCard(
+    mode: ChatGptApprovalAutomationMode,
+    signal?: AbortSignal,
+    delayMs = 0,
+    expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
+  ): ReturnType<NonNullable<ChatGptSurfaceDriver["processApprovalCard"]>> {
+    if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 15_000) {
+      throw new Error("ChatGPT approval delay must be 0-15000ms");
+    }
+    const started = performance.now();
+    this.#diagnostic("approval_preparation_started", { consent_delay_ms: delayMs });
+    const prepare = (scope: AbortSignal) => this.#prepareApprovalCard(mode, scope, delayMs, expected);
+    let prepared: Awaited<ReturnType<typeof prepare>>;
     try {
-      await this.page.pointerClick(target, signal);
+      prepared = await prepareApprovalWithinDeadline(
+        prepare, signal, delayMs,
+      );
+      signal?.throwIfAborted();
+      this.#diagnostic("approval_preparation_settled", {
+        outcome: prepared.status, duration_ms: Math.max(0, Math.round(performance.now() - started)),
+      });
+    } catch (error) {
+      this.#diagnostic("approval_preparation_failed", {
+        reason_class: signal?.aborted ? "owner_cancelled"
+          : error instanceof DOMException && error.name === "TimeoutError" ? "preparation_timeout" : "preparation_failed",
+        duration_ms: Math.max(0, Math.round(performance.now() - started)), dispatch_started: false,
+      });
+      throw error;
+    }
+    if (prepared.status !== "ready") return prepared;
+    // A concurrent preparation must still respect the single activation fence.
+    if (prepared.cardKey === this.#activatedApprovalCardKey) {
+      this.#diagnostic("approval_activation_withheld", { reason_class: "already_activated" });
+      return Object.freeze({ status: "none" as const, reason: "already_activated" });
+    }
+    // An ambiguous activation must never be retried against the same card.
+    this.#activatedApprovalCardKey = prepared.cardKey;
+    this.#diagnostic("approval_dispatch_started", { card_fingerprint: diagnosticFingerprint(prepared.cardKey) });
+    try {
+      await this.page.pointerClick(prepared.target, signal);
     } catch (error) {
       this.#diagnostic("approval_dispatch_failed", {
         reason_class: signal?.aborted ? "owner_cancelled" : "dispatch_indeterminate",
-        card_fingerprint: diagnosticFingerprint(observed.cardKey!),
-        proof_fingerprint: diagnosticFingerprint(observed.proofKey!),
+        card_fingerprint: diagnosticFingerprint(prepared.cardKey),
+        proof_fingerprint: diagnosticFingerprint(prepared.proofKey),
         automatic_retry: false,
       });
       throw error;
     }
-    this.#diagnostic("approval_activated", { choice: decision.preferredChoice,
-      card_fingerprint: diagnosticFingerprint(observed.cardKey ?? ""), proof_fingerprint: diagnosticFingerprint(observed.proofKey ?? "") });
-    return Object.freeze({ status: "dispatched" as const, reason: decision.preferredChoice,
-      cardFingerprint: diagnosticFingerprint(observed.cardKey!) });
+    this.#diagnostic("approval_activated", { choice: "allow_once",
+      card_fingerprint: diagnosticFingerprint(prepared.cardKey), proof_fingerprint: diagnosticFingerprint(prepared.proofKey) });
+    return Object.freeze({ status: "dispatched" as const, reason: "allow_once",
+      cardFingerprint: diagnosticFingerprint(prepared.cardKey) });
   }
 
   async replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void> {

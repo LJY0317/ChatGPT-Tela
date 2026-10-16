@@ -266,12 +266,15 @@ class FixtureElement {
 
 class RendererFixturePage extends FakePage {
   readonly rendererState: Record<string | symbol, unknown> = {};
+  animationFrame: (callback: () => void) => void = callback => callback();
+  hitTest = () => this.document.querySelectorAll('[data-codex-approval-surface="true"]')[0]
+    ?.querySelectorAll("button").find(b => b.textContent.startsWith("Allow once"));
   constructor(readonly document: FixtureElement) { super(); }
   override async evaluate<Argument, Result>(source: string, argument: Argument): Promise<Result> {
     if (source.includes("return { url: location.href, composers, sendControls, turns }") || source.includes("const cards =")) {
       return runInNewContext(`(${source})(argument)`, Object.assign(this.rendererState, {
-        argument, innerWidth: 800, innerHeight: 600, requestAnimationFrame: (callback: () => void) => callback(),
-        document: Object.assign(this.document, { documentElement: this.document, elementFromPoint: () => this.document.querySelectorAll('[data-codex-approval-surface="true"]')[0]?.querySelectorAll("button").find(b => b.textContent.startsWith("Allow once")) }), HTMLElement: FixtureElement, HTMLButtonElement: FixtureElement,
+        argument, innerWidth: 800, innerHeight: 600, requestAnimationFrame: (callback: () => void) => this.animationFrame(callback),
+        document: Object.assign(this.document, { documentElement: this.document, elementFromPoint: this.hitTest }), HTMLElement: FixtureElement, HTMLButtonElement: FixtureElement,
         getComputedStyle: (element: FixtureElement) => ({ display: element.getAttribute("data-fixture-display") ?? "block", visibility: element.getAttribute("data-fixture-visibility") ?? "visible", opacity: element.getAttribute("data-fixture-opacity") ?? "1" }),
         location: { href: "https://chatgpt.com/" }, crypto: { randomUUID: () => "synthetic-card" },
       })) as Result;
@@ -729,6 +732,52 @@ describe("current ChatGPT DOM surface driver", () => {
     expect((await driver.observe()).approvalInputReceipt).toEqual(after.approvalInputReceipt);
     expect(clicks).toBe(1);
   });
+  test("hidden approval makes progress without requesting an animation frame or revealing a window", async () => {
+    const deny = new FixtureElement(); deny.textContent = "Deny";
+    const allow = new FixtureElement(); allow.textContent = "Allow once";
+    let scrolled = false, frames = 0;
+    allow.scrollIntoView = () => { scrolled = true; };
+    allow.getBoundingClientRect = () => ({ left: 10, top: scrolled ? 20 : 1200, width: 20, height: 20 });
+    const card = new FixtureElement({}, { button: [deny, allow] });
+    const page = new RendererFixturePage(new FixtureElement({}, { '[data-codex-approval-surface="true"]': [card] }));
+    page.animationFrame = () => { frames++; }; // Hidden renderer never delivers a frame callback.
+    const clicks: { x: number; y: number }[] = [];
+    page.pointerClick = async point => { clicks.push(point); };
+    const owner = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([
+        new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once", owner.signal),
+        new Promise<"frame_wait_stalled"> (resolve => { timer = setTimeout(() => resolve("frame_wait_stalled"), 100); }),
+      ]);
+      expect(outcome).toMatchObject({ status: "dispatched" });
+      expect(scrolled).toBe(true); expect(frames).toBe(0);
+      expect(clicks).toEqual([{ x: 20, y: 30 }]);
+    } finally { clearTimeout(timer); owner.abort(); }
+  });
+  test.each(["replaced", "proof_changed", "disabled", "occluded", "outside", "ambiguous"])(
+    "frame-independent approval still rejects a changed or unproven target (%s)", async mutation => {
+      const deny = new FixtureElement(); deny.textContent = "Deny";
+      const allow = new FixtureElement(); allow.textContent = "Allow once";
+      const card = new FixtureElement({}, { button: [deny, allow] });
+      const document = new FixtureElement({}, { '[data-codex-approval-surface="true"]': [card] });
+      const page = new RendererFixturePage(document);
+      page.animationFrame = () => { throw Error("must not wait for paint"); };
+      allow.scrollIntoView = () => {
+        if (mutation === "replaced") { document.selectors['[data-codex-approval-surface="true"]'] = []; allow.isConnected = false; }
+        if (mutation === "proof_changed") card.textContent = "Synthetic changed approval arguments";
+        if (mutation === "disabled") allow.disabled = true;
+        if (mutation === "occluded") page.hitTest = () => new FixtureElement();
+        if (mutation === "outside") allow.getBoundingClientRect = () => ({ left: 900, top: 0, width: 20, height: 20 });
+        if (mutation === "ambiguous") { const other = new FixtureElement(); other.textContent = "Allow once"; card.selectors.button!.push(other); }
+      };
+      // The renderer holds one hit-test function for this evaluation; resolve the latest fixture state.
+      page.hitTest = () => mutation === "occluded" ? new FixtureElement() : allow;
+      let clicks = 0; page.pointerClick = async () => { clicks++; };
+      expect((await new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once")).status).toBe("none");
+      expect(clicks).toBe(0);
+    },
+  );
   const approvalCard = {
     cardCount: 1, denyCount: 1, allowCount: 0, allowOnceCount: 1,
     alwaysAllowCount: 1, unknownCount: 0, allowPoint: null,
@@ -833,6 +882,57 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(page.actions).toEqual(["pointer:30,40"]);
   });
 
+  test("hung renderer preparation times out; its late completion cannot dispatch input", async () => {
+    let release!: (value: Record<string, unknown>) => void;
+    class HungTargetPage extends ApprovalPage {
+      override async evaluate<Argument, Result>(source: string, argument: Argument): Promise<Result> {
+        if (argument && source.includes('[data-testid="tool-approval-card"]')) {
+          return new Promise(resolve => { release = value => resolve(value as Result); });
+        }
+        return super.evaluate(source, argument);
+      }
+    }
+    const page = new HungTargetPage(); page.observations = [approvalCard];
+    const scratch = mkdtempSync(join(tmpdir(), "tela-approval-timeout-"));
+    const file = join(scratch, "events.jsonl"), prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+    try {
+      await expect(new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once"))
+        .rejects.toMatchObject({ name: "TimeoutError" });
+      release(approvalCard); await Promise.resolve(); await Promise.resolve();
+      expect(page.actions).toEqual([]);
+      const log = readFileSync(file, "utf8");
+      const rows = log.trim().split("\n").map(line => JSON.parse(line));
+      expect(rows.find(row => row.stage === "approval_preparation_failed")).toMatchObject({
+        reason_class: "preparation_timeout", dispatch_started: false,
+      });
+      expect(rows.some(row => row.stage === "approval_dispatch_started")).toBe(false);
+      expect(log).not.toMatch(/card-1|proof-1|Allow once/);
+    } finally {
+      if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 7000);
+  test("owner cancellation escapes a renderer ignoring AbortSignal without a late click", async () => {
+    let entered!: () => void, release!: (value: Record<string, unknown>) => void;
+    const preparing = new Promise<void>(resolve => { entered = resolve; });
+    class CancelledTargetPage extends ApprovalPage {
+      override async evaluate<Argument, Result>(source: string, argument: Argument): Promise<Result> {
+        if (argument && source.includes('[data-testid="tool-approval-card"]')) {
+          return new Promise(resolve => { release = value => resolve(value as Result); entered(); });
+        }
+        return super.evaluate(source, argument);
+      }
+    }
+    const page = new CancelledTargetPage(); page.observations = [approvalCard];
+    const owner = new AbortController();
+    const pending = new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once", owner.signal);
+    await preparing; owner.abort(new DOMException("Owner ended", "AbortError"));
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    release(approvalCard); await Promise.resolve(); await Promise.resolve();
+    expect(page.actions).toEqual([]);
+  });
   test("cancelled approval delay cannot click the card", async () => {
     const page = new ApprovalPage();
     page.observations = [approvalCard];
