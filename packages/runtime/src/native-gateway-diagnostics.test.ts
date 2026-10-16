@@ -37,6 +37,8 @@ test("committed model outcome and denied replay correlate without claiming Nativ
  const retired=rows.find(r=>r.stage==="native_turn_retired");
  expect(retired).toMatchObject({reason_class:"owner_signal",turn_phase:"completed",retryable:false,execution_proven:false});
  expect(rows.indexOf(retired)).toBeLessThan(rows.indexOf(replay));
+ expect(rows.filter(r=>r.stage==="native_cycle_summary")).toHaveLength(1);
+ expect(rows.find(r=>r.stage==="native_cycle_summary")).toMatchObject({state:"completed",local_final_committed:true,composer_measured:false});
  expect(JSON.stringify(rows)).not.toMatch(/fixture-thread|fixture-turn|private fixture answer/);
 });
 test("first execution failure remains distinct from subsequent replay denial",async()=>{
@@ -50,6 +52,7 @@ test("first execution failure remains distinct from subsequent replay denial",as
  expect(failure.turn_phase).toBe("prepared");
  expect(failure.turn_fingerprint).toBe(replay.turn_fingerprint);
  expect(rows.indexOf(failure)).toBeLessThan(rows.indexOf(replay));
+ expect(rows.find(r=>r.stage==="native_cycle_summary")).toMatchObject({state:"failed",local_final_committed:false});
  const retired=rows.find(r=>r.stage==="native_turn_retired");
  expect(retired).toMatchObject({reason_class:"execution_failed",turn_phase:"failed-before-acceptance",retryable:false});
  expect(JSON.stringify(rows)).not.toContain("private command failure");

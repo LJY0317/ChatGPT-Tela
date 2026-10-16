@@ -331,12 +331,12 @@ async function restoreEmptyComposer(
   }
 }
 
-export function formatWebPhysicalContext(
+function formatWebPhysicalContextParts(
   context: WebPhysicalContext,
   toolBridge: WebTurnRequest["toolBridge"],
   contextAttachment?: ChatGptContextAttachmentReference,
   media: readonly WebTurnMedia[] = [],
-): string {
+) {
   const retained = context.mode === "retained-delta";
   if (retained && contextAttachment) {
     throw new Error("retained Web continuation cannot reference a fresh context attachment");
@@ -417,7 +417,7 @@ export function formatWebPhysicalContext(
           content: segment.content,
         })
   ));
-  return [
+  const text = [
     "<chatgpt_tela_transport_contract>",
     ...contract,
     "</chatgpt_tela_transport_contract>",
@@ -433,7 +433,16 @@ export function formatWebPhysicalContext(
       : "The active task context is complete. Execute the latest active request now under the contract above.",
     "</chatgpt_tela_transport_resume>",
   ].join("\n");
+  const composerBytes = Buffer.byteLength(text);
+  const contextBytes = lines.reduce((n,line)=>n+Buffer.byteLength(line), Math.max(0,lines.length-1));
+  return {text, composerBytes, contextBytes, protocolBytes:composerBytes-contextBytes};
 }
+
+export function formatWebPhysicalContext(context: WebPhysicalContext, toolBridge: WebTurnRequest["toolBridge"],
+  contextAttachment?: ChatGptContextAttachmentReference, media: readonly WebTurnMedia[] = []): string {
+  return formatWebPhysicalContextParts(context,toolBridge,contextAttachment,media).text;
+}
+
 
 
 function assistantFingerprint(assistant: ChatGptTurnObservation | undefined): string {
@@ -1240,10 +1249,13 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const upload = prepareWebTurnMedia(request.physicalContext, request.media ?? []);
     const files = [...(sourceUpload ? [sourceUpload.file] : []), ...upload.files];
     if (new Set(files.map(file => file.name)).size !== files.length) throw Error("source and media attachments have duplicate names");
-    const text = formatWebPhysicalContext(request.physicalContext, request.toolBridge, request.contextAttachment, request.media);
+    const formatted = formatWebPhysicalContextParts(request.physicalContext, request.toolBridge, request.contextAttachment, request.media);
+    const text = formatted.text;
     emitDiagnosticEvent("chatgpt_tela_work", "browser_message_prepared", {
       context_mode: request.physicalContext.mode,
       message_chars: text.length,
+      composer_wire_bytes: formatted.composerBytes, context_wire_bytes: formatted.contextBytes,
+      protocol_wire_bytes: formatted.protocolBytes,
       logical_estimate: request.physicalContext.logicalTokens,
       transfer_estimate: request.physicalContext.transferTokens,
     });
@@ -1381,7 +1393,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       signal?.throwIfAborted();
       assertCausalInputUnchanged?.();
       sendActivationAttempted = true;
-      emitDiagnosticEvent("chatgpt_tela_work", "web_send_activation_started", { phase: "turn" });
+      emitDiagnosticEvent("chatgpt_tela_work", "web_send_activation_started", { phase: "turn", composer_wire_bytes:formatted.composerBytes,
+        context_wire_bytes:formatted.contextBytes,protocol_wire_bytes:formatted.protocolBytes });
       await driver.activateSend(sendAfterFill.key, signal);
       emitDiagnosticEvent("chatgpt_tela_work", "web_send_activation_settled", { phase: "turn", remote_terminal_proven: false });
       this.#temporaryChatSurfaces.add(surface);

@@ -20,8 +20,14 @@ export function diagnosticCenter(root: string, paths: readonly string[], command
     const atMs = option("--at") ? Date.parse(option("--at")!) : Date.now();
     const minutes = Number(option("--minutes") ?? 120), scope = option("--scope");
     if (!Number.isFinite(atMs) || !Number.isInteger(minutes) || minutes < 1 || minutes > 120) throw Error("invalid context report window");
+    const view=option("--view")??"full",limit=Number(option("--limit")??(view==="summary"?8:64));
+    if(!["full","summary"].includes(view)||!Number.isInteger(limit)||limit<1||limit>64)throw Error("invalid context report view or limit");
     const source = readDiagnosticSources(paths, { fromMs: atMs - minutes * 60000, toMs: atMs });
-    return { ...summarizeContextContinuity({ events: source.events, atMs, ...(scope ? { scope } : {}) }),
+    const report=summarizeContextContinuity({ events: source.events, atMs, ...(scope ? { scope } : {}) });
+    const selected=report.turns.slice(-limit);
+    return { ...report,view,selection:{turnLimit:limit,turnsOmitted:report.turns.length-selected.length},
+      turns:view==="full"?selected:selected.map(t=>({scopeFingerprint:t.scopeFingerprint,turnFingerprint:t.turnFingerprint,
+        outcome:t.outcome,completionEvidence:t.completionEvidence,summary:t.summary,cycleReceipts:t.cycleReceipts.slice(-1)})),
       sourceCoverage: source.coverage, sourceLimitReached: source.sourceLimitReached, excludedTestEvents: source.excludedTestEvents };
   }
   if (command === "capture") {

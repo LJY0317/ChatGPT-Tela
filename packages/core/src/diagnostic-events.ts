@@ -19,6 +19,13 @@ const FORBIDDEN_FIELD = /(prompt|path|url|uri|token|secret|email|content|command
 const DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024;
 let emittedSinceRotationCheck = 0;
 const recent: StructuralDiagnosticEvent[] = [];
+const observers = new Set<(event: StructuralDiagnosticEvent) => void>();
+/** Local, sanitized observation only; bounded subscribers and isolated callback failures. */
+export function observeDiagnosticEvents(observer: (event: StructuralDiagnosticEvent) => void): (() => void) | undefined {
+  if (observers.size >= 32) return undefined;
+  observers.add(observer);
+  return () => { observers.delete(observer); };
+}
 const pendingIncidents = new Map<string, { stage: string; observedAt: string; timeline: StructuralDiagnosticEvent[]; occurrences: number }>();
 function scheduleIncident(root: string, event: StructuralDiagnosticEvent) {
   const previous = pendingIncidents.get(root);
@@ -91,6 +98,8 @@ export function emitDiagnosticEvent(
     appendConfiguredDiagnosticFile(line);
     const safe = structuralDiagnosticEvent(record);
     if (safe) {
+      Object.freeze(safe);
+      for (const observer of [...observers]) { try { observer(safe); } catch { /* Diagnostic-only subscriber. */ } }
       recent.push(safe);
       if (recent.length > 128) recent.shift();
       const root = configuredDiagnosticRoot();

@@ -245,3 +245,14 @@ completed summaries, and unknown remote outcome; settlement means local closure,
 The retired Native owner cannot submit again even under a changed stage key. Only independently
 proven new Native authority can start another isolated operation. This maintenance contract applies
 to both legacy and current records through one settlement API; do not add version-specific retry paths.
+
+### Diagnostic accounting must not become model work
+
+Turn-level diagnostics aggregate existing execution events and locally known byte lengths; they
+add no context text, acknowledgement generation, model call, or cache-key policy. Keep encoded
+context/protocol bytes, prepared drafts, activation attempts, tool-result text/media and MCP
+transport envelopes distinct. Overlapping byte categories are never summed as billed usage.
+A complete process-local terminal receipt does not prove cross-service cost, comprehension or
+host display. Unknown/clipped measurements stay explicit. Preserve the cold/repeat/append/edit
+and retained-context gates when instrumenting these paths; see `docs/diagnostics.md` for the
+bounded summary and correlation contract.

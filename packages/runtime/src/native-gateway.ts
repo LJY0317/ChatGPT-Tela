@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { capturePrivateDiagnosticValue, nativeTextHash, diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
+import { startTurnDiagnosticSummary, diagnosticContext, capturePrivateDiagnosticValue, nativeTextHash, diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import {
   bindNativeTurnRequest,
   extractNativeToolResults,
@@ -36,6 +36,7 @@ export type NativeGatewayOutcome =
 export type StartWebTurn = (turn: RegisteredTurn, nativeRequest: unknown, nativeSignal?: AbortSignal) => Promise<unknown>;
 
 interface NativeLifetime {
+  diagnostics?: ReturnType<typeof startTurnDiagnosticSummary>;
   readonly controller: AbortController;
   current: RegisteredTurn;
   watch: NativeTurnTerminationWatch | undefined;
@@ -290,6 +291,9 @@ export class NativeResponsesGateway {
         }
       }
       const owned = registered;
+      lifetime!.diagnostics?.finish();
+      lifetime!.diagnostics = startTurnDiagnosticSummary(diagnosticFingerprint(owned.channel.binding.authority.threadId),
+        diagnosticFingerprint(owned.channel.binding.authority.turnId), diagnosticContext().request_fingerprint);
       const launch = Promise.resolve().then(() => this.startWebTurn(owned, body, AbortSignal.any([this.#controller.signal, lifetime!.controller.signal, ...(lifetime?.watch ? [lifetime.watch.signal] : [])]))).catch(error => {
         const failedOwner = owned.channel.binding.authority;
         withDiagnosticContext({
@@ -391,6 +395,7 @@ export class NativeResponsesGateway {
       }));
     }
 
+    lifetime.diagnostics?.finish();
     const launch = this.#launches.get(owned.capability);
     this.#launches.delete(owned.capability);
     const previousSettlement = this.#settlingByTask.get(authority.threadId);
@@ -444,6 +449,7 @@ export class NativeResponsesGateway {
       tool_round_count: channel.toolRoundCount,
       native_terminal_observed: false,
     }));
+    if (outcome.type === "final") this.#lifetimes.get(`${authority.threadId}\u0000${authority.turnId}`)?.diagnostics?.finish();
     // Without a lifecycle observer the owner remains uncertain until explicit gateway shutdown.
     // Such inert/test sources can never authorize another response cycle.
   }

@@ -393,6 +393,7 @@ export class RuntimeTurnChannel {
     if (this.#phase !== "tool-result-delivered" || !pending.result) {
       throw new Error("native tool result is not ready for Web release");
     }
+    this.#toolEvidence("native_tool_result_released", pending);
     this.#pendingTool = undefined;
     pending.resolve(pending.result);
     this.#touchState();
