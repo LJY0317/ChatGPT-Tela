@@ -1,9 +1,12 @@
 import type { TelaChatCapability } from "./tools";
+import type { ChatCapabilitySemantics } from "@chatgpt-tela/service-protocol";
+import { CHAT_CAPABILITY_SEMANTICS } from "./capability-semantics";
 
 export interface ChatCapabilityContract {
   readonly capability: TelaChatCapability;
   readonly description: string;
   readonly inputSchema: Readonly<Record<string, unknown>>;
+  readonly semantics?: ChatCapabilitySemantics;
 }
 
 const string = (maxLength: number) => Object.freeze({ type: "string", minLength: 1, maxLength });
@@ -244,5 +247,5 @@ export function chatCapabilityCatalog(
     if (!needle) return true;
     return contract.capability.toLowerCase().includes(needle)
       || contract.description.toLowerCase().includes(needle);
-  }));
+  }).map(contract => Object.freeze({ ...contract, semantics: CHAT_CAPABILITY_SEMANTICS[contract.capability] })));
 }

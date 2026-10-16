@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { parseChatCapabilityContract } from "@chatgpt-tela/service-protocol";
 import {
   TELA_CHAT_CAPABILITIES,
   TELA_CHAT_BASE_CAPABILITIES,
@@ -35,5 +36,39 @@ describe("Tela Chat capability contracts", () => {
       expect(contract.inputSchema.type).toBe("object");
       expect(contract.inputSchema.additionalProperties).toBe(false);
     }
+  });
+
+  test("available descriptors survive protocol parsing without claiming account parity", () => {
+    for (const item of chatCapabilityCatalog(TELA_CHAT_CAPABILITIES)) {
+      const parsed = parseChatCapabilityContract(JSON.parse(JSON.stringify(item)));
+      expect(parsed.semantics).toEqual(item.semantics);
+      expect(parsed.semantics?.maturity).toBe("implemented");
+      expect(parsed.semantics?.authority).toBe("chat_service");
+      expect(Object.isFrozen(parsed.semantics)).toBe(true);
+    }
+  });
+
+  test("mutating and arbitrary capabilities never advertise safe blind replay", () => {
+    const catalog = chatCapabilityCatalog(TELA_CHAT_CAPABILITIES);
+    for (const item of catalog) {
+      if (item.semantics?.effect !== "read") expect(item.semantics?.replay).not.toBe("observe_again");
+    }
+    const semantics = (name: string) => catalog.find(item => item.capability === name)?.semantics;
+    expect(semantics("exec_command")).toMatchObject({ effect: "arbitrary_execution", replay: "same_operation_id", verification: "process_status" });
+    expect(semantics("write_stdin")).toMatchObject({ effect: "arbitrary_execution", replay: "inspect_before_repeat" });
+    expect(semantics("show_changes")).toMatchObject({ effect: "service_state", replay: "inspect_before_repeat" });
+    expect(semantics("start_agent")).toMatchObject({ effect: "arbitrary_execution", replay: "inspect_before_repeat" });
+  });
+
+  test("legacy discovery remains valid; invalid semantics cannot create authority", () => {
+    const legacy = { capability: "future_tool", description: "Future", inputSchema: { type: "object" } };
+    expect(parseChatCapabilityContract(legacy).semantics).toBeUndefined();
+    const semantics = chatCapabilityCatalog(["read"])[0]!.semantics!;
+    for (const invalid of [null, [], { ...semantics, version: 2 }, { ...semantics, authority: "native_turn" },
+      { ...semantics, effect: "read_or_write" }, { ...semantics, maturity: "verified_parity" }]) {
+      expect(() => parseChatCapabilityContract({ ...legacy, semantics: invalid })).toThrow("Invalid Chat capability semantics");
+    }
+    const parsed = parseChatCapabilityContract({ ...legacy, semantics: { ...semantics, credential: "discard-me" } });
+    expect(JSON.stringify(parsed)).not.toContain("discard-me");
   });
 });

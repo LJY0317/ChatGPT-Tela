@@ -1,5 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
+export { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
 import type {
   NativeToolCatalogEntry,
   NativeToolInvocation,
@@ -158,6 +160,7 @@ export interface ChatCapabilityContract {
   readonly capability: string;
   readonly description: string;
   readonly inputSchema: Readonly<Record<string, unknown>>;
+  readonly semantics?: ChatCapabilitySemantics;
 }
 
 export function parseCodexProfileStatusContract(value: unknown): CodexProfileStatusContract {
@@ -378,6 +381,7 @@ export function parseChatCapabilityContract(value: unknown, field = "Chat capabi
     capability: text(item.capability, `${field} name`),
     description: typeof item.description === "string" ? item.description : "",
     inputSchema,
+    ...(item.semantics === undefined ? {} : { semantics: parseChatCapabilitySemantics(item.semantics) }),
   });
 }
 
