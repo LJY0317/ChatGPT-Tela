@@ -1,10 +1,12 @@
-/** A local cancellation receipt, never a claim that remote generation was stopped. */
+/** Issued by the isolated operation owner only after physical release succeeds (or
+ * before provider invocation). Settles local ownership, never remote completion or replay.
+ */
 export class WebCheckpointOperationClosed extends Error {
   constructor(readonly receipt: {
     readonly nativeTaskId: string;
     readonly sourceRevisionId: string;
     readonly webEpochId: string;
-    readonly disposition: "not_invoked" | "cancelled_locally" | "completed_unusable";
+    readonly disposition: "not_invoked" | "released_locally" | "completed_unusable";
   }, options?: ErrorOptions) {
     super("Isolated checkpoint operation closed without a result", options);
     this.name = "WebCheckpointOperationClosed";

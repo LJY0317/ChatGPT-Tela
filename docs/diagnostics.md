@@ -579,9 +579,13 @@ completed phases, while `checkpoint_operation_failed` retains the phase reached 
 and completion were observed. Completion does not imply a valid envelope or durable summary.
 `context_checkpoint_failed` distinguishes Native-owner cancellation, host-input revocation and provider
 errors. `context_checkpoint_released` records physical release and persistence separately; a failed
-release has its own event and cannot produce a local-close receipt. Generic observation errors remain
-unresolved even after release. Successful release after proven local cancellation uses the existing
-local-close settlement; it proves neither remote termination nor permission to replay a request.
+release has its own event and cannot produce a local-close receipt. Any failure whose isolated lease
+was successfully released produces the same request-bound local-close receipt; exception categories
+classify diagnostics, not settlement authority. `released_locally` preserves unknown remote outcome;
+only an exact proven completed rejection is classified `completed_unusable`. The journal still requires
+its original claim/owner. A producer failure without that receipt remains unresolved. The public
+`checkpoint_closed` recovery state asks for a new authorized Native turn; only unresolved
+`checkpoint_interrupted` asks for reconciliation. Neither state permits replay of the retired turn.
 No exception messages, message digests, source bodies, raw operation identities or private captures
 are added. Existing structured incident/log retention bounds apply.
 

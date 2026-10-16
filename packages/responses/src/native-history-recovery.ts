@@ -1,46 +1,43 @@
-/** A Native-owned recovery decision, safe to expose even after streaming has
- * already begun. Never copy an upstream/adapter exception message into it. */
-export function nativeHistoryRecovery(error: unknown): {
-  readonly type: "invalid_request_error";
-  readonly code: "tela_native_checkpoint_response_rejected" | "tela_native_history_indexed_source_required" | "tela_native_history_checkpoint_required" | "tela_native_checkpoint_reconciliation_required" | "tela_native_context_checkpoint_required";
-  readonly retryable: false;
-  readonly recovery: {
-    readonly kind: "continue_on_native" | "explicit_native_handoff" | "reconcile_checkpoint";
-    readonly requires_user_action: true;
-    readonly requires_new_native_turn: boolean;
-    readonly original_history_preserved: true;
-  };
+import type { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
+
+/** Public recovery projection of the Native-owned lifecycle state. Diagnostics and
+ * exception text never determine authority or get copied into the response. */
+const RECOVERY = {
+  checkpoint_rejected: {code: "tela_native_checkpoint_response_rejected", kind: "explicit_native_handoff", newTurn: true,
+    message: "A proven Web context-summary response was unusable and its isolated operation was released. This Native turn will not resend it. Continue in a newly authorized Native turn or provide a verified handoff. Completed checkpoint stages and original history are preserved; no task answer or tool execution was committed by this request." },
+  source_budget: {code: "tela_native_context_checkpoint_required", kind: "explicit_native_handoff", newTurn: true,
+    message: "This conversation's readable context cannot be prepared within the Web input or preparation budget. Continue on Native or provide an explicitly authorized verified checkpoint or handoff. Original history is preserved; no Web answer or tool execution was committed by this request." },
+  checkpoint_interrupted: {code: "tela_native_checkpoint_reconciliation_required", kind: "reconcile_checkpoint", newTurn: true,
+    message: "A Web context-summary submission has an uncertain outcome and was not resent. Reconcile the owned checkpoint operation or provide an explicitly authorized verified handoff before a new Native turn continues. Original history is preserved; no task answer or tool execution was committed by this request." },
+  unindexed_history: {code: "tela_native_history_indexed_source_required", kind: "continue_on_native", newTurn: false,
+    message: "This Native conversation uses unindexed history that cannot be safely replayed for Web. Continue on Native; a new handoff turn alone cannot establish an indexed source. Web continuation requires a supported independently verified checkpoint or a new public bounded history contract. Original history is preserved, and this request committed no Web answer or tool action." },
+  source_unavailable: {code: "tela_native_history_checkpoint_required", kind: "explicit_native_handoff", newTurn: true,
+    message: "This Native conversation needs a verified readable checkpoint or an explicit authorized handoff before Web can continue. Original history was preserved, not silently truncated. No Web answer or tool execution was committed by this request." },
+  checkpoint_closed: {code: "tela_native_checkpoint_operation_closed", kind: "explicit_native_handoff", newTurn: true,
+    message: "Web context preparation ended after its isolated operation was released locally without a usable result. Continue with a new explicitly authorized Native turn using the preserved checkpoints. This retired turn will not resend. Remote outcome remains unknown; original history and completed checkpoint stages are preserved. No task answer or tool execution was committed by this request." },
+} as const satisfies Record<NativeHistoryBootstrapRequired["recoveryReason"], {
+  readonly code: string;
+  readonly kind: "continue_on_native" | "explicit_native_handoff" | "reconcile_checkpoint";
+  readonly newTurn: boolean;
   readonly message: string;
-} | undefined {
+}>;
+
+export function nativeHistoryRecovery(error: unknown) {
   if (!error || typeof error !== "object"
-    || (error as { code?: unknown }).code !== "native_history_bootstrap_required") {
-    return undefined;
-  }
-  const rejected = (error as { recoveryReason?: unknown }).recoveryReason === "checkpoint_rejected";
-  const unindexed = (error as { recoveryReason?: unknown }).recoveryReason === "unindexed_history";
-  const interrupted = (error as { recoveryReason?: unknown }).recoveryReason === "checkpoint_interrupted";
-  const sourceBudget = (error as { recoveryReason?: unknown }).recoveryReason === "source_budget";
+    || (error as {code?: unknown}).code !== "native_history_bootstrap_required") return undefined;
+  const reason = (error as {recoveryReason?: unknown}).recoveryReason;
+  const decision = typeof reason === "string" && Object.hasOwn(RECOVERY, reason)
+    ? RECOVERY[reason as keyof typeof RECOVERY] : RECOVERY.source_unavailable;
   return {
     type: "invalid_request_error" as const,
-    code: rejected ? "tela_native_checkpoint_response_rejected" : sourceBudget ? "tela_native_context_checkpoint_required"
-      : interrupted ? "tela_native_checkpoint_reconciliation_required"
-      : unindexed ? "tela_native_history_indexed_source_required"
-      : "tela_native_history_checkpoint_required",
-    retryable: false,
+    code: decision.code,
+    retryable: false as const,
     recovery: {
-      kind: interrupted ? "reconcile_checkpoint" : unindexed ? "continue_on_native" : "explicit_native_handoff",
-      requires_user_action: true,
-      requires_new_native_turn: !unindexed,
-      original_history_preserved: true,
+      kind: decision.kind,
+      requires_user_action: true as const,
+      requires_new_native_turn: decision.newTurn,
+      original_history_preserved: true as const,
     },
-    message: rejected
-      ? "A proven Web context-summary response was unusable and its isolated operation was released. This Native turn will not resend it. Continue in a newly authorized Native turn or provide a verified handoff. Completed checkpoint stages and original history are preserved; no task answer or tool execution was committed by this request."
-      : sourceBudget
-      ? "This conversation's readable context cannot be prepared within the Web input or preparation budget. Continue on Native or provide an explicitly authorized verified checkpoint or handoff. Original history is preserved; no Web answer or tool execution was committed by this request."
-      : interrupted
-      ? "A Web context-summary submission has an uncertain outcome and was not resent. Reconcile the owned checkpoint operation or provide an explicitly authorized verified handoff before a new Native turn continues. Original history is preserved; no task answer or tool execution was committed by this request."
-      : unindexed
-      ? "This Native conversation uses unindexed history that cannot be safely replayed for Web. Continue on Native; a new handoff turn alone cannot establish an indexed source. Web continuation requires a supported independently verified checkpoint or a new public bounded history contract. Original history is preserved, and this request committed no Web answer or tool action."
-      : "This Native conversation needs a verified readable checkpoint or an explicit authorized handoff before Web can continue. Original history was preserved, not silently truncated. No Web answer or tool execution was committed by this request.",
+    message: decision.message,
   };
 }

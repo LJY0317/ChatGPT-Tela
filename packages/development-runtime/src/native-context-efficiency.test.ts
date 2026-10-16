@@ -6,6 +6,8 @@ import { join } from "node:path";
 import type { NativeVisiblePrefixSnapshot } from "@chatgpt-tela/codex";
 import { produceNativePrefixCheckpoint, type NativePrefixCheckpointInput } from "./native-visible-prefix-checkpoint";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
+import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
+import { runBrowserContextCheckpoint } from "@chatgpt-tela/runtime";
 
 const hash=(s:string)=>createHash("sha256").update(s).digest("hex");
 function source(text:string):NativeVisiblePrefixSnapshot {
@@ -13,6 +15,47 @@ function source(text:string):NativeVisiblePrefixSnapshot {
   return {kind:"native-visible-prefix",threadId:"thread",currentTurnId:"active",contentDigest: hash(content), digest:hash(content),sourceItemCount:1,
     content,inlineAssets:[],references:[],localImageCandidates:[]};
 }
+
+test.each([false, true])("observation failure follows physical release through the durable journal (close fails=%s)", async failClose => {
+  const root = await mkdtemp(join(tmpdir(), "tela-checkpoint-release-"));
+  const options = {directory: join(root, "journal"), initializationPath: join(root, "receipt")};
+  const snapshot = source("bounded source for one owned summary");
+  let sends = 0, releases = 0;
+  const host = new ControlledBrowserHost(async () => ({
+    async navigate() {}, async reveal() {}, async hide() {},
+    async close() { releases++; if (failClose) throw Error("physical close failed"); },
+  }));
+  const run = (currentTurnId: string) => produceNativePrefixCheckpoint({
+    source: {...snapshot, currentTurnId}, journal: new FileNativeVisiblePrefixStageJournal(options),
+    accountNamespace: "account", effort: "medium", confirmSource: async () => ({...snapshot, currentTurnId}),
+    producer: async r => runBrowserContextCheckpoint({browserHost: host,
+      request: {nativeTaskId: r.nativeTaskId, sourceRevisionId: r.sourceRevisionId,
+        webEpochId: `isolated-${currentTurnId}`, physicalContext: r.physicalContext},
+      ...(r.persistResult ? {persistResult: r.persistResult} : {}),
+      provider: {
+        async observeCapabilities() { return {state: "proven", value: {observed: new Set(["composer"])}, evidence: []}; },
+        async createContextCheckpoint(_surface, request) {
+          sends++;
+          if (sends === 1) throw Error("accepted operation observation failed");
+          return {state: "proven", value: {...request, providerOperationId: "op", content: "verified replacement summary"}, evidence: []};
+        },
+      },
+    }),
+  });
+  try {
+    await expect(run("original-owner")).rejects.toMatchObject({recoveryReason: failClose ? "checkpoint_interrupted" : "checkpoint_closed"});
+    expect(sends).toBe(1); expect(releases).toBe(1);
+    expect(await new FileNativeVisiblePrefixStageJournal(options).pendingOperations()).toHaveLength(failClose ? 1 : 0);
+    await expect(run("original-owner")).rejects.toThrow(); expect(sends).toBe(1);
+    if (failClose) {
+      await expect(run("new-authorized-owner")).rejects.toThrow(); expect(sends).toBe(1);
+    } else {
+      expect(await run("new-authorized-owner")).toContain("verified replacement summary");
+      expect(sends).toBe(2);
+      await run("later-authorized-owner"); expect(sends).toBe(2);
+    }
+  } finally { await host.close().catch(() => {}); await rm(root, {recursive: true, force: true}); }
+});
 
 test("durable unchanged-fragment reuse survives cache loss, appended history and edited tails",async()=>{
   const root=await mkdtemp(join(tmpdir(),"tela-efficient-context-"));

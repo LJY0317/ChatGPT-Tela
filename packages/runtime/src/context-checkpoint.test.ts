@@ -79,11 +79,10 @@ describe("browser context checkpoint runner", () => {
           throw primary;
         }}),
       }); } catch (error) { caught = error; }
-      if (scenario === "revoked") expect(caught).toMatchObject({name: "WebCheckpointOperationClosed", cause: primary,
-        receipt: {disposition: "cancelled_locally"}});
+      if (scenario !== "release-failed") expect(caught).toMatchObject({name: "WebCheckpointOperationClosed", cause: primary,
+        receipt: {disposition: "released_locally"}});
       else {
         expect(caught).not.toBeInstanceOf(WebCheckpointOperationClosed);
-        if (scenario === "unknown") expect(caught).toBe(primary);
       }
       expect(nativeOwner.signal.aborted).toBe(false);
       expect(calls).toBe(1); expect(closes).toBe(1);
@@ -91,7 +90,7 @@ describe("browser context checkpoint runner", () => {
       expect(rows.find(row => row.stage === "context_checkpoint_failed")).toMatchObject({
         reason_class: scenario === "unknown" ? "provider_error" : "input_revoked",
       });
-      expect(rows.some(row => row.stage === "context_checkpoint_closed")).toBe(scenario === "revoked");
+      expect(rows.some(row => row.stage === "context_checkpoint_closed")).toBe(scenario !== "release-failed");
       expect(rows.some(row => row.stage === "context_checkpoint_release_failed")).toBe(scenario === "release-failed");
       expect(JSON.stringify(rows)).not.toContain("private provider detail");
     } finally {
@@ -174,7 +173,7 @@ describe("browser context checkpoint runner", () => {
         browserHost: host,
         provider: mismatched,
         request: request(),
-      })).rejects.toThrow("different causal source");
+      })).rejects.toMatchObject({name: "WebCheckpointOperationClosed", cause: {message: "checkpoint provider returned a result for a different causal source"}});
       expect(events).toEqual(["close"]);
     } finally {
       await host.close();
@@ -208,7 +207,7 @@ describe("browser context checkpoint runner", () => {
         request: { ...request(), webEpochId: `failed-${broken}` },
         provider: provider({ async createContextCheckpoint() { controller.abort(); throw primary; } }),
       })).rejects.toMatchObject({ name: "WebCheckpointOperationClosed", cause: primary,
-        receipt: { disposition: "cancelled_locally" } });
+        receipt: { disposition: "released_locally" } });
       expect(events).toEqual(["capture", "close"]);
       expect(host.activeSurfaceCount).toBe(0);
     } finally {
@@ -284,7 +283,7 @@ describe("durable checkpoint settlement", () => {
     const host = new ControlledBrowserHost(async () => ({ async navigate() {}, async reveal() {}, async hide() {}, async close() {} }));
     try {
       await expect(runBrowserContextCheckpoint({ browserHost:host, request:request(), provider:provider(),
-        persistResult:async()=>{throw Error("durable write failed");} })).rejects.toThrow("durable write failed");
+        persistResult:async()=>{throw Error("durable write failed");} })).rejects.toMatchObject({name: "WebCheckpointOperationClosed", cause: {message: "durable write failed"}});
     } finally { await host.close(); }
   });
   test("foreign results never reach persistence", async()=>{
@@ -293,11 +292,11 @@ describe("durable checkpoint settlement", () => {
     try {
       await expect(runBrowserContextCheckpoint({browserHost:host,request:request(),persistResult:async()=>{writes++;},
         provider:provider({async createContextCheckpoint(){return {state:"proven",evidence:["fixture"],value:{
-          nativeTaskId:"foreign",sourceRevisionId:"revision-2",webEpochId:"checkpoint-epoch-1",providerOperationId:"op",content:"summary"}};}})})).rejects.toThrow("different causal source");
+          nativeTaskId:"foreign",sourceRevisionId:"revision-2",webEpochId:"checkpoint-epoch-1",providerOperationId:"op",content:"summary"}};}})})).rejects.toMatchObject({name: "WebCheckpointOperationClosed", cause: {message: "checkpoint provider returned a result for a different causal source"}});
       expect(writes).toBe(0);
     } finally {await host.close();}
   });
-  test("only exact terminal rejection plus successful release closes the operation",async()=>{
+  test("successful release always closes locally; only exact completion classifies a rejected response",async()=>{
     const {WebCheckpointResponseRejected}=await import("@chatgpt-tela/chatgpt");
     for(const scenario of ["exact","task","source","epoch","empty-operation","generic","close-failed"]){
       const receipt={nativeTaskId:"task-1",sourceRevisionId:"revision-2",webEpochId:"checkpoint-epoch-1",providerOperationId:"op",reason:"json_invalid" as const};
@@ -312,7 +311,8 @@ describe("durable checkpoint settlement", () => {
         async createContextCheckpoint(){throw scenario==="generic"?Error("unknown"):new WebCheckpointResponseRejected(receipt,"invalid");}
       })});}catch(error){caught=error;}
       if(scenario==="exact")expect(caught).toMatchObject({name:"WebCheckpointOperationClosed",receipt:{disposition:"completed_unusable"}});
-      else expect(caught).not.toBeInstanceOf(WebCheckpointOperationClosed);
+      else if(scenario==="close-failed") expect(caught).not.toBeInstanceOf(WebCheckpointOperationClosed);
+      else expect(caught).toMatchObject({name:"WebCheckpointOperationClosed",receipt:{disposition:"released_locally"}});
       await host.close().catch(()=>{});
     }
   });

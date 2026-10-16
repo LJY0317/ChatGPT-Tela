@@ -6,6 +6,7 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@chatgpt-tela/core": "workspace:*",
-    "@chatgpt-tela/runtime": "workspace:*"
+    "@chatgpt-tela/runtime": "workspace:*",
+    "@chatgpt-tela/codex": "workspace:*"
   }
 }

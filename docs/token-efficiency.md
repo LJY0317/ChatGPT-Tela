@@ -38,8 +38,10 @@ by observation from preparation-only work or an unaccepted request.
 Retain causal submission proof independently of rendered-body availability. Display expansion must
 not force cold reconstruction when the exact composer/send, logical parent and unchanged host input
 still prove the owned request. Distinguish display evidence from ownership evidence in diagnostics.
-Host-input cancellation settles only after physical release; a generic observation failure remains
-unresolved. Preserve compatible completed checkpoint stages without resending the uncertain stage.
+Checkpoint local settlement follows proven physical release, not exception categories. Without a
+matching closure receipt, failed observations remain unresolved. Completed stages stay reusable and
+retired owners cannot resend. A new independently authorized Native owner may replace a locally
+closed claim; this is never an automatic retry or a cold reset of the completed prefix.
 
 ## Capacity, ownership and preparation policy
 

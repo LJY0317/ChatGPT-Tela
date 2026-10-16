@@ -1072,11 +1072,17 @@ cannot be recovered, preserve the unresolved receipt and completed checkpoints a
 blocked state. A new authorized operation still needs the established release/ownership rules.
 
 The isolated checkpoint runner owns one cancellation scope spanning its Native owner and the
-host input boundary. Either owner can cancel local observation. Successful physical release then
-permits the existing local-cancellation settlement, never a claim that remote generation stopped.
-A release failure or generic observation error without cancellation remains unresolved. Completed
-validated results persist before release, including cancellation races. No path resends automatically;
-future execution still requires the existing authorized Native lifecycle and compatible source proof.
+host input boundary. Either owner can cancel local observation. Local settlement depends on successful
+physical release, independently of the exception category. The runner issues one exact request-bound
+closure receipt after release (or before provider invocation); the journal settles only its matching
+claim and original owner. This closes local ownership while preserving an unknown remote outcome.
+A failed/unproven release or a producer failure without an owned closure receipt stays pending.
+Completed validated results persist before release, including cancellation races and cleanup failures.
+No path resends automatically. The retired owner remains fenced; a later independently authorized
+Native turn may reuse completed stages and replace a locally closed claim. Recovery responses distinguish
+`checkpoint_closed` from unresolved `checkpoint_interrupted` so a settled operation does not request
+manual reconciliation. Cross-layer regressions must exercise provider failure → physical release →
+durable settlement → old-owner replay denial → new-owner continuation, with counted calls and reuse.
 
 Implementation sequence and acceptance gates:
 
