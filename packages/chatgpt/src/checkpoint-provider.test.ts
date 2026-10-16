@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import { expect, test } from 'bun:test';
 import type { BrowserSurfaceLease } from '@chatgpt-tela/browser-host';
-import type { WebContextCheckpointRequest, WebTurnRequest } from './index';
+import type { WebContextCheckpointRequest, WebTurnRequest, WebContextAttachmentPreloadRequest } from './index';
 import { ChatGptContextCheckpointProvider, chatGptCheckpointInputTokens } from './checkpoint-provider';
 import { serializeChatGptContextAttachment } from './context-attachment';
 import { decodeNativeInlineEvidence, nativeEvidenceRef } from '@chatgpt-tela/core';
@@ -29,7 +29,8 @@ function fixture(change: (value: any) => any = value => value,
   let submits = 0;
   const provider = new ChatGptContextCheckpointProvider(() => ({
     async observeCapabilities() { return {state:'proven',value:{observed:new Set(['composer'])},evidence:[]}; },
-    async preloadContextAttachment(_surface, request) {
+    async preloadContextAttachment(_surface: BrowserSurfaceLease,
+      request: WebContextAttachmentPreloadRequest) {
       preloads++;
       return {state:'proven',value:{nativeTaskId:request.nativeTaskId,webEpochId:request.webEpochId,
         attachmentName:request.attachment.name,attachmentSha256:request.attachment.sha256,providerOperationId:'preload'},evidence:[]};
