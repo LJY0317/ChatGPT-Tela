@@ -22,7 +22,7 @@ describe("Tela Chat private capability API", () => {
       });
       const capabilities = await (await request("v1/capabilities")).json() as {
         capabilities: string[];
-        catalog: Array<{ capability: string; description: string; inputSchema: Record<string, unknown> }>;
+        catalog: Array<{ capability: string; description: string; inputSchema: Record<string, unknown>; semantics?: Record<string, unknown> }>;
       };
       expect(capabilities.capabilities).toContain("open_workspace");
       expect(capabilities.capabilities).toContain("process_status");
@@ -31,6 +31,9 @@ describe("Tela Chat private capability API", () => {
       expect(capabilities.catalog.find(item => item.capability === "read")?.inputSchema).toMatchObject({
         type: "object",
         additionalProperties: false,
+      });
+      expect(capabilities.catalog.find(item => item.capability === "exec_command")?.semantics).toMatchObject({
+        version: 1, authority: "chat_service", effect: "arbitrary_execution", replay: "same_operation_id",
       });
       const openedResponse = await request("v1/call", {
         method: "POST",

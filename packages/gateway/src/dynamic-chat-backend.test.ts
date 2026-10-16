@@ -27,6 +27,8 @@ describe("dynamic Tela Chat backend", () => {
               { capability: "read", description: "Read a bounded workspace file",
                 inputSchema: { type: "object", properties: { path: { type: "string" } } } },
               { capability: "future_chat_capability_2099", description: "Future runtime capability",
+                semantics: { version: 1, authority: "chat_service", effect: "read", scope: "workspace",
+                  replay: "observe_again", verification: "bounded_result", maturity: "implemented" },
                 inputSchema: { type: "object", properties: { future: { type: "boolean" } } } },
             ] });
         }
@@ -54,7 +56,9 @@ describe("dynamic Tela Chat backend", () => {
         }
       : undefined);
     try {
-      expect((await backend.inventory("future")).map(item => item.capability)).toEqual(["future_chat_capability_2099"]);
+      const inventory = await backend.inventory("future");
+      expect(inventory.map(item => item.capability)).toEqual(["future_chat_capability_2099"]);
+      expect(inventory[0]?.semantics).toMatchObject({ version: 1, authority: "chat_service", replay: "observe_again" });
       expect(await backend.call("read", { workspace_id: "chatws_fixture", path: "README.md" }))
         .toEqual({ capability: "read", via: "private-http" });
       expect(seen).toEqual([{ capability: "read", arguments: { workspace_id: "chatws_fixture", path: "README.md" } }]);
