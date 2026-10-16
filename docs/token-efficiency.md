@@ -121,6 +121,14 @@ Unresolved alternatives supply no content identity. This evidence adds
 zero model calls, context injection or successful-turn prompt bytes. Completed preparation receipts
 remain available under their original source/account/model/policy identity.
 
+Full author-text rereading after Send is not a universal identity requirement. A guarded causal
+submission receipt may combine the verified full pre-send composer, single activation, consumed
+composer and unique new logical user/assistant parent under unchanged host input ownership.
+This is a local deterministic proof with no extra model turn, receipt-ack generation, context
+upload, summary or prompt token. It must not be described as server-byte acceptance or semantic
+comprehension. Rendered previews and virtualization do not by themselves invalidate logical context
+or completed summaries. Missing causal/ownership evidence still blocks delivery, never authorizes replay.
+
 ## Regression and review gates
 
 ### Upstream changes must not trigger repeated model work

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync, mkdtempSync, rmSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
-import { ControlledBrowserHost, type BrowserMemoryFile } from "@chatgpt-tela/browser-host";
+import { BROWSER_INPUT_OWNERSHIP, ControlledBrowserHost, type BrowserMemoryFile } from "@chatgpt-tela/browser-host";
 import { nativeEvidenceRef, setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
 import { createChatGptContextAttachment } from "./context-attachment";
 import {
@@ -302,14 +302,14 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   }
 }
 
-async function leaseFor(driver: FixtureDriver) {
+async function leaseFor(driver: FixtureDriver, inputOwner?: { current(): { revision: number; available: boolean; signal: AbortSignal } }) {
   const host = new ControlledBrowserHost(async () => ({
     async navigate() {},
     async reveal() {},
     async hide() {},
     async close() {},
     capability(capability) {
-      return capability === CHATGPT_SURFACE_DRIVER ? driver as never : undefined;
+      return capability === CHATGPT_SURFACE_DRIVER ? driver as never : capability === BROWSER_INPUT_OWNERSHIP ? inputOwner as never : undefined;
     },
   }));
   const lease = await host.acquire({ taskId: "task-1", epochId: "epoch-1" });
@@ -2418,4 +2418,83 @@ test.each(["equivalent", "expected-inner", "expected-outer"] as const)("nested a
     expect(driver.activated).toHaveLength(1);
     await expect(provider.observeTurn(surface.lease, submitted.value)).rejects.toThrow("not bound");
   } finally { await surface.host.close(); }
+});
+
+function causalSnapshot(driver: FixtureDriver): ChatGptSurfaceSnapshot {
+  const seen = acceptedSnapshot(driver), userKey = seen.turns[0]!.key, anchor = 'new-owned-logical-turn';
+  return { ...seen, revision: 'causal-receipt',
+    composers: seen.composers.map(({textFingerprint: _hash, ...composer}) => ({...composer, textLength: 0})),
+    turns: [{ key: userKey, role: 'user', lineageAnchor: anchor, userPayloadReason: 'ambiguous_author_root',
+      candidateFingerprints: [hash('rendered preview'), hash('connector label')],
+      userPayloadStructure: {rootCount:2,nestedRoots:true,equivalentRoots:false,outerLength:10126,innerLength:52} },
+      {key:'causal-assistant',role:'assistant',parentUserTurnKey:userKey,lineageAnchor:anchor,phase:'streaming'}] };
+}
+
+test.each(['present', 'unmounted', 'external-input', 'across-frames', 'provisional', 'presentation-change'] as const)('causal receipt separates long composer from renderer preview: %s', async mode => {
+  const driver = new FixtureDriver(fixture('ready-new-chat'));
+  let revision = 0; const inputAbort = new AbortController();
+  const surface = await leaseFor(driver, {current:()=>({revision,available:true,signal:inputAbort.signal})});
+  const provider = new ChatGptSemanticProvider();
+  const payload = request();
+  const large = {...payload, physicalContext:{...payload.physicalContext, segments:[{type:'revision' as const,revisionId:'rev-1',kind:'user' as const,content:'한글 long content '.repeat(2000)}]}};
+  try {
+    const sending = provider.submitTurn(surface.lease, large);
+    while (!driver.activated.length) await Promise.resolve();
+    const receipt = causalSnapshot(driver);
+    if (mode === 'across-frames') driver.queued.push({...receipt,revision:'user-only',turns:[receipt.turns[0]!]},{...receipt,revision:'assistant-only',turns:[receipt.turns[1]!]});
+    else driver.queued.push(mode==='provisional'?{...receipt,url:'https://chatgpt.com/c/local-chatgpt%3A00000000-0000-0000-0000-000000000001'}:receipt);
+    const submitted = await sending;
+    expect(submitted.state).toBe('proven');
+    if(submitted.state!=='proven')throw Error('fixture causal receipt');
+    const user = receipt.turns[0]!, assistant = receipt.turns[1]!;
+    driver.current = {...driver.current,revision:'causal-final',turns:[...(mode==='unmounted'?[]:[mode==='presentation-change'?{...user,contentFingerprint:hash('different rendered preview')}:user]),{...assistant,phase:'complete',text:'owned useful final'}]};
+    if(mode==='external-input') {
+      revision++;
+      await expect(provider.waitForTurnEvent(surface.lease,submitted.value)).rejects.toMatchObject({code:'tela_web_submission_unproven',retryable:false});
+    } else {
+      const event=await provider.waitForTurnEvent(surface.lease,submitted.value);
+      expect(event.state==='proven'&&event.value).toMatchObject({kind:'completed',answer:'owned useful final'});
+    }
+    expect(driver.activated).toHaveLength(1);
+  }finally{await surface.host.close();}
+});
+
+test.each(['missing-host','unavailable-host','changed-input','unconsumed','missing-anchor','wrong-parent','wrong-anchor','competing-parent','foreign-route'] as const)('causal receipt fails closed: %s',async mode=>{
+  const driver=new FixtureDriver(fixture('ready-new-chat'));let revision=0;const inputAbort=new AbortController();
+  const surface=await leaseFor(driver,mode==='missing-host'?undefined:{current:()=>({revision,available:mode!=='unavailable-host',signal:inputAbort.signal})});
+  try{
+    const sending=new ChatGptSemanticProvider().submitTurn(surface.lease,request());
+    while(!driver.activated.length)await Promise.resolve();
+    let seen=causalSnapshot(driver);
+    if(mode==='changed-input')revision++;
+    if(mode==='unconsumed')seen={...seen,composers:driver.current.composers};
+    if(mode==='missing-anchor')seen={...seen,turns:seen.turns.map(({lineageAnchor:_anchor,...turn})=>turn)};
+    if(mode==='wrong-parent')seen={...seen,turns:seen.turns.map(turn=>turn.role==='assistant'?{...turn,parentUserTurnKey:'foreign'}:turn)};
+    if(mode==='wrong-anchor')seen={...seen,turns:seen.turns.map(turn=>turn.role==='assistant'?{...turn,lineageAnchor:'foreign'}:turn)};
+    if(mode==='competing-parent')seen={...seen,turns:[...seen.turns,{key:'foreign',role:'assistant',parentUserTurnKey:'foreign',phase:'complete',text:'foreign'}]};
+    if(mode==='foreign-route')seen={...seen,url:'https://foreign.invalid/c/other'};
+    driver.queued.push(seen);
+    await expect(sending).rejects.toThrow();
+    expect(driver.activated).toHaveLength(1);
+  }finally{await surface.host.close();}
+});
+
+test('causal receipt aborts a pending observer on host input revocation without a second send',async()=>{
+ const driver=new FixtureDriver(fixture('ready-new-chat')),inputAbort=new AbortController();let revision=0;
+ const surface=await leaseFor(driver,{current:()=>({revision,available:true,signal:inputAbort.signal})});
+ const provider=new ChatGptSemanticProvider();
+ try{
+  const sending=provider.submitTurn(surface.lease,request());
+  while(!driver.activated.length)await Promise.resolve();
+  driver.queued.push(causalSnapshot(driver));
+  const submitted=await sending;if(submitted.state!=='proven')throw Error('fixture receipt');
+  driver.waitForChange=async(_revision: string,signal?: AbortSignal)=>new Promise<ChatGptSurfaceSnapshot>((_,reject)=>{
+   if(signal?.aborted){reject(signal.reason);return;}
+   signal?.addEventListener('abort',()=>reject(signal.reason),{once:true});
+  });
+  const waiting=provider.waitForTurnEvent(surface.lease,submitted.value);
+  revision++;inputAbort.abort(new Error('fixture input revoked'));
+  await expect(waiting).rejects.toThrow('fixture input revoked');
+  expect(driver.activated).toHaveLength(1);
+ }finally{await surface.host.close();}
 });

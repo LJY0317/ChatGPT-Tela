@@ -20,6 +20,15 @@ or prove remote termination. Add sanitized fixture coverage before extending pay
 Diagnostic observations never grant acceptance,
 release, replay, tool or delivery authority. See the change-resilient design in `docs/architecture.md`.
 
+Causal acceptance adds only booleans/counts: composer consumed, paired assistant/anchor,
+carried user witness and causal receipt. `accepted_fingerprint_matches` remains an actual observed
+payload comparison; causal acceptance does not manufacture a text-match result. Ongoing ownership
+reports `payload_state=causal` separately from actual author-root availability. Host
+`inspection_ownership_revoked` records at most16 unowned-input revisions per surface, without keys,
+coordinates or text. The canonical diagnostic sanitizer now preserves `first_reason_class`; previously
+the provider emitted it but incident projection discarded it. Regression tests cover that public
+projection, not only the emitter. Candidate text and fingerprints remain excluded from logs.
+
 ## Cancellation, edited requests and steering
 
 Native admission is serialized per conversation, including transitions to a new Native turn.

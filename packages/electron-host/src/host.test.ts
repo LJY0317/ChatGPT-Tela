@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { BROWSER_DOCUMENT_LIFETIME, BROWSER_PAGE_AUTOMATION, BROWSER_READ_ONLY_PREVIEW } from "@chatgpt-tela/browser-host";
+import { BROWSER_DOCUMENT_LIFETIME, BROWSER_INPUT_OWNERSHIP, BROWSER_PAGE_AUTOMATION, BROWSER_READ_ONLY_PREVIEW } from "@chatgpt-tela/browser-host";
 import type { BrowserWindowConstructorOptions } from "electron";
 import { createElectronBrowserHost, type ElectronBrowserWindowLike } from "./host";
 import { createElectronMainProcessBrowserHost } from "./host";
@@ -290,15 +290,19 @@ test("closing manual inspection resets viewing and keeps the owned lease alive",
   const surface=await host.acquire({taskId:"task",epochId:"epoch"});
   const { BROWSER_INSPECTION_INPUT } = await import("@chatgpt-tela/browser-host");
   const controls=surface.capability(BROWSER_INSPECTION_INPUT)!; controls.setInteractive(true);
+  const ownership=surface.capability(BROWSER_INPUT_OWNERSHIP)!;
+  const before=ownership.current(); expect(before.available).toBe(true);
   let blocked=0;
   window.webContents.emit("before-input-event", {preventDefault(){blocked++;}}, {type:"keyDown",key:"Enter"});
   expect(blocked).toBe(0);
+  expect(before.signal.aborted).toBe(true);
   listener!({preventDefault(){}});
   window.webContents.emit("before-input-event", {preventDefault(){blocked++;}}, {type:"keyDown",key:"Enter"});
   expect(blocked).toBe(1);
   expect(surface.capability(BROWSER_DOCUMENT_LIFETIME)!.current().signal.aborted).toBe(false);
   await host.release(surface.leaseId);
-  expect(()=>controls.setInteractive(true)).toThrow("unavailable"); await host.close();
+  expect(()=>controls.setInteractive(true)).toThrow("unavailable");
+  expect(ownership.current().available).toBe(false); await host.close();
 });
 
 test("user-hide observation is tied to one browser lease and never fires on ordinary release", async () => {

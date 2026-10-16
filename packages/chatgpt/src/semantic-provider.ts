@@ -3,6 +3,7 @@ import { authorFingerprint, assistantFor, baselineUserLineageKeys, resolveAssist
 import { createHash } from "node:crypto";
 import {
   BROWSER_PAGE_AUTOMATION,
+  BROWSER_INPUT_OWNERSHIP,
   captureBrowserDiagnosticEvidence,
   captureBrowserDiagnosticCheckpoint,
   type BrowserSurfaceLease,
@@ -41,6 +42,7 @@ import type {
 import { isChatGptTemporaryChatUrl, isChatGptProvisionalConversationUrl } from "./session";
 
 interface TrackedTurn extends TurnOwnership {
+  readonly causalInputSignal?: AbortSignal;
   readonly handle: WebTurnHandle;
   readonly surfaceLeaseId: string;
   readonly retainedContext: boolean;
@@ -1246,6 +1248,18 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       transfer_estimate: request.physicalContext.transferTokens,
     });
     const expectedFingerprint = fingerprint(text);
+    const inputOwner = surface.capability(BROWSER_INPUT_OWNERSHIP);
+    // Capture before consequential input, never infer exclusivity from missing support.
+    const inputBaseline = inputOwner?.current();
+    const assertCausalInputUnchanged = inputBaseline?.available && inputBaseline.signal && !inputBaseline.signal.aborted && Number.isSafeInteger(inputBaseline.revision)
+      ? () => {
+        const now = inputOwner!.current();
+        if (!now.available || now.revision !== inputBaseline.revision) {
+          throw new WebSubmissionUnproven("author_payload_unavailable");
+        }
+      } : undefined;
+    if (assertCausalInputUnchanged) signal = signal
+      ? AbortSignal.any([signal, inputBaseline!.signal]) : inputBaseline!.signal;
     try {
       let preparedBaseline = baseline;
       if (request.toolBridge) {
@@ -1365,6 +1379,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       if (request.physicalContext.mode === "retained-delta") this.#assertRetainedConversation(surface, filled);
       await captureBrowserDiagnosticCheckpoint(surface,"before_submit");
       signal?.throwIfAborted();
+      assertCausalInputUnchanged?.();
       sendActivationAttempted = true;
       emitDiagnosticEvent("chatgpt_tela_work", "web_send_activation_started", { phase: "turn" });
       await driver.activateSend(sendAfterFill.key, signal);
@@ -1391,17 +1406,58 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     let acceptancePendingRecorded = false;
     let firstProofReason: WebSubmissionProofReason | undefined;
     let lastWitness = "", witnessCount = 0;
+    let pendingCausalUser: ChatGptTurnObservation | undefined;
     try {
       snapshot = await driver.waitForChange(filled.revision, acceptance.combined);
       for (;;) {
-        const newUserTurns = snapshot.turns.filter(turn => (
+        assertCausalInputUnchanged?.();
+        let newUserTurns = snapshot.turns.filter(turn => (
           turn.role === "user" && !baselineTurnKeys.has(turn.key)
         ));
+        const renderedNewUserCount = newUserTurns.length;
+        // Virtualization may unmount the user before its paired assistant mounts.
+        // Carry evidence, never authority: only the same unique logical parent may
+        // finish this receipt, under the unchanged host input boundary.
+        if (pendingCausalUser && newUserTurns.some(turn => turn.lineageAnchor !== pendingCausalUser!.lineageAnchor)) {
+          throw new WebSubmissionUnproven("author_payload_unavailable");
+        }
+        if (!newUserTurns.length && pendingCausalUser && snapshot.turns.some(turn => turn.role === "assistant"
+          && turn.parentUserTurnKey === pendingCausalUser!.key && turn.lineageAnchor === pendingCausalUser!.lineageAnchor)) {
+          newUserTurns = [pendingCausalUser];
+        }
         const candidate = newUserTurns.length === 1 ? newUserTurns[0] : undefined;
+        const observedFingerprint = authorFingerprint(candidate, expectedFingerprint);
+        const beforeRoute = new URL(filled.url), afterRoute = new URL(snapshot.url);
+        const sameRoute = beforeRoute.origin + beforeRoute.pathname === afterRoute.origin + afterRoute.pathname;
+        const canonicalHydration = beforeRoute.origin === afterRoute.origin
+          && (beforeRoute.pathname === "/" || isChatGptProvisionalConversationUrl(filled.url))
+          && /^\/c\/[^/]+$/.test(afterRoute.pathname)
+          && (!isChatGptProvisionalConversationUrl(snapshot.url) || beforeRoute.pathname === "/");
+        const pairedAssistants = candidate ? snapshot.turns.filter(turn => turn.role === "assistant"
+          && turn.parentUserTurnKey === candidate.key) : [];
+        const newAssistantParents = new Set(snapshot.turns.flatMap(turn => turn.role === "assistant"
+          && turn.parentUserTurnKey && !preSubmitUserLineageKeys.has(turn.parentUserTurnKey) ? [turn.parentUserTurnKey] : []));
+        const composerConsumed = snapshot.composers.filter(item => item.key === composer.key).length === 1
+          && snapshot.composers.find(item => item.key === composer.key)!.textLength === 0;
+        const causalReceipt = observedFingerprint === undefined && !!assertCausalInputUnchanged
+          && !!candidate?.lineageAnchor && !filled.turns.some(turn => turn.lineageAnchor === candidate.lineageAnchor)
+          && composerConsumed && (sameRoute || canonicalHydration) && pairedAssistants.length === 1
+          && newAssistantParents.size === 1
+          && pairedAssistants[0]!.lineageAnchor === candidate.lineageAnchor;
+        if (causalReceipt) assertCausalInputUnchanged!();
+        if (candidate?.lineageAnchor && assertCausalInputUnchanged && composerConsumed
+          && !filled.turns.some(turn => turn.lineageAnchor === candidate.lineageAnchor) && (sameRoute || canonicalHydration)) {
+          pendingCausalUser = candidate;
+        }
         const reason = candidate ? acceptanceProofReason(candidate.userPayloadReason) : "new_author_unavailable";
-        const fields = { reason_class: reason, user_count: newUserTurns.length,
+        const fields = { reason_class: reason, user_count: renderedNewUserCount,
+          carried_user_witness: renderedNewUserCount === 0 && newUserTurns.length === 1,
           logical_anchor_present: candidate?.lineageAnchor !== undefined,
           expected_payload_matches: authorFingerprint(candidate, expectedFingerprint) === expectedFingerprint,
+          causal_receipt: causalReceipt, composer_consumed: composerConsumed,
+          paired_assistant_count: pairedAssistants.length,
+          paired_anchor_matches: !!candidate?.lineageAnchor && pairedAssistants.length === 1
+            && pairedAssistants[0]!.lineageAnchor === candidate.lineageAnchor,
           route_matches: new URL(snapshot.url).origin + new URL(snapshot.url).pathname === new URL(filled.url).origin + new URL(filled.url).pathname,
           ...acceptanceStructure(candidate) };
         const witness = JSON.stringify(fields);
@@ -1421,9 +1477,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             evidence: evidence("multiple new user turns appeared after one exact send activation"),
           };
         }
-        if (newUserTurns.length === 1 && authorFingerprint(newUserTurns[0], expectedFingerprint) !== undefined) {
+        if (newUserTurns.length === 1 && (observedFingerprint !== undefined || causalReceipt)) {
           const userTurn = newUserTurns[0]!;
-          const acceptedFingerprint = authorFingerprint(userTurn, expectedFingerprint)!;
+          const acceptedFingerprint = observedFingerprint ?? expectedFingerprint;
           const handle = Object.freeze({
             nativeTaskId: request.nativeTaskId,
             nativeTurnId: request.nativeTurnId,
@@ -1432,12 +1488,14 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           });
           acceptance.combined.throwIfAborted();
           await captureBrowserDiagnosticCheckpoint(surface,"turn_accepted");
+          if (causalReceipt) assertCausalInputUnchanged!();
           this.#turns.set(surface, {
             handle,
             surfaceLeaseId: surface.leaseId,
             retainedContext: request.physicalContext.mode === "retained-delta",
             userTurnKey: userTurn.key,
             acceptedUserFingerprint: acceptedFingerprint,
+            ...(causalReceipt ? { assertCausalInputUnchanged: assertCausalInputUnchanged!, causalInputSignal: inputBaseline!.signal } : {}),
             ...(userTurn.lineageAnchor ? { acceptedLineageAnchor: userTurn.lineageAnchor } : {}),
             conversationRoute: new URL(snapshot.url).origin + new URL(snapshot.url).pathname,
             baselineUserLineageKeys: preSubmitUserLineageKeys,
@@ -1451,7 +1509,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
               : /^\/c\/[^/]+$/.test(acceptedRoute.pathname) ? "conversation" : "other",
             user_count: snapshot.turns.filter(turn => turn.role === "user").length,
             baseline_lineage_count: preSubmitUserLineageKeys.size,
-            accepted_fingerprint_matches: acceptedFingerprint === expectedFingerprint,
+            accepted_fingerprint_matches: observedFingerprint === expectedFingerprint,
+            causal_receipt: causalReceipt,
             logical_anchor_present: userTurn.lineageAnchor !== undefined,
             ...acceptanceStructure(userTurn),
           });
@@ -1459,7 +1518,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             state: "proven",
             value: handle,
             evidence: evidence(
-              acceptedFingerprint === expectedFingerprint
+              causalReceipt ? "exact composer and one send consumed into a unique new logical user and assistant under unchanged owned input"
+              : acceptedFingerprint === expectedFingerprint
                 ? "one new stable user turn acknowledges the exact submitted payload fingerprint"
                 : "one new stable user turn acknowledges the exact pre-send composer readback and send activation",
             ),
@@ -1499,6 +1559,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   ): Promise<SemanticObservation<WebTurnState>> {
     signal?.throwIfAborted();
     const tracked = this.#tracked(surface, turn);
+    tracked.assertCausalInputUnchanged?.();
+    if (tracked.causalInputSignal) signal = signal
+      ? AbortSignal.any([signal, tracked.causalInputSignal]) : tracked.causalInputSignal;
     const snapshot = await driverFor(surface).observe(signal);
     signal?.throwIfAborted();
     tracked.revision = snapshot.revision;
@@ -1522,6 +1585,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   ): Promise<SemanticObservation<WebToolContinuationBoundary>> {
     if (!callId.trim()) throw new Error("Web tool continuation call id must be non-empty");
     const tracked = this.#tracked(surface, turn);
+    tracked.assertCausalInputUnchanged?.();
+    if (tracked.causalInputSignal) signal = signal
+      ? AbortSignal.any([signal, tracked.causalInputSignal]) : tracked.causalInputSignal;
     let { snapshot, lineage } = await waitForLineage(driverFor(surface), tracked, signal);
     if (tracked.retainedContext) {
       snapshot = await this.#waitForRetainedConversation(surface, snapshot, tracked, signal);
@@ -1591,6 +1657,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   ): Promise<SemanticObservation<WebTurnEvent>> {
     signal?.throwIfAborted();
     const tracked = this.#tracked(surface, turn);
+    tracked.assertCausalInputUnchanged?.();
+    if (tracked.causalInputSignal) signal = signal
+      ? AbortSignal.any([signal, tracked.causalInputSignal]) : tracked.causalInputSignal;
     const driver = driverFor(surface);
 
     if (tracked.pendingCompletedAnswer !== undefined) {
@@ -1605,6 +1674,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       // A new approval can render after completion controls. It still blocks final delivery.
       if (assistantLifecyclePhase(snapshot, ownership.assistants[0]) === "failed") {
         await this.#recordApprovalResolution(surface, tracked, "failed");
+        tracked.assertCausalInputUnchanged?.();
+        signal?.throwIfAborted();
         this.#turns.delete(surface);
         return { state: "proven", value: { kind: "failed", providerTurnId: tracked.handle.providerTurnId,
           detail: ownership.assistants[0]!.failureDetail ?? "ChatGPT turn failed" },
@@ -1612,6 +1683,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       if (!snapshot.approval?.cardCount) {
         await this.#recordApprovalResolution(surface, tracked, "completed");
+        tracked.assertCausalInputUnchanged?.();
+        signal?.throwIfAborted();
         this.#turns.delete(surface);
         return {
           state: "proven",
@@ -1693,15 +1766,21 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         && !tracked.approvalObservation.wasDispatched(observedApproval.cardFingerprint)
         && assistant?.phase !== "failed" && driver.processApprovalCard
         && decideChatGptApproval(this.#approvalAutomationMode, observedApproval).action === "approve_once") {
+        tracked.assertCausalInputUnchanged?.();
+        signal?.throwIfAborted();
         const action = await driver.processApprovalCard(this.#approvalAutomationMode, signal,
           this.#approvalAutomationDelayMs, { cardFingerprint: observedApproval.cardFingerprint,
             revisionFingerprint: observedApproval.revisionFingerprint });
+        tracked.assertCausalInputUnchanged?.();
+        signal?.throwIfAborted();
         if (action.status === "dispatched" || action.reason === "already_activated") {
           const card = action.status === "dispatched" ? action.cardFingerprint : observedApproval.cardFingerprint;
           const transition = tracked.approvalObservation.dispatched(card, Date.now());
           approvalTransitionDiagnostic(transition);
         }
       }
+      tracked.assertCausalInputUnchanged?.();
+      signal?.throwIfAborted();
       const approvalPhase = tracked.approvalObservation.phase;
       const approvalProgress = approvalPhase ? approvalObservationSummary(approvalPhase) : "";
       if (approvalProgress && tracked.approvalProgress !== approvalProgress) {
@@ -1718,6 +1797,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         });
         await captureBrowserDiagnosticCheckpoint(surface, "surface_anomaly");
       }
+      tracked.assertCausalInputUnchanged?.();
+      signal?.throwIfAborted();
       if (publicProgress && publicProgress.length <= 16384 && tracked.publicProgress !== publicProgress) {
         tracked.publicProgress = publicProgress;
         tracked.observeAgain = true;
@@ -1734,6 +1815,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         delete tracked.continuationBoundary;
         if (assistant.phase === "failed") {
           await this.#recordApprovalResolution(surface, tracked, "failed");
+          tracked.assertCausalInputUnchanged?.();
+          signal?.throwIfAborted();
           this.#turns.delete(surface);
           return {
             state: "proven",
@@ -1756,8 +1839,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         };
       }
       if (assistant.phase === "complete") {
-        this.#commitAnswer(surface, tracked.userTurnKey, assistant);
         await this.#recordApprovalResolution(surface, tracked, "completed");
+        tracked.assertCausalInputUnchanged?.();
+        signal?.throwIfAborted();
+        this.#commitAnswer(surface, tracked.userTurnKey, assistant);
         this.#turns.delete(surface);
         return {
           state: "proven",
@@ -1771,6 +1856,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       if (assistant.phase === "failed") {
         await this.#recordApprovalResolution(surface, tracked, "failed");
+        tracked.assertCausalInputUnchanged?.();
+        signal?.throwIfAborted();
         this.#turns.delete(surface);
         return {
           state: "proven",

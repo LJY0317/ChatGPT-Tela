@@ -2,6 +2,7 @@ import { diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiag
 import {
   BROWSER_READ_ONLY_PREVIEW,
   BROWSER_INSPECTION_INPUT,
+  BROWSER_INPUT_OWNERSHIP,
   BROWSER_USER_HIDE,
   BROWSER_PAGE_AUTOMATION,
   BROWSER_DOCUMENT_LIFETIME,
@@ -230,7 +231,7 @@ export function createElectronBrowserHost(input: {
             return () => { hideListeners.delete(observer); };
           } } as T;
         }
-        if (capability === BROWSER_INSPECTION_INPUT) return inspection as T;
+        if (capability === BROWSER_INSPECTION_INPUT || capability === BROWSER_INPUT_OWNERSHIP) return inspection as T;
         if (capability === BROWSER_PAGE_AUTOMATION) return automation as T;
         if (capability === BROWSER_DOCUMENT_LIFETIME && documentLifetime) return documentLifetime as T;
         if (capability === BROWSER_READ_ONLY_PREVIEW && preview) return preview as T;

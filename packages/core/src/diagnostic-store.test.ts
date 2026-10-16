@@ -102,11 +102,11 @@ test("unflagged or clipped results remain evidence signals rather than proven re
   expect(()=>analyzeDiagnosticEvents({events:[],atMs:0,reportOrigin:"PRIVATE" as never})).toThrow("invalid host report origin");
 });
 test("ownership and inspection witnesses survive canonical filtering without payload or input details", () => {
-  const row = event("web_turn_ownership_observed", { payload_state: "unavailable", anchor_state: "matching",
+  const row = event("web_turn_ownership_observed", { payload_state: "unavailable", anchor_state: "matching", first_reason_class: "ambiguous_author_root",
     author_root_available: false, action: "close_to_hide", owned_input: false, input_count: 1,
     key: "private keystroke", prompt: "private question", coordinates: "private position" });
   expect(row).toMatchObject({ payload_state: "unavailable", anchor_state: "matching", author_root_available: false,
-    action: "close_to_hide", owned_input: false, input_count: 1 });
+    action: "close_to_hide", owned_input: false, input_count: 1, first_reason_class: "ambiguous_author_root" });
   expect(JSON.stringify(row)).not.toContain("private");
 });
 test("bounded reader explicitly reports truncation and never follows source symlinks", () => {

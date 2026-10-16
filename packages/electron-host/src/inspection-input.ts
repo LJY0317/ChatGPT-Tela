@@ -20,6 +20,19 @@ export class InspectionInput {
   #interactive: boolean | undefined;
   readonly #origin = diagnosticContext();
   #inputCount = 0;
+  #unownedRevision = 0;
+  #inputAbort = new AbortController();
+  #invalidateInput(): void {
+    this.#unownedRevision++;
+    if (this.#unownedRevision <= 16) withDiagnosticContext(this.#origin, () =>
+      emitDiagnosticEvent("chatgpt_tela_browser", "inspection_ownership_revoked", { input_revision: this.#unownedRevision }));
+    this.#inputAbort.abort(new Error("browser input ownership changed"));
+    this.#inputAbort = new AbortController();
+  }
+  current(): { readonly revision: number; readonly available: boolean; readonly signal: AbortSignal } {
+    return { revision: this.#unownedRevision, signal: this.#inputAbort.signal, available: !this.#disposed
+      && !!this.contents.on && !!this.contents.removeListener && !!this.contents.sendInputEvent };
+  }
   #recordInput(kind: "pointer_activation" | "key_activation"): void {
     if (++this.#inputCount > 64) return;
     withDiagnosticContext(this.#origin, () => emitDiagnosticEvent("chatgpt_tela_browser", "inspection_input_observed", {
@@ -54,6 +67,7 @@ export class InspectionInput {
     try { this.contents.sendInputEvent(input); } finally { this.#owned = previous; }
   };
   mouse = (event: { preventDefault(): void }, input: any): void => {
+    if (!this.#owned && !this.#observing && input.type === "mouseDown") this.#invalidateInput();
     if (input.type === "mouseDown") this.#recordInput("pointer_activation");
     if (!this.#observing || this.#owned) return;
     if (input.type === "mouseWheel") return;
@@ -87,6 +101,7 @@ export class InspectionInput {
     }).catch(() => {}).finally(() => { if (this.#pending === pending) this.#pending = undefined; });
   };
   key = (event: { preventDefault(): void }, input: any): void => {
+    if (!this.#owned && !this.#observing && input.type === "keyDown") this.#invalidateInput();
     if (input.type === "keyDown") this.#recordInput("key_activation");
     if (!this.#observing || this.#owned) return;
     event.preventDefault();
@@ -110,6 +125,7 @@ export class InspectionInput {
   };
   documentChanged = (): void => { this.reset(); };
   dispose(): void {
+    this.#inputAbort.abort(new Error("browser input owner disposed"));
     this.#disposed = true; this.reset();
     this.contents.removeListener?.("before-mouse-event", this.mouse);
     this.contents.removeListener?.("before-input-event", this.key);

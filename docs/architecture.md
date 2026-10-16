@@ -1013,7 +1013,7 @@ details. Do not create per-version, per-profile or per-error fallback chains. Re
 capabilities actually observed, separately from login and model availability. An idle/readiness probe
 must not send a model message or claim that a task response has succeeded.
 
-The operation receipt should retain pre-send composer proof, baseline logical anchors, one activation
+The operation receipt retains pre-send composer proof, baseline logical anchors, one activation
 boundary and subsequent identity observations. Logical identity and body extraction are separate
 evidence: an anchor alone cannot authorize a tool or final delivery, and a text match alone cannot
 adopt a foreign message. Rekeying/hydration may replace renderer keys only through a unique causal
@@ -1029,6 +1029,29 @@ conflicting payload takes precedence; siblings, branches, missing anchors and un
 remain unproven. This is independent of which endpoint contains the expected author text. Do not
 strip arbitrary text, use a substring or guess an intermediate candidate. Extend structural support
 only with bounded evidence and sanitized fixtures, never per-UI-version fallback branches.
+
+The live failure with a 26,327-character composer and unequal 10,126/52-character candidates proves
+that displayed candidate text is not a complete transport receipt. It does not prove server-side
+truncation. The shared provider can now bind a causal submission receipt without interpreting that
+display text: exact full composer readback and one send activation, one consumed composer, a unique
+new logical user anchor absent from the baseline, exactly one paired assistant with the same anchor,
+no competing new assistant parent, and an unchanged host input boundary. Only same-route or the
+owned initial/provisional-to-conversation transition is admissible. An observed user witness may
+survive virtualization until that same logical parent appears; it grants no authority by itself.
+
+`BROWSER_INPUT_OWNERSHIP` is a product-neutral host capability with a monotonic unowned-input
+revision and an abort signal. The Electron adapter fences unowned keyboard/pointer activation and
+disposal while allowing owned automation and read-only inspection. Missing host support cannot
+authorize causal acceptance. Input invalidation aborts active observation/approval waits; delivery
+and commit boundaries recheck ownership after asynchronous work. Native cancellation/edited ancestry,
+document lifetime, lease/account and assistant-body completion contracts remain mandatory. Causal
+receipts bind intended local sends, not provider-billed usage or a server proof of every received byte.
+
+Once causally bound, displayed author hashes are advisory; the same logical document/parent and
+unchanged input/Native owner retain identity through preview changes. A different anchor, foreign
+route, competing user/parent or revoked owner cannot borrow the receipt. Primary payload comparison
+remains the independent existing proof path when no causal receipt is established. Synthetic saved-chat
+deletion still requires its exact marker/content proof; causal task identity grants no delete authority.
 
 Cancellation revokes further commit/tool authority; it does not assert remote termination or undo
 completed effects. An edited resend starts from the new canonical ancestry after the old owner's
@@ -1056,7 +1079,7 @@ Implementation sequence and acceptance gates:
    Verify useful final delivery in the affected installed profile separately from fixture success.
 
 These are design/acceptance requirements, not a claim that reconciliation or every extraction shape
-is implemented. Exact anchored endpoint resolution and bounded acceptance transitions are implemented;
+is implemented. Exact anchored endpoint resolution, guarded causal receipts and bounded acceptance transitions are implemented;
 unknown endpoints still fail closed. The earlier incident did not record endpoint matches, so its
 successful live recovery remains unverified. No read-only durable post-timeout reconciliation was added.
 Token-cost gates live in

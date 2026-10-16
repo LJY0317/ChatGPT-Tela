@@ -33,6 +33,13 @@ export const BROWSER_INSPECTION_INPUT = createBrowserSurfaceCapability<{
   setInteractive(interactive: boolean): void;
 }>("browser-inspection-input");
 
+/** Host evidence only: unowned mutating input invalidates an operation's causal receipt.
+ * Missing support is unknown, never equivalent to an unchanged input boundary.
+ */
+export const BROWSER_INPUT_OWNERSHIP = createBrowserSurfaceCapability<{
+  current(): { readonly revision: number; readonly available: boolean; readonly signal: AbortSignal };
+}>("browser-input-ownership");
+
 /** A user closing this exact browser window, not a document/navigation or
  * task-completion signal. Only an optional account-management owner uses it. */
 export const BROWSER_USER_HIDE = createBrowserSurfaceCapability<{

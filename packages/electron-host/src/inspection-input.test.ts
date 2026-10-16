@@ -44,3 +44,22 @@ test("unavailable host cannot silently claim observation mode", () => {
   const gate = new InspectionInput({ async executeJavaScript() { return false; }, isDestroyed() { return false; } });
   expect(() => gate.setInteractive(false)).toThrow("unavailable"); gate.dispose();
 });
+
+test("host input evidence survives owned input and viewing but fences external interaction and disposal", async () => {
+  const f = fixture(), original = f.gate.current();
+  expect(original.available).toBe(true);
+  f.gate.send(down); f.gate.send(up); f.gate.send({ type: "keyDown", keyCode: "Enter" });
+  expect(f.gate.current()).toEqual(original);
+  f.gate.setInteractive(false); f.contents.sendInputEvent(down); await flush();
+  expect(f.gate.current()).toEqual(original);
+  f.gate.setInteractive(true); f.contents.sendInputEvent(down);
+  expect(f.gate.current().revision).toBe(original.revision + 1);
+  expect(original.signal.aborted).toBe(true);
+  const second = f.gate.current();
+  f.contents.sendInputEvent({ type: "keyDown", key: "Enter" });
+  expect(f.gate.current().revision).toBe(original.revision + 2);
+  expect(second.signal.aborted).toBe(true);
+  const last=f.gate.current();
+  f.gate.dispose(); expect(f.gate.current().available).toBe(false);
+  expect(last.signal.aborted).toBe(true);
+});
