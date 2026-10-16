@@ -636,3 +636,9 @@ terminal HTTP 400 `tela_native_handoff_reconciliation_required`. The same saniti
 retirement and streamed failures. Native may retry an already-started streamed failure once;
 the following HTTP 400 ends the retry. Preserve/reconcile the existing Native result before a
 new authorized turn; neither a retry nor this recovery code authorizes executing the tool twice.
+
+
+Owned maintenance settlement emits `native_checkpoint_operation_reconciled` with a bounded stage
+fingerprint, original owner kind, `released_locally`, `remote_outcome=unknown` and zero model calls.
+It requires verified physical-owner release and exact journal selection; it does not report a
+successful summary, proven remote cancellation or a resumed task. Completed summaries are preserved.

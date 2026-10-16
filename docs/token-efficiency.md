@@ -122,3 +122,17 @@ This proof path applies to newly observed operations; missing historical evidenc
 manufactured retroactively. Local transfer estimates include the actual formatted transport
 contract, source bytes, receipt footer, media manifest and deduplicated media bytes; estimates
 remain distinct from billed tokens.
+
+
+## Releasing interrupted owners
+
+Maintenance can settle an exact pending operation after a verified owned lifecycle cutover proves
+its original physical owner was released. Prove Native work idle before that cutover, bind the
+installed/target/account/generation receipts, and recheck owner absence and exact original claim
+under the journal writer lock immediately before mutation. Current readiness, elapsed time,
+a new Native turn or an error log alone cannot establish release. Records without a turn owner
+require whole-generation quiescence proof. Preserve the original identity and claim, existing
+completed summaries, and unknown remote outcome; settlement means local closure, never success.
+The retired Native owner cannot submit again even under a changed stage key. Only independently
+proven new Native authority can start another isolated operation. This maintenance contract applies
+to both legacy and current records through one settlement API; do not add version-specific retry paths.

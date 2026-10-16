@@ -51,30 +51,30 @@ test("legacy recovery requires repeated owner quiescence, exact selection and a 
   const journal = new FileNativeVisiblePrefixStageJournal(options), id = identity();
   const claim = await journal.claim(id); if (claim.status !== "claimed") throw Error("fixture");
   let checks = 0;
-  const recovery = { ...id, claimId: claim.claimId, terminalOwnerFingerprint: hash("terminal Native turn"),
-    reconciliationFingerprint: hash("owned profile quiescence receipt"), assertQuiescent: async () => { checks++; } };
-  await expect(journal.reconcileQuiescentLegacy({ ...recovery, assertQuiescent: async () => { throw Error("profile owner still alive"); } })).rejects.toThrow("still alive");
+  const recovery = { ...id, claimId: claim.claimId, expectedOwnerFingerprint: null, retiredOwnerFingerprint: hash("terminal Native turn"),
+    reconciliationFingerprint: hash("owned profile quiescence receipt"), assertReleased: async () => { checks++; } };
+  await expect(journal.reconcileReleasedOperation({ ...recovery, assertReleased: async () => { throw Error("profile owner still alive"); } })).rejects.toThrow("still alive");
   expect(await journal.claim(id, hash("new turn"))).toEqual({ status: "unknown" });
-  await expect(journal.reconcileQuiescentLegacy({ ...recovery, claimId: "foreign" })).rejects.toThrow("selection changed");
-  await journal.reconcileQuiescentLegacy(recovery);
+  await expect(journal.reconcileReleasedOperation({ ...recovery, claimId: "foreign" })).rejects.toThrow("selection changed");
+  await journal.reconcileReleasedOperation(recovery);
   expect(checks).toBe(3);
-  await journal.reconcileQuiescentLegacy(recovery); // Same receipt is an idempotent inspection, no resend.
-  expect(await journal.claim(id, recovery.terminalOwnerFingerprint)).toEqual({ status: "unknown" });
+  await journal.reconcileReleasedOperation(recovery); // Same receipt is an idempotent inspection, no resend.
+  expect(await journal.claim(id, recovery.retiredOwnerFingerprint)).toEqual({ status: "unknown" });
   const next = await journal.claim(id, hash("new turn")); expect(next.status).toBe("claimed");
   await expect(journal.complete({ ...id, claimId: claim.claimId, status: "completed", summary: "late old summary" })).rejects.toThrow("owned claim");
 }));
-test("reconciliation refuses modern owners and a changed quiescence observation without mutation", () => fixture(async options => {
+test("reconciliation refuses a mismatched original owner and changed release proof without mutation", () => fixture(async options => {
   const journal = new FileNativeVisiblePrefixStageJournal(options), id = identity();
   const claim = await journal.claim(id); if (claim.status !== "claimed") throw Error("fixture");
-  const recovery = { ...id, claimId: claim.claimId, terminalOwnerFingerprint: hash("terminal"),
+  const recovery = { ...id, claimId: claim.claimId, expectedOwnerFingerprint: null, retiredOwnerFingerprint: hash("terminal"),
     reconciliationFingerprint: hash("receipt") };
   let checks = 0;
-  await expect(journal.reconcileQuiescentLegacy({ ...recovery, assertQuiescent: async () => { if (++checks === 2) throw Error("owner changed"); } })).rejects.toThrow("owner changed");
+  await expect(journal.reconcileReleasedOperation({ ...recovery, assertReleased: async () => { if (++checks === 2) throw Error("owner changed"); } })).rejects.toThrow("owner changed");
   expect(await journal.claim(id)).toEqual({ status: "unknown" });
   const modern = identity(1), owner = hash("modern");
   const modernClaim = await journal.claim(modern, owner); if (modernClaim.status !== "claimed") throw Error("fixture");
-  await expect(journal.reconcileQuiescentLegacy({ ...recovery, ...modern, claimId: modernClaim.claimId,
-    assertQuiescent: async () => {} })).rejects.toThrow("legacy pending");
+  await expect(journal.reconcileReleasedOperation({ ...recovery, ...modern, claimId: modernClaim.claimId,
+    assertReleased: async () => {} })).rejects.toThrow("original owner changed");
 }));
 test("missing whole storage, missing state and interrupted writes never reinitialize execution", async () => {
   for (const failure of ["directory", "file", "incomplete", "corrupt", "lock"] as const) await fixture(async options => {
@@ -107,3 +107,27 @@ test("worst escaped completion fits reserved capacity and only completed entries
   expect((await journal.claim(identity(64))).status).toBe("completed");
   expect((await readFile(join(options.directory, "state.json"))).length).toBeLessThan(16 * 1024 * 1024);
 }), 30_000);
+
+test("released modern operation retains original claim and unknown outcome without authorizing its retired owner", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options);
+  const id = { ...identity(77), key: `native-visible-stage-v2-${hash("owned modern stage")}` };
+  const owner = hash("original Native turn"), scope = hash("account/thread"), root = hash("canonical source");
+  const claim = await journal.claim(id, owner, root, scope);
+  if (claim.status !== "claimed") throw Error("fixture");
+  const recovery = { ...id, claimId: claim.claimId, expectedOwnerFingerprint: owner, retiredOwnerFingerprint: owner,
+    reconciliationFingerprint: hash("verified owned generation release"), assertReleased: async () => {} };
+  await expect(journal.reconcileReleasedOperation({ ...recovery, retiredOwnerFingerprint: hash("foreign") })).rejects.toThrow("owner identity");
+  let checks = 0;
+  await expect(journal.reconcileReleasedOperation({ ...recovery, assertReleased: async () => { if (++checks === 2) throw Error("generation changed"); } })).rejects.toThrow("generation changed");
+  expect(await journal.pendingOperations()).toHaveLength(1);
+  await journal.reconcileReleasedOperation(recovery);
+  await journal.reconcileReleasedOperation(recovery);
+  const state = JSON.parse((await readFile(join(options.directory, "state.json"), "utf8")).slice(1));
+  expect(state.entries[0]).toMatchObject({ ...id, status: "closed", claimId: claim.claimId, ownerFingerprint: owner, remoteOutcome: "unknown" });
+  expect(state.entries[0]).not.toHaveProperty("summary");
+  expect((await journal.claim(id, owner, root, scope)).status).toBe("unknown");
+  const changed = { ...id, key: `native-visible-stage-v2-${hash("changed model or source stage")}`, inputDigest: hash("changed input") };
+  expect((await journal.claim(changed, owner, hash("grown source"), scope)).status).toBe("unknown");
+  expect((await journal.claim(changed, hash("new Native turn"), hash("grown source"), scope)).status).toBe("claimed");
+  await expect(journal.complete({ ...id, status: "completed", claimId: claim.claimId, summary: "late old result" })).rejects.toThrow("owned claim");
+}));

@@ -1,4 +1,5 @@
 import { constants } from "node:fs";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { mkdir, lstat, open, unlink } from "node:fs/promises";
 import { dirname, resolve, relative, isAbsolute, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -193,6 +194,9 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
         && !entry.key.startsWith("native-visible-stage-v2-") && entry.sourceDigest === sourceRootDigest)) {
         return { status: "unknown" as const };
       }
+      // A released Native owner stays retired even when source/policy changes the stage key.
+      if (ownerFingerprint && state.entries.some(value => value.status === "closed"
+        && value.ownerFingerprint === ownerFingerprint)) return { status: "unknown" as const };
       // Stable account/thread admission is independent of model, policy, source growth and nonce.
       // Older pending records without this proof cannot be presumed to belong to a foreign task.
       if (scopeFingerprint && state.entries.some(value => value.status === "pending"
@@ -248,39 +252,52 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     });
   }
   /** Bounded maintenance metadata only; never returns derived summary contents. */
-  async pendingOperations(): Promise<readonly (NativeVisiblePrefixStageIdentity & { claimId: string; updatedAt: number; legacy: boolean })[]> {
+  async pendingOperations(): Promise<readonly (NativeVisiblePrefixStageIdentity & { claimId: string; updatedAt: number; legacy: boolean; ownerFingerprint?: string })[]> {
     return this.#transaction(async state => state.entries.filter(entry => entry.status === "pending").map(entry => ({
       key: entry.key, sourceDigest: entry.sourceDigest, inputDigest: entry.inputDigest,
       claimId: entry.claimId, updatedAt: entry.updatedAt, legacy: entry.ownerFingerprint === undefined,
+      ...(entry.ownerFingerprint ? { ownerFingerprint: entry.ownerFingerprint } : {}),
     })));
   }
-  /** Maintenance-only legacy recovery. The authenticated owner adapter must stop
-   * the exact profile, prove all its Native work idle and original physical owners
-   * absent. Logs/timeouts/changed nonces are NOT quiescence proof. No model is sent.
-   * The original unknown remote outcome and claim remain preserved. */
-  async reconcileQuiescentLegacy(input: NativeVisiblePrefixStageIdentity & {
+  /** Maintenance-only settlement after the exact original physical owner was released.
+   * A verified owned lifecycle cutover may prove release for an earlier generation;
+   * mere inactivity, elapsed time, current readiness or a changed nonce cannot.
+   * Legacy records require whole-generation quiescence because their turn owner is absent.
+   * Remote outcome remains unknown; no summary or inference is manufactured. */
+  async reconcileReleasedOperation(input: NativeVisiblePrefixStageIdentity & {
     claimId: string;
-    terminalOwnerFingerprint: string;
+    expectedOwnerFingerprint: string | null;
+    retiredOwnerFingerprint: string;
     reconciliationFingerprint: string;
-    assertQuiescent: () => Promise<void>;
+    assertReleased: () => Promise<void>;
   }): Promise<void> {
-    if (!validIdentity(input) || !/^[a-f0-9]{64}$/.test(input.terminalOwnerFingerprint)
-      || !/^[a-f0-9]{64}$/.test(input.reconciliationFingerprint)) throw Error("Invalid checkpoint reconciliation identity");
+    if (!validIdentity(input) || !/^[a-f0-9]{64}$/.test(input.retiredOwnerFingerprint)
+      || !/^[a-f0-9]{64}$/.test(input.reconciliationFingerprint)
+      || (input.expectedOwnerFingerprint !== null && (!/^[a-f0-9]{64}$/.test(input.expectedOwnerFingerprint)
+        || input.expectedOwnerFingerprint !== input.retiredOwnerFingerprint))) {
+      throw Error("Invalid checkpoint reconciliation owner identity");
+    }
     await this.#transaction(async state => {
-      await input.assertQuiescent();
+      await input.assertReleased();
       const entry = state.entries.find(value => value.key === input.key);
       if (!entry || !same(entry, input) || entry.claimId !== input.claimId) throw Error("Checkpoint reconciliation selection changed");
       if (entry.status === "closed" && entry.reconciliationFingerprint === input.reconciliationFingerprint
-        && entry.ownerFingerprint === input.terminalOwnerFingerprint) return;
-      if (entry.status !== "pending" || entry.ownerFingerprint !== undefined) throw Error("Checkpoint reconciliation requires an unchanged legacy pending operation");
-      // Recheck immediately before the durable mutation, under the writer lock.
-      await input.assertQuiescent();
+        && entry.ownerFingerprint === input.retiredOwnerFingerprint) return;
+      if (entry.status !== "pending" || (entry.ownerFingerprint ?? null) !== input.expectedOwnerFingerprint) {
+        throw Error("Checkpoint reconciliation original owner changed");
+      }
+      await input.assertReleased();
       entry.status = "closed";
-      entry.ownerFingerprint = input.terminalOwnerFingerprint;
+      entry.ownerFingerprint = input.retiredOwnerFingerprint;
       entry.reconciliationFingerprint = input.reconciliationFingerprint;
       entry.remoteOutcome = "unknown";
       entry.updatedAt = Date.now();
       await this.#write(state);
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_checkpoint_operation_reconciled", {
+        stage_fingerprint: createHash("sha256").update(entry.key).digest("hex").slice(0, 24),
+        owner_kind: input.expectedOwnerFingerprint === null ? "legacy_generation" : "native_turn",
+        disposition: "released_locally", remote_outcome: "unknown", model_calls: 0,
+      });
     });
   }
 }
