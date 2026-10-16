@@ -119,6 +119,30 @@ remain available under their original source/account/model/policy identity.
 
 ## Regression and review gates
 
+### Upstream changes must not trigger repeated model work
+
+Optimize total useful-task cost, including failed attempts and recovery, rather than only tokens
+in one request. Observation-adapter revisions, selectors and presentation fingerprints must not
+participate in semantic checkpoint identity. Change the summary-policy identity only when its actual
+semantics change; preserve unresolved-operation ownership across that change. A renderer failure
+alone must not evict completed summaries, invalidate canonical context or initiate cold preparation.
+
+For every observation/recovery patch, compare cold, retained, exact-repeat, append, edit and
+observation-failure paths using counted provider attempts and durable receipts. Retained continuation
+and mechanical recovery add zero preparation calls; identical completed preparation adds zero new
+summary calls after cache loss. Edits reuse compatible unchanged fragments and rebuild only affected
+coverage/merges. Do not claim that every edit can retain its physical Web session.
+
+Report actual counters separately: new/reused fragment and merge stages, preparation/task calls,
+estimated newly transferred and duplicated input, preparation duration and useful final delivery.
+Label missing provider usage as unmeasured; byte/token estimates cannot prove billing or comprehension.
+New diagnostic checks add no prompt bytes or model calls. Prefer bounded event-driven local evidence
+over repeated model inspection. An efficiency regression requires an explicit correctness/capability
+reason and a measured bound; passing an emergency cost cap is insufficient.
+
+The identity/recovery design and unimplemented gaps are in
+`docs/architecture.md#change-resilient-web-identity-and-recovery-design`.
+
 Changes to prompts, context, tools, retries, routing, delegation and monitoring must state their
 effect on model-call count, duplicated input, output bounds and reuse. Normal retained continuation
 must add zero preparation model calls. An attachment-backed checkpoint must use one useful model

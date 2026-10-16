@@ -992,6 +992,71 @@ requires exact composer readback and exactly one matching new user turn. Tool-be
 requires an explicitly armed MCP result boundary followed by an assistant-state change; it does not
 need to guess a `tool-wait` state from ChatGPT's generic progress UI.
 
+## Change-resilient Web identity and recovery design
+
+Design target: absorb presentation changes inside the provider adapter without changing canonical
+history, execution ownership or reusable checkpoint identity. No DOM integration can promise immunity
+to every upstream update. An unsupported structure must cause a bounded, diagnosable capability
+failure; it must not silently misdeliver an answer or initiate another expensive preparation.
+
+Keep three independent boundaries:
+
+| Boundary | Owns | Must not depend on |
+| --- | --- | --- |
+| Native logical context | Active revision ancestry, edits, tool authority, checkpoint coverage | DOM keys, layout, adapter release number |
+| Owned Web operation | One send attempt, account/model/epoch, causal user/assistant identity, settlement | Display position, latest visible answer, retry count |
+| Replaceable observation adapter | Capability detection, renderer-key mapping, exact payload extraction, narrow actions | Authority to replay, truncate history or invalidate summaries |
+
+Prefer documented public contracts when available. Otherwise detect supported structural capabilities
+locally inside the existing adapter; selectors and renderer conventions remain replaceable implementation
+details. Do not create per-version, per-profile or per-error fallback chains. Readiness reports the
+capabilities actually observed, separately from login and model availability. An idle/readiness probe
+must not send a model message or claim that a task response has succeeded.
+
+The operation receipt should retain pre-send composer proof, baseline logical anchors, one activation
+boundary and subsequent identity observations. Logical identity and body extraction are separate
+evidence: an anchor alone cannot authorize a tool or final delivery, and a text match alone cannot
+adopt a foreign message. Rekeying/hydration may replace renderer keys only through a unique causal
+mapping on the same owned surface. Missing frames remain pending within the observation deadline;
+route/document changes require renewed ownership proof, never an implicit resend.
+
+Payload extraction must distinguish author content from wrapper decoration through an evidenced
+structural contract. The current adapter supports one payload root or one equal-text containment
+chain. Unequal nested roots remain unsupported: do not assume the inner or outer candidate is correct,
+strip arbitrary text, or weaken validation until it passes. Before extending this contract, capture
+bounded content-free structural evidence and reproduce the observed shape in a sanitized fixture.
+Expected-payload comparison is useful evidence only within the proven causal message boundary.
+
+Cancellation revokes further commit/tool authority; it does not assert remote termination or undo
+completed effects. An edited resend starts from the new canonical ancestry after the old owner's
+local execution/cleanup settles. Late observations remain attached to the old operation. Reuse compatible
+completed prefix summaries; exclude abandoned descendants. Steering follows the same ownership rules
+at its supported cycle boundary, rather than injecting arbitrary input into an active Web generation.
+
+Recover observation before reconstructing context: reconcile the exact existing operation through
+read-only owned observations, then resume delivery only if its identity and completion are proven.
+A timeout, adapter update or cache miss alone proves neither remote failure nor safe replay. If proof
+cannot be recovered, preserve the unresolved receipt and completed checkpoints and report one actionable
+blocked state. A new authorized operation still needs the established release/ownership rules.
+
+Implementation sequence and acceptance gates:
+
+1. Preserve first failure and last observation separately; add bounded structural identity transitions
+   and candidate comparisons without payloads (see `docs/diagnostics.md`).
+2. Reproduce the unequal-root incident and renderer replacement locally; extend the shared adapter
+   only for an evidenced author-content boundary. Keep unsupported structures explicitly unproven.
+3. Verify equivalent wrappers, unrelated decoration, missing/replaced keys, transient empty frames,
+   siblings, contradictory identity and duplicate candidates. Exercise ordinary send, cancel,
+   cancel/new input, edited resend, steering and late completion through the same operation contract.
+4. Count sends, tool effects, final commits and preparation work. Require no duplicate send/effect,
+   no old-owner commit, no mechanical verification model call and unchanged compatible receipt reuse.
+   Verify useful final delivery in the affected installed profile separately from fixture success.
+
+These are design/acceptance requirements, not a claim that reconciliation or every extraction shape
+is implemented. Current known gap: unequal nested payload candidates and disappearance before acceptance;
+the installed equal-wrapper repair does not resolve it. Token-cost gates live in
+`docs/token-efficiency.md`; adapter changes must preserve those independent gates.
+
 ## Browser host and Codex launcher
 
 Electron Chromium is the intended first browser host because it gives ChatGPT Tela a packaged, cross-platform,

@@ -1,5 +1,20 @@
 # Diagnostic evidence
 
+## Observation compatibility evidence design
+
+For an owned submission, preserve the first structural failure independently of the final snapshot.
+The planned bounded incident projection records first/last reason, candidate count and containment,
+candidate text lengths and equality to the expected payload, logical-anchor continuity, renderer-key
+replacement, route/document continuity and monotonic stage durations. Comparisons occur locally;
+never export candidate text, HTML, raw anchors, URLs or message bodies. Limit candidates, transitions
+and retention; coalesce identical observations and capture on failure rather than idle polling.
+
+These fields are a design requirement, not all current emitted fields. Existing root count/nesting/
+equivalence evidence distinguishes equal wrappers from unsupported unequal text, but cannot explain
+which structural branch added text or why a subsequent frame lost the user candidate. Add sanitized
+fixture coverage before changing payload selection. Diagnostic observations never grant acceptance,
+release, replay, tool or delivery authority. See the change-resilient design in `docs/architecture.md`.
+
 ## Cancellation, edited requests and steering
 
 Native admission is serialized per conversation, including transitions to a new Native turn.
