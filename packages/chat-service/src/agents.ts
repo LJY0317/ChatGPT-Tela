@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ChatWorkspaceRegistry } from "./workspaces";
 
 const MAX_PROMPT_BYTES = 256 * 1024;
@@ -63,6 +64,8 @@ interface DurableAgentTurn {
   readonly id: string;
   readonly agentId: string;
   readonly status: ChatAgentTurnStatus;
+  /** Missing in older records: unresolved legacy turns may have written. */
+  readonly writeMode?: ChatAgentWriteMode;
   readonly response?: string;
   readonly errorCode?: string;
   readonly startedAt: string;
@@ -140,6 +143,33 @@ function turnStatus(value: unknown, field: string): ChatAgentTurnStatus {
   return value;
 }
 
+/** Different approved roots may still address the same physical Git checkout. */
+function nearestCheckoutRoot(root: string): string | undefined {
+  let current = resolve(root);
+  for (;;) {
+    try {
+      const marker = lstatSync(join(current, ".git"));
+      if (marker.isDirectory() || marker.isFile() || marker.isSymbolicLink()) return current;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+    }
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
+function containsPath(parent: string, child: string): boolean {
+  const suffix = relative(parent, child);
+  return suffix === "" || (suffix !== ".." && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix));
+}
+
+function mayWriteSameCheckout(a: string, b: string): boolean {
+  if (containsPath(a, b) || containsPath(b, a)) return true;
+  const checkoutA = nearestCheckoutRoot(a);
+  return checkoutA !== undefined && checkoutA === nearestCheckoutRoot(b);
+}
+
 function optionalText(value: unknown, field: string): string | undefined {
   return value === undefined ? undefined : singleLine(value, field);
 }
@@ -178,6 +208,7 @@ function parseStore(value: unknown): AgentStore {
       id: singleLine(item.id, `agent turn[${index}].id`),
       agentId: singleLine(item.agentId, `agent turn[${index}].agentId`),
       status: turnStatus(item.status, `agent turn[${index}].status`),
+      ...(item.writeMode === undefined ? {} : { writeMode: writeMode(item.writeMode) }),
       ...(item.response === undefined ? {} : { response: boundedMultiline(item.response, `agent turn[${index}].response`, MAX_RESPONSE_BYTES) }),
       ...(item.errorCode === undefined ? {} : { errorCode: singleLine(item.errorCode, `agent turn[${index}].errorCode`) }),
       startedAt: timestamp(item.startedAt, `agent turn[${index}].startedAt`),
@@ -345,6 +376,22 @@ export class ChatAgentManager {
     while (this.#turns.size >= MAX_TURNS && removable.length > 0) this.#turns.delete(removable.shift()!.id);
   }
 
+  /** Admission guard for this Chat agent manager, not a cross-service checkout lease. */
+  #assertWriterAvailable(workspaceId: string, mode: ChatAgentWriteMode): void {
+    if (mode !== "workspace_write") return;
+    const root = this.#workspaces.get(workspaceId).root;
+    for (const agent of this.#agents.values()) {
+      const unresolved = [...this.#turns.values()].filter(turn => turn.agentId === agent.id
+        && (turn.status === "running" || turn.status === "unknown"));
+      const possiblyWriting = unresolved.some(turn => turn.writeMode !== "read_only")
+        || ((agent.status === "running" || agent.status === "unknown") && unresolved.length === 0);
+      if (!possiblyWriting) continue;
+      if (mayWriteSameCheckout(root, this.#workspaces.get(agent.workspaceId).root)) {
+        throw new Error("checkout has an active or unresolved writable agent; inspect its ownership before starting another writer");
+      }
+    }
+  }
+
   #agent(workspaceId: string, agentId: string): DurableAgent {
     this.#workspaces.get(workspaceId);
     const agent = this.#agents.get(singleLine(agentId, "agent id"));
@@ -384,6 +431,8 @@ export class ChatAgentManager {
     const driver = this.#drivers.get(target);
     if (!driver) throw new Error(`unknown or unavailable Tela Chat agent target: ${target}`);
     const prompt = boundedMultiline(input.prompt, "agent prompt", MAX_PROMPT_BYTES);
+    const mode = writeMode(input.writeMode);
+    this.#assertWriterAvailable(workspace.id, mode);
     this.#reserveAgentCapacity();
     if (this.#agents.size >= MAX_AGENTS) throw new Error("Tela Chat agent registry is at capacity");
     const now = new Date().toISOString();
@@ -397,7 +446,7 @@ export class ChatAgentManager {
     });
     this.#agents.set(agent.id, agent);
     try {
-      this.#begin(agent, prompt, writeMode(input.writeMode), workspace.root);
+      this.#begin(agent, prompt, mode, workspace.root);
       return summary(this.#agents.get(agent.id)!);
     } catch (error) {
       this.#agents.delete(agent.id);
@@ -424,11 +473,13 @@ export class ChatAgentManager {
     }
     if (!this.#drivers.has(agent.driverId)) throw new Error(`Tela Chat agent target is unavailable: ${agent.driverId}`);
     const prompt = boundedMultiline(input.prompt, "agent prompt", MAX_PROMPT_BYTES);
+    const mode = writeMode(input.writeMode);
+    this.#assertWriterAvailable(workspace.id, mode);
     const running = Object.freeze({ ...agent, status: "running" as const,
       latestResponse: undefined, latestErrorCode: undefined, updatedAt: new Date().toISOString() });
     this.#agents.set(agent.id, running);
     try {
-      this.#begin(running, prompt, writeMode(input.writeMode), workspace.root);
+      this.#begin(running, prompt, mode, workspace.root);
       return summary(this.#agents.get(agent.id)!);
     } catch (error) {
       this.#agents.set(agent.id, agent);
@@ -447,6 +498,7 @@ export class ChatAgentManager {
       id: `chatturn_${randomUUID()}`,
       agentId: agent.id,
       status: "running",
+      writeMode: mode,
       startedAt: now,
       updatedAt: now,
     });

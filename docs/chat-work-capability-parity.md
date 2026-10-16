@@ -29,6 +29,26 @@ Maintain single-writer-per-checkout, exact operation identity, provenance/owners
 
 ## Acceptance roadmap
 
+### Current source slice: delegated checkout-writer admission (2026-10-16)
+
+Tela Chat's delegated agent manager now records each turn's requested write mode and
+rejects a second writable delegated turn targeting an overlapping approved root or
+the same discoverable Git checkout while another writable turn is running or has an
+unresolved interrupted outcome. Older unresolved turn records without a write-mode
+field are conservatively treated as possibly writable. Read-only agent turns remain
+admissible; completed/stopped turns release this local admission guard. Regression
+fixtures cover nested roots, read-only overlap, restart uncertainty and existing
+agent authority constraints.
+
+This is **not** the cross-service, cross-process single-writer broker. It does not
+reserve direct `exec_command`/patch writes, other Chat service instances, DevSpace,
+Native Codex or Plura writers. It is not a sandbox, cannot undo effects after
+cancellation, and does not automatically clear unknown writer state. Before
+claiming global single-writer correctness, introduce a durable exact-checkout
+reservation shared by all compatible write routes with owner generation,
+authenticated settlement and restart/conflict tests; retain independently owned
+service authority. No new public Gateway tool or installed acceptance is implied.
+
 1. **Baseline**: discover current Chat and exact-turn Native capabilities and produce a matrix of advertised, proven, unsupported and unknown functions. Compare actual outcomes, not similarly named tools.
 2. **Typed catalogue**: implement backward-compatible semantic descriptors and contract tests for effect, authority, proof, replay policy and maturity. Existing public connector fingerprint remains unchanged.
 3. **Durability and ergonomics**: finish process restart reconciliation, owned-tree cancellation, conflict-safe file edits, review expansion and typed incident receipts. Never replay an accepted uncertain write.

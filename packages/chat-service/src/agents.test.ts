@@ -17,6 +17,51 @@ function fixture(driver: ChatAgentDriver) {
 }
 
 describe("Tela Chat durable agents", () => {
+  test("serializes writable agents across overlapping roots, but permits read-only turns", async () => {
+    const driver: ChatAgentDriver = { id: "fixture", run: async (_input, _callbacks, signal) => {
+      await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+      return { response: "stopped" };
+    } };
+    const f = fixture(driver);
+    const nested = join(f.root, "nested"); mkdirSync(nested);
+    const nestedWorkspace = f.workspaces.open(nested);
+    try {
+      const first = await f.manager.start({ workspaceId: f.workspace.id, target: "fixture", prompt: "writer", writeMode: "workspace_write" });
+      await expect(f.manager.start({ workspaceId: nestedWorkspace.id, target: "fixture", prompt: "second writer", writeMode: "workspace_write" }))
+        .rejects.toThrow("active or unresolved writable agent");
+      const reader = await f.manager.start({ workspaceId: nestedWorkspace.id, target: "fixture", prompt: "reader", writeMode: "read_only" });
+      expect(reader.status).toBe("running");
+      await f.manager.stop(f.workspace.id, first.id);
+      await f.manager.stop(nestedWorkspace.id, reader.id);
+    } finally { await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+  });
+
+  test("restart retains an unresolved writer reservation and does not misclassify a read-only interruption", async () => {
+    const driver: ChatAgentDriver = { id: "fixture", async run(_input, _callbacks, signal) {
+      await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+      return { response: "stopped" };
+    } };
+    const f = fixture(driver);
+    try {
+      const writer = await f.manager.start({ workspaceId: f.workspace.id, target: "fixture", prompt: "writer", writeMode: "workspace_write" });
+      const persisted = JSON.parse(readFileSync(f.storePath, "utf8"));
+      expect(persisted.turns.some((turn: { writeMode: string }) => turn.writeMode === "workspace_write")).toBe(true);
+      await f.manager.stop(f.workspace.id, writer.id);
+      await f.manager.close();
+      persisted.agents[0].status = "running";
+      persisted.turns[0].status = "running";
+      const { writeFileSync } = await import("node:fs");
+      writeFileSync(f.storePath, JSON.stringify(persisted));
+      const reopened = new ChatAgentManager({ workspaces: f.workspaces, storePath: f.storePath, drivers: [driver] });
+      try {
+        await expect(reopened.start({ workspaceId: f.workspace.id, target: "fixture", prompt: "new writer", writeMode: "workspace_write" }))
+          .rejects.toThrow("active or unresolved writable agent");
+        const reader = await reopened.start({ workspaceId: f.workspace.id, target: "fixture", prompt: "reader", writeMode: "read_only" });
+        await reopened.stop(f.workspace.id, reader.id);
+      } finally { await reopened.close(); }
+    } finally { await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+  });
+
   test("start and continue persist provider continuation but never persist prompts", async () => {
     const seen: Array<{ prompt: string; providerSessionId?: string }> = [];
     const driver: ChatAgentDriver = {
