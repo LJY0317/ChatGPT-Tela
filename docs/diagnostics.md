@@ -149,6 +149,12 @@ new conversation, authorize retry, or assert prior execution settlement;
 
 ## Start here
 
+`native_history_anchor_rejected` distinguishes `marker_missing` (the bounded indexed source
+was exhausted without a public compaction marker) from `byte_budget` (coverage remains unknown).
+Page/item/byte counts are structural evidence. Internal Native compaction may have no public
+UI marker; this does not prove history loss or index corruption. Retired requests preserve a
+known sanitized history-recovery decision without restoring execution authority.
+
 Native response-cycle rejection now records `native_cycle_proof_rejected` before the existing
 replay denial. Its fixed reason separates a missing prior final, no new user message, and a
 missing or mismatched canonical input witness. Counts and exact-request equality are structural
