@@ -137,6 +137,11 @@ function surfaceDiagnostic(stage: string, snapshot: ChatGptSurfaceSnapshot, extr
   });
 }
 
+function acceptanceProofReason(reason: string | undefined): string {
+  return reason && ["author_root_missing", "ambiguous_author_root", "author_payload_empty", "author_payload_budget"].includes(reason)
+    ? reason : "author_payload_unavailable";
+}
+
 function driverFor(surface: BrowserSurfaceLease): ChatGptSurfaceDriver {
   const driver = surface.capability(CHATGPT_SURFACE_DRIVER);
   if (driver) return driver;
@@ -1366,72 +1371,89 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       throw error;
     }
 
-    let snapshot = await driver.waitForChange(filled.revision, signal);
+    // Send activation may already have succeeded. Bound only the local receipt
+    // observation; expiry cannot authorize another send or adopt an unbound answer.
+    const acceptance = timeoutSignal(signal, CHATGPT_READINESS_TIMEOUT_MS);
+    let snapshot = filled;
     let acceptancePendingRecorded = false;
-    for (;;) {
-      const newUserTurns = snapshot.turns.filter(turn => (
-        turn.role === "user" && !baselineTurnKeys.has(turn.key)
-      ));
-      if (newUserTurns.length > 1) {
-        return {
-          state: "ambiguous",
-          candidates: Object.freeze(newUserTurns.map(turn => ({
+    try {
+      snapshot = await driver.waitForChange(filled.revision, acceptance.combined);
+      for (;;) {
+        const newUserTurns = snapshot.turns.filter(turn => (
+          turn.role === "user" && !baselineTurnKeys.has(turn.key)
+        ));
+        if (newUserTurns.length > 1) {
+          return {
+            state: "ambiguous",
+            candidates: Object.freeze(newUserTurns.map(turn => ({
+              nativeTaskId: request.nativeTaskId,
+              nativeTurnId: request.nativeTurnId,
+              webEpochId: request.webEpochId,
+              providerTurnId: turn.key,
+            }))),
+            evidence: evidence("multiple new user turns appeared after one exact send activation"),
+          };
+        }
+        if (newUserTurns.length === 1 && newUserTurns[0]!.contentFingerprint !== undefined) {
+          const userTurn = newUserTurns[0]!;
+          const handle = Object.freeze({
             nativeTaskId: request.nativeTaskId,
             nativeTurnId: request.nativeTurnId,
             webEpochId: request.webEpochId,
-            providerTurnId: turn.key,
-          }))),
-          evidence: evidence("multiple new user turns appeared after one exact send activation"),
-        };
+            providerTurnId: userTurn.key,
+          });
+          acceptance.combined.throwIfAborted();
+          await captureBrowserDiagnosticCheckpoint(surface,"turn_accepted");
+          this.#turns.set(surface, {
+            handle,
+            surfaceLeaseId: surface.leaseId,
+            retainedContext: request.physicalContext.mode === "retained-delta",
+            userTurnKey: userTurn.key,
+            acceptedUserFingerprint: userTurn.contentFingerprint!,
+            ...(userTurn.lineageAnchor ? { acceptedLineageAnchor: userTurn.lineageAnchor } : {}),
+            conversationRoute: new URL(snapshot.url).origin + new URL(snapshot.url).pathname,
+            baselineUserLineageKeys: preSubmitUserLineageKeys,
+            revision: snapshot.revision,
+            approvalObservation: new ChatGptApprovalObservation(),
+          });
+          const acceptedRoute = new URL(snapshot.url);
+          emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_accepted", {
+            route_kind: acceptedRoute.pathname === "/" ? "initial"
+              : isChatGptProvisionalConversationUrl(snapshot.url) ? "provisional"
+              : /^\/c\/[^/]+$/.test(acceptedRoute.pathname) ? "conversation" : "other",
+            user_count: snapshot.turns.filter(turn => turn.role === "user").length,
+            baseline_lineage_count: preSubmitUserLineageKeys.size,
+            accepted_fingerprint_matches: userTurn.contentFingerprint === expectedFingerprint,
+            logical_anchor_present: userTurn.lineageAnchor !== undefined,
+          });
+          return {
+            state: "proven",
+            value: handle,
+            evidence: evidence(
+              userTurn.contentFingerprint === expectedFingerprint
+                ? "one new stable user turn acknowledges the exact submitted payload fingerprint"
+                : "one new stable user turn acknowledges the exact pre-send composer readback and send activation",
+            ),
+          };
+        }
+        if (newUserTurns.length === 1 && !acceptancePendingRecorded) {
+          acceptancePendingRecorded = true;
+          emitDiagnosticEvent("chatgpt_tela_work", "web_turn_acceptance_pending", {
+            reason_class: acceptanceProofReason(newUserTurns[0]!.userPayloadReason), user_count: 1,
+            logical_anchor_present: newUserTurns[0]!.lineageAnchor !== undefined,
+          });
+        }
+        snapshot = await driver.waitForChange(snapshot.revision, acceptance.combined);
       }
-      if (newUserTurns.length === 1 && newUserTurns[0]!.contentFingerprint !== undefined) {
-        const userTurn = newUserTurns[0]!;
-        const handle = Object.freeze({
-          nativeTaskId: request.nativeTaskId,
-          nativeTurnId: request.nativeTurnId,
-          webEpochId: request.webEpochId,
-          providerTurnId: userTurn.key,
-        });
-        await captureBrowserDiagnosticCheckpoint(surface,"turn_accepted");
-        this.#turns.set(surface, {
-          handle,
-          surfaceLeaseId: surface.leaseId,
-          retainedContext: request.physicalContext.mode === "retained-delta",
-          userTurnKey: userTurn.key,
-          acceptedUserFingerprint: userTurn.contentFingerprint!,
-          ...(userTurn.lineageAnchor ? { acceptedLineageAnchor: userTurn.lineageAnchor } : {}),
-          conversationRoute: new URL(snapshot.url).origin + new URL(snapshot.url).pathname,
-          baselineUserLineageKeys: preSubmitUserLineageKeys,
-          revision: snapshot.revision,
-          approvalObservation: new ChatGptApprovalObservation(),
-        });
-        const acceptedRoute = new URL(snapshot.url);
-        emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_accepted", {
-          route_kind: acceptedRoute.pathname === "/" ? "initial"
-            : isChatGptProvisionalConversationUrl(snapshot.url) ? "provisional"
-            : /^\/c\/[^/]+$/.test(acceptedRoute.pathname) ? "conversation" : "other",
-          user_count: snapshot.turns.filter(turn => turn.role === "user").length,
-          baseline_lineage_count: preSubmitUserLineageKeys.size,
-          accepted_fingerprint_matches: userTurn.contentFingerprint === expectedFingerprint,
-          logical_anchor_present: userTurn.lineageAnchor !== undefined,
-        });
-        return {
-          state: "proven",
-          value: handle,
-          evidence: evidence(
-            userTurn.contentFingerprint === expectedFingerprint
-              ? "one new stable user turn acknowledges the exact submitted payload fingerprint"
-              : "one new stable user turn acknowledges the exact pre-send composer readback and send activation",
-          ),
-        };
-      }
-      if (newUserTurns.length === 1 && !acceptancePendingRecorded) {
-        acceptancePendingRecorded = true;
-        emitDiagnosticEvent("chatgpt_tela_work", "web_turn_acceptance_pending", {
-          reason_class: "author_payload_unavailable", user_count: 1,
-        });
-      }
-      snapshot = await driver.waitForChange(snapshot.revision, signal);
+    } catch (error) {
+      if (signal?.aborted || !acceptance.timeout.aborted) throw error;
+      const users = snapshot.turns.filter(turn => turn.role === "user" && !baselineTurnKeys.has(turn.key));
+      emitDiagnosticEvent("chatgpt_tela_work", "web_turn_acceptance_timeout", {
+        reason_class: users.length === 1 ? acceptanceProofReason(users[0]!.userPayloadReason) : "new_author_unavailable",
+        user_count: users.length, accepted: false, remote_terminal_proven: false,
+        assistant_complete_observed: snapshot.turns.some(turn => turn.role === "assistant" && turn.phase === "complete"),
+      });
+      throw new Error("Web submission outcome is uncertain: local acceptance proof timed out; do not resend this operation", { cause: error });
     }
   }
 

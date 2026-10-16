@@ -30,6 +30,20 @@ Cancelled/ambiguous turns cannot advance retained anchors. A file-only summary h
 Source confirmation, document ownership, Native input witnesses, structured completion parsing and
 durable settlement are correctness checks; perform them locally wherever possible.
 
+## Steady state and recovery
+
+Proven retained context plus its canonical suffix is the steady-state target, not an unconditional
+transport rule. Editing prior input, cancellation, lost physical ownership, model/account changes
+and exhausted context capacity may invalidate that proof. Recover from compatible completed
+checkpoints/fragments and send only the necessary reconstruction; never force a suffix onto an
+unproven page or repeat full cold preparation by default. Recovery cost is explicit and bounded.
+
+Keep preparation, Web submission, exact acceptance, model completion and Native delivery distinct.
+A visible Web answer is not proof that it belongs to the accepted Native operation. Local acceptance
+observation has a bounded deadline even when the browser stops changing; missing author proof
+must produce a diagnostic failure, not an endless working indicator, a fabricated final answer or
+an automatic resend. Mechanical receipt observation must not add a model call.
+
 ## Regression and review gates
 
 Changes to prompts, context, tools, retries, routing, delegation and monitoring must state their

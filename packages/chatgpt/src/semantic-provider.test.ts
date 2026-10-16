@@ -2371,3 +2371,24 @@ test("inert checkpoint source rejects tool authority, preloads, retained deltas 
     } finally { await surface.host.close(); }
   }
 });
+
+test("a visible final without author proof cannot leave submit waiting forever or authorize another send", async () => {
+  const driver = new FixtureDriver(fixture("ready-new-chat"));
+  const surface = await leaseFor(driver);
+  const originalWait = driver.waitForChange.bind(driver);
+  driver.waitForChange = async (revision: string, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    if (driver.current.revision !== revision || driver.queued.length) return originalWait(revision);
+    return new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  };
+  try {
+    const pending = new ChatGptSemanticProvider().submitTurn(surface.lease, request());
+    while (!driver.activated.length) await Promise.resolve();
+    driver.queued.push({ ...driver.current, revision: "final-without-author-proof", turns: [
+      { key: "user", role: "user", userPayloadReason: "author_root_missing" },
+      { key: "assistant", role: "assistant", parentUserTurnKey: "user", phase: "complete", text: "Visible final" },
+    ] });
+    await expect(pending).rejects.toThrow("local acceptance proof timed out");
+    expect(driver.activated).toHaveLength(1);
+  } finally { await surface.host.close(); }
+}, 35000);
