@@ -1,5 +1,22 @@
 # Diagnostic evidence
 
+## Native response reconnect and idle boundaries
+
+Correlate the request fingerprint across `http_transport_closed`, `http_transport_error`, and
+`http_request_observer_aborted`. Closed streams preserve the observed `close_source`, configured
+request/header/socket timeout values, local `socket_write_count`/`socket_write_bytes`, and
+`last_socket_write_at_ms`/`last_socket_write_age_ms`. Writes attest only local socket acceptance,
+never host display. A configured timeout does not prove that it fired. Client cancellation and a
+network disconnect remain combined when the transport supplies no finer evidence; only observed
+socket errors distinguish connection reset, broken pipe and timeout. No heartbeat or extra model call
+is introduced.
+
+`native_response_observer_replaced` means a canonically admitted reconnect replaced the previous
+response wait without restarting Web execution. `native_checkpoint_model_started` and the matching
+stage-fingerprinted failure/settlement record identify fragment/merge stage and duration. A missing
+completion is uncertainty, not permission to resend a submitted checkpoint. No source, summary,
+tool contents or remote/account identity enters these records.
+
 ## Native-to-Web planner failure substage (source candidate, 2026-10-15)
 
 The existing `web_turn_plan` observation includes `logical_estimate`,
