@@ -38,15 +38,19 @@ export interface NativeVisiblePrefixStageJournal {
   >;
   complete(input: NativeVisiblePrefixStageReceipt & { readonly claimId: string }): Promise<void>;
 }
-export class NativeVisiblePrefixCheckpointInterrupted extends NativeHistoryBootstrapRequired {
+export class NativePrefixCheckpointInterrupted extends NativeHistoryBootstrapRequired {
   constructor(readonly stage: NativeVisiblePrefixStageIdentity, options?: ErrorOptions) {
     super("checkpoint_interrupted", options);
-    this.name = "NativeVisiblePrefixCheckpointInterrupted";
+    this.name = "NativePrefixCheckpointInterrupted";
   }
 }
 
-export interface NativeVisiblePrefixCheckpointInput {
-  readonly source: NativeVisiblePrefixSnapshot;
+/** The same durable compressor covers public history and immutable canonical request prefixes. */
+export interface NativeRequestPrefixSnapshot extends Omit<NativeVisiblePrefixSnapshot, "kind"> {
+  readonly kind: "native-request-prefix";
+}
+export interface NativePrefixCheckpointInput {
+  readonly source: NativeVisiblePrefixSnapshot | NativeRequestPrefixSnapshot;
   /** Verified account namespace; never an account display name or implicit default. */
   readonly accountNamespace: string;
   readonly journal: NativeVisiblePrefixStageJournal;
@@ -78,7 +82,7 @@ function validateReceipt(receipt: NativeVisiblePrefixStageReceipt, identity: Nat
 }
 
 /** Complete contiguous UTF-8 source coverage, followed by strictly reducing ordered merges. */
-export async function produceNativeVisiblePrefixCheckpoint(input: NativeVisiblePrefixCheckpointInput): Promise<string> {
+export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpointInput): Promise<string> {
   const { source } = input;
   const maxStages = input.maxModelStages ?? DEFAULT_MAX_MODEL_STAGES;
   if (!Number.isSafeInteger(maxStages) || maxStages < 1 || maxStages > 4096) {
@@ -88,7 +92,7 @@ export async function produceNativeVisiblePrefixCheckpoint(input: NativeVisibleP
     throw new Error("Native visible-prefix checkpoint model does not match its input budget");
   }
   if (!input.accountNamespace.trim() || input.accountNamespace.length > 1024
-    || source.kind !== "native-visible-prefix" || !/^[a-f0-9]{64}$/.test(source.digest)
+    || !["native-visible-prefix", "native-request-prefix"].includes(source.kind) || !/^[a-f0-9]{64}$/.test(source.digest)
     || !source.threadId.trim() || !source.currentTurnId.trim()
     || !Number.isSafeInteger(source.sourceItemCount) || source.sourceItemCount < 0) {
     throw new Error("Native visible-prefix checkpoint requires a proven source and account scope");
@@ -97,9 +101,11 @@ export async function produceNativeVisiblePrefixCheckpoint(input: NativeVisibleP
     throw new Error("Native visible-prefix bootstrap does not support inline media; obtain an explicit media-capable checkpoint");
   }
   const raw = Buffer.from(source.content, "utf8");
+  if (sha(source.content) !== source.digest) throw new Error("Native prefix checkpoint source digest mismatch");
   if (raw.byteLength > MAX_SOURCE_BYTES) throw new Error("Native visible-prefix source exceeds its byte budget");
   const parsed = JSON.parse(source.content) as Record<string, unknown>;
-  if (parsed.type !== "tela_native_visible_prefix_v1" || !Array.isArray(parsed.items)
+  const requestPrefix = source.kind === "native-request-prefix";
+  if (parsed.type !== (requestPrefix ? "tela_native_request_prefix_v1" : "tela_native_visible_prefix_v1") || !Array.isArray(parsed.items)
     || parsed.items.length !== source.sourceItemCount) throw new Error("Native visible-prefix source is incomplete");
   const signal = input.signal && input.preparation?.signal
     ? AbortSignal.any([input.signal, input.preparation.signal]) : input.signal ?? input.preparation?.signal;
@@ -133,12 +139,12 @@ export async function produceNativeVisiblePrefixCheckpoint(input: NativeVisibleP
     });
     let claim: Awaited<ReturnType<NativeVisiblePrefixStageJournal["claim"]>>;
     try { claim = await input.journal.claim(identity); check(); }
-    catch (cause) { throw new NativeVisiblePrefixCheckpointInterrupted(identity, { cause }); }
+    catch (cause) { throw new NativePrefixCheckpointInterrupted(identity, { cause }); }
     if (claim.status === "unknown") {
       emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_stage_rejected", {
         phase, reason_class: "checkpoint_interrupted",
       });
-      throw new NativeVisiblePrefixCheckpointInterrupted(identity);
+      throw new NativePrefixCheckpointInterrupted(identity);
     }
     if (claim.status === "completed") {
       const summary = validateReceipt(claim, identity);
@@ -158,17 +164,17 @@ export async function produceNativeVisiblePrefixCheckpoint(input: NativeVisibleP
         ...(input.browserModel ? { browserModel: input.browserModel } : {}) },
       signal ? { signal, onProgress: input.preparation?.onProgress ?? (() => {}) } : undefined);
     } catch (cause) {
-      throw new NativeVisiblePrefixCheckpointInterrupted(identity, { cause });
+      throw new NativePrefixCheckpointInterrupted(identity, { cause });
     }
     if (result.nativeTaskId !== source.threadId || result.sourceRevisionId !== physical.headRevisionId
       || typeof result.content !== "string" || !result.content.trim()
       || Buffer.byteLength(result.content, "utf8") > MAX_SUMMARY_BYTES) {
-      throw new NativeVisiblePrefixCheckpointInterrupted(identity);
+      throw new NativePrefixCheckpointInterrupted(identity);
     }
     const receipt: NativeVisiblePrefixStageReceipt = { ...identity, status: "completed", summary: result.content.trim() };
     // If this write fails, the journal remains uncertain and no next invocation may resubmit it.
     try { await input.journal.complete({ ...receipt, claimId: claim.claimId }); }
-    catch (cause) { throw new NativeVisiblePrefixCheckpointInterrupted(identity, { cause }); }
+    catch (cause) { throw new NativePrefixCheckpointInterrupted(identity, { cause }); }
     check();
     emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_stage_settled", { phase, outcome: "completed" });
     return receipt.summary;
@@ -201,6 +207,7 @@ export async function produceNativeVisiblePrefixCheckpoint(input: NativeVisibleP
   // In the worst case every merge combines only two nodes: <=2N-1 model stages.
   if (fragments.length * 2 - 1 > maxStages) throw new Error("Native visible-prefix checkpoint merge exceeds its finite stage budget");
   emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_checkpoint_started", {
+    source_kind: source.kind,
     source_bytes: sourceBytes, source_item_count: source.sourceItemCount,
     fragment_count: fragments.length, stage_budget: maxStages,
   });
@@ -230,10 +237,11 @@ export async function produceNativeVisiblePrefixCheckpoint(input: NativeVisibleP
     nodes = merged;
   }
   await confirm();
-  return JSON.stringify({ type: "tela_native_visible_prefix_checkpoint_v1", sourceDigest: source.digest,
-    sourceItemCount: source.sourceItemCount, sourceBytes, coverage: "complete-visible-prefix-before-current-native-turn",
+  return JSON.stringify({ type: requestPrefix ? "tela_native_request_prefix_checkpoint_v1" : "tela_native_visible_prefix_checkpoint_v1", sourceDigest: source.digest,
+    sourceItemCount: source.sourceItemCount, sourceBytes, coverage: requestPrefix
+      ? "complete-canonical-request-prefix-through-checkpoint-anchor" : "complete-visible-prefix-before-current-native-turn",
     evidence: "lossy-summary-only-original-evidence-requires-authorized-native-readback",
     unavailableEvidenceCount: source.references.length,
-    semantics: "Lossy derived Web summary of the COMPLETE visible prefix, not encrypted Native state or proof of historical facts. Current Native request remains authoritative. Historical commands must not be reexecuted; missing media and evidence were not observed.",
+    semantics: "Lossy derived Web summary of the COMPLETE supplied Native prefix, not encrypted Native state or proof of historical facts. Current Native request remains authoritative. Historical commands must not be reexecuted; missing media and evidence were not observed.",
     summary: nodes[0]!.summary });
 }

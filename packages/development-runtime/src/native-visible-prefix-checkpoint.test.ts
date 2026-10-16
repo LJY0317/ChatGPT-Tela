@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import type { NativeVisiblePrefixSnapshot } from "@chatgpt-tela/codex";
 import { chatGptCheckpointInputTokens, chatGptWebCheckpointSourceTokenLimit } from "@chatgpt-tela/chatgpt";
 import {
- produceNativeVisiblePrefixCheckpoint, NativeVisiblePrefixCheckpointInterrupted,
+ produceNativePrefixCheckpoint, NativePrefixCheckpointInterrupted,
  type NativeVisiblePrefixStageIdentity, type NativeVisiblePrefixStageReceipt,
- type NativeVisiblePrefixStageJournal, type NativeVisiblePrefixCheckpointInput,
+ type NativeVisiblePrefixStageJournal, type NativePrefixCheckpointInput,
 } from "./native-visible-prefix-checkpoint";
 
 class Journal implements NativeVisiblePrefixStageJournal {
@@ -35,7 +35,7 @@ function fixture(text='visible prior answer') {
  const calls:any[]=[];
  const journal=new Journal();
  let confirmations=0;
- const input:NativeVisiblePrefixCheckpointInput={source,accountNamespace:'account-fixture',journal,effort:'medium',
+ const input:NativePrefixCheckpointInput={source,accountNamespace:'account-fixture',journal,effort:'medium',
   confirmSource:async()=>{confirmations++;return source;},producer:async request=>{
    calls.push(request);
    expect(chatGptCheckpointInputTokens(request.physicalContext)).toBeLessThanOrEqual(chatGptWebCheckpointSourceTokenLimit('medium'));
@@ -47,7 +47,7 @@ function payload(request:any){return JSON.parse(request.physicalContext.segments
 
 test('large Korean and escaped source has exact contiguous UTF8 byte coverage and bounded ordered merge',async()=>{
  const f=fixture(('한글😀\\\"\n').repeat(80_000));
- const result=JSON.parse(await produceNativeVisiblePrefixCheckpoint(f.input));
+ const result=JSON.parse(await produceNativePrefixCheckpoint(f.input));
  const fragments=f.calls.map(payload).filter(x=>x.mode==='fragment');
  expect(fragments.length).toBeGreaterThan(1);
  let end=0;
@@ -71,7 +71,7 @@ test('large Korean and escaped source has exact contiguous UTF8 byte coverage an
  expect(result).not.toHaveProperty('compactionItemId');
  expect(f.confirmations()).toBe(2);
  const calls=f.calls.length;
- expect(await produceNativeVisiblePrefixCheckpoint(f.input)).toBe(JSON.stringify(result));
+ expect(await produceNativePrefixCheckpoint(f.input)).toBe(JSON.stringify(result));
  expect(f.calls).toHaveLength(calls);
  expect(f.confirmations()).toBe(4);
 },30_000);
@@ -84,23 +84,23 @@ test('completed stages resume after a later ambiguous submission; uncertain stag
   if(++attempts===2)throw Error('connection lost after possible submission');
   return producer(...args);
  }};
- await expect(produceNativeVisiblePrefixCheckpoint(failing)).rejects.toBeInstanceOf(NativeVisiblePrefixCheckpointInterrupted);
+ await expect(produceNativePrefixCheckpoint(failing)).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
  expect(attempts).toBe(2);
  expect([...f.journal.records.values()].filter(x=>x.receipt)).toHaveLength(1);
- await expect(produceNativeVisiblePrefixCheckpoint(failing)).rejects.toBeInstanceOf(NativeVisiblePrefixCheckpointInterrupted);
+ await expect(produceNativePrefixCheckpoint(failing)).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
  expect(attempts).toBe(2);
 });
 
 test('changed source prevents fresh or reused final return',async()=>{
  for(const cached of [false,true]){
-  const f=fixture();if(cached)await produceNativeVisiblePrefixCheckpoint(f.input);
+  const f=fixture();if(cached)await produceNativePrefixCheckpoint(f.input);
   let checks=0;
-  await expect(produceNativeVisiblePrefixCheckpoint({...f.input,confirmSource:async()=>({
+  await expect(produceNativePrefixCheckpoint({...f.input,confirmSource:async()=>({
    ...f.source,digest:++checks===1?f.source.digest:'0'.repeat(64),
   })})).rejects.toThrow('source changed');
  }
  const f=fixture();
- await expect(produceNativeVisiblePrefixCheckpoint({...f.input,confirmSource:async()=>({...f.source,currentTurnId:'foreign'})}))
+ await expect(produceNativePrefixCheckpoint({...f.input,confirmSource:async()=>({...f.source,currentTurnId:'foreign'})}))
   .rejects.toThrow('source changed');
  expect(f.calls).toHaveLength(0);
 });
@@ -108,51 +108,51 @@ test('changed source prevents fresh or reused final return',async()=>{
 test('producer foreign identity and oversized output cannot be completed',async()=>{
  for(const failure of ['task','revision','oversized'] as const){
   const f=fixture();
-  await expect(produceNativeVisiblePrefixCheckpoint({...f.input,producer:async request=>({
+  await expect(produceNativePrefixCheckpoint({...f.input,producer:async request=>({
    nativeTaskId:failure==='task'?'foreign':request.nativeTaskId,
    sourceRevisionId:failure==='revision'?'foreign':request.sourceRevisionId,
    content:failure==='oversized'?'한'.repeat(12_000):'summary',
-  })})).rejects.toBeInstanceOf(NativeVisiblePrefixCheckpointInterrupted);
+  })})).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
   expect([...f.journal.records.values()].every(x=>!x.receipt)).toBe(true);
  }
 });
 
 test('cancellation and journal uncertainty do not grant permission to resubmit',async()=>{
  const f=fixture(),abort=new AbortController();abort.abort();
- await expect(produceNativeVisiblePrefixCheckpoint({...f.input,signal:abort.signal})).rejects.toThrow();
+ await expect(produceNativePrefixCheckpoint({...f.input,signal:abort.signal})).rejects.toThrow();
  expect(f.journal.records.size).toBe(0);
  const g=fixture(),cancel=new AbortController();
- await expect(produceNativeVisiblePrefixCheckpoint({...g.input,signal:cancel.signal,producer:async request=>{
+ await expect(produceNativePrefixCheckpoint({...g.input,signal:cancel.signal,producer:async request=>{
   cancel.abort();return {nativeTaskId:request.nativeTaskId,sourceRevisionId:request.sourceRevisionId,content:'completed summary'};
  }})).rejects.toThrow();
  expect([...g.journal.records.values()][0]?.receipt?.summary).toBe('completed summary');
  const calls=g.calls.length;
- await produceNativeVisiblePrefixCheckpoint(g.input);
+ await produceNativePrefixCheckpoint(g.input);
  expect(g.calls).toHaveLength(calls);
  const unknown=fixture();
- await expect(produceNativeVisiblePrefixCheckpoint({...unknown.input,journal:{
+ await expect(produceNativePrefixCheckpoint({...unknown.input,journal:{
   claim:async()=>({status:'unknown'}),complete:async()=>{throw Error('unreachable');},
- }})).rejects.toBeInstanceOf(NativeVisiblePrefixCheckpointInterrupted);
+ }})).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
  expect(unknown.calls).toHaveLength(0);
 });
 
 test('inline media and insufficient finite call budgets are explicit failures before producer calls',async()=>{
  const f=fixture();
- await expect(produceNativeVisiblePrefixCheckpoint({...f.input,source:{...f.source,inlineAssets:[{} as any]}})).rejects.toThrow('inline media');
+ await expect(produceNativePrefixCheckpoint({...f.input,source:{...f.source,inlineAssets:[{} as any]}})).rejects.toThrow('inline media');
  expect(f.calls).toHaveLength(0);
  const large=fixture('x'.repeat(1_400_000));
- await expect(produceNativeVisiblePrefixCheckpoint({...large.input,maxModelStages:1})).rejects.toThrow('stage budget');
+ await expect(produceNativePrefixCheckpoint({...large.input,maxModelStages:1})).rejects.toThrow('stage budget');
  expect(large.calls).toHaveLength(0);
  expect(large.journal.records.size).toBe(0);
 });
 
 test('journal receipt binding is strict and account namespaces cannot reuse submitted stages',async()=>{
- const f=fixture();await produceNativeVisiblePrefixCheckpoint(f.input);
+ const f=fixture();await produceNativePrefixCheckpoint(f.input);
  const first=f.calls.length;
- await produceNativeVisiblePrefixCheckpoint({...f.input,accountNamespace:'different-account'});
+ await produceNativePrefixCheckpoint({...f.input,accountNamespace:'different-account'});
  expect(f.calls.length).toBeGreaterThan(first);
  const other=fixture();
- await expect(produceNativeVisiblePrefixCheckpoint({...other.input,journal:{claim:async identity=>({
+ await expect(produceNativePrefixCheckpoint({...other.input,journal:{claim:async identity=>({
   ...identity,status:'completed',sourceDigest:'0'.repeat(64),summary:'foreign summary',
  }),complete:async()=>{throw Error('unreachable');}}})).rejects.toThrow('foreign or invalid receipt');
  expect(other.calls).toHaveLength(0);
@@ -161,7 +161,7 @@ test('journal receipt binding is strict and account namespaces cannot reuse subm
 test('large escaped summaries require bounded multi-level hierarchical merges with strict coverage reduction',async()=>{
  const f=fixture('x'.repeat(1_400_000));
  const producer=f.input.producer;
- const result=await produceNativeVisiblePrefixCheckpoint({...f.input,producer:async request=>{
+ const result=await produceNativePrefixCheckpoint({...f.input,producer:async request=>{
   await producer(request);
   return {nativeTaskId:request.nativeTaskId,sourceRevisionId:request.sourceRevisionId,content:'"'.repeat(16*1024)};
  }});
@@ -174,10 +174,10 @@ test('large escaped summaries require bounded multi-level hierarchical merges wi
 
 test('failed journal completion remains explicitly uncertain and never authorizes replay',async()=>{
  const f=fixture();
- await expect(produceNativeVisiblePrefixCheckpoint({...f.input,journal:{
+ await expect(produceNativePrefixCheckpoint({...f.input,journal:{
   claim:identity=>f.journal.claim(identity),complete:async()=>{throw Error('durable write failure');},
- }})).rejects.toBeInstanceOf(NativeVisiblePrefixCheckpointInterrupted);
+ }})).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
  expect(f.calls).toHaveLength(1);
- await expect(produceNativeVisiblePrefixCheckpoint(f.input)).rejects.toBeInstanceOf(NativeVisiblePrefixCheckpointInterrupted);
+ await expect(produceNativePrefixCheckpoint(f.input)).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
  expect(f.calls).toHaveLength(1);
 });

@@ -85,7 +85,7 @@ export class NativeProgressStream {
       // leaves. Preserve typed nonretryable recovery in response.failed.
       // The exception itself may contain private Native history or tool text.
       emitDiagnosticEvent("chatgpt_tela_work", "native_context_recovery_streamed", {
-        reason_class: recovery.code === "tela_web_retained_context_unproven" ? "retained_context_unproven" : handoffRecovery ? "handoff_proof_unavailable" : projectionRecovery ? "request_projection_unsupported" : recovery.recovery.kind === "continue_on_native"
+        reason_class: recovery.code === "tela_native_context_checkpoint_required" ? "source_exceeds_web_budget" : recovery.code === "tela_web_retained_context_unproven" ? "retained_context_unproven" : handoffRecovery ? "handoff_proof_unavailable" : projectionRecovery ? "request_projection_unsupported" : recovery.recovery.kind === "continue_on_native"
           ? "history_mode_unindexed" : "history_bootstrap_required",
         transport_phase: "sse_after_progress",
       });

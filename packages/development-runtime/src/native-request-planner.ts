@@ -18,6 +18,7 @@ import {
 import {
   CHATGPT_WEB_EFFORTS,
   chatGptWebPhysicalLimits,
+  chatGptWebCheckpointSourceTokenLimit,
   createChatGptContextAttachment,
   estimateChatGptContextAttachmentTransferTokens,
   parseChatGptWebModelId,
@@ -44,6 +45,7 @@ import {
   type NativeContinuitySources,
 } from "./native-context-continuity";
 import { boundedWebCheckpointSource } from "./web-checkpoint-source";
+import { produceNativePrefixCheckpoint, type NativeRequestPrefixSnapshot } from "./native-visible-prefix-checkpoint";
 import type {
   DevelopmentWebTurnPlan,
   DevelopmentWebTurnPlanner,
@@ -962,18 +964,45 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         // A checkpoint producer is a real Web model operation, not a free
         // recursive compressor with unlimited input. Prevent the old
         // "compress -> immediately overflow -> compress again" cycle.
-        if (!bounded) {
+        const stageOwner = options.visiblePrefix;
+        if (!bounded && (!stageOwner || checkpointMedia.length)) {
           emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_rejected", {
             phase: "checkpoint_budget", reason_class: "source_exceeds_web_budget",
             source_estimate: checkpointPhysicalContext.transferTokens,
+            input_budget: chatGptWebCheckpointSourceTokenLimit(browserModel?.effort ?? "medium"),
+            source_segment_count: checkpointPhysicalContext.segments.length,
+            media_count: checkpointMedia.length,
+            staged_checkpoint_available: !!stageOwner,
           });
-          throw new NativeHistoryBootstrapRequired();
+          throw new NativeHistoryBootstrapRequired("source_budget");
         }
         stage("checkpoint_production");
-        const produced = await options.checkpointProducer(Object.freeze({
+        let produced: NativeRequestCheckpointProductionResult;
+        if (stageOwner && checkpointMedia.length === 0) {
+          // Reuse the existing account-owned durable stage ledger, not a second
+          // compressor or an unbounded retry of the same summarization request.
+          // The exact immutable request prefix is the source; no history RPC is needed.
+          const content = JSON.stringify({ type: "tela_native_request_prefix_v1",
+            sourceRevisionId: anchor.revision.id, items: checkpointPhysicalContext.segments });
+          const source: NativeRequestPrefixSnapshot = Object.freeze({
+            kind: "native-request-prefix", threadId, currentTurnId: turn.channel.binding.authority.turnId,
+            digest: createHash("sha256").update(content).digest("hex"), content,
+            sourceItemCount: checkpointPhysicalContext.segments.length,
+            inlineAssets: [], references: checkpointPhysicalContext.segments.flatMap(segment =>
+              segment.type === "revision" ? segment.evidence ?? [] : []), localImageCandidates: [],
+          });
+          const summary = await produceNativePrefixCheckpoint({
+            source, accountNamespace: stageOwner.accountNamespace, journal: stageOwner.journal,
+            producer: options.checkpointProducer, effort: browserModel?.effort ?? "medium",
+            ...(browserModel ? { browserModel } : {}),
+            confirmSource: async () => { preparation?.signal.throwIfAborted(); return source; },
+            ...(preparation ? { preparation, signal: preparation.signal } : {}),
+          });
+          produced = { nativeTaskId: threadId, sourceRevisionId: anchor.revision.id, content: summary };
+        } else produced = await options.checkpointProducer(Object.freeze({
           nativeTaskId: threadId,
           sourceRevisionId: anchor.revision.id,
-          physicalContext: bounded,
+          physicalContext: bounded!,
           ...(browserModel ? { browserModel } : {}),
           ...(checkpointMedia.length ? { media: checkpointMedia } : {}),
         }), preparation);

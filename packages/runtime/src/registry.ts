@@ -142,6 +142,7 @@ export class ActiveTurnRegistry {
     const retainedContext = webRetainedContextFailureReason(failure);
     this.#retiredTurns.set(key, retainedContext ? { retainedContext } : error?.code === "native_history_bootstrap_required"
       ? error.recoveryReason === "checkpoint_interrupted" ? "checkpoint_interrupted"
+        : error.recoveryReason === "source_budget" ? "source_budget"
         : error.recoveryReason === "unindexed_history" ? "unindexed_history" : "source_unavailable"
       : error?.code === "native_projection_unsupported" ? "projection_unsupported"
       : error?.code === "native_web_handoff_unproven" ? error.proofState === "ambiguous" ? "handoff_ambiguous" : "handoff_probable" : true);

@@ -5,6 +5,8 @@ import { join } from "node:path";
 import {
   chatGptWebFamilyKey,
   chatGptWebModelId,
+  chatGptCheckpointInputTokens,
+  chatGptWebCheckpointSourceTokenLimit,
 } from "@chatgpt-tela/chatgpt";
 import {
   NativeToolInventory,
@@ -17,6 +19,8 @@ import {
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
 import { ActiveTurnRegistry } from "@chatgpt-tela/runtime";
 import { FileContextCheckpointCache } from "./context-cache";
+import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
+import { NativePrefixCheckpointInterrupted } from "./native-visible-prefix-checkpoint";
 import { maybeProduceNativeHistoryCheckpoint } from "./native-history-checkpoint";
 import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
 import {
@@ -26,7 +30,7 @@ import {
 import { prepareWebTurnMedia } from "@chatgpt-tela/chatgpt";
 import { projectFreshWebPhysicalContext } from "./provider-projection";
 
-function binding(): NativeTurnBinding {
+function binding(turnId = "turn-1"): NativeTurnBinding {
   const tools = [{
     wireName: "exec_command",
     name: "exec_command",
@@ -37,13 +41,13 @@ function binding(): NativeTurnBinding {
   return {
     claim: {
       threadId: "thread-1",
-      turnId: "turn-1",
+      turnId,
       requestKind: "turn",
       toolObservations: [{ source: "fixture", tools }],
     },
     authority: defineNativeTurnAuthority({
       threadId: "thread-1",
-      turnId: "turn-1",
+      turnId,
       cwd: "/private/workspace",
       workspaceRoots: ["/private/workspace"],
       sandbox: { kind: "read-only", network: "restricted" },
@@ -53,18 +57,18 @@ function binding(): NativeTurnBinding {
     ]),
     canonicalEvidence: {
       threadId: "thread-1",
-      turnId: "turn-1",
+      turnId,
       cwd: "/private/workspace",
       workspaceRoots: ["/private/workspace"],
       sandbox: { kind: "read-only", network: "restricted" },
       proof: "turn-context",
-      environmentSourceTurnId: "turn-1",
+      environmentSourceTurnId: turnId,
     },
   };
 }
 
-function registered() {
-  return new ActiveTurnRegistry().register(binding());
+function registered(turnId?: string) {
+  return new ActiveTurnRegistry().register(binding(turnId));
 }
 
 function scratch(): string {
@@ -1624,3 +1628,79 @@ test("an attributed agent JSON matching the prior answer cannot replace Native f
   expect(next.physicalContext.segments.some(item=>item.content===serialized)).toBe(true);
   next.settle?.({status:"failed"});
 });
+
+test('cold readable request uses bounded durable prefix stages and preserves the newest request exact', async () => {
+  const root = scratch();
+  try {
+    const calls: any[] = [];
+    const options = {
+      budgetTokens: 2_000,
+      checkpointCache: new FileContextCheckpointCache({ directory: join(root, 'cache') }),
+      visiblePrefix: {
+        accountNamespace: 'account-fixture',
+        journal: new FileNativeVisiblePrefixStageJournal({ directory: join(root, 'ledger'), initializationPath: join(root, 'ledger-init') }),
+        async read(): Promise<never> { throw Error('readable request must not page history'); },
+      },
+      checkpointProducer: async (input: any) => {
+        calls.push(input);
+        expect(chatGptCheckpointInputTokens(input.physicalContext)).toBeLessThanOrEqual(chatGptWebCheckpointSourceTokenLimit('medium'));
+        return { nativeTaskId: input.nativeTaskId, sourceRevisionId: input.sourceRevisionId, content: 'Derived prefix summary; no historical tool commands executed.' };
+      },
+    };
+    const current = '현재 요청은 그대로 보존';
+    const request = { model: chatGptWebModelId(chatGptWebFamilyKey('Fixture')), reasoning: { effort: 'medium' },
+      instructions: 'P'.repeat(200_499 * 4), input: [{ role: 'user', content: current }] };
+    const plan = await createNativeRequestDevelopmentWebTurnPlanner(options)(registered(), request);
+    expect(plan.physicalContext.mode).toBe('checkpoint-delta');
+    expect(plan.physicalContext.segments.at(-1)).toMatchObject({ type: 'revision', kind: 'user', content: current });
+    const payloads = calls.map(call => JSON.parse(call.physicalContext.segments[0].content));
+    const fragments = payloads.filter(row => row.mode === 'fragment');
+    expect(fragments.length).toBeGreaterThan(1);
+    let end = 0;
+    for (const fragment of fragments) { expect(fragment.startByte).toBe(end); end = fragment.endByte; }
+    const recovered = fragments.map(fragment => fragment.fragment).join('');
+    expect(Buffer.byteLength(recovered, 'utf8')).toBe(end);
+    const source = JSON.parse(recovered);
+    expect(source.type).toBe('tela_native_request_prefix_v1');
+    expect(source.items.map((item: any) => item.content).join('')).toBe(request.instructions);
+    expect(recovered).not.toContain(current);
+    expect(payloads.some(row => row.mode === 'merge')).toBe(true);
+    const checkpoint = JSON.parse((await options.checkpointCache.list('thread-1'))[0]!.content);
+    expect(checkpoint.coverage).toBe('complete-canonical-request-prefix-through-checkpoint-anchor');
+    const count = calls.length;
+    // Derived cache loss must reuse completed model stages, even in a later Native turn.
+    rmSync(join(root, 'cache'), { recursive: true, force: true });
+    const restored = await createNativeRequestDevelopmentWebTurnPlanner({ ...options,
+      checkpointCache: new FileContextCheckpointCache({ directory: join(root, 'cache') }),
+      visiblePrefix: { ...options.visiblePrefix, journal: new FileNativeVisiblePrefixStageJournal({ directory: join(root, 'ledger'), initializationPath: join(root, 'ledger-init') }) },
+    })(registered('turn-2'), request);
+    expect(restored.physicalContext.mode).toBe('checkpoint-delta');
+    expect(calls).toHaveLength(count);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
+
+test('uncertain readable-prefix model stage is not replayed by a new planner or Native turn', async () => {
+  const root = scratch();
+  try {
+    let calls = 0;
+    const options = {
+      budgetTokens: 2_000,
+      checkpointCache: new FileContextCheckpointCache({ directory: join(root, 'cache') }),
+      visiblePrefix: { accountNamespace: 'account-fixture',
+        journal: new FileNativeVisiblePrefixStageJournal({ directory: join(root, 'ledger'), initializationPath: join(root, 'ledger-init') }),
+        async read(): Promise<never> { throw Error('must not page history'); } },
+      checkpointProducer: async (input: any) => {
+        if (++calls === 2) throw Error('unknown outcome after possible submission');
+        return { nativeTaskId: input.nativeTaskId, sourceRevisionId: input.sourceRevisionId, content: 'First derived fragment summary.' };
+      },
+    };
+    const request = { instructions: 'P'.repeat(200_499 * 4), input: [{ role: 'user', content: 'Exact newest request' }] };
+    await expect(createNativeRequestDevelopmentWebTurnPlanner(options)(registered(), request)).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
+    expect(calls).toBe(2);
+    const planner = createNativeRequestDevelopmentWebTurnPlanner({ ...options,
+      visiblePrefix: { ...options.visiblePrefix, journal: new FileNativeVisiblePrefixStageJournal({ directory: join(root, 'ledger'), initializationPath: join(root, 'ledger-init') }) } });
+    await expect(planner(registered('turn-2'), request)).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
+    expect(calls).toBe(2);
+    expect(await options.checkpointCache.list('thread-1')).toHaveLength(0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 30_000);

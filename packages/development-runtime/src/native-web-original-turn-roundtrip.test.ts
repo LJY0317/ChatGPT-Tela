@@ -240,7 +240,7 @@ test("opaque original Legacy compaction stays nonretryable without Web submissio
         { type: "compaction", encrypted_content: "synthetic-unreadable-marker" },
         { type: "message", role: "user", content: "Continue original opaque task" },
       ], false));
-    expect(response.status).toBe(422);
+    expect(response.status).toBe(400);
     const body = await response.text();
     expect(body).toContain("tela_native_history_indexed_source_required");
     expect(body).toContain("continue_on_native");

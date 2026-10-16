@@ -114,7 +114,7 @@ describe("Native Responses HTTP transport", () => {
   });
 
   test("retries preserve the original history recovery without restoring execution authority", async () => {
-    for (const recoveryReason of ["unindexed_history", "source_unavailable", "checkpoint_interrupted"] as const) {
+    for (const recoveryReason of ["unindexed_history", "source_unavailable", "checkpoint_interrupted", "source_budget"] as const) {
       let reads = 0;
       let launches = 0;
       const turns = new ActiveTurnRegistry();
@@ -127,8 +127,11 @@ describe("Native Responses HTTP transport", () => {
         });
       });
       const first = await handleNativeResponsesHttp(post(body()), gateway);
-      expect(first.status).toBe(422);
+      expect(first.status).toBe(400);
       const expected = await first.json();
+      if (recoveryReason === "source_budget") expect(expected.error).toMatchObject({
+        code: "tela_native_context_checkpoint_required", type: "invalid_request_error", retryable: false,
+      });
       if (recoveryReason === "checkpoint_interrupted") expect(expected.error).toMatchObject({
         code: "tela_native_checkpoint_reconciliation_required", retryable: false,
         recovery: { kind: "reconcile_checkpoint", requires_new_native_turn: true },
@@ -136,7 +139,7 @@ describe("Native Responses HTTP transport", () => {
       expect(turns.size).toBe(0);
       for (let retry = 0; retry < 5; retry++) {
         const response = await handleNativeResponsesHttp(post(body()), gateway);
-        expect(response.status).toBe(422);
+        expect(response.status).toBe(400);
         expect(await response.json()).toEqual(expected);
         expect(turns.size).toBe(0);
       }
@@ -230,7 +233,7 @@ describe("Native Responses HTTP transport", () => {
           });
         });
         const response = await handleNativeResponsesHttp(post(body()), gateway);
-        // A started SSE stream cannot be retroactively changed into HTTP 422.
+        // A started SSE stream cannot be retroactively changed into HTTP 400.
         expect(response.status).toBe(200);
         fail();
         const text = await response.text();
@@ -309,7 +312,7 @@ describe("Native Responses HTTP transport", () => {
       expect(launches).toBe(1);
     } finally { await gateway.close(); }
   });
-  test("oversized cold Native history reports a recoverable 422 instead of pretending to be a connection outage", async () => {
+  test("oversized cold Native history reports a recoverable 400 instead of pretending to be a connection outage", async () => {
     const turns=new ActiveTurnRegistry();
     let starts=0;
     let nativeReads=0;
@@ -324,13 +327,13 @@ describe("Native Responses HTTP transport", () => {
       });
     });
     const first=await handleNativeResponsesHttp(post(body([],false)),gateway);
-    expect(first.status).toBe(422);
+    expect(first.status).toBe(400);
     const result=await first.json() as {error:{
       type:string;code:string;message:string;retryable:boolean;
       recovery?:{kind:string;requires_user_action:boolean;requires_new_native_turn:boolean;original_history_preserved:boolean};
     }};
     expect(result.error).toMatchObject({
-      type:"tela_context_recovery_required",
+      type:"invalid_request_error",
       code:"tela_native_history_checkpoint_required",
     });
     expect(result.error.message).toContain("verified readable checkpoint");
@@ -344,7 +347,7 @@ describe("Native Responses HTTP transport", () => {
     expect(JSON.stringify(result)).not.toContain("Private source contents");
     expect(starts).toBe(1);
     const replay=await handleNativeResponsesHttp(post(body([],false)),gateway);
-    expect(replay.status).toBe(422);
+    expect(replay.status).toBe(400);
     const retry = await replay.json() as {error:{code?:string;retryable?:boolean;message:string}};
     expect(retry.error.code).toBe("tela_native_history_checkpoint_required");
     expect(retry.error.retryable).toBe(false);
@@ -366,7 +369,7 @@ describe("Native Responses HTTP transport", () => {
       });
     });
     const response = await handleNativeResponsesHttp(post(body([], false)), gateway);
-    expect(response.status).toBe(422);
+    expect(response.status).toBe(400);
     const reply = await response.json() as { error: {
       code: string; retryable: boolean; message: string;
       recovery: {
@@ -388,7 +391,7 @@ describe("Native Responses HTTP transport", () => {
     expect(turns.size).toBe(0);
   });
 
-  test("real bounded current-turn binding returns Legacy 422 before any tool, history paging or Web launch", async () => {
+  test("real bounded current-turn binding returns Legacy 400 before any tool, history paging or Web launch", async () => {
     const methods: string[] = [];
     let closes = 0;
     let launches = 0;
@@ -411,7 +414,7 @@ describe("Native Responses HTTP transport", () => {
       throw Error("Web must not be launched on unproved Native authority");
     });
     const response = await handleNativeResponsesHttp(post(body([], false)), gateway);
-    expect(response.status).toBe(422);
+    expect(response.status).toBe(400);
     const reply = await response.json() as { error: {
       code: string; retryable: boolean;
       recovery: { kind: string; original_history_preserved: boolean };

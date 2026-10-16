@@ -22,7 +22,7 @@ import { readNativeHistoryCheckpoint, maybeProduceNativeHistoryCheckpoint } from
 import { manualHandoffText, recentManualHandoff, storeManualHandoff } from "./native-manual-handoff-cache";
 import { recentAutomaticNativeHandoff, storeAutomaticNativeHandoff } from "./native-automatic-handoff-cache";
 import type { NativeRequestCheckpointProducer } from "./native-request-planner";
-import { produceNativeVisiblePrefixCheckpoint, type NativeVisiblePrefixStageJournal } from "./native-visible-prefix-checkpoint";
+import { produceNativePrefixCheckpoint, type NativeVisiblePrefixStageJournal } from "./native-visible-prefix-checkpoint";
 
 /** The public adapter may initially return a bounded source without resolved local media. */
 export type NativeHistorySource = Pick<NativeCompactionHistoryProjection,
@@ -304,7 +304,7 @@ export async function resolveNativeContextContinuity(input: {
       throw new Error("Native visible prefix belongs to a different current turn");
     }
     let producedStages = 0;
-    const checkpoint = await produceNativeVisiblePrefixCheckpoint({
+    const checkpoint = await produceNativePrefixCheckpoint({
       source, accountNamespace: sourceAdapter.accountNamespace,
       journal: sourceAdapter.journal, producer: async (...args) => {
         producedStages++;

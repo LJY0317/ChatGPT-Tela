@@ -147,13 +147,14 @@ export async function handleNativeResponsesHttp(
     const historyRecovery = nativeHistoryRecovery(error);
     if (historyRecovery) {
       // Keep the HTTP and already-started SSE recovery decisions identical;
-      // neither transport may repeat a private Native exception.
+      // neither transport may repeat a private Native exception. Native retries
+      // UnexpectedStatus (including 422) despite retryable:false; InvalidRequest
+      // is terminal and leaves the same typed user recovery available.
       return Response.json({
         error: {
-          type: "tela_context_recovery_required",
           ...historyRecovery,
         },
-      }, { status: 422 });
+      }, { status: 400 });
     }
     if (record(error)?.code === "tela_native_turn_already_retired") {
       // Native retries UnexpectedStatus (409) but treats InvalidRequest (400) as terminal.

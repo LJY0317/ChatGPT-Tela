@@ -39,6 +39,12 @@ test("proof stages accept only classified preparation stages", () => {
     expect(event("web_admission_failed", { proof_stage: stage })).not.toHaveProperty("proof_stage");
   }
 });
+test("checkpoint source kinds remain classified and content-free in incident records", () => {
+  for (const kind of ["native-visible-prefix", "native-request-prefix"]) {
+    expect(event("native_visible_prefix_checkpoint_started", { source_kind: kind }).source_kind).toBe(kind);
+  }
+  expect(event("native_visible_prefix_checkpoint_started", { source_kind: "private_source_text" })).not.toHaveProperty("source_kind");
+});
 test("planner substages survive canonical filtering and reject arbitrary strings", async () => {
   const root = fixture(), file = join(root, "events.jsonl");
   process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;

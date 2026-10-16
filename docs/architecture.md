@@ -568,6 +568,17 @@ dedicated checkpoint result bound to the same Native task, Web operation epoch, 
 only then may the derived cache persist it. An ordinary assistant reply can therefore never populate
 the checkpoint cache merely because it contains summary-like prose.
 
+Readable canonical request prefixes and public visible-history prefixes share the same bounded,
+account-scoped checkpoint stage engine. Each UTF-8 fragment has complete ordered byte coverage;
+ordered merges reduce the source within the real serialized Web input budget. The immutable request
+prefix ends at the exact checkpoint anchor, so the newest user request stays verbatim. Completed
+stage receipts survive disposable-cache loss; an uncertain submitted stage requires reconciliation
+and is never replayed. Prefixes with inline media retain the bounded media-capable single-call path;
+oversized media sources require an explicit compatible checkpoint rather than losing the media.
+HTTP recovery uses terminal invalid-request status400, including after retirement; retryable:false
+on status422 alone does not prevent the Native client from reconnecting. Started SSE streams retain
+the same typed invalid-request recovery inside response.failed.
+
 The development composition deliberately has no implicit ChatGPT checkpoint provider. A caller must
 supply that provider separately from the ordinary conversation provider because the current ChatGPT
 DOM adapter cannot yet prove that a summarization response used no ChatGPT-native tools. With no

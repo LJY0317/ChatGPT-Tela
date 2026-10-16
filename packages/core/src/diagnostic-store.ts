@@ -36,6 +36,10 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
       if (typeof field === "string" && SAFE_PROOF_STAGES.has(field)) safe[key] = field;
       continue;
     }
+    if (key === "source_kind") {
+      if (field === "native-visible-prefix" || field === "native-request-prefix") safe[key] = field;
+      continue;
+    }
     if (key === "planner_stage") {
       if (isWebContextPlannerStage(field)) safe[key] = field;
       continue;
