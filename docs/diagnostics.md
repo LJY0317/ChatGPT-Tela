@@ -591,6 +591,7 @@ proof of absence of a server failure. Diagnostics preserve status, headers, byte
 cancellation, and original read errors; they neither recover nor retry the user's task.
 
 | Native visible-prefix checkpoint | `native_visible_prefix_checkpoint_started`, `native_visible_prefix_stage_settled`, `native_visible_prefix_stage_rejected` | Complete indexed visible history can bootstrap Web without an optional UI compaction marker. Records bounded source bytes/item count, fragment/stage counts, fixed fragment/merge phase and completed/reused/uncertain outcome. No historical text or source identifiers. The account-scoped execution journal owns submitted-stage receipts; disposable caches do not authorize reuse or retries. An uncertain submission returns `tela_native_checkpoint_reconciliation_required` with `retryable=false`; subsequent retired-turn retries preserve that recovery decision. |
+| Checkpoint resource cost | `checkpoint_transfer_planned`, `native_checkpoint_efficiency_settled` | Tool-free summary transport reports source bytes, local transfer estimates, one planned model call and zero separate acknowledgement calls. Successful prefix preparation reports stage attempts and completed-stage reuse; interrupted work retains the existing per-stage evidence. See [efficiency contract](token-efficiency.md). These counters do not measure provider billing or semantic comprehension. |
 
 
 ### Unsupported Native projection and terminal retry semantics

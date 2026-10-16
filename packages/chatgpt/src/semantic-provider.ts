@@ -13,6 +13,7 @@ import { ChatGptApprovalObservation, approvalObservationSummary, type ApprovalOb
 import {
   contextAttachmentReference,
   formatChatGptContextAttachmentStage,
+  formatInertSourceAttachment,
   type ChatGptContextAttachmentReference,
 } from "./context-attachment";
 import { prepareWebTurnMedia, type WebTurnMedia } from "./turn-media";
@@ -1163,6 +1164,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     request: WebTurnRequest,
     signal?: AbortSignal,
   ): Promise<SemanticObservation<WebTurnHandle>> {
+    if (request.inertSourceAttachment && (request.toolBridge || request.contextAttachment || request.physicalContext.mode === "retained-delta")) {
+      throw Error("inert source requires an isolated tool-free non-preloaded submission");
+    }
+    const sourceUpload = request.inertSourceAttachment
+      ? formatInertSourceAttachment(request.inertSourceAttachment.attachment, request.inertSourceAttachment.receipt) : undefined;
     const driver = driverFor(surface);
     const hydrated = await waitForHydratedComposer(driver, signal);
     const settled = await waitForSettledEmptyComposer(driver, hydrated.snapshot, signal);
@@ -1212,6 +1218,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     let baselineTurnKeys: Set<string>;
     let preSubmitUserLineageKeys: ReadonlySet<string>;
     const upload = prepareWebTurnMedia(request.physicalContext, request.media ?? []);
+    const files = [...(sourceUpload ? [sourceUpload.file] : []), ...upload.files];
+    if (new Set(files.map(file => file.name)).size !== files.length) throw Error("source and media attachments have duplicate names");
     const text = formatWebPhysicalContext(request.physicalContext, request.toolBridge, request.contextAttachment, request.media);
     emitDiagnosticEvent("chatgpt_tela_work", "browser_message_prepared", {
       context_mode: request.physicalContext.mode,
@@ -1305,14 +1313,14 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           "send control identity changed after exact composer readback",
         );
       }
-      if (upload.files.length) {
+      if (files.length) {
         if (!driver.attachFiles) throw new Error("ChatGPT surface lacks a verified media upload adapter");
         emitDiagnosticEvent("chatgpt_tela_work", "web_media_upload_started", {
-          file_count: upload.statistics.uniqueFiles,
+          file_count: files.length,
           evidence_count: upload.statistics.logicalReferences,
-          total_bytes: upload.statistics.uniqueBytes,
+          total_bytes: files.reduce((sum, file) => sum + file.bytes.byteLength, 0),
         });
-        await driver.attachFiles(composer.key, upload.files, signal);
+        await driver.attachFiles(composer.key, files, signal);
         filled = await driver.observe(signal);
         const verified = filled.composers.find(c => c.key === composer.key);
         const send = visibleSends(filled, composer.key);
@@ -1325,7 +1333,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           throw new Error("ChatGPT Web media upload lost exact composer, connector, or send ownership");
         }
         emitDiagnosticEvent("chatgpt_tela_work", "web_media_composer_accepted", {
-          file_count: upload.statistics.uniqueFiles,
+          file_count: files.length,
           evidence_count: upload.statistics.logicalReferences,
           // Composer observation is not a server receipt or proof of content understanding.
           proof_scope: "composer_attachment_surface_only",

@@ -1128,7 +1128,10 @@ describe("Native request development Web planner", () => {
 
   test('retained Web context continues for twenty bounded followups without repacking old revisions',async()=>{
     const model=chatGptWebModelId(chatGptWebFamilyKey('Observed Family'));
-    const planner=createNativeRequestDevelopmentWebTurnPlanner();
+    let preparationCalls=0;
+    const planner=createNativeRequestDevelopmentWebTurnPlanner({checkpointProducer:async()=>{
+      preparationCalls++;throw Error('retained continuation must not prepare context through a model');
+    }});
     const input:Array<{type:string;role:string;content:string}>=[
       {type:'message',role:'user',content:'Initial verified context'},
     ];
@@ -1148,6 +1151,7 @@ describe("Native request development Web planner", () => {
       receipt.settle?.({status:'completed',documentGeneration:1,
         surfaceLeaseId:'one-retained-physical-page',answer:`Completed step ${i}`});
     }
+    expect(preparationCalls).toBe(0);
   });
 
   test('a cold oversized prefix cannot be sent to checkpoint producer as an unbounded Web prompt',async()=>{

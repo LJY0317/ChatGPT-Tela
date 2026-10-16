@@ -2331,3 +2331,43 @@ test("failed assistant supersedes a cached post-tool final even with a pending a
   expect(driver.approvalCalls).toBe(0);
  }finally{await surface.host.close();}
 });
+
+test("inert checkpoint source uploads once and sends once, carrying its receipt only inside the file", async () => {
+  const driver = new FixtureDriver(fixture("ready-new-chat"));
+  const surface = await leaseFor(driver);
+  const payload = request();
+  const attachment = createChatGptContextAttachment(payload.physicalContext);
+  const receipt = `ctxr_${"a".repeat(32)}`;
+  try {
+    const pending = new ChatGptSemanticProvider().submitTurn(surface.lease, {
+      ...payload, inertSourceAttachment: { attachment, receipt },
+    });
+    while (driver.activated.length === 0) await Promise.resolve();
+    driver.queued.push(acceptedSnapshot(driver));
+    expect((await pending).state).toBe("proven");
+    expect(driver.attachedFiles).toEqual([attachment.name]);
+    expect(driver.activated).toHaveLength(1);
+    expect(driver.contextAcknowledgement).toBe(`TELA_CONTEXT_ACK ${receipt}`);
+  } finally { await surface.host.close(); }
+});
+
+test("inert checkpoint source rejects tool authority, preloads, retained deltas and corrupt files before browser mutation", async () => {
+  const payload = request();
+  const attachment = createChatGptContextAttachment(payload.physicalContext);
+  const source = { attachment, receipt: `ctxr_${"a".repeat(32)}` };
+  const cases: WebTurnRequest[] = [
+    { ...toolRequest(), inertSourceAttachment: source },
+    { ...payload, inertSourceAttachment: source, contextAttachment: attachment },
+    { ...payload, inertSourceAttachment: source, physicalContext: { ...payload.physicalContext, mode: "retained-delta" } },
+    { ...payload, inertSourceAttachment: { ...source, attachment: { ...attachment, sha256: "0".repeat(64) } } },
+  ];
+  for (const candidate of cases) {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const surface = await leaseFor(driver);
+    try {
+      await expect(new ChatGptSemanticProvider().submitTurn(surface.lease, candidate)).rejects.toThrow();
+      expect(driver.attachedFiles).toHaveLength(0);
+      expect(driver.activated).toHaveLength(0);
+    } finally { await surface.host.close(); }
+  }
+});

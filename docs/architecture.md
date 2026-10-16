@@ -1,5 +1,10 @@
 # Architecture
 
+Model calls and repeated context transfer are explicit resource costs. All execution, context,
+delegation and monitoring changes follow the [token-efficiency contract](token-efficiency.md):
+reuse proven state first, perform mechanical checks locally, and guard model-call budgets with
+regressions while preserving context fidelity and authority.
+
 ChatGPT Tela is designed around two premises:
 
 1. Chat/workspace execution and Codex/Web execution are separate services and must remain separate failure

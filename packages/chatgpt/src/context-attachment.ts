@@ -91,6 +91,17 @@ function fileText(attachment: ChatGptContextAttachment, acknowledgement: string)
   ].join("\n");
 }
 
+/** Same memory-backed source transport, without a separate acknowledgement turn. */
+export function formatInertSourceAttachment(attachment: ChatGptContextAttachment, receipt: string): ChatGptContextAttachmentStage {
+  if (!attachment || typeof attachment.contextJson !== "string"
+    || Buffer.byteLength(attachment.contextJson, "utf8") > CHATGPT_CONTEXT_ATTACHMENT_MAX_BYTES
+    || createHash("sha256").update(attachment.contextJson).digest("hex") !== attachment.sha256
+    || attachment.name !== `tela-context-v1--${attachment.sha256.slice(0,16)}.txt`) throw Error("inert source attachment identity is invalid");
+  const parsed = JSON.parse(attachment.contextJson);
+  if (parsed?.type !== "chatgpt_tela_context_file" || parsed.version !== 1 || !Array.isArray(parsed.segments)) throw Error("inert source attachment schema is invalid");
+  return formatChatGptContextAttachmentStage(attachment, receipt);
+}
+
 /**
  * Build one inert preload message. The random receipt appears only at the end of the file, never
  * in the visible prompt. Exact acknowledgement therefore proves file access/integrity, not semantic

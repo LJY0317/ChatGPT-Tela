@@ -26,6 +26,7 @@ function fixture(change: (value: any) => any = value => value,
   complete: (value: {answer:string;plainAnswer:string}) => {answer:string;plainAnswer?:string} = value => value) {
   let submitted: WebTurnRequest | undefined;
   let preloads = 0;
+  let submits = 0;
   const provider = new ChatGptContextCheckpointProvider(() => ({
     async observeCapabilities() { return {state:'proven',value:{observed:new Set(['composer'])},evidence:[]}; },
     async preloadContextAttachment(_surface, request) {
@@ -34,19 +35,20 @@ function fixture(change: (value: any) => any = value => value,
         attachmentName:request.attachment.name,attachmentSha256:request.attachment.sha256,providerOperationId:'preload'},evidence:[]};
     },
     async submitTurn(_surface, request) {
-      submitted = request;
+      submits++; submitted = request;
       return {state:'proven',value:{nativeTaskId:request.nativeTaskId,nativeTurnId:request.nativeTurnId,
         webEpochId:request.webEpochId,providerTurnId:'accepted-op'},evidence:[]};
     },
     async waitForTurnEvent(_surface, handle) {
-      const data = submitted!.physicalContext.segments[1]!.content;
+      const data = submitted!.inertSourceAttachment?.attachment.contextJson ?? submitted!.physicalContext.segments[1]!.content;
       const plainAnswer = JSON.stringify(change({type:'tela_context_checkpoint_v1',operation:handle.nativeTurnId,
-        sourceDigest:createHash('sha256').update(data).digest('hex'),summary:'Keep abc; result observed; action pending.'}));
+        sourceDigest:createHash('sha256').update(data).digest('hex'),
+        ...(submitted!.inertSourceAttachment ? {receipt:`TELA_CONTEXT_ACK ${submitted!.inertSourceAttachment.receipt}`} : {}),summary:'Keep abc; result observed; action pending.'}));
       return {state:'proven',value:{kind:'completed',providerTurnId:handle.providerTurnId,
         ...complete({answer:presentation(plainAnswer),plainAnswer})},evidence:[]};
     },
   }));
-  return {provider, submitted:()=>submitted!, preloads:()=>preloads};
+  return {provider, submitted:()=>submitted!, preloads:()=>preloads, submits:()=>submits};
 }
 test('dedicated summary has no tool bridge and keeps the complete source inert', async () => {
   const f = fixture();
@@ -84,14 +86,28 @@ test('foreign source, empty and oversized summaries are rejected rather than cac
     await expect(fixture(change).provider.createContextCheckpoint(surface,source)).rejects.toThrow('does not prove');
   }
 });
-test('large prefixes use receipt-verified attachment before the isolated summary request', async () => {
+test('large prefixes use one source-and-receipt summary submission with no preload response', async () => {
   const large: WebContextCheckpointRequest = {...source,physicalContext:{...source.physicalContext,
     segments:[source.physicalContext.segments[0]!,{type:'revision',revisionId:'r2',kind:'tool-result',content:'x'.repeat(210000)}]}};
   const f = fixture();
   await f.provider.createContextCheckpoint(surface,large);
-  expect(f.preloads()).toBe(1);
-  expect(f.submitted().contextAttachment?.sha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(f.preloads()).toBe(0); expect(f.submits()).toBe(1);
+  expect(f.submitted().contextAttachment).toBeUndefined();
+  expect(f.submitted().inertSourceAttachment?.attachment.sha256).toMatch(/^[a-f0-9]{64}$/);
   expect(f.submitted().physicalContext.activeRequestRevisionId).toBe(f.submitted().physicalContext.headRevisionId);
+});
+
+test('file-only receipt is required in the SAME summary; no missing receipt retry or ACK fallback', async () => {
+  const large = {...source, physicalContext: {...source.physicalContext, segments: [source.physicalContext.segments[0]!,
+    {type:'revision' as const,revisionId:'r2',kind:'assistant' as const,content:'x'.repeat(250000)}]}};
+  for (const change of [(v:any)=>({...v,receipt:'foreign'}),(v:any)=>{delete v.receipt;return v;}]) {
+    const f=fixture(change);
+    await expect(f.provider.createContextCheckpoint(surface,large)).rejects.toThrow('does not prove');
+    expect(f.submits()).toBe(1); expect(f.preloads()).toBe(0);
+  }
+  const f=fixture(); await f.provider.createContextCheckpoint(surface,large);
+  expect(JSON.stringify(f.submitted().physicalContext)).not.toContain(f.submitted().inertSourceAttachment!.receipt);
+  expect(f.submitted().inertSourceAttachment!.attachment.contextJson).toBe(serializeChatGptContextAttachment(large.physicalContext));
 });
 
 test('checkpoint source rebinds media references to the inert summary request without tool authority',async()=>{
@@ -157,7 +173,7 @@ test('checkpoint forwards only proven public progress, preserving the source/res
   expect(f.submitted().toolBridge).toBeUndefined();
 });
 
-test('checkpoint budget measurement equals effective serialized UTF8 input including escaped source and repeated policies',async()=>{
+test('inline checkpoint budget measures serialized UTF8 including escaped source and policy',async()=>{
  const f=fixture();
  const request={...source,physicalContext:{...source.physicalContext,segments:source.physicalContext.segments.map(segment=>({
   ...segment,content:'한글😀\\\"\n'.repeat(1000),

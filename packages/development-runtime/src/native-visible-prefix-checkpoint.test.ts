@@ -169,7 +169,7 @@ test('journal receipt binding is strict and account namespaces cannot reuse subm
 });
 
 test('large escaped summaries require bounded multi-level hierarchical merges with strict coverage reduction',async()=>{
- const f=fixture('x'.repeat(1_400_000));
+ const f=fixture('x'.repeat(8_000_000));
  const producer=f.input.producer;
  const result=await produceNativePrefixCheckpoint({...f.input,producer:async request=>{
   await producer(request);

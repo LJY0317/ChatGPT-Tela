@@ -74,6 +74,9 @@ export interface WebTurnRequest {
   readonly webEpochId: string;
   readonly physicalContext: WebPhysicalContext;
   readonly contextAttachment?: ChatGptContextAttachmentReference;
+  /** One tool-free response consumes this inert source AND returns its file receipt.
+   * It cannot be combined with a preloaded reference, retained delta or tool bridge. */
+  readonly inertSourceAttachment?: { readonly attachment: ChatGptContextAttachment; readonly receipt: string };
   readonly media?: readonly import("./turn-media").WebTurnMedia[];
   readonly toolBridge?: WebToolBridgeContext;
 }
