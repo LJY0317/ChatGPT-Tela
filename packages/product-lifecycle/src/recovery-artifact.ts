@@ -79,7 +79,20 @@ function cached(plan: PackagedUpgradePlan, slot: string, keys: PackagedPayloadTr
 /** Read-only planning never creates a cache or trusts a cached key as release authority. */
 export function reviewPackagedRecoveryArtifact(plan: PackagedUpgradePlan, keys: PackagedPayloadTrustedKeys,
   supplied?: PackagedUpgradeRecoveryArtifact): Review {
-  if (supplied) { assertSource(plan, supplied); return { ...supplied, origin: "supplied" }; }
+  if (supplied) {
+    assertSource(plan, supplied);
+    // Verify ALL currently retained historical slots under explicitly provided
+    // external trust even when the new source is separately supplied. Otherwise
+    // dry-run can approve a migration which fails while retiring older slots.
+    if (existsSync(root(plan))) {
+      assertRoot(plan);
+      for (const slot of SLOTS) {
+        if (slot === "pending" && incompletePending(plan)) continue;
+        cached(plan, slot, supplied.trustedKeys);
+      }
+    }
+    return { ...supplied, origin: "supplied" };
+  }
   if (existsSync(root(plan))) {
     assertRoot(plan);
     for (const slot of SLOTS) {

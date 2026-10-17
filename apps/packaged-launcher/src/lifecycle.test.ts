@@ -85,7 +85,7 @@ describe("packaged lifecycle CLI", () => {
     expect(() => parsePackagedLifecycleCommand(["cancel-upgrade", "--dry-run", "--trusted-public-key", "release.pem"]))
       .toThrow("requires --payload");
     expect(parsePackagedLifecycleCommand(["cancel-upgrade", "--dry-run", "--trusted-public-key", "release.pem", "--payload", "source-package"]))
-      .toEqual({ command: "cancel-upgrade", mode: "dry-run", trustedPublicKeyPath: "release.pem", payloadSourcePath: "source-package" });
+      .toEqual({ command: "cancel-upgrade", mode: "dry-run", trustedPublicKeyPath: "release.pem", payloadSourcePath: "source-package", retainedRecoveryKeys: [] });
   });
 
   test("dry-runs then applies a signed install without trusting any key stored inside the payload", async () => {
@@ -140,4 +140,11 @@ test('upgrade recovery flags form one explicit signed-source contract',()=>{
  expect(()=>parsePackagedLifecycleCommand(flags.slice(0,-2))).toThrow('requires both');
  expect(()=>parsePackagedLifecycleCommand(['repair',...flags.slice(1)])).toThrow('requires both');
  expect(()=>parsePackagedLifecycleCommand([...flags,'--recovery-payload','other'])).toThrow('duplicate');
+ const historical=[...flags,'--retained-recovery-key','old-source','old-source.pem','--retained-recovery-key','older-source','older-source.pem'];
+ expect(parsePackagedLifecycleCommand(historical).retainedRecoveryKeys).toEqual([
+  {keyId:'old-source',path:'old-source.pem'},{keyId:'older-source',path:'older-source.pem'},
+ ]);
+ expect(()=>parsePackagedLifecycleCommand([...historical,'--retained-recovery-key','old-source','other.pem'])).toThrow('duplicated');
+ expect(()=>parsePackagedLifecycleCommand([...flags,'--retained-recovery-key','../unsafe','bad.pem'])).toThrow('invalid');
+ expect(()=>parsePackagedLifecycleCommand(['install','--dry-run','--trusted-public-key','release.pem','--retained-recovery-key','older','older.pem'])).toThrow('require an explicit');
 });

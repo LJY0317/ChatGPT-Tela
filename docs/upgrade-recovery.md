@@ -6,6 +6,14 @@ creates a clean signed snapshot in product-owned storage, then uses the same
 recovering transition as an explicit operator request. Dry-run reports the source
 origin without creating files. `--recovery-payload` and `--recovery-public-key`
 remain available for an explicitly verified source/key (for example key rotation).
+When the existing bounded `source` and `previous` recovery slots were signed by
+*other* historical keys, supply each trusted out-of-band pair as
+`--retained-recovery-key <key-id> <public-key.pem>` alongside the explicit
+signed current source. This is not trust-on-first-use: the caller chooses the
+external keys, and the shared recovery verifier validates every retained slot
+and its receipt against that exact key before *dry-run* succeeds. Unmatched,
+damaged, unknown, duplicated, or missing authority blocks both dry-run and apply;
+never delete a recovery slot to make a different signature pass.
 An unsigned source or source lacking the signed cancellation protocol is refused
 before shutdown; the client never silently falls back to an unprotected update.
 

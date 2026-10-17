@@ -35,6 +35,8 @@ export interface ParsedPackagedLifecycleCommand {
   readonly payloadSourcePath?: string;
   readonly recoveryPayloadPath?: string;
   readonly recoveryPublicKeyPath?: string;
+  /** Caller-supplied out-of-band public keys for already-owned historical recovery slots. */
+  readonly retainedRecoveryKeys: readonly { readonly keyId: string; readonly path: string }[];
 }
 
 export interface PackagedLifecycleOptions {
@@ -62,6 +64,7 @@ export function parsePackagedLifecycleCommand(arguments_: readonly string[]): Pa
   let trustedPublicKeyPath: string | undefined;
   let payloadSourcePath: string | undefined;
   let recoveryPayloadPath: string | undefined, recoveryPublicKeyPath: string | undefined;
+  const retainedRecoveryKeys: { keyId: string; path: string }[] = [];
   for (let index = 1; index < arguments_.length; index += 1) {
     const item = arguments_[index]!;
     if (item === "--dry-run" || item === "--apply") {
@@ -93,6 +96,16 @@ export function parsePackagedLifecycleCommand(arguments_: readonly string[]): Pa
       }
       index += 1; continue;
     }
+    if (item === "--retained-recovery-key") {
+      const keyId = oneValue(arguments_, index, item);
+      const path = oneValue(arguments_, index + 1, item);
+      if (!/^[a-zA-Z0-9._-]{1,128}$/.test(keyId)
+        || retainedRecoveryKeys.some(entry => entry.keyId === keyId)) {
+        throw new Error("retained recovery key id is invalid or duplicated");
+      }
+      retainedRecoveryKeys.push({ keyId, path });
+      index += 2; continue;
+    }
     throw new Error(`unknown packaged lifecycle argument: ${item}`);
   }
   if (!mode) throw new Error("choose exactly one of --dry-run or --apply");
@@ -100,10 +113,14 @@ export function parsePackagedLifecycleCommand(arguments_: readonly string[]): Pa
   if (command === "cancel-upgrade" && !payloadSourcePath) throw new Error("cancel-upgrade requires --payload for the signed source package");
   if (Boolean(recoveryPayloadPath) !== Boolean(recoveryPublicKeyPath)
     || (recoveryPayloadPath && command !== "upgrade")) throw new Error("upgrade recovery requires both signed source payload and public key");
+  if (retainedRecoveryKeys.length && (command !== "upgrade" || !recoveryPayloadPath)) {
+    throw new Error("historical recovery keys require an explicit signed upgrade recovery source");
+  }
   return Object.freeze({
     command,
     mode,
     trustedPublicKeyPath,
+    retainedRecoveryKeys: Object.freeze(retainedRecoveryKeys.map(item => Object.freeze(item))),
     ...(payloadSourcePath ? { payloadSourcePath } : {}),
     ...(recoveryPayloadPath ? { recoveryPayloadPath, recoveryPublicKeyPath: recoveryPublicKeyPath! } : {}),
   });
@@ -237,7 +254,20 @@ export async function runPackagedLifecycleCommand(
   });
   const recovery = parsed.recoveryPayloadPath ? {
     sourcePayloadPath: realDirectory(parsed.recoveryPayloadPath, "signed recovery payload"),
-    trustedKeys: trustedKeys(parsed.recoveryPayloadPath, parsed.recoveryPublicKeyPath!),
+    // These are explicitly out-of-band caller keys, never untrusted cached
+    // recovery-slot keys. The existing recovery journal verifies every older
+    // slot against the caller's corresponding key before retirement.
+    trustedKeys: (() => {
+      const sourceKeys = trustedKeys(parsed.recoveryPayloadPath!, parsed.recoveryPublicKeyPath!);
+      for (const item of parsed.retainedRecoveryKeys) {
+        if (Object.hasOwn(sourceKeys, item.keyId)) throw Error("retained key duplicates current recovery source authority");
+      }
+      return {
+        ...sourceKeys,
+        ...Object.fromEntries(parsed.retainedRecoveryKeys.map(({ keyId, path }) =>
+          [keyId, readFileSync(realRegularFile(path, "trusted historical recovery public key"))])),
+      } satisfies PackagedPayloadTrustedKeys;
+    })(),
   } : undefined;
   if (recovery) assertPackagedUpgradeRecoveryArtifact(plan, recovery);
   const recoveryKeys = recovery?.trustedKeys ?? keys;

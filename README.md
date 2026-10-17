@@ -447,6 +447,14 @@ out-of-band, and both planning and apply re-verify the target package before mut
 ./chatgpt-tela upgrade --dry-run --trusted-public-key ./chatgpt-tela-release.pem
 ./chatgpt-tela upgrade --apply   --trusted-public-key ./chatgpt-tela-release.pem
 
+# When retained source/previous rollback slots were signed under other
+# explicitly trusted historical publisher keys, give the exact signed source
+# plus one out-of-band key per retained key ID. Never trust a cached key merely
+# because it is inside the package's recovery directory.
+# ./chatgpt-tela upgrade --dry-run --trusted-public-key ./new-release.pem \
+#   --recovery-payload ./verified-installed-source --recovery-public-key ./source-key.pem \
+#   --retained-recovery-key old-release-id ./old-release.pem
+
 # Run uninstall apply from a separately extracted package copy, not the installed binary root:
 ./chatgpt-tela uninstall --dry-run
 ./chatgpt-tela uninstall --apply
