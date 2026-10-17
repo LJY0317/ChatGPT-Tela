@@ -182,6 +182,8 @@ export function inspectNativeThreadHistoricalEvidence(input: {
   const pending = events.filter(event => event.stage === "approval_wait_transition"
     && event.phase === "pending").at(-1);
   const lastApproval = last("approval_wait_transition");
+  const expiry = last("approval_wait_expired");
+  const stop = last("web_owned_stop");
   const lastManualReview = last("approval_manual_review_required");
   const lastNativeFailure = events.filter(event =>
     ["native_execution_failed", "web_turn_identity_rejected"].includes(event.stage)).at(-1);
@@ -266,6 +268,17 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       ? { at: lastNativeFailure.ts, stage: lastNativeFailure.stage,
         ...(typeof lastNativeFailure.reason_class === "string" ? { reasonClass: lastNativeFailure.reason_class } : {}) }
       : null,
+    approvalTerminationEvidence: expiry || stop ? {
+      expiryObservedAt: expiry?.ts ?? null,
+      browserStopObservedAt: stop?.ts ?? null,
+      browserStopStatus: stop && ["stopped", "stop_sent", "unavailable", "ownership_changed", "unconfirmed"].includes(String(stop.status))
+        ? stop.status : "not_verified",
+      // UI generation controls disappearing does not settle remote tool effects.
+      remoteOutcome: "uncertain" as const,
+      nativeCompletionProven: false as const,
+      canReplayAcceptedRequest: false as const,
+      proofLevel: "historical-thread-scoped-events-only" as const,
+    } : null,
     ownershipFailureEvidence,
     recentEvents: events.slice(-MAX_TIMELINE).map(event => ({
       at: event.ts, stage: event.stage,

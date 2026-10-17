@@ -94,6 +94,23 @@ describe("one read-only conversation inspection by exact Native ID", () => {
         .toThrow("exact Native UUID");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+  test("approval expiry and browser Stop evidence never fabricate Native completion or remote success", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tela-approval-termination-evidence-"));
+    const path = join(dir, "events.jsonl");
+    const scope_fingerprint = diagnosticFingerprint(THREAD);
+    writeFileSync(path, [
+      {ts:"2026-10-17T08:09:00Z",event:"chatgpt_tela_work",stage:"approval_wait_transition",scope_fingerprint,phase:"pending"},
+      {ts:"2026-10-17T08:19:00Z",event:"chatgpt_tela_work",stage:"approval_wait_expired",scope_fingerprint,elapsed_ms:600000},
+      {ts:"2026-10-17T08:19:01Z",event:"chatgpt_tela_work",stage:"web_owned_stop",scope_fingerprint,status:"stop_sent"},
+    ].map(row=>JSON.stringify(row)).join("\n"));
+    try {
+      const result = inspectNativeThreadHistoricalEvidence({threadId:THREAD,diagnosticPaths:[path],nowMs:NOW});
+      expect(result.approval.nativeEndedAfterPending).toBe(false);
+      expect(result.approvalTerminationEvidence).toMatchObject({browserStopStatus:"stop_sent",remoteOutcome:"uncertain",
+        nativeCompletionProven:false,canReplayAcceptedRequest:false});
+      expect(result.lastNativeOutcome).toBeNull();
+    } finally { rmSync(dir,{recursive:true,force:true}); }
+  });
   test("a renderer pause or manual-review log from another time/turn is never presented as a cause", () => {
     const dir = mkdtempSync(join(tmpdir(), "tela-thread-evidence-uncertainty-"));
     const path = join(dir, "events.jsonl");
