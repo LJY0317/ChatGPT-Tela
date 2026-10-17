@@ -7,11 +7,13 @@ import {
 import { nativeCompactionSummaryResponse } from "@chatgpt-tela/responses";
 import {
   chatGptCheckpointInputTokens, chatGptWebCheckpointSourceTokenLimit, type ChatGptWebEffort, type WebPhysicalContext, type WebTurnMedia } from "@chatgpt-tela/chatgpt";
-import { bindNativePhysicalEvidence, nativeRequestContentSource, nativeRequestBrowserModelRoute, projectNativeRequestContext } from "./native-request-planner";
+import { bindNativePhysicalEvidence, nativeRequestContentSource, nativeRequestBrowserModelRoute, nativeRequestPrefixSnapshot, projectNativeRequestContext, type NativeRequestCheckpointProducer, type NativeRequestCheckpointProductionRequest } from "./native-request-planner";
 import {
   nativeOpaqueCompaction, resolveNativeContextContinuity, type NativeContinuitySources,
 } from "./native-context-continuity";
 import { boundedWebCheckpointSource } from "./web-checkpoint-source";
+import { CheckpointPreparationBudget, CheckpointPreparationBudgetExceeded } from "./checkpoint-preparation-budget";
+import { produceNativePrefixCheckpoint } from "./native-visible-prefix-checkpoint";
 
 type RecordValue = Record<string, unknown>;
 function record(value: unknown): RecordValue | undefined {
@@ -21,7 +23,7 @@ function record(value: unknown): RecordValue | undefined {
 type CompactionPhase = "route" | "binding" | "identity" | "admission" | "watch" | "continuity"
   | "projection" | "source_fit" | "summary" | "summary_validation" | "release" | "delivery";
 type CompactionReason = NativeBindingReason | "stage_failed" | "source_changed" | "capacity_exhausted"
-  | "readable_checkpoint_required" | "owner_cancelled" | "invalid_summary";
+  | "readable_checkpoint_required" | "preparation_budget_exceeded" | "owner_cancelled" | "invalid_summary";
 class CompactionFailure extends Error {
   constructor(readonly phase: CompactionPhase, readonly reason: CompactionReason, cause?: unknown) {
     super("Native local compaction failed", { cause });
@@ -29,7 +31,8 @@ class CompactionFailure extends Error {
 }
 function failure(error: unknown, phase: CompactionPhase): CompactionFailure {
   if (error instanceof CompactionFailure) return error;
-  return new CompactionFailure(phase, error instanceof NativeHistoryBootstrapRequired
+  return new CompactionFailure(phase, error instanceof CheckpointPreparationBudgetExceeded
+    ? "preparation_budget_exceeded" : error instanceof NativeHistoryBootstrapRequired
     ? "readable_checkpoint_required" : error instanceof NativeBindingError ? error.reason : "stage_failed", error);
 }
 /** Canonical JSON source, independent of key ordering and delivery/correlation metadata. */
@@ -50,6 +53,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
     readonly physicalContext: WebPhysicalContext;
     readonly media?: readonly WebTurnMedia[];
     readonly browserModel: { readonly familyKey: string; readonly effort: ChatGptWebEffort };
+    readonly persistResult?: NativeRequestCheckpointProductionRequest["persistResult"];
   }) => Promise<string>;
   readonly maxRetainedOperations?: number;
 }) {
@@ -112,17 +116,20 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
             watch = await input.source.watchTurn?.(claim.threadId, claim.turnId);
             if (watch?.signal.aborted) throw new CompactionFailure(operationPhase, "owner_cancelled");
             operationPhase = "continuity";
+            const preparationBudget = new CheckpointPreparationBudget(
+              chatGptWebCheckpointSourceTokenLimit(browserModel.effort), input.checkpointPreparationPolicy);
+            const producer: NativeRequestCheckpointProducer = async (request, preparation) => ({
+              nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId,
+              content: await input.summarize({ ...request, browserModel,
+                ...(preparation ? { signal: preparation.signal } : {}) }),
+            });
             const opaque = nativeOpaqueCompaction(body);
             const continuity = await resolveNativeContextContinuity({
               threadId: claim.threadId, currentTurnId: claim.turnId,
               authority: historicalTurnAuthority(activeOwner),
-              opaque, effort: browserModel.effort, browserModel, options: {
+              opaque, effort: browserModel.effort, browserModel, preparationBudget, options: {
                 ...input,
-                checkpointProducer: async (request, preparation) => ({
-                  nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId,
-                  content: await input.summarize({ ...request, browserModel,
-                    ...(preparation ? { signal: preparation.signal } : {}) }),
-                }),
+                checkpointProducer: producer,
               },
               ...(watch ? { preparation: {
                 signal: watch.signal, onProgress: (_summary: string) => {},
@@ -153,18 +160,35 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
               transfer_estimate: Math.max(physicalContext.transferTokens, chatGptCheckpointInputTokens(physicalContext, projection.media)),
               source_limit: chatGptWebCheckpointSourceTokenLimit(browserModel.effort), source_fits: !!bounded,
             });
-            if (!bounded) {
-              // No partial source or rolling truncation: this compaction can only
-              // run once a source-bound readable checkpoint is available.
-              throw new NativeHistoryBootstrapRequired();
-            }
+            if (!bounded && (!input.visiblePrefix || projection.media.length)) throw new NativeHistoryBootstrapRequired();
             operationPhase = "summary";
-            summary = await input.summarize({
-              ...(watch ? { signal: watch.signal } : {}),
-              nativeTaskId: claim.threadId, sourceRevisionId: projection.headId, browserModel,
-              physicalContext: bounded,
-              ...(projection.media.length ? { media: projection.media } : {}),
-            });
+            if (!bounded) {
+              const owner = input.visiblePrefix!;
+              // The account-owned stage journal is the same compressor used by
+              // ordinary request prefixes. No truncation or second retry ledger.
+              const source = nativeRequestPrefixSnapshot(claim.threadId, claim.turnId, physicalContext);
+              const checkpoint = record(JSON.parse(await produceNativePrefixCheckpoint({
+                source, accountNamespace: owner.accountNamespace, journal: owner.journal,
+                producer, effort: browserModel.effort, browserModel, preparationBudget,
+                confirmSource: async () => {
+                  if (watch?.signal.aborted) throw new CompactionFailure("summary", "owner_cancelled");
+                  await bindNativeCompactionRequest(body, input.source);
+                  return source;
+                },
+                ...(watch ? { signal: watch.signal, preparation: {
+                  signal: watch.signal, onProgress: (_summary: string) => {},
+                } } : {}),
+              })));
+              if (typeof checkpoint?.summary !== "string") throw new CompactionFailure("summary_validation", "invalid_summary");
+              summary = checkpoint.summary;
+            } else {
+              const result = await preparationBudget.producer(producer)({
+                nativeTaskId: claim.threadId, sourceRevisionId: projection.headId,
+                physicalContext: bounded, browserModel,
+                ...(projection.media.length ? { media: projection.media } : {}),
+              }, watch ? { signal: watch.signal, onProgress: (_summary: string) => {} } : undefined);
+              summary = result.content;
+            }
             if (watch?.signal.aborted) throw new CompactionFailure(operationPhase, "owner_cancelled");
             operationPhase = "summary_validation";
             if (!summary.trim() || Buffer.byteLength(summary, "utf8") > 32 * 1024) throw new CompactionFailure(operationPhase, "invalid_summary");
@@ -200,7 +224,8 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
       });
     } catch (error) {
       const rejected = failure(error, phase);
-      const status = rejected.reason === "readable_checkpoint_required" ? 422 : 400;
+      const budgetExceeded = rejected.reason === "preparation_budget_exceeded";
+      const status = rejected.reason === "readable_checkpoint_required" || budgetExceeded ? 422 : 400;
       emitDiagnosticEvent("chatgpt_tela_work", "compaction_rejected", {
         phase: rejected.phase, reason_class: rejected.reason, status, state,
         kind: diagnosticFailureClass(rejected.cause),
@@ -211,8 +236,10 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
       if (status === 422) {
         return Response.json({ error: {
           type: "invalid_request_error",
-          code: "tela_compaction_requires_readable_checkpoint",
-          message: "Native readable history exceeds the bounded Web compaction input. A verified checkpoint or explicit handoff is needed; no historical evidence was removed.",
+          code: budgetExceeded ? "tela_compaction_preparation_budget_exceeded" : "tela_compaction_requires_readable_checkpoint",
+          message: budgetExceeded
+            ? "Web compaction exceeds the configured preparation budget. Reuse a verified checkpoint or explicit handoff; Native history was not changed."
+            : "Native readable history exceeds the bounded Web compaction input. A verified checkpoint or explicit handoff is needed; no historical evidence was removed.",
         } }, { status: 422 });
       }
       return Response.json({ error: { type: "invalid_request_error", code: "tela_local_compaction_rejected",

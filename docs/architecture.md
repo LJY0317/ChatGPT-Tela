@@ -1786,5 +1786,11 @@ The one bounded operation table retains success/failure promises, coalesces sour
 and rejects changed source without re-execution. Failure phase/reason belongs to the operation, not
 the latest observer. Cleanup is observed independently and preserves the first failure; success is
 published only after the owned watch closes. Source fitting remains conservative and shared with
-other Web checkpoint producers. A failed fit is not permission to shorten history or silently start
-another summarization. Cross-layer diagnostics follow the same boundaries without granting authority.
+other Web checkpoint producers. An oversized readable text source uses the same account-owned
+request-prefix stage journal as ordinary Web preparation. Completed stages are reused, all source
+bytes remain covered, and each model input must fit. Continuity preparation and compaction share
+one configured cost budget; conservative whole-plan admission still precedes execution claims.
+Missing ownership, unsupported media, uncertain stages or insufficient budget require a verified
+checkpoint/handoff; none permits truncation, automatic budget expansion or replay. Browser results
+are persisted through the shared callback before surface release. Cross-layer diagnostics follow
+the same boundaries without granting authority.

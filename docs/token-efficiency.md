@@ -283,4 +283,9 @@ Compaction retry gates must cover transport/correlation-only changes (one summar
 cached pre-send failure), JSON key order, changed source/instructions/model/environment (no new call),
 concurrent waiters and revoked owners. Diagnostics and canonical failure replay add no model calls,
 new physical sessions or full-history projection beyond the original operation. Source fitting uses
-the provider capability limit and includes full readable evidence; oversized input remains blocked.
+the provider capability limit and includes full readable evidence. Oversized readable text uses the
+existing account-bound request-prefix compressor and durable stage receipts, with one shared budget
+for continuity and compaction. Return the final merged summary without another polishing call.
+An insufficient whole-plan budget, missing journal, unsupported media or uncertain stage still blocks
+before further sends. Enabling staged compaction does not raise the default preparation budget;
+very large cold histories may still need a verified checkpoint or explicitly configured cost policy.

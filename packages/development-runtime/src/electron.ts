@@ -206,6 +206,7 @@ export async function startElectronDevelopmentRuntime(
 
   const localCompactionRouter = input.checkpointProvider ? createNativeLocalCompactionRouter({
     source: input.currentTurnSource,
+    ...(input.context?.checkpointPreparationPolicy ? { checkpointPreparationPolicy: input.context.checkpointPreparationPolicy } : {}),
     ...(input.context?.visiblePrefix ? { visiblePrefix: input.context.visiblePrefix } : {}),
     ...(input.compactionHistory ? { compactionHistory: input.compactionHistory } : {}),
     ...(input.compactionAnchor ? { compactionAnchor: input.compactionAnchor } : {}),
@@ -215,6 +216,9 @@ export async function startElectronDevelopmentRuntime(
     summarize: async request => {
       const result = await runOwnedContextCheckpoint({
         browserHost, provider: input.checkpointProvider!,
+        ...(request.persistResult ? { persistResult: async result => request.persistResult!({
+          nativeTaskId: result.nativeTaskId, sourceRevisionId: result.sourceRevisionId, content: result.content,
+        })} : {}),
         ...(input.webTurnTimeoutMs !== undefined
           ? { signal: AbortSignal.any([...(request.signal ? [request.signal] : []), AbortSignal.timeout(input.webTurnTimeoutMs)]) }
           : request.signal ? { signal: request.signal } : {}),
