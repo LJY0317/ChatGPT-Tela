@@ -295,3 +295,43 @@ for continuity and compaction. Return the final merged summary without another p
 An insufficient whole-plan budget, missing journal, unsupported media or uncertain stage still blocks
 before further sends. Enabling staged compaction does not raise the default preparation budget;
 very large cold histories may still need a verified checkpoint or explicitly configured cost policy.
+
+## Rolling working-context accounting (local source, not installed; 2026-10-17)
+
+`web-working-context-policy.ts` resolves the common policy for regular Web tasks and
+Native compaction. Fixed conservative capacity calibration is not browser discovery.
+The default first-input (24k), derived checkpoint (8k), suffix (13,952) and
+per-turn output/tool reserve (2,048) are distinct from hard Web refusal limits and
+the unchanged 8-model-call, 8 × source-budget, 10-minute preparation admission.
+Oversized exact current user requests, high-priority instructions and required
+tool evidence are not trimmed to meet an optional soft target.
+
+`native-working-context.ts` selects the newest source-compatible checkpoint on
+the active Native branch. On-demand maintenance seals the previous lossy summary
+plus its complete *new sealed suffix*, never an ever-growing summary chain.
+The existing `native-visible-prefix-checkpoint.ts` compressor and account-scoped
+execution journal remain the sole stage-send authority. The same journal durably
+publishes the completed-stage/anchor/route pointer before the disposable cache
+is written. Lost cache with intact published pointer yields zero summary calls;
+lost ledger, uncertain operations, changed scope and edited ancestry fail closed.
+Read historical details again through currently authorized Native tools.
+
+Ordinary task checkpoint maintenance does not replace an owned retained Web
+conversation. Necessary fresh tasks contain one inline working bundle without a
+preload/ACK. Resident usage is a conservative, monotonic **estimate**, composed
+of input transfer, observed settled final-answer bytes and a per-turn reserve.
+It is neither Native logical token delta nor provider billing. Native local
+compaction reuses the same checkpoint selection/budget and makes one final
+summary call. Neither path adds idle or per-turn background model work.
+
+Deterministic local regressions count stage model calls, input estimates and
+compatible completed reuse, multi-rollover behavior, cache loss/restart,
+changed historical content, journal loss, media, cancellation and unknown sends.
+The Electron composition's one BrowserHost acquisition boundary records
+`web_surface_acquired` events with purpose and process-local total/purpose
+counts, including task, summary, account probe, profile probe and setup windows;
+the deterministic desktop fixture checks these categories. Events count only
+**successfully owned browser leases**, not failed partial OS-window creation
+and not chargeable provider operations. Checkpoint stage/send events separately
+count possible model work. Actual provider billing, hidden reasoning/output
+and live account costs remain **unmeasured** and require owner validation.

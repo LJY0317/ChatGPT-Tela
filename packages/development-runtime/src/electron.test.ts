@@ -18,6 +18,7 @@ import type {
   WebTurnRequest,
 } from "@chatgpt-tela/chatgpt";
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
+import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 import { FileContextCheckpointCache } from "./context-cache";
 import { startElectronDevelopmentRuntime } from "./electron";
 
@@ -154,11 +155,11 @@ function compactableNativeRequest(): Record<string, unknown> {
   return {
     ...nativeRequest(),
     instructions: "I".repeat(80),
-    input: [{
-      type: "message",
-      role: "user",
-      content: [{ type: "input_text", text: "N".repeat(20) }],
-    }],
+    input: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "N".repeat(20) }] },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "A".repeat(400) }] },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "Proceed with current task" }] },
+    ],
   };
 }
 
@@ -272,6 +273,12 @@ describe("Electron development runtime composition", () => {
   });
 
   test("one profile boundary creates the persistent Electron host and shared runtime lifecycle", async () => {
+    const acquired: Array<{ purpose: unknown; surface_total: unknown }> = [];
+    const stopSurfaces = observeDiagnosticEvents(event => {
+      if (event.stage === "web_surface_acquired") {
+        acquired.push({ purpose: event.kind, surface_total: event.surface_total });
+      }
+    });
     const [, serverTransport] = InMemoryTransport.createLinkedPair();
     const events: string[] = [];
     const windows: FakeWindow[] = [];
@@ -332,6 +339,11 @@ describe("Electron development runtime composition", () => {
       });
       expect(response.status).toBe(200);
       expect(await response.text()).toContain("desktop-ok");
+      expect(acquired).toEqual([
+        { purpose: "profile_probe", surface_total: 1 },
+        { purpose: "profile_setup", surface_total: 2 },
+        { purpose: "task", surface_total: 3 },
+      ]);
       expect(events).toEqual([
         `set-path:userData:${userDataDir}`,
         "app-ready",
@@ -346,6 +358,7 @@ describe("Electron development runtime composition", () => {
       await setup.close();
     } finally {
       await runtime.stop();
+      stopSurfaces?.();
     }
 
     expect(windows).toHaveLength(3);
@@ -355,6 +368,12 @@ describe("Electron development runtime composition", () => {
   });
 
   test("explicit checkpoint provider is isolated from the ordinary turn provider and feeds the derived cache once", async () => {
+    const acquired: Array<{ purpose: unknown; purpose_count: unknown }> = [];
+    const stopSurfaces = observeDiagnosticEvents(event => {
+      if (event.stage === "web_surface_acquired") {
+        acquired.push({ purpose: event.kind, purpose_count: event.purpose_count });
+      }
+    });
     const root = mkdtempSync(join(tmpdir(), "chatgpt-tela-electron-checkpoint-test-"));
     const [, serverTransport] = InMemoryTransport.createLinkedPair();
     const windows: FakeWindow[] = [];
@@ -373,7 +392,7 @@ describe("Electron development runtime composition", () => {
       mcp: { kind: "transport", transport: serverTransport },
       provider,
       checkpointProvider,
-      context: { checkpointCache: cache, budgetTokens: 10 },
+      context: { checkpointCache: cache, budgetTokens: 45 },
       electron: {
         async loadRuntime() {
           return {
@@ -398,18 +417,65 @@ describe("Electron development runtime composition", () => {
       expect(checkpointProvider.requests).toHaveLength(1);
       expect(checkpointProvider.requests[0]?.physicalContext).toMatchObject({
         mode: "full",
-        segments: [{ type: "revision", kind: "system", content: "I".repeat(80) }],
+        segments: [{ type: "revision", kind: "system", content: "I".repeat(80) },
+          { type: "revision", kind: "user", content: "N".repeat(20) },
+          { type: "revision", kind: "assistant", content: "A".repeat(400) }],
       });
       expect(provider.submitted?.physicalContext.mode).toBe("checkpoint-delta");
+      expect(provider.submitted?.physicalContext.segments[0]).toMatchObject({
+        type: "revision", kind: "system", content: "I".repeat(80),
+      });
       expect(provider.submitted?.toolBridge).toBeDefined();
       expect(await cache.list("thread-1")).toHaveLength(1);
       expect(windows).toHaveLength(2);
       expect(windows[0]?.destroyed).toBe(true); // one-purpose checkpoint surface
       expect(windows[1]?.destroyed).toBe(false); // successful ordinary epoch stays retained
+      expect(acquired).toEqual([
+        { purpose: "summary", purpose_count: 1 },
+        { purpose: "task", purpose_count: 1 },
+      ]);
     } finally {
       await runtime.stop();
+      stopSurfaces?.();
       expect(windows.every(window => window.destroyed)).toBe(true);
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("account identity checks count a disposable zero-model-call browser surface", async () => {
+    const [, serverTransport] = InMemoryTransport.createLinkedPair();
+    const windows: FakeWindow[] = [];
+    class RuntimeWindow extends FakeWindow {
+      constructor(_input: BrowserWindowConstructorOptions) {
+        super(); windows.push(this);
+      }
+    }
+    const acquired: Array<{ purpose: unknown; model_send_possible: unknown }> = [];
+    const stopSurfaces = observeDiagnosticEvents(event => {
+      if (event.stage === "web_surface_acquired") {
+        acquired.push({ purpose: event.kind, model_send_possible: event.model_send_possible });
+      }
+    });
+    const runtime = await startElectronDevelopmentRuntime({
+      profileId: "profile-account-cost",
+      currentTurnSource: source,
+      mcp: { kind: "transport", transport: serverTransport },
+      provider: new FinalProvider(),
+      accountIdentityObserver: async () => ({
+        accountFingerprint: "a".repeat(64), containerFingerprint: "fixture", accountStructure: "personal",
+      }),
+      electron: { async loadRuntime() {
+        return { app: { setPath() {}, async whenReady() {} }, BrowserWindow: RuntimeWindow };
+      } },
+    });
+    try {
+      expect(await runtime.probeChatGptAccount()).toMatchObject({ accountStructure: "personal" });
+      expect(acquired).toEqual([{ purpose: "account_probe", model_send_possible: false }]);
+      expect(windows).toHaveLength(1);
+      expect(windows[0]!.destroyed).toBe(true);
+    } finally {
+      await runtime.stop();
+      stopSurfaces?.();
     }
   });
 
@@ -423,7 +489,7 @@ describe("Electron development runtime composition", () => {
       currentTurnSource: source,
       mcp: { kind: "transport", transport: serverTransport },
       provider,
-      context: { checkpointCache: cache, budgetTokens: 10 },
+      context: { checkpointCache: cache, budgetTokens: 45 },
       electron: {
         async loadRuntime() {
           return {

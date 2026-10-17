@@ -1,9 +1,10 @@
 export interface WebEpochPressureInput {
-  readonly baseLogicalInputTokens: number;
-  readonly baseTransferInputTokens: number;
+  /** Monotonic accumulated input and conservatively estimated output of this physical page. */
+  readonly settledEpochTokens: number;
+  readonly nextInputTokens: number;
+  readonly outputReserveTokens: number;
   readonly rolloverTokenLimit: number;
   readonly contextWindowTokenLimit: number;
-  readonly currentLogicalInputTokens: number;
 }
 
 export interface WebEpochPressure {
@@ -12,29 +13,25 @@ export interface WebEpochPressure {
   readonly shouldRollover: boolean;
 }
 
-/** Estimate disposable Web pressure without changing Native logical history. */
+/** Estimate physical Web occupancy; Native compaction never releases a resident Web token. */
 export function assessWebEpochPressure(input: WebEpochPressureInput): WebEpochPressure | undefined {
   const values = [
-    input.baseLogicalInputTokens,
-    input.baseTransferInputTokens,
+    input.settledEpochTokens,
+    input.nextInputTokens,
+    input.outputReserveTokens,
     input.rolloverTokenLimit,
     input.contextWindowTokenLimit,
-    input.currentLogicalInputTokens,
   ];
   if (!values.every(value => Number.isSafeInteger(value) && value >= 0)) return undefined;
   if (input.rolloverTokenLimit <= 0
     || input.contextWindowTokenLimit <= 0
     || input.contextWindowTokenLimit < input.rolloverTokenLimit) return undefined;
 
-  const estimatedEpochInputTokens = input.baseTransferInputTokens + Math.max(
-    0,
-    input.currentLogicalInputTokens - input.baseLogicalInputTokens,
-  );
+  const estimatedEpochInputTokens = input.settledEpochTokens + input.nextInputTokens
+    + input.outputReserveTokens;
   // An overflowed estimate cannot safely decide to keep a retained conversation.
   if (!Number.isSafeInteger(estimatedEpochInputTokens)) return undefined;
-  const effectiveRolloverTokenLimit = input.baseTransferInputTokens >= input.rolloverTokenLimit
-    ? input.contextWindowTokenLimit
-    : input.rolloverTokenLimit;
+  const effectiveRolloverTokenLimit = input.rolloverTokenLimit;
   return Object.freeze({
     estimatedEpochInputTokens,
     effectiveRolloverTokenLimit,

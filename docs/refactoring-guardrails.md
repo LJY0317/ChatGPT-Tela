@@ -25,3 +25,22 @@ Do not impose an arbitrary added-line ceiling: necessary fixes can grow code. Un
 ## Completion
 
 Integrate only verified minimal changes to clean `main`; record deferred work and remaining uncertainty in the local `STATE.md`. Do not delete worktrees, branches, Agent Workspace data, conversations, checkpoints or signed rollback assets until exact ownership and safe retirement are proved. Once consolidation is complete, verify `main` and use the official signed installation and restore procedure. Distinguish source tests, installed readiness and actual model acceptance.
+
+## Rolling-context integration gates (2026-10-17 source)
+
+The working-set projection has one shared selector (`native-working-context.ts`),
+one existing durable stage execution journal (extended only with published
+derived pointers), one disposable cache and one per-physical-generation usage
+estimate. Reject a second ledger, independent compaction retry path, implicit
+Web capacity inferred from Native metadata or checkpoint-triggered Web reset.
+Existing stage receipt identities and pending-send fencing must remain intact.
+
+Require zero new model calls on compatible journal-published checkpoint reuse,
+including after disposable cache loss. Edited ancestry or changed route/effort
+must invalidate reuse by source/route scope. Test updates during a retained Web
+page and multiple physical rollovers, without preload/ACK. Large exact active
+work must fail before spending checkpoint model calls. Keep counted requests,
+transfer estimates and source-only fixture results distinct from unmeasured
+provider billing and partially failed/unowned OS windows. Successfully acquired
+task, summary and account/probe/setup surfaces are counted at the same existing
+Electron BrowserHost lifecycle without a second journal or retry mechanism.

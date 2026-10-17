@@ -40,6 +40,8 @@ async function withTaskMutation<T>(path: string, mutation: () => Promise<T>): Pr
 export interface CachedContextCheckpoint {
   readonly checkpoint: ContextCheckpoint;
   readonly content: string;
+  /** Account/route/effort/summary-policy proof for maintained working checkpoints. */
+  readonly scopeFingerprint?: string;
 }
 
 export interface ContextCheckpointCache {
@@ -49,6 +51,7 @@ export interface ContextCheckpointCache {
     readonly revisionId: string;
     readonly content: string;
     readonly estimatedTokens: number;
+    readonly scopeFingerprint?: string;
   }): Promise<CachedContextCheckpoint>;
   clear(nativeTaskId: string): Promise<void>;
 }
@@ -60,6 +63,7 @@ interface StoredCheckpoint {
   readonly projectionRef: string;
   readonly contentHash: string;
   readonly content: string;
+  readonly scopeFingerprint?: string;
 }
 
 interface StoredTaskCache {
@@ -95,19 +99,24 @@ function taskFingerprint(nativeTaskId: string): string {
   return hashHex(`chatgpt-tela-context-task-v1\0${validId(nativeTaskId, "native task id")}`);
 }
 
-function checkpointIdentity(revisionId: string, content: string, estimatedTokens: number): {
+function checkpointIdentity(revisionId: string, content: string, estimatedTokens: number, scopeFingerprint?: string): {
   readonly id: string;
   readonly contentHash: string;
   readonly projectionRef: string;
 } {
   const revision = validId(revisionId, "checkpoint revision id");
   const tokens = validTokens(estimatedTokens);
+  if (scopeFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(scopeFingerprint)) {
+    throw Error("Invalid checkpoint scope");
+  }
   if (Buffer.byteLength(content, "utf8") > MAX_CHECKPOINT_CONTENT_BYTES) {
     throw new Error("checkpoint content exceeds its bounded derived-cache limit");
   }
   const contentHash = hashHex(content);
   const id = `checkpoint_${hashBase64Url(
-    `chatgpt-tela-checkpoint-v1\0${revision}\0${contentHash}\0${tokens}`,
+    scopeFingerprint === undefined
+      ? `chatgpt-tela-checkpoint-v1\0${revision}\0${contentHash}\0${tokens}`
+      : `chatgpt-tela-checkpoint-v2\0${scopeFingerprint}\0${revision}\0${contentHash}\0${tokens}`,
   ).slice(0, 28)}`;
   return {
     id,
@@ -126,7 +135,9 @@ function parseStoredCheckpoint(value: unknown): StoredCheckpoint | undefined {
     || typeof item.contentHash !== "string"
     || typeof item.content !== "string") return undefined;
   try {
-    const identity = checkpointIdentity(item.revisionId, item.content, item.estimatedTokens);
+    const identity = checkpointIdentity(item.revisionId, item.content, item.estimatedTokens,
+      typeof item.scopeFingerprint === "string" ? item.scopeFingerprint : undefined);
+    if (item.scopeFingerprint !== undefined && typeof item.scopeFingerprint !== "string") return undefined;
     if (identity.id !== item.id
       || identity.contentHash !== item.contentHash
       || identity.projectionRef !== item.projectionRef) return undefined;
@@ -137,6 +148,7 @@ function parseStoredCheckpoint(value: unknown): StoredCheckpoint | undefined {
       projectionRef: item.projectionRef,
       contentHash: item.contentHash,
       content: item.content,
+      ...(item.scopeFingerprint ? { scopeFingerprint: item.scopeFingerprint } : {}),
     });
   } catch {
     return undefined;
@@ -152,6 +164,26 @@ function toCached(value: StoredCheckpoint): CachedContextCheckpoint {
       projectionRef: value.projectionRef,
     }),
     content: value.content,
+    ...(value.scopeFingerprint ? { scopeFingerprint: value.scopeFingerprint } : {}),
+  });
+}
+
+/** Rehydrate a journal-published derivative without depending on writable disposable cache. */
+export function derivedContextCheckpoint(input: {
+  readonly revisionId: string;
+  readonly content: string;
+  readonly estimatedTokens: number;
+  readonly scopeFingerprint?: string;
+}): CachedContextCheckpoint {
+  const identity = checkpointIdentity(input.revisionId, input.content, input.estimatedTokens, input.scopeFingerprint);
+  return toCached({
+    id: identity.id,
+    revisionId: input.revisionId,
+    content: input.content,
+    estimatedTokens: input.estimatedTokens,
+    contentHash: identity.contentHash,
+    projectionRef: identity.projectionRef,
+    ...(input.scopeFingerprint ? { scopeFingerprint: input.scopeFingerprint } : {}),
   });
 }
 
@@ -188,10 +220,11 @@ export class FileContextCheckpointCache implements ContextCheckpointCache {
     readonly revisionId: string;
     readonly content: string;
     readonly estimatedTokens: number;
+    readonly scopeFingerprint?: string;
   }): Promise<CachedContextCheckpoint> {
     const fingerprint = taskFingerprint(input.nativeTaskId);
     validTokens(input.estimatedTokens);
-    const identity = checkpointIdentity(input.revisionId, input.content, input.estimatedTokens);
+    const identity = checkpointIdentity(input.revisionId, input.content, input.estimatedTokens, input.scopeFingerprint);
     const next: StoredCheckpoint = Object.freeze({
       id: identity.id,
       revisionId: validId(input.revisionId, "checkpoint revision id"),
@@ -199,6 +232,7 @@ export class FileContextCheckpointCache implements ContextCheckpointCache {
       projectionRef: identity.projectionRef,
       contentHash: identity.contentHash,
       content: input.content,
+      ...(input.scopeFingerprint ? { scopeFingerprint: input.scopeFingerprint } : {}),
     });
     return withTaskMutation(this.#path(fingerprint), async () => {
       const current = await this.#read(fingerprint);

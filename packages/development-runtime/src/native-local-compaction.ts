@@ -7,13 +7,16 @@ import {
 import { nativeCompactionSummaryResponse } from "@chatgpt-tela/responses";
 import {
   chatGptCheckpointInputTokens, chatGptWebCheckpointSourceTokenLimit, type ChatGptWebEffort, type WebPhysicalContext, type WebTurnMedia } from "@chatgpt-tela/chatgpt";
-import { bindNativePhysicalEvidence, nativeRequestContentSource, nativeRequestBrowserModelRoute, nativeRequestPrefixSnapshot, projectNativeRequestContext, type NativeRequestCheckpointProducer, type NativeRequestCheckpointProductionRequest } from "./native-request-planner";
+import { bindNativePhysicalEvidence, nativeRequestContentSource, nativeRequestBrowserModelRoute, projectNativeRequestContext, type NativeRequestCheckpointProducer, type NativeRequestCheckpointProductionRequest } from "./native-request-planner";
 import {
   nativeOpaqueCompaction, resolveNativeContextContinuity, type NativeContinuitySources,
 } from "./native-context-continuity";
 import { boundedWebCheckpointSource } from "./web-checkpoint-source";
 import { CheckpointPreparationBudget, CheckpointPreparationBudgetExceeded } from "./checkpoint-preparation-budget";
 import { produceNativePrefixCheckpoint } from "./native-visible-prefix-checkpoint";
+import { nativeRequestPrefixSnapshot, nativeWorkingPhysicalContext, selectNativeWorkingCheckpoint } from "./native-working-context";
+import { webWorkingContextPolicy } from "./web-working-context-policy";
+import type { ContextCheckpointCache } from "./context-cache";
 
 type RecordValue = Record<string, unknown>;
 function record(value: unknown): RecordValue | undefined {
@@ -45,6 +48,7 @@ function digest(value: unknown): string {
 
 /** Only handles authenticated tool-free Native local compaction, never remote opaque compaction. */
 export function createNativeLocalCompactionRouter(input: NativeContinuitySources & {
+  readonly checkpointCache?: ContextCheckpointCache;
   readonly source: CanonicalCurrentTurnSource;
   readonly summarize: (request: {
     readonly signal?: AbortSignal;
@@ -116,8 +120,9 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
             watch = await input.source.watchTurn?.(claim.threadId, claim.turnId);
             if (watch?.signal.aborted) throw new CompactionFailure(operationPhase, "owner_cancelled");
             operationPhase = "continuity";
+            const policy = webWorkingContextPolicy(browserModel.effort, input.checkpointPreparationPolicy);
             const preparationBudget = new CheckpointPreparationBudget(
-              chatGptWebCheckpointSourceTokenLimit(browserModel.effort), input.checkpointPreparationPolicy);
+              policy.checkpointSourceTokens, input.checkpointPreparationPolicy);
             const producer: NativeRequestCheckpointProducer = async (request, preparation) => ({
               nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId,
               content: await input.summarize({ ...request, browserModel,
@@ -144,14 +149,17 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
               activeOwner.nativeGoal, activeOwner.nativeGoalState);
             const tokens = projection.revisions.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
             emitDiagnosticEvent("chatgpt_tela_work", "compaction_started", { logical_estimate: tokens, revision_count: projection.revisions.length });
-            const physicalContext: WebPhysicalContext = bindNativePhysicalEvidence(projection, {
-              headRevisionId: projection.headId, activeRequestRevisionId: projection.headId,
-              mode: "full", logicalTokens: tokens,
-              transferTokens: tokens,
-              segments: projection.revisions.map(item => ({
-                type: "revision" as const, revisionId: item.revision.id, kind: item.revision.kind, content: item.content,
-              })),
+            const maintained = await selectNativeWorkingCheckpoint({
+              projection, currentTurnId: claim.turnId,
+              ...(input.checkpointCache ? { cache: input.checkpointCache } : {}),
+              ...(input.visiblePrefix ? { visiblePrefix: input.visiblePrefix } : {}),
+              producer, browserModel, policy, preparationBudget,
+              allowBootstrap: false,
+              ...(watch ? { signal: watch.signal,
+                preparation: { signal: watch.signal, onProgress: (_message: string) => {} } } : {}),
             });
+            const physicalContext: WebPhysicalContext = bindNativePhysicalEvidence(projection,
+              nativeWorkingPhysicalContext(projection, maintained.checkpoint));
             // Refuse an unprovable or oversized source before producing any model summary.
             operationPhase = "source_fit";
             const bounded = boundedWebCheckpointSource(physicalContext, projection.media, browserModel.effort);
@@ -159,6 +167,8 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
               logical_estimate: tokens, revision_count: projection.revisions.length,
               transfer_estimate: Math.max(physicalContext.transferTokens, chatGptCheckpointInputTokens(physicalContext, projection.media)),
               source_limit: chatGptWebCheckpointSourceTokenLimit(browserModel.effort), source_fits: !!bounded,
+              working_checkpoint_reused: maintained.reused,
+              working_checkpoint_advanced: maintained.produced,
             });
             if (!bounded && (!input.visiblePrefix || projection.media.length)) throw new NativeHistoryBootstrapRequired();
             operationPhase = "summary";

@@ -3,8 +3,10 @@ import {
   BROWSER_READ_ONLY_PREVIEW,
   BROWSER_INSPECTION_INPUT,
   BROWSER_PAGE_AUTOMATION,
+  type BrowserHost,
   type BrowserSurfaceLease,
 } from "@chatgpt-tela/browser-host";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   createElectronMainProcessBrowserHost,
   type ElectronMainRuntimeLike,
@@ -157,6 +159,52 @@ export interface ElectronDevelopmentRuntimeOptions {
   };
 }
 
+/** Classify all acquired pages at the one browser-host seam, including zero-model-call probes.
+ * These are surface counters, NOT billing or a second execution/retry ledger. */
+function webSurfacePurpose(input: { taskId: string; epochId: string }):
+  "task" | "summary" | "account_probe" | "profile_probe" | "profile_setup" {
+  if (input.epochId.startsWith("checkpoint-") || input.epochId.startsWith("native-compact-")) {
+    return "summary";
+  }
+  if (input.taskId === "chatgpt-tela-account-observation"
+    || input.taskId === "chatgpt-tela-account-display") return "account_probe";
+  if (input.taskId === "chatgpt-tela-profile-setup") return "profile_setup";
+  if (input.taskId.startsWith("chatgpt-tela-")
+    || input.taskId.startsWith("profile-")) return "profile_probe";
+  return "task";
+}
+
+function countedWebSurfaceHost(
+  physical: Awaited<ReturnType<typeof createElectronMainProcessBrowserHost>>,
+): BrowserHost & Pick<typeof physical, "selectedCapability" | "listSurfaces" | "revealSurface"> {
+  let total = 0;
+  const perPurpose = new Map<ReturnType<typeof webSurfacePurpose>, number>();
+  return Object.freeze({
+    async acquire(input: { taskId: string; epochId: string }) {
+      // Count only successfully owned acquisitions; a host failure may still
+      // create an unowned partial OS window and remains unknown.
+      const lease = await physical.acquire(input);
+      const purpose = webSurfacePurpose(input);
+      total++;
+      const purposeCount = (perPurpose.get(purpose) ?? 0) + 1;
+      perPurpose.set(purpose, purposeCount);
+      emitDiagnosticEvent("chatgpt_tela_work", "web_surface_acquired", {
+        kind: purpose, surface_total: total, purpose_count: purposeCount,
+        model_send_possible: purpose === "task" || purpose === "summary",
+        evidence_class: "owned_browser_lease",
+      });
+      return lease;
+    },
+    release: (leaseId: string) => physical.release(leaseId),
+    close: () => physical.close(),
+    // The Electron composition's inspection UI is read-only and retains its
+    // existing capabilities; acquisition telemetry must never hide them.
+    selectedCapability: physical.selectedCapability.bind(physical),
+    listSurfaces: () => physical.listSurfaces(),
+    revealSurface: (leaseId: string) => physical.revealSurface(leaseId),
+  });
+}
+
 /**
  * Development desktop composition root.
  *
@@ -166,13 +214,13 @@ export interface ElectronDevelopmentRuntimeOptions {
 export async function startElectronDevelopmentRuntime(
   input: ElectronDevelopmentRuntimeOptions,
 ): Promise<ElectronDevelopmentRuntime> {
-  const browserHost = await createElectronMainProcessBrowserHost({
+  const browserHost = countedWebSurfaceHost(await createElectronMainProcessBrowserHost({
     profileId: input.profileId,
     ...(input.electron?.userDataDir ? { userDataDir: input.electron.userDataDir } : {}),
     initialUrl: input.chatGptUrl ?? "https://chatgpt.com/",
     ...(input.electron?.window ? { window: input.electron.window } : {}),
     ...(input.electron?.loadRuntime ? { loadRuntime: input.electron.loadRuntime } : {}),
-  });
+  }));
   const provider = input.provider ?? new ChatGptSemanticProvider({
     requireTemporaryChat: isChatGptTemporaryChatUrl(input.chatGptUrl ?? ""),
     ...(input.connectorName ? { connectorName: input.connectorName } : {}),
@@ -206,6 +254,7 @@ export async function startElectronDevelopmentRuntime(
 
   const localCompactionRouter = input.checkpointProvider ? createNativeLocalCompactionRouter({
     source: input.currentTurnSource,
+    ...(checkpointCache ? { checkpointCache } : {}),
     ...(input.context?.checkpointPreparationPolicy ? { checkpointPreparationPolicy: input.context.checkpointPreparationPolicy } : {}),
     ...(input.context?.visiblePrefix ? { visiblePrefix: input.context.visiblePrefix } : {}),
     ...(input.compactionHistory ? { compactionHistory: input.compactionHistory } : {}),

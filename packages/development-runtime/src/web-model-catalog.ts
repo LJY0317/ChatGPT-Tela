@@ -88,6 +88,10 @@ function webModel(template: JsonObject, family: ChatGptWebModelFamily, localComp
   delete model.comp_hash;
   // Only a verified model-aware Native engine may request portable local compaction.
   delete model.compaction_mode;
+  // Native template context/compaction/output metadata is not Web-route evidence.
+  delete model.context_window;
+  delete model.auto_compact_token_limit;
+  delete model.max_output_tokens;
   if (localCompaction) model.compaction_mode = "local";
   return model;
 }

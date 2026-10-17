@@ -19,12 +19,8 @@ import {
 } from "@chatgpt-tela/core";
 import {
   CHATGPT_WEB_EFFORTS,
-  chatGptWebPhysicalLimits,
   chatGptWebCheckpointSourceTokenLimit,
-  createChatGptContextAttachment,
-  estimateChatGptContextAttachmentTransferTokens,
   parseChatGptWebModelId,
-  shouldUseChatGptContextAttachment,
   prepareWebTurnMedia,
   webEvidenceFilename,
   type ChatGptWebEffort,
@@ -47,7 +43,12 @@ import {
   type NativeContinuitySources,
 } from "./native-context-continuity";
 import { boundedWebCheckpointSource } from "./web-checkpoint-source";
-import { produceNativePrefixCheckpoint, type NativeRequestPrefixSnapshot } from "./native-visible-prefix-checkpoint";
+import { produceNativePrefixCheckpoint } from "./native-visible-prefix-checkpoint";
+import {
+  nativeRequestPrefixSnapshot, selectNativeWorkingCheckpoint,
+  workingCheckpointAnchor, withExactCurrentInstructions, nativeWorkingCheckpointScope,
+} from "./native-working-context";
+import { webWorkingContextPolicy } from "./web-working-context-policy";
 import type {
   DevelopmentWebTurnPlan,
   DevelopmentWebTurnPlanner,
@@ -88,16 +89,7 @@ export interface NativeRequestCheckpointProductionRequest {
   readonly browserModel?: { readonly familyKey: string; readonly effort: ChatGptWebEffort };
 }
 
-/** Semantic source excludes a changing outer head marker; ordered revisions already bind it. */
-export function nativeRequestPrefixSnapshot(threadId: string, currentTurnId: string,
-  physicalContext: WebPhysicalContext): NativeRequestPrefixSnapshot {
-  const content = JSON.stringify({ type: "tela_native_request_prefix_v1", items: physicalContext.segments });
-  const digest = createHash("sha256").update(content).digest("hex");
-  return Object.freeze({ kind: "native-request-prefix", threadId, currentTurnId,
-    digest, contentDigest: digest, content, sourceItemCount: physicalContext.segments.length,
-    inlineAssets: [], references: physicalContext.segments.flatMap(segment =>
-      segment.type === "revision" ? segment.evidence ?? [] : []), localImageCandidates: [] });
-}
+export { nativeRequestPrefixSnapshot } from "./native-working-context";
 
 export interface NativeRequestCheckpointProductionResult {
   readonly nativeTaskId: string;
@@ -240,8 +232,8 @@ interface CommittedRetainedContext {
   readonly inputHeadRevisionId: string;
   readonly answerFingerprint: string;
   readonly routeIdentity: string;
-  readonly baseLogicalInputTokens: number;
-  readonly baseTransferInputTokens: number;
+  /** Monotonic input+estimated output of the exact owned physical generation. */
+  readonly estimatedResidentTokens: number;
   readonly physicalLimits?: ChatGptWebPhysicalLimits;
 }
 
@@ -361,6 +353,30 @@ function retainedDelta(
       content: item.content,
     }))),
   });
+}
+
+function admittedRetainedContext(
+  projection: NativeRequestContextProjection,
+  committed: CommittedRetainedContext,
+  route: string,
+  budgetTokens: number | undefined,
+  outputReserveTokens: number,
+): { readonly physicalContext: WebPhysicalContext; readonly media: readonly WebTurnMedia[];
+  readonly pressure?: WebEpochPressure } | undefined {
+  const delta = retainedDelta(projection, committed, route, budgetTokens);
+  if (!delta) return undefined;
+  const bound = bindNativePhysicalEvidence(projection, delta);
+  const media = includedMedia(projection, bound);
+  const physicalContext = physicalMediaCost(bound, media);
+  // The estimated task wrapper is not Native tokens and is not a provider-reported bill.
+  const pressure = committed.physicalLimits ? assessWebEpochPressure({
+    settledEpochTokens: committed.estimatedResidentTokens,
+    nextInputTokens: physicalContext.transferTokens + 1_024,
+    outputReserveTokens,
+    rolloverTokenLimit: committed.physicalLimits.rolloverTokenLimit,
+    contextWindowTokenLimit: committed.physicalLimits.contextWindowTokenLimit,
+  }) : undefined;
+  return Object.freeze({ physicalContext, media, ...(pressure ? { pressure } : {}) });
 }
 
 function messageKind(role: unknown): RevisionKind {
@@ -659,7 +675,7 @@ function activeCheckpoint(
   budgetTokens: number | undefined,
 ): CachedContextCheckpoint | undefined {
   const activeIds = new Set(projection.revisions.map(item => item.revision.id));
-  const safeAnchor = checkpointAnchor(projection);
+  const safeAnchor = workingCheckpointAnchor(projection);
   const safeIndex = safeAnchor ? projection.revisions.indexOf(safeAnchor) : -1;
   let selected: { readonly cached: CachedContextCheckpoint; readonly transferTokens: number } | undefined;
   for (const cached of candidates) {
@@ -691,16 +707,6 @@ async function cachedCheckpoints(
     // transfer cost, but must never change which Native history is authoritative.
     return [];
   }
-}
-
-function checkpointAnchor(projection: NativeRequestContextProjection): ProjectedNativeRevision | undefined {
-  // Keep the latest user request and all subsequent tool rounds exact, including mid-turn plans.
-  let latestUser = -1;
-  for (let index = projection.revisions.length - 1; index >= 0; index -= 1) {
-    if (projection.revisions[index]!.revision.kind === "user") { latestUser = index; break; }
-  }
-  const boundary = latestUser >= 0 ? latestUser : projection.revisions.length - 1;
-  return boundary > 0 ? projection.revisions[boundary - 1] : undefined;
 }
 
 function checkpointSourceContext(
@@ -773,8 +779,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     readonly webEpochId: string;
     readonly inputHeadRevisionId: string;
     readonly routeIdentity: string;
-    readonly baseLogicalInputTokens: number;
-    readonly baseTransferInputTokens: number;
+    readonly previousResidentTokens: number;
+    readonly inputTokens: number;
+    readonly outputReserveTokens: number;
     readonly physicalLimits?: ChatGptWebPhysicalLimits;
     readonly hotHistory?: { readonly opaqueFingerprint: string; readonly visibleHistory: string };
   }) => (outcome: DevelopmentWebTurnSettlement): void => {
@@ -791,6 +798,24 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       clearRetainedContext(entry.threadId);
       throw new Error("completed Web context requires a physical surface owner");
     }
+    const outputTokens = tokenEstimate(outcome.answer);
+    const toolBytes = outcome.releasedToolResultBytes ?? 0;
+    const rounds = outcome.toolRoundCount ?? 0;
+    if (!Number.isSafeInteger(toolBytes) || toolBytes < 0
+      || !Number.isSafeInteger(rounds) || rounds < 0) {
+      clearRetainedContext(entry.threadId);
+      return;
+    }
+    // Count only outputs actually released to this Web turn, and reserve some
+    // framing/tool-call overhead. Neither Native compaction nor a checkpoint
+    // can subtract bytes already resident in the provider's conversation.
+    const estimatedResidentTokens = entry.previousResidentTokens + entry.inputTokens
+      + Math.max(outputTokens, entry.outputReserveTokens)
+      + Math.ceil(toolBytes / 4) + rounds * 512;
+    if (!Number.isSafeInteger(estimatedResidentTokens)) {
+      clearRetainedContext(entry.threadId);
+      return;
+    }
     retainedByTask.set(entry.threadId, Object.freeze({
       webEpochId: entry.webEpochId,
       surfaceLeaseId: outcome.surfaceLeaseId,
@@ -798,8 +823,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       inputHeadRevisionId: entry.inputHeadRevisionId,
       answerFingerprint: contentFingerprint(outcome.answer),
       routeIdentity: entry.routeIdentity,
-      baseLogicalInputTokens: entry.baseLogicalInputTokens,
-      baseTransferInputTokens: entry.baseTransferInputTokens,
+      estimatedResidentTokens,
       ...(entry.physicalLimits ? { physicalLimits: entry.physicalLimits } : {}),
     }));
     if (entry.hotHistory) keepHotHistory(entry.threadId, entry.hotHistory);
@@ -808,6 +832,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       status: "completed", epoch_fingerprint: diagnosticFingerprint(entry.webEpochId),
       surface_fingerprint: diagnosticFingerprint(outcome.surfaceLeaseId), document_generation: outcome.documentGeneration,
       head_revision_fingerprint: diagnosticFingerprint(entry.inputHeadRevisionId),
+      resident_usage_estimate: estimatedResidentTokens, resident_usage_confidence: "conservative-estimate",
+      tool_result_bytes: toolBytes, tool_round_count: rounds,
     });
   };
   const plan = async (turn: RegisteredTurn, nativeRequest: unknown, preparation?: Parameters<DevelopmentWebTurnPlanner>[2]): Promise<DevelopmentWebTurnPlan> => {
@@ -825,10 +851,11 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     const opaqueFingerprint = opaque.fingerprint;
     stage("model_route");
     const browserModel = nativeRequestBrowserModelRoute(nativeRequest);
+    const workingPolicy = webWorkingContextPolicy(browserModel?.effort ?? "medium", options.checkpointPreparationPolicy);
     const preparationBudget = new CheckpointPreparationBudget(
-      chatGptWebCheckpointSourceTokenLimit(browserModel?.effort ?? "medium"), options.checkpointPreparationPolicy);
+      workingPolicy.checkpointSourceTokens, options.checkpointPreparationPolicy);
     const checkpointProducer = options.checkpointProducer ? preparationBudget.producer(options.checkpointProducer) : undefined;
-    const physicalLimits = browserModel ? chatGptWebPhysicalLimits(browserModel.effort) : undefined;
+    const physicalLimits = browserModel ? workingPolicy.hard : undefined;
     const budgetTokens = options.budgetTokens ?? (checkpointProducer ? physicalLimits?.rolloverTokenLimit : undefined);
     const currentRouteIdentity = routeIdentity(nativeRequest);
     const committed = retainedByTask.get(threadId);
@@ -849,16 +876,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         hot.visibleHistory, [], undefined, ingress,
         turn.channel.binding.canonicalEvidence.nativeGoal,
         turn.channel.binding.canonicalEvidence.nativeGoalState);
-      const logical = provisional.revisions.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
-      const pressure = committed.physicalLimits ? assessWebEpochPressure({
-        baseLogicalInputTokens: committed.baseLogicalInputTokens,
-        baseTransferInputTokens: committed.baseTransferInputTokens,
-        rolloverTokenLimit: committed.physicalLimits.rolloverTokenLimit,
-        contextWindowTokenLimit: committed.physicalLimits.contextWindowTokenLimit,
-        currentLogicalInputTokens: logical,
-      }) : undefined;
-      if (pressure?.shouldRollover !== true
-        && retainedDelta(provisional, committed, currentRouteIdentity, budgetTokens)) {
+      const trial = admittedRetainedContext(provisional, committed, currentRouteIdentity,
+        budgetTokens, workingPolicy.outputReserveTokens);
+      if (trial && (!committed.physicalLimits || (trial.pressure && !trial.pressure.shouldRollover))) {
         retainedHistory = hot.visibleHistory;
         provenRetainedProjection = provisional;
       }
@@ -895,26 +915,48 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       && (historyCheckpointReused || historyCheckpointProduced || historyManualHandoff
         || continuity.mode === "automatic-handoff")
       ? Object.freeze({ opaqueFingerprint, visibleHistory }) : undefined;
-    const currentLogicalInputTokens = projection.revisions
-      .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
-    const pressure: WebEpochPressure | undefined = committed?.physicalLimits
-      ? assessWebEpochPressure({
-          baseLogicalInputTokens: committed.baseLogicalInputTokens,
-          baseTransferInputTokens: committed.baseTransferInputTokens,
-          rolloverTokenLimit: committed.physicalLimits.rolloverTokenLimit,
-          contextWindowTokenLimit: committed.physicalLimits.contextWindowTokenLimit,
-          currentLogicalInputTokens,
-        })
-      : undefined;
-    const retained = committed && pressure?.shouldRollover !== true
-      ? retainedDelta(projection, committed, currentRouteIdentity, budgetTokens)
-      : undefined;
+    const currentAnchor = workingCheckpointAnchor(projection);
+    const currentAnchorIndex = currentAnchor ? projection.revisions.indexOf(currentAnchor) : -1;
+    const exactActiveTokens = projection.revisions.slice(currentAnchorIndex + 1)
+      .reduce((sum, item) => sum + item.revision.estimatedTokens, 0)
+      + projection.revisions.filter(item =>
+        item.revision.kind === "system" || item.revision.kind === "developer")
+        .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
+    if (physicalLimits && exactActiveTokens + 2_048 >= physicalLimits.contextWindowTokenLimit) {
+      // Required active work is irreducible. Do not burn model calls trying
+      // to compress old context to fit a request that cannot fit by itself.
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_rejected", {
+        phase: "active_work_fit", reason_class: "irreducible_current_work",
+        exact_active_estimate: exactActiveTokens,
+        calibrated_hard_limit: physicalLimits.contextWindowTokenLimit,
+      });
+      throw new NativeHistoryBootstrapRequired("source_budget");
+    }
+    // Soft rollover is for session runway, not a hard prohibition on a single
+    // irreducible current request that can still pass the calibrated hard limit.
+    const freshBudgetTokens = options.budgetTokens === undefined && physicalLimits
+      && exactActiveTokens + 2_048 >= physicalLimits.rolloverTokenLimit
+      ? physicalLimits.contextWindowTokenLimit : budgetTokens;
+    // Checkpoint maintenance is orthogonal to page retention: periodically seal
+    // settled source even when the current Web page can accept another delta.
+    stage("checkpoint_lookup");
+    const working = await selectNativeWorkingCheckpoint({
+      projection, currentTurnId: turn.channel.binding.authority.turnId,
+      ...(options.checkpointCache ? { cache: options.checkpointCache } : {}),
+      ...(options.visiblePrefix ? { visiblePrefix: options.visiblePrefix } : {}),
+      ...(checkpointProducer ? { producer: checkpointProducer } : {}),
+      ...(browserModel ? { browserModel } : {}),
+      policy: workingPolicy, preparationBudget,
+      ...(preparation ? { preparation, signal: preparation.signal } : {}),
+    });
+    const admitted = committed ? admittedRetainedContext(projection, committed,
+      currentRouteIdentity, budgetTokens, workingPolicy.outputReserveTokens) : undefined;
+    const pressure = admitted?.pressure;
     const pending = Symbol(threadId);
-    if (retained && committed) {
+    if (admitted && committed
+      && (!committed.physicalLimits || (pressure && !pressure.shouldRollover))) {
       stage("media_binding");
-      const bound = bindNativePhysicalEvidence(projection, retained);
-      const media = includedMedia(projection, bound);
-      const physicalContext = physicalMediaCost(bound, media);
+      const { physicalContext, media } = admitted;
       stage("settlement");
       pendingByTask.set(threadId, pending);
       return Object.freeze({
@@ -942,19 +984,20 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         settle: settleOwnedContext({
           threadId, pending, webEpochId: committed.webEpochId,
           inputHeadRevisionId: projection.headId, routeIdentity: currentRouteIdentity,
-          baseLogicalInputTokens: committed.baseLogicalInputTokens,
-          baseTransferInputTokens: committed.baseTransferInputTokens,
+          previousResidentTokens: committed.estimatedResidentTokens,
+          inputTokens: physicalContext.transferTokens + 1_024,
+          outputReserveTokens: workingPolicy.outputReserveTokens,
           ...(committed.physicalLimits ? { physicalLimits: committed.physicalLimits } : {}),
           ...(hotCandidate ? { hotHistory: hotCandidate } : {}),
         }),
       });
     }
     const contentById = new Map(projection.revisions.map(item => [item.revision.id, item.content]));
-    stage("checkpoint_lookup");
     const candidates = await cachedCheckpoints(options.checkpointCache, threadId);
-    let selected = activeCheckpoint(projection, candidates, budgetTokens);
-    const requestCheckpointFromCache = selected !== undefined;
-    let requestCheckpointProduced = false;
+    let selected = working.checkpoint ?? (options.visiblePrefix && browserModel
+      ? undefined : activeCheckpoint(projection, candidates, budgetTokens));
+    const requestCheckpointFromCache = !working.produced && selected !== undefined;
+    let requestCheckpointProduced = working.produced;
     let selectedContent = selected
       ? new Map([[selected.checkpoint.id, selected.content]])
       : new Map<string, string>();
@@ -975,20 +1018,33 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       lineage: projection.lineage,
       headId: projection.headId,
       source: sourceFor(),
-      ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+      ...(freshBudgetTokens !== undefined ? { budgetTokens: freshBudgetTokens } : {}),
       ...(selected ? { checkpoint: selected.checkpoint } : {}),
     });
     if (prepared.status === "checkpoint-required"
       && options.checkpointCache
       && checkpointProducer) {
-      const anchor = checkpointAnchor(projection);
+      const anchor = workingCheckpointAnchor(projection);
       if (!anchor) {
         throw new Error(
           `Native request context cannot preserve its newest revision within the ${prepared.budgetTokens}-token Web budget`,
         );
       }
+      // A current system/developer instruction is not historical work that may
+      // be replaced by lossy prose. Keep it exact or refuse the oversized task.
+      if (projection.revisions.slice(0, projection.revisions.indexOf(anchor) + 1)
+        .every(item => item.revision.kind === "system" || item.revision.kind === "developer")) {
+        throw new NativeHistoryBootstrapRequired("source_budget");
+      }
+      if (selected?.checkpoint.revisionId === anchor.revision.id) {
+        throw new NativeHistoryBootstrapRequired("source_budget");
+      }
+      const scoped = options.visiblePrefix && browserModel
+        ? nativeWorkingCheckpointScope(options.visiblePrefix.accountNamespace, threadId, browserModel)
+        : undefined;
       const existingAtAnchor = candidates.some(candidate => (
         candidate.checkpoint.revisionId === anchor.revision.id
+        && (scoped ? candidate.scopeFingerprint === scoped : candidate.scopeFingerprint === undefined)
       ));
       if (!existingAtAnchor) {
         const checkpointPhysicalContext = checkpointSourceContext(projection, anchor);
@@ -1014,6 +1070,10 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         }
         stage("checkpoint_production");
         let produced: NativeRequestCheckpointProductionResult;
+        let publication: {
+          scopeFingerprint: string; revisionId: string; sourceRootDigest: string;
+          stageKey: string; content: string; estimatedTokens: number;
+        } | undefined;
         if (stageOwner && checkpointMedia.length === 0) {
           // Reuse the existing account-owned durable stage ledger, not a second
           // compressor or an unbounded retry of the same summarization request.
@@ -1028,6 +1088,17 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
             ...(preparation ? { preparation, signal: preparation.signal } : {}),
           });
           produced = { nativeTaskId: threadId, sourceRevisionId: anchor.revision.id, content: summary };
+          if (browserModel) {
+            const value = JSON.parse(summary) as { completedStageKey: string };
+            publication = {
+              scopeFingerprint: nativeWorkingCheckpointScope(stageOwner.accountNamespace, threadId, browserModel),
+              revisionId: anchor.revision.id, sourceRootDigest: source.digest,
+              stageKey: value.completedStageKey, content: summary, estimatedTokens: checkpointTokens(summary),
+            };
+            if (stageOwner.journal.publishCheckpoint) {
+              await stageOwner.journal.publishCheckpoint(publication);
+            }
+          }
         } else produced = await checkpointProducer(Object.freeze({
           nativeTaskId: threadId,
           sourceRevisionId: anchor.revision.id,
@@ -1047,6 +1118,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           revisionId: anchor.revision.id,
           content,
           estimatedTokens: checkpointTokens(content),
+          ...(publication ? { scopeFingerprint: publication.scopeFingerprint } : {}),
         });
         requestCheckpointProduced = true;
         selectedContent = new Map([[selected.checkpoint.id, selected.content]]);
@@ -1055,7 +1127,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           lineage: projection.lineage,
           headId: projection.headId,
           source: sourceFor(),
-          ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+          ...(freshBudgetTokens !== undefined ? { budgetTokens: freshBudgetTokens } : {}),
           checkpoint: selected.checkpoint,
         });
       }
@@ -1069,27 +1141,29 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // history) is atomic transport context. Provider-level assistant
     // presentation trimming must not sever its provenance or limitations.
     stage("physical_context_fit");
+    // Tool results are original evidence, not merely settled assistant style.
+    // The shared checkpoint may summarize a sealed prefix with readback caveats,
+    // but the fresh execution presenter must not quietly shorten unsummarized proof.
+    const protectedNativeEvidence = Object.freeze([
+      ...projection.protectedRevisionIds,
+      ...projection.revisions.filter(item => item.revision.kind === "tool-result")
+        .map(item => item.revision.id),
+    ]);
+    const withInstructions = withExactCurrentInstructions(prepared.physicalContext, projection);
     const providerProjection = physicalLimits
-      ? fitFreshWebPhysicalContext(prepared.physicalContext, physicalLimits, projection.protectedRevisionIds)
-      : projectFreshWebPhysicalContext(prepared.physicalContext, undefined, {
-          protectedRevisionIds: projection.protectedRevisionIds,
+      ? fitFreshWebPhysicalContext(withInstructions, {
+          ...physicalLimits, rolloverTokenLimit: workingPolicy.firstMessageTargetTokens,
+        }, protectedNativeEvidence)
+      : projectFreshWebPhysicalContext(withInstructions, undefined, {
+          protectedRevisionIds: protectedNativeEvidence,
         });
     stage("media_binding");
     const boundContext = bindNativePhysicalEvidence(projection, providerProjection.context);
     const media = includedMedia(projection, boundContext, true);
-    const contextAttachment = browserModel && shouldUseChatGptContextAttachment(boundContext)
-      ? createChatGptContextAttachment(boundContext)
-      : undefined;
-    const contextWithFileCost = contextAttachment
-      ? Object.freeze({
-          ...boundContext,
-          transferTokens: Math.max(
-            boundContext.transferTokens,
-            estimateChatGptContextAttachmentTransferTokens(contextAttachment),
-          ),
-        })
-      : boundContext;
-    const physicalContext = physicalMediaCost(contextWithFileCost, media);
+    // One fresh task seed only: no separate file preload/ACK model turn.
+    // The composer/hard-window preflight below must refuse irreducible oversize
+    // rather than secretly spending an additional task conversation turn.
+    const physicalContext = physicalMediaCost(boundContext, media);
     const transportAnchor = prepared.plan.mode === "checkpoint-delta"
       ? `checkpoint:${prepared.plan.checkpointId}`
       : `full:${projection.headId}`;
@@ -1101,7 +1175,6 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       webEpochId: epochId,
       physicalContext,
       ...(media.length ? { media } : {}),
-      ...(contextAttachment ? { contextAttachment } : {}),
       ...(browserModel ? { browserModel } : {}),
       ...(physicalLimits ? { physicalLimits } : {}),
       diagnostics: Object.freeze({
@@ -1129,21 +1202,18 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         projection_omitted_tool_results: providerProjection.stats.omittedToolResults,
         projection_retention_step: providerProjection.stats.retentionStep,
         projection_fit_target: providerProjection.stats.fitTarget,
-        context_attachment: contextAttachment !== undefined,
+        context_attachment: false,
         media_reference_count: media.length,
         media_file_count: new Set(media.map(item => item.file.name)).size,
         media_unique_bytes: [...new Map(media.map(item => [item.file.name, item.file.bytes.byteLength])).values()]
           .reduce((sum, count) => sum + count, 0),
-        ...(contextAttachment ? {
-          context_attachment_chars: contextAttachment.contextJson.length,
-          context_attachment_bytes: Buffer.byteLength(contextAttachment.contextJson, "utf8"),
-        } : {}),
       }),
       settle: settleOwnedContext({
         threadId, pending, webEpochId: epochId,
         inputHeadRevisionId: projection.headId, routeIdentity: currentRouteIdentity,
-        baseLogicalInputTokens: currentLogicalInputTokens,
-        baseTransferInputTokens: physicalContext.transferTokens,
+        previousResidentTokens: 0,
+        inputTokens: physicalContext.transferTokens + 1_024,
+        outputReserveTokens: workingPolicy.outputReserveTokens,
         ...(physicalLimits ? { physicalLimits } : {}),
         ...(hotCandidate ? { hotHistory: hotCandidate } : {}),
       }),

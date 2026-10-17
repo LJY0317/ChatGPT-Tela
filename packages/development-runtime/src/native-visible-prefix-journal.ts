@@ -5,6 +5,7 @@ import { dirname, resolve, relative, isAbsolute, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   NativeVisiblePrefixStageIdentity, NativeVisiblePrefixStageJournal, NativeVisiblePrefixStageReceipt,
+  PublishedNativeWorkingCheckpoint,
 } from "./native-visible-prefix-checkpoint";
 
 const MAX_BYTES = 16 * 1024 * 1024;
@@ -12,6 +13,8 @@ const MAX_BYTES = 16 * 1024 * 1024;
 const MAX_RECORDS = 64;
 const RESERVED_ENTRY_BYTES = 32 * 1024 * 6 + 1024;
 const RETENTION_MS = 28 * 24 * 60 * 60 * 1000;
+const MAX_WORKING_CHECKPOINTS = 32;
+const MAX_WORKING_CHECKPOINT_BYTES = 40 * 1024;
 const queues = new Map<string, Promise<unknown>>();
 interface Entry extends NativeVisiblePrefixStageIdentity {
   status: "pending" | "completed" | "closed";
@@ -24,7 +27,22 @@ interface Entry extends NativeVisiblePrefixStageIdentity {
   updatedAt: number;
   summary?: string;
 }
-interface State { version: 1; entries: Entry[] }
+interface PublishedEntry extends PublishedNativeWorkingCheckpoint {
+  readonly contentHash: string;
+  readonly updatedAt: number;
+}
+interface State { version: 1; entries: Entry[]; checkpoints?: PublishedEntry[] }
+function sha(value: string): string { return createHash("sha256").update(value).digest("hex"); }
+function validPublished(input: PublishedNativeWorkingCheckpoint): boolean {
+  return /^[a-f0-9]{64}$/.test(input.scopeFingerprint)
+    && /^native_[a-zA-Z0-9_-]{20}$/.test(input.revisionId)
+    && /^[a-f0-9]{64}$/.test(input.sourceRootDigest)
+    && /^native-visible-stage-v2-[a-f0-9]{64}$/.test(input.stageKey)
+    && typeof input.content === "string" && !!input.content.trim()
+    && Buffer.byteLength(input.content, "utf8") <= MAX_WORKING_CHECKPOINT_BYTES
+    && Number.isSafeInteger(input.estimatedTokens) && input.estimatedTokens >= 0
+    && input.estimatedTokens === Math.ceil(Buffer.byteLength(input.content, "utf8") / 4);
+}
 function validIdentity(value: NativeVisiblePrefixStageIdentity): boolean {
   return /^native-visible-stage-(?:v2-)?[a-f0-9]{64}$/.test(value.key)
     && /^[a-f0-9]{64}$/.test(value.sourceDigest) && /^[a-f0-9]{64}$/.test(value.inputDigest);
@@ -39,6 +57,19 @@ function validate(value: unknown): State {
   const state = value as State;
   if (!state || state.version !== 1 || !Array.isArray(state.entries) || state.entries.length > MAX_RECORDS) {
     throw new Error("Invalid Native checkpoint execution journal");
+  }
+  if (state.checkpoints !== undefined) {
+    if (!Array.isArray(state.checkpoints) || state.checkpoints.length > MAX_WORKING_CHECKPOINTS) {
+      throw Error("Invalid published Web checkpoint journal");
+    }
+    const keys = new Set<string>();
+    for (const checkpoint of state.checkpoints) {
+      const key = JSON.stringify([checkpoint.scopeFingerprint, checkpoint.revisionId]);
+      if (!validPublished(checkpoint) || sha(checkpoint.content) !== checkpoint.contentHash
+        || !Number.isSafeInteger(checkpoint.updatedAt) || checkpoint.updatedAt < 0
+        || keys.has(key)) throw Error("Invalid published Web checkpoint");
+      keys.add(key);
+    }
   }
   const keys = new Set<string>();
   for (const entry of state.entries) {
@@ -184,6 +215,35 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     return this.#transaction(async state => state.entries.filter(entry => entry.status === "completed")
       .map(entry => Object.freeze({ key: entry.key, sourceDigest: entry.sourceDigest,
         inputDigest: entry.inputDigest, status: "completed" as const, summary: entry.summary! })));
+  }
+  /** Source-bound, durable rolling pointers, published only after a matching model stage completed.
+   * These are derived summary data, not execution claims. Old v1 journals remain readable. */
+  async publishedCheckpoints(scopeFingerprint: string): Promise<readonly PublishedNativeWorkingCheckpoint[]> {
+    if (!/^[a-f0-9]{64}$/.test(scopeFingerprint)) throw Error("Invalid Web checkpoint scope");
+    return this.#transaction(async state => Object.freeze((state.checkpoints ?? [])
+      .filter(item => item.scopeFingerprint === scopeFingerprint)
+      .map(({ scopeFingerprint, revisionId, sourceRootDigest, stageKey, content, estimatedTokens }) =>
+        Object.freeze({ scopeFingerprint, revisionId, sourceRootDigest, stageKey, content, estimatedTokens }))));
+  }
+  async publishCheckpoint(input: PublishedNativeWorkingCheckpoint): Promise<void> {
+    if (!validPublished(input)) throw Error("Invalid Web checkpoint publication");
+    await this.#transaction(async state => {
+      // The caller's summary must be the output of the exact completed owned stage.
+      // A pending/closed/foreign stage can never promote source coverage.
+      const parsed = JSON.parse(input.content) as Record<string, unknown>;
+      const completed = state.entries.find(item => item.key === input.stageKey
+        && item.status === "completed" && item.summary === parsed.summary);
+      if (!completed || parsed.completedStageKey !== input.stageKey
+        || parsed.sourceDigest !== input.sourceRootDigest
+        || parsed.type !== "tela_native_request_prefix_checkpoint_v1") {
+        throw Error("Web checkpoint publication has no matching completed summary");
+      }
+      const checkpoints = (state.checkpoints ?? []).filter(item =>
+        item.scopeFingerprint !== input.scopeFingerprint || item.revisionId !== input.revisionId);
+      checkpoints.push({ ...input, contentHash: sha(input.content), updatedAt: Date.now() });
+      state.checkpoints = checkpoints.slice(-MAX_WORKING_CHECKPOINTS);
+      await this.#write(state);
+    });
   }
   async claim(identity: NativeVisiblePrefixStageIdentity, ownerFingerprint?: string, sourceRootDigest?: string, scopeFingerprint?: string) {
     if (!validIdentity(identity)) throw new Error("Invalid Native checkpoint stage identity");

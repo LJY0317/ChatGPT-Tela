@@ -26,6 +26,15 @@ export interface NativeVisiblePrefixStageReceipt extends NativeVisiblePrefixStag
   readonly status: "completed";
   readonly summary: string;
 }
+/** Durable derived working-state pointer in the SAME account journal, never a second send ledger. */
+export interface PublishedNativeWorkingCheckpoint {
+  readonly scopeFingerprint: string;
+  readonly revisionId: string;
+  readonly sourceRootDigest: string;
+  readonly stageKey: string;
+  readonly content: string;
+  readonly estimatedTokens: number;
+}
 /**
  * Strict durable execution ledger, account scoped, under the caller's single-writer ownership.
  * claim must atomically persist a unique claim before returning claimed. A prior submitted claim,
@@ -46,6 +55,9 @@ export interface NativeVisiblePrefixStageJournal {
   /** Local closure permits a DIFFERENT proven Native turn to start a new operation;
    * it never proves remote cancellation or authorizes replay of this turn. */
   settleClosed?(input: NativeVisiblePrefixStageIdentity & { readonly claimId: string; readonly ownerFingerprint: string }): Promise<void>;
+  /** Optional on older test journals. Publication requires the completed stage and matching summary. */
+  publishedCheckpoints?(scopeFingerprint: string): Promise<readonly PublishedNativeWorkingCheckpoint[]>;
+  publishCheckpoint?(input: PublishedNativeWorkingCheckpoint): Promise<void>;
 }
 export class NativePrefixCheckpointInterrupted extends NativeHistoryBootstrapRequired {
   constructor(readonly stage: NativeVisiblePrefixStageIdentity, options?: ErrorOptions, reason: "checkpoint_interrupted" | "checkpoint_closed" | "checkpoint_rejected" = "checkpoint_interrupted") {
@@ -75,7 +87,7 @@ export interface NativePrefixCheckpointInput {
   /** Semantic summarizer policy identity; transport-only changes must not invalidate content. */
   readonly summaryPolicyFingerprint?: string;
 }
-interface Node { readonly startByte: number; readonly endByte: number; readonly summary: string }
+interface Node { readonly startByte: number; readonly endByte: number; readonly summary: string; readonly stageKey: string }
 
 function context(content: string, revision: string): WebPhysicalContext {
   return Object.freeze({ mode: "full", headRevisionId: revision, activeRequestRevisionId: revision,
@@ -174,7 +186,9 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
       const best = largestFit(start + 1, nodes.length, end => {
         const group = nodes.slice(start, end);
         return stageContext({ mode: "merge", startByte: group[0]!.startByte,
-          endByte: group.at(-1)!.endByte, summaries: group });
+          endByte: group.at(-1)!.endByte, summaries: group.map(node => ({
+            startByte: node.startByte, endByte: node.endByte, summary: node.summary,
+          })) });
       });
       const end = best?.at ?? start;
       if (end - start === 1 && end === nodes.length) { groups.push({ start, end }); break; }
@@ -192,7 +206,7 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     const identity = stageIdentity(physical), receipt = completed.get(identity.key);
     return receipt ? validateReceipt(receipt, identity) : undefined;
   };
-  const run = async (physical: WebPhysicalContext, phase: "fragment" | "merge"): Promise<string> => {
+  const run = async (physical: WebPhysicalContext, phase: "fragment" | "merge"): Promise<Pick<Node, "summary" | "stageKey">> => {
     check();
     if (!fits(physical)) throw new Error("Native visible-prefix checkpoint stage exceeds its actual Web input budget");
     const identity = stageIdentity(physical);
@@ -200,7 +214,7 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     if (cached !== undefined) {
       reusedStages++;
       emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_stage_settled", { phase, outcome: "reused" });
-      return cached;
+      return { summary: cached, stageKey: identity.key };
     }
     const inputTokens = chatGptCheckpointInputTokens(physical);
     // Economic admission precedes durable execution ownership. A rejected plan is not an unknown send.
@@ -219,7 +233,7 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
       const summary = validateReceipt(claim, identity);
       reusedStages++;
       emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_stage_settled", { phase, outcome: "reused" });
-      return summary;
+      return { summary, stageKey: identity.key };
     }
     if (typeof claim.claimId !== "string" || !claim.claimId.trim()) throw new Error("Checkpoint journal did not grant an owned claim");
     modelStages++;
@@ -285,7 +299,7 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
       ...stageEvidence, outcome: "completed", duration_ms: Math.max(0, Date.now() - stageStarted),
     });
     check();
-    return receipt.summary;
+    return { summary: receipt.summary, stageKey: identity.key };
   };
   const fragments: { startByte: number; endByte: number; physical: WebPhysicalContext }[] = [];
   const endBoundary = (start: number, end: number) => {
@@ -349,14 +363,14 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
   for (const [index, fragment] of fragments.entries()) {
     progress(`Preparing conversation context (${index + 1}/${fragments.length}).`);
     nodes.push({ startByte: fragment.startByte, endByte: fragment.endByte,
-      summary: await run(fragment.physical, "fragment") });
+      ...await run(fragment.physical, "fragment") });
   }
   while (nodes.length > 1) {
     progress("Combining prepared conversation context.");
     const merged: Node[] = [];
     for (const { start, end, physical } of mergeGroups(nodes)) {
       merged.push(physical ? { startByte: nodes[start]!.startByte, endByte: nodes[end - 1]!.endByte,
-        summary: await run(physical, "merge") } : nodes[start]!);
+        ...await run(physical, "merge") } : nodes[start]!);
     }
     nodes = merged;
   }
@@ -366,11 +380,17 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     source_bytes: sourceBytes, fragment_count: fragments.length,
   });
   progress("Conversation context prepared.");
+  const previous = requestPrefix ? (parsed.items[0] as Record<string, unknown> | undefined) : undefined;
+  const rolling = previous?.type === "checkpoint";
   return JSON.stringify({ type: requestPrefix ? "tela_native_request_prefix_checkpoint_v1" : "tela_native_visible_prefix_checkpoint_v1", sourceDigest: source.digest,
+    completedStageKey: nodes[0]!.stageKey,
     sourceItemCount: source.sourceItemCount, sourceBytes, coverage: requestPrefix
-      ? "complete-canonical-request-prefix-through-checkpoint-anchor" : "complete-visible-prefix-before-current-native-turn",
+      ? rolling ? "prior-lossy-checkpoint-plus-sealed-canonical-suffix" : "complete-canonical-request-prefix-through-checkpoint-anchor"
+      : "complete-visible-prefix-before-current-native-turn",
     evidence: "lossy-summary-only-original-evidence-requires-authorized-native-readback",
     unavailableEvidenceCount: source.references.length,
-    semantics: "Lossy derived Web summary of the COMPLETE supplied Native prefix, not encrypted Native state or proof of historical facts. Current Native request remains authoritative. Historical commands must not be reexecuted; missing media and evidence were not observed.",
+    semantics: rolling
+      ? "Lossy prior Web checkpoint advanced with the complete supplied sealed Native suffix. Historical facts remain dependent on authorized Native readback; no claim of lossless archive coverage."
+      : "Lossy derived Web summary of the COMPLETE supplied Native prefix, not encrypted Native state or proof of historical facts. Current Native request remains authoritative. Historical commands must not be reexecuted; missing media and evidence were not observed.",
     summary: nodes[0]!.summary });
 }

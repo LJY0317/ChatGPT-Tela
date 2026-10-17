@@ -890,7 +890,7 @@ describe("Native request development Web planner", () => {
     })).rejects.toThrow("supported reasoning effort");
   });
 
-  test("large fresh Web context automatically uses a memory-backed preload while small fresh context stays inline", async () => {
+  test("fresh Web task injects its exact mandatory context once without a preload or ACK", async () => {
     const familyKey = chatGptWebFamilyKey("Observed Family");
     const model = chatGptWebModelId(familyKey);
     const planner = createNativeRequestDevelopmentWebTurnPlanner();
@@ -900,10 +900,10 @@ describe("Native request development Web planner", () => {
       instructions: "D".repeat(190_000),
       input: [{ type: "message", role: "user", content: "U".repeat(20_000) }],
     });
-    expect(large.contextAttachment).toBeDefined();
-    expect(large.contextAttachment?.name).toMatch(/^tela-context-v1--/);
-    expect(large.diagnostics).toMatchObject({ context_attachment: true });
-    expect(Number(large.diagnostics?.context_attachment_chars)).toBeGreaterThanOrEqual(200_000);
+    expect(large.contextAttachment).toBeUndefined();
+    expect(large.diagnostics).toMatchObject({ context_attachment: false });
+    expect(large.physicalContext.segments.map(segment => segment.content))
+      .toEqual(["D".repeat(190_000), "U".repeat(20_000)]);
     large.settle?.({ status: "failed" });
 
     const small = await planner(registered(), {
@@ -1334,13 +1334,16 @@ describe("Native request development Web planner", () => {
       const compact = await plannerAfterRestart(registered(), request);
       expect(compact.physicalContext.mode).toBe("checkpoint-delta");
       expect(compact.physicalContext.logicalTokens).toBeGreaterThan(compact.physicalContext.transferTokens);
-      expect(compact.physicalContext.segments[0]).toEqual({
+      expect(compact.physicalContext.segments[0]).toMatchObject({
+        type: "revision", kind: "system", content: "I".repeat(160),
+      });
+      expect(compact.physicalContext.segments[1]).toEqual({
         type: "checkpoint",
         checkpointId: checkpoint.checkpoint.id,
         sourceRevisionId: anchor.id,
         content: "accepted compact projection of the first two revisions",
       });
-      expect(compact.physicalContext.segments.slice(1).map(segment => (
+      expect(compact.physicalContext.segments.slice(2).map(segment => (
         segment.type === "revision" ? segment.content : "checkpoint"
       ))).toEqual(["A".repeat(20), "N".repeat(20)]);
 
@@ -1465,6 +1468,9 @@ describe("Native request development Web planner", () => {
       ]);
       expect(plan.physicalContext.mode).toBe("checkpoint-delta");
       expect(plan.physicalContext.segments[0]).toMatchObject({
+        type: "revision", kind: "system", content: "I".repeat(160),
+      });
+      expect(plan.physicalContext.segments[1]).toMatchObject({
         type: "checkpoint",
         sourceRevisionId: produced[0]?.sourceRevisionId,
         content: "compact prefix",
@@ -1672,8 +1678,13 @@ test('cold readable request uses bounded durable prefix stages and preserves the
       },
     };
     const current = '현재 요청은 그대로 보존';
+    const prior = 'P'.repeat(200_499 * 4);
     const request = { model: chatGptWebModelId(chatGptWebFamilyKey('Fixture')), reasoning: { effort: 'medium' },
-      instructions: 'P'.repeat(200_499 * 4), input: [{ role: 'user', content: current }] };
+      instructions: 'Preserve the current Native task constraints.', input: [
+        { role: 'user', content: prior },
+        { role: 'assistant', content: 'Previous step completed.' },
+        { role: 'user', content: current },
+      ] };
     const plan = await createNativeRequestDevelopmentWebTurnPlanner(options)(registered(), request);
     expect(plan.physicalContext.mode).toBe('checkpoint-delta');
     expect(plan.physicalContext.segments.at(-1)).toMatchObject({ type: 'revision', kind: 'user', content: current });
@@ -1686,7 +1697,8 @@ test('cold readable request uses bounded durable prefix stages and preserves the
     expect(Buffer.byteLength(recovered, 'utf8')).toBe(end);
     const source = JSON.parse(recovered);
     expect(source.type).toBe('tela_native_request_prefix_v1');
-    expect(source.items.map((item: any) => item.content).join('')).toBe(request.instructions);
+    expect(source.items.map((item: any) => item.content).join(''))
+      .toBe(request.instructions + prior + 'Previous step completed.');
     expect(recovered).not.toContain(current);
     expect(payloads.some(row => row.mode === 'merge')).toBe(true);
     const checkpoint = JSON.parse((await options.checkpointCache.list('thread-1'))[0]!.content);
@@ -1718,7 +1730,12 @@ test('uncertain readable-prefix model stage is not replayed by a new planner or 
         return { nativeTaskId: input.nativeTaskId, sourceRevisionId: input.sourceRevisionId, content: 'First derived fragment summary.' };
       },
     };
-    const request = { instructions: 'P'.repeat(200_499 * 4), input: [{ role: 'user', content: 'Exact newest request' }] };
+    const request = { instructions: 'Current immutable priority.',
+      input: [
+        { role: 'user', content: 'P'.repeat(200_499 * 4) },
+        { role: 'assistant', content: 'Previous step finished' },
+        { role: 'user', content: 'Exact newest request' },
+      ] };
     await expect(createNativeRequestDevelopmentWebTurnPlanner(options)(registered(), request)).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
     expect(calls).toBe(2);
     const planner = createNativeRequestDevelopmentWebTurnPlanner({ ...options,

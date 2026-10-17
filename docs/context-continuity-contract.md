@@ -1,7 +1,8 @@
 # Native / Web context continuity contract
 
-This is the current contract and implementation plan, replacing dated source-candidate narratives.
-The target lifecycle below is not installed behavior. Execution budgets and receipt settlement
+This is the current contract and source implementation record, replacing dated source-candidate narratives.
+The revised lifecycle has **not been installed or validated with a real Web account/model**.
+Execution budgets and receipt settlement
 remain defined by [token-efficiency.md](token-efficiency.md).
 
 ## Bounds and current gaps
@@ -20,12 +21,26 @@ in constant space; old details require authorized readback. An oversized exact c
 unresolved causal chain can require recovery. Bounded admission does not guarantee success for every
 arbitrary task, or a globally bounded Native archive.
 
-At `97dc2d5`, retained deltas, source-bound checkpoints, bounded fragmentation, durable stage reuse
-and cost refusal exist. Cold preparation is still largely fit-failure driven. Local compaction can
-construct a roughly 490k transfer candidate before rejecting it; limits refuse oversized work rather
-than continuously reducing it. This is not a proven bounded steady-state working set. Dynamic Web
-capacity, small cold-start targets, incremental checkpoint advance and settled epoch-usage accounting
-remain implementation work.
+The installed baseline `97dc2d5` supports retained deltas, source-bound checkpoints, bounded
+fragmentation, durable stage reuse and cost refusal but does **not** maintain a rolling working set.
+In the subsequent local source implementation, `web-working-context-policy.ts` resolves one
+calibration/operational policy; `native-working-context.ts` advances prior checkpoint + sealed suffix;
+the existing `context-cache.ts` and `native-visible-prefix-journal.ts` atomically publish a
+completed, source-bound checkpoint pointer. Both regular planning and Native local compaction call
+that selector. None of this changes the installed runtime.
+
+Product defaults remain **conservative calibration**, not discovered browser limits: 95,000
+estimated resident tokens for physical rollover, the existing effort-dependent hard/checkpoint
+source limits, 24,000 first-message operational target, 8,000 checkpoint-content target, 13,952
+uncheckpointed-suffix target and 2,048 per-settled-turn output/tool reserve. A single large
+settled revision may exceed the suffix target; one maintenance call must still pass the hard source
+and finite preparation budgets. There is no dynamic Web capacity query.
+
+Physical residency is estimated monotonically from accepted task input, observed settled
+final-answer size and a per-turn reserve. It is **not** billed provider usage and cannot observe
+all hidden reasoning or in-browser tool output. A checkpoint or shorter Native active context
+cannot subtract already-resident Web tokens. These estimates remain a limitation, not a guarantee
+of actual account capacity.
 
 ## One capacity and working-set policy
 
@@ -158,11 +173,11 @@ references are not observations; old files/images/commands need current authoriz
 
 | Slice | Existing boundary | Required change |
 | --- | --- | --- |
-| Capacity/policy | physical-limits.ts, web-model-catalog.ts, checkpoint-preparation-budget.ts | Typed capacity/confidence and one resolver distinguish Native/Web hard limits, operational targets, reserves and cost. No invented capability. |
-| Checkpoint advance | context-cache.ts, native-visible-prefix-checkpoint.ts, existing journal | Source-bound rolling summary over prior checkpoint plus bounded suffix; atomic promotion, compatible reuse and unknown-send fencing. No second ledger. |
-| Common planning | native-request-planner.ts, native-context-continuity.ts, native-local-compaction.ts | One working-set maintenance/selection policy; archived history is not recurring model-summary input. Preserve Native compaction response semantics. |
-| Physical lifecycle | web-epoch-pressure.ts, planner settlement, existing surface owner | Monotonic occupancy per real generation; checkpoints do not reset residency; only necessary rotation. |
-| Evidence | Existing diagnostics and efficiency fixtures | First input bytes/estimate, resident usage/confidence, checkpoint/suffix size, new/reused calls, duplicate transfer, surfaces by purpose, rotation reason and runway; no payload or idle sampler. |
+| Capacity/policy | physical-limits.ts, web-model-catalog.ts, checkpoint-preparation-budget.ts | `web-working-context-policy.ts` resolves conservative calibration vs smaller targets; Web catalog rows no longer inherit Native context/compaction/output numbers. |
+| Checkpoint advance | context-cache.ts, native-visible-prefix-checkpoint.ts, existing journal | Scope-bound rolling summary, completed stage -> durable same-journal pointer -> disposable cache. Missing cache can rehydrate; unknown stages cannot publish. |
+| Common planning | native-request-planner.ts, native-context-continuity.ts, native-local-compaction.ts | Shared on-demand `selectNativeWorkingCheckpoint` selection. Compaction reuses prior working state without an extra bootstrap summary. |
+| Physical lifecycle | web-epoch-pressure.ts, planner settlement, existing surface owner | Monotonic estimated residency per owned generation; checkpoint updates do not rotate a healthy retained page. |
+| Evidence | Existing diagnostics and efficiency fixtures | Counted stage inputs/calls, coverage/reuse, checkpoint+suffix and resident estimates; Electron host counts successful task, summary, account/probe and setup surface acquisitions by purpose. Actual provider billing and failed partial OS-window allocations remain unknown. |
 
 Implement in dependency order as reviewable slices. Do not install a partial checkpoint migration
 that strands completed receipts. Keep source tests, installed readiness and actual useful live
