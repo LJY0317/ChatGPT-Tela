@@ -55,12 +55,15 @@ is **profile-scoped**, never automatically attributed to a supplied
 Native conversation UUID. Native `thread/read(includeTurns:false)`
 and bounded paginated latest-turn reads independently establish status.
 
-Tela's existing explicitly opted-in `recognized_once` policy can
-process **one narrowly recognized ordinary one-shot choice per proven card**
-with exact card identity, replay fencing and input/clearance evidence. It
-cannot select **Always allow**, authorize an ambiguous card, or approve
-warnings flagged `requiresManualReview`. An agent may triage these
-warnings but its assessment is not a substitute for human approval.
+Tela automation defaults off. On an already owned Web operation, explicit
+`recognized_once` or `recognized_conversation` preferences select one exact,
+unique current-action choice. Discovery accepts marked provider cards and
+accessible dialogs with the exact connector heading; nested wrappers represent
+one candidate and retain their warning scope. Unknown auxiliary controls and
+Deny cardinality do not veto an otherwise proven target. Generic `Allow` needs
+the card-local connector heading; explicit `Allow once` does not borrow that
+meaning from arbitrary page text. Persistent `Always allow` is never selected.
+Warnings still require human review. Platform pre-ingress review is independent.
 
 **Manual one-shot consent and accepted request identity:** On a proven
 owned Web surface, a human may click a currently recognized approval-card
@@ -99,27 +102,16 @@ small, fixed vocabulary: `absent`, `eligible_once`, `eligible_conversation`, `ma
 Each report includes a next action and `agentMayApprove:false`; an
 ordinary `eligible_once` result only means an **already running,
 owner-bound Web turn** may use its existing opt-in auto-approval path.
-The explicitly selected `recognized_conversation` mode prefers a
-uniquely visible **Allow for this conversation** choice on the currently
-owned Web card, without warnings, an ambiguous choice or a competing
-`Always allow` scope. If a normal card has one exact `Approval options`
-disclosure with a visible, hit-tested target and `aria-controls`, the
-provider may **open that disclosure once** (not grant approval), then
-revalidate the unchanged card body, its unique expanded linked menu,
-all exposed options, **warnings within the linked menu as well as the
-card**, and the exact conversation-scoped target. If menu
-items and native buttons coexist without unambiguous ownership, automatic
-approval is withheld rather than guessing which control to activate. If menu
-opening or its revalidation is indeterminate, the renderer permanently
-fences that card from further automatic activation. A new scope choice
-rotates the prepared revision, which must be bound to the actual click
-receipt before it can be counted as verified success. The adapter never
-guesses the contents of a closed menu or selects `Always allow`.
-Warnings and unknown/ambiguous menu items remain human-only.
-Existing `recognized_once` preferences remain one-shot.
-The Control Center toggle selects the conversation mode on a fresh opt-in;
-`off` remains the default. This applies to Tela-owned Web approval cards,
-**not ChatGPT host-platform approval cards before tool ingress**.
+The explicitly selected `recognized_conversation` mode prefers a unique
+**Allow for this conversation** choice. An exact card-local **Approval options**
+disclosure may be opened once, followed by unchanged-card, unique linked-menu,
+warning and target revalidation. Native buttons and menuitems are deduplicated;
+a button with `role=menuitem` is one control. Auxiliary controls and a separate
+persistent choice do not make the chosen narrower control ambiguous.
+The same pure choice resolver runs in policy and renderer preparation, before
+and after scrolling. The host separately verifies card/revision, current owner,
+viewport hit target and cancellation before dispatch. A card receives at most
+one uncertain activation; neither new revision nor clearance resets its fence.
 
 The profile's currently selected Web surface reports this classification
 through the typed bridge-preview contract. It is optional and **only
@@ -147,31 +139,26 @@ platform safety review remains mandatory. This mitigates one renderer-stall
 failure mode; it does not by itself prove the original `accepted_user_changed`
 incident is repaired.
 
-The automatic dispatcher is bounded to **at most 8 still-unverified
-automatic approval dispatches per accepted Web turn**, not 8 successful
-approvals. An exact card leaves the budget only after trusted input receipt,
-observed card clearance and renewed owned-assistant progress; clicking
-alone, hiding the card, or observing an unrelated Native result does not
-release its slot. The one-click card fingerprint fence remains in force
-even after success, so budget release never authorizes replay. Once
-8 dispatches remain unverified,
-the provider reports a manual-review action and will not approve another
-card or resume by replaying the accepted request. `approval_agent_review`
-diagnostics are content-free and bounded per turn; they distinguish
-eligibility, manual warning and limit reached. This additional limit
-has no new model calls, periodic monitoring or global approval ledger.
-Existing `off` remains the default.
+The former eight-dispatch budget is replaced by a state rule: **while a
+previous automatic dispatch remains unverified, withhold another automatic
+dispatch**. Trusted input, observed clearance and owned assistant progress are
+all required to verify it. Verified approvals have no count limit. A direct
+card replacement only supplies clearance, never execution success on its own.
+The existing public `limit_reached` category now reports this unresolved state;
+it does not describe a fixed successful-approval quota. No additional model
+calls, polling or retry path are introduced.
 
-**Human-review time policy:** An unanswered manual approval is not a failed
-execution. On an existing owned observation, Tela emits progressively clearer
-user-visible progress after two minutes and fifteen minutes of the *same
-card* remaining unresolved. Those are display-only thresholds, not background
-model calls or authority extensions. Tela does **not** automatically press
-`Deny`, retire a proven accepted turn, recreate a physical Web session or
-resend an accepted request based on wall time. If the real owner/card is
-unavailable, status must become unknown and reconciliation is needed before
-any fresh authorized turn. A user's explicit Stop remains the cancellation
-path; no deadline is misrepresented as consent.
+**Approval wait lifecycle:** Program-owned timers wake the existing observation
+at 30 seconds (visible pending state), two minutes (prolonged wait), five minutes
+(fresh owner/lineage, renderer and eligibility observation), and ten minutes
+(terminate the owned accepted operation). The ten-minute deadline fences result
+and approval delivery before bounded owner-verified public Stop dispatch.
+It never selects Deny, assumes approval success, or resubmits an accepted task.
+Native cancellation and browser Stop share the provider cancellation contract.
+Stop delivery, observed disappearance of generation controls, surface release,
+and remote execution outcome remain distinct. A missing/failed Stop proof keeps
+the remote outcome uncertain. Late approval cannot revive the retired Native
+operation. No extra LLM call manages the wait.
 
 **Not yet implemented:** an agent-triggered `approve_once` API for an
 already pending card. Before implementing it, prove exact Native turn,
@@ -245,3 +232,23 @@ raw commands, credentials, prompts or card bodies.
 Source implementation is distinct from the installed product. Real
 approval recognition and external host policy decisions require live
 acceptance evidence; passing local tests proves neither.
+
+## Official platform evidence availability (reviewed 2026-10-18)
+
+The [Responses MCP guide](https://developers.openai.com/api/docs/guides/tools-connectors-mcp)
+exposes `mcp_approval_request`, `mcp_approval_response`, approval request IDs and
+MCP call items to the client that owns that API response. These are not an event
+feed for a separate ChatGPT UI conversation; Tela's MCP server has not obtained
+that host response stream. [MCP Events](https://developers.openai.com/plugins/build/mcp-events)
+lets ChatGPT subscribe to server-originated events; it does not give the server
+a subscription to ChatGPT approval cards. [Secure MCP Tunnel documentation](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+notes app invocation/auth lifecycle compliance logs and tunnel metadata audit
+logs, not a server entitlement to arbitrary pre-ingress approval decisions.
+No applicable authorized host approval feed was found in the installed contract.
+
+Tela can correlate its own ingress/start/complete timestamps, operation receipts,
+owned Web approval transitions and explicitly recorded user observations.
+Before-ingress waiting duration, reviewer identity, warning contents and decision
+remain unobserved unless an authorized official source supplies them. Missing
+ingress is not proof of a host refusal. Never log capability tokens, arguments,
+prompts, cookies or raw card text; never fabricate host request IDs from local IDs.

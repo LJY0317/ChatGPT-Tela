@@ -901,17 +901,24 @@ Both paths are bounded and structural. If a catalog path changes or becomes ambi
 privacy-safe counts/stages, clears only its dedicated probe surface, and fails closed; it never clicks an
 arbitrary card or treats an unbound submission as equivalent to selecting **ChatGPT Tela**.
 
-Approval automation is a separate opt-in policy boundary. Default mode is `off`. The only automated mode is
-`recognized_once`: one structurally recognized tool-approval card with one deny choice and one one-shot allow
-choice may be activated. Persistent `Always allow`, unknown layouts, multiple cards, or ambiguous controls are
-never auto-approved. Approval-card text, tool arguments, prompt content, or raw HTML are not exported from the
-renderer for policy decisions or diagnostics. The user may choose one bounded delay preset from instant
-through 15 seconds. Tela waits first and only then inspects the **current** card from scratch, so a stale card
-target is never retained across the delay.
-Approval-card appearance, replacement, mutation and removal contribute an opaque revision to the
-semantic surface snapshot, so card-only changes wake the observer. Approval processing can run before
-an assistant message exists, after turn-lineage ambiguity checks. Diagnostic transitions contain only
-assistant phase, card count and policy mode; they never include card text or tool arguments.
+Approval automation defaults to `off`. Explicit `recognized_once` and
+`recognized_conversation` preferences share a pure choice resolver with renderer
+preparation. Candidate discovery is separate from execution: marked provider
+cards and connector-owned accessible dialogs are candidates, while exact choice
+uniqueness, unchanged card/revision, owner, hit testing and one-shot input fences
+govern dispatch. Auxiliary controls, Deny count and a separate persistent choice
+are metadata, not global vetoes. Generic Allow requires exact card-local connector
+identity; persistent Always allow remains unselected. Nested candidate wrappers
+retain their complete warning scope. Trusted input, clearance, owned progress and
+Native result are separate evidence. One unresolved dispatch blocks another;
+verified successful approvals have no count limit. See
+[approval lifecycle and review boundaries](approval-review-boundaries.md).
+
+Program-owned approval timers publish 30-second/two-minute progress, revalidate
+at five minutes and retire the owned operation at ten minutes. Expiry and Native
+Stop fence delivery before a bounded provider Stop attempt and physical release.
+No timer implies Deny, accepted-task failure/success or permission to resend;
+unconfirmed remote cancellation remains uncertain.
 
 Visible provider security warnings are still manual-review decisions, including in any future
 user-selected automation mode. The replaceable provider adapter may classify a warning into a
