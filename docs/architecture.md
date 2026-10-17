@@ -2,6 +2,8 @@
 
 ## Tela Chat-first dogfooding and work-runtime parity (2026-10-16)
 
+Material refactors and branch integrations must follow the [selective integration and nonregression review contract](refactoring-guardrails.md). Treat current `main` as the semantic baseline; do not reintroduce obsolete whole-branch trees or parallel ownership/retry paths. Report code growth, tests, lifecycle and context-cost deltas before acceptance.
+
 For ordinary Tela repository development, use Tela Chat from the outset instead of requiring a failed Native-tool attempt; DevSpace is an independently authorized technical fallback. Exact-turn Native tools remain required for Native-authority tasks, and reliable Web-model Native-tool execution remains a long-term product goal. This changes local operator workflow, not the consumer Work/Codex default or backend authority. Platform safety/permission refusals are not retried through another model, service or command shape. Separate a refusal from a technical tool failure and a post-acceptance observation failure.
 
 The target is measured Chat work quality at least comparable to Work/Codex, not equality of tool names. See [the semantic capability and parity contract](chat-work-capability-parity.md): durable logical work record, independently proven physical session/workspace/turn bindings, runtime-discovered semantic capability descriptors with effect/authority/proof/replay semantics, bounded typed result artifacts, event-driven orchestration and matched outcome/resource benchmarks. This is an unimplemented design/acceptance roadmap unless subsequent source/test/installed evidence proves a specific gate. Keep Tela Chat and Tela Codex peer failure/authority domains and the frozen public Gateway schema.
