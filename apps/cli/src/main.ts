@@ -12,7 +12,7 @@ import { summarizeDiagnosticWorkload } from "./diagnostic-workload";
 import { summarizeWorkIncident } from "./work-incident";
 import { observeDesktopPerformance } from "./desktop-performance";
 import { summarizeRetentionCanary } from "./retention-canary";
-import { workTerminalArguments, runWorkTerminal } from "@chatgpt-tela/codex";
+import { workTerminalArguments, runWorkTerminal, connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import { diagnoseDefaultDesktop, resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
 import {
   probePublicMcp,
@@ -25,6 +25,7 @@ import {
 } from "./product-config-selection";
 import { profileSlotFromArguments } from "./profile-selection";
 import { runWebDelegationCommand } from "./web-delegation";
+import { inspectNativeThread } from "./native-thread-inspection";
 import {
   readChatAgentProvidersConfig,
   readChatApprovedRootsConfig,
@@ -878,6 +879,45 @@ async function main(): Promise<void> {
     await setupProfile(slot(), productPaths);
     return;
   }
+  if (command === "thread") {
+    if (process.argv[3] !== "inspect") throw new Error("usage: chatgpt-tela thread inspect --thread UUID [--slot N] [--minutes 1-120]");
+    const threadId = option("--thread");
+    if (!threadId) throw new Error("thread inspect requires --thread UUID");
+    const slotNumber = slot();
+    const manifest = readOwnershipManifest(productPaths.installManifest);
+    if (!manifest) throw new Error("thread inspect requires an owned Tela installation");
+    const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
+    const running = await supervisor.current({ service: "codex",
+      descriptorPath: serviceDescriptorPath(productPaths, "codex") });
+    if (!running) throw new Error("thread inspect requires the installed Codex service");
+    const codex = new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
+    const before = (await codex.profiles(AbortSignal.timeout(10_000))).find(item => item.slot === slotNumber);
+    if (!before || before.controlState !== "running" || before.targetSessionState !== "ready") {
+      throw new Error("the selected profile's Native owner is not ready");
+    }
+    const session = await codex.terminalSession(slotNumber, AbortSignal.timeout(10_000));
+    const rpc = await connectCodexAppServerWebSocket(session.endpoint, { signal: AbortSignal.timeout(10_000) });
+    try {
+      const report = await inspectNativeThread({
+        rpc, threadId, slot: slotNumber,
+        diagnosticPaths: diagnosticSourcePaths(productPaths.logsRoot),
+        ...(option("--minutes") ? { minutes: Number(option("--minutes")) } : {}),
+      });
+      // A read from a stale owner must not be presented as current evidence.
+      const after = (await codex.profiles(AbortSignal.timeout(10_000))).find(item => item.slot === slotNumber);
+      const again = await codex.terminalSession(slotNumber, AbortSignal.timeout(10_000));
+      if (!after || after.controlState !== "running" || after.targetSessionState !== "ready"
+        || after.childProcessId !== before.childProcessId
+        || after.responsesRouteFingerprint !== before.responsesRouteFingerprint
+        || again.endpoint !== session.endpoint) {
+        throw new Error("profile Native owner changed during read-only inspection");
+      }
+      console.log(JSON.stringify(report, null, 2));
+    } finally {
+      await rpc.close().catch(() => {});
+    }
+    return;
+  }
   if (command === "work") {
     if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("work requires an interactive terminal");
     const manifest = readOwnershipManifest(productPaths.installManifest);
@@ -1050,6 +1090,7 @@ async function main(): Promise<void> {
     + "  diagnostics incident [--minutes <1-120>]\n"
     + "  diagnostics trace [--minutes <1-120>]\n"
     + "  diagnostics desktop [--seconds <5-60>] (macOS)\n"
+    + "  thread inspect --thread UUID [--slot N] [--minutes <1-120>] (read-only)\n"
     + "  retention-canary [--minutes <1-120>]\n"
     + "  uninstall (--dry-run | --apply) [--remove-data]\n"
     + "  chat roots\n"

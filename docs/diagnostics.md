@@ -133,6 +133,42 @@ and makes no model calls. It does not reduce cold-checkpoint inference time.
 
 ## Per-turn context evidence
 
+### Exact Native conversation inspection by ID
+
+When the user supplies an original Native conversation UUID, use one scoped,
+read-only inspection instead of searching private rollout files or repeatedly
+auditing all logs:
+
+```sh
+bun run cli thread inspect --thread <Native-conversation-UUID> --slot 2 --minutes 30
+```
+
+Profile 1 is the default. The CLI authenticates the currently installed Codex
+service, checks the selected Native profile ownership before and after the read,
+asks the public app-server for `thread/read(includeTurns:false)` and at most
+four `thread/turns/list(itemsView:notLoaded)` metadata rows. Indexed-history
+capability is required for turn metadata; older Legacy threads return only
+thread metadata without transferring unindexed rollout history.
+
+The same exact conversation ID is converted to an existing 24-character
+diagnostic scope fingerprint. Only that scope's bounded structural events are
+shown (at most 24 recent event summaries), including recent context transfer
+estimates and the **last observed** manual-review wait. A pending log entry
+does **not** prove a card remains on screen right now; inspect the current
+owned surface and original request before a manually authorized click.
+Unknown or host-owned platform security review requires its ordinary manual
+review; neither the agent nor a local preference can auto-grant it. Do not
+replay an accepted request to clear a pending approval. No conversation body,
+tool arguments, DOM, attachments, secret, path or account metadata is
+exported, and this command sends, edits, approves and cancels nothing.
+
+For remote work, the same scoped status can help an agent tell the user
+whether the Native turn is still active, a past approval wait has no observed
+clearance, and which safe next action is available. It cannot guarantee
+unattended completion when the host requires a separate human safety review;
+remote approval needs a specifically authenticated user/host interface with
+fresh card identity and an actual receipt, not an inferred browser click.
+
 ```sh
 chatgpt-tela diagnostics context --scope <24-character-scope-fingerprint> --minutes 120
 ```

@@ -45,6 +45,15 @@ The product treats the following as explicit design principles:
 - **Multi-OS and efficient by default** — macOS, Windows, and Linux remain architectural targets; long-running work is event-driven/on-demand, with idle CPU, wakeups, battery, I/O, and log volume treated as design constraints.
 - **Evidence-first diagnostics** — failure-triggered, structured, privacy-safe, bounded evidence is preferred over always-on telemetry or ad-hoc raw logs.
 
+For development operators diagnosing one existing Native conversation, a
+read-only source CLI command now joins its exact thread status, recent bounded
+turn statuses, matching structural diagnostic events and last observed approval
+wait without searching the user's private messages:
+`bun run cli thread inspect --thread <UUID> --slot 2 --minutes 30`.
+See [diagnostics](docs/diagnostics.md) for limits. The CLI cannot approve
+provider security reviews or attest the state of an inaccessible host card;
+unattended execution cannot be promised while human review is outstanding.
+
 - Make installation, repair, upgrade, and **complete removal** first-class product lifecycles. Tela records
   what it owns and never relies on an undocumented cleanup checklist.
 - Present one **ChatGPT Tela** integration. The mainstream setup is ChatGPT's built-in
