@@ -1,7 +1,10 @@
 # Native / Web context continuity contract
 
 This is the current contract and source implementation record, replacing dated source-candidate narratives.
-The revised lifecycle has **not been installed or validated with a real Web account/model**.
+The source implementation was installed with the official signed local upgrade as
+`0.0.0-context-continuity-20261017.f1a482c.1`. Profile 1/2 and Web route readiness
+were checked without sending model messages. **Real account/model semantic or
+billing validation remains unperformed and user-owned.**
 Execution budgets and receipt settlement
 remain defined by [token-efficiency.md](token-efficiency.md).
 
@@ -27,7 +30,8 @@ In the subsequent local source implementation, `web-working-context-policy.ts` r
 calibration/operational policy; `native-working-context.ts` advances prior checkpoint + sealed suffix;
 the existing `context-cache.ts` and `native-visible-prefix-journal.ts` atomically publish a
 completed, source-bound checkpoint pointer. Both regular planning and Native local compaction call
-that selector. None of this changes the installed runtime.
+that selector. These changes were included in the locally installed `f1a482c`
+source release, not in the preceding `97dc2d5` runtime.
 
 Product defaults remain **conservative calibration**, not discovered browser limits: 95,000
 estimated resident tokens for physical rollover, the existing effort-dependent hard/checkpoint

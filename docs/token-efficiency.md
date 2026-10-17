@@ -296,7 +296,7 @@ An insufficient whole-plan budget, missing journal, unsupported media or uncerta
 before further sends. Enabling staged compaction does not raise the default preparation budget;
 very large cold histories may still need a verified checkpoint or explicitly configured cost policy.
 
-## Rolling working-context accounting (local source, not installed; 2026-10-17)
+## Rolling working-context accounting (signed local source installation; 2026-10-17)
 
 `web-working-context-policy.ts` resolves the common policy for regular Web tasks and
 Native compaction. Fixed conservative capacity calibration is not browser discovery.
