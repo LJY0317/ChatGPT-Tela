@@ -483,7 +483,7 @@ describe("browser turn runner", () => {
     expect(released).toEqual(["surface-1"]);
   });
 
-  test.each([false, true])("Native cancellation stops the accepted Web turn once before release; stop fails=%s", async stopFails => {
+  test.each(["success", "failure", "hung"] as const)("Native cancellation stops the accepted Web turn once before release; stop=%s", async stopMode => {
     const owner = new AbortController();
     const channel = new RuntimeTurnChannel(binding());
     const released: string[] = [];
@@ -503,7 +503,8 @@ describe("browser turn runner", () => {
         expect(released).toEqual([]);
         expect(String(channel.phase)).toBe("indeterminate-after-acceptance");
         expect(() => channel.complete("late answer")).toThrow();
-        if (stopFails) throw new Error("Web stop unconfirmed");
+        if (stopMode === "failure") throw new Error("Web stop unconfirmed");
+        if (stopMode === "hung") await new Promise<void>(() => {});
       },
     };
     const run = runBrowserTurn({ browserHost: browserHost(released), provider: wrapped, channel,
@@ -515,7 +516,7 @@ describe("browser turn runner", () => {
     expect(submissions).toBe(1);
     expect(released).toEqual(["surface-1"]);
     await expect(channel.waitForFinal()).rejects.toThrow();
-  });
+  }, 10_000);
 
   test("Native tool-state wake must not discard an already observed one-shot Web event", async () => {
     const channel = new RuntimeTurnChannel(binding());

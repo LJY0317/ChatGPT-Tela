@@ -312,14 +312,22 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       }
     }
     if (acceptedHandle && input.provider.cancelTurn) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         // Provider cancellation owns fresh surface/turn proof and a bounded stop
         // attempt. It never authorizes resubmission or settles the remote result.
-        await input.provider.cancelTurn(surface, acceptedHandle);
+        await Promise.race([
+          input.provider.cancelTurn(surface, acceptedHandle),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("Web cleanup deadline")), 5_000);
+          }),
+        ]);
       } catch {
         emitDiagnosticEvent("chatgpt_tela_work", "web_turn_cleanup_unavailable", {
           reason_class: "stop_unconfirmed", remote_outcome: "unknown", retryable: false,
         });
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
     throw error;

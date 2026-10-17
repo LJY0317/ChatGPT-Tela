@@ -35,7 +35,7 @@ private struct ControlCenterProfilesEnvelope: Decodable {
 }
 
 private struct ControlCenterBridgeSurface: Decodable { let id: String; let label: String }
-private struct ControlCenterApprovalReview: Decodable { let classification: String }
+private struct ControlCenterApprovalReview: Decodable { let classification: String; let reviewReason: String? }
 
 private struct ControlCenterBridgePreview: Decodable {
   let approvalState: String?
@@ -1751,9 +1751,18 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       }
       if preview.selectedSurfaceId != nil && preview.approvalState == "pending" {
         if preview.approvalReview?.classification == "manual_review" {
-          bridgeMessage += "\nSecurity review is required. Open Interact to inspect the card."
+          let reason: String
+          switch preview.approvalReview?.reviewReason {
+          case "tool_description_policy_directive": reason = "The tool description requires review."
+          case "suspicious_instruction": reason = "The card contains an instruction that requires review."
+          case "provider_warning": reason = "The Web provider displayed a security warning."
+          default: reason = "Manual review is required."
+          }
+          bridgeMessage += "\n\(reason) Open Interact to inspect the card."
         } else if preview.approvalReview?.classification == "limit_reached" {
-          bridgeMessage += "\nThe automatic approval limit was reached. Open Interact to review this card."
+          bridgeMessage += "\nA previous approval has not been confirmed. Open Interact to inspect the current card; Tela will not click again while its outcome is uncertain."
+        } else if preview.approvalReview?.classification == "eligible_conversation" {
+          bridgeMessage += "\nThe card matches the configured conversation approval policy; only its owning Work turn may act on it. Use Interact if it remains blocked."
         } else if preview.approvalReview?.classification == "eligible_once" {
           bridgeMessage += "\nThe card matches the configured one-shot policy; only its owning Work turn may act on it. Use Interact if it remains blocked."
         } else {
