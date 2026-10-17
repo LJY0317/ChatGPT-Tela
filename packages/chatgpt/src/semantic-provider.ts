@@ -38,6 +38,7 @@ import type {
   WebTurnHandle,
   WebTurnRequest,
   WebTurnState,
+  WebApprovalWaitProjection,
 } from "./index";
 import { isChatGptTemporaryChatUrl, isChatGptProvisionalConversationUrl } from "./session";
 
@@ -1723,6 +1724,17 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       value: { providerTurnId: tracked.handle.providerTurnId, callId },
       evidence: evidence("captured exact assistant state before MCP result handoff"),
     };
+  }
+
+  inspectApprovalWait(surface: BrowserSurfaceLease): WebApprovalWaitProjection | undefined {
+    const tracked = this.#turns.get(surface);
+    if (!tracked || tracked.surfaceLeaseId !== surface.leaseId) return;
+    const elapsedMs = tracked.approvalObservation.pendingElapsedMs(Date.now());
+    const phase = tracked.approvalObservation.phase;
+    if (elapsedMs === undefined || phase === undefined) return;
+    return Object.freeze({ phase, elapsedMs, expiresAfterMs: 600000,
+      unverifiedDispatchCount: tracked.approvalObservation.unverifiedDispatchCount,
+      operationState: tracked.operationAbort.signal.aborted || tracked.retirement ? "stopping" : "waiting" });
   }
 
   #retireTurn(surface: BrowserSurfaceLease, tracked: TrackedTurn): void {

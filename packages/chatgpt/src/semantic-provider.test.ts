@@ -2757,6 +2757,8 @@ test.each(["pending", "cleared_before", "preparation", "replacement", "hidden", 
     driver.queued.push({ ...driver.current, revision: "owned-pending", approval: recognizedApproval,
       turns: [...driver.current.turns, { key: "assistant-wait", role: "assistant", parentUserTurnKey: "user-turn-1", phase: "tool-wait" }] });
     const event = () => provider.waitForTurnEvent(surface.lease, submitted.value, owner.signal);
+    expect(provider.inspectApprovalWait(surface.lease)).toBeUndefined();
+    expect(provider.inspectApprovalWait({ ...surface.lease })).toBeUndefined();
     if (scenario === "preparation") {
       let preparationSignal: AbortSignal | undefined;
       driver.processApprovalCard = async (_mode, signal) => {
@@ -2774,6 +2776,8 @@ test.each(["pending", "cleared_before", "preparation", "replacement", "hidden", 
       return;
     }
     expect((await event()).state).toBe("proven");
+    expect(provider.inspectApprovalWait(surface.lease)).toMatchObject({ phase: "pending", elapsedMs: 0,
+      expiresAfterMs: 600000, unverifiedDispatchCount: 0, operationState: "waiting" });
     if (scenario === "forgotten") {
       await advance(600_000);
       expect(stops).toBe(1);
@@ -2805,6 +2809,7 @@ test.each(["pending", "cleared_before", "preparation", "replacement", "hidden", 
     await advance(29_999);
     expect(stops).toBe(0);
     await advance(1);
+    expect(provider.inspectApprovalWait(surface.lease)).toMatchObject({ phase: "pending", elapsedMs: 30_000 });
     expect(await pending).toMatchObject({ state: "proven", value: { kind: "progress", summary: expect.stringContaining("thirty seconds") } });
     pending = event(); await advance(0); await advance(90_000);
     expect(await pending).toMatchObject({ state: "proven", value: { summary: expect.stringContaining("two minutes") } });
@@ -2823,6 +2828,7 @@ test.each(["pending", "cleared_before", "preparation", "replacement", "hidden", 
       await advance(0);
       if (scenario === "hidden") {
         expect(await pending).toMatchObject({ state: "proven", value: { kind: "progress", summary: expect.stringContaining("card cleared") } });
+        expect(provider.inspectApprovalWait(surface.lease)).toMatchObject({ phase: "card_cleared", elapsedMs: 540_000 });
         pending = event(); void pending.catch(() => {}); await advance(0);
       }
     }
@@ -2842,6 +2848,7 @@ test.each(["pending", "cleared_before", "preparation", "replacement", "hidden", 
     await advance(1); await expect(pending).rejects.toMatchObject({ code: "tela_web_approval_expired", retryable: false }); expect(stops).toBe(1);
     driver.current = { ...driver.current, approval: { ...recognizedApproval, inputReceived: true } };
     await expect(event()).rejects.toThrow("not bound");
+    expect(provider.inspectApprovalWait(surface.lease)).toBeUndefined();
     expect(driver.approvalCalls).toBe(0);
   } finally { clock.mockRestore(); timeout.mockRestore(); clear.mockRestore(); clearTimeout(watchdog); await surface.host.close(); }
 });
@@ -2877,7 +2884,10 @@ test.each(["owned", "changed_author"] as const)("public cancellation aborts pend
     await preparing;
     if (scenario === "changed_author") driver.current = { ...driver.current, turns: driver.current.turns.map(t => t.role === "user"
       ? { ...t, contentFingerprint: hash("changed request with same renderer keys") } : t) };
-    await provider.cancelTurn(surface.lease, submitted.value);
+    const cancelling = provider.cancelTurn(surface.lease, submitted.value);
+    expect(provider.inspectApprovalWait(surface.lease)).toMatchObject({ operationState: "stopping" });
+    await cancelling;
+    expect(provider.inspectApprovalWait(surface.lease)).toBeUndefined();
     expect(preparationSignal!.aborted).toBe(true);
     await expect(waiting).rejects.toThrow("Owned Web operation retired");
     expect(physicalStops).toBe(scenario === "owned" ? 1 : 0);
