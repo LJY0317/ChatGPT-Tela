@@ -5,12 +5,15 @@ type Input = Parameters<NonNullable<ElectronWebContentsLike["sendInputEvent"]>>[
 // Closed semantic categories only; actual keys and shortcut combinations are never logged.
 function keyKind(input: any): "modifier" | "navigation" | "editing" | "activation" | "other" {
   if (["Shift", "Control", "Alt", "Meta", "OS", "Super"].includes(input.key)) return "modifier";
-  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End"].includes(input.key)) return "navigation";
-  if (["Enter", " ", "Space", "Tab", "Escape"].includes(input.key)) return "activation";
+  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", "Tab"].includes(input.key)) return "navigation";
+  if (["Enter", " ", "Space", "Escape"].includes(input.key)) return "activation";
   if (["Backspace", "Delete"].includes(input.key) || (typeof input.key === "string" && [...input.key].length === 1)) return "editing";
   return "other";
 }
 type Pending = { revision: number; down: Input; up?: Input; move?: Input };
+// A frozen renderer must not keep a human's intercepted input pending forever.
+// The event is discarded, not replayed or granted new request authority.
+const DEFAULT_INPUT_CLASSIFICATION_DEADLINE_MS = 5_000;
 type Emitter = ElectronWebContentsLike & {
   on?: (name: string, listener: (...args: any[]) => void) => void;
   removeListener?: (name: string, listener: (...args: any[]) => void) => void;
@@ -25,6 +28,9 @@ export class InspectionInput {
   #revision = 0;
   #selecting = false;
   #pending: Pending | undefined;
+  #pendingDeadline: ReturnType<typeof setTimeout> | undefined;
+  #rendererUnresponsive = false;
+  #stalledInputCount = 0;
   #interactive: boolean | undefined;
   readonly #origin = diagnosticContext();
   #inputCount = 0;
@@ -54,11 +60,15 @@ export class InspectionInput {
       input_revision: this.#revision, input_count: this.#inputCount,
     }));
   }
-  constructor(readonly contents: Emitter) {
+  constructor(readonly contents: Emitter, readonly classificationDeadlineMs = DEFAULT_INPUT_CLASSIFICATION_DEADLINE_MS) {
+    if (!Number.isSafeInteger(classificationDeadlineMs) || classificationDeadlineMs < 1
+      || classificationDeadlineMs > 30_000) throw new Error("invalid input classification deadline");
     contents.on?.("before-mouse-event", this.mouse);
     contents.on?.("before-input-event", this.key);
     contents.on?.("did-start-navigation", this.documentChanged);
     contents.on?.("render-process-gone", this.documentChanged);
+    contents.on?.("unresponsive", this.rendererUnresponsive);
+    contents.on?.("responsive", this.rendererResponsive);
   }
   setInteractive(interactive: boolean): void {
     if (this.#disposed || !this.contents.on || !this.contents.removeListener) {
@@ -79,9 +89,34 @@ export class InspectionInput {
   }
   reset(): void {
     const pending = !!this.#pending;
+    this.#clearPendingDeadline();
     this.#revision++; this.#pending = undefined; this.#selecting = false;
     if (pending) this.#notifyObservationSettled();
   }
+  #clearPendingDeadline(): void {
+    if (this.#pendingDeadline !== undefined) {
+      clearTimeout(this.#pendingDeadline);
+      this.#pendingDeadline = undefined;
+    }
+  }
+  rendererUnresponsive = (): void => {
+    this.#rendererUnresponsive = true;
+    if (!this.#pending) return;
+    // The event was prevented before any renderer delivery. An unresponsive
+    // renderer cannot safely classify/replay it, now or after recovery.
+    this.#clearPendingDeadline();
+    this.#pending = undefined;
+    this.#selecting = false;
+    withDiagnosticContext(this.#origin, () => emitDiagnosticEvent("chatgpt_tela_browser",
+      "inspection_input_classification_unavailable", {
+        reason_class: "renderer_unresponsive", input_replayed: false, ownership_revoked: false,
+      }));
+  };
+  rendererResponsive = (): void => {
+    if (!this.#rendererUnresponsive) return;
+    this.#rendererUnresponsive = false;
+    this.#notifyObservationSettled();
+  };
   send = (input: Input): void => {
     if (this.#disposed || !this.contents.sendInputEvent) throw new Error("owned browser input is unavailable");
     const previous = this.#owned;
@@ -89,6 +124,16 @@ export class InspectionInput {
     try { this.contents.sendInputEvent(input); } finally { this.#owned = previous; }
   };
   mouse = (event: { preventDefault(): void }, input: any): void => {
+    if (!this.#owned && this.#rendererUnresponsive) {
+      event.preventDefault();
+      if (input.type === "mouseDown" && ++this.#stalledInputCount <= 16) {
+        withDiagnosticContext(this.#origin, () => emitDiagnosticEvent("chatgpt_tela_browser",
+          "inspection_input_classification_unavailable", {
+            reason_class: "renderer_unresponsive", input_replayed: false, ownership_revoked: false,
+          }));
+      }
+      return;
+    }
     // A click cannot be declared foreign before its current card-local
     // target is classified. In particular, a verified manual one-shot
     // consent must preserve the original accepted request's causal fence.
@@ -119,6 +164,21 @@ export class InspectionInput {
     const observing = this.#observing;
     const pending = { revision: this.#revision, down: input } as Pending;
     this.#pending = pending;
+    this.#pendingDeadline = setTimeout(() => {
+      if (this.#pending !== pending) return;
+      this.#pendingDeadline = undefined;
+      this.#pending = undefined;
+      this.#selecting = false;
+      // The intercepted click was never delivered. Preserve the accepted
+      // request witness; on renderer recovery the person may click afresh.
+      withDiagnosticContext(this.#origin, () => emitDiagnosticEvent("chatgpt_tela_browser",
+        "inspection_input_classification_unavailable", {
+          reason_class: "renderer_timeout", input_replayed: false,
+          ownership_revoked: false, deadline_ms: this.classificationDeadlineMs,
+        }));
+      this.#notifyObservationSettled();
+    }, this.classificationDeadlineMs);
+    this.#pendingDeadline.unref?.();
     // One hit test per selection gesture, no pointer-move queries or idle polling.
     const code = `(() => {
       let node = document.elementFromPoint(${input.x}, ${input.y});
@@ -168,15 +228,28 @@ export class InspectionInput {
       if (pending.move) this.send(pending.move);
       if (pending.up) this.send(pending.up);
       else this.#selecting = true;
-    }).catch(() => { if (!observing) this.#observationRevision++; })
+    }).catch(() => {
+      if (this.#pending !== pending) return;
+      // A failed *read-only* hit test did not send the intercepted gesture.
+      // Unknown input is not an edit if it was never delivered.
+      withDiagnosticContext(this.#origin, () => emitDiagnosticEvent("chatgpt_tela_browser",
+        "inspection_input_classification_unavailable", {
+          reason_class: "renderer_rejected", input_replayed: false, ownership_revoked: false,
+        }));
+    })
       .finally(() => {
         if (this.#pending !== pending) return;
+        this.#clearPendingDeadline();
         this.#pending = undefined;
         // Wake the existing renderer clock even when selection causes no DOM mutation.
         this.#notifyObservationSettled();
       });
   };
   key = (event: { preventDefault(): void }, input: any): void => {
+    if (!this.#owned && this.#rendererUnresponsive) {
+      event.preventDefault();
+      return;
+    }
     if (!this.#owned && !this.#observing && input.type === "keyDown") {
       const copy = (input.meta || input.control) && !input.alt && !input.shift && input.key?.toLowerCase() === 'c';
       const kind = keyKind(input);
@@ -225,7 +298,7 @@ export class InspectionInput {
       }));
     }).catch(() => {});
   };
-  documentChanged = (): void => { this.reset(); };
+  documentChanged = (): void => { this.#rendererUnresponsive = false; this.reset(); };
   dispose(): void {
     if (this.#disposed) return;
     withDiagnosticContext(this.#origin, () => emitDiagnosticEvent("chatgpt_tela_browser", "inspection_owner_disposed", {
@@ -238,5 +311,7 @@ export class InspectionInput {
     this.contents.removeListener?.("before-input-event", this.key);
     this.contents.removeListener?.("did-start-navigation", this.documentChanged);
     this.contents.removeListener?.("render-process-gone", this.documentChanged);
+    this.contents.removeListener?.("unresponsive", this.rendererUnresponsive);
+    this.contents.removeListener?.("responsive", this.rendererResponsive);
   }
 }

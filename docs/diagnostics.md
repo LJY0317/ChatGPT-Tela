@@ -188,6 +188,14 @@ when those events are available. The result is explicitly temporal
 correlation, **not proof of which physical input caused the failure**.
 An unclassified input does not establish that the user edited or sent
 anything; the diagnostic never authorizes replay of an accepted request.
+The `inspection_input_classification_unavailable` event distinguishes a
+read-only approval/viewing hit-test that timed out (`renderer_timeout`) or
+was rejected (`renderer_rejected`), or Electron signaled a frozen renderer
+(`renderer_unresponsive`). All outcomes explicitly report
+`input_replayed=false` and `ownership_revoked=false`: the user's click
+was intercepted but **never delivered** and cannot be replayed later from
+the same hit test. A later `inspection_ownership_revoked` needs separate
+investigation; a temporal association alone does not prove cause.
 For agents connected to Tela Chat, the same functionality is exposed as the
 separate **read-only** `inspect_native_evidence` capability (with opened
 `workspace_id`, exact `thread_id`, optional `minutes` up to 360).
@@ -202,6 +210,10 @@ asks the public app-server for `thread/read(includeTurns:false)` and at most
 four `thread/turns/list(itemsView:notLoaded)` metadata rows. Indexed-history
 capability is required for turn metadata; older Legacy threads return only
 thread metadata without transferring unindexed rollout history.
+The public Native thread state is verified against the same finite allowed
+values whether the upstream response uses `status: "idle"` or
+`status: {type:"idle"}`. Unknown states, mismatched exact thread IDs or
+unproven profile ownership still fail closed.
 
 The same exact conversation ID is converted to an existing 24-character
 diagnostic scope fingerprint. Only that scope's bounded structural events are

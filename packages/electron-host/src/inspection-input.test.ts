@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InspectionInput } from "./inspection-input";
 import { runInNewContext } from "node:vm";
-function fixture() {
+function fixture(classificationDeadlineMs?: number) {
   const listeners = new Map<string, (...args: any[]) => void>();
   const sent: unknown[] = []; let copied = 0; let allowed = false;
   const contents = {
     on(name: string, fn: (...args: any[]) => void) { listeners.set(name, fn); },
     removeListener(name: string) { listeners.delete(name); },
-    async executeJavaScript() { return allowed; },
+    async executeJavaScript(): Promise<unknown> { return allowed; },
     sendInputEvent(input: any) {
       let blocked = false;
       listeners.get(input.type.startsWith("mouse") ? "before-mouse-event" : "before-input-event")?.({ preventDefault() { blocked = true; } }, input);
@@ -18,7 +18,7 @@ function fixture() {
     },
     copy() { copied++; }, isDestroyed() { return false; },
   };
-  const gate = new InspectionInput(contents);
+  const gate = new InspectionInput(contents, classificationDeadlineMs);
   return { gate, contents, listeners, sent, allow() { allowed = true; }, get copied() { return copied; } };
 }
 const down = { type: "mouseDown" as const, x: 20, y: 20, button: "left" as const };
@@ -201,11 +201,92 @@ test("recognized consent preserves large accepted send while an unrelated input 
   expect(f.sent).toEqual([down, up, down, up]);
   f.gate.dispose();
 });
+test("unresponsive renderer expires the intercepted gesture without revoking accepted request or replaying late consent", async () => {
+  const f = fixture(15);
+  f.gate.setInteractive(true);
+  let release!: (value: string) => void;
+  f.contents.executeJavaScript = async (code?: string) =>
+    code?.includes("chatgpt-tela-inspection-settled")
+      ? undefined : new Promise<string>(resolve => { release = resolve; });
+  const owner = f.gate.current(), observation = f.gate.observationCurrent();
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
+  expect(f.gate.observationCurrent().pending).toBe(true);
+  await new Promise(resolve => setTimeout(resolve, 35));
+  expect(f.gate.observationCurrent()).toEqual(observation);
+  expect(f.gate.current().revision).toBe(owner.revision);
+  expect(owner.signal.aborted).toBe(false);
+  expect(f.sent).toEqual([]);
+  release("manual-consent");
+  await flush();
+  expect(f.sent).toEqual([]); // A stale promise never authorizes a click.
+  f.contents.executeJavaScript = async () => "manual-consent";
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
+  await flush();
+  expect(f.sent).toEqual([down, up]); // A *new* verified human gesture may proceed.
+  expect(owner.signal.aborted).toBe(false);
+  f.gate.dispose();
+});
+test("Electron unresponsive event immediately drops pending and new input until responsive, never approving a stale click", async () => {
+  const f = fixture(1_000); f.gate.setInteractive(true);
+  let release!: (value: string) => void;
+  f.contents.executeJavaScript = async (code?: string) =>
+    code?.includes("chatgpt-tela-inspection-settled")
+      ? undefined : new Promise<string>(resolve => { release = resolve; });
+  const owner = f.gate.current(), observed = f.gate.observationCurrent();
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
+  expect(f.gate.observationCurrent().pending).toBe(true);
+  const originalHitTest = release;
+  f.listeners.get("unresponsive")!();
+  expect(f.gate.observationCurrent().pending).toBe(false);
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
+  f.contents.sendInputEvent({ type: "keyDown", key: "Enter" });
+  expect(f.sent).toEqual([]);
+  expect(f.gate.observationCurrent()).toEqual(observed);
+  expect(owner.signal.aborted).toBe(false);
+  originalHitTest("manual-consent");
+  await flush();
+  expect(f.sent).toEqual([]);
+  f.listeners.get("responsive")!();
+  f.contents.executeJavaScript = async () => "manual-consent";
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
+  await flush();
+  expect(f.sent).toEqual([down, up]);
+  expect(owner.signal.aborted).toBe(false);
+  f.gate.dispose();
+  expect(f.listeners.size).toBe(0);
+});
+test("failed renderer hit test drops input without inventing an external request change", async () => {
+  const f = fixture(30); f.gate.setInteractive(true);
+  f.contents.executeJavaScript = async () => { throw new Error("renderer unavailable"); };
+  const owner = f.gate.current(), observed = f.gate.observationCurrent();
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
+  await flush();
+  expect(f.gate.observationCurrent()).toEqual(observed);
+  expect(owner.signal.aborted).toBe(false);
+  expect(f.sent).toEqual([]);
+  f.gate.dispose();
+});
+test("switching interaction mode discards an unresolved click and blocks delayed replay", async () => {
+  const f = fixture(30); f.gate.setInteractive(true);
+  let release!: (value: string) => void;
+  f.contents.executeJavaScript = async (code?: string) =>
+    code?.includes("chatgpt-tela-inspection-settled")
+      ? undefined : new Promise<string>(resolve => { release = resolve; });
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
+  expect(f.gate.observationCurrent().pending).toBe(true);
+  f.gate.setInteractive(false);
+  expect(f.gate.observationCurrent().pending).toBe(false);
+  release("manual-consent");
+  await flush();
+  expect(f.sent).toEqual([]);
+  f.gate.dispose();
+});
 test("pure modifier, navigation and copy never invalidate the prior accepted input; edits do", () => {
   const f = fixture(); f.gate.setInteractive(true);
   const strict = f.gate.current();
   for (const key of [
     { type: "keyDown", key: "Shift" }, { type: "keyDown", key: "ArrowDown" },
+    { type: "keyDown", key: "Tab" }, { type: "keyDown", key: "Tab", shift: true },
     { type: "keyDown", key: "c", meta: true },
   ]) f.contents.sendInputEvent(key);
   expect(f.gate.current().revision).toBe(strict.revision);

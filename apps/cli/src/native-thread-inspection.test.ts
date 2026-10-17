@@ -13,6 +13,8 @@ function fixtureReader(overrides: {
   readonly mismatchedOwner?: boolean;
   readonly legacy?: boolean;
   readonly malformedTurn?: boolean;
+  readonly stringStatus?: boolean;
+  readonly invalidStatus?: boolean;
 } = {}) {
   const calls: { method: string; params: any }[] = [];
   return {
@@ -21,7 +23,9 @@ function fixtureReader(overrides: {
       calls.push({ method, params });
       if (method === "thread/read") return {
         thread: { id: overrides.mismatchedOwner ? "foreign" : THREAD,
-          status: { type: "active" }, historyMode: overrides.legacy ? "legacy" : "paginated",
+          status: overrides.invalidStatus ? "not-a-native-state"
+            : overrides.stringStatus ? "active" : { type: "active" },
+          historyMode: overrides.legacy ? "legacy" : "paginated",
           updatedAt: 1792224222, title: "PRIVATE TASK NAME", cwd: "/PRIVATE/WORKSPACE" },
       };
       if (method === "thread/turns/list") return { data: [
@@ -196,6 +200,21 @@ describe("one read-only conversation inspection by exact Native ID", () => {
       expect(result.diagnostics.reviewEvidence).toBeNull();
       expect(result.continuation.classification).toBe("in_progress_without_verified_review");
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  test("exact owner status supports both documented Native status wire shapes but rejects unknown values", async () => {
+    const stringStatus = fixtureReader({ stringStatus: true });
+    const report = await inspectNativeThread({
+      rpc: stringStatus, threadId: THREAD, slot: 2, diagnosticPaths: [],
+    });
+    expect(report).toMatchObject({
+      identityVerified: true,
+      native: { state: "active", historyMode: "paginated",
+        recentTurns: [{ id: TURN, status: "inProgress" }] },
+    });
+    expect(stringStatus.calls.map(call => call.method)).toEqual(["thread/read", "thread/turns/list"]);
+    await expect(inspectNativeThread({
+      rpc: fixtureReader({ invalidStatus: true }), threadId: THREAD, slot: 2, diagnosticPaths: [],
+    })).rejects.toThrow("status is not proven");
   });
 
   test("rejects incorrect identity and content-bearing page, allows Legacy metadata only", async () => {

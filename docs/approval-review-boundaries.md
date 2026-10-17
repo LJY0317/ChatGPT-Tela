@@ -131,6 +131,22 @@ and neither a model judgment nor a profile preview alone authorizes
 the click. The exact card and revision are checked again immediately
 before the browser input.
 
+**Frozen-renderer human input:** An intercepted human pointer gesture stays
+pending until its current target is classified. If that read-only DOM hit test
+does not settle within 5 seconds, or Electron rejects it, the intercepted
+gesture is **discarded without replay**; it is never automatically treated as
+permission, an edited request or a new turn. Pending observation is released,
+so an otherwise owned Web request may continue once the renderer recovers.
+A main-process Electron `unresponsive` signal discards the same pending
+gesture immediately, and further human input stays blocked until the
+renderer reports `responsive` or a new document replaces it.
+A late result from the old hit test cannot dispatch the click. The person must
+click again after recovery. Unknown gestures that are actually classified and
+delivered still revoke the accepted input witness before delivery, and
+platform safety review remains mandatory. This mitigates one renderer-stall
+failure mode; it does not by itself prove the original `accepted_user_changed`
+incident is repaired.
+
 The automatic dispatcher is bounded to **at most 8 still-unverified
 automatic approval dispatches per accepted Web turn**, not 8 successful
 approvals. An exact card leaves the budget only after trusted input receipt,

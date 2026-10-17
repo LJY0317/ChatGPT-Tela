@@ -44,7 +44,11 @@ export async function inspectNativeThread(input: {
   if (!thread || thread.id !== threadId) {
     throw new Error("the requested Native conversation is not owned by this profile");
   }
-  const state = object(thread.status)?.type;
+  // Supported Native builds expose thread/read.status as either a public
+  // discriminated object or the same finite string enum. Keep exact owner,
+  // history, turn-metadata and status validation unchanged across both.
+  const state = typeof thread.status === "string"
+    ? thread.status : object(thread.status)?.type;
   if (!["active", "idle", "notLoaded"].includes(String(state))) {
     throw new Error("Native conversation status is not proven");
   }

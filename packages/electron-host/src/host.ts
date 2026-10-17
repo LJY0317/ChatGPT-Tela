@@ -133,6 +133,7 @@ export function createElectronBrowserHost(input: {
       }
     }
     let observed = 0;
+    let inputHitTestPending = () => false;
     if (emitter.on && emitter.removeListener) for (const [event, stage] of [
       ["did-start-loading", "navigation_started"], ["did-stop-loading", "navigation_settled"],
       ["did-fail-load", "navigation_failed"], ["render-process-gone", "renderer_crashed"],
@@ -142,6 +143,8 @@ export function createElectronBrowserHost(input: {
         observed++;
         withDiagnosticContext(origin, () => emitDiagnosticEvent("chatgpt_tela_browser", stage, {
           event_count: observed,
+          ...(["unresponsive", "responsive"].includes(event)
+            ? { input_hit_test_pending: inputHitTestPending() } : {}),
           ...(event === "did-fail-load" && typeof args[1] === "number" ? { error_code: args[1] } : {}),
         }));
       };
@@ -149,6 +152,7 @@ export function createElectronBrowserHost(input: {
     }
     const detachDiagnostics = () => { for (const [event, listener] of listeners) emitter.removeListener?.(event, listener); };
     const inspection = withDiagnosticContext(origin, () => new InspectionInput(emitter));
+    inputHitTestPending = () => inspection.observationCurrent().pending;
     const automation = new ElectronWebContentsPageAutomation(window.webContents, inspection.send);
     const preview = window.webContents.capturePage
       ? Object.freeze({

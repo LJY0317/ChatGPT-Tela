@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { resolve, join } from "node:path";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { BROWSER_DOCUMENT_LIFETIME, BROWSER_INPUT_OWNERSHIP, BROWSER_PAGE_AUTOMATION, BROWSER_READ_ONLY_PREVIEW } from "@chatgpt-tela/browser-host";
+import { BROWSER_DOCUMENT_LIFETIME, BROWSER_INPUT_OWNERSHIP, BROWSER_INSPECTION_INPUT, BROWSER_PAGE_AUTOMATION, BROWSER_READ_ONLY_PREVIEW } from "@chatgpt-tela/browser-host";
 import type { BrowserWindowConstructorOptions } from "electron";
 import { createElectronBrowserHost, type ElectronBrowserWindowLike } from "./host";
 import { createElectronMainProcessBrowserHost } from "./host";
@@ -381,6 +381,39 @@ test("browser lifecycle and input events retain one private surface identity acr
     expect(reveals[1].surface_fingerprint).not.toBe(reveals[0].surface_fingerprint);
     expect(disposals.map(row => row.surface_fingerprint)).toEqual(reveals.map(row => row.surface_fingerprint));
     expect(raw).not.toContain("PRIVATE_");
+  } finally {
+    await host.close();
+    if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("renderer stall records whether a human hit-test was pending, without any private event data", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "tela-renderer-stall-")), file = join(scratch, "events.jsonl");
+  const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  const window = new FakeWindow();
+  window.webContents.executeJavaScript = async () => new Promise<unknown>(() => {});
+  const host = createElectronBrowserHost({ profileId: "SECRET_PROFILE", createWindow: () => window });
+  try {
+    const surface = await host.acquire({ taskId: "SECRET_TASK", epochId: "SECRET_EPOCH" });
+    const inspection = surface.capability(BROWSER_INSPECTION_INPUT)!;
+    inspection.setInteractive(true);
+    window.webContents.emit("before-mouse-event", { preventDefault() {} },
+      { type: "mouseDown", button: "left", x: 10, y: 10 });
+    expect(surface.capability(BROWSER_INPUT_OWNERSHIP)?.observationCurrent?.().pending).toBe(true);
+    window.webContents.emit("unresponsive");
+    inspection.setInteractive(false); // Cancels the intercepted gesture; never replays it.
+    window.webContents.emit("responsive");
+    const raw = readFileSync(file, "utf8");
+    const rows = raw.trim().split("\n").map(line => JSON.parse(line));
+    expect(rows.find(row => row.stage === "renderer_unresponsive"))
+      .toMatchObject({ input_hit_test_pending: true });
+    expect(rows.find(row => row.stage === "renderer_responsive"))
+      .toMatchObject({ input_hit_test_pending: false });
+    expect(raw).not.toMatch(/SECRET_PROFILE|SECRET_TASK|SECRET_EPOCH/);
+    await host.release(surface.leaseId);
   } finally {
     await host.close();
     if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
