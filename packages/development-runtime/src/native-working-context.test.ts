@@ -245,6 +245,40 @@ test("large Web-released Native tool output consumes physical residency and forc
   second.settle?.({ status: "failed" });
 });
 
+test("zero-budget optional maintenance cannot block a proven healthy retained page", async () => {
+  const directory = root();
+  try {
+    let calls = 0;
+    const planner = createNativeRequestDevelopmentWebTurnPlanner({
+      checkpointCache: new FileContextCheckpointCache({ directory: join(directory, "cache") }),
+      visiblePrefix: { accountNamespace: "retained-account",
+        journal: new FileNativeVisiblePrefixStageJournal({
+          directory: join(directory, "journal"), initializationPath: join(directory, "initialization"),
+        }), async read(): Promise<never> { throw Error("no historical page needed"); } },
+      checkpointPreparationPolicy: { maxModelCalls: 0, maxInputTokens: 0, maxElapsedMs: 600_000 },
+      checkpointProducer: async () => { calls++; throw Error("must not call"); },
+    });
+    const first = await planner(registered("retained-first"), {
+      model, reasoning: { effort: "high" }, input: [{ role: "user", content: "Start" }],
+    });
+    const answer = "A".repeat(65_000);
+    first.settle?.({ status: "completed", documentGeneration: 1,
+      surfaceLeaseId: "owned-page", answer });
+    const next = await planner(registered("retained-next"), {
+      model, reasoning: { effort: "high" }, input: [
+        { role: "user", content: "Start" },
+        { role: "assistant", content: answer },
+        { role: "user", content: "Continue exactly" },
+      ],
+    });
+    expect(next.physicalContext.mode).toBe("retained-delta");
+    expect(next.webEpochId).toBe(first.webEpochId);
+    expect(next.physicalContext.segments.at(-1)?.content).toBe("Continue exactly");
+    expect(calls).toBe(0);
+    next.settle?.({ status: "failed" });
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("completed summaries reuse only under the exact account, Web family, effort and active ancestry", async () => {
   const directory = root();
   try {

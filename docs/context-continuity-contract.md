@@ -200,3 +200,35 @@ for checkpoint maintenance, one fresh task seed, zero summary calls for complete
 polishing/ACK and bounded auxiliary-surface counts. Retain meaning checks for objectives, active
 constraints, decisions, unfinished work and readback refs. These fixtures prove structural/cost gates,
 not lossless model understanding or real-account success.
+
+### Cold original-source recovery versus maintained steady state (2026-10-17 audit)
+
+The synthetic cold fixture with 411 indexed items and approximately 468,190
+source logical tokens (1,872,757 UTF-8 bytes) required 9 staged summary calls
+and approximately 873,988 combined model-input tokens by the existing
+hierarchical compressor. The default 8-call/791,240-input preparation budget
+refused it **before any model send** (0 new calls). This is distinct from the
+bounded, post-initialization rolling lifecycle and must not be reported as a
+successful cold recovery. The historical 461,623/490,590-token incident remains
+unproven without verified original source and current Native authority.
+
+A compatible completed stage/working checkpoint costs 0 new summarization
+calls. Otherwise, for a **verified paginated Native thread**, the owner may
+request the exact `NATIVE_WEB_HANDOFF_PROMPT` in a separate normal Native turn,
+receive one bounded final JSON summary with limitations, and choose Web on the
+immediately following turn. See `docs/native-web-continuity.md`. That is one
+user-authorized Native handoff call and one new Web task seed; it is not a
+background Web summary or an automatic fork. Web account charges/semantics
+remain unmeasured. For Legacy/unindexed or missing evidence, this procedure is
+not safe: continue Native or provide a newly supported verified source; no
+amount of automatic retry, paging or enlarged budget substitutes for proof.
+
+A model-call budget refusal for **optional maintained checkpoint work** now
+defers that work when a physically owned retained Web page already admits its
+proven exact delta. A pending/uncertain send, changed owner, source mismatch or
+hard capacity refusal is never downgraded to optional maintenance. Journal
+publication retains a last published head for every known active account/task/
+route scope within the existing fixed 32-entry capacity; an additional distinct
+scope refuses publication rather than silently evicting another task's sole
+recovery pointer. Previously completed stage claims remain subject to the
+unchanged execution journal retention/reconciliation rules.

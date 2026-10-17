@@ -145,3 +145,31 @@ test("completed receipt snapshots are immutable reads and never admit a pending 
   expect(Object.isFrozen(receipts[0])).toBe(true);
   expect(await journal.pendingOperations()).toHaveLength(0);
 }));
+
+test("published checkpoint rotation preserves the newest head per distinct scope and refuses cross-scope eviction", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options);
+  const publish = async (scope: number, revision: number) => {
+    const sourceRootDigest = hash(`root-${scope}-${revision}`);
+    const id = { key: `native-visible-stage-v2-${hash(`stage-${scope}-${revision}`)}`,
+      sourceDigest: hash(`input-${scope}-${revision}`),
+      inputDigest: hash(`wire-${scope}-${revision}`) };
+    const claim = await journal.claim(id, hash(`owner-${scope}-${revision}`), sourceRootDigest, hash(`scope-owner-${scope}`));
+    if (claim.status !== "claimed") throw Error("fixture claim rejected");
+    const summary = `summary ${scope}-${revision}`;
+    await journal.complete({ ...id, status: "completed", claimId: claim.claimId, summary });
+    const content = JSON.stringify({ type: "tela_native_request_prefix_checkpoint_v1",
+      sourceDigest: sourceRootDigest, completedStageKey: id.key, summary });
+    await journal.publishCheckpoint({ scopeFingerprint: hash(`published-${scope}`),
+      revisionId: `native_${hash(`revision-${scope}-${revision}`).slice(0, 20)}`,
+      sourceRootDigest, stageKey: id.key, content,
+      estimatedTokens: Math.ceil(Buffer.byteLength(content, "utf8") / 4) });
+  };
+  for (let scope = 0; scope < 32; scope++) await publish(scope, 0);
+  await publish(0, 1); // Old alternative in the same scope is disposable.
+  expect(await journal.publishedCheckpoints(hash("published-0"))).toHaveLength(1);
+  expect((await journal.publishedCheckpoints(hash("published-0")))[0]?.content).toContain("summary 0-1");
+  expect(await journal.publishedCheckpoints(hash("published-31"))).toHaveLength(1);
+  await expect(publish(32, 0)).rejects.toThrow("capacity exhausted");
+  expect(await journal.publishedCheckpoints(hash("published-0"))).toHaveLength(1);
+  expect(await journal.publishedCheckpoints(hash("published-31"))).toHaveLength(1);
+}), 30_000);

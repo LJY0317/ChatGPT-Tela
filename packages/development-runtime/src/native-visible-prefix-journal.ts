@@ -235,13 +235,29 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
         && item.status === "completed" && item.summary === parsed.summary);
       if (!completed || parsed.completedStageKey !== input.stageKey
         || parsed.sourceDigest !== input.sourceRootDigest
+        || completed.sourceRootDigest !== input.sourceRootDigest
         || parsed.type !== "tela_native_request_prefix_checkpoint_v1") {
         throw Error("Web checkpoint publication has no matching completed summary");
       }
       const checkpoints = (state.checkpoints ?? []).filter(item =>
         item.scopeFingerprint !== input.scopeFingerprint || item.revisionId !== input.revisionId);
       checkpoints.push({ ...input, contentHash: sha(input.content), updatedAt: Date.now() });
-      state.checkpoints = checkpoints.slice(-MAX_WORKING_CHECKPOINTS);
+      // Do not evict the only recoverable head of an unrelated active task.
+      // Discard an older alternative only where a scope retains a newer
+      // checkpoint. If there are too many distinct scopes, refuse publication
+      // without altering a completed receipt or the previous published heads.
+      while (checkpoints.length > MAX_WORKING_CHECKPOINTS) {
+        const counts = new Map<string, number>();
+        for (const checkpoint of checkpoints) counts.set(checkpoint.scopeFingerprint,
+          (counts.get(checkpoint.scopeFingerprint) ?? 0) + 1);
+        const disposable = checkpoints.findIndex(item =>
+          (counts.get(item.scopeFingerprint) ?? 0) > 1);
+        if (disposable < 0) {
+          throw Error("Native checkpoint journal publication capacity exhausted by distinct active scopes");
+        }
+        checkpoints.splice(disposable, 1);
+      }
+      state.checkpoints = checkpoints;
       await this.#write(state);
     });
   }

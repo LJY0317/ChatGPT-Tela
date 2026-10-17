@@ -1,4 +1,4 @@
-import { CheckpointPreparationBudget } from "./checkpoint-preparation-budget";
+import { CheckpointPreparationBudget, CheckpointPreparationBudgetExceeded } from "./checkpoint-preparation-budget";
 import { createHash } from "node:crypto";
 import {
   NativeHistoryBootstrapRequired,
@@ -937,24 +937,36 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     const freshBudgetTokens = options.budgetTokens === undefined && physicalLimits
       && exactActiveTokens + 2_048 >= physicalLimits.rolloverTokenLimit
       ? physicalLimits.contextWindowTokenLimit : budgetTokens;
-    // Checkpoint maintenance is orthogonal to page retention: periodically seal
-    // settled source even when the current Web page can accept another delta.
-    stage("checkpoint_lookup");
-    const working = await selectNativeWorkingCheckpoint({
-      projection, currentTurnId: turn.channel.binding.authority.turnId,
-      ...(options.checkpointCache ? { cache: options.checkpointCache } : {}),
-      ...(options.visiblePrefix ? { visiblePrefix: options.visiblePrefix } : {}),
-      ...(checkpointProducer ? { producer: checkpointProducer } : {}),
-      ...(browserModel ? { browserModel } : {}),
-      policy: workingPolicy, preparationBudget,
-      ...(preparation ? { preparation, signal: preparation.signal } : {}),
-    });
     const admitted = committed ? admittedRetainedContext(projection, committed,
       currentRouteIdentity, budgetTokens, workingPolicy.outputReserveTokens) : undefined;
     const pressure = admitted?.pressure;
+    const healthyRetained = !!(admitted && committed
+      && (!committed.physicalLimits || pressure && !pressure.shouldRollover));
+    // Maintenance is optional while the exact physical page is healthy.
+    // A budget refusal BEFORE the first maintenance stage claim may defer
+    // preparation; pending/uncertain sends and source/owner errors never may.
+    stage("checkpoint_lookup");
+    let working;
+    try {
+      working = await selectNativeWorkingCheckpoint({
+        projection, currentTurnId: turn.channel.binding.authority.turnId,
+        ...(options.checkpointCache ? { cache: options.checkpointCache } : {}),
+        ...(options.visiblePrefix ? { visiblePrefix: options.visiblePrefix } : {}),
+        ...(checkpointProducer ? { producer: checkpointProducer } : {}),
+        ...(browserModel ? { browserModel } : {}),
+        policy: workingPolicy, preparationBudget,
+        ...(preparation ? { preparation, signal: preparation.signal } : {}),
+      });
+    } catch (error) {
+      if (!healthyRetained || !(error instanceof CheckpointPreparationBudgetExceeded)
+        || preparationBudget.modelCalls !== 0) throw error;
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_working_checkpoint_deferred", {
+        reason_class: "preparation_budget", retained_page_proven: true,
+      });
+      working = { produced: false, reused: false, pendingSuffixTokens: 0 };
+    }
     const pending = Symbol(threadId);
-    if (admitted && committed
-      && (!committed.physicalLimits || (pressure && !pressure.shouldRollover))) {
+    if (healthyRetained && admitted && committed) {
       stage("media_binding");
       const { physicalContext, media } = admitted;
       stage("settlement");

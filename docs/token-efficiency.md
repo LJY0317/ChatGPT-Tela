@@ -337,3 +337,17 @@ the deterministic desktop fixture checks these categories. Events count only
 and not chargeable provider operations. Checkpoint stage/send events separately
 count possible model work. Actual provider billing, hidden reasoning/output
 and live account costs remain **unmeasured** and require owner validation.
+
+#### Cold source versus retained-page update acceptance
+
+For a synthetic 411-item/468,190-token cold source, preflight predicted
+9 stage calls and 873,988 total summary input tokens, exceeding default
+8-call/791,240-input admission; 0 summary calls and 0 task chats were opened.
+These figures are deterministic fixture projections, NOT a measurement of the
+specific incident or a provider bill. Completed compatible checkpoints are
+reused first at zero model calls. An explicitly user-requested, bounded Native
+handoff incurs one Native turn/model call plus one Web task seed, subject to
+public indexed history/current-turn verification; Legacy history has no such
+safe paging shortcut. Retained Web deltas proceed even if optional summary
+maintenance is declined before any execution claim. A maintenance failure with
+an uncertain stage never grants an alternate send or reusable completion.
