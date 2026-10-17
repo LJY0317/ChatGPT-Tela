@@ -43,7 +43,9 @@ import {
 } from "@chatgpt-tela/runtime";
 
 export type DevelopmentWebTurnSettlement =
-  | { readonly status: "completed"; readonly answer: string; readonly surfaceLeaseId: string; readonly documentGeneration?: number }
+  | { readonly status: "completed"; readonly answer: string; readonly surfaceLeaseId: string; readonly documentGeneration?: number;
+    /** Actual Native result bytes delivered to the same Web generation; never Native logical history. */
+    readonly releasedToolResultBytes?: number; readonly toolRoundCount?: number }
   | { readonly status: "preflight-rejected" }
   | { readonly status: "failed" };
 
@@ -335,6 +337,8 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           const surfaceLeaseId = acquired.surface.leaseId;
           await browserEpochs.complete(plan.nativeTaskId, plan.webEpochId, () => {
             plan.settle?.({ status: "completed", answer, surfaceLeaseId,
+              releasedToolResultBytes: turn.channel.releasedToolResultBytes,
+              toolRoundCount: turn.channel.toolRoundCount,
               ...(document ? { documentGeneration: document.generation } : {}),
             });
           });

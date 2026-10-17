@@ -132,6 +132,7 @@ describe("runtime turn channel", () => {
     });
     channel.releaseNativeToolResultToWeb("call-1");
     expect(await waitingWeb).toEqual({ callId: "call-1", content: "ok", isError: false });
+    expect(channel.releasedToolResultBytes).toBe(4); // JSON wire string includes quotes
     expect(channel.phase).toBe("tool-result-delivered");
     expect(() => channel.complete("too early")).toThrow("continuation is proven");
 

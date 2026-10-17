@@ -3,6 +3,7 @@ import {
   diagnosticFingerprint,
   diagnosticToolContract,
   diagnosticToolResultEvidence,
+  diagnosticSerializedBytes,
   type DiagnosticScalar,
   emitDiagnosticEvent,
   type NativeToolCatalogEntry,
@@ -114,6 +115,8 @@ export class RuntimeTurnChannel {
   readonly #rejectFinal: (error: Error) => void;
   #settled = false;
   #toolRoundCount = 0;
+  /** Actual Native result bytes released to this Web turn (not the canonical history size). */
+  #releasedToolResultBytes = 0;
   #stateRevision = 0;
   readonly #progressListeners = new Set<(summary: string, sequence: number) => void>();
   readonly #progressJournal: { sequence: number; summary: string }[] = [];
@@ -221,6 +224,10 @@ export class RuntimeTurnChannel {
 
   get toolRoundCount(): number {
     return this.#toolRoundCount;
+  }
+
+  get releasedToolResultBytes(): number {
+    return this.#releasedToolResultBytes;
   }
 
   get stateRevision(): number {
@@ -394,6 +401,10 @@ export class RuntimeTurnChannel {
       throw new Error("native tool result is not ready for Web release");
     }
     this.#toolEvidence("native_tool_result_released", pending);
+    const releasedBytes = diagnosticSerializedBytes(pending.result.content);
+    this.#releasedToolResultBytes = releasedBytes !== undefined
+      && Number.isSafeInteger(this.#releasedToolResultBytes + releasedBytes)
+      ? this.#releasedToolResultBytes + releasedBytes : Number.MAX_SAFE_INTEGER;
     this.#pendingTool = undefined;
     pending.resolve(pending.result);
     this.#touchState();

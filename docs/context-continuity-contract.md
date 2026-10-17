@@ -37,8 +37,11 @@ settled revision may exceed the suffix target; one maintenance call must still p
 and finite preparation budgets. There is no dynamic Web capacity query.
 
 Physical residency is estimated monotonically from accepted task input, observed settled
-final-answer size and a per-turn reserve. It is **not** billed provider usage and cannot observe
-all hidden reasoning or in-browser tool output. A checkpoint or shorter Native active context
+final-answer size, the serialized Native tool-result bytes actually released to the Web
+turn, a per-tool-round overhead estimate and a per-turn reserve. Unserializable
+Native result content invalidates the retained-context estimate rather than counting it as zero.
+It is **not** billed provider usage and cannot observe all hidden reasoning or in-browser output.
+A checkpoint or shorter Native active context
 cannot subtract already-resident Web tokens. These estimates remain a limitation, not a guarantee
 of actual account capacity.
 

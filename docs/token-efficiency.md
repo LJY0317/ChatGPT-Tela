@@ -319,7 +319,9 @@ Read historical details again through currently authorized Native tools.
 Ordinary task checkpoint maintenance does not replace an owned retained Web
 conversation. Necessary fresh tasks contain one inline working bundle without a
 preload/ACK. Resident usage is a conservative, monotonic **estimate**, composed
-of input transfer, observed settled final-answer bytes and a per-turn reserve.
+of input transfer, observed settled final-answer bytes, serialized Native
+tool-result bytes actually released to the browser, per-round overhead and a
+per-turn reserve. An unmeasurable Native result prevents unsafe retained reuse.
 It is neither Native logical token delta nor provider billing. Native local
 compaction reuses the same checkpoint selection/budget and makes one final
 summary call. Neither path adds idle or per-turn background model work.

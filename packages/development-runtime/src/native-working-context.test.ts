@@ -245,6 +245,60 @@ test("large Web-released Native tool output consumes physical residency and forc
   second.settle?.({ status: "failed" });
 });
 
+test("completed summaries reuse only under the exact account, Web family, effort and active ancestry", async () => {
+  const directory = root();
+  try {
+    const cache = new FileContextCheckpointCache({ directory: join(directory, "cache") });
+    const journal = new FileNativeVisiblePrefixStageJournal({
+      directory: join(directory, "ledger"), initializationPath: join(directory, "init"),
+    });
+    let calls = 0;
+    const checkpointProducer = async (source: any) => {
+      calls++;
+      return { nativeTaskId: source.nativeTaskId, sourceRevisionId: source.sourceRevisionId,
+        content: "One settled objective and its readback obligation" };
+    };
+    const source = [
+      { role: "user", content: "Establish the task objective" },
+      { role: "assistant", content: "Settled history ".repeat(12_500) },
+      { role: "user", content: "Perform current work" },
+    ];
+    const options = {
+      checkpointCache: cache, checkpointProducer,
+      visiblePrefix: { accountNamespace: "account-a", journal,
+        async read(): Promise<never> { throw Error("unexpected original-history paging"); } },
+    };
+    const prepared = await createNativeRequestDevelopmentWebTurnPlanner(options)(
+      registered("source"), { model, reasoning: { effort: "high" }, input: source });
+    expect(prepared.physicalContext.mode).toBe("checkpoint-delta");
+    expect(calls).toBe(1);
+    prepared.settle?.({ status: "failed" });
+    const noSpending = { maxModelCalls: 0, maxInputTokens: 0, maxElapsedMs: 600_000 };
+    const same = await createNativeRequestDevelopmentWebTurnPlanner({
+      ...options, checkpointPreparationPolicy: noSpending,
+    })(registered("reused"), { model, reasoning: { effort: "high" },
+      input: [...source.slice(0, 2), { role: "user", content: "A changed current request" }] });
+    expect(same.physicalContext.mode).toBe("checkpoint-delta");
+    expect(same.physicalContext.segments.at(-1)?.content).toBe("A changed current request");
+    same.settle?.({ status: "failed" });
+    expect(calls).toBe(1);
+    for (const variant of [
+      { account: "account-b", webModel: model, effort: "high" },
+      { account: "account-a", webModel: chatGptWebModelId(chatGptWebFamilyKey("Another Family")), effort: "high" },
+      { account: "account-a", webModel: model, effort: "medium" },
+    ] as const) {
+      const isolated = createNativeRequestDevelopmentWebTurnPlanner({
+        ...options, checkpointPreparationPolicy: noSpending,
+        visiblePrefix: { ...options.visiblePrefix, accountNamespace: variant.account },
+      });
+      await expect(isolated(registered(`isolated-${variant.account}-${variant.effort}`), {
+        model: variant.webModel, reasoning: { effort: variant.effort }, input: source,
+      })).rejects.toMatchObject({ budgetReason: "model_calls" });
+      expect(calls).toBe(1);
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("a past edit cannot inherit the old derived branch; losing the entire stage journal fails closed", async () => {
   const directory = root();
   try {
