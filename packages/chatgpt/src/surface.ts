@@ -122,7 +122,7 @@ export interface ChatGptSurfaceDriver {
   /** Stop only the exact owned assistant through the provider's public Stop affordance.
    * Absence of generation controls is not proof of successful remote task completion. */
   stopGeneration?(
-    expected: { readonly assistantKey: string; readonly userTurnKey: string },
+    expected: { readonly assistantKey: string; readonly userTurnKey: string; readonly userFingerprint: string },
     signal?: AbortSignal,
   ): Promise<{ readonly status: "stopped" | "stop_sent" | "unavailable" | "ownership_changed" }>;
   replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;

@@ -66,7 +66,7 @@ interface TrackedTurn extends TurnOwnership {
   readonly approvalObservation: ChatGptApprovalObservation;
   observeAgain?: boolean;
   approvalRevalidatedCard?: string;
-  stopTarget?: { readonly assistantKey: string; readonly userTurnKey: string };
+  readonly operationAbort: AbortController;
 }
 
 export interface ChatGptSemanticProviderOptions {
@@ -1556,6 +1556,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             baselineUserLineageKeys: preSubmitUserLineageKeys,
             revision: snapshot.revision,
             approvalObservation: new ChatGptApprovalObservation(),
+            operationAbort: new AbortController(),
           });
           const acceptedRoute = new URL(snapshot.url);
           emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_accepted", {
@@ -1614,8 +1615,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   ): Promise<SemanticObservation<WebTurnState>> {
     signal?.throwIfAborted();
     const tracked = this.#tracked(surface, turn);
+    signal = AbortSignal.any([...(signal ? [signal] : []), tracked.operationAbort.signal]);
     const snapshot = await driverFor(surface).observe(signal);
-    signal?.throwIfAborted();
+    signal.throwIfAborted();
+    this.#tracked(surface, turn);
     tracked.revision = snapshot.revision;
     const state = stateFromSnapshot(snapshot, tracked);
     if (tracked.retainedContext && !tracked.identityPending && !this.#assertRetainedConversation(surface, snapshot, true)) {
@@ -1637,11 +1640,14 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   ): Promise<SemanticObservation<WebToolContinuationBoundary>> {
     if (!callId.trim()) throw new Error("Web tool continuation call id must be non-empty");
     const tracked = this.#tracked(surface, turn);
+    signal = AbortSignal.any([...(signal ? [signal] : []), tracked.operationAbort.signal]);
     let { snapshot, lineage } = await waitForLineage(driverFor(surface), tracked, signal);
     if (tracked.retainedContext) {
       snapshot = await this.#waitForRetainedConversation(surface, snapshot, tracked, signal);
       lineage = resolveAssistantLineage(snapshot, tracked);
     }
+    signal?.throwIfAborted();
+    this.#tracked(surface, turn);
     const assistants = lineage.assistants;
     if (lineage.ambiguous) {
       return {
@@ -1704,17 +1710,34 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     if (!tracked) return; // Already retired by expiry or a completed observation.
     this.#tracked(surface, turn);
     // Fence first. Late approval preparation/observation cannot regain this operation.
+    tracked.operationAbort.abort(new Error("Owned Web operation retired"));
     this.#turns.delete(surface);
     const driver = driverFor(surface);
     const timeout = AbortSignal.timeout(5_000);
     let status = "unavailable";
     try {
-      if (tracked.stopTarget && driver.stopGeneration) {
-        const stopped = driver.stopGeneration(tracked.stopTarget, timeout);
+      if (driver.stopGeneration) {
+        const stopped = (async () => {
+          const snapshot = await driver.observe(timeout);
+          timeout.throwIfAborted();
+          // Reuse accepted-request ownership proof. Stable renderer keys alone cannot authorize Stop.
+          const lineage = resolveAssistantLineage(snapshot, tracked);
+          const users = snapshot.turns.filter(item => item.role === "user" && item.key === tracked.userTurnKey);
+          if (lineage.identityPending || lineage.ambiguous || lineage.assistants.length !== 1 || users.length !== 1) {
+            return { status: "ownership_changed" as const };
+          }
+          const userFingerprint = users[0]!.contentFingerprint;
+          if (!userFingerprint) return { status: "unavailable" as const };
+          return driver.stopGeneration!({ assistantKey: lineage.assistants[0]!.key,
+            userTurnKey: tracked.userTurnKey, userFingerprint }, timeout);
+        })();
         const deadline = new Promise<never>((_, reject) => timeout.addEventListener("abort", () => reject(timeout.reason), { once: true }));
         status = (await Promise.race([stopped, deadline])).status;
       }
-    } catch { status = "unconfirmed"; }
+    } catch (error) {
+      status = error && typeof error === "object" && "code" in error && error.code === "tela_web_observation_unproven"
+        ? "ownership_changed" : "unconfirmed";
+    }
     emitDiagnosticEvent("chatgpt_tela_work", "web_owned_stop", { status, remote_outcome: "uncertain" });
   }
 
@@ -1749,11 +1772,14 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   ): Promise<SemanticObservation<WebTurnEvent>> {
     signal?.throwIfAborted();
     const tracked = this.#tracked(surface, turn);
+    signal = AbortSignal.any([...(signal ? [signal] : []), tracked.operationAbort.signal]);
     const driver = driverFor(surface);
 
     if (tracked.pendingCompletedAnswer !== undefined) {
       let { snapshot } = await waitForLineage(driver, tracked, signal);
       snapshot = await this.#waitForRetainedConversation(surface, snapshot, tracked, signal);
+      signal.throwIfAborted();
+      this.#tracked(surface, turn);
       const ownership = resolveAssistantLineage(snapshot, tracked);
       if (ownership.ambiguous || ownership.assistants.length !== 1) {
         throw new Error("ChatGPT pending completion no longer has one proven assistant identity");
@@ -1823,7 +1849,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         };
       }
       const assistant = assistants[0];
-      if (assistant) tracked.stopTarget = { assistantKey: assistant.key, userTurnKey: tracked.userTurnKey };
       const waitState = JSON.stringify([assistant?.phase ?? "absent", snapshot.approval ?? null]);
       const inputReceiptTransition = tracked.approvalObservation.recordInputReceipt(snapshot.approvalInputReceipt, Date.now());
       if (inputReceiptTransition) approvalTransitionDiagnostic(inputReceiptTransition);

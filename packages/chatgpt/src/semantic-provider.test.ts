@@ -2718,7 +2718,8 @@ test.each(["pending", "cleared_before", "preparation"] as const)("fake clock: ap
   const clear = spyOn(globalThis, "clearTimeout").mockImplementation(((id: number) => { timers.delete(id); }) as typeof clearTimeout);
   let stops = 0;
   (driver as ChatGptSurfaceDriver).stopGeneration = async expected => {
-    expect(expected).toEqual({ assistantKey: "assistant-wait", userTurnKey: "user-turn-1" });
+    expect(expected).toEqual({ assistantKey: "assistant-wait", userTurnKey: "user-turn-1",
+      userFingerprint: driver.current.turns.find(t => t.role === "user")!.contentFingerprint! });
     stops++; return { status: "stop_sent" };
   };
   const advance = async (ms: number) => {
@@ -2786,4 +2787,46 @@ test.each(["pending", "cleared_before", "preparation"] as const)("fake clock: ap
     await expect(event()).rejects.toThrow("not bound");
     expect(driver.approvalCalls).toBe(0);
   } finally { clock.mockRestore(); timeout.mockRestore(); clear.mockRestore(); clearTimeout(watchdog); await surface.host.close(); }
+});
+
+
+test.each(["owned", "changed_author"] as const)("public cancellation aborts pending approval and freshly proves Stop ownership (%s)", async scenario => {
+  const driver = new FixtureDriver(fixture("ready-new-chat"));
+  const surface = await leaseFor(driver);
+  const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "recognized_once" });
+  let preparationSignal: AbortSignal | undefined;
+  let began!: () => void;
+  const preparing = new Promise<void>(resolve => { began = resolve; });
+  let physicalStops = 0;
+  (driver as ChatGptSurfaceDriver).stopGeneration = async expected => {
+    physicalStops++;
+    expect(expected.userFingerprint).toBe(driver.current.turns.find(t => t.role === "user")!.contentFingerprint!);
+    return { status: "stop_sent" };
+  };
+  try {
+    const submitting = provider.submitTurn(surface.lease, request());
+    while (driver.current.revision === "r1") await Promise.resolve();
+    driver.queued.push(acceptedSnapshot(driver));
+    const submitted = await submitting;
+    if (submitted.state !== "proven") throw Error("fixture submission failed");
+    driver.queued.push({ ...driver.current, revision: "approval-preparing", approval: recognizedApproval,
+      turns: [...driver.current.turns, { key: "assistant-owned", role: "assistant", parentUserTurnKey: "user-turn-1", phase: "tool-wait" }] });
+    driver.processApprovalCard = async (_mode, signal) => {
+      preparationSignal = signal; began();
+      return await new Promise((_, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }));
+    };
+    const waiting = provider.waitForTurnEvent(surface.lease, submitted.value);
+    void waiting.catch(() => {});
+    await preparing;
+    if (scenario === "changed_author") driver.current = { ...driver.current, turns: driver.current.turns.map(t => t.role === "user"
+      ? { ...t, contentFingerprint: hash("changed request with same renderer keys") } : t) };
+    await provider.cancelTurn(surface.lease, submitted.value);
+    expect(preparationSignal!.aborted).toBe(true);
+    await expect(waiting).rejects.toThrow("Owned Web operation retired");
+    expect(physicalStops).toBe(scenario === "owned" ? 1 : 0);
+    await provider.cancelTurn(surface.lease, submitted.value);
+    expect(physicalStops).toBe(scenario === "owned" ? 1 : 0);
+    await expect(provider.waitForTurnEvent(surface.lease, submitted.value)).rejects.toThrow("not bound");
+    expect(driver.activated).toHaveLength(1);
+  } finally { await surface.host.close(); }
 });
