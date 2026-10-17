@@ -498,6 +498,15 @@ function turnObservationFields(snapshot: ChatGptSurfaceSnapshot, tracked: Tracke
   };
 }
 
+function answerBodyReason(assistant: ChatGptTurnObservation | undefined): string {
+  // Renderer observations remain untrusted, including exception-like strings.
+  return ["body_empty", "body_budget", "unsupported_node", "unsupported_link", "unsupported_list", "unsupported_table"]
+    .find(value => value === assistant?.bodyProof?.reason) ?? "unclassified";
+}
+
+type RetainedAnswer = { readonly state: "verified"; readonly fingerprint: string }
+  | { readonly state: "unavailable"; readonly reason: string };
+
 function committedAnswerFingerprint(assistant: ChatGptTurnObservation): string | undefined {
   // The current composer Stop state can change phase labels on older DOM turns. Identity and
   // accepted answer content, rather than current-page activity labels, prove the retained prefix.
@@ -579,19 +588,28 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   readonly #completedBySurface = new WeakMap<BrowserSurfaceLease, {
     readonly userTurnKey: string;
     readonly assistantKey: string;
-    readonly assistantFingerprint: string | undefined;
+    readonly retention: RetainedAnswer;
     readonly presentationFingerprint: string;
     readonly answerCharacters: number;
     readonly privateBodyEvidence?: ChatGptTurnObservation["privateBodyEvidence"];
   }>();
 
   #commitAnswer(surface: BrowserSurfaceLease, userTurnKey: string, assistant: ChatGptTurnObservation): void {
-    this.#completedBySurface.set(surface, { userTurnKey, assistantKey: assistant.key,
-      assistantFingerprint: committedAnswerFingerprint(assistant),
+    const digest = committedAnswerFingerprint(assistant);
+    const retention: RetainedAnswer = digest === undefined
+      ? { state: "unavailable", reason: answerBodyReason(assistant) }
+      : { state: "verified", fingerprint: digest };
+    this.#completedBySurface.set(surface, { userTurnKey, assistantKey: assistant.key, retention,
       presentationFingerprint: fingerprint(assistant.text ?? ""), answerCharacters: assistant.text?.length ?? 0,
       ...(assistant.privateBodyEvidence ? { privateBodyEvidence: assistant.privateBodyEvidence } : {}),
     });
     this.#retainedBodyPending.delete(surface);
+    // Final delivery and retained-context proof are distinct. Record the latter at
+    // completion, not for the first time when the next request tries to reuse it.
+    emitDiagnosticEvent("chatgpt_tela_work", "web_retained_answer_committed", {
+      state: retention.state, semantic_answer_available: retention.state === "verified",
+      ...(retention.state === "unavailable" ? { reason_class: retention.reason } : {}),
+    });
   }
 
   #assertRetainedConversation(surface: BrowserSurfaceLease, snapshot: ChatGptSurfaceSnapshot, allowUnavailable = false): boolean {
@@ -599,7 +617,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const assistants = anchor ? assistantFor(snapshot, anchor.userTurnKey) : [];
     const assistant = assistants.length === 1 ? assistants[0] : undefined;
     const sameKey = !!anchor && assistant?.key === anchor.assistantKey;
-    const committedSemanticAvailable = anchor?.assistantFingerprint !== undefined;
+    const committedSemanticAvailable = anchor?.retention.state === "verified";
     const observedSemanticAvailable = assistant?.bodyProof?.version === 1 && assistant.bodyProof.digest !== undefined;
     const reason: WebRetainedContextReason = !anchor ? "anchor_missing"
       : !assistant ? "lineage_not_unique" : !sameKey ? "assistant_identity_changed"
@@ -608,13 +626,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       : assistant.bodyProof.version !== 1 ? "observed_body_version_unsupported"
       : !observedSemanticAvailable ? "observed_body_incomplete"
       : assistant.text === undefined ? "answer_unavailable" : "semantic_digest_mismatch";
-    // The renderer reason is untrusted. Keep only the codec's closed vocabulary.
-    const bodyReason = ["body_empty", "body_budget", "unsupported_node", "unsupported_link", "unsupported_list", "unsupported_table"]
-      .find(value => value === assistant?.bodyProof?.reason) ?? "unclassified";
+    const bodyReason = answerBodyReason(assistant);
     const sameAnswer = !!anchor && !!assistant && assistant.text !== undefined
-      && anchor.assistantFingerprint !== undefined
-      && committedAnswerFingerprint(assistant) === anchor.assistantFingerprint;
-    if (allowUnavailable && anchor?.assistantFingerprint !== undefined && assistant && sameKey
+      && anchor.retention.state === "verified"
+      && committedAnswerFingerprint(assistant) === anchor.retention.fingerprint;
+    if (allowUnavailable && anchor?.retention.state === "verified" && assistant && sameKey
       && assistant.bodyProof?.digest === undefined) {
       if (!this.#retainedBodyPending.has(surface)) {
         this.#retainedBodyPending.add(surface);
@@ -645,7 +661,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       });
       capturePrivateDiagnosticValue("retained_body_mismatch", {
         before: anchor?.privateBodyEvidence ?? null, after: assistant?.privateBodyEvidence ?? null,
-        beforeDigest: anchor?.assistantFingerprint ?? null,
+        beforeDigest: anchor?.retention.state === "verified" ? anchor.retention.fingerprint : null,
         afterDigest: assistant ? committedAnswerFingerprint(assistant) ?? null : null,
         assistantKeyMatches: sameKey,
       });

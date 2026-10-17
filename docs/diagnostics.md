@@ -800,3 +800,11 @@ and whether external input was previously observed, without claiming that it cau
 Browser lifecycle events carry a disposable surface fingerprint because their creation-time request
 context may differ from the request currently reusing that surface. Existing event caps and retention
 apply; actual keys, shortcut combinations and text are never recorded.
+
+### Retained answer availability
+
+`web_retained_answer_committed` records `verified`/`unavailable` and a closed reason at answer
+completion, independently of final delivery. It contains no answer or element/attribute values.
+`web_retained_anchor_rejected` continues to distinguish missing committed proof from later body
+absence or a changed digest. A lossless generic DOM representation handles elements outside the
+normalized author grammar; remaining unavailable proof never permits text-equality fallback.

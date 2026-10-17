@@ -398,6 +398,23 @@ prefix and Native reconstruction after capacity retirement. No default limit is 
 mounted Web acceptance and equivalent work-plus-idle cost measurements choose the product policy.
 Document generation alone is not conversation identity or authorization for eviction.
 
+Answer proof belongs to the provider's owned-body codec. Known author structures retain their
+normalized representation; other HTML, SVG and MathML elements use one lossless DOM extension
+representation (namespace, element name, sorted namespaced attributes and ordered children).
+They are neither ignored nor reduced to display text. Unknown-element attributes are retained
+conservatively, so an attribute change may invalidate reuse even when the visible text matches.
+The existing node/character budgets also bound extension attributes. No tag-specific recovery
+allowlist, model recheck, resend or cold-context reconstruction is introduced. This proves the
+owned author DOM source, not remote image bytes, script execution or pixel equality.
+
+Completion records a discriminated retained-answer state (`verified` with digest or `unavailable`
+with a closed reason). Final delivery does not manufacture reuse authority. Missing, changed or
+unrepresentable proof remains blocked, but its availability is recorded at completion before the
+next retained submission. The same codec and state rule cover all consumers of this semantic
+provider, including direct Web Work/Codex and Web delegation; native-only/Chat execution does not
+use a browser answer-body proof.
+
+
 Native Codex history and a ChatGPT Web conversation deliberately have different lifetimes. Native
 history is canonical; a Web conversation is a replaceable physical projection. A successful Web
 turn may leave its hidden browser surface retained for the next Native turn in the same exact

@@ -272,3 +272,9 @@ A complete process-local terminal receipt does not prove cross-service cost, com
 host display. Unknown/clipped measurements stay explicit. Preserve the cold/repeat/append/edit
 and retained-context gates when instrumenting these paths; see `docs/diagnostics.md` for the
 bounded summary and correlation contract.
+
+Retained-answer codec changes must preserve an unchanged extended DOM body without another model
+call, checkpoint or whole-history transfer, and reject changed source attributes/namespaces even
+when display text matches. Unsupported elements use one bounded lossless representation rather
+than a growing tag exception table. Local normalization is not an extra inference step. Existing
+cold/repeat/append/edit/recovery cost gates still apply; unavailable proof grants no fallback send.
