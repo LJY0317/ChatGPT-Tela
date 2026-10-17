@@ -104,7 +104,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   // Warnings belong to human review, regardless of the ordinary one-shot policy.
   // Known provider wording is isolated here; structural alerts fail closed too.
   const displayedText = cards[0].innerText || cards[0].textContent || '';
-  const suspiciousLabel = /(?:Suspicious Instruction|Suspicious Activity|의심스러운 지침|의심스러운 명령)/i.test(displayedText);
+  const suspiciousLabel = /(?:Suspicious (?:Instruction|Activity|content)|의심스러운 지침|의심스러운 명령|의심스러운 콘텐츠)/i.test(displayedText);
   result.requiresManualReview = [...cards[0].querySelectorAll('[role="alert"], [data-warning], [data-safety-warning]')].some(visible)
     || suspiciousLabel;
   // Classify only already-visible warnings. This fixed vocabulary, not the

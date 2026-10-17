@@ -23,6 +23,22 @@ export type ChatGptApprovalDecision =
   | { readonly action: "approve_once"; readonly preferredChoice: "allow_once" };
 
 /**
+ * A finite per-accepted-Web-turn limit, not a timer or a quota reset on a DOM
+ * revision. A new card is not evidence of a new owner or unlimited authority.
+ */
+export const MAX_RECOGNIZED_APPROVALS_PER_TURN = 8;
+
+export type ChatGptAgentApprovalReview = Readonly<{
+  readonly contractVersion: 1;
+  readonly classification: "absent" | "eligible_once" | "manual_review"
+    | "disabled" | "ambiguous" | "unrecognized" | "limit_reached";
+  readonly nextAction: "none" | "existing_owned_turn_automation" | "human_browser_review";
+  /** Existing turn-owned automation is distinct from a new agent/tool grant. */
+  readonly agentMayApprove: false;
+  readonly reviewReason?: ChatGptApprovalReviewReason;
+}>;
+
+/**
  * Decide from structural card evidence and the provider warning flag. No tool arguments,
  * prompt, or integration identity grants approval. Warnings and ambiguous cards fail closed.
  */
@@ -43,4 +59,39 @@ export function decideChatGptApproval(
     return Object.freeze({ action: "approve_once", preferredChoice: "allow_once" });
   }
   return Object.freeze({ action: "none", reason: "unrecognized" });
+}
+
+/**
+ * Model-safe guidance from exactly the same structural policy as dispatch.
+ * The consumer must separately prove current turn/surface ownership before
+ * dispatch; this review never issues or enlarges approval authority.
+ */
+export function reviewChatGptApprovalForAgent(
+  mode: ChatGptApprovalAutomationMode,
+  observed?: ChatGptApprovalCardObservation,
+  dispatchCount = 0,
+): ChatGptAgentApprovalReview {
+  if (!Number.isSafeInteger(dispatchCount) || dispatchCount < 0) {
+    throw new Error("approval dispatch count is invalid");
+  }
+  if (!observed?.cardCount) {
+    return Object.freeze({ contractVersion: 1, classification: "absent",
+      nextAction: "none", agentMayApprove: false });
+  }
+  if (observed.requiresManualReview) {
+    return Object.freeze({ contractVersion: 1, classification: "manual_review",
+      nextAction: "human_browser_review", agentMayApprove: false,
+      ...(observed.reviewReason ? { reviewReason: observed.reviewReason } : {}) });
+  }
+  const decision = decideChatGptApproval(mode, observed);
+  const classification = decision.action === "approve_once"
+    ? dispatchCount >= MAX_RECOGNIZED_APPROVALS_PER_TURN ? "limit_reached" : "eligible_once"
+    : decision.reason;
+  return Object.freeze({
+    contractVersion: 1,
+    classification,
+    nextAction: classification === "eligible_once" ? "existing_owned_turn_automation"
+      : "human_browser_review",
+    agentMayApprove: false,
+  });
 }

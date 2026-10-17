@@ -3,6 +3,8 @@ import { dirname } from "node:path";
 import { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
 export { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
 export { parseCodexWorkInspectionContract } from "./work-inspection";
+export { parseCodexAgentApprovalReview, type CodexAgentApprovalReviewContract } from "./approval-review";
+import { parseCodexAgentApprovalReview, type CodexAgentApprovalReviewContract } from "./approval-review";
 import type {
   NativeToolCatalogEntry,
   NativeToolInvocation,
@@ -141,6 +143,7 @@ export interface CodexBridgePreviewContract {
   readonly imageBase64?: string;
   readonly approvalState?: "pending" | "none" | "unavailable";
   readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed";
+  readonly approvalReview?: CodexAgentApprovalReviewContract;
 }
 
 export interface CodexModelSelectionCanaryContract {
@@ -240,6 +243,12 @@ export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePrev
       || !["automation_unavailable", "dom_observation_failed"].includes(String(approvalObservationReason)))) {
     throw new Error("invalid approval observation reason");
   }
+  const rawReview = item.approvalReview;
+  let approvalReview: CodexAgentApprovalReviewContract | undefined;
+  if (rawReview !== undefined) {
+    if (selected === undefined || approvalState !== "pending") throw new Error("invalid approval review ownership");
+    approvalReview = parseCodexAgentApprovalReview(rawReview);
+  }
   const imageMimeType = item.imageMimeType;
   const imageBase64 = item.imageBase64;
   if (item.previewAvailable) {
@@ -260,6 +269,7 @@ export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePrev
     ...(selected ? { selectedSurfaceId: selected as string } : {}),
     ...(approvalState ? { approvalState: approvalState as NonNullable<CodexBridgePreviewContract["approvalState"]> } : {}),
     ...(approvalObservationReason ? { approvalObservationReason: approvalObservationReason as NonNullable<CodexBridgePreviewContract["approvalObservationReason"]> } : {}),
+    ...(approvalReview ? { approvalReview } : {}),
     ...(item.previewAvailable ? { imageMimeType: "image/jpeg" as const, imageBase64: imageBase64 as string } : {}),
   });
 }

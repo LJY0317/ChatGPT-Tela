@@ -60,6 +60,9 @@ current profile Web approval separately from the Native thread because
 profile-only browser evidence is not proof of one conversation's ownership.
 The host's own ChatGPT tool approval prompts are outside Tela ingress and
 cannot be granted by an agent; see [approval review boundaries](docs/approval-review-boundaries.md).
+For selected owned Web sessions, agents can inspect a bounded one-shot
+eligibility classification; the actual automatic click remains exclusive to
+the existing opt-in, owner-bound provider path with a finite per-turn limit.
 
 - Make installation, repair, upgrade, and **complete removal** first-class product lifecycles. Tela records
   what it owns and never relies on an undocumented cleanup checklist.

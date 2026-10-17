@@ -56,11 +56,54 @@ Native conversation UUID. Native `thread/read(includeTurns:false)`
 and bounded paginated latest-turn reads independently establish status.
 
 Tela's existing explicitly opted-in `recognized_once` policy can
-process **one narrowly recognized ordinary one-shot Web approval** with
-exact card identity, replay fencing and input/clearance evidence. It
+process **one narrowly recognized ordinary one-shot choice per proven card**
+with exact card identity, replay fencing and input/clearance evidence. It
 cannot select **Always allow**, authorize an ambiguous card, or approve
 warnings flagged `requiresManualReview`. An agent may triage these
 warnings but its assessment is not a substitute for human approval.
+
+### Agent-assisted eligibility and bounded automatic execution
+
+The provider-owned pure policy `reviewChatGptApprovalForAgent()` shares
+the **same one-shot decision** used immediately before input dispatch;
+the policy result cannot open an independent agent grant. It yields a
+small, fixed vocabulary: `absent`, `eligible_once`, `manual_review`,
+`disabled`, `ambiguous`, `unrecognized` or `limit_reached`.
+Each report includes a next action and `agentMayApprove:false`; an
+ordinary `eligible_once` result only means an **already running,
+owner-bound Web turn** may use its existing opt-in auto-approval path.
+
+The profile's currently selected Web surface reports this classification
+through the typed bridge-preview contract. It is optional and **only
+present when a card is actually pending**; observation failure never
+supplies eligibility. `inspect_native_work` carries the current profile
+review in `browser.review` without attaching it to the Native
+conversation. Web and Native owners must be independently reverified
+and neither a model judgment nor a profile preview alone authorizes
+the click. The exact card and revision are checked again immediately
+before the browser input.
+
+The automatic dispatcher is bounded to **at most 8 distinct dispatched
+one-shot cards per accepted Web turn**. Once the budget is exhausted,
+the provider reports a manual-review action and will not approve another
+card or resume by replaying the accepted request. `approval_agent_review`
+diagnostics are content-free and bounded per turn; they distinguish
+eligibility, manual warning and limit reached. This additional limit
+has no new model calls, periodic monitoring, global approval ledger,
+or new user setting. Existing `off` remains the default.
+
+**Not yet implemented:** an agent-triggered `approve_once` API for an
+already pending card. Before implementing it, prove exact Native turn,
+active Web turn, browser surface, single user-granted task scope,
+card fingerprint/revision and current backend owner in one transaction.
+A future request should carry a short-lived one-use, owner-bound
+intent without raw arguments, and dispatch **only through the existing
+provider-owned approval engine** under `recognized_once`. User-provided
+text, model classification, a screenshot or a profile-wide card count
+is never an authority lease; a host security warning remains human-only.
+The result must distinguish `dispatched`, trusted input, card
+clearance and actual Native task continuation, and an indeterminate
+dispatch must never be retried automatically.
 
 ## 3. Diagnostic and remote review workflow
 
@@ -106,6 +149,8 @@ Use `capability_call_start/complete` and durable process status to
 identify what Tela executed. `approval_wait_transition`,
 `approval_manual_review_required` and
 `bridge_approval_observation_unavailable` describe owned Web evidence.
+`approval_agent_review` is the new bounded, content-free classification;
+it is diagnostic evidence and **not** a host approval or execution receipt.
 Record the first failing layer, source coverage and unknowns rather
 than treating silence as proof of refusal. Host cards seen only in
 ChatGPT UI need user-supplied or official host evidence. Never log

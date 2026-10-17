@@ -35,10 +35,12 @@ private struct ControlCenterProfilesEnvelope: Decodable {
 }
 
 private struct ControlCenterBridgeSurface: Decodable { let id: String; let label: String }
+private struct ControlCenterApprovalReview: Decodable { let classification: String }
 
 private struct ControlCenterBridgePreview: Decodable {
   let approvalState: String?
   let approvalObservationReason: String?
+  let approvalReview: ControlCenterApprovalReview?
   let contractVersion: Int
   let slot: Int
   let activeSurfaceCount: Int
@@ -1745,7 +1747,15 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         bridgeMessage = "Choose a Web session to view its snapshot or open its browser."
       }
       if preview.selectedSurfaceId != nil && preview.approvalState == "pending" {
-        bridgeMessage += "\nApproval is waiting in this browser session. Choose Interact to review and approve the card."
+        if preview.approvalReview?.classification == "manual_review" {
+          bridgeMessage += "\nSecurity review is required. Open Interact to inspect the card."
+        } else if preview.approvalReview?.classification == "limit_reached" {
+          bridgeMessage += "\nThe automatic approval limit was reached. Open Interact to review this card."
+        } else if preview.approvalReview?.classification == "eligible_once" {
+          bridgeMessage += "\nThe card matches the configured one-shot policy; only its owning Work turn may act on it. Use Interact if it remains blocked."
+        } else {
+          bridgeMessage += "\nApproval is waiting in this browser session. Choose Interact to review the card."
+        }
       } else if preview.selectedSurfaceId != nil && preview.approvalState == "unavailable" {
         bridgeMessage += preview.approvalObservationReason == "automation_unavailable"
           ? "\nApproval cannot be checked because this session has no page-observation capability."

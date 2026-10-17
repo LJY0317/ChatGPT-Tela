@@ -1,4 +1,5 @@
 import { diagnosticFingerprint } from "@chatgpt-tela/core";
+import { parseCodexAgentApprovalReview } from "./approval-review";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SAFE_STAGE = /^[a-z][a-z0-9_]{0,63}$/;
@@ -46,6 +47,11 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
     && (browser.approvalState !== "unavailable" || !CAUSE.includes(browser.observationReason as typeof CAUSE[number]))) {
     throw Error("invalid browser observation reason");
   }
+  const agentReview = browser.review === undefined ? undefined
+    : parseCodexAgentApprovalReview(browser.review);
+  if (agentReview !== undefined && (browser.approvalState !== "pending" || browser.selectedSurface !== true)) {
+    throw Error("unowned or inactive approval review");
+  }
   if (!Array.isArray(native.recentTurns) || native.recentTurns.length > 4
     || native.recentTurns.some(item => {
       const row = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
@@ -91,6 +97,7 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
       selectedSurface: browser.selectedSurface as boolean,
       approvalState: browser.approvalState as typeof APPROVAL[number],
       ...(browser.observationReason ? { observationReason: browser.observationReason as typeof CAUSE[number] } : {}),
+      ...(agentReview ? { review: agentReview } : {}),
     }),
     hostPlatformReview: Object.freeze({
       visibility: "outside_tela_pre_ingress" as const, agentMayApprove: false as const,

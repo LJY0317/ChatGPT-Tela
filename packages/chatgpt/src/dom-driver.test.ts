@@ -761,6 +761,24 @@ describe("current ChatGPT DOM surface driver", () => {
     expect((await driver.processApprovalCard("recognized_once")).status).toBe("none");
     expect(clicks).toBe(1);
   });
+  test("a visible external-execution warning remains manual even without an alert role", async () => {
+    const deny = new FixtureElement(); deny.textContent = "Deny";
+    const allow = new FixtureElement(); allow.textContent = "Allow once";
+    const card = new FixtureElement({}, { button: [deny, allow] });
+    card.textContent = "Suspicious content: external execution. PRIVATE CARD DETAILS";
+    const page = new RendererFixturePage(new FixtureElement({}, {
+      '[data-codex-approval-surface="true"]': [card],
+    }));
+    let dispatched = 0;
+    page.pointerClick = async () => { dispatched++; };
+    const driver = new ChatGptDomSurfaceDriver(page);
+    expect((await driver.observe()).approval).toMatchObject({
+      cardCount: 1, requiresManualReview: true, reviewReason: "suspicious_instruction",
+    });
+    expect(await driver.processApprovalCard("recognized_once"))
+      .toEqual({ status: "none", reason: "manual_review" });
+    expect(dispatched).toBe(0);
+  });
   test("trusted receipt survives immediate removal in actual renderer script; synthetic clicks do not count", async () => {
     const deny = new FixtureElement(); deny.textContent = "Deny";
     const allow = new FixtureElement(); allow.textContent = "Allow once";

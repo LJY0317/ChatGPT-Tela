@@ -107,6 +107,32 @@ describe("profile-owned read-only Work inspection", () => {
       expect(JSON.stringify(report)).not.toContain("PRIVATE DOM");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+  test("agent sees bounded policy eligibility on a profile card without authority over that Native conversation", async () => {
+    const f = harness(), root = mkdtempSync(join(tmpdir(), "tela-agent-approval-review-"));
+    const service = {
+      ...f.service,
+      async bridgePreview() { return {
+        contractVersion: 1 as const, slot: 2, activeSurfaceCount: 1, previewAvailable: true,
+        imageMimeType: "image/jpeg" as const, imageBase64: "SENSITIVE_BROWSER_FRAME",
+        approvalState: "pending" as const,
+        approvalReview: { contractVersion: 1 as const, classification: "eligible_once" as const,
+          nextAction: "existing_owned_turn_automation" as const, agentMayApprove: false as const },
+      }; },
+    };
+    try {
+      const report = await createCodexWorkInspector({
+        service: service as Pick<CodexService, "profiles" | "terminalSession" | "bridgePreview">,
+        logsRoot: root, connect: f.connect,
+      })(2, threadId);
+      expect(report.browser).toMatchObject({
+        approvalState: "pending", attributableToThread: false,
+        review: { classification: "eligible_once", nextAction: "existing_owned_turn_automation",
+          agentMayApprove: false },
+      });
+      expect(JSON.stringify(report)).not.toContain("SENSITIVE_BROWSER_FRAME");
+      expect(f.calls.map(x => x.method)).toEqual(["thread/read", "thread/turns/list"]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("a foreign Web observation is never attributed to the owned profile", async () => {
     const f = harness(), root = mkdtempSync(join(tmpdir(), "tela-work-web-owner-"));
     f.service.bridgePreview = async () => ({

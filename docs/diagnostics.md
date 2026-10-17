@@ -147,6 +147,15 @@ failure reason where supported; ChatGPT host-owned approval cards
 remain pre-ingress and cannot be approved by Tela. See
 [approval review boundaries](approval-review-boundaries.md).
 
+When a current selected Web card is pending, its optional `browser.review`
+reports the provider policy classification (`eligible_once`,
+`manual_review`, `limit_reached`, `disabled`, `ambiguous`,
+`unrecognized`). It never grants an agent a new click capability:
+`eligible_once` only refers to the existing, explicitly opted-in
+owner-bound automation. An accepted Web turn dispatches no more than eight
+distinct one-shot cards; safety warnings and exhausted budgets remain
+manual. See `approval_agent_review` events for bounded structural triage.
+
 When the user supplies an original Native conversation UUID, use one scoped,
 read-only inspection instead of searching private rollout files or repeatedly
 auditing all logs:

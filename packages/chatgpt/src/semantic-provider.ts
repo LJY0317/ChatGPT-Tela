@@ -10,7 +10,7 @@ import {
 } from "@chatgpt-tela/browser-host";
 import { WebRetainedContextUnproven, capturePrivateDiagnosticValue, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, type WebRetainedContextReason } from "@chatgpt-tela/core";
 import { ChatGptDomSurfaceDriver } from "./dom-driver";
-import { decideChatGptApproval, type ChatGptApprovalAutomationMode } from "./approval-policy";
+import { decideChatGptApproval, reviewChatGptApprovalForAgent, type ChatGptApprovalAutomationMode } from "./approval-policy";
 import { ChatGptApprovalObservation, approvalObservationSummary, type ApprovalObservationTransition } from "./approval-observation";
 import {
   contextAttachmentReference,
@@ -61,6 +61,8 @@ interface TrackedTurn extends TurnOwnership {
   approvalProgress?: string;
   approvalPendingCaptured?: boolean;
   approvalResolutionRecorded?: boolean;
+  approvalReviewState?: string;
+  approvalReviewCount?: number;
   readonly approvalObservation: ChatGptApprovalObservation;
   observeAgain?: boolean;
 }
@@ -1810,10 +1812,30 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         }
       }
       const observedApproval = snapshot.approval;
+      const approvalReview = reviewChatGptApprovalForAgent(
+        this.#approvalAutomationMode, observedApproval, tracked.approvalObservation.audit.dispatch_count,
+      );
+      if (observedApproval?.cardCount) {
+        const state = JSON.stringify([observedApproval.cardFingerprint ?? null,
+          observedApproval.revisionFingerprint, approvalReview.classification]);
+        if (tracked.approvalReviewState !== state && (tracked.approvalReviewCount ?? 0) < 16) {
+          tracked.approvalReviewState = state;
+          tracked.approvalReviewCount = (tracked.approvalReviewCount ?? 0) + 1;
+          emitDiagnosticEvent("chatgpt_tela_work", "approval_agent_review", {
+            classification: approvalReview.classification,
+            next_action: approvalReview.nextAction,
+            approval_mode: this.#approvalAutomationMode,
+            ...(approvalReview.reviewReason ? { reason_class: approvalReview.reviewReason } : {}),
+            dispatch_count: tracked.approvalObservation.audit.dispatch_count,
+            // No renderer text, coordinates or raw card identity enter diagnostics.
+            ...(observedApproval.cardFingerprint ? { card_fingerprint: observedApproval.cardFingerprint } : {}),
+          });
+        }
+      }
       if (observedApproval?.cardCount === 1 && observedApproval.cardFingerprint
         && !tracked.approvalObservation.wasDispatched(observedApproval.cardFingerprint)
         && assistant?.phase !== "failed" && driver.processApprovalCard
-        && decideChatGptApproval(this.#approvalAutomationMode, observedApproval).action === "approve_once") {
+        && approvalReview.classification === "eligible_once") {
         signal?.throwIfAborted();
         const action = await driver.processApprovalCard(this.#approvalAutomationMode, signal,
           this.#approvalAutomationDelayMs, { cardFingerprint: observedApproval.cardFingerprint,
@@ -1828,7 +1850,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       signal?.throwIfAborted();
       const approvalPhase = tracked.approvalObservation.phase;
       const approvalProgress = approvalPhase
-        ? approvalObservationSummary(approvalPhase,
+        ? approvalPhase === "pending" && approvalReview.classification === "limit_reached"
+          ? "The automatic one-shot approval limit for this Web turn was reached. Review the current card in the browser; Tela will not click another."
+          : approvalObservationSummary(approvalPhase,
           observedApproval?.requiresManualReview ? observedApproval.reviewReason ?? "provider_warning" : undefined)
         : "";
       if (approvalProgress && tracked.approvalProgress !== approvalProgress) {

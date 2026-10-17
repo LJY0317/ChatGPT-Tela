@@ -99,6 +99,22 @@ describe("private service protocol", () => {
     })).toThrow();
     expect(() => parseCodexBridgePreviewContract({ ...selected, selectedSurfaceId: undefined,
       approvalState: "pending" })).toThrow();
+    const review = { contractVersion: 1, classification: "eligible_once",
+      nextAction: "existing_owned_turn_automation", agentMayApprove: false,
+      rawCardText: "SENSITIVE UNTRUSTED CARD BODY" };
+    const reported = parseCodexBridgePreviewContract({ ...selected, approvalState: "pending",
+      approvalReview: review });
+    expect(reported.approvalReview).toEqual({
+      contractVersion: 1, classification: "eligible_once",
+      nextAction: "existing_owned_turn_automation", agentMayApprove: false,
+    });
+    expect(JSON.stringify(reported)).not.toContain("SENSITIVE");
+    expect(() => parseCodexBridgePreviewContract({ ...selected, approvalReview: review }))
+      .toThrow("approval review ownership");
+    expect(() => parseCodexBridgePreviewContract({ ...selected, approvalState: "pending",
+      approvalReview: { ...review, agentMayApprove: true } })).toThrow();
+    expect(() => parseCodexBridgePreviewContract({ ...selected, approvalState: "pending",
+      approvalReview: { ...review, classification: "manual_review" } })).toThrow();
   });
 });
 

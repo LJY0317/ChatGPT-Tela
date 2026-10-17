@@ -15,6 +15,7 @@ import {
   type ChatGptSurfaceSnapshot,
 } from "./surface";
 import { ChatGptSemanticProvider } from "./semantic-provider";
+import { MAX_RECOGNIZED_APPROVALS_PER_TURN } from "./approval-policy";
 import { webEvidenceFilename } from "./turn-media";
 import { CHATGPT_TEMPORARY_CHAT_URL } from "./session";
 import type { WebTurnRequest } from "./index";
@@ -2164,6 +2165,41 @@ describe("ChatGPT semantic provider", () => {
       ] });
       await provider.waitForTurnEvent(surface.lease, submitted.value);
       expect(driver.approvalCalls).toBe(1);
+    } finally { await surface.host.close(); }
+  });
+  test("agent automation cannot dispatch unbounded new one-shot cards within one accepted Web turn", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.approveRecognizedCard = true;
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "recognized_once" });
+    try {
+      const submitting = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await submitting;
+      if (submitted.state !== "proven") throw Error("expected accepted Web turn");
+      const owned = driver.current;
+      for (let index = 0; index <= MAX_RECOGNIZED_APPROVALS_PER_TURN; index++) {
+        driver.queued.push({
+          ...owned, revision: `approval-budget-card-${index}`,
+          approval: { ...recognizedApproval,
+            cardFingerprint: `card-${index}`,
+            revisionFingerprint: `card-proof-${index}` },
+          turns: [...owned.turns, {
+            key: "assistant-budget", role: "assistant", parentUserTurnKey: "user-turn-1",
+            phase: "thinking",
+          }],
+        });
+      }
+      const first = await provider.waitForTurnEvent(surface.lease, submitted.value);
+      expect(first.state === "proven" && first.value).toMatchObject({
+        kind: "progress", summary: "Approval click sent; waiting for the Web browser to receive and process it.",
+      });
+      const exhausted = await provider.waitForTurnEvent(surface.lease, submitted.value);
+      expect(exhausted.state === "proven" && exhausted.value).toMatchObject({
+        kind: "progress", summary: expect.stringContaining("automatic one-shot approval limit"),
+      });
+      expect(driver.approvalCalls).toBe(MAX_RECOGNIZED_APPROVALS_PER_TURN);
     } finally { await surface.host.close(); }
   });
 

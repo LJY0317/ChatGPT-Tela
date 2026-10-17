@@ -222,6 +222,35 @@ describe("profile bridge preview server", () => {
       expect(calls).toBe(2);
     } finally { await server.close(); }
   });
+  test("selected Web review is projected only as policy metadata, never raw card contents", async () => {
+    const token = "k".repeat(48), id = "surface_" + "e".repeat(32);
+    const server = await startProfileBridgePreviewServer({ slot: 2, bearerToken: token,
+      async observe(selected) { return {
+        activeSurfaceCount: 2, surfaces: [{ id, label: "Owned" }, { id: "surface_" + "f".repeat(32), label: "Other" }],
+        ...(selected ? {
+          selectedSurfaceId: id, approvalState: "pending" as const,
+          approvalReview: { contractVersion: 1 as const, classification: "manual_review" as const,
+            nextAction: "human_browser_review" as const, agentMayApprove: false as const,
+            reviewReason: "provider_warning" as const,
+            cardBody: "SECRET INJECTED IN CARD",
+          },
+        } : {}),
+      }; },
+    });
+    try {
+      const headers = { authorization: `Bearer ${token}` };
+      const unselected = await (await fetch(new URL("v1/bridge-preview", server.endpoint), { headers })).json() as any;
+      expect(unselected.approvalReview).toBeUndefined();
+      const selected = await (await fetch(new URL(`v1/bridge-preview?surfaceId=${id}`, server.endpoint), {
+        headers,
+      })).json() as any;
+      expect(selected.approvalReview).toMatchObject({
+        classification: "manual_review", nextAction: "human_browser_review", agentMayApprove: false,
+      });
+      // In-process adapter's projection is a typed allowlist, not the raw page.
+      expect(JSON.stringify(selected)).not.toContain("SECRET INJECTED");
+    } finally { await server.close(); }
+  });
   test("read-only bridge reports fixed observation cause without page text or a guessed clearance", async () => {
     const token = "t".repeat(48); const id = "surface_" + "b".repeat(32);
     const server = await startProfileBridgePreviewServer({ slot: 2, bearerToken: token,
