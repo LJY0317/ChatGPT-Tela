@@ -48,6 +48,12 @@ manual reconciliation merely because its failure classification changed.
 
 ## Capacity, ownership and preparation policy
 
+The [working-context lifecycle](context-continuity-contract.md) defines the next implementation:
+bounded first-message and maintenance inputs, an incrementally advanced checkpoint, and independent
+resident-session accounting. Current fit/cost refusals alone do not establish those steady-state
+bounds. Do not equate full archived history with active working context or rotate Web merely because
+a checkpoint changed. Use that contract's implementation order and long-history acceptance gates.
+
 Native owns canonical task history, edits, authorization and compaction. Preserve logical/physical
 context separation: the Web window is a projection, not a replacement authority. Obtain effective
 Native settings and usage through the public Native adapter where available; never copy Native's

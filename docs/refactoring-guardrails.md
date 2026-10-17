@@ -13,7 +13,7 @@ This tracked review contract applies to material Tela patches, refactors and bra
 - Keep one writer per physical checkout and exact account, profile and Native turn authority. Failure labels are diagnostics, not independent settlement authority.
 - A checkpoint or uncertain operation can be settled only under matching owner and proven physical release. Never fabricate remote success, replay uncertain sends or allow retired owners to execute again.
 - Reuse proven Web sessions, canonical suffixes, completed checkpoint receipts and unchanged source fragments. Presentation failure or deterministic preflight refusal must not cause an unnecessary new browser, cold reconstruction, model call or duplicate transfer.
-- Keep logical context separate from physical Web transport. Reject stale or ambiguous context without weakening proof; repair the shared cause instead of adding category-specific retries.
+- Keep archived lineage, bounded working context and resident Web occupancy distinct. Require the [long-history lifecycle gates](context-continuity-contract.md#implementation-sequence-and-acceptance): bounded fresh/maintenance input with growing archives, no ordinary whole-history reconstruction and no rotation solely for checkpoint maintenance. Reject stale/ambiguous context without weakening proof or adding category-specific retries.
 - Retain independent Tela Chat, Tela Codex and Plura state/lifecycle, and avoid idle polling, hidden extra model work, and unnecessary persistent configuration.
 
 ## Evidence required for material changes

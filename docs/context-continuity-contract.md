@@ -1,299 +1,184 @@
 # Native / Web context continuity contract
 
-## Original-turn ACK route for readable Legacy current input (source candidate 2026-10-12)
+This is the current contract and implementation plan, replacing dated source-candidate narratives.
+The target lifecycle below is not installed behavior. Execution budgets and receipt settlement
+remain defined by [token-efficiency.md](token-efficiency.md).
 
-The owned default Desktop proxy now records a **process-local, revocable**
-receipt for an original public `turn/start` response that confirms the exact
-`inProgress` Native turn. It joins the engine's `turn.id` to the original
-`threadId` using the same socket and matching JSON-RPC request ID, not
-untrusted Responses metadata. A mismatched, missing, completed, replaced or
-ambiguous receipt grants no turn authority. The same JSON-RPC request ID
-cannot be reused to prove a later turn on that connection: an old delayed
-ACK could otherwise be mistaken for the newly requested thread. Native
-traffic is still forwarded without mutation, but the reused ID grants no
-new Legacy ownership. The bounded proof registry disables further admissions
-if it runs out of safe request-ID slots. A second socket cannot silently
-take over an accepted receipt. Close, explicit thread/turn retirement, new
-Native turn, account invalidation and owned proxy shutdown revoke it.
+## Bounds and current gaps
 
-For a thread **explicitly reporting `historyMode=legacy`**, the default
-Desktop current-turn reader may now use this fresh original engine ACK and
-two public `thread/read(includeTurns:false)` metadata checks with matching
-owner/environment, while the exact receipt remains current. A watcher uses
-the same receipt and its original socket's lifecycle signals; it **never**
-calls `thread/resume`, `thread/turns/list`, `thread/items/list`,
-`thread/fork`, or `turn/start` merely to inspect old Legacy history. Without
-this live receipt (for example after restart), or for unknown storage modes,
-the existing unindexed-history refusal remains unchanged. Paginated readers
-retain their existing indexed proof path.
+| Layer | Owner | Contract |
+| --- | --- | --- |
+| Canonical history/artifacts | Native / original tools | Preserve authority and evidence. The archive may grow; its entire contents are not model input. Tela does not delete Native history to fit Web. |
+| Native active context | Native engine | Follow effective model/settings and standard compaction. A Web checkpoint does not rewrite Native history or global settings. |
+| Web working context | Tela projection | Exact current instructions/request, bounded derived checkpoint and necessary recent suffix. Its admitted size must not scale with archived conversation length. |
+| Resident Web conversation | Owned provider session | Append proven deltas while usable. Account for cumulative occupancy independently from Native compaction and newly transferred bytes. |
 
-This unlocks Native→Web continuity for an older Legacy thread **only where
-the already-authenticated current Native Responses request contains a
-complete, readable model-visible task context**, including an ordinary
-readable `context_compaction` marker followed by its user summary. It never
-manufactures historical content. A 73 MiB Legacy thread with **opaque**
-encrypted compaction and no separately verifiable checkpoint still returns
-`tela_native_history_indexed_source_required` and
-`recovery.kind=continue_on_native`, not a partial, falsely successful Web
-answer. The live ACK proves the new turn's identity, **not** atomic historical
-revision, past executed model/provider, or a tool-free fork certificate.
-Only default Desktop routing owns this proxy receipt. Source tests use
-synthetic metadata/turns and do not establish installed or live 73 MiB
-acceptance.
+Logical context describes canonical ancestry, source identity and accessible evidence. Physical
+context is the bounded representation a model/session receives. A derived summary is lossy guidance,
+not original evidence or tool authority. Arbitrarily many independent facts cannot all remain exact
+in constant space; old details require authorized readback. An oversized exact current request or
+unresolved causal chain can require recovery. Bounded admission does not guarantee success for every
+arbitrary task, or a globally bounded Native archive.
 
-## 2026-10-11 resumed original-work safety gate: no hidden Legacy replay
+At `97dc2d5`, retained deltas, source-bound checkpoints, bounded fragmentation, durable stage reuse
+and cost refusal exist. Cold preparation is still largely fit-failure driven. Local compaction can
+construct a roughly 490k transfer candidate before rejecting it; limits refuse oversized work rather
+than continuously reducing it. This is not a proven bounded steady-state working set. Dynamic Web
+capacity, small cold-start targets, incremental checkpoint advance and settled epoch-usage accounting
+remain implementation work.
 
-The product must not turn a small public page limit into an unbounded
-**server-side** replay of an old Legacy Native rollout. All source-level
-historical compaction/anchor and explicit-handoff public paging now require
-`historyMode:paginated` in a metadata-only `thread/read(includeTurns:false)`
-**before** any `thread/turns/list` or `thread/items/list`, and reprove
-the storage mode and owner/environment metadata afterward. Missing, future
-and Legacy modes return `NativeHistoryBootstrapRequired` with
-`recoveryReason:"unindexed_history"` without paging. The loaded active-turn
-interruption scan similarly rejects an unindexed active thread before
-`thread/read(includeTurns:true)`, pagination, or any partial interrupt.
-Idle unindexed loaded threads remain skippable from metadata alone.
-Both the default Desktop target and the optional multi-profile target now
-configure bounded active-turn ownership proof.
-The bounded Native turn **watcher** also validates the indexed current-turn
-identity before sending `thread/resume(excludeTurns:true)` and rechecks after
-the observation connection attaches. Legacy/unknown active turns never
-reach the resume request merely to attach notifications; a storage-mode
-change at either proof stage fails closed. The pre-resume indexed probe is
-on demand for an actual watched turn, not an idle sampler.
+## One capacity and working-set policy
 
-An old 73 MiB Legacy cold Web attempt with no prior verified current-input
-or retained source is therefore **not yet recoverable automatically**.
-The nonretryable 422 `tela_native_history_indexed_source_required`
-returns `recovery.kind:"continue_on_native"`, not a misleading request to
-create an explicit Native handoff that would still need unsafe Legacy paging.
-The source/protocol tests use fixtures only; no installed app/73 MiB private
-thread, historical model/provider attestation, user account, or Native tool
-action was touched. The missing upstream requirements remain a bounded,
-owner-authenticated Legacy source/compaction read and historical executed-model
-provenance with a true pre-execution no-tools fork policy.
+Resolve Native settings through its supported adapter. Scope Web capabilities/usage to the proven
+account/model/effort and adapter generation. Label values observed, configured or conservatively
+estimated. Unknown Web capacity cannot be inferred from a Native template, API specification, model
+name or one successful send. Keep existing isolated calibration explicit until a real capability
+exists; do not claim dynamic discovery from a fixed value.
 
-When a Web attempt has already emitted SSE preparation progress, HTTP status
-cannot be changed retroactively to 422. A late typed Native-history failure
-therefore ends the *same* stream with `response.failed` carrying the identical
-nonretryable Tela recovery code and `continue_on_native` / explicit handoff
-action as the ordinary pre-stream HTTP 422. Both paths use fixed messages,
-never exception text or private Native history. No `response.completed` or
-Web continuation is committed after that failure. The structural diagnostic
-`native_context_recovery_streamed` distinguishes this late SSE result from
-a normal pre-stream HTTP 422; HTTP 200 alone is not proof of recovery.
+One pure policy resolver serves ordinary planning and local compaction. Keep distinct:
 
-## Automatic cold Native handoff (source-only 2026-10-11 extension)
+- Hard Web epoch/message/file/character capacity and output/reasoning/protocol reserves.
+- A smaller operational first-message target with useful retained-continuation runway.
+- Derived checkpoint-size and uncheckpointed-suffix targets.
+- The existing preparation call/input/time policy, which grants no send authority.
 
-The normal current input, proven retained Web page, durable Native readable
-checkpoint and already user-requested prior Native final answer take
-precedence over any additional Native model call. For an otherwise impossible
-cold Web start, a public, ephemeral Native fork of the immediately previous
-completed turn may produce a tightly bounded structured handoff with one
-**Native** model call. It is selected from a verified Native catalog (or the
-fork's own persisted model) rather than hard-coded model IDs. The original
-in-progress Web turn is never duplicated, interrupted or mutated. The fork
-uses read-only sandbox, approval never, JSON schema and tool-item rejection;
-it explicitly defers and clears any inherited Goal before generating text.
-The source is re-proven afterward, and its content is stored under the
-account's separate historical checkpoint namespace and the opaque Native
-compaction fingerprint. Recent public source ancestry is required to reuse
-the cached value after Web restart. The derived summary is lower-priority
-task guidance with explicit original-evidence limitations, not authority.
+Derive operational targets from the user working-context preference and provider evidence; keep
+product defaults in one replaceable adapter, not per-incident thresholds or numerous UI knobs.
+A hard limit is a refusal boundary, not a target to fill. The fresh payload is exact current
+policy/environment/goal + checkpoint + bounded necessary suffix + active request/tool/media chain.
+Normally it fits the first-message target with runway below the resident rollover boundary.
+Mandatory exact content may exceed the soft target if it still passes hard admission; report that
+condition rather than silently truncating it or presenting a preference as provider capacity.
 
-Where any public fork isolation or exact historical executed Native model
-proof is unsupported, no model is started. The product runtime now
-**omits** the `automaticNativeHandoff` and
-`verifyAutomaticNativeHandoff` callbacks entirely. The separate
-source adapter remains **deny before RPC connect** by default; only isolated
-synthetic fixtures explicitly opt into unshipped fork behavior. The typed
-HTTP 422 cold-history boundary remains. Synthetic tests do not constitute
-live Native authority, historical model provenance, a verified tool-free
-engine policy, or an installed automatic recovery feature.
-The common Native continuity resolver also **ignores accidental callback
-injection and cached automatic summaries** unless a second, conspicuously
-unsafe flag is supplied by an isolated synthetic fixture. The actual product
-does not supply that flag. A denied injection emits one content-free
-`native_auto_handoff_rejected` event in the `continuity_resolver` phase;
-this is not an engine capability claim or a release enablement switch.
-See [the required upstream execution-provenance and tool-free fork contract](native-execution-provenance-gate.md)
-for the exact missing engine evidence and acceptance gates; it is a request,
-not a public API that Tela can already call.
+Audit `web-model-catalog.ts`: it currently clones Native template metadata. Web rows must describe
+supported route capacity/compaction behavior, rather than accidentally inheriting Native limits.
+Do not change Native model rows, copy Web transport limits into global Native settings, or force
+frequent Native compaction just to achieve a small initial Web message.
 
-## Legacy compatibility cleanup (2026-10-11)
+## Maintained checkpoint instead of accumulated summaries
 
-- Removed the old historical projection switch that allowed
-  thread/read(includeTurns:true) to download the entire original transcript.
-  All AppServerCompactionHistorySource.project callers now use bounded public
-  thread/read(includeTurns:false) and thread/turns/list. Direct media/history
-  tests follow the same contract.
-- Removed fallback of ordinary Web-epoch checkpoint storage for a missing
-  Native-history checkpoint cache. Separate source-binding and retention
-  boundaries are intentional and no auto-migration is performed.
-- Protected Native continuity summaries and current Native Goal observations
-  from provider-only trimming of old assistant/tool prose. Their exact
-  canonical revision IDs reach Web physical fitting, which refuses to
-  silently crop that source-bound content even under memory pressure.
-- Previously permitted Legacy `thread/turns/list` requests are now
-  **blocked before pagination** in compaction source/anchor and explicit
-  handoff readers; their limits did not bound Native-internal rollout work.
-- `AppServerCurrentTurnSource` now **defaults** to bounded proof for every
-  new caller, not merely the explicitly configured Native-first and optional
-  multi-profile routes. The standalone default Desktop product-profile route
-  also explicitly selects bounded proof. All these routes fail closed for
-  Legacy, missing or unknown history modes before any unbounded read; the
-  public product source factory does not expose an unsafe override.
-  Older full-snapshot compatibility remains only as an explicitly requested
-  `preferBoundedTurnProof:false` mode in isolated internal regression
-  fixtures; it is never selected implicitly. Product lifecycle interruption
-  never invokes the full-history fallback.
-- A verified user-requested Native handoff remains available through
-  **Paginated public** recent-turn summaries, not unindexed Legacy.
-  Without a validated checkpoint, independently verifiable handoff or
-  readable source, opaque Native compaction continues to fail closed.
+Extend the existing account-scoped checkpoint store and stage journal: no second compressor,
+execution ledger, background summarizer or task-history authority. Keep the latest useful checkpoint
+on the active branch and bounded alternatives under existing retention. Its envelope carries compact
+source coverage/anchor, semantic compatibility, bounded summary and evidence limitations/references.
+Do not recursively embed every earlier summary or retain an unbounded list of covered turns.
 
-These changes do not decode encrypted compaction, grant missing historical
-tool/file evidence, or automatically restore a cold 73 MiB Legacy conversation.
+At a proven settled boundary, fold the previous checkpoint plus only the new sealed suffix into a
+replacement when suffix/runway policy requires it. This source must fit one summary operation.
+Preserve objectives, current constraints/decisions, unfinished work, failures and readback references;
+remove superseded narration from derived working context. Current authoritative instructions and
+exact active requests remain separate from lower-priority summary prose. Original evidence stays
+Native-owned and available through authorized readback.
 
-This document describes the implemented source architecture. Native Codex remains the only
-authority for task identity, tool execution, approval, cancellation, branching and compaction.
-All checkpoint and Web physical state is derived and disposable.
+Use one useful summary completion, including a necessary file receipt, without acknowledgement,
+polishing or model-backed mechanical validation. Repeated summarization is lossy: test unresolved
+commitments and readback behavior; source coverage/digests cannot prove semantic completeness.
+Persist before physical release, and publish the new checkpoint only under matching Native source
+and branch proof. Failure leaves the previous valid checkpoint usable; an uncertain completion never
+advances coverage. Native compaction, edits and account/route changes require explicit source mapping
+or revalidation. Text similarity cannot reattach stale ancestry.
 
-## One continuity decision
+Maintenance runs on demand at existing request/settlement boundaries. Coalesce/defer when safe; no
+idle timer, model call on every turn or second writer. Optimize total preparation calls/bytes, new
+surfaces and useful session runway together. Smaller first messages can require more maintenance;
+neither minimum payload alone nor maximum session lifetime alone is the objective.
 
-On each authenticated Native-owned Web request:
+## Common planning and independent physical lifecycle
 
-The resolver first requires its `threadId` and `currentTurnId` to match
-the in-process canonical `NativeTurnAuthority` exactly, including the
-`native-current-turn` authority source. A mismatched owner fails before
-reusing hot history, reading local derived caches, invoking public history
-adapters or producing a checkpoint. This prevents accidental cross-turn or
-cross-thread routing inside Tela; it does **not** itself attest a historical
-executed model, external account identity or tool-free fork capability.
+Ordinary Web requests and Native local compaction share working-set selection and cost admission:
 
-1. The canonical current-turn proof and original Native Responses input remain unchanged.
-   A readable local `context_compaction` followed by a user summary is ordinary current
-   Native input; it needs no separate historical adapter or model call.
-2. For an opaque Native compaction, a proven *surviving* Web physical page may reuse its
-   existing transport summary only after exact model/effort, encrypted-state fingerprint,
-   canonical revision ancestry, preceding assistant answer and Web pressure are checked.
-3. Otherwise, locate a source-bound Native history checkpoint by the current public
-   compaction item/turn anchor. The account-scoped cache is only a hint; current Native
-   identity must be rechecked.
-4. If unavailable, optionally read a *user-requested* completed Native final-answer
-   handoff only through a proven indexed Paginated source. A persisted handoff
-   and a newly found handoff are each accepted only after independent
-   verification of the exact same public Native answer, source IDs, digest,
-   summary and limitations. Missing or changed verification fails before a
-   derived cache write or Web execution. A Legacy early handoff probe fails
-   before unsafe historical pagination.
-   After recognizing the exact requested handoff prompt, both readers reject
-   any **visible** tool call, file change, plan, second user request, extra
-   assistant message, or unknown public item; only one user prompt, optional
-   reasoning, and one final answer are accepted in that completed Native turn.
-   An unrelated ordinary Native tool turn remains a non-handoff. This checks
-   the bounded public `itemsView:summary` projection, **not** a proof that
-   the Native engine blocked every possible hidden tool execution.
-   The current in-progress Web turn also must be unacted: at most its initial
-   public `userMessage` is permitted. A visible agent/tool/unknown item or
-   multiple user items blocks both new and cached handoff verification, rather
-   than importing a previous checkpoint after execution has already started.
-   Before accepting either a newly found or cached manual handoff, Tela
-   rechecks the newest in-progress turn through one
-   `thread/turns/list(itemsView:notLoaded,limit:1)` **indexed Paginated**
-   metadata page, after the normal post-source metadata owner check.
-   A changed newest turn or malformed public head refuses the handoff
-   before returning derived Web context. The extra page never requests
-   historical tool outputs or attempts a Legacy server-side replay.
-   This narrows the source-snapshot race; it is **not** an atomic Native
-   turn-revision certificate or proof that a Native engine cannot change
-   state after the final public check.
-5. Only then try the bounded complete visible Native source. If it is fully readable and
-   an ordinary, authorized Web checkpoint producer is available, create one checkpoint
-   within the *same* Web source/output budget. Revalidate the public compaction anchor
-   before committing it. Otherwise use the bounded source as-is if it fits.
-6. If the original source is unavailable, oversized or ambiguously owned, fail closed
-   with a context-recovery requirement. Never turn a partial suffix into an alleged
-   complete original transcript.
+1. Prove current Native authority, account/route and canonical branch. Reconcile uncertain work first.
+2. With proven owned Web ancestry, preceding answer and capacity, send only the canonical delta.
+   A new checkpoint or Native compaction alone does not require a new Web conversation.
+3. For a necessary fresh conversation, select the cheapest compatible checkpoint plus bounded suffix.
+   Advance it if required before opening the task surface. The first task message contains one
+   prepared working bundle, not successive installments of the historical archive.
+4. Maintenance uses the previous checkpoint plus bounded new suffix once, sharing the same preparation
+   budget across continuity and compaction. Commit only on owned completion.
+5. Genuine cold/edited legacy sources may need bounded bootstrap. Resolve compatible completed stages
+   first, then admit remaining work. This is exceptional recovery, never the recurring normal-turn
+   path. Bound source access, calls, input and time. Missing proof/budget requires explicit recovery,
+   not more chats, automatic budget expansion or repeated reconstruction from zero.
 
-`packages/development-runtime/src/native-context-continuity.ts` owns this selection
-and returns a typed mode, visible context, media and evidence references. The Native
-history and manually produced summaries are **lower-priority transport context**;
-they never constitute new system instructions, Native tool receipts or source-file data.
+The existing runner may use an isolated tool-free summary surface. Count these surfaces separately
+from task conversations and account probes, and include all in churn/cost acceptance. Do not inject
+several preparation installments into the fresh task conversation, hide extra summary prompts in
+ordinary answers or share a live profile concurrently to reduce visible chat counts.
 
-## Physical Web context and session ownership
+A local checkpoint cannot remove already-resident Web tokens. Keep the current page while ownership
+and headroom permit; prepare a small successor bundle and rotate once when needed. Without a
+supported provider operation, appending a summary does not reclaim capacity. Real ownership/generation
+loss, incompatible route or edits invalidating retained ancestry may also require rotation. New
+Native turns, checkpoint IDs, harmless presentation changes, cache misses and transport retries are
+not independent rotation reasons.
 
-`packages/development-runtime/src/native-request-planner.ts` independently builds a
-canonical Native logical revision lineage, then selects:
+Fresh creation requires a unique owned physical generation. A deterministic logical epoch ID alone
+cannot prove that a page was reset. Full/checkpoint-delta plans need a fresh physical conversation;
+only separately proven retained-delta plans can append to an existing one. Claim no shared provider
+KV cache between Native/Web, accounts, models or sessions.
 
-- Verified retained Web epoch: transfer only the new canonical suffix, preserving its
-  already-resident context and required media. Reuse the proven logical projection once.
-  The prior committed answer must be the single assistant completion of the immediately
-  preceding original Native request, before any subsequent user/steering request.
-  Repeated assistant text later in the Native history must not skip intervening turns;
-  an ambiguous completion boundary or post-final tool event requires fresh projection.
-- New or rolled-over Web epoch: use source-bound Web checkpoint + revisions when valid,
-  otherwise the bounded, physically fitted visible context. Optional context attachment
-  has a separate upload receipt. Provider projection cannot erase the current request,
-  authorization or verified original evidence.
-  Every fresh full/checkpoint-delta Native projection requires a **new physical
-  Web conversation**, even if its deterministic Web epoch ID matches a
-  previously completed original Native turn (for example, repeated identical
-  requests). Only a separately proven `retained-delta` plan may reuse an
-  existing physical surface. Matching epoch IDs alone do not prove ancestry.
+Track per-generation occupancy from accepted inputs and observed outputs/protocol usage. Use
+exposed authoritative usage or a labeled conservative monotonic estimate, including answers and tool
+rounds. Native compaction shrinking its active input cannot decrease old Web occupancy. Short deltas
+and checkpoint creation do not reset it. Ambiguous acceptance preserves an unknown outcome and blocks
+unsafe further admission. Commit once per operation; retries must not double-count or execute again.
+Do not rely only on currentLogicalTokens minus baseLogicalTokens to prove remaining physical room.
 
-Preparation cost and model capacity have separate owners. Ordinary Web planning shares one
-preparation budget across continuity and checkpoint phases; completed receipt reuse does not
-consume it. See [the cost and capacity contract](token-efficiency.md#capacity-ownership-and-preparation-policy)
-for admission order, elapsed-time semantics, defaults and regression ownership. A cost-policy
-change must not change stage identity, Native authority or unknown-send settlement.
+## Source and recovery gates preserved
 
-All actual Web summarizers, including Native local compaction, use
-`web-checkpoint-source.ts` to enforce one source-plus-media budget with reserved
-model-output headroom. If source cannot fit, no extra model call is made to
-repeatedly compact the same unfit prefix. The original Native logical history is not
-deleted or modified.
+Native owns task/environment/tool authority. Responses metadata alone is not proof. The owned
+Desktop proxy's original engine ACK attests only its exact live turn under existing socket, matching
+request ID, metadata and revocation gates. A changed socket/owner, ambiguous ACK or completed/retired
+turn revokes it. Readable authenticated current input needs no old-history read; it does not attest
+historical execution or grant replay authority.
 
-Fresh and retained Web results settle through one transactional boundary. Only an
-actual completed answer with physical surface lease and document generation advances
-the committed Web epoch. Failure, cancellation and retired leases invalidate uncertain
-Web state, not the Native task. Route/effort changes create another physical epoch
-without claiming shared underlying model KV cache.
-If the original Native owner cancels just after the context planner reserves a
-pending transaction but before Web surface acquisition, that plan is settled
-failed immediately. No Web request is submitted and a later independently
-authorized original Native turn may plan anew without inheriting a stale lock.
+Public history/anchor/handoff paging requires proven indexed historyMode=paginated and matching
+owner/environment before and after bounded reads. Never use thread/read(includeTurns:true), Legacy
+resume/fork or a small public page size to trigger unbounded server-side reconstruction. Opaque
+Native state cannot become invented plaintext or an allegedly complete suffix. Unindexed Legacy
+history requires supported bounded Native source/continuation; a handoff prompt does not make Legacy
+paging safe. Preserve typed nonretryable HTTP and already-started SSE recovery behavior.
 
-## Restart, account and source recovery
+Prefer retained context and completed readable checkpoints, then already-authorized source-verified
+manual handoffs or original-source bootstrap. Manual handoff verification retains the exact completed
+source turn, bounded indexed evidence, expected sole final answer and unacted current-turn gates;
+visible tools/plans/file changes or ambiguous source refuse it. Public summary evidence cannot attest
+that every hidden tool was prohibited. Automatic Native inference forks remain unshipped/denied
+without the separate [execution-provenance contract](native-execution-provenance-gate.md). Do not
+silently switch models or add inference to bypass these limits.
 
-- The history checkpoint store and ordinary Web-epoch cache have distinct account-scoped
-  namespaces and retention. Cache entries carry integrity proofs and Native source
-  identities, not Native authority.
-- Restart requires renewed public Native anchor or handoff-answer proof; retained
-  browser-state shortcuts do not survive restart.
-- Legacy Native thread paging may still reconstruct the whole historical
-  rollout on the Native server side, so all historical projection/handoff
-  paths refuse it. Paginated Native `thread/items/list` supports indexed
-  compaction anchor discovery where the public contract explicitly allows it.
-- A cache missing or corrupt on a 73 MiB old Legacy conversation **cannot be made
-  whole** by pretending the encrypted compaction is readable. An explicit
-  handoff alone does **not** make Legacy public pagination safe. Native
-  continuation or a future bounded public original-source contract is required.
-- Old files/commands/images can only become verified evidence after readback through a
-  current authorized Native/public tool path. An evidence reference or summary does not
-  itself grant file access or permission to reexecute past commands.
+Cache loss affects reuse, never authority. Reuse compatible durable completed receipts first. Loss of
+all usable source/checkpoints remains recovery, not guaranteed constant-cost successful cold start.
+Unknown claims cannot expire/be evicted to authorize replay. Proven local release retains unknown
+remote outcome and requires independent new Native authority for an admitted successor. Preserve
+separate account-scoped stores, bounded derived retention and original claim identities. Evidence
+references are not observations; old files/images/commands need current authorized readback.
 
-## Decision observability and validation
+## Implementation sequence and acceptance
 
-Web-turn diagnostics expose a payload-free `continuity_source` value from
-`current-input`, `retained`, `readable-checkpoint`, `cached-handoff`,
-`explicit-handoff`, `bounded-source`, or `produced-checkpoint`, alongside the
-existing checkpoint/physical-pressure flags. No prompt, command text, account identity
-or raw task identifier is recorded in routine diagnostic output.
+| Slice | Existing boundary | Required change |
+| --- | --- | --- |
+| Capacity/policy | physical-limits.ts, web-model-catalog.ts, checkpoint-preparation-budget.ts | Typed capacity/confidence and one resolver distinguish Native/Web hard limits, operational targets, reserves and cost. No invented capability. |
+| Checkpoint advance | context-cache.ts, native-visible-prefix-checkpoint.ts, existing journal | Source-bound rolling summary over prior checkpoint plus bounded suffix; atomic promotion, compatible reuse and unknown-send fencing. No second ledger. |
+| Common planning | native-request-planner.ts, native-context-continuity.ts, native-local-compaction.ts | One working-set maintenance/selection policy; archived history is not recurring model-summary input. Preserve Native compaction response semantics. |
+| Physical lifecycle | web-epoch-pressure.ts, planner settlement, existing surface owner | Monotonic occupancy per real generation; checkpoints do not reset residency; only necessary rotation. |
+| Evidence | Existing diagnostics and efficiency fixtures | First input bytes/estimate, resident usage/confidence, checkpoint/suffix size, new/reused calls, duplicate transfer, surfaces by purpose, rotation reason and runway; no payload or idle sampler. |
 
-Synthetic fixtures cover 593 turns/99 compactions, oversized history refusal,
-20 retained follow-ups, persistent checkpoint restart, manual handoff source
-readback, cache tampering, changed compaction lineage, Native owner cancellation,
-local compaction parity, and a shared Web checkpoint budget. These tests are not
-a live long-conversation Web acceptance or a signed installed release.
+Implement in dependency order as reviewable slices. Do not install a partial checkpoint migration
+that strands completed receipts. Keep source tests, installed readiness and actual useful live
+continuation separate. No claim of infinite-conversation or constant-cost success before lifecycle
+acceptance; real-use validation remains user-owned.
+
+With deterministic histories/counting producers, vary archived length over orders of magnitude
+while necessary active work stays fixed. After initialization, fresh task input, maintenance input,
+pending suffix and new-call count must stay within the same configured budgets. Also test growing
+active work and explicit oversize refusal: boundedness cannot depend on forgetting unresolved work.
+
+Cover bootstrap, retained repeat/append, rolling updates/many rollovers, restart, cache loss with
+surviving receipts, total loss, edits before/after checkpoints, Native compaction during a Web epoch,
+large tool/output/media, cancellation, uncertain acceptance, transport duplicates and changed
+account/model/effort/policy. Require no ordinary whole-history preparation, no task rotation solely
+for checkpoint maintenance, one fresh task seed, zero summary calls for completed reuse, no extra
+polishing/ACK and bounded auxiliary-surface counts. Retain meaning checks for objectives, active
+constraints, decisions, unfinished work and readback refs. These fixtures prove structural/cost gates,
+not lossless model understanding or real-account success.

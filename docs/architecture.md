@@ -1778,6 +1778,11 @@ superseded reads so older results cannot overwrite an in-progress connection.
 
 ### Native local compaction identity and settlement
 
+The [Native/Web context continuity contract](context-continuity-contract.md) owns the bounded
+working-set and physical-session lifecycle design. Its maintained checkpoint, first-message target
+and per-generation occupancy are implementation work; the existing oversized-source/cost gates
+are not evidence that initial transfer or reconstruction cost stays constant as history grows.
+
 The request-content view consumed by Native projection also defines compaction's request-owned
 source. Model/effort, claimed lineage and the canonical environment/media/goal evidence complete the
 operation identity; streaming and transport correlation affect delivery only. JSON object key order
