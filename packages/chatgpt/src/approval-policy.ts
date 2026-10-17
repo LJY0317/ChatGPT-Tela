@@ -14,6 +14,8 @@ export interface ChatGptApprovalCardObservation {
   readonly reviewReason?: ChatGptApprovalReviewReason;
   readonly denyCount: number;
   readonly allowCount: number;
+  /** Provider card-local connector heading proves generic Allow is this action. */
+  readonly genericAllowIsCurrentAction?: boolean;
   readonly allowOnceCount: number;
   readonly allowConversationCount?: number;
   readonly alwaysAllowCount: number;
@@ -22,17 +24,8 @@ export interface ChatGptApprovalCardObservation {
 
 export type ChatGptApprovalDecision =
   | { readonly action: "none"; readonly reason: "disabled" | "absent" | "ambiguous" | "unrecognized" | "manual_review" }
-  | { readonly action: "approve_once"; readonly preferredChoice: "allow_once" }
+  | { readonly action: "approve_once"; readonly preferredChoice: "allow_once" | "allow" }
   | { readonly action: "approve_conversation"; readonly preferredChoice: "allow_conversation" };
-
-/**
- * A finite per-accepted-Web-turn limit on unresolved dispatches only: confirmed
- * trusted-input + clearance + renewed task progress does not consume budget.
- * A new card is not evidence of a new owner or unlimited authority.
- */
-export const MAX_UNVERIFIED_APPROVALS_PER_TURN = 8;
-/** Compatibility alias; it now counts unresolved dispatches, not successes. */
-export const MAX_RECOGNIZED_APPROVALS_PER_TURN = MAX_UNVERIFIED_APPROVALS_PER_TURN;
 
 export type ChatGptAgentApprovalReview = Readonly<{
   readonly contractVersion: 1;
@@ -55,21 +48,18 @@ export function decideChatGptApproval(
   if (mode === "off") return Object.freeze({ action: "none", reason: "disabled" });
   if (observed.requiresManualReview) return Object.freeze({ action: "none", reason: "manual_review" });
   if (observed.cardCount === 0) return Object.freeze({ action: "none", reason: "absent" });
-  if (observed.cardCount !== 1 || observed.denyCount !== 1
-    || observed.allowCount > 1 || observed.allowOnceCount > 1
-    || (observed.allowConversationCount ?? 0) > 1
-    || (observed.allowCount > 0 && observed.allowOnceCount > 0)
-    || observed.alwaysAllowCount > 1 || observed.unknownCount !== 0) {
-    return Object.freeze({ action: "none", reason: "ambiguous" });
-  }
-  // Only the provider's *explicitly labeled current-conversation* control.
-  // Never confuse it with "Always allow" (which can outlive this conversation).
-  if (mode === "recognized_conversation" && observed.allowConversationCount === 1
-    && observed.allowCount === 0 && observed.alwaysAllowCount === 0) {
-    return Object.freeze({ action: "approve_conversation", preferredChoice: "allow_conversation" });
-  }
-  if (observed.allowOnceCount === 1) {
-    return Object.freeze({ action: "approve_once", preferredChoice: "allow_once" });
+  if (observed.cardCount !== 1) return Object.freeze({ action: "none", reason: "ambiguous" });
+  // Candidate metadata (Deny, disclosures, persistent alternatives and unrelated
+  // controls) does not decide whether the exact requested choice is unique.
+  const choices = mode === "recognized_conversation"
+    ? [[observed.allowConversationCount ?? 0, "allow_conversation"],
+      [observed.allowOnceCount, "allow_once"], [observed.genericAllowIsCurrentAction ? observed.allowCount : 0, "allow"]] as const
+    : [[observed.allowOnceCount, "allow_once"], [observed.genericAllowIsCurrentAction ? observed.allowCount : 0, "allow"]] as const;
+  for (const [count, choice] of choices) {
+    if (count > 1) return Object.freeze({ action: "none", reason: "ambiguous" });
+    if (count === 1) return choice === "allow_conversation"
+      ? Object.freeze({ action: "approve_conversation", preferredChoice: choice })
+      : Object.freeze({ action: "approve_once", preferredChoice: choice });
   }
   return Object.freeze({ action: "none", reason: "unrecognized" });
 }
@@ -99,7 +89,7 @@ export function reviewChatGptApprovalForAgent(
   const decision = decideChatGptApproval(mode, observed);
   const classification = decision.action === "approve_once"
     || decision.action === "approve_conversation"
-    ? unverifiedDispatchCount >= MAX_UNVERIFIED_APPROVALS_PER_TURN ? "limit_reached"
+    ? unverifiedDispatchCount > 0 ? "limit_reached"
       : decision.action === "approve_conversation" ? "eligible_conversation" : "eligible_once"
     : decision.reason;
   return Object.freeze({

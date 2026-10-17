@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decideChatGptApproval, MAX_RECOGNIZED_APPROVALS_PER_TURN,
+import { decideChatGptApproval,
   reviewChatGptApprovalForAgent } from "./approval-policy";
 
 describe("ChatGPT approval automation policy", () => {
@@ -58,15 +58,16 @@ describe("ChatGPT approval automation policy", () => {
       cardCount: 1,
       denyCount: 1,
       allowCount: 1,
+      genericAllowIsCurrentAction: true,
       allowOnceCount: 0,
       alwaysAllowCount: 0,
       unknownCount: 0,
-    })).toEqual({ action: "none", reason: "unrecognized" });
+    })).toEqual({ action: "approve_once", preferredChoice: "allow" });
     expect(decideChatGptApproval("recognized_once", { ...observed, allowCount: 1 })).toEqual({
-      action: "none", reason: "ambiguous",
+      action: "approve_once", preferredChoice: "allow_once",
     });
     expect(decideChatGptApproval("recognized_once", { ...observed, unknownCount: 1 })).toEqual({
-      action: "none", reason: "ambiguous",
+      action: "approve_once", preferredChoice: "allow_once",
     });
   });
   test("agent-facing inspection shares policy but grants no independent approval authority", () => {
@@ -94,10 +95,10 @@ describe("ChatGPT approval automation policy", () => {
     expect(reviewChatGptApprovalForAgent("recognized_once", { ...observed, allowOnceCount: 0 }))
       .toMatchObject({ classification: "unrecognized" });
   });
-  test("the finite per-turn gate closes rather than expanding agent authority for later cards", () => {
+  test("one unresolved dispatch blocks another while verified approvals have no count limit", () => {
     expect(reviewChatGptApprovalForAgent("recognized_once", observed,
-      MAX_RECOGNIZED_APPROVALS_PER_TURN - 1).classification).toBe("eligible_once");
-    for (const used of [MAX_RECOGNIZED_APPROVALS_PER_TURN, MAX_RECOGNIZED_APPROVALS_PER_TURN + 30]) {
+      0).classification).toBe("eligible_once");
+    for (const used of [1, 8, 38]) {
       expect(reviewChatGptApprovalForAgent("recognized_once", observed, used)).toMatchObject({
         classification: "limit_reached", nextAction: "human_browser_review", agentMayApprove: false,
       });
