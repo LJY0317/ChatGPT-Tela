@@ -858,9 +858,10 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(clicks).toBe(eligible ? 1 : 0);
   });
 
-  test.each(["stopped", "still running", "foreign", "occluded", "disabled"])(
+  test.each(["stopped", "still running", "foreign", "edited before dispatch", "occluded", "disabled"])(
     "owned public Stop dispatch is one-shot with observed outcome: %s", async scenario => {
-    const user = new FixtureElement(); user.textContent = "Owned test request";
+    const user = new FixtureElement(); user.innerText = user.textContent = "Owned test request";
+    user.selectors['[data-search-result-target]'] = [user];
     const answer = new FixtureElement(); answer.textContent = "Working";
     const group = new FixtureElement({'data-turn-key':'owned'}, {
       '[data-user-message-bubble]':[user], '[data-markdown-text-style="assistant-message"]':[answer],
@@ -873,11 +874,18 @@ describe("current ChatGPT DOM surface driver", () => {
     const page = new RendererFixturePage(root); page.hitTest = () => scenario === "occluded" ? root : stop;
     let clicks = 0;
     page.pointerClick = async () => { clicks++; if (scenario === "stopped") form.selectors['[data-testid="stop-button"]'] = []; };
+    if (scenario === "edited before dispatch") {
+      const evaluate = page.evaluate.bind(page);
+      page.evaluate = async (source, argument) => {
+        if (source.includes("const snapshot =")) user.textContent = "Changed request with identical turn keys";
+        return evaluate(source, argument);
+      };
+    }
     const driver = new ChatGptDomSurfaceDriver(page);
-    const expected = { assistantKey: scenario === "foreign" ? "assistant:foreign" : "assistant:owned", userTurnKey: "user:owned" };
+    const expected = { assistantKey: scenario === "foreign" ? "assistant:foreign" : "assistant:owned", userTurnKey: "user:owned", userFingerprint: createHash("sha256").update("Owned test request").digest("base64url") };
     const result = await driver.stopGeneration(expected);
     expect(result.status).toBe(scenario === "stopped" ? "stopped" : scenario === "still running" ? "stop_sent"
-      : scenario === "foreign" ? "ownership_changed" : "unavailable");
+      : scenario === "foreign" || scenario === "edited before dispatch" ? "ownership_changed" : "unavailable");
     expect(clicks).toBe(["stopped", "still running"].includes(scenario) ? 1 : 0);
     await driver.stopGeneration(expected);
     expect(clicks).toBe(["stopped", "still running"].includes(scenario) ? 1 : 0);

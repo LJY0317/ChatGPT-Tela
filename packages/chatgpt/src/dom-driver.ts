@@ -1870,7 +1870,7 @@ const PREPARE_STOP_GENERATION = String.raw`function (expected) {
   const assistant = snapshot.turns.filter(item => item.role === 'assistant').at(-1);
   const user = snapshot.turns.filter(item => item.role === 'user').at(-1);
   if (!assistant || !user || assistant.key !== expected.assistantKey
-    || user.key !== expected.userKey || assistant.parentUserTurnKey !== expected.userKey
+    || user.key !== expected.userKey || user.contentText !== expected.userContent || assistant.parentUserTurnKey !== expected.userKey
     || assistant.lineageAnchor !== expected.anchor) return { status: 'ownership_changed' };
   const visible = node => node instanceof HTMLElement && getComputedStyle(node).display !== 'none'
     && getComputedStyle(node).visibility !== 'hidden' && getComputedStyle(node).opacity !== '0'
@@ -2342,7 +2342,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
   }
 
   /** Public provider Stop only, bound to the current user/assistant lineage. */
-  async stopGeneration(expected: { readonly assistantKey: string; readonly userTurnKey: string }, signal?: AbortSignal): Promise<{
+  async stopGeneration(expected: { readonly assistantKey: string; readonly userTurnKey: string; readonly userFingerprint: string }, signal?: AbortSignal): Promise<{
     readonly status: "stopped" | "stop_sent" | "unavailable" | "ownership_changed";
   }> {
     signal?.throwIfAborted();
@@ -2350,13 +2350,14 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     const assistant = raw.turns.filter(item => item.role === "assistant").at(-1);
     const user = raw.turns.filter(item => item.role === "user").at(-1);
     if (!assistant || !user || turn(assistant).key !== expected.assistantKey
-      || turn(assistant).parentUserTurnKey !== expected.userTurnKey || turn(user).key !== expected.userTurnKey) {
+      || turn(assistant).parentUserTurnKey !== expected.userTurnKey || turn(user).key !== expected.userTurnKey
+      || turn(user).contentFingerprint !== expected.userFingerprint) {
       return { status: "ownership_changed" };
     }
     if (this.#stopAttemptedTurn === expected.assistantKey) return { status: "stop_sent" };
-    const target = await this.page.evaluate<{ assistantKey: string; userKey: string; anchor?: string }, {
+    const target = await this.page.evaluate<{ assistantKey: string; userKey: string; userContent: string | undefined; anchor?: string }, {
       status: "ready" | "unavailable" | "ownership_changed"; point?: { x: number; y: number };
-    }>(PREPARE_STOP_GENERATION, { assistantKey: assistant.key, userKey: user.key,
+    }>(PREPARE_STOP_GENERATION, { assistantKey: assistant.key, userKey: user.key, userContent: user.contentText,
       ...(assistant.lineageAnchor ? { anchor: assistant.lineageAnchor } : {}) }, signal);
     if (target.status !== "ready" || !target.point) return { status: target.status === "ownership_changed" ? "ownership_changed" : "unavailable" };
     signal?.throwIfAborted();
@@ -2365,7 +2366,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     await this.page.pointerClick(target.point, signal);
     signal?.throwIfAborted();
     const after = await this.page.evaluate( PREPARE_STOP_GENERATION, { assistantKey: assistant.key,
-      userKey: user.key, ...(assistant.lineageAnchor ? { anchor: assistant.lineageAnchor } : {}) }, signal) as { status: string; stopCount?: number };
+      userKey: user.key, userContent: user.contentText, ...(assistant.lineageAnchor ? { anchor: assistant.lineageAnchor } : {}) }, signal) as { status: string; stopCount?: number };
     return { status: after.status === "ownership_changed" ? "ownership_changed"
       : after.stopCount === 0 ? "stopped" : "stop_sent" };
   }
