@@ -27,7 +27,7 @@ Reproducible lexical counts (`if (` tokens and `&&`/`||`, not cyclomatic complex
 | --- | --- | --- | --- |
 | Pure policy | 113 / 103 | 9 / 9 | 14 / 3 |
 | Renderer approval inspector | 288 / 298 | 47 / 48 | 108 / 107 |
-| Evidence/wait observation | 156 / 173 | 21 / 26 | 22 / 26 |
+| Evidence/wait observation | 156 / 191 | 21 / 26 | 22 / 37 |
 
 The pure policy's auxiliary-count conditions and duplicated preparation policy
 were removed. Candidate discovery, warning scope, explicit Stop and expiry add
@@ -40,7 +40,9 @@ Synthetic renderer fixtures demonstrate acceptance of auxiliary controls,
 missing Deny, connector-owned dialogs, native button/menuitem overlap and nested
 wrappers. They also reject changed/duplicate/disabled/occluded targets and wrapper
 warnings. Fake clocks cover unchanged-DOM milestones, clearance immediately before
-expiry, expiry racing a snapshot/preparation, public cancellation and late input.
+expiry, expiry racing a snapshot/preparation, public cancellation and late input. One operation-owned expiry remains active
+through card disappearance without task progress, unresponsive handoff observation
+and a caller that stops consuming progress. All retirement paths clear that timer.
 These establish specific previously rejected structures; they do not measure
 account-backed approval success rate, provider billing or final user task success.
 
