@@ -28,7 +28,9 @@ test("approval waiting has exact 30s, 2m, 5m and 10m program milestones", () => 
   expect(observation.phase).toBe("pending");
   expect(observation.audit).toMatchObject({ dispatch_count: 0, verified_success_count: 0 });
   observation.observe(undefined, "same-assistant", true, 905_000);
-  expect(observation.pendingElapsedMs(906_000)).toBeUndefined();
+  expect(observation.pendingElapsedMs(906_000)).toBe(905_000);
+  observation.observe(undefined, "owned-progress", true, 907_000);
+  expect(observation.pendingElapsedMs(908_000)).toBeUndefined();
   expect(overdueHumanApprovalSummary(Infinity)).toBeUndefined();
 });
 

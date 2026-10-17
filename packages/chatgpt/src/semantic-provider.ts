@@ -67,6 +67,8 @@ interface TrackedTurn extends TurnOwnership {
   observeAgain?: boolean;
   approvalRevalidatedCard?: string;
   readonly operationAbort: AbortController;
+  approvalExpiry?: { readonly at: number; readonly timer: ReturnType<typeof setTimeout> };
+  retirement?: Promise<void>;
 }
 
 export interface ChatGptSemanticProviderOptions {
@@ -105,6 +107,19 @@ export interface ChatGptConnectorProbe {
 
 function fingerprint(value: string): string {
   return createHash("sha256").update(value).digest("base64url");
+}
+
+/** Abort is a settlement boundary even when an adapter fails to observe its signal. */
+async function waitOwned<T>(signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> {
+  signal?.throwIfAborted();
+  if (!signal) return work();
+  let abort!: () => void;
+  const cancelled = new Promise<never>((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+  try { return await Promise.race([work(), cancelled]); }
+  finally { signal.removeEventListener("abort", abort); }
 }
 
 function evidence(...parts: string[]): readonly string[] {
@@ -1616,11 +1631,15 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     signal?.throwIfAborted();
     const tracked = this.#tracked(surface, turn);
     signal = AbortSignal.any([...(signal ? [signal] : []), tracked.operationAbort.signal]);
-    const snapshot = await driverFor(surface).observe(signal);
+    const snapshot = await waitOwned(signal, () => driverFor(surface).observe(signal));
     signal.throwIfAborted();
     this.#tracked(surface, turn);
     tracked.revision = snapshot.revision;
     const state = stateFromSnapshot(snapshot, tracked);
+    if (!tracked.identityPending) {
+      const assistants = assistantFor(snapshot, tracked.userTurnKey);
+      this.#observeApproval(surface, tracked, snapshot, assistants.length === 1 ? assistants[0] : undefined);
+    }
     if (tracked.retainedContext && !tracked.identityPending && !this.#assertRetainedConversation(surface, snapshot, true)) {
       return { state: "probable", value: { providerTurnId: turn.providerTurnId, phase: "accepted" },
         evidence: evidence("retained author body is temporarily unavailable") };
@@ -1641,9 +1660,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     if (!callId.trim()) throw new Error("Web tool continuation call id must be non-empty");
     const tracked = this.#tracked(surface, turn);
     signal = AbortSignal.any([...(signal ? [signal] : []), tracked.operationAbort.signal]);
-    let { snapshot, lineage } = await waitForLineage(driverFor(surface), tracked, signal);
+    let { snapshot, lineage } = await waitOwned(signal, () => waitForLineage(driverFor(surface), tracked, signal));
     if (tracked.retainedContext) {
-      snapshot = await this.#waitForRetainedConversation(surface, snapshot, tracked, signal);
+      snapshot = await waitOwned(signal, () => this.#waitForRetainedConversation(surface, snapshot, tracked, signal));
       lineage = resolveAssistantLineage(snapshot, tracked);
     }
     signal?.throwIfAborted();
@@ -1670,6 +1689,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       };
     }
     const assistant = assistants[0];
+    this.#observeApproval(surface, tracked, snapshot, assistant);
     const phase = assistantLifecyclePhase(snapshot, assistant);
     if (phase === "completed" || phase === "failed") {
       emitDiagnosticEvent("chatgpt_tela_work", "web_tool_handoff_rejected", {
@@ -1705,13 +1725,52 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     };
   }
 
+  #retireTurn(surface: BrowserSurfaceLease, tracked: TrackedTurn): void {
+    if (tracked.approvalExpiry) clearTimeout(tracked.approvalExpiry.timer);
+    delete tracked.approvalExpiry;
+    if (this.#turns.get(surface) === tracked) this.#turns.delete(surface);
+  }
+
+  #observeApproval(surface: BrowserSurfaceLease, tracked: TrackedTurn, snapshot: ChatGptSurfaceSnapshot,
+    assistant: ChatGptTurnObservation | undefined): void {
+    const received = tracked.approvalObservation.recordInputReceipt(snapshot.approvalInputReceipt, Date.now());
+    if (received) approvalTransitionDiagnostic(received);
+    const transition = tracked.approvalObservation.observe(snapshot.approval, approvalAssistantVersion(assistant),
+      assistant !== undefined && assistant.phase !== "failed", Date.now());
+    if (transition) approvalTransitionDiagnostic(transition);
+    const now = Date.now();
+    const age = tracked.approvalObservation.pendingElapsedMs(now);
+    const at = age === undefined ? undefined : now + 600_000 - age;
+    if (tracked.approvalExpiry?.at === at) return;
+    if (tracked.approvalExpiry) clearTimeout(tracked.approvalExpiry.timer);
+    delete tracked.approvalExpiry;
+    if (at === undefined) return;
+    const timer = setTimeout(() => {
+      if (this.#turns.get(surface) !== tracked || tracked.approvalExpiry?.at !== at) return;
+      emitDiagnosticEvent("chatgpt_tela_work", "approval_wait_expired", { elapsed_ms: 600_000,
+        remote_outcome: "uncertain", next_action: "reconcile_existing_operation" });
+      tracked.operationAbort.abort(new ChatGptApprovalExpired());
+      // One owned cancellation joins public Stop and physical retirement; no caller polling is needed.
+      void this.cancelTurn(surface, tracked.handle).catch(() => {});
+    }, Math.max(0, at - Date.now()));
+    timer.unref?.();
+    tracked.approvalExpiry = { at, timer };
+  }
+
   async cancelTurn(surface: BrowserSurfaceLease, turn: WebTurnHandle): Promise<void> {
     const tracked = this.#turns.get(surface);
     if (!tracked) return; // Already retired by expiry or a completed observation.
-    this.#tracked(surface, turn);
+    this.#tracked(surface, turn, true);
+    if (tracked.retirement) return tracked.retirement;
     // Fence first. Late approval preparation/observation cannot regain this operation.
     tracked.operationAbort.abort(new Error("Owned Web operation retired"));
-    this.#turns.delete(surface);
+    if (tracked.approvalExpiry) clearTimeout(tracked.approvalExpiry.timer);
+    delete tracked.approvalExpiry;
+    tracked.retirement = this.#stopOwnedTurn(surface, tracked);
+    return tracked.retirement;
+  }
+
+  async #stopOwnedTurn(surface: BrowserSurfaceLease, tracked: TrackedTurn): Promise<void> {
     const driver = driverFor(surface);
     const timeout = AbortSignal.timeout(5_000);
     let status = "unavailable";
@@ -1739,6 +1798,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         ? "ownership_changed" : "unconfirmed";
     }
     emitDiagnosticEvent("chatgpt_tela_work", "web_owned_stop", { status, remote_outcome: "uncertain" });
+    this.#retireTurn(surface, tracked);
   }
 
   async #approvalSnapshot(driver: ChatGptSurfaceDriver, tracked: TrackedTurn, signal?: AbortSignal): Promise<ChatGptSurfaceSnapshot> {
@@ -1776,29 +1836,30 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const driver = driverFor(surface);
 
     if (tracked.pendingCompletedAnswer !== undefined) {
-      let { snapshot } = await waitForLineage(driver, tracked, signal);
-      snapshot = await this.#waitForRetainedConversation(surface, snapshot, tracked, signal);
+      let { snapshot } = await waitOwned(signal, () => waitForLineage(driver, tracked, signal));
+      snapshot = await waitOwned(signal, () => this.#waitForRetainedConversation(surface, snapshot, tracked, signal));
       signal.throwIfAborted();
       this.#tracked(surface, turn);
       const ownership = resolveAssistantLineage(snapshot, tracked);
       if (ownership.ambiguous || ownership.assistants.length !== 1) {
         throw new Error("ChatGPT pending completion no longer has one proven assistant identity");
       }
+      this.#observeApproval(surface, tracked, snapshot, ownership.assistants[0]);
       const answer = tracked.pendingCompletedAnswer;
       delete tracked.pendingCompletedAnswer;
       // A new approval can render after completion controls. It still blocks final delivery.
       if (assistantLifecyclePhase(snapshot, ownership.assistants[0]) === "failed") {
-        await this.#recordApprovalResolution(surface, tracked, "failed");
+        await waitOwned(signal, () => this.#recordApprovalResolution(surface, tracked, "failed"));
         signal?.throwIfAborted();
-        this.#turns.delete(surface);
+        this.#retireTurn(surface, tracked);
         return { state: "proven", value: { kind: "failed", providerTurnId: tracked.handle.providerTurnId,
           detail: ownership.assistants[0]!.failureDetail ?? "ChatGPT turn failed" },
           evidence: evidence("assistant failure superseded pending completion") };
       }
       if (!snapshot.approval?.cardCount) {
-        await this.#recordApprovalResolution(surface, tracked, "completed");
+        await waitOwned(signal, () => this.#recordApprovalResolution(surface, tracked, "completed"));
         signal?.throwIfAborted();
-        this.#turns.delete(surface);
+        this.#retireTurn(surface, tracked);
         return {
           state: "proven",
           value: { kind: "completed", providerTurnId: tracked.handle.providerTurnId, ...answer },
@@ -1809,13 +1870,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
 
     for (;;) {
       let snapshot: ChatGptSurfaceSnapshot;
-      try { snapshot = await this.#approvalSnapshot(driver, tracked, signal); }
+      try { snapshot = await waitOwned(signal, () => this.#approvalSnapshot(driver, tracked, signal)); }
       catch (error) {
-        if (error instanceof ChatGptApprovalExpired) {
-          emitDiagnosticEvent("chatgpt_tela_work", "approval_wait_expired", { elapsed_ms: tracked.approvalObservation.pendingElapsedMs(Date.now()) ?? 600_000,
-            remote_outcome: "uncertain", next_action: "reconcile_existing_operation" });
-          await this.cancelTurn(surface, turn);
-        }
+        if (error instanceof ChatGptApprovalExpired) await this.cancelTurn(surface, turn);
         throw error;
       }
       signal?.throwIfAborted();
@@ -1850,13 +1907,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       const assistant = assistants[0];
       const waitState = JSON.stringify([assistant?.phase ?? "absent", snapshot.approval ?? null]);
-      const inputReceiptTransition = tracked.approvalObservation.recordInputReceipt(snapshot.approvalInputReceipt, Date.now());
-      if (inputReceiptTransition) approvalTransitionDiagnostic(inputReceiptTransition);
-      const approvalTransition = tracked.approvalObservation.observe(snapshot.approval,
-        approvalAssistantVersion(assistant), assistant !== undefined && assistant.phase !== "failed", Date.now());
-      if (approvalTransition) approvalTransitionDiagnostic(approvalTransition);
+      this.#observeApproval(surface, tracked, snapshot, assistant);
       const elapsedApproval = tracked.approvalObservation.pendingElapsedMs(Date.now());
-      if (elapsedApproval !== undefined && elapsedApproval >= 300_000
+      if (snapshot.approval && elapsedApproval !== undefined && elapsedApproval >= 300_000
         && tracked.approvalRevalidatedCard !== (snapshot.approval?.cardFingerprint ?? snapshot.approval?.revisionFingerprint)) {
         tracked.approvalRevalidatedCard = snapshot.approval?.cardFingerprint ?? snapshot.approval!.revisionFingerprint;
         emitDiagnosticEvent("chatgpt_tela_work", "approval_wait_revalidated", { elapsed_ms: elapsedApproval,
@@ -1866,7 +1919,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       if (snapshot.approval?.cardCount && !tracked.approvalPendingCaptured) {
         tracked.approvalPendingCaptured = true;
         // Capture the first exact card before dispatch; private opt-in only, bounded once per turn.
-        await captureBrowserDiagnosticCheckpoint(surface, "approval_pending");
+        await waitOwned(signal, () => captureBrowserDiagnosticCheckpoint(surface, "approval_pending"));
         signal?.throwIfAborted();
       }
       if (tracked.waitState !== waitState) {
@@ -1883,7 +1936,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         if (snapshot.approval?.cardCount && this.#approvalAutomationMode !== "off") {
           const decision = decideChatGptApproval(this.#approvalAutomationMode, snapshot.approval);
           if (decision.action === "none") {
-            await captureBrowserDiagnosticEvidence(surface, "approval_anomaly");
+            await waitOwned(signal, () => captureBrowserDiagnosticEvidence(surface, "approval_anomaly"));
             emitDiagnosticEvent("chatgpt_tela_work", "approval_card_anomaly", {
               reason_class: decision.reason, approval_card_count: snapshot.approval.cardCount,
             });
@@ -1926,26 +1979,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         && (approvalReview.classification === "eligible_once"
           || approvalReview.classification === "eligible_conversation")) {
         signal?.throwIfAborted();
-        const remaining = 600_000 - (tracked.approvalObservation.pendingElapsedMs(Date.now()) ?? 0);
-        const expiryController = new AbortController();
-        const expiry = expiryController.signal;
-        const expiryTimer = setTimeout(() => expiryController.abort(new ChatGptApprovalExpired()), Math.max(0, remaining));
-        const approvalSignal = AbortSignal.any([...(signal ? [signal] : []), expiry]);
-        let action: Awaited<ReturnType<NonNullable<ChatGptSurfaceDriver["processApprovalCard"]>>>;
-        try {
-          action = await Promise.race([driver.processApprovalCard(this.#approvalAutomationMode, approvalSignal,
-            this.#approvalAutomationDelayMs, { cardFingerprint: observedApproval.cardFingerprint,
-              revisionFingerprint: observedApproval.revisionFingerprint }), new Promise<never>((_, reject) => {
-                expiry.addEventListener("abort", () => reject(new ChatGptApprovalExpired()), { once: true });
-              })]);
-          if (expiry.aborted) throw new ChatGptApprovalExpired();
-        } catch (error) {
-          if (!signal?.aborted && expiry.aborted) {
-            await this.cancelTurn(surface, turn);
-            throw new ChatGptApprovalExpired();
-          }
-          throw error;
-        } finally { clearTimeout(expiryTimer); }
+        const action = await waitOwned(signal, () => driver.processApprovalCard!(this.#approvalAutomationMode, signal,
+          this.#approvalAutomationDelayMs, { cardFingerprint: observedApproval.cardFingerprint!,
+            revisionFingerprint: observedApproval.revisionFingerprint }));
         signal?.throwIfAborted();
         this.#tracked(surface, turn);
         if (action.status === "dispatched" || action.reason === "already_activated") {
@@ -1977,7 +2013,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         emitDiagnosticEvent("chatgpt_tela_work", "web_public_progress_missing", {
           assistant_phase: assistant.phase, matched_assistant_count: lineage.assistants.length,
         });
-        await captureBrowserDiagnosticCheckpoint(surface, "surface_anomaly");
+        await waitOwned(signal, () => captureBrowserDiagnosticCheckpoint(surface, "surface_anomaly"));
       }
       signal?.throwIfAborted();
       if (publicProgress && publicProgress.length <= 16384 && tracked.publicProgress !== publicProgress) {
@@ -1995,9 +2031,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         if (assistantFingerprint(assistant) === boundary.assistantFingerprint) continue;
         delete tracked.continuationBoundary;
         if (assistant.phase === "failed") {
-          await this.#recordApprovalResolution(surface, tracked, "failed");
+          await waitOwned(signal, () => this.#recordApprovalResolution(surface, tracked, "failed"));
           signal?.throwIfAborted();
-          this.#turns.delete(surface);
+          this.#retireTurn(surface, tracked);
           return {
             state: "proven",
             value: {
@@ -2019,10 +2055,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         };
       }
       if (assistant.phase === "complete") {
-        await this.#recordApprovalResolution(surface, tracked, "completed");
+        await waitOwned(signal, () => this.#recordApprovalResolution(surface, tracked, "completed"));
         signal?.throwIfAborted();
         this.#commitAnswer(surface, tracked.userTurnKey, assistant);
-        this.#turns.delete(surface);
+        this.#retireTurn(surface, tracked);
         return {
           state: "proven",
           value: {
@@ -2034,9 +2070,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         };
       }
       if (assistant.phase === "failed") {
-        await this.#recordApprovalResolution(surface, tracked, "failed");
+        await waitOwned(signal, () => this.#recordApprovalResolution(surface, tracked, "failed"));
         signal?.throwIfAborted();
-        this.#turns.delete(surface);
+        this.#retireTurn(surface, tracked);
         return {
           state: "proven",
           value: {
@@ -2068,7 +2104,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     }
   }
 
-  #tracked(surface: BrowserSurfaceLease, turn: WebTurnHandle): TrackedTurn {
+  #tracked(surface: BrowserSurfaceLease, turn: WebTurnHandle, allowRetired = false): TrackedTurn {
     const tracked = this.#turns.get(surface);
     if (!tracked || tracked.surfaceLeaseId !== surface.leaseId
       || tracked.handle.providerTurnId !== turn.providerTurnId
@@ -2077,6 +2113,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       || tracked.handle.webEpochId !== turn.webEpochId) {
       throw new Error("ChatGPT turn handle is not bound to this browser surface and Native turn");
     }
+    if (!allowRetired) tracked.operationAbort.signal.throwIfAborted();
     return tracked;
   }
 }

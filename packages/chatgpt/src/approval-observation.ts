@@ -36,7 +36,7 @@ export class ChatGptApprovalObservation {
   get unverifiedDispatchCount(): number { return this.#dispatched.size - this.#verified.size; }
   /** Read-only age of the unresolved current card; never a grant or timeout. */
   pendingElapsedMs(now: number): number | undefined {
-    return this.#current && ["pending", "dispatch_sent", "input_received"].includes(this.#current.phase)
+    return this.#current && ["pending", "dispatch_sent", "input_received", "card_cleared"].includes(this.#current.phase)
       ? Math.max(0, now - this.#current.seenAt) : undefined;
   }
   #verifyCard(): void {

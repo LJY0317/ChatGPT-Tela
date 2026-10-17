@@ -2702,7 +2702,7 @@ test('post-acceptance input does not cancel an observer; Native cancellation sti
 });
 
 
-test.each(["pending", "cleared_before", "preparation", "replacement"] as const)("fake clock: approval milestones, ten-minute expiry and late-input fencing (%s)", async scenario => {
+test.each(["pending", "cleared_before", "preparation", "replacement", "hidden", "forgotten", "handoff"] as const)("fake clock: approval milestones, ten-minute expiry and late-input fencing (%s)", async scenario => {
   const driver = new FixtureDriver(fixture("ready-new-chat"));
   const surface = await leaseFor(driver);
   const provider = new ChatGptSemanticProvider({ approvalAutomationMode: scenario === "preparation" ? "recognized_once" : "off" });
@@ -2753,6 +2753,27 @@ test.each(["pending", "cleared_before", "preparation", "replacement"] as const)(
       return;
     }
     expect((await event()).state).toBe("proven");
+    if (scenario === "forgotten") {
+      await advance(600_000);
+      expect(stops).toBe(1);
+      await expect(event()).rejects.toThrow("not bound");
+      return;
+    }
+    if (scenario === "handoff") {
+      driver.current = { ...driver.current, turns: driver.current.turns.map(t => {
+        if (t.role !== "user") return t;
+        const { contentFingerprint: _fingerprint, ...pending } = t;
+        return pending;
+      }) };
+      driver.waitForChange = async () => new Promise(() => {}); // Adapter ignores abort while identity is pending.
+      const handoff = provider.armToolContinuation(surface.lease, submitted.value, "pending-call");
+      void handoff.catch(() => {});
+      await advance(0);
+      await advance(600_000);
+      await expect(handoff).rejects.toMatchObject({ code: "tela_web_approval_expired" });
+      expect(stops).toBe(0);
+      return;
+    }
     let changed: ((snapshot: ChatGptSurfaceSnapshot) => void) | undefined;
     driver.waitForChange = async (_revision: string, signal?: AbortSignal) => new Promise((resolve, reject) => {
       changed = resolve;
@@ -2769,22 +2790,30 @@ test.each(["pending", "cleared_before", "preparation", "replacement"] as const)(
     pending = event(); await advance(0); await advance(180_000);
     expect(await pending).toMatchObject({ state: "proven", value: { summary: expect.stringContaining("rechecking") } });
     pending = event(); await advance(0); void pending.catch(() => {});
-    if (scenario === "replacement") {
+    if (scenario === "replacement" || scenario === "hidden") {
       await advance(240_000); // Replace at nine minutes without receipt or owned progress.
-      driver.current = { ...driver.current, revision: "replacement-nine-minutes", approval: {
+      if (scenario === "replacement") driver.current = { ...driver.current, revision: "replacement-nine-minutes", approval: {
         ...recognizedApproval, cardFingerprint: "b".repeat(24), revisionFingerprint: "replacement-proof" } };
+      else {
+        const { approval: _approval, ...hidden } = driver.current;
+        driver.current = { ...hidden, revision: "hidden-nine-minutes" };
+      }
       changed!(await driver.observe());
       await advance(0);
+      if (scenario === "hidden") {
+        expect(await pending).toMatchObject({ state: "proven", value: { kind: "progress", summary: expect.stringContaining("card cleared") } });
+        pending = event(); void pending.catch(() => {}); await advance(0);
+      }
     }
-    await advance(scenario === "replacement" ? 59_999 : 299_999); expect(stops).toBe(0);
+    await advance(scenario === "replacement" || scenario === "hidden" ? 59_999 : 299_999); expect(stops).toBe(0);
     if (scenario === "cleared_before") {
       const { approval: _approval, ...cleared } = driver.current;
       driver.current = { ...cleared, revision: "cleared-before-expiry", turns: driver.current.turns.map(t => t.role === "assistant"
         ? { ...t, phase: "complete", text: "verified owned final", contentFingerprint: hash("verified owned final") } : t) };
       changed!(await driver.observe());
       expect(await pending).toMatchObject({ state: "proven", value: { kind: "progress", summary: expect.stringContaining("card cleared") } });
-      await advance(2); // Successful clearance just before expiry survives the old deadline.
-      await event();
+      await event(); // Owned task progress is proven before the deadline, beyond mere clearance.
+      await advance(2);
       expect(await event()).toMatchObject({ state: "proven", value: { kind: "completed", answer: "verified owned final" } });
       expect(stops).toBe(0);
       return;
