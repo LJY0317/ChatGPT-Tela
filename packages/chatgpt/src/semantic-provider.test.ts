@@ -2168,6 +2168,27 @@ describe("ChatGPT semantic provider", () => {
       expect(driver.approvalCalls).toBe(1);
     } finally { await surface.host.close(); }
   });
+  test.each([["occluded", "could not be reached"], ["card_changed", "changed before the click"],
+    ["PRIVATE_UNTRUSTED_REASON", "could not be verified"]])("approval preparation failure is explained without leaking adapter text: %s", async (reason, explanation) => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.processApprovalCard = async () => ({status:"none",reason:reason!});
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({approvalAutomationMode:"recognized_once"});
+    let accepted: any;
+    try {
+      const pending = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await pending;
+      if (submitted.state !== "proven") throw Error("fixture acceptance failed");
+      accepted = submitted.value;
+      driver.queued.push({...driver.current,revision:"pending-unreachable",approval:recognizedApproval});
+      const event = await provider.waitForTurnEvent(surface.lease,accepted);
+      expect(event.state === "proven" && event.value).toMatchObject({kind:"progress",summary:expect.stringContaining(explanation!)});
+      expect(JSON.stringify(event)).not.toContain("PRIVATE_UNTRUSTED_REASON");
+      expect(driver.activated).toHaveLength(1);
+    } finally { if (accepted) await provider.cancelTurn(surface.lease,accepted); await surface.host.close(); }
+  });
   test("agent automation cannot dispatch unbounded new one-shot cards within one accepted Web turn", async () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.approveRecognizedCard = true;

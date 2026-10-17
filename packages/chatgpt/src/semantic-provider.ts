@@ -11,7 +11,7 @@ import {
 import { WebRetainedContextUnproven, capturePrivateDiagnosticValue, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, type WebRetainedContextReason } from "@chatgpt-tela/core";
 import { ChatGptDomSurfaceDriver } from "./dom-driver";
 import { decideChatGptApproval, reviewChatGptApprovalForAgent, type ChatGptApprovalAutomationMode } from "./approval-policy";
-import { ChatGptApprovalObservation, ChatGptApprovalExpired, nextApprovalWaitWakeMs, approvalObservationSummary, overdueHumanApprovalSummary, type ApprovalObservationTransition } from "./approval-observation";
+import { ChatGptApprovalObservation, ChatGptApprovalExpired, nextApprovalWaitWakeMs, approvalPreparationFailureSummary, approvalObservationSummary, overdueHumanApprovalSummary, type ApprovalObservationTransition } from "./approval-observation";
 import {
   contextAttachmentReference,
   formatChatGptContextAttachmentStage,
@@ -1973,6 +1973,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           });
         }
       }
+      let preparationFailure: string | undefined;
       if (observedApproval?.cardCount === 1 && observedApproval.cardFingerprint
         && !tracked.approvalObservation.wasDispatched(observedApproval.cardFingerprint)
         && assistant?.phase !== "failed" && driver.processApprovalCard
@@ -1989,13 +1990,15 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           const transition = tracked.approvalObservation.dispatched(card, Date.now(),
             action.status === "dispatched" ? action.revisionFingerprint : undefined);
           approvalTransitionDiagnostic(transition);
+        } else {
+          preparationFailure = approvalPreparationFailureSummary(action.reason);
         }
       }
       signal?.throwIfAborted();
       const approvalPhase = tracked.approvalObservation.phase;
       const overdueHumanReview = observedApproval?.cardCount
         ? overdueHumanApprovalSummary(tracked.approvalObservation.pendingElapsedMs(Date.now())) : undefined;
-      const approvalProgress = overdueHumanReview ?? (approvalPhase
+      const approvalProgress = overdueHumanReview ?? preparationFailure ?? (approvalPhase
         ? approvalPhase === "pending" && approvalReview.classification === "limit_reached"
           ? "A previous automatic approval remains unverified. Review the existing operation in the browser; Tela will not click another card or resend the request."
           : approvalObservationSummary(approvalPhase,

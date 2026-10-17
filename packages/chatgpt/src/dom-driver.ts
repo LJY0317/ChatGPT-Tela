@@ -2274,7 +2274,8 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       ? value.allowConversationPoint : decision.preferredChoice === "allow" ? value.allowPoint : value.allowOncePoint;
     if (!observed.cardKey || !observed.proofKey
       || !targetPoint(observed)) {
-      return Object.freeze({ status: "none" as const, reason: "target_missing" });
+      return Object.freeze({ status: "none" as const, reason: observed.targetState === "occluded" || observed.targetState === "outside_viewport"
+        ? observed.targetState : "target_missing" });
     }
     if (observed.cardKey === this.#activatedApprovalCardKey) {
       this.#diagnostic("approval_activation_withheld", { reason_class: "already_activated",

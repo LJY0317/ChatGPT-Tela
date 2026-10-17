@@ -179,3 +179,13 @@ export class ChatGptApprovalExpired extends Error {
     this.name = "ChatGptApprovalExpired";
   }
 }
+
+/** Fixed public explanations only; an adapter's raw reason is never displayed. */
+export function approvalPreparationFailureSummary(reason: string): string {
+  const detail = reason === "card_changed" ? "The approval card changed before the click."
+    : reason === "occluded" || reason === "outside_viewport" ? "The approval button could not be reached."
+    : reason === "options_unverified" || reason === "options_already_attempted" ? "The approval menu could not be verified."
+    : reason === "target_missing" || reason === "changed" ? "The current approval button could not be verified."
+    : "Automatic approval could not be verified.";
+  return `${detail} Review the current card in the owned browser; the accepted request will not be resent.`;
+}
