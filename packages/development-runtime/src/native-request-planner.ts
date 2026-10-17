@@ -1187,6 +1187,19 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         : segment.kind === "tool-result" && protectedIds.has(segment.revisionId) ? "protectedTool" : "other";
       seedBytes[kind] += Buffer.byteLength(segment.content, "utf8");
     }
+    const authority = boundContext.segments.filter(segment => segment.type !== "checkpoint").filter(segment => segment.kind === "system" || segment.kind === "developer");
+    const authorityByContent = new Map(authority.map(segment => [createHash("sha256").update(segment.content).digest("hex"), Buffer.byteLength(segment.content, "utf8")]));
+    const authorityUniqueBytes = [...authorityByContent.values()].reduce((sum, bytes) => sum + bytes, 0);
+    emitDiagnosticEvent("chatgpt_tela_codex", "native_seed_authority_observed", {
+      segment_count: authority.length, unique_segment_count: authorityByContent.size,
+      authority_bytes: seedBytes.authority, unique_authority_bytes: authorityUniqueBytes,
+      duplicate_authority_bytes: seedBytes.authority - authorityUniqueBytes,
+      largest_segment_bytes: [...authorityByContent.values()].reduce((largest, bytes) => Math.max(largest, bytes), 0),
+      system_bytes: authority.filter(segment => segment.kind === "system").reduce((sum, segment) => sum + Buffer.byteLength(segment.content, "utf8"), 0),
+      developer_bytes: authority.filter(segment => segment.kind === "developer").reduce((sum, segment) => sum + Buffer.byteLength(segment.content, "utf8"), 0),
+      native_instructions_bytes: typeof nativeRequestContentSource(nativeRequest).instructions === "string"
+        ? Buffer.byteLength(nativeRequestContentSource(nativeRequest).instructions as string, "utf8") : 0,
+    });
     const transportAnchor = prepared.plan.mode === "checkpoint-delta"
       ? `checkpoint:${prepared.plan.checkpointId}`
       : `full:${projection.headId}`;

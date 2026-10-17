@@ -29,6 +29,25 @@ coordinates or text. The canonical diagnostic sanitizer now preserves `first_rea
 the provider emitted it but incident projection discarded it. Regression tests cover that public
 projection, not only the emitter. Candidate text and fingerprints remain excluded from logs.
 
+## Public progress, manual consent and seed authority
+
+`web_public_progress_extraction` reports unique explicitly linked status-region counts and
+visible eligible region counts. The adapter reads only visible public descriptions in the
+proven assistant turn. Hidden, ambiguous, user and final-answer regions remain excluded.
+A transport commit attests local delivery only; it does not prove Desktop rendered that text.
+
+`inspection_input_classified.manual_consent` distinguishes a real user's card-local action
+from passive viewing. The provider rechecks the currently observed unique card and enabled
+control; the host releases the existing user gesture without inventing one. This does not
+edit the submitted request or grant Native execution authority. Provider warnings require
+manual review and remain visible; ordinary automatic one-shot approval cannot accept them.
+
+`native_seed_authority_observed` records fresh-seed system/developer segment counts, total,
+unique, duplicate and largest byte sizes, plus Native instructions bytes. Content hashes
+stay local to that calculation; no instruction text or hashes enter the event. Duplicate
+measurements do not authorize deduplication or instruction removal. The existing bounded
+log retention applies; no sampler, model call or raw history capture is added.
+
 ## Cancellation, edited requests and steering
 
 Native admission is serialized per conversation, including transitions to a new Native turn.

@@ -361,3 +361,16 @@ public indexed history/current-turn verification; Legacy history has no such
 safe paging shortcut. Retained Web deltas proceed even if optional summary
 maintenance is declined before any execution claim. A maintenance failure with
 an uncertain stage never grants an alternate send or reusable completion.
+
+## Oversized mandatory seed diagnosis
+
+A successful transport is not an efficiency verdict. If required current instructions already
+exceed the soft epoch rollover limit, a fresh seed can trigger rollover again on the next turn.
+Correlate seed authority partitions, settled occupancy, retained-surface evidence and checkpoint
+calls across turns before changing policy. Do not fix this by hiding current instructions,
+raising the hard window or adding repeated checkpoint calls. Reduce redundant declarations at
+the canonical source where authorized, or design bounded retention against proven provider
+capacity. Until that is established, report the cost and unresolved rollover condition explicitly.
+An automatically continued goal can start new turns correctly while the model repeats completed
+checks; distinct canonical revisions and tool results distinguish that from transport replay.
+Tool completion alone does not prove meaningful task progress or semantic memory retention.

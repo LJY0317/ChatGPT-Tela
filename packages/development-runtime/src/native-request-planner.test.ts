@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -890,6 +890,29 @@ describe("Native request development Web planner", () => {
     })).rejects.toThrow("supported reasoning effort");
   });
 
+  test("large and duplicate authority is measured without dropping instructions or exporting their contents",async()=>{
+    const root=scratch(), file=join(root,'authority.jsonl');
+    const previous=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+    try {
+      const content='PRIVATE_AUTHORITY_'.repeat(10000);
+      const planner=createNativeRequestDevelopmentWebTurnPlanner();
+      const result=await planner(registered(),{
+        model:chatGptWebModelId(chatGptWebFamilyKey('Observed Family')),reasoning:{effort:'high'},
+        instructions:content,input:[{type:'message',role:'developer',content},{type:'message',role:'user',content:'Continue'}],
+      });
+      const log=readFileSync(file,'utf8');
+      const event=log.trim().split('\n').map(line=>JSON.parse(line)).find(row=>row.stage==='native_seed_authority_observed');
+      expect(event).toMatchObject({segment_count:2,unique_segment_count:1,authority_bytes:content.length*2,
+        duplicate_authority_bytes:content.length,system_bytes:content.length,developer_bytes:content.length});
+      expect(log).not.toContain('PRIVATE_AUTHORITY');
+      expect(result.physicalContext.segments.filter(segment=>segment.content===content)).toHaveLength(2);
+      result.settle?.({status:'failed'});
+    } finally {
+      if(previous===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;
+      rmSync(root,{recursive:true,force:true});
+    }
+  });
   test("fresh Web task injects its exact mandatory context once without a preload or ACK", async () => {
     const familyKey = chatGptWebFamilyKey("Observed Family");
     const model = chatGptWebModelId(familyKey);

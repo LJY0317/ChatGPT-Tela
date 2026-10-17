@@ -22,6 +22,11 @@ describe("ChatGPT approval automation policy", () => {
     });
   });
 
+  test("a provider warning always requires human review", () => {
+    expect(decideChatGptApproval("recognized_once", {...observed, requiresManualReview: true}))
+      .toEqual({action: "none", reason: "manual_review"});
+  });
+
   test("unknown or ambiguous cards fail closed", () => {
     expect(decideChatGptApproval("recognized_once", { ...observed, cardCount: 2 })).toEqual({
       action: "none",

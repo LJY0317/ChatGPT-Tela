@@ -115,6 +115,8 @@ export class InspectionInput {
     const code = `(() => {
       let node = document.elementFromPoint(${input.x}, ${input.y});
       if (!node) return false;
+      const approval = globalThis[Symbol.for('chatgpt-tela.approval-observations.v1')];
+      if (approval?.manualInputTarget?.(node) === true) return 'manual-consent';
       const button = node.closest('button[aria-expanded]');
       if (button && !button.hasAttribute('aria-haspopup')
         && !button.closest('form,[contenteditable]:not([contenteditable="false"])')) {
@@ -142,10 +144,10 @@ export class InspectionInput {
       if (this.#pending !== pending || pending.revision !== this.#revision || observing !== this.#observing) return;
       if (++this.#classificationCount <= 16) withDiagnosticContext(this.#origin, () =>
         emitDiagnosticEvent('chatgpt_tela_browser', 'inspection_input_classified', {
-          viewing_proven: allowed === true, interactive: !observing,
-          observation_revision: this.#observationRevision + (allowed === true || observing ? 0 : 1),
+          viewing_proven: allowed === true, manual_consent: allowed === 'manual-consent', interactive: !observing,
+          observation_revision: this.#observationRevision + (allowed === true || allowed === 'manual-consent' || observing ? 0 : 1),
         }));
-      if (allowed !== true) {
+      if (allowed !== true && allowed !== 'manual-consent') {
         if (observing) return;
         this.#observationRevision++;
       }

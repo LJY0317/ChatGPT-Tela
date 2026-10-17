@@ -51,7 +51,7 @@ interface RawTurn {
   readonly text?: string;
   readonly failureDetail?: string;
   readonly publicProgress?: readonly string[];
-  readonly progressProbe?: { readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
+  readonly progressProbe?: { readonly linkedRegionCount?: number; readonly visibleLinkedRegionCount?: number; readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
 }
 
 interface RawSnapshot {
@@ -78,6 +78,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     allowOnceCount: 0,
     alwaysAllowCount: 0,
     unknownCount: 0,
+    requiresManualReview: false,
     allowPoint: null,
     allowOncePoint: null,
     cardKey: null,
@@ -86,7 +87,23 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     inputReceived: false,
     receipt: registry.receipt || null,
   };
+  // This provider-owned classifier only releases a real user's card-local click.
+  // It performs no activation and grants no Native/tool authority. It rechecks the
+  // exact observed card contents on every gesture, so a replaced card fails closed.
+  registry.manualInputTarget = node => {
+    const current = [...document.querySelectorAll('[data-testid="tool-approval-card"], [data-codex-approval-surface="true"]')].filter(visible);
+    if (current.length !== 1) return false;
+    const card = current[0], observed = registry.cards.get(card);
+    const button = node?.closest?.('button,[role="button"]');
+    return !!observed && observed.text === card.textContent && !!button && card.contains(button)
+      && visible(button) && !button.disabled && button.getAttribute('aria-disabled') !== 'true'
+      && !button.closest('[inert]');
+  };
   if (cards.length !== 1) return result;
+  // Warnings belong to human review, regardless of the ordinary one-shot policy.
+  // Known provider wording is isolated here; structural alerts fail closed too.
+  result.requiresManualReview = [...cards[0].querySelectorAll('[role="alert"], [data-warning], [data-safety-warning]')].some(visible)
+    || /(?:Suspicious Instruction|Suspicious Activity|의심스러운 지침|의심스러운 명령)/i.test(cards[0].innerText || cards[0].textContent || '');
   const point = element => {
     const bounds = element.getBoundingClientRect();
     if (!Number.isFinite(bounds.left) || !Number.isFinite(bounds.top)
@@ -143,7 +160,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     // inspection never scrolls or consumes an activation attempt.
     if (prepare.cardKey !== prior.cardKey || prepare.proofKey !== prior.proofKey
       || result.denyCount !== 1 || result.allowCount !== 0 || result.allowOnceCount !== 1
-      || result.unknownCount !== 0 || !allowOnceButton || allowOnceButton.disabled
+      || result.requiresManualReview || result.unknownCount !== 0 || !allowOnceButton || allowOnceButton.disabled
       || allowOnceButton.getAttribute("aria-disabled") === "true") return result;
     allowOnceButton.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
     // Instant scroll plus synchronous geometry/hit testing flushes current layout.
@@ -152,7 +169,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     const after = await inspectApproval();
     if (after.cardKey !== prepare.cardKey || after.proofKey !== prepare.proofKey
       || after.cardCount !== 1 || after.denyCount !== 1 || after.allowCount !== 0
-      || after.allowOnceCount !== 1 || after.unknownCount !== 0
+      || after.allowOnceCount !== 1 || after.requiresManualReview || after.unknownCount !== 0
       || !allowOnceButton.isConnected || allowOnceButton.disabled
       || allowOnceButton.getAttribute("aria-disabled") === "true") return result;
     const target = point(allowOnceButton);
@@ -646,6 +663,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
     const ownedVisibleControls = ownedControls.filter(progressVisible);
     const ownedLabels = ownedControls.length === 1 ? [...ownedAgentShell.querySelectorAll('[id]')]
       .filter(node => node.getAttribute('id') === ownedControls[0].getAttribute('aria-labelledby')) : [];
+    let linkedRegionCount = 0, visibleLinkedRegionCount = 0;
     let progressTitleCount = 0;
     let progressDescriptionCount = 0;
     let visibleAnchorCount = 0, controlCount = 0, visibleControlCount = 0, localLabelCount = 0, visibleLabelCount = 0;
@@ -660,26 +678,44 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
     const publicProgress = progressRoot ? progressAnchors
       .filter(progressVisible).map(row => {
         visibleAnchorCount += 1;
-        let title;
+        let title, disclosure;
         if (row === ownedAgentShell) {
           const candidates = [...row.querySelectorAll('button[aria-expanded][aria-labelledby]')];
           controlCount += candidates.length;
           const controls = candidates.filter(progressVisible);
           visibleControlCount += controls.length;
           if (controls.length !== 1) return "";
+          disclosure = controls[0];
           const labelId = controls[0].getAttribute('aria-labelledby');
           const labels = [...row.querySelectorAll('[id]')].filter(node => node.getAttribute('id') === labelId);
           localLabelCount += labels.length;
           visibleLabelCount += labels.filter(progressVisible).length;
           if (labels.length !== 1) return "";
           title = labels[0];
-        } else title = row.querySelector('button[aria-expanded], [data-markdown-text-tone="tertiary"]');
+        } else {
+          title = row.querySelector('button[aria-expanded], [data-markdown-text-tone="tertiary"]');
+          disclosure = row.querySelector('button[aria-expanded]');
+        }
         if (!title || !progressVisible(title)) return "";
         progressTitleCount += 1;
         const copy = title.cloneNode(true);
         copy.querySelectorAll('button, svg, [aria-hidden="true"]').forEach(control => control.remove());
         const titleText = text(copy).replace(/\s+/g, " ").trim();
-        const description = visibleDescription(row, title).replace(/\s+/g, " ").trim();
+        // Public disclosures may place their visible description outside the status
+        // row. Follow only a unique explicit local relationship inside this owned
+        // keyed turn; never scan the page or promote an answer/user body to progress.
+        const regionId = disclosure?.getAttribute('aria-controls');
+        const linked = regionId ? [...group.querySelectorAll('[id]')].filter(node => node.getAttribute('id') === regionId) : [];
+        linkedRegionCount += Math.min(linked.length, 65);
+        const region = linked.length === 1 && linked[0] !== answerBody
+          && !linked[0].querySelector('[data-user-message-bubble], [data-markdown-text-style="assistant-message"], [data-turn-key]')
+          && linked[0].getAttribute('data-user-message-bubble') === null
+          && linked[0].getAttribute('data-markdown-text-style') !== 'assistant-message'
+          && linked[0].getAttribute('data-turn-key') === null
+          && progressVisible(linked[0]) ? linked[0] : undefined;
+        if (region) visibleLinkedRegionCount++;
+        const description = [visibleDescription(row, title), region && !row.contains(region) ? visibleDescription(region, title) : '']
+          .filter(Boolean).join(' ').replace(/\s+/g, " ").trim();
         if (description) progressDescriptionCount += 1;
         return [titleText, description].filter(Boolean).join("\n\n").slice(0, 4096);
       }).filter(value => value.length > 0 && value.length <= 4096).slice(0, 64) : [];
@@ -707,7 +743,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         bodyProof: answerBody ? answerBodyProof(answerBody) : undefined,
         failureDetail: failure ? text(failure) : undefined,
         publicProgress,
-        progressProbe: { containerPresent: !!progressRoot, anchorCount: progressAnchors.length, titleCount: progressTitleCount, descriptionCount: progressDescriptionCount, containerVisible: !!progressRoot && visible(progressRoot), markerCount: agentStarts.length, agentShellEligible: !!ownedAgentShell, shellSearchDepth, shellCandidateCount, visibleAnchorCount, controlCount, visibleControlCount, localLabelCount, visibleLabelCount,
+        progressProbe: { linkedRegionCount, visibleLinkedRegionCount, containerPresent: !!progressRoot, anchorCount: progressAnchors.length, titleCount: progressTitleCount, descriptionCount: progressDescriptionCount, containerVisible: !!progressRoot && visible(progressRoot), markerCount: agentStarts.length, agentShellEligible: !!ownedAgentShell, shellSearchDepth, shellCandidateCount, visibleAnchorCount, controlCount, visibleControlCount, localLabelCount, visibleLabelCount,
           containerDisplay: progressStyle?.display === "none" ? "none" : progressStyle?.display === "contents" ? "contents" : "other",
           containerVisibilityHidden: progressStyle?.visibility === "hidden" || progressStyle?.visibility === "collapse",
           containerOpacityZero: progressStyle?.opacity === "0",
@@ -1752,7 +1788,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       phase = "approval_read";
       const card = await this.page.evaluate<undefined, {
         cardCount: number; denyCount: number; allowCount: number; allowOnceCount: number;
-        alwaysAllowCount: number; unknownCount: number; cardKey: string | null; proofKey: string | null;
+        alwaysAllowCount: number; unknownCount: number; requiresManualReview?: boolean; cardKey: string | null; proofKey: string | null;
         inputReceived?: boolean;
         receipt?: { cardKey: string; proofKey: string } | null;
       }>(INSPECT_APPROVAL_CARD, undefined, signal);
@@ -1792,6 +1828,8 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
             progress_local_label_count: probe.localLabelCount,
             progress_visible_label_count: probe.visibleLabelCount,
             progress_description_count: probe.descriptionCount,
+            progress_linked_region_count: probe.linkedRegionCount ?? 0,
+            progress_visible_linked_region_count: probe.visibleLinkedRegionCount ?? 0,
             progress_title_count: probe.titleCount,
             public_progress_part_count: settled.publicProgress?.length ?? 0,
           });
@@ -1800,7 +1838,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       const approval = card.cardCount > 0 ? Object.freeze({
         cardCount: card.cardCount, denyCount: card.denyCount, allowCount: card.allowCount,
         allowOnceCount: card.allowOnceCount, alwaysAllowCount: card.alwaysAllowCount,
-        unknownCount: card.unknownCount,
+        unknownCount: card.unknownCount, requiresManualReview: card.requiresManualReview === true,
         revisionFingerprint: fingerprint(JSON.stringify([card.cardKey, card.proofKey])),
         ...(card.cardCount === 1 && card.cardKey ? { cardFingerprint: diagnosticFingerprint(card.cardKey) } : {}),
         inputReceived: card.inputReceived === true,
@@ -1947,6 +1985,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       readonly allowOnceCount: number;
       readonly alwaysAllowCount: number;
       readonly unknownCount: number;
+      readonly requiresManualReview?: boolean;
       readonly allowPoint: { readonly x: number; readonly y: number } | null;
       readonly allowOncePoint: { readonly x: number; readonly y: number } | null;
       readonly cardKey: string | null;
@@ -1963,6 +2002,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     if (observed.cardCount > 0) this.#diagnostic("approval_policy", {
       mode,
       action: decision.action,
+      requires_manual_review: observed.requiresManualReview === true,
       card_count: observed.cardCount,
       deny_count: observed.denyCount,
       allow_count: observed.allowCount,

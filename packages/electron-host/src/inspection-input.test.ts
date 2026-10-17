@@ -149,3 +149,23 @@ test("external input diagnostics classify keys without changing authority or rec
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+test.each([false, true])("real manual consent passes in viewing and interact modes without changing accepted observation: interactive=%s", async interactive => {
+  const f=fixture(); f.gate.setInteractive(interactive);
+  const node={}, registry={manualInputTarget:(target:unknown)=>target===node};
+  f.contents.executeJavaScript=async(code?:string)=>runInNewContext(code!, {
+    document:{elementFromPoint:()=>node,dispatchEvent(){}},Event:class {},
+    [Symbol.for('chatgpt-tela.approval-observations.v1')]:registry,
+  });
+  const before=f.gate.observationCurrent();
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
+  expect(f.sent).toHaveLength(0); expect(f.gate.observationCurrent().pending).toBe(true);
+  await flush();
+  expect(f.sent).toEqual([down,up]); expect(f.gate.observationCurrent()).toEqual(before);
+  f.gate.dispose();
+});
+test("unproven card controls stay blocked in viewing mode",async()=>{
+  const f=fixture();f.gate.setInteractive(false);
+  f.contents.sendInputEvent(down);f.contents.sendInputEvent(up);await flush();
+  expect(f.sent).toEqual([]);f.gate.dispose();
+});

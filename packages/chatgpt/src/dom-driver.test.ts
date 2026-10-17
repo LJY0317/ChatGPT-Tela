@@ -302,6 +302,41 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(turns.find(t=>t.role==='assistant')?.publicProgress??[]).toEqual(ambiguous?[]:['Reviewing changes\n\nChecking the current patch.']);
     expect(JSON.stringify(turns.find(t=>t.role==='assistant')?.publicProgress??[])).not.toContain('FINAL_EXCLUDED');
   });
+  test.each(['visible','hidden','duplicate','answer'])("public status only follows a unique visible linked region inside its owned turn: %s", async mode => {
+    const label=new FixtureElement({id:'label'});label.innerText='Thinking';
+    const button=new FixtureElement({'aria-expanded':'true','aria-labelledby':'label','aria-controls':'details'});
+    const shell=new FixtureElement({}, {'button[aria-expanded][aria-labelledby]':[button],'[id]':[label]});
+    shell.childNodes=[button,label];
+    const marker=Object.assign(new FixtureElement(),{parentElement:shell});
+    const region=new FixtureElement({id:'details',...(mode==='hidden'?{hidden:''}:{}),...(mode==='answer'?{'data-markdown-text-style':'assistant-message'}:{})});
+    region.childNodes=[{nodeType:3,textContent:'Visible public status.'}];
+    const group=new FixtureElement({'data-turn-key':'owned'}, {'[data-chatgpt-agent-turn-start]':[marker],'[id]':mode==='duplicate'?[region,new FixtureElement({id:'details'})]:[region],
+      ...(mode==='answer'?{'[data-markdown-text-style="assistant-message"]':[region]}:{})});
+    group.contains=node=>[group,shell,region].includes(node as FixtureElement);
+    const driver=new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, {'[data-turn-key]':[group]})));
+    const parts=(await driver.observe()).turns.find(t=>t.role==='assistant')?.publicProgress??[];
+    expect(parts).toEqual(mode==='visible'?['Thinking\n\nVisible public status.']:['Thinking']);
+  });
+  test("manual consent classifier releases only a current observed card, including warnings, without auto activation", async () => {
+    const allow=new FixtureElement({'data-fixture-tag':'BUTTON'});allow.textContent='Allow once';
+    const deny=new FixtureElement({'data-fixture-tag':'BUTTON'});deny.textContent='Deny';
+    const card=new FixtureElement({}, {button:[deny,allow]});
+    card.textContent=card.innerText='Suspicious Instruction';
+    card.contains=node=>node===allow||node===deny;
+    allow.closest=(selector?:string)=>selector==='button,[role="button"]'?allow:null;
+    const page=new RendererFixturePage(new FixtureElement({}, {'[data-codex-approval-surface="true"]':[card]}));
+    const driver=new ChatGptDomSurfaceDriver(page);
+    const snapshot=await driver.observe();
+    expect(snapshot.approval?.requiresManualReview).toBe(true);
+    const registry=page.rendererState[Symbol.for('chatgpt-tela.approval-observations.v1')] as {manualInputTarget:(node:unknown)=>boolean};
+    expect(registry.manualInputTarget(allow)).toBe(true);
+    expect(registry.manualInputTarget(new FixtureElement())).toBe(false);
+    await expect(driver.processApprovalCard('recognized_once')).resolves.toMatchObject({status:'none'});
+    expect(page.actions).toEqual([]);
+    card.textContent='Replaced request';expect(registry.manualInputTarget(allow)).toBe(false);
+    await driver.observe();expect(registry.manualInputTarget(allow)).toBe(true);
+    allow.disabled=true;expect(registry.manualInputTarget(allow)).toBe(false);
+  });
   test("exact composer focus for trusted synthetic typing never changes or submits a draft", async () => {
     const page = new FakePage();
     const driver = new ChatGptDomSurfaceDriver(page);
