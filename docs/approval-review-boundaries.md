@@ -162,6 +162,17 @@ eligibility, manual warning and limit reached. This additional limit
 has no new model calls, periodic monitoring or global approval ledger.
 Existing `off` remains the default.
 
+**Human-review time policy:** An unanswered manual approval is not a failed
+execution. On an existing owned observation, Tela emits progressively clearer
+user-visible progress after two minutes and fifteen minutes of the *same
+card* remaining unresolved. Those are display-only thresholds, not background
+model calls or authority extensions. Tela does **not** automatically press
+`Deny`, retire a proven accepted turn, recreate a physical Web session or
+resend an accepted request based on wall time. If the real owner/card is
+unavailable, status must become unknown and reconciliation is needed before
+any fresh authorized turn. A user's explicit Stop remains the cancellation
+path; no deadline is misrepresented as consent.
+
 **Not yet implemented:** an agent-triggered `approve_once` API for an
 already pending card. Before implementing it, prove exact Native turn,
 active Web turn, browser surface, single user-granted task scope,

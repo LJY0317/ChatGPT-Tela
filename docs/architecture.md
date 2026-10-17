@@ -470,9 +470,10 @@ to retire a sole exact Tela context-file artifact, but it preserves any unknown 
 user draft rather than guessing ownership. A product-path `context-canary` exercises the same hidden browser,
 memory-file, upload, receipt and cleanup boundary without granting Native task authority.
 
-The historical reasons and remaining parity work inherited from CodexGPTWeb experimentation are
-tracked in `docs/codexgptweb-assimilation.md` so removal of the old installation/source checkout does
-not erase the product requirements it uncovered.
+Web/Native compatibility requirements are independently tracked in
+`docs/web-native-compatibility-gates.md`. They are assessed against current
+provider, security and Native ownership contracts without depending on
+separate historical local patch sets.
 
 Fresh Web epochs also apply a deterministic provider-only projection to settled model/tool evidence.
 System, developer, user and steering authority, the active request, tool-call linkage and tool-search
@@ -487,8 +488,8 @@ The product should be capable of developing itself through its public/user-facin
 
 - **Tela Chat** is the local-work surface and should converge on DevSpace-level ergonomics around workspace
   discovery, bounded file operations, process execution, review, worktree isolation, and agent delegation.
-- **Tela Work/Codex** is the exact-turn Native/Web composition surface and should converge on the smooth
-  CodexGPTWeb-style experience where Web reasoning transparently uses the current Native Codex authority and
+- **Tela Work/Codex** is the exact-turn Native/Web composition surface and should provide reliable operation
+  where Web reasoning transparently uses the current Native Codex authority and
   tools, consumes their results, and continues the same turn.
 
 This does not merge their authority. Tela Chat still owns only its approved workspace/process/agent state,
@@ -777,11 +778,10 @@ coarse, short single-engine comparison cannot establish battery parity or whole-
 CPU/noise and exited-child accounting limit inference. Evidence is `idle-comparison-result.json` under
 the local account-event fixture directory. No sampler/polling was added to the product.
 
-The retained CodexGPTWeb local-patches reference (15285cd) shares one Electron partition across its
-login and task views, verifies sessions on cookie-change hints, and rejects stale authentication probes.
-It provides explicit owned-browser logout and a dedicated-Chrome passkey transfer, but the reviewed
-source contains no official Desktop login/logout synchronization. These are behavioral references,
-not an implementation to copy. Upstream Codex ab021e9 returns a browser-login auth URL with automatic
+An authenticated browser profile must keep sign-in state and task views inside
+its owned Electron partition, and reject stale authentication probes. An
+explicit logout or passkey handoff must not be mistaken for an official
+Desktop login/logout synchronization contract. Upstream Codex ab021e9 returns a browser-login auth URL with automatic
 browser opening disabled in app-server; the calling host owns where that URL opens. A potential unified
 login must prove both Native authorization and a usable website session in the same owned browser.
 That does not establish a handoff from the existing Desktop login UI. Also, `account/updated` can be an

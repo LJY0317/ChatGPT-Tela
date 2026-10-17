@@ -11,9 +11,8 @@ tested, and dogfooded through Tela's own authority boundaries:
 | Reference workflow | Tela owner | Retirement-ready gate | Current state |
 | --- | --- | --- | --- |
 | DevSpace local patches | Tela Chat | the maintainer can read/edit local files directly from ordinary Chat, with approved folders, instructions, bounded transactional edits and reliable command execution | **advanced partial** — installed connector read/edit/create/command/replay/current and historical Git-review proof passes; installed folder controls exist. Ordinary-Chat onboarding/daily use remains. Delegated providers and richer cards are optional scope |
-| CodexGPTWeb local patches | Tela Codex | the final downstream parity audit passes against the retained snapshot/current upstream and normal Work can use Native + explicit `(Web)` models without the old bridge | **advanced partial** — tracked in `codexgptweb-assimilation.md`; most ledger items are absorbed and Profile 1 exact-turn/tool/retention/context proofs are live-proven, while remaining partial/pending items still block retirement-readiness |
 | Permity | product UI + ChatGPT semantic approval policy | Tela covers every Permity behavior the maintainer still relies on, with explicit policy/UX decisions for any deliberately rejected behavior | **partial** — opt-in fail-closed recognized one-shot approval and product preference/diagnostics are absorbed; general allowlist/full-access policy, bounded delays, unknown-approval evidence/review, browser/AX adapters, and Work-handoff policy are not yet assimilated |
-| LJY's Menu Bar | product UI / lifecycle | Tela's own menu bar/Control Center covers the surviving daily controls after DevSpace/CodexGPTWeb retirement-readiness, without importing backend authority into the UI | **partial** — split-service/profile control, approval preference, diagnostics, bridge preview, updates/settings surfaces and signed lifecycle ownership exist; legacy DevSpace/CodexWeb aggregate controls remain useful until those systems themselves become unnecessary |
+| LJY's Menu Bar | product UI / lifecycle | Tela's own menu bar/Control Center covers the surviving daily controls without importing backend authority into the UI | **partial** — split-service/profile control, approval preference, diagnostics, bridge preview, updates/settings surfaces and signed lifecycle ownership exist; legacy DevSpace controls remain useful until no longer necessary |
 
 ## Completion rule
 
@@ -116,12 +115,6 @@ independent, must not be merged into Tela, and remains blocked on upstream
 per-thread authenticated owner routing/Remote support. Do not delete those
 active/recent foreign worktrees as a consequence of Tela parity progress.
 
-## CodexGPTWeb assimilation ledger
-
-The detailed, testable source of truth remains [`codexgptweb-assimilation.md`](codexgptweb-assimilation.md).
-That ledger, not the existence of a few successful `(Web)` turns, decides when the old bridge is
-retirement-ready.
-
 ## Permity assimilation backlog
 
 Tela intentionally does **not** broaden approval authority just to mimic Permity. The current safe default is
@@ -135,5 +128,5 @@ adapters, and Chat-to-Work handoff behavior.
 
 The Tela menu bar is product UI rather than a general controller for unrelated services. It should absorb the
 daily controls that remain necessary **after** Tela Chat and Tela Codex become self-sufficient. Therefore its
-retirement-readiness gate depends partly on the DevSpace and CodexGPTWeb gates: once those old runtimes are no
+retirement-readiness gate depends partly on the remaining DevSpace parity gate: once that older runtime is no
 longer required, Tela should not recreate menu toggles whose only purpose was to operate them.

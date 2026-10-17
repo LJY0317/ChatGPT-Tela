@@ -34,6 +34,11 @@ export class ChatGptApprovalObservation {
       native_result_count: this.#nativeResultCount });
   }
   get unverifiedDispatchCount(): number { return this.#dispatched.size - this.#verified.size; }
+  /** Read-only age of the unresolved current card; never a grant or timeout. */
+  pendingElapsedMs(now: number): number | undefined {
+    return this.#current && ["pending", "dispatch_sent", "input_received"].includes(this.#current.phase)
+      ? Math.max(0, now - this.#current.seenAt) : undefined;
+  }
   #verifyCard(): void {
     const key = this.#current?.cardFingerprint;
     if (key && this.#dispatched.has(key) && this.#trustedInput.has(key)
@@ -136,4 +141,16 @@ export function approvalObservationSummary(phase: ApprovalObservationPhase, revi
     case "card_cleared": return "Approval card cleared; waiting for the task to resume.";
     case "task_progress": return "The Web task progressed after the approval card cleared.";
   }
+}
+
+/**
+ * A prolonged human review produces a visible escalation, never implicit
+ * Deny, a fabricated Native failure or a replay of an accepted Web operation.
+ */
+export function overdueHumanApprovalSummary(elapsedMs: number | undefined): string | undefined {
+  if (elapsedMs === undefined || !Number.isFinite(elapsedMs) || elapsedMs < 120_000) return undefined;
+  if (elapsedMs < 15 * 60_000) {
+    return "Web approval still requires human review after two minutes. Open the owned browser to review the pending card; Tela will not auto-deny or replay the accepted request.";
+  }
+  return "Web approval has awaited human review for at least fifteen minutes. The same request remains pending; review the current card or explicitly stop this turn. Tela will not auto-deny, resend or claim task progress.";
 }

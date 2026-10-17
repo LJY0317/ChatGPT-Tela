@@ -108,15 +108,15 @@ use. This dogfooding target is stricter than merely exposing low-level tools:
 - **Tela Chat** should feel as smooth and self-directed as DevSpace for local software work: open/reuse a
   workspace, inspect files, edit transactionally, run and resume commands, review changes, create isolated
   worktrees, and delegate longer work without making the user manually orchestrate each primitive.
-- **Tela Work/Codex** should feel as smooth as the CodexGPTWeb-style bridge: Native Codex remains the authority
+- **Tela Work/Codex** should provide reliable direct Native/Web integration: Native Codex remains the authority
   for the exact task/turn/workspace/sandbox/tool state, while ChatGPT Web reasoning can discover and invoke the
   current Native tools and continue the **same turn** after tool results without manual transport plumbing.
 - Developing Tela through Tela Chat and Tela Work/Codex is an explicit product-quality gate. When normal Tela
   development cannot be completed comfortably through those surfaces, that friction is treated as product
   work rather than as an acceptable permanent dependency on a separate developer-only control path.
 
-The long-term assimilation gate is stronger than feature sampling. The maintainer's DevSpace local patches,
-CodexGPTWeb local patches, Permity workflow, and LJY's Menu Bar workflow remain available as reference/fallback
+The long-term integration gate is stronger than feature sampling. The maintainer's DevSpace reference,
+Permity workflow, and LJY's Menu Bar workflow remain available as reference/fallback
 systems while Tela is pre-release, but Tela is only considered complete when the user could remove those
 reference installations without losing the workflows they still rely on. Reaching that gate does **not** mean
 Tela will delete or uninstall those projects automatically; retirement is a human decision after parity and

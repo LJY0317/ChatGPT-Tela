@@ -1,11 +1,30 @@
 import { expect, test } from "bun:test";
-import { ChatGptApprovalObservation, approvalObservationSummary } from "./approval-observation";
+import { ChatGptApprovalObservation, approvalObservationSummary, overdueHumanApprovalSummary } from "./approval-observation";
 
 test("review warnings project as fixed public progress, never as a copied card prompt", () => {
   expect(approvalObservationSummary("pending", "tool_description_policy_directive"))
     .toContain("tool-description instructions");
   expect(approvalObservationSummary("pending", "provider_warning")).toContain("Manual security review");
   expect(approvalObservationSummary("pending")).toBe("Approval needed in the Web browser.");
+});
+
+test("human approval waiting escalates read-only status without expiring accepted requests", () => {
+  const observation = new ChatGptApprovalObservation();
+  expect(observation.pendingElapsedMs(0)).toBeUndefined();
+  const card = { cardCount: 1, denyCount: 1, allowCount: 0, allowOnceCount: 1,
+    alwaysAllowCount: 0, unknownCount: 0, revisionFingerprint: "test-proof",
+    cardFingerprint: "a".repeat(24), inputReceived: false };
+  observation.observe(card, "same-assistant", true, 1_000);
+  expect(observation.pendingElapsedMs(1_000)).toBe(0);
+  expect(overdueHumanApprovalSummary(observation.pendingElapsedMs(120_999))).toBeUndefined();
+  expect(overdueHumanApprovalSummary(observation.pendingElapsedMs(121_000))).toContain("after two minutes");
+  expect(overdueHumanApprovalSummary(observation.pendingElapsedMs(901_000))).toContain("at least fifteen minutes");
+  expect(overdueHumanApprovalSummary(observation.pendingElapsedMs(901_000))).toContain("explicitly stop");
+  expect(observation.phase).toBe("pending");
+  expect(observation.audit).toMatchObject({ dispatch_count: 0, verified_success_count: 0 });
+  observation.observe(undefined, "same-assistant", true, 905_000);
+  expect(observation.pendingElapsedMs(906_000)).toBeUndefined();
+  expect(overdueHumanApprovalSummary(Infinity)).toBeUndefined();
 });
 
 const card = { cardCount: 1, denyCount: 1, allowCount: 0, allowOnceCount: 1, alwaysAllowCount: 0,

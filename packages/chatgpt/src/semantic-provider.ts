@@ -11,7 +11,7 @@ import {
 import { WebRetainedContextUnproven, capturePrivateDiagnosticValue, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, type WebRetainedContextReason } from "@chatgpt-tela/core";
 import { ChatGptDomSurfaceDriver } from "./dom-driver";
 import { decideChatGptApproval, reviewChatGptApprovalForAgent, type ChatGptApprovalAutomationMode } from "./approval-policy";
-import { ChatGptApprovalObservation, approvalObservationSummary, type ApprovalObservationTransition } from "./approval-observation";
+import { ChatGptApprovalObservation, approvalObservationSummary, overdueHumanApprovalSummary, type ApprovalObservationTransition } from "./approval-observation";
 import {
   contextAttachmentReference,
   formatChatGptContextAttachmentStage,
@@ -1852,12 +1852,15 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       signal?.throwIfAborted();
       const approvalPhase = tracked.approvalObservation.phase;
-      const approvalProgress = approvalPhase
+      const overdueHumanReview = observedApproval?.cardCount
+        && approvalReview.nextAction === "human_browser_review" && approvalPhase === "pending"
+        ? overdueHumanApprovalSummary(tracked.approvalObservation.pendingElapsedMs(Date.now())) : undefined;
+      const approvalProgress = overdueHumanReview ?? (approvalPhase
         ? approvalPhase === "pending" && approvalReview.classification === "limit_reached"
           ? "Eight automatic approval dispatches remain unverified for this Web turn. Confirm the current card in the browser; verified successful approvals do not count toward this limit."
           : approvalObservationSummary(approvalPhase,
           observedApproval?.requiresManualReview ? observedApproval.reviewReason ?? "provider_warning" : undefined)
-        : "";
+        : "");
       if (approvalProgress && tracked.approvalProgress !== approvalProgress) {
         tracked.approvalProgress = approvalProgress;
         tracked.observeAgain = true;

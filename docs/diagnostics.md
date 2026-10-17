@@ -617,12 +617,12 @@ collected JSONL, incident/artifact names and diagnostic directories as defense i
 commit, push, upload, or include evidence in release packages. Source/tests use synthetic disposable data. Bun test preload isolates the inherited sink and tags test events;
 common analysis excludes test-tagged records and bounded, local test-origin annotations.
 Removing Tela data through its existing owned uninstall lifecycle removes its logs; keeping data preserves
-bounded evidence. No DevSpace or CodexGPTWeb data is imported, deleted or changed.
+bounded evidence. Diagnostics neither import nor modify unrelated service data.
 
 ## Reference assimilation map
 
-DevSpace local patches and the retained CodexGPTWeb local-patches revision `15285cd` were behavioral
-references. Tela implements these concepts independently behind its own runtime contracts.
+The following diagnostic families are implemented independently behind
+Tela's own runtime and ownership contracts.
 
 | Reference diagnostic family | Tela boundary / implementation |
 | --- | --- |
