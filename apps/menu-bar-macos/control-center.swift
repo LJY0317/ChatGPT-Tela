@@ -36,11 +36,27 @@ private struct ControlCenterProfilesEnvelope: Decodable {
 
 private struct ControlCenterBridgeSurface: Decodable { let id: String; let label: String }
 private struct ControlCenterApprovalReview: Decodable { let classification: String; let reviewReason: String? }
+private struct ControlCenterApprovalWait: Decodable {
+  let phase: String
+  let elapsedMs: Int
+  let expiresAfterMs: Int
+  let unverifiedDispatchCount: Int
+  let operationState: String
+
+  var statusText: String {
+    if operationState == "stopping" { return "Ending this Web operation; remote outcome unconfirmed." }
+    let seconds = max(0, elapsedMs) / 1000
+    let elapsed = "\(seconds / 60)m \(seconds % 60)s"
+    if phase == "card_cleared" { return "Card cleared; task progress unconfirmed · \(elapsed)" }
+    return "Approval waiting · \(elapsed) · ends at \(max(0, expiresAfterMs) / 60000)m"
+  }
+}
 
 private struct ControlCenterBridgePreview: Decodable {
   let approvalState: String?
   let approvalObservationReason: String?
   let approvalReview: ControlCenterApprovalReview?
+  let approvalWait: ControlCenterApprovalWait?
   let contractVersion: Int
   let slot: Int
   let activeSurfaceCount: Int
@@ -1748,6 +1764,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         bridgeMessage = "Profile \(profile.slot) is running, but no Work/Codex browser surface is active right now."
       } else {
         bridgeMessage = "Choose a Web session to view its snapshot or open its browser."
+      }
+      if preview.selectedSurfaceId != nil, let wait = preview.approvalWait {
+        bridgeMessage += "\n\(wait.statusText)"
       }
       if preview.selectedSurfaceId != nil && preview.approvalState == "pending" {
         if preview.approvalReview?.classification == "manual_review" {
