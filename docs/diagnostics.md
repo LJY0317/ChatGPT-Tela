@@ -48,6 +48,18 @@ stay local to that calculation; no instruction text or hashes enter the event. D
 measurements do not authorize deduplication or instruction removal. The existing bounded
 log retention applies; no sampler, model call or raw history capture is added.
 
+When an **owned** connector selection fails, the provider DOM adapter may make
+one failure-only structural observation before transient-menu cleanup. The
+`selection_failed` event distinguishes `catalog_unavailable` from
+`selection_unproven`, records whether the observation succeeded, and when it
+did exposes capped (at 512) counts of visible composers, add-context controls,
+menus, dialogs, listboxes and candidate rows. No labels, raw error messages,
+DOM, account identity, prompt text, or coordinates are exported. Failure to
+observe the structure does not replace the original error, authorize another
+attempt, change request ownership, or prove that login/capability succeeded.
+This fills a future failure-evidence gap; it cannot retroactively identify
+which menu state caused the earlier profile-2 startup failure.
+
 ## Cancellation, edited requests and steering
 
 Native admission is serialized per conversation, including transitions to a new Native turn.

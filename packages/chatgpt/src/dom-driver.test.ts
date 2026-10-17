@@ -71,6 +71,7 @@ class FakePage implements BrowserPageAutomation {
   lastObserveSource = "";
   pendingConnectorName: string | undefined;
   forceMentionFailure = false;
+  forceAddContextObservationFailure = false;
   addContextMenuOpen = false;
   addContextHighlightedIndex = 0;
   addContextTargetIndex = 2;
@@ -122,10 +123,15 @@ class FakePage implements BrowserPageAutomation {
       if (this.forceMentionFailure) throw new Error("fixture mention lookup unavailable");
       return { x: 25, y: 40 } as Result;
     }
+    if (source.includes("ChatGPT connector failure structure v1")) {
+      return { composerCount: 1, addContextCount: 1, menuCount: 0,
+        dialogCount: 0, listboxCount: 0, candidateRowCount: 0 } as Result;
+    }
     if (source.includes("ChatGPT add-context control is not unique")) {
       return { x: 10, y: 20 } as Result;
     }
     if (source.includes("ChatGPT add-context menu exposed no recognized connector path")) {
+      if (this.forceAddContextObservationFailure) throw new Error("fixture menu structure was unavailable");
       const input = argument as { connectorName: string };
       if (!this.addContextMenuOpen) throw new Error("fixture add-context menu is closed");
       this.addContextConnectorName = input.connectorName;
@@ -1218,6 +1224,33 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(page.actions.filter(action => action === "key:ArrowDown")).toHaveLength(2);
     expect(page.actions).toContain("key:Enter");
     expect(page.actions).not.toContain("pointer:75,80");
+  });
+
+  test("failed connector preparation records bounded visible structure without card or account text", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "tela-connector-failure-observation-"));
+    const file = join(directory, "events.jsonl");
+    const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+    try {
+      const page = new FakePage();
+      page.raw.composers[0]!.text = "";
+      page.forceMentionFailure = true;
+      page.forceAddContextObservationFailure = true;
+      await expect(new ChatGptDomSurfaceDriver(page).selectConnector("composer:primary", "PRIVATE_CONNECTOR_NAME"))
+        .rejects.toThrow("connector selection failed");
+      const events = readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(events.find(row => row.stage === "selection_failed")).toMatchObject({
+        reason_class: "selection_unproven", structure_observed: true,
+        visible_composers: 1, visible_add_context_controls: 1,
+        visible_menus: 0, visible_candidate_rows: 0,
+      });
+      expect(JSON.stringify(events)).not.toContain("PRIVATE_CONNECTOR_NAME");
+      expect(page.raw.composers[0]?.connectorNames).toHaveLength(0);
+    } finally {
+      if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("semantic provider can derive its product driver from generic page automation", async () => {

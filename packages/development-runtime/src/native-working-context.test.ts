@@ -8,7 +8,64 @@ import { ActiveTurnRegistry } from "@chatgpt-tela/runtime";
 import { NativeToolInventory, defineNativeTurnAuthority } from "@chatgpt-tela/core";
 import { FileContextCheckpointCache } from "./context-cache";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
-import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
+import { createNativeRequestDevelopmentWebTurnPlanner, projectNativeRequestContext } from "./native-request-planner";
+import { withExactCurrentInstructions } from "./native-working-context";
+
+test("checkpoint projection injects each exact current instruction revision only once", () => {
+  const projection = projectNativeRequestContext("task", {
+    instructions: "Current priority, retained without rewriting",
+    input: [
+      { role: "user", content: "Older request" },
+      { role: "assistant", content: "Completed earlier work" },
+      { role: "developer", content: "Later current developer instruction" },
+      { role: "user", content: "Continue" },
+    ],
+  });
+  const later = projection.revisions.at(-2)!;
+  const request = projection.revisions.at(-1)!;
+  const physical = {
+    mode: "checkpoint-delta" as const,
+    headRevisionId: projection.headId,
+    activeRequestRevisionId: request.revision.id,
+    baseRevisionId: projection.revisions[2]!.revision.id,
+    logicalTokens: 500,
+    transferTokens: 24,
+    segments: [
+      { type: "checkpoint" as const, checkpointId: "verified", sourceRevisionId: projection.revisions[2]!.revision.id, content: "Previous work was completed" },
+      { type: "revision" as const, revisionId: later.revision.id, kind: later.revision.kind, content: later.content },
+      { type: "revision" as const, revisionId: request.revision.id, kind: request.revision.kind, content: request.content },
+    ],
+  };
+  const restored = withExactCurrentInstructions(physical, projection);
+  expect(restored.segments.filter(segment => segment.type === "revision"
+    && segment.kind === "developer" && segment.revisionId === later.revision.id)).toHaveLength(1);
+  expect(restored.segments[0]).toMatchObject({ type: "revision", kind: "system",
+    content: "Current priority, retained without rewriting" });
+  expect(restored.transferTokens).toBe(physical.transferTokens + Math.ceil(Buffer.byteLength(projection.revisions[0]!.content) / 4));
+  expect(withExactCurrentInstructions(restored, projection)).toBe(restored);
+
+  const conflicting = { ...physical, segments: [physical.segments[0]!,
+    { ...physical.segments[1]!, content: "Altered developer authority" }, physical.segments[2]!] };
+  expect(() => withExactCurrentInstructions(conflicting, projection))
+    .toThrow("conflicts with exact Native instruction ownership");
+
+  const distinct = projectNativeRequestContext("task", {
+    instructions: "Same exact words",
+    input: [
+      { role: "user", content: "First" }, { role: "assistant", content: "Completed" },
+      { role: "developer", content: "Same exact words" }, { role: "user", content: "Next" },
+    ],
+  });
+  const suffix = distinct.revisions.slice(-2).map(item => ({
+    type: "revision" as const, revisionId: item.revision.id,
+    kind: item.revision.kind, content: item.content,
+  }));
+  const alsoExact = withExactCurrentInstructions({ ...physical,
+    headRevisionId: distinct.headId, segments: [physical.segments[0]!, ...suffix],
+  }, distinct);
+  expect(alsoExact.segments.filter(item => item.type === "revision"
+    && item.content === "Same exact words")).toHaveLength(2);
+});
 import { createNativeLocalCompactionRouter } from "./native-local-compaction";
 
 const model = chatGptWebModelId(chatGptWebFamilyKey("Working Set Fixture"));

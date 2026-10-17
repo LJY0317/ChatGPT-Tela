@@ -74,6 +74,15 @@ unchanged. This avoids a repeat-seed feedback loop but does not make oversized
 authority efficient; diagnose its production/duplication separately. Tests must
 distinguish both kinds of physical growth and avoid treating estimates as billing.
 
+Checkpoint-delta reconstruction must reattach *missing* exact Native system/developer
+revisions, not repeat the same revision already carried by the post-checkpoint
+suffix. Revision IDs and full contents are both checked: two distinct Native
+instruction revisions remain distinct even if their prose is identical. This
+avoids one provable source-owned duplication without altering Native authority,
+upstream instruction production or required model policy. Segment-level duplicate
+counts do not establish duplication *inside* an opaque 399KB Native instruction
+string; do not delete, paraphrase or suppress such text on an inference.
+
 One `CheckpointPreparationBudget` belongs to one Native planner invocation. Continuity recovery,
 fragmented request/history preparation and single checkpoint producers share it. No phase creates
 fresh allowance; same-budget producer decoration is idempotent. The independent policy module owns

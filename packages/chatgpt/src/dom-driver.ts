@@ -1104,6 +1104,25 @@ const LOCATE_CONNECTOR_TARGET = String.raw`async function (argument) {
   };
 }`;
 
+/** Failure-only structural witness; no labels, row text, HTML, account, or prompt leave the page. */
+const OBSERVE_CONNECTOR_FAILURE_STRUCTURE = String.raw`function () {
+  // ChatGPT connector failure structure v1. The entire adapter can change with provider UI.
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const count = selector => Math.min(512, [...document.querySelectorAll(selector)].filter(visible).length);
+  return {
+    composerCount: count(${JSON.stringify(CHATGPT_CURRENT_COMPOSER_SELECTOR)}),
+    addContextCount: count('button[data-composer-navigation-target="add-context"]'),
+    menuCount: count('[role="menu"]'),
+    dialogCount: count('[role="dialog"]'),
+    listboxCount: count('[role="listbox"]'),
+    candidateRowCount: count('[role="menuitem"], [role="option"], [data-list-navigation-item]'),
+  };
+}`;
+
 const PREPARE_ADD_CONTEXT = String.raw`function () {
   const visible = element => element instanceof HTMLElement
     && getComputedStyle(element).display !== "none"
@@ -2742,7 +2761,35 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       this.#diagnostic("add_context_selection_proven");
       return;
     } catch (fallbackError) {
-      this.#diagnostic("selection_failed");
+      // The first-start failure previously retained only an attempt count.
+      // Take one bounded read when the selection has actually failed, before
+      // cleanup closes the transient menu. This witness cannot approve, retry,
+      // or change the original failure outcome.
+      let structure: {
+        readonly composerCount: number;
+        readonly addContextCount: number;
+        readonly menuCount: number;
+        readonly dialogCount: number;
+        readonly listboxCount: number;
+        readonly candidateRowCount: number;
+      } | undefined;
+      if (!signal?.aborted) {
+        try { structure = await this.page.evaluate(OBSERVE_CONNECTOR_FAILURE_STRUCTURE, undefined, signal); }
+        catch { /* Unavailable diagnostic evidence never overrides the first failure. */ }
+      }
+      this.#diagnostic("selection_failed", {
+        reason_class: fallbackError instanceof ChatGptConnectorCatalogUnavailableError
+          ? "catalog_unavailable" : "selection_unproven",
+        structure_observed: structure !== undefined,
+        ...(structure ? {
+          visible_composers: structure.composerCount,
+          visible_add_context_controls: structure.addContextCount,
+          visible_menus: structure.menuCount,
+          visible_dialogs: structure.dialogCount,
+          visible_listboxes: structure.listboxCount,
+          visible_candidate_rows: structure.candidateRowCount,
+        } : {}),
+      });
       let cleanupError: unknown;
       let cleanupComplete = false;
       for (let attempt = 1; attempt <= 3; attempt += 1) {

@@ -58,7 +58,26 @@ export function exactCurrentInstructions(projection: NativeRequestContextProject
 export function withExactCurrentInstructions(context: WebPhysicalContext,
   projection: NativeRequestContextProjection): WebPhysicalContext {
   if (context.mode !== "checkpoint-delta") return context;
-  const instructions = exactCurrentInstructions(projection);
+  // A checkpoint may precede a later system/developer revision. The physical
+  // suffix already includes that *same* exact revision, so injecting it again
+  // duplicates authority and pays for the same instruction twice. Do not
+  // deduplicate by matching prose: two distinct Native revisions remain two
+  // independent instructions even when their text is identical.
+  const included = new Map<string, { readonly kind: string; readonly content: string }>();
+  for (const segment of context.segments) {
+    if (segment.type === "revision") {
+      included.set(segment.revisionId, segment);
+    }
+  }
+  const instructions = exactCurrentInstructions(projection).filter(item => {
+    if (item.type !== "revision") throw new Error("Exact Native instruction is not a revision");
+    const present = included.get(item.revisionId);
+    if (!present) return true;
+    if (present.kind !== item.kind || present.content !== item.content) {
+      throw new Error("Web checkpoint suffix conflicts with exact Native instruction ownership");
+    }
+    return false;
+  });
   if (!instructions.length) return context;
   return Object.freeze({ ...context,
     transferTokens: context.transferTokens + instructions.reduce((n, item) => n + tokens(item.content), 0),
