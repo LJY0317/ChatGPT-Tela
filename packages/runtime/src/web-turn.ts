@@ -284,6 +284,11 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       abortReason: input.signal?.aborted && input.signal.reason instanceof Error
         ? { name: input.signal.reason.name, message: input.signal.reason.message } : undefined,
     });
+    // Retire delivery authority before any asynchronous diagnostic or stop action.
+    // A late Web event cannot settle this failed Native run while cleanup waits.
+    if (acceptedPhase(input.channel.phase)) {
+      try { input.channel.markIndeterminate(error); } catch { /* Preserve the first failure. */ }
+    }
     if (acceptedHandle) {
       // One read before surface retirement, including after a deadline abort. Never submit, retry
       // or wait indefinitely for a faulty provider; this evidence cannot change the original error.
@@ -306,12 +311,15 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
         controller.abort();
       }
     }
-    if (acceptedPhase(input.channel.phase)) {
+    if (acceptedHandle && input.provider.cancelTurn) {
       try {
-        input.channel.markIndeterminate(error);
+        // Provider cancellation owns fresh surface/turn proof and a bounded stop
+        // attempt. It never authorizes resubmission or settles the remote result.
+        await input.provider.cancelTurn(surface, acceptedHandle);
       } catch {
-        // Preserve the original provider/runtime error if terminalization itself races with another
-        // terminal event. The channel still fails closed.
+        emitDiagnosticEvent("chatgpt_tela_work", "web_turn_cleanup_unavailable", {
+          reason_class: "stop_unconfirmed", remote_outcome: "unknown", retryable: false,
+        });
       }
     }
     throw error;

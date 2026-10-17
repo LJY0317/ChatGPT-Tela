@@ -483,6 +483,40 @@ describe("browser turn runner", () => {
     expect(released).toEqual(["surface-1"]);
   });
 
+  test.each([false, true])("Native cancellation stops the accepted Web turn once before release; stop fails=%s", async stopFails => {
+    const owner = new AbortController();
+    const channel = new RuntimeTurnChannel(binding());
+    const released: string[] = [];
+    const fixture = provider(new EventQueue());
+    let stopped = 0, submissions = 0;
+    const failure = new Error("Native owner stopped");
+    const wrapped: WebConversationProvider = { ...fixture,
+      async submitTurn(...args) { submissions++; return fixture.submitTurn(...args); },
+      async observeTurn(...args) {
+        expect(String(channel.phase)).toBe("indeterminate-after-acceptance");
+        return fixture.observeTurn(...args);
+      },
+      async cancelTurn(surface, handle) {
+        stopped++;
+        expect(surface.leaseId).toBe("surface-1");
+        expect(handle.providerTurnId).toBe("web-turn-1");
+        expect(released).toEqual([]);
+        expect(String(channel.phase)).toBe("indeterminate-after-acceptance");
+        expect(() => channel.complete("late answer")).toThrow();
+        if (stopFails) throw new Error("Web stop unconfirmed");
+      },
+    };
+    const run = runBrowserTurn({ browserHost: browserHost(released), provider: wrapped, channel,
+      nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext, signal: owner.signal });
+    while (channel.phase !== "accepted") await Promise.resolve();
+    owner.abort(failure);
+    await expect(run).rejects.toBe(failure);
+    expect(stopped).toBe(1);
+    expect(submissions).toBe(1);
+    expect(released).toEqual(["surface-1"]);
+    await expect(channel.waitForFinal()).rejects.toThrow();
+  });
+
   test("Native tool-state wake must not discard an already observed one-shot Web event", async () => {
     const channel = new RuntimeTurnChannel(binding());
     const released: string[] = [];
