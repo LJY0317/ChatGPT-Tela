@@ -229,6 +229,7 @@ describe("profile bridge preview server", () => {
         activeSurfaceCount: 2, surfaces: [{ id, label: "Owned" }, { id: "surface_" + "f".repeat(32), label: "Other" }],
         ...(selected ? {
           selectedSurfaceId: id, approvalState: "pending" as const,
+          approvalWait: {phase:"dispatch_sent" as const,elapsedMs:120000,expiresAfterMs:600000 as const,unverifiedDispatchCount:1,operationState:"waiting" as const,rawCard:"SECRET INJECTED"},
           approvalReview: { contractVersion: 1 as const, classification: "manual_review" as const,
             nextAction: "human_browser_review" as const, agentMayApprove: false as const,
             reviewReason: "provider_warning" as const,
@@ -241,12 +242,14 @@ describe("profile bridge preview server", () => {
       const headers = { authorization: `Bearer ${token}` };
       const unselected = await (await fetch(new URL("v1/bridge-preview", server.endpoint), { headers })).json() as any;
       expect(unselected.approvalReview).toBeUndefined();
+      expect(unselected.approvalWait).toBeUndefined();
       const selected = await (await fetch(new URL(`v1/bridge-preview?surfaceId=${id}`, server.endpoint), {
         headers,
       })).json() as any;
       expect(selected.approvalReview).toMatchObject({
         classification: "manual_review", nextAction: "human_browser_review", agentMayApprove: false,
       });
+      expect(selected.approvalWait).toEqual({phase:"dispatch_sent",elapsedMs:120000,expiresAfterMs:600000,unverifiedDispatchCount:1,operationState:"waiting"});
       // In-process adapter's projection is a typed allowlist, not the raw page.
       expect(JSON.stringify(selected)).not.toContain("SECRET INJECTED");
     } finally { await server.close(); }

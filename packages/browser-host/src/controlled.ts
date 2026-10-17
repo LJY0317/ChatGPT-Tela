@@ -20,6 +20,7 @@ export type BrowserSurfaceControllerFactory = (input: {
 }) => Promise<BrowserSurfaceController>;
 
 interface OwnedSurface {
+  readonly lease: BrowserSurfaceLease;
   readonly key: string;
   readonly controller: BrowserSurfaceController;
 }
@@ -70,9 +71,7 @@ export class ControlledBrowserHost implements BrowserHost {
       this.#creating.delete(key);
     }
     const id = leaseId();
-    this.#surfaces.set(id, { key, controller });
-    this.#leaseByKey.set(key, id);
-    return Object.freeze({
+    const lease: BrowserSurfaceLease = Object.freeze({
       leaseId: id,
       taskId: input.taskId,
       epochId: input.epochId,
@@ -81,6 +80,9 @@ export class ControlledBrowserHost implements BrowserHost {
       hide: () => controller.hide(),
       capability: <T>(capability: BrowserSurfaceCapability<T>) => controller.capability?.(capability),
     });
+    this.#surfaces.set(id, { key, controller, lease });
+    this.#leaseByKey.set(key, id);
+    return lease;
   }
 
   async release(id: string): Promise<void> {
@@ -122,6 +124,13 @@ export class ControlledBrowserHost implements BrowserHost {
     return [...this.#surfaces].map(([id, surface], index) => Object.freeze({
       id, label: surface.controller.displayName?.().trim().slice(0, 200) || `Web session ${index + 1}`,
     }));
+  }
+
+  /** Internal read-only inspection uses the exact existing lease, never a reconstructed owner. */
+  selectedSurfaceLease(id: string): BrowserSurfaceLease {
+    const surface = this.#surfaces.get(id);
+    if (!surface) throw new Error("selected browser surface is no longer owned");
+    return surface.lease;
   }
 
   selectedCapability<T>(id: string, capability: BrowserSurfaceCapability<T>): T | undefined {

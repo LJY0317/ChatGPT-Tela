@@ -51,6 +51,7 @@ export function createCodexWorkInspector(input: {
       readonly approvalState: "pending" | "none" | "unavailable";
       readonly observationReason?: "automation_unavailable" | "dom_observation_failed"
         | "bridge_preview_failed" | "no_active_surface" | "surface_not_selected";
+      readonly wait?: NonNullable<Awaited<ReturnType<typeof input.service.bridgePreview>>["approvalWait"]>;
       readonly review?: NonNullable<Awaited<ReturnType<typeof input.service.bridgePreview>>["approvalReview"]>;
     };
     let observedPreview: Awaited<ReturnType<typeof input.service.bridgePreview>> | undefined;
@@ -70,6 +71,7 @@ export function createCodexWorkInspector(input: {
         selectedSurface,
         approvalState: selectedSurface ? preview.approvalState ?? "unavailable" : "unavailable",
         ...(observationReason ? { observationReason } : {}),
+        ...(selectedSurface && preview.approvalWait ? { wait: preview.approvalWait } : {}),
         ...(selectedSurface && preview.approvalState === "pending" && preview.approvalReview
           ? { review: preview.approvalReview } : {}),
       };

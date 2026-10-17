@@ -99,6 +99,13 @@ describe("private service protocol", () => {
     })).toThrow();
     expect(() => parseCodexBridgePreviewContract({ ...selected, selectedSurfaceId: undefined,
       approvalState: "pending" })).toThrow();
+    const wait = {phase:"card_cleared",elapsedMs:540000,expiresAfterMs:600000,unverifiedDispatchCount:1,operationState:"waiting",rawCard:"PRIVATE"};
+    const waiting = parseCodexBridgePreviewContract({...selected,approvalState:"none",approvalWait:wait});
+    expect(waiting.approvalWait).toEqual({phase:"card_cleared",elapsedMs:540000,expiresAfterMs:600000,unverifiedDispatchCount:1,operationState:"waiting"});
+    expect(() => parseCodexBridgePreviewContract({...selected,selectedSurfaceId:undefined,approvalWait:wait})).toThrow();
+    for (const invalid of [{elapsedMs:-1},{elapsedMs:Infinity},{expiresAfterMs:3600000},{operationState:"complete"},{phase:"approved"},{unverifiedDispatchCount:0.5}, {phase:["pending"]}, {operationState:["waiting"]}]) {
+      expect(() => parseCodexBridgePreviewContract({...selected,approvalWait:{...wait,...invalid}})).toThrow();
+    }
     const review = { contractVersion: 1, classification: "eligible_once",
       nextAction: "existing_owned_turn_automation", agentMayApprove: false,
       rawCardText: "SENSITIVE UNTRUSTED CARD BODY" };

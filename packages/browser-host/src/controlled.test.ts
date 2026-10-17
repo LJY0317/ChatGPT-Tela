@@ -112,6 +112,7 @@ test("explicit surface selection never falls back to a different live generation
   const a = await host.acquire({ taskId: "A", epochId: "1" });
   const b = await host.acquire({ taskId: "B", epochId: "1" });
   expect(host.listSurfaces().map(row => row.label)).toEqual(["A", "B"]);
+  expect(host.selectedSurfaceLease(b.leaseId)).toBe(b);
   expect(host.singleActiveCapability(preview).capability).toBeUndefined();
   expect(host.selectedCapability(b.leaseId, preview)?.value).toBe("B");
   await host.revealSurface(b.leaseId); expect(shown).toEqual(["B"]);
@@ -119,6 +120,7 @@ test("explicit surface selection never falls back to a different live generation
   const replacement = await host.acquire({ taskId: "B", epochId: "2" });
   expect(replacement.leaseId).not.toBe(b.leaseId);
   expect(() => host.selectedCapability(b.leaseId, preview)).toThrow("no longer owned");
+  expect(() => host.selectedSurfaceLease(b.leaseId)).toThrow("no longer owned");
   await expect(host.revealSurface(b.leaseId)).rejects.toThrow("no longer owned");
   expect(host.selectedCapability(a.leaseId, preview)?.value).toBe("A");
   await host.close();

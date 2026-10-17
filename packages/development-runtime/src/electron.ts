@@ -95,6 +95,7 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
     readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed";
     /** Structural recommendation, not a permission or a proven Native turn binding. */
     readonly approvalReview?: ChatGptAgentApprovalReview;
+    readonly approvalWait?: import("@chatgpt-tela/chatgpt").WebApprovalWaitProjection;
   }>;
   /**
    * Open one visible control-plane ChatGPT surface using the same persistent ChatGPT Tela profile partition.
@@ -181,7 +182,7 @@ function webSurfacePurpose(input: { taskId: string; epochId: string }):
 
 function countedWebSurfaceHost(
   physical: Awaited<ReturnType<typeof createElectronMainProcessBrowserHost>>,
-): BrowserHost & Pick<typeof physical, "selectedCapability" | "listSurfaces" | "revealSurface"> {
+): BrowserHost & Pick<typeof physical, "selectedCapability" | "selectedSurfaceLease" | "listSurfaces" | "revealSurface"> {
   let total = 0;
   const perPurpose = new Map<ReturnType<typeof webSurfacePurpose>, number>();
   return Object.freeze({
@@ -205,6 +206,7 @@ function countedWebSurfaceHost(
     // The Electron composition's inspection UI is read-only and retains its
     // existing capabilities; acquisition telemetry must never hide them.
     selectedCapability: physical.selectedCapability.bind(physical),
+    selectedSurfaceLease: physical.selectedSurfaceLease.bind(physical),
     listSurfaces: () => physical.listSurfaces(),
     revealSurface: (leaseId: string) => physical.revealSurface(leaseId),
   });
@@ -441,14 +443,12 @@ export async function startElectronDevelopmentRuntime(
       const automation = selected ? browserHost.selectedCapability(selected, BROWSER_PAGE_AUTOMATION) : undefined;
       let approvalState: "pending" | "none" | "unavailable" = "unavailable";
       let approvalObservationReason: "automation_unavailable" | "dom_observation_failed" | undefined;
-      let approvalReview: ChatGptAgentApprovalReview | undefined;
+      let observedApproval: Parameters<typeof reviewChatGptApprovalForAgent>[1];
       if (automation) {
         try {
           const observation = await new ChatGptDomSurfaceDriver(automation).observe();
           approvalState = observation.approval?.cardCount ? "pending" : "none";
-          if (observation.approval?.cardCount) {
-            approvalReview = reviewChatGptApprovalForAgent(input.approvalAutomationMode ?? "off", observation.approval);
-          }
+          observedApproval = observation.approval;
         } catch {
           // Never interpret a failed DOM read as clearance or as authorization to click.
           approvalObservationReason = "dom_observation_failed";
@@ -461,11 +461,16 @@ export async function startElectronDevelopmentRuntime(
           reason_class: approvalObservationReason,
         });
       }
+      const approvalWait = selected ? provider.inspectApprovalWait?.(browserHost.selectedSurfaceLease(selected)) : undefined;
+      const approvalReview = observedApproval?.cardCount
+        ? reviewChatGptApprovalForAgent(input.approvalAutomationMode ?? "off", observedApproval, approvalWait?.unverifiedDispatchCount ?? 0)
+        : undefined;
       return Object.freeze({ activeSurfaceCount: surfaces.length, surfaces,
         ...(selected ? { selectedSurfaceId: selected } : {}),
         ...(selected ? { approvalState } : {}),
         ...(approvalObservationReason ? { approvalObservationReason } : {}),
         ...(approvalReview ? { approvalReview } : {}),
+        ...(approvalWait ? { approvalWait } : {}),
         ...(capability ? { jpeg: await capability.captureJpeg() } : {}),
       });
     },
