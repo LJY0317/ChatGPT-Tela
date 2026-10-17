@@ -29,4 +29,24 @@ describe("Web epoch physical pressure", () => {
       shouldRollover: false,
     });
   });
+
+  test("retained logical history below its baseline does not force unnecessary rollover", () => {
+    expect(assessWebEpochPressure({
+      baseLogicalInputTokens: 80_000,
+      baseTransferInputTokens: 20_000,
+      rolloverTokenLimit: 95_000,
+      contextWindowTokenLimit: 111_193,
+      currentLogicalInputTokens: 70_000,
+    })).toMatchObject({ estimatedEpochInputTokens: 20_000, shouldRollover: false });
+  });
+
+  test("overflowed accumulated estimates are unknown instead of authorizing retention", () => {
+    expect(assessWebEpochPressure({
+      baseLogicalInputTokens: 0,
+      baseTransferInputTokens: Number.MAX_SAFE_INTEGER,
+      rolloverTokenLimit: 95_000,
+      contextWindowTokenLimit: 111_193,
+      currentLogicalInputTokens: 1,
+    })).toBeUndefined();
+  });
 });

@@ -992,6 +992,26 @@ describe("Native request development Web planner", () => {
     third.settle?.({ status: "failed" });
   });
 
+  test("preflight refusal releases pending plan without discarding the committed Web page", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const firstInput = [{ type: "message", role: "user", content: "Inspect A." }];
+    const first = await planner(registered(), { input: firstInput });
+    first.settle?.({ status: "completed", documentGeneration: 1,
+      surfaceLeaseId: "owned-page", answer: "A inspected." });
+    const nextInput = [...firstInput,
+      { type: "message", role: "assistant", content: "A inspected." },
+      { type: "message", role: "user", content: "Inspect B." },
+    ];
+    const rejected = await planner(registered(), { input: nextInput });
+    expect(rejected.physicalContext.mode).toBe("retained-delta");
+    rejected.settle?.({ status: "preflight-rejected" });
+    const corrected = await planner(registered(), { input: nextInput });
+    expect(corrected.physicalContext.mode).toBe("retained-delta");
+    expect(corrected.retainedSurfaceLeaseId).toBe("owned-page");
+    expect(corrected.webEpochId).toBe(first.webEpochId);
+    corrected.settle?.({ status: "failed" });
+  });
+
   test("repeated identical Native assistant answers never hide intervening completed turns from retained Web context", async () => {
     const planner = createNativeRequestDevelopmentWebTurnPlanner();
     const first = await planner(registered(), {

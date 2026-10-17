@@ -37,12 +37,14 @@ import {
   ActiveTurnRegistry,
   NativeResponsesGateway,
   RetainedBrowserEpochRegistry,
+  assertWebMessageFitsComposer,
   runBrowserTurnOnSurface,
   type RegisteredTurn,
 } from "@chatgpt-tela/runtime";
 
 export type DevelopmentWebTurnSettlement =
   | { readonly status: "completed"; readonly answer: string; readonly surfaceLeaseId: string; readonly documentGeneration?: number }
+  | { readonly status: "preflight-rejected" }
   | { readonly status: "failed" };
 
 export interface DevelopmentWebTurnPlan {
@@ -232,8 +234,28 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             toolResultBytes: diagnosticToolResults.reduce((sum, segment) => sum + Buffer.byteLength(segment.content), 0),
           });
         let acquired: Awaited<ReturnType<RetainedBrowserEpochRegistry["acquire"]>> | undefined;
+        let rejectedBeforeAcquisition = false;
         try {
           signal.throwIfAborted();
+          const toolBridge = {
+            protocol: "mcp" as const,
+            contract: webMcpContract,
+            turnCapability: turn.capability,
+          };
+          // A deterministic size refusal must not retire a reusable Web page,
+          // open a fresh Temporary Chat, or spend a model turn on preload.
+          try {
+            assertWebMessageFitsComposer({
+              physicalContext: plan.physicalContext,
+              ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
+              ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
+              ...(plan.media ? { media: plan.media } : {}),
+              toolBridge,
+            });
+          } catch (error) {
+            rejectedBeforeAcquisition = true;
+            throw error;
+          }
           if (plan.physicalContext.mode !== "retained-delta") {
             // A fresh/full canonical projection is a new logical Web
             // conversation, not a message to append to any prior surface.
@@ -298,11 +320,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
             ...(plan.media ? { media: plan.media } : {}),
             ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
-            toolBridge: {
-              protocol: "mcp",
-              contract: webMcpContract,
-              turnCapability: turn.capability,
-            },
+            toolBridge,
             proveCapabilities: !acquired.reused,
             ...(plan.browserModel ? {
               prepareForSubmit: (surface, signal) => selectChatGptWebModel(
@@ -330,7 +348,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             tool_round_count: turn.channel.toolRoundCount,
             network_kind: classifyNetworkFailure(error),
           });
-          plan.settle?.({ status: "failed" });
+          plan.settle?.({ status: rejectedBeforeAcquisition ? "preflight-rejected" : "failed" });
           if (acquired) {
             try {
               await browserEpochs.fail(plan.nativeTaskId, plan.webEpochId);

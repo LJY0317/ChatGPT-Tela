@@ -30,6 +30,8 @@ export function assessWebEpochPressure(input: WebEpochPressureInput): WebEpochPr
     0,
     input.currentLogicalInputTokens - input.baseLogicalInputTokens,
   );
+  // An overflowed estimate cannot safely decide to keep a retained conversation.
+  if (!Number.isSafeInteger(estimatedEpochInputTokens)) return undefined;
   const effectiveRolloverTokenLimit = input.baseTransferInputTokens >= input.rolloverTokenLimit
     ? input.contextWindowTokenLimit
     : input.rolloverTokenLimit;

@@ -42,6 +42,24 @@ export interface BrowserTurnSurfaceRunInput extends Omit<BrowserTurnRunInput, "b
   readonly proveCapabilities?: boolean;
 }
 
+/** Exact composer-size admission belongs before browser creation and any context
+ * preload/model request. It never changes the canonical Native context. */
+export function assertWebMessageFitsComposer(input: Pick<BrowserTurnRunInput,
+  "physicalContext" | "physicalLimits" | "contextAttachment" | "media" | "toolBridge">): void {
+  if (!input.physicalLimits) return;
+  const messageChars = formatWebPhysicalContext(
+    input.physicalContext,
+    input.toolBridge,
+    input.contextAttachment ? contextAttachmentReference(input.contextAttachment) : undefined,
+    input.media,
+  ).length;
+  if (messageChars > input.physicalLimits.composerCharLimit) {
+    throw new Error(
+      `Fresh ChatGPT Web message requires ${messageChars} characters, exceeding the ${input.physicalLimits.composerCharLimit}-character browser message limit; Native context was left unchanged`,
+    );
+  }
+}
+
 function validateHandle(input: BrowserTurnSurfaceRunInput, handle: WebTurnHandle): void {
   const authority = input.channel.binding.authority;
   if (handle.nativeTaskId !== input.nativeTaskId
@@ -131,6 +149,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
   let acceptedHandle: WebTurnHandle | undefined;
   let boundary = "preparation";
   try {
+    assertWebMessageFitsComposer(input);
     if (input.proveCapabilities !== false) {
       requireProven(await input.provider.observeCapabilities(surface, input.signal));
     }
@@ -161,19 +180,6 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
         preload_ms: Math.max(0, Date.now() - startedAt),
         receipt_verified: true,
       });
-    }
-    if (input.physicalLimits) {
-      const messageChars = formatWebPhysicalContext(
-        input.physicalContext,
-        input.toolBridge,
-        attachmentReference,
-        input.media,
-      ).length;
-      if (messageChars > input.physicalLimits.composerCharLimit) {
-        throw new Error(
-          `Fresh ChatGPT Web message requires ${messageChars} characters, exceeding the ${input.physicalLimits.composerCharLimit}-character browser message limit; Native context was left unchanged`,
-        );
-      }
     }
     await input.prepareForSubmit?.(surface, input.signal);
     input.signal?.throwIfAborted();
@@ -314,6 +320,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
 
 /** One-shot compatibility wrapper. Development/Product runtimes use retained epoch ownership. */
 export async function runBrowserTurn(input: BrowserTurnRunInput): Promise<string> {
+  assertWebMessageFitsComposer(input);
   const surface = await input.browserHost.acquire({
     taskId: input.nativeTaskId,
     epochId: input.webEpochId,

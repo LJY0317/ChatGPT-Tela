@@ -774,6 +774,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
   }) => (outcome: DevelopmentWebTurnSettlement): void => {
     if (pendingByTask.get(entry.threadId) !== entry.pending) return;
     pendingByTask.delete(entry.threadId);
+    // A deterministic composer refusal before browser acquisition cannot have
+    // changed the previously committed page. Keep its exact owner and anchor.
+    if (outcome.status === "preflight-rejected") return;
     if (outcome.status !== "completed" || outcome.documentGeneration === undefined) {
       clearRetainedContext(entry.threadId);
       return;
