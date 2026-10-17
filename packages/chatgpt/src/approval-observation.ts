@@ -75,6 +75,13 @@ export class ChatGptApprovalObservation {
         ? this.#current.cardFingerprint === approval.cardFingerprint
         : this.#current.revision === approval.revisionFingerprint);
       if (!same) {
+        const prior = this.#current?.cardFingerprint;
+        if (prior && approval.cardCount === 1 && approval.cardFingerprint) {
+          if (!this.#clearance.has(prior)) this.#cardClearCount = Math.min(this.#cardClearCount + 1, Number.MAX_SAFE_INTEGER);
+          this.#clearance.add(prior);
+          if (canProgress && assistantVersion !== this.#current!.assistantVersion) this.#resumed.add(prior);
+          this.#verifyCard();
+        }
         this.#observedCount = Math.min(this.#observedCount + 1, Number.MAX_SAFE_INTEGER);
         const phase = this.wasDispatched(approval.cardFingerprint) ? "dispatch_sent" : "pending";
         this.#current = { ...(approval.cardFingerprint ? { cardFingerprint: approval.cardFingerprint } : {}), revision: approval.revisionFingerprint,
@@ -143,14 +150,24 @@ export function approvalObservationSummary(phase: ApprovalObservationPhase, revi
   }
 }
 
-/**
- * A prolonged human review produces a visible escalation, never implicit
- * Deny, a fabricated Native failure or a replay of an accepted Web operation.
- */
+/** Program-owned milestones; no model calls or repeated LLM monitoring. */
+export const APPROVAL_WAIT_MILESTONES_MS = Object.freeze([30_000, 120_000, 300_000, 600_000]);
+export function nextApprovalWaitWakeMs(elapsedMs: number | undefined): number | undefined {
+  if (elapsedMs === undefined || !Number.isFinite(elapsedMs)) return;
+  const next = APPROVAL_WAIT_MILESTONES_MS.find(value => value > elapsedMs);
+  return next === undefined ? 0 : next - elapsedMs;
+}
 export function overdueHumanApprovalSummary(elapsedMs: number | undefined): string | undefined {
-  if (elapsedMs === undefined || !Number.isFinite(elapsedMs) || elapsedMs < 120_000) return undefined;
-  if (elapsedMs < 15 * 60_000) {
-    return "Web approval still requires human review after two minutes. Open the owned browser to review the pending card; Tela will not auto-deny or replay the accepted request.";
+  if (elapsedMs === undefined || !Number.isFinite(elapsedMs) || elapsedMs < 30_000) return;
+  if (elapsedMs < 120_000) return "Web approval has been waiting for thirty seconds. Review the current card in the owned browser.";
+  if (elapsedMs < 300_000) return "Web approval still requires review after two minutes. The accepted request will not be resent.";
+  return "Web approval has waited five minutes. Tela is rechecking the owned card, request and browser; unresolved approval ends this Web operation at ten minutes without resending it.";
+}
+export class ChatGptApprovalExpired extends Error {
+  readonly code = "tela_web_approval_expired";
+  readonly retryable = false;
+  constructor() {
+    super("Web approval remained unresolved for ten minutes. The owned operation was terminated locally and browser stop was attempted where ownership could be proven. Remote execution outcome remains uncertain; do not resend automatically. Reconcile the existing operation before continuing.");
+    this.name = "ChatGptApprovalExpired";
   }
-  return "Web approval has awaited human review for at least fifteen minutes. The same request remains pending; review the current card or explicitly stop this turn. Tela will not auto-deny, resend or claim task progress.";
 }

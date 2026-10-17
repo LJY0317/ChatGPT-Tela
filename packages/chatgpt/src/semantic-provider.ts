@@ -11,7 +11,7 @@ import {
 import { WebRetainedContextUnproven, capturePrivateDiagnosticValue, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, type WebRetainedContextReason } from "@chatgpt-tela/core";
 import { ChatGptDomSurfaceDriver } from "./dom-driver";
 import { decideChatGptApproval, reviewChatGptApprovalForAgent, type ChatGptApprovalAutomationMode } from "./approval-policy";
-import { ChatGptApprovalObservation, approvalObservationSummary, overdueHumanApprovalSummary, type ApprovalObservationTransition } from "./approval-observation";
+import { ChatGptApprovalObservation, ChatGptApprovalExpired, nextApprovalWaitWakeMs, approvalObservationSummary, overdueHumanApprovalSummary, type ApprovalObservationTransition } from "./approval-observation";
 import {
   contextAttachmentReference,
   formatChatGptContextAttachmentStage,
@@ -65,6 +65,8 @@ interface TrackedTurn extends TurnOwnership {
   approvalReviewCount?: number;
   readonly approvalObservation: ChatGptApprovalObservation;
   observeAgain?: boolean;
+  approvalRevalidatedCard?: string;
+  stopTarget?: { readonly assistantKey: string; readonly userTurnKey: string };
 }
 
 export interface ChatGptSemanticProviderOptions {
@@ -1697,6 +1699,49 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     };
   }
 
+  async cancelTurn(surface: BrowserSurfaceLease, turn: WebTurnHandle): Promise<void> {
+    const tracked = this.#turns.get(surface);
+    if (!tracked) return; // Already retired by expiry or a completed observation.
+    this.#tracked(surface, turn);
+    // Fence first. Late approval preparation/observation cannot regain this operation.
+    this.#turns.delete(surface);
+    const driver = driverFor(surface);
+    const timeout = AbortSignal.timeout(5_000);
+    let status = "unavailable";
+    try {
+      if (tracked.stopTarget && driver.stopGeneration) {
+        const stopped = driver.stopGeneration(tracked.stopTarget, timeout);
+        const deadline = new Promise<never>((_, reject) => timeout.addEventListener("abort", () => reject(timeout.reason), { once: true }));
+        status = (await Promise.race([stopped, deadline])).status;
+      }
+    } catch { status = "unconfirmed"; }
+    emitDiagnosticEvent("chatgpt_tela_work", "web_owned_stop", { status, remote_outcome: "uncertain" });
+  }
+
+  async #approvalSnapshot(driver: ChatGptSurfaceDriver, tracked: TrackedTurn, signal?: AbortSignal): Promise<ChatGptSurfaceSnapshot> {
+    const age = tracked.approvalObservation.pendingElapsedMs(Date.now());
+    const wakeMs = nextApprovalWaitWakeMs(age);
+    if (wakeMs === 0) throw new ChatGptApprovalExpired();
+    if (wakeMs === undefined) return tracked.observeAgain ? driver.observe(signal) : driver.waitForChange(tracked.revision, signal);
+    const wake = new AbortController();
+    const child = AbortSignal.any([...(signal ? [signal] : []), wake.signal]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<undefined>(resolve => { timer = setTimeout(() => { resolve(undefined); wake.abort(); }, wakeMs); });
+    try {
+      const observed = tracked.observeAgain ? driver.observe(child) : driver.waitForChange(tracked.revision, child);
+      const snapshot = await Promise.race([observed, deadline]);
+      signal?.throwIfAborted();
+      if ((tracked.approvalObservation.pendingElapsedMs(Date.now()) ?? 0) >= 600_000) throw new ChatGptApprovalExpired();
+      if (snapshot) return snapshot;
+      // A bounded fresh read at the milestone verifies renderer health and current ownership.
+      const readDeadline = AbortSignal.timeout(5_000);
+      const readSignal = AbortSignal.any([...(signal ? [signal] : []), readDeadline]);
+      return await Promise.race([driver.observe(readSignal), new Promise<never>((_, reject) => {
+        readDeadline.addEventListener("abort", () => reject(readDeadline.reason), { once: true });
+      })]);
+    } finally { if (timer !== undefined) clearTimeout(timer); wake.abort(); }
+  }
+
   async waitForTurnEvent(
     surface: BrowserSurfaceLease,
     turn: WebTurnHandle,
@@ -1737,10 +1782,18 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     }
 
     for (;;) {
-      const snapshot = tracked.observeAgain
-        ? await driver.observe(signal)
-        : await driver.waitForChange(tracked.revision, signal);
+      let snapshot: ChatGptSurfaceSnapshot;
+      try { snapshot = await this.#approvalSnapshot(driver, tracked, signal); }
+      catch (error) {
+        if (error instanceof ChatGptApprovalExpired) {
+          emitDiagnosticEvent("chatgpt_tela_work", "approval_wait_expired", { elapsed_ms: tracked.approvalObservation.pendingElapsedMs(Date.now()) ?? 600_000,
+            remote_outcome: "uncertain", next_action: "reconcile_existing_operation" });
+          await this.cancelTurn(surface, turn);
+        }
+        throw error;
+      }
       signal?.throwIfAborted();
+      this.#tracked(surface, turn);
       tracked.observeAgain = false;
       tracked.revision = snapshot.revision;
       tracked.waitSnapshotCount = Math.min((tracked.waitSnapshotCount ?? 0) + 1, Number.MAX_SAFE_INTEGER);
@@ -1770,12 +1823,21 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         };
       }
       const assistant = assistants[0];
+      if (assistant) tracked.stopTarget = { assistantKey: assistant.key, userTurnKey: tracked.userTurnKey };
       const waitState = JSON.stringify([assistant?.phase ?? "absent", snapshot.approval ?? null]);
       const inputReceiptTransition = tracked.approvalObservation.recordInputReceipt(snapshot.approvalInputReceipt, Date.now());
       if (inputReceiptTransition) approvalTransitionDiagnostic(inputReceiptTransition);
       const approvalTransition = tracked.approvalObservation.observe(snapshot.approval,
         approvalAssistantVersion(assistant), assistant !== undefined && assistant.phase !== "failed", Date.now());
       if (approvalTransition) approvalTransitionDiagnostic(approvalTransition);
+      const elapsedApproval = tracked.approvalObservation.pendingElapsedMs(Date.now());
+      if (elapsedApproval !== undefined && elapsedApproval >= 300_000
+        && tracked.approvalRevalidatedCard !== (snapshot.approval?.cardFingerprint ?? snapshot.approval?.revisionFingerprint)) {
+        tracked.approvalRevalidatedCard = snapshot.approval?.cardFingerprint ?? snapshot.approval!.revisionFingerprint;
+        emitDiagnosticEvent("chatgpt_tela_work", "approval_wait_revalidated", { elapsed_ms: elapsedApproval,
+          request_ownership: "proven", browser_response: "received", approval_card_count: snapshot.approval?.cardCount ?? 0,
+          automation_available: driver.processApprovalCard !== undefined });
+      }
       if (snapshot.approval?.cardCount && !tracked.approvalPendingCaptured) {
         tracked.approvalPendingCaptured = true;
         // Capture the first exact card before dispatch; private opt-in only, bounded once per turn.
@@ -1839,10 +1901,28 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         && (approvalReview.classification === "eligible_once"
           || approvalReview.classification === "eligible_conversation")) {
         signal?.throwIfAborted();
-        const action = await driver.processApprovalCard(this.#approvalAutomationMode, signal,
-          this.#approvalAutomationDelayMs, { cardFingerprint: observedApproval.cardFingerprint,
-            revisionFingerprint: observedApproval.revisionFingerprint });
+        const remaining = 600_000 - (tracked.approvalObservation.pendingElapsedMs(Date.now()) ?? 0);
+        const expiryController = new AbortController();
+        const expiry = expiryController.signal;
+        const expiryTimer = setTimeout(() => expiryController.abort(new ChatGptApprovalExpired()), Math.max(0, remaining));
+        const approvalSignal = AbortSignal.any([...(signal ? [signal] : []), expiry]);
+        let action: Awaited<ReturnType<NonNullable<ChatGptSurfaceDriver["processApprovalCard"]>>>;
+        try {
+          action = await Promise.race([driver.processApprovalCard(this.#approvalAutomationMode, approvalSignal,
+            this.#approvalAutomationDelayMs, { cardFingerprint: observedApproval.cardFingerprint,
+              revisionFingerprint: observedApproval.revisionFingerprint }), new Promise<never>((_, reject) => {
+                expiry.addEventListener("abort", () => reject(new ChatGptApprovalExpired()), { once: true });
+              })]);
+          if (expiry.aborted) throw new ChatGptApprovalExpired();
+        } catch (error) {
+          if (!signal?.aborted && expiry.aborted) {
+            await this.cancelTurn(surface, turn);
+            throw new ChatGptApprovalExpired();
+          }
+          throw error;
+        } finally { clearTimeout(expiryTimer); }
         signal?.throwIfAborted();
+        this.#tracked(surface, turn);
         if (action.status === "dispatched" || action.reason === "already_activated") {
           const card = action.status === "dispatched" ? action.cardFingerprint : observedApproval.cardFingerprint;
           const transition = tracked.approvalObservation.dispatched(card, Date.now(),
@@ -1853,11 +1933,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       signal?.throwIfAborted();
       const approvalPhase = tracked.approvalObservation.phase;
       const overdueHumanReview = observedApproval?.cardCount
-        && approvalReview.nextAction === "human_browser_review" && approvalPhase === "pending"
         ? overdueHumanApprovalSummary(tracked.approvalObservation.pendingElapsedMs(Date.now())) : undefined;
       const approvalProgress = overdueHumanReview ?? (approvalPhase
         ? approvalPhase === "pending" && approvalReview.classification === "limit_reached"
-          ? "Eight automatic approval dispatches remain unverified for this Web turn. Confirm the current card in the browser; verified successful approvals do not count toward this limit."
+          ? "A previous automatic approval remains unverified. Review the existing operation in the browser; Tela will not click another card or resend the request."
           : approvalObservationSummary(approvalPhase,
           observedApproval?.requiresManualReview ? observedApproval.reviewReason ?? "provider_warning" : undefined)
         : "");

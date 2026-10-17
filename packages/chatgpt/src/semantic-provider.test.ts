@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, spyOn } from "bun:test";
 import { BROWSER_INPUT_OWNERSHIP, ControlledBrowserHost, type BrowserMemoryFile } from "@chatgpt-tela/browser-host";
 import { nativeEvidenceRef, setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
 import { createChatGptContextAttachment } from "./context-attachment";
@@ -15,7 +15,6 @@ import {
   type ChatGptSurfaceSnapshot,
 } from "./surface";
 import { ChatGptSemanticProvider } from "./semantic-provider";
-import { MAX_RECOGNIZED_APPROVALS_PER_TURN } from "./approval-policy";
 import { webEvidenceFilename } from "./turn-media";
 import { CHATGPT_TEMPORARY_CHAT_URL } from "./session";
 import type { WebTurnRequest } from "./index";
@@ -2181,7 +2180,7 @@ describe("ChatGPT semantic provider", () => {
       const submitted = await submitting;
       if (submitted.state !== "proven") throw Error("expected accepted Web turn");
       const owned = driver.current;
-      for (let index = 0; index <= MAX_RECOGNIZED_APPROVALS_PER_TURN; index++) {
+      for (let index = 0; index < 3; index++) {
         driver.queued.push({
           ...owned, revision: `approval-budget-card-${index}`,
           approval: { ...recognizedApproval,
@@ -2199,9 +2198,9 @@ describe("ChatGPT semantic provider", () => {
       });
       const exhausted = await provider.waitForTurnEvent(surface.lease, submitted.value);
       expect(exhausted.state === "proven" && exhausted.value).toMatchObject({
-        kind: "progress", summary: expect.stringContaining("remain unverified for this Web turn"),
+        kind: "progress", summary: expect.stringContaining("remains unverified"),
       });
-      expect(driver.approvalCalls).toBe(MAX_RECOGNIZED_APPROVALS_PER_TURN);
+      expect(driver.approvalCalls).toBe(1);
     } finally { await surface.host.close(); }
   });
 
@@ -2700,4 +2699,75 @@ test('post-acceptance input does not cancel an observer; Native cancellation sti
   await expect(waiting).rejects.toThrow('Native owner cancelled');
   expect(driver.activated).toHaveLength(1);
  }finally{await surface.host.close();}
+});
+
+
+test.each(["pending", "cleared_before"] as const)("fake clock: approval milestones, ten-minute expiry and late-input fencing (%s)", async scenario => {
+  const driver = new FixtureDriver(fixture("ready-new-chat"));
+  const surface = await leaseFor(driver);
+  const provider = new ChatGptSemanticProvider();
+  let now = 1_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const timers = new Map<number, { at: number; callback: () => void }>();
+  let timerId = 0;
+  const owner = new AbortController();
+  const watchdog = setTimeout(() => owner.abort(new Error("fake clock stalled")), 2000);
+  const timeout = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+    const id = ++timerId; timers.set(id, { at: now + ms, callback }); return id;
+  }) as typeof setTimeout);
+  const clear = spyOn(globalThis, "clearTimeout").mockImplementation(((id: number) => { timers.delete(id); }) as typeof clearTimeout);
+  let stops = 0;
+  (driver as ChatGptSurfaceDriver).stopGeneration = async expected => {
+    expect(expected).toEqual({ assistantKey: "assistant-wait", userTurnKey: "user-turn-1" });
+    stops++; return { status: "stop_sent" };
+  };
+  const advance = async (ms: number) => {
+    now += ms;
+    for (const [id, timer] of [...timers]) if (timer.at <= now) { timers.delete(id); timer.callback(); }
+    for (let i = 0; i < 100; i++) await Promise.resolve();
+  };
+  try {
+    const submitting = provider.submitTurn(surface.lease, request());
+    while (driver.current.revision === "r1") await Promise.resolve();
+    driver.queued.push(acceptedSnapshot(driver));
+    const submitted = await submitting;
+    if (submitted.state !== "proven") throw Error("fixture submission failed");
+    driver.queued.push({ ...driver.current, revision: "owned-pending", approval: recognizedApproval,
+      turns: [...driver.current.turns, { key: "assistant-wait", role: "assistant", parentUserTurnKey: "user-turn-1", phase: "tool-wait" }] });
+    const event = () => provider.waitForTurnEvent(surface.lease, submitted.value, owner.signal);
+    expect((await event()).state).toBe("proven");
+    let changed: ((snapshot: ChatGptSurfaceSnapshot) => void) | undefined;
+    driver.waitForChange = async (_revision: string, signal?: AbortSignal) => new Promise((resolve, reject) => {
+      changed = resolve;
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+    let pending = event();
+    await advance(0);
+    await advance(29_999);
+    expect(stops).toBe(0);
+    await advance(1);
+    expect(await pending).toMatchObject({ state: "proven", value: { kind: "progress", summary: expect.stringContaining("thirty seconds") } });
+    pending = event(); await advance(0); await advance(90_000);
+    expect(await pending).toMatchObject({ state: "proven", value: { summary: expect.stringContaining("two minutes") } });
+    pending = event(); await advance(0); await advance(180_000);
+    expect(await pending).toMatchObject({ state: "proven", value: { summary: expect.stringContaining("rechecking") } });
+    pending = event(); await advance(0); void pending.catch(() => {});
+    await advance(299_999); expect(stops).toBe(0);
+    if (scenario === "cleared_before") {
+      const { approval: _approval, ...cleared } = driver.current;
+      driver.current = { ...cleared, revision: "cleared-before-expiry", turns: driver.current.turns.map(t => t.role === "assistant"
+        ? { ...t, phase: "complete", text: "verified owned final", contentFingerprint: hash("verified owned final") } : t) };
+      changed!(await driver.observe());
+      expect(await pending).toMatchObject({ state: "proven", value: { kind: "progress", summary: expect.stringContaining("card cleared") } });
+      await advance(2); // Successful clearance just before expiry survives the old deadline.
+      await event();
+      expect(await event()).toMatchObject({ state: "proven", value: { kind: "completed", answer: "verified owned final" } });
+      expect(stops).toBe(0);
+      return;
+    }
+    await advance(1); await expect(pending).rejects.toMatchObject({ code: "tela_web_approval_expired", retryable: false }); expect(stops).toBe(1);
+    driver.current = { ...driver.current, approval: { ...recognizedApproval, inputReceived: true } };
+    await expect(event()).rejects.toThrow("not bound");
+    expect(driver.approvalCalls).toBe(0);
+  } finally { clock.mockRestore(); timeout.mockRestore(); clear.mockRestore(); clearTimeout(watchdog); await surface.host.close(); }
 });

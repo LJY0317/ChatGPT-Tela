@@ -210,6 +210,10 @@ export interface WebConversationProvider {
     signal?: AbortSignal,
   ): Promise<SemanticObservation<WebToolContinuationBoundary>>;
 
+  /** Retire exact operation authority and attempt public browser Stop with bounded observation.
+   * The accepted remote outcome remains uncertain; this never resends a request. */
+  cancelTurn?(surface: BrowserSurfaceLease, turn: WebTurnHandle): Promise<void>;
+
   /** Wait for the next semantic lifecycle event without requiring runtime polling. */
   waitForTurnEvent(
     surface: BrowserSurfaceLease,

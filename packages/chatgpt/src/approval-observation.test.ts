@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ChatGptApprovalObservation, approvalObservationSummary, overdueHumanApprovalSummary } from "./approval-observation";
+import { ChatGptApprovalObservation, approvalObservationSummary, overdueHumanApprovalSummary, nextApprovalWaitWakeMs } from "./approval-observation";
 
 test("review warnings project as fixed public progress, never as a copied card prompt", () => {
   expect(approvalObservationSummary("pending", "tool_description_policy_directive"))
@@ -8,7 +8,7 @@ test("review warnings project as fixed public progress, never as a copied card p
   expect(approvalObservationSummary("pending")).toBe("Approval needed in the Web browser.");
 });
 
-test("human approval waiting escalates read-only status without expiring accepted requests", () => {
+test("approval waiting has exact 30s, 2m, 5m and 10m program milestones", () => {
   const observation = new ChatGptApprovalObservation();
   expect(observation.pendingElapsedMs(0)).toBeUndefined();
   const card = { cardCount: 1, denyCount: 1, allowCount: 0, allowOnceCount: 1,
@@ -16,10 +16,15 @@ test("human approval waiting escalates read-only status without expiring accepte
     cardFingerprint: "a".repeat(24), inputReceived: false };
   observation.observe(card, "same-assistant", true, 1_000);
   expect(observation.pendingElapsedMs(1_000)).toBe(0);
-  expect(overdueHumanApprovalSummary(observation.pendingElapsedMs(120_999))).toBeUndefined();
+  expect(overdueHumanApprovalSummary(observation.pendingElapsedMs(30_999))).toBeUndefined();
+  expect(overdueHumanApprovalSummary(observation.pendingElapsedMs(31_000))).toContain("thirty seconds");
+  expect(nextApprovalWaitWakeMs(observation.pendingElapsedMs(30_999))).toBe(1);
+  expect(nextApprovalWaitWakeMs(observation.pendingElapsedMs(31_000))).toBe(90_000);
   expect(overdueHumanApprovalSummary(observation.pendingElapsedMs(121_000))).toContain("after two minutes");
-  expect(overdueHumanApprovalSummary(observation.pendingElapsedMs(901_000))).toContain("at least fifteen minutes");
-  expect(overdueHumanApprovalSummary(observation.pendingElapsedMs(901_000))).toContain("explicitly stop");
+  expect(overdueHumanApprovalSummary(observation.pendingElapsedMs(301_000))).toContain("rechecking");
+  expect(nextApprovalWaitWakeMs(observation.pendingElapsedMs(301_000))).toBe(300_000);
+  expect(nextApprovalWaitWakeMs(observation.pendingElapsedMs(600_999))).toBe(1);
+  expect(nextApprovalWaitWakeMs(observation.pendingElapsedMs(601_000))).toBe(0);
   expect(observation.phase).toBe("pending");
   expect(observation.audit).toMatchObject({ dispatch_count: 0, verified_success_count: 0 });
   observation.observe(undefined, "same-assistant", true, 905_000);
@@ -167,4 +172,28 @@ test("a vanished card, failed assistant, duplicate receipt or late evidence neve
   expect(observation.unverifiedDispatchCount).toBe(1);
   observation.recordInputReceipt({ cardFingerprint: card.cardFingerprint, revisionFingerprint: "incorrect" }, 4);
   expect(observation.unverifiedDispatchCount).toBe(1);
+});
+
+
+test("direct card replacement needs trusted receipt and changed owned assistant to verify the prior approval", () => {
+  for (const receipt of [false, true]) for (const progress of [false, true]) {
+    const observation = new ChatGptApprovalObservation();
+    observation.observe(card, "before", true, 0);
+    observation.dispatched(card.cardFingerprint, 1);
+    if (receipt) observation.recordInputReceipt({ cardFingerprint: card.cardFingerprint,
+      revisionFingerprint: card.revisionFingerprint }, 2);
+    observation.observe({ ...card, cardFingerprint: "b".repeat(24), revisionFingerprint: "proof-b" },
+      progress ? "after" : "before", true, 3);
+    expect(observation.audit.verified_success_count).toBe(receipt && progress ? 1 : 0);
+  }
+});
+
+test("an ambiguous multi-card snapshot cannot establish the previous card's clearance", () => {
+  const observation = new ChatGptApprovalObservation();
+  observation.observe(card, "before", true, 0);
+  observation.dispatched(card.cardFingerprint, 1);
+  observation.recordInputReceipt({ cardFingerprint: card.cardFingerprint, revisionFingerprint: card.revisionFingerprint }, 2);
+  const { cardFingerprint: _fingerprint, ...ambiguous } = card;
+  observation.observe({ ...ambiguous, cardCount: 2, revisionFingerprint: "ambiguous-two" }, "after", true, 3);
+  expect(observation.audit).toMatchObject({ verified_success_count: 0, card_clear_count: 0 });
 });

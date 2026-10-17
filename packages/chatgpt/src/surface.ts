@@ -117,8 +117,14 @@ export interface ChatGptSurfaceDriver {
     delayMs?: number,
     expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
   ): Promise<{ readonly status: "none"; readonly reason: string }
-    | { readonly status: "dispatched"; readonly reason: "allow_once" | "allow_conversation";
+    | { readonly status: "dispatched"; readonly reason: "allow" | "allow_once" | "allow_conversation";
         readonly cardFingerprint: string; readonly revisionFingerprint?: string }>;
+  /** Stop only the exact owned assistant through the provider's public Stop affordance.
+   * Absence of generation controls is not proof of successful remote task completion. */
+  stopGeneration?(
+    expected: { readonly assistantKey: string; readonly userTurnKey: string },
+    signal?: AbortSignal,
+  ): Promise<{ readonly status: "stopped" | "stop_sent" | "unavailable" | "ownership_changed" }>;
   replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;
   clearComposerText(composerKey: string, signal?: AbortSignal): Promise<void>;
   appendComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;
