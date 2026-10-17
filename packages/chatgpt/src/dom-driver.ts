@@ -114,8 +114,12 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       return allowed.includes(decision)
         || (decision === 'Approval options' && control.getAttribute('aria-haspopup') === 'menu');
     }
-    // Never infer that an unrelated global menu belongs to this request.
-    if (control.getAttribute('role') !== 'menuitem' || !allowed.includes(decision)) return false;
+    // The provider may render a consent choice as a native button instead
+    // of role=menuitem. Its role is not proof of authority: require the same
+    // uniquely linked, expanded, card-owned menu and exact choice label.
+    if (!allowed.includes(decision)
+      || (control.getAttribute('role') !== 'menuitem'
+        && control.tagName !== 'BUTTON' && control.getAttribute('role') !== 'button')) return false;
     const menu = control.closest('[role="menu"]');
     const menus = [...document.querySelectorAll('[role="menu"]')].filter(visible);
     if (!menu || menus.length !== 1 || menus[0] !== menu || !menu.contains(control)) return false;
@@ -215,7 +219,13 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       if ((menuId && optionsDisclosure.getAttribute("aria-controls") === menuId)
         || (disclosureId && menu.getAttribute("aria-labelledby") === disclosureId)) {
         classifyWarning(menu);
-        for (const item of menu.querySelectorAll('[role="menuitem"]')) {
+        // Some provider surfaces use buttons in a popover without menuitem
+        // roles. Do not combine both variants: a mixed surface is ambiguous.
+        const menuItems = [...menu.querySelectorAll('[role="menuitem"]')];
+        const menuButtons = [...menu.querySelectorAll('button')];
+        const choices = menuItems.length ? (menuButtons.length ? [] : menuItems) : menuButtons;
+        if (menuItems.length && menuButtons.length) result.unknownCount += 1;
+        for (const item of choices) {
           if (!visible(item)) continue;
           const label = normalize(item.getAttribute("aria-label") || accessibleText(item));
           if (!registry.manualInputTarget(item)) {

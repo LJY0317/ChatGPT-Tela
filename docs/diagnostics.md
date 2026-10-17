@@ -181,6 +181,13 @@ transition, terminal/failure classification, and the gap between
 observations. A long elapsed gap does **not** prove the card remained
 visible for that entire period; current browser status stays
 `not_verified`. Missing/truncated sources are reported explicitly.
+For a Web identity rejection, the historical inspector also gives a
+time-bounded structural sequence of renderer unresponsiveness, input
+ownership revocation, input classification, and later Native failure,
+when those events are available. The result is explicitly temporal
+correlation, **not proof of which physical input caused the failure**.
+An unclassified input does not establish that the user edited or sent
+anything; the diagnostic never authorizes replay of an accepted request.
 For agents connected to Tela Chat, the same functionality is exposed as the
 separate **read-only** `inspect_native_evidence` capability (with opened
 `workspace_id`, exact `thread_id`, optional `minutes` up to 360).

@@ -402,6 +402,59 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(registry.manualInputTarget(scoped)).toBe(false);
     expect(page.actions).toEqual([]); // Classification is passive; no approvals were dispatched.
   });
+  test.each(["ordinary", "provider warning"] as const)(
+    "a native-button portal permits human but not unreviewed %s approval", async scenario => {
+    const deny = new FixtureElement({ "data-fixture-tag": "BUTTON" }); deny.textContent = "Deny";
+    const once = new FixtureElement({ "data-fixture-tag": "BUTTON" }); once.textContent = "Allow once";
+    const disclosure = new FixtureElement({ "data-fixture-tag": "BUTTON", "aria-haspopup": "menu",
+      "aria-controls": "linked-approval", "aria-expanded": "true" });
+    disclosure.textContent = "Approval options";
+    const scoped = new FixtureElement({ "data-fixture-tag": "BUTTON" });
+    scoped.textContent = "Allow ChatGPT Tela for this conversation";
+    const foreign = new FixtureElement({ "data-fixture-tag": "BUTTON" });
+    foreign.textContent = "Approve unrelated workflow";
+    const menu = new FixtureElement({ role: "menu", id: "linked-approval" }, {
+      button: [scoped, foreign],
+    });
+    menu.contains = value => value === scoped || value === foreign;
+    const card = new FixtureElement({}, { button: [deny, once, disclosure] });
+    card.textContent = scenario === "provider warning"
+      ? "Suspicious Instruction: private fixture warning requires human review"
+      : "Fixture-owned read-only task";
+    card.contains = value => [deny, once, disclosure].includes(value as FixtureElement);
+    for (const item of [scoped, foreign]) item.closest = (selector?: string) =>
+      selector === "button,[role=\"button\"]" ? item : selector === '[role="menu"]' ? menu : null;
+    const root = new FixtureElement({}, {
+      '[data-codex-approval-surface="true"]': [card], '[role="menu"]': [menu],
+    });
+    const page = new RendererFixturePage(root);
+    const driver = new ChatGptDomSurfaceDriver(page);
+    const observed = await driver.observe();
+    if (scenario === "provider warning") {
+      expect(observed.approval).toMatchObject({ requiresManualReview: true });
+      expect(await driver.processApprovalCard("recognized_conversation"))
+        .toMatchObject({ status: "none", reason: "manual_review" });
+    }
+    const registry = page.rendererState[Symbol.for("chatgpt-tela.approval-observations.v1")] as {
+      manualInputTarget(node: unknown): boolean;
+    };
+    expect(registry.manualInputTarget(scoped)).toBe(true);
+    expect(registry.manualInputTarget(foreign)).toBe(false);
+    scoped.disabled = true; expect(registry.manualInputTarget(scoped)).toBe(false);
+    scoped.disabled = false;
+    disclosure.attributes["aria-expanded"] = "false";
+    expect(registry.manualInputTarget(scoped)).toBe(false);
+    disclosure.attributes["aria-expanded"] = "true";
+    menu.attributes.id = "unlinked-menu";
+    expect(registry.manualInputTarget(scoped)).toBe(false);
+    menu.attributes.id = "linked-approval";
+    root.selectors['[role="menu"]']!.push(new FixtureElement({ role: "menu" }));
+    expect(registry.manualInputTarget(scoped)).toBe(false);
+    root.selectors['[role="menu"]']!.pop();
+    card.textContent = "Request replaced";
+    expect(registry.manualInputTarget(scoped)).toBe(false);
+    expect(page.actions).toEqual([]);
+  });
   test("exact composer focus for trusted synthetic typing never changes or submits a draft", async () => {
     const page = new FakePage();
     const driver = new ChatGptDomSurfaceDriver(page);
@@ -844,6 +897,7 @@ describe("current ChatGPT DOM surface driver", () => {
   });
   test.each([
     ["verified", "allow_conversation", 2],
+    ["verified native buttons", "allow_conversation", 2],
     ["security warning", "manual_review", 0],
     ["replaced card", "options_unverified", 1],
     ["unlinked portal", "options_unverified", 1],
@@ -857,13 +911,16 @@ describe("current ChatGPT DOM surface driver", () => {
       "aria-haspopup": "menu", "aria-controls": "approval-scope-menu", "aria-expanded": "false" });
     trigger.textContent = "Approval options";
     trigger.getBoundingClientRect = () => ({ left: 0, top: 0, width: 20, height: 20 });
-    const scoped = new FixtureElement({ role: "menuitem" });
+    const nativeButtons = scenario === "verified native buttons";
+    const scoped = new FixtureElement(nativeButtons ? { "data-fixture-tag": "BUTTON" } : { role: "menuitem" });
     scoped.textContent = "Allow for this conversation";
     scoped.getBoundingClientRect = () => ({ left: 60, top: 0, width: 20, height: 20 });
-    const menuOnce = new FixtureElement({ role: "menuitem" }); menuOnce.textContent = "Allow once";
+    const menuOnce = new FixtureElement(nativeButtons ? { "data-fixture-tag": "BUTTON" } : { role: "menuitem" });
+    menuOnce.textContent = "Allow once";
     const forever = new FixtureElement({ role: "menuitem" }); forever.textContent = "Always allow";
     const menu = new FixtureElement({ role: "menu", id: "approval-scope-menu" }, {
-      '[role="menuitem"]': [scoped, menuOnce, ...(scenario === "persistent alternative" ? [forever] : [])],
+      [nativeButtons ? "button" : '[role="menuitem"]']: [scoped, menuOnce,
+        ...(scenario === "persistent alternative" ? [forever] : [])],
       ...(scenario === "menu warning" ? { '[role="alert"]': [new FixtureElement({ role: "alert" })] } : {}),
     });
     menu.contains = value => [scoped, menuOnce, forever].includes(value as FixtureElement);
@@ -873,7 +930,7 @@ describe("current ChatGPT DOM surface driver", () => {
       : "Fixture-owned normal approval";
     card.contains = value => [deny, once, trigger].includes(value as FixtureElement);
     for (const item of [scoped, menuOnce, forever]) {
-      item.closest = (selector?: string) => selector === '[role="menuitem"]'
+      item.closest = (selector?: string) => selector === (nativeButtons ? 'button,[role="button"]' : '[role="menuitem"]')
         ? item : selector === '[role="menu"]' ? menu : null;
     }
     trigger.closest = (selector?: string) => selector === 'button,[role="button"]' ? trigger : null;
@@ -903,7 +960,7 @@ describe("current ChatGPT DOM surface driver", () => {
     });
     expect(first.reason).toBe(outcome);
     expect(clicks).toHaveLength(expectedClicks);
-    if (scenario === "verified") {
+    if (scenario === "verified" || scenario === "verified native buttons") {
       expect(first.status).toBe("dispatched");
       expect(first).toMatchObject({ revisionFingerprint: expect.any(String) });
       if (first.status === "dispatched") {

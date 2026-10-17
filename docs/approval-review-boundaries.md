@@ -81,8 +81,11 @@ request edit. A human choice rendered in an out-of-card menu preserves
 the accepted input witness only if the card is unchanged, one visible
 `role=menu` is linked to the single expanded disclosure through
 `aria-controls` or `aria-labelledby`, and an enabled menu item has an
-exactly recognized decision label. An unlinked/duplicate/stale menu,
-foreign action or changed card still revokes/blocks delivery. This
+exactly recognized decision label. That choice may be a native `button`
+instead of a `role=menuitem`, but its role never grants authority:
+the unique expanded menu, precise card linkage, visible/active target
+and recognized decision label are still mandatory. An unlinked/duplicate/
+stale menu, foreign action or changed card revokes/blocks delivery. This
 manual-input classifier never clicks a menu or approves a safety warning,
 and cannot alter a ChatGPT host-managed permission decision.
 
@@ -105,6 +108,8 @@ provider may **open that disclosure once** (not grant approval), then
 revalidate the unchanged card body, its unique expanded linked menu,
 all exposed options, **warnings within the linked menu as well as the
 card**, and the exact conversation-scoped target. If menu
+items and native buttons coexist without unambiguous ownership, automatic
+approval is withheld rather than guessing which control to activate. If menu
 opening or its revalidation is indeterminate, the renderer permanently
 fences that card from further automatic activation. A new scope choice
 rotates the prepared revision, which must be bound to the actual click
