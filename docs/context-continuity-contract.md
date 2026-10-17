@@ -8,6 +8,35 @@ billing validation remains unperformed and user-owned.**
 Execution budgets and receipt settlement
 remain defined by [token-efficiency.md](token-efficiency.md).
 
+## Browser inspection lifecycle correction (2026-10-17)
+
+The 13:31 KST incident was a checkpoint accepted before Interact was opened;
+an unowned `mouseDown` revoked the host input fence, which the checkpoint runner
+had coupled to the whole observation. The input's physical origin and remote
+completion are **unknown**. No conclusion that the user edited or sent anything
+is supported. `LOCAL-HISTORY/context-continuity-20261017/incident-1331-summary.json`
+contains the payload-free incident receipt.
+
+The source-only lifecycle change separates the strict composer/send/acceptance
+input fence from the subsequent Native/document-owned observation. An accepted
+turn retains the exact request identity, renderer/document anchor, assistant
+lineage, unique parent, and conversation route. A same-document detour pauses
+handoff until the original author is proved again. After outside input,
+an opaque author can no longer borrow the original input fence, while a
+fresh exact author witness may restore observation. Native cancellation and
+main-document lifetime remain independent. The checkpoint runner no longer
+closes a successfully accepted remote operation solely because an interactive
+mouse/key input was seen. This is not authorization to resend uncertain work.
+
+The test-only Electron window sequence proved that reveal/Interact leaves the
+document live and a subsequent pointer event retires only the submission fence.
+The full source gate passed `bun run verify` (1,763 tests, 235 files, zero
+failures; TypeScript passed), including different-conversation suspension,
+recovery, conflicting authors, Native cancellation, approvals and exact result
+handoffs. It does not prove live Electron/ChatGPT event provenance, real-account
+responses, an installed binary, or signed upgrade/profile recovery. No
+real-account model message was sent for this review.
+
 ## Bounds and current gaps
 
 | Layer | Owner | Contract |

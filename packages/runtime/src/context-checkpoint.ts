@@ -1,4 +1,4 @@
-import { BROWSER_INPUT_OWNERSHIP, captureBrowserDiagnosticEvidence, type BrowserHost, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import { BROWSER_DOCUMENT_LIFETIME, BROWSER_INPUT_OWNERSHIP, captureBrowserDiagnosticEvidence, type BrowserHost, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   requireProven,
@@ -68,6 +68,7 @@ export async function runBrowserContextCheckpoint(
   let failure: unknown;
   let failed = false;
   let inputBoundary: { readonly available: boolean; readonly signal: AbortSignal } | undefined;
+  let documentBoundary: { readonly signal: AbortSignal } | undefined;
   let resultPersisted = false;
   try {
     input.signal?.throwIfAborted();
@@ -76,15 +77,17 @@ export async function runBrowserContextCheckpoint(
       taskId: input.request.nativeTaskId,
       epochId: input.request.webEpochId,
     });
-    requireProven(await input.provider.observeCapabilities(surface, input.signal));
-    await input.prepareForSubmit?.(surface, input.signal);
-    input.signal?.throwIfAborted();
-    // One operation cancellation scope covers both the Native owner and the
-    // host's input owner. Local closure is distinct from remote completion.
-    inputBoundary = surface.capability(BROWSER_INPUT_OWNERSHIP)?.current();
-    const operationSignal = inputBoundary?.available ? input.signal
-      ? AbortSignal.any([input.signal, inputBoundary.signal]) : inputBoundary.signal : input.signal;
+    // The physical document and Native owner govern the operation lifetime.
+    // Input exclusivity governs only the provider's pre-acceptance submission:
+    // later inspection is resolved by request/conversation/assistant proof.
+    documentBoundary = surface.capability(BROWSER_DOCUMENT_LIFETIME)?.current();
+    const operationSignal = documentBoundary ? input.signal
+      ? AbortSignal.any([input.signal, documentBoundary.signal]) : documentBoundary.signal : input.signal;
     operationSignal?.throwIfAborted();
+    requireProven(await input.provider.observeCapabilities(surface, operationSignal));
+    await input.prepareForSubmit?.(surface, operationSignal);
+    operationSignal?.throwIfAborted();
+    inputBoundary = surface.capability(BROWSER_INPUT_OWNERSHIP)?.current();
     invoked = true;
     emitDiagnosticEvent("chatgpt_tela_work", "context_checkpoint_provider_invoked");
     const result = requireProven(await input.provider.createContextCheckpoint(
@@ -103,9 +106,10 @@ export async function runBrowserContextCheckpoint(
     failed = true; failure = error;
     emitDiagnosticEvent("chatgpt_tela_work", "context_checkpoint_failed", {
       reason_class: input.signal?.aborted ? "owner_cancelled"
-        : inputBoundary?.available && inputBoundary.signal.aborted ? "input_revoked" : "provider_error",
+        : documentBoundary?.signal.aborted ? "document_lost" : "provider_error",
       surface_acquired: surface !== undefined,
       provider_invoked: invoked,
+      input_revoked_observed: inputBoundary?.available === true && inputBoundary.signal.aborted,
     });
     // Use an independent bounded diagnostic read while this surface is still owned.
     // The cancelled operation signal must not prevent failure evidence collection.

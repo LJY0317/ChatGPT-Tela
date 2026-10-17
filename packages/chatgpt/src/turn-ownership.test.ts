@@ -38,7 +38,8 @@ test("alternatives never grant proof without exact expected content and logical 
   ]) expect(authorFingerprint(invalid, "author-payload")).toBeUndefined();
   expect(authorFingerprint(valid, "edited-author-payload")).toBeUndefined();
   expect(() => resolveAssistantLineage(snapshot([{ ...valid, lineageAnchor: "foreign-document" }, answer]), owner())).toThrow();
-  expect(() => resolveAssistantLineage(snapshot([valid, answer], "https://chatgpt.com/c/foreign"), owner())).toThrow();
+  expect(resolveAssistantLineage(snapshot([valid, answer], "https://chatgpt.com/c/foreign"), owner()))
+    .toMatchObject({ identityPending: true, assistants: [] });
 });
 
 test("unavailable author projection blocks delivery and recovers without retiring ownership", () => {
@@ -62,8 +63,10 @@ test("a new competing user cannot borrow the still-visible owned answer", () => 
 });
 test.each(["payload", "anchor", "duplicate", "route"])("positive conflicting evidence fails closed: %s", kind => {
   const changed = kind === "payload" ? { ...user, contentFingerprint: "foreign" } : kind === "anchor" ? { ...user, lineageAnchor: "foreign" } : user;
-  expect(() => resolveAssistantLineage(snapshot(kind === "duplicate" ? [user, user, answer] : [changed, answer],
-    kind === "route" ? "https://chatgpt.com/c/foreign" : undefined), owner())).toThrow(/identity|conversation/);
+  const resolve = () => resolveAssistantLineage(snapshot(kind === "duplicate" ? [user, user, answer] : [changed, answer],
+    kind === "route" ? "https://chatgpt.com/c/foreign" : undefined), owner());
+  if (kind === "route") expect(resolve()).toMatchObject({ identityPending: true, assistants: [] });
+  else expect(resolve).toThrow(/identity|conversation/);
 });
 test("canonical hydration cannot promote unavailable payload, and commits only after proof returns", () => {
   const tracked = owner(); tracked.conversationRoute = "https://chatgpt.com/";
@@ -71,4 +74,26 @@ test("canonical hydration cannot promote unavailable payload, and commits only a
   expect(tracked.conversationRoute).toBe("https://chatgpt.com/");
   expect(resolveAssistantLineage(snapshot([user, answer]), tracked).assistants).toEqual([answer]);
   expect(tracked.conversationRoute).toBe("https://chatgpt.com/c/owned");
+});
+test("a different conversation suspends observation and return requires fresh author proof", () => {
+  const tracked = owner();
+  expect(resolveAssistantLineage(snapshot([user, answer], "https://chatgpt.com/c/other"), tracked))
+    .toMatchObject({ identityPending: true, assistants: [] });
+  expect(tracked.navigationSuspended).toBe(true);
+  expect(resolveAssistantLineage(snapshot([unavailableUser, answer]), tracked))
+    .toMatchObject({ identityPending: true, assistants: [] });
+  expect(tracked.navigationSuspended).toBe(true);
+  expect(resolveAssistantLineage(snapshot([user, answer]), tracked).assistants).toEqual([answer]);
+  expect(tracked.navigationSuspended).toBe(false);
+});
+test("after outside input, a causal receipt cannot reuse an opaque or edited author", () => {
+  let unchanged = true;
+  const tracked = { ...owner(), causalReceipt: true, inputUnchanged: () => unchanged };
+  const decorated = { ...user, contentFingerprint: "different presentation" };
+  expect(resolveAssistantLineage(snapshot([decorated, answer]), tracked).assistants).toEqual([answer]);
+  unchanged = false;
+  expect(() => resolveAssistantLineage(snapshot([decorated, answer]), tracked)).toThrow("identity changed");
+  expect(resolveAssistantLineage(snapshot([unavailableUser, answer]), tracked))
+    .toMatchObject({ identityPending: true, assistants: [] });
+  expect(resolveAssistantLineage(snapshot([user, answer]), tracked).assistants).toEqual([answer]);
 });

@@ -1439,6 +1439,15 @@ describe("ChatGPT semantic provider", () => {
           }] });
           const result = await provider.waitForTurnEvent(surface.lease, submitted.value);
           expect(result.state === "proven" && result.value).toMatchObject({ kind: "completed", answer: "verified answer" });
+        } else if (mode === 'same-request-other-conversation') {
+          // The foreign frame is not deliverable; a subsequent exact return is.
+          driver.queued.push({ ...driver.current, revision: 'original-restored',
+            url: 'https://chatgpt.com/c/accepted', turns: [user, {
+              key: 'owned-assistant', role: 'assistant', parentUserTurnKey: user.key,
+              phase: 'complete', text: 'original owned answer',
+            }] });
+          const result = await provider.waitForTurnEvent(surface.lease, submitted.value);
+          expect(result.state === 'proven' && result.value).toMatchObject({kind:'completed',answer:'original owned answer'});
         } else {
           await expect(provider.waitForTurnEvent(surface.lease, submitted.value)).rejects.toThrow(/identity|conversation/);
         }
@@ -1468,7 +1477,12 @@ describe("ChatGPT semantic provider", () => {
           url: mode === 'different-conversation' ? 'https://chatgpt.com/c/foreign' : driver.current.url,
           turns: mode === 'changed-user' ? [{ ...user, contentFingerprint: hash('foreign request') }, assistant] : [assistant],
         });
-        if (mode === 'different-conversation' || mode === 'changed-user') {
+        if (mode === 'different-conversation') {
+          driver.queued.push({...driver.current,revision:'same-document-original-restored',
+            url:'https://chatgpt.com/c/accepted',turns:[user,{...assistant,text:'verified original answer'}]});
+          const result=await provider.waitForTurnEvent(surface.lease,submitted.value);
+          expect(result.state==='proven'&&result.value).toMatchObject({kind:'completed',answer:'verified original answer'});
+        } else if (mode === 'changed-user') {
           await expect(provider.waitForTurnEvent(surface.lease, submitted.value)).rejects.toThrow(/conversation|identity/);
         } else {
           if (mode === 'different-document') driver.queued.push({ ...driver.current, revision: 'restored',
@@ -1525,8 +1539,13 @@ describe("ChatGPT semantic provider", () => {
       const continuing = await provider.waitForTurnEvent(surface.lease, submitted.value);
       expect(continuing.state === "proven" && continuing.value.kind).toBe("continuing");
       driver.current = { ...driver.current, url: "https://chatgpt.com/c/foreign" };
-      await expect(provider.armToolContinuation(surface.lease, submitted.value, "wrong-call")).rejects.toThrow("conversation changed");
-      await expect(provider.waitForTurnEvent(surface.lease, submitted.value)).rejects.toThrow("conversation changed");
+      expect((await provider.observeTurn(surface.lease,submitted.value)).state).toBe('probable');
+      // Returning an unproven author cannot release the cached post-tool answer.
+      const original=driver.current.turns.find(turn=>turn.role==='user')!;
+      driver.current={...driver.current,url:'https://chatgpt.com/c/accepted',turns:driver.current.turns.filter(turn=>turn.role==='assistant')};
+      expect((await provider.observeTurn(surface.lease,submitted.value)).state).toBe('probable');
+      driver.current={...driver.current,turns:[original,...driver.current.turns]};
+      expect((await provider.observeTurn(surface.lease,submitted.value)).state).toBe('proven');
     } finally { await surface.host.close(); }
   });
 
@@ -1543,7 +1562,7 @@ describe("ChatGPT semantic provider", () => {
       driver.current = { ...driver.current, url: "https://chatgpt.com/c/accepted" };
       expect((await provider.observeTurn(surface.lease, submitted.value)).state).toBe("proven");
       driver.current = { ...driver.current, url: "https://chatgpt.com/c/foreign" };
-      await expect(provider.observeTurn(surface.lease, submitted.value)).rejects.toThrow("conversation changed");
+      expect((await provider.observeTurn(surface.lease, submitted.value)).state).toBe('probable');
     } finally { await surface.host.close(); }
   });
 
@@ -1590,7 +1609,7 @@ describe("ChatGPT semantic provider", () => {
       expect((await provider.observeTurn(surface.lease, submitted.value)).state).toBe("probable");
       const loading = driver.current;
       driver.current = { ...loading, url: "https://chatgpt.com/c/foreign" };
-      await expect(provider.observeTurn(surface.lease, submitted.value)).rejects.toThrow("conversation changed");
+      expect((await provider.observeTurn(surface.lease, submitted.value)).state).toBe("probable");
       driver.current = loading;
       const key = mode === "same-key" ? user.key : "hydrated-user";
       driver.queued.push({ ...loading, revision: "restored", turns: [
@@ -1780,7 +1799,7 @@ describe("ChatGPT semantic provider", () => {
       expect((await provider.observeTurn(surface.lease, submitted.value)).state).toBe("proven");
       const hydrated = driver.current;
       driver.current = { ...driver.current, url: "https://chatgpt.com/c/foreign" };
-      await expect(provider.observeTurn(surface.lease, submitted.value)).rejects.toThrow("conversation changed");
+      expect((await provider.observeTurn(surface.lease, submitted.value)).state).toBe("probable");
       driver.current = hydrated;
       driver.queued.push({ ...hydrated, revision: "complete", turns: hydrated.turns.map(turn => turn.role === "assistant"
         ? { ...turn, phase: "complete", text: "correct" } : turn) });
@@ -1836,16 +1855,15 @@ describe("ChatGPT semantic provider", () => {
           await provider.observeTurn(surface.lease, submitted.value);
         }
         driver.current = { ...driver.current, url: "https://chatgpt.com/c/SYNTHETIC_PRIVATE_FOREIGN" };
-        await expect(provider.observeTurn(surface.lease, submitted.value)).rejects.toThrow("conversation changed");
+        expect((await provider.observeTurn(surface.lease, submitted.value)).state).toBe("probable");
         const text = readFileSync(file, "utf8");
         const rows = text.trim().split("\n").map(line => JSON.parse(line));
         expect(rows.filter(row => row.stage === "web_turn_identity_accepted")).toHaveLength(1);
         expect(rows.find(row => row.stage === "web_turn_identity_accepted")).toMatchObject({
           route_kind: mode, user_count: 1, baseline_lineage_count: 0, accepted_fingerprint_matches: true,
         });
-        expect(rows.find(row => row.stage === "web_turn_identity_rejected")).toMatchObject({
-          reason_class: "conversation_changed", previous_route_initial: false, previous_route_provisional: false,
-          same_origin: true, matching_user_count: 1, accepted_key_matches: true,
+        expect(rows.find(row => row.stage === "web_turn_observation_suspended")).toMatchObject({
+          reason_class: "different_conversation",
         });
         expect(text).not.toContain("SYNTHETIC_PRIVATE");
         expect(text).not.toContain("https://");
@@ -2468,10 +2486,11 @@ test.each(['matching', 'normalized', 'matching-revoked', 'normalized-revoked'] a
     ]};
     const revoked = mode.endsWith('-revoked');
     if (revoked) {
-      // An unchanged host revision must not hide its aborted input boundary.
+      // After outside input, a different rendered author cannot borrow the
+      // accepted causal receipt. It blocks result delivery without a resend.
       inputAbort.abort(new Error('host input revoked'));
       await expect(provider.waitForTurnEvent(surface.lease, submitted.value)).rejects
-        .toMatchObject({code: 'tela_web_submission_unproven', retryable: false});
+        .toThrow('accepted user identity changed');
     } else {
       const completed = await provider.waitForTurnEvent(surface.lease, submitted.value);
       expect(completed.state === 'proven' && completed.value).toMatchObject({kind: 'completed', answer: 'owned final'});
@@ -2479,7 +2498,7 @@ test.each(['matching', 'normalized', 'matching-revoked', 'normalized-revoked'] a
     expect(driver.activated).toHaveLength(1);
     const rows = readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(rows.find(row => row.stage === 'web_turn_identity_accepted')).toMatchObject({causal_receipt: true});
-    if (revoked) expect(rows.find(row => row.stage === 'web_submission_input_revoked')).toMatchObject({input_aborted: true});
+    if (revoked) expect(rows.find(row => row.stage === 'web_turn_identity_rejected')).toMatchObject({reason_class: 'accepted_user_changed'});
     else expect(rows.find(row => row.stage === 'web_turn_ownership_observed' && row.rendered_payload_state === 'changed'))
       .toMatchObject({payload_state: 'causal', anchor_state: 'matching'});
   } finally {
@@ -2515,7 +2534,7 @@ test.each(['missing-host', 'unavailable-host', 'unconsumed', 'wrong-anchor', 'co
   },
 );
 
-test.each(['present', 'unmounted', 'external-input', 'across-frames', 'provisional', 'presentation-change'] as const)('causal receipt separates long composer from renderer preview: %s', async mode => {
+test.each(['present', 'unmounted', 'across-frames', 'provisional', 'presentation-change'] as const)('causal receipt separates long composer from renderer preview: %s', async mode => {
   const driver = new FixtureDriver(fixture('ready-new-chat'));
   let revision = 0; const inputAbort = new AbortController();
   const surface = await leaseFor(driver, {current:()=>({revision,available:true,signal:inputAbort.signal})});
@@ -2533,10 +2552,7 @@ test.each(['present', 'unmounted', 'external-input', 'across-frames', 'provision
     if(submitted.state!=='proven')throw Error('fixture causal receipt');
     const user = receipt.turns[0]!, assistant = receipt.turns[1]!;
     driver.current = {...driver.current,revision:'causal-final',turns:[...(mode==='unmounted'?[]:[mode==='presentation-change'?{...user,contentFingerprint:hash('different rendered preview')}:user]),{...assistant,phase:'complete',text:'owned useful final'}]};
-    if(mode==='external-input') {
-      revision++;
-      await expect(provider.waitForTurnEvent(surface.lease,submitted.value)).rejects.toMatchObject({code:'tela_web_submission_unproven',retryable:false});
-    } else {
+    {
       const event=await provider.waitForTurnEvent(surface.lease,submitted.value);
       expect(event.state==='proven'&&event.value).toMatchObject({kind:'completed',answer:'owned useful final'});
     }
@@ -2564,7 +2580,7 @@ test.each(['missing-host','unavailable-host','changed-input','unconsumed','missi
   }finally{await surface.host.close();}
 });
 
-test('causal receipt aborts a pending observer on host input revocation without a second send',async()=>{
+test('post-acceptance input does not cancel an observer; Native cancellation still does',async()=>{
  const driver=new FixtureDriver(fixture('ready-new-chat')),inputAbort=new AbortController();let revision=0;
  const surface=await leaseFor(driver,{current:()=>({revision,available:true,signal:inputAbort.signal})});
  const provider=new ChatGptSemanticProvider();
@@ -2577,9 +2593,12 @@ test('causal receipt aborts a pending observer on host input revocation without 
    if(signal?.aborted){reject(signal.reason);return;}
    signal?.addEventListener('abort',()=>reject(signal.reason),{once:true});
   });
-  const waiting=provider.waitForTurnEvent(surface.lease,submitted.value);
+  const native=new AbortController();
+  const waiting=provider.waitForTurnEvent(surface.lease,submitted.value,native.signal);
   revision++;inputAbort.abort(new Error('fixture input revoked'));
-  await expect(waiting).rejects.toThrow('fixture input revoked');
+  expect(native.signal.aborted).toBe(false);
+  native.abort(new Error('Native owner cancelled'));
+  await expect(waiting).rejects.toThrow('Native owner cancelled');
   expect(driver.activated).toHaveLength(1);
  }finally{await surface.host.close();}
 });

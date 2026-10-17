@@ -75,7 +75,7 @@ describe("browser context checkpoint runner", () => {
         provider: provider({async createContextCheckpoint(_surface, _request, signal) {
           calls++;
           if (scenario !== "unknown") inputOwner.abort(primary);
-          expect(signal?.aborted).toBe(scenario !== "unknown");
+          expect(signal?.aborted).toBe(false);
           throw primary;
         }}),
       }); } catch (error) { caught = error; }
@@ -88,7 +88,8 @@ describe("browser context checkpoint runner", () => {
       expect(calls).toBe(1); expect(closes).toBe(1);
       const rows = readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line));
       expect(rows.find(row => row.stage === "context_checkpoint_failed")).toMatchObject({
-        reason_class: scenario === "unknown" ? "provider_error" : "input_revoked",
+        reason_class: "provider_error",
+        input_revoked_observed: scenario !== "unknown",
       });
       expect(rows.some(row => row.stage === "context_checkpoint_closed")).toBe(scenario !== "release-failed");
       expect(rows.some(row => row.stage === "context_checkpoint_release_failed")).toBe(scenario === "release-failed");

@@ -307,6 +307,26 @@ test("closing manual inspection resets viewing and keeps the owned lease alive",
   expect(ownership.current().available).toBe(false); await host.close();
 });
 
+test("Interact reveal and pointer revocation retire only the submission fence, never the document", async () => {
+  const window=new FakeWindow();
+  const host=createElectronBrowserHost({profileId:"interact-lifecycle",createWindow:()=>window});
+  const surface=await host.acquire({taskId:"task",epochId:"epoch"});
+  try {
+    const { BROWSER_INSPECTION_INPUT }=await import("@chatgpt-tela/browser-host");
+    const controls=surface.capability(BROWSER_INSPECTION_INPUT)!;
+    const submission=surface.capability(BROWSER_INPUT_OWNERSHIP)!.current();
+    const document=surface.capability(BROWSER_DOCUMENT_LIFETIME)!.current();
+    await host.revealSurface(surface.leaseId);
+    controls.setInteractive(true);
+    expect(submission.signal.aborted).toBe(false);
+    expect(document.signal.aborted).toBe(false);
+    window.webContents.emit("before-mouse-event",{preventDefault(){}},{type:"mouseDown",button:"left"});
+    expect(submission.signal.aborted).toBe(true);
+    expect(document.signal.aborted).toBe(false);
+    expect(host.activeSurfaceCount).toBe(1);
+  } finally {await host.close();}
+});
+
 test("user-hide observation is tied to one browser lease and never fires on ordinary release", async () => {
   const window = new FakeWindow();
   let closeListener: ((event: { preventDefault(): void }) => void) | undefined;

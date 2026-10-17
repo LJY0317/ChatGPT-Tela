@@ -42,7 +42,6 @@ import type {
 import { isChatGptTemporaryChatUrl, isChatGptProvisionalConversationUrl } from "./session";
 
 interface TrackedTurn extends TurnOwnership {
-  readonly causalInputSignal?: AbortSignal;
   readonly handle: WebTurnHandle;
   readonly surfaceLeaseId: string;
   readonly retainedContext: boolean;
@@ -1279,13 +1278,18 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const inputOwner = surface.capability(BROWSER_INPUT_OWNERSHIP);
     // Capture before consequential input, never infer exclusivity from missing support.
     const inputBaseline = inputOwner?.current();
-    const assertCausalInputUnchanged = inputBaseline?.available && inputBaseline.signal && !inputBaseline.signal.aborted && Number.isSafeInteger(inputBaseline.revision)
+    const inputUnchanged = inputBaseline?.available && inputBaseline.signal && !inputBaseline.signal.aborted && Number.isSafeInteger(inputBaseline.revision)
       ? () => {
         const now = inputOwner!.current();
-        if (!now.available || now.revision !== inputBaseline.revision || inputBaseline.signal.aborted) {
+        return now.available && now.revision === inputBaseline.revision && !inputBaseline.signal.aborted;
+      } : undefined;
+    const assertCausalInputUnchanged = inputUnchanged
+      ? () => {
+        if (!inputUnchanged()) {
+          const now = inputOwner!.current();
           emitDiagnosticEvent("chatgpt_tela_work", "web_submission_input_revoked", {
-            host_available: now.available, revision_matches: now.revision === inputBaseline.revision,
-            input_aborted: inputBaseline.signal.aborted,
+            host_available: now.available, revision_matches: now.revision === inputBaseline!.revision,
+            input_aborted: inputBaseline!.signal.aborted,
           });
           throw new WebSubmissionUnproven("author_payload_unavailable");
         }
@@ -1532,7 +1536,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             retainedContext: request.physicalContext.mode === "retained-delta",
             userTurnKey: userTurn.key,
             acceptedUserFingerprint: acceptedFingerprint,
-            ...(causalReceipt ? { assertCausalInputUnchanged: assertCausalInputUnchanged!, causalInputSignal: inputBaseline!.signal } : {}),
+            ...(inputUnchanged ? { inputUnchanged } : {}),
+            ...(causalReceipt ? { causalReceipt: true } : {}),
             ...(userTurn.lineageAnchor ? { acceptedLineageAnchor: userTurn.lineageAnchor } : {}),
             conversationRoute: new URL(snapshot.url).origin + new URL(snapshot.url).pathname,
             baselineUserLineageKeys: preSubmitUserLineageKeys,
@@ -1596,9 +1601,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   ): Promise<SemanticObservation<WebTurnState>> {
     signal?.throwIfAborted();
     const tracked = this.#tracked(surface, turn);
-    tracked.assertCausalInputUnchanged?.();
-    if (tracked.causalInputSignal) signal = signal
-      ? AbortSignal.any([signal, tracked.causalInputSignal]) : tracked.causalInputSignal;
     const snapshot = await driverFor(surface).observe(signal);
     signal?.throwIfAborted();
     tracked.revision = snapshot.revision;
@@ -1622,9 +1624,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   ): Promise<SemanticObservation<WebToolContinuationBoundary>> {
     if (!callId.trim()) throw new Error("Web tool continuation call id must be non-empty");
     const tracked = this.#tracked(surface, turn);
-    tracked.assertCausalInputUnchanged?.();
-    if (tracked.causalInputSignal) signal = signal
-      ? AbortSignal.any([signal, tracked.causalInputSignal]) : tracked.causalInputSignal;
     let { snapshot, lineage } = await waitForLineage(driverFor(surface), tracked, signal);
     if (tracked.retainedContext) {
       snapshot = await this.#waitForRetainedConversation(surface, snapshot, tracked, signal);
@@ -1694,9 +1693,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   ): Promise<SemanticObservation<WebTurnEvent>> {
     signal?.throwIfAborted();
     const tracked = this.#tracked(surface, turn);
-    tracked.assertCausalInputUnchanged?.();
-    if (tracked.causalInputSignal) signal = signal
-      ? AbortSignal.any([signal, tracked.causalInputSignal]) : tracked.causalInputSignal;
     const driver = driverFor(surface);
 
     if (tracked.pendingCompletedAnswer !== undefined) {
@@ -1711,7 +1707,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       // A new approval can render after completion controls. It still blocks final delivery.
       if (assistantLifecyclePhase(snapshot, ownership.assistants[0]) === "failed") {
         await this.#recordApprovalResolution(surface, tracked, "failed");
-        tracked.assertCausalInputUnchanged?.();
         signal?.throwIfAborted();
         this.#turns.delete(surface);
         return { state: "proven", value: { kind: "failed", providerTurnId: tracked.handle.providerTurnId,
@@ -1720,7 +1715,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       if (!snapshot.approval?.cardCount) {
         await this.#recordApprovalResolution(surface, tracked, "completed");
-        tracked.assertCausalInputUnchanged?.();
         signal?.throwIfAborted();
         this.#turns.delete(surface);
         return {
@@ -1803,12 +1797,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         && !tracked.approvalObservation.wasDispatched(observedApproval.cardFingerprint)
         && assistant?.phase !== "failed" && driver.processApprovalCard
         && decideChatGptApproval(this.#approvalAutomationMode, observedApproval).action === "approve_once") {
-        tracked.assertCausalInputUnchanged?.();
         signal?.throwIfAborted();
         const action = await driver.processApprovalCard(this.#approvalAutomationMode, signal,
           this.#approvalAutomationDelayMs, { cardFingerprint: observedApproval.cardFingerprint,
             revisionFingerprint: observedApproval.revisionFingerprint });
-        tracked.assertCausalInputUnchanged?.();
         signal?.throwIfAborted();
         if (action.status === "dispatched" || action.reason === "already_activated") {
           const card = action.status === "dispatched" ? action.cardFingerprint : observedApproval.cardFingerprint;
@@ -1816,7 +1808,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           approvalTransitionDiagnostic(transition);
         }
       }
-      tracked.assertCausalInputUnchanged?.();
       signal?.throwIfAborted();
       const approvalPhase = tracked.approvalObservation.phase;
       const approvalProgress = approvalPhase ? approvalObservationSummary(approvalPhase) : "";
@@ -1834,7 +1825,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         });
         await captureBrowserDiagnosticCheckpoint(surface, "surface_anomaly");
       }
-      tracked.assertCausalInputUnchanged?.();
       signal?.throwIfAborted();
       if (publicProgress && publicProgress.length <= 16384 && tracked.publicProgress !== publicProgress) {
         tracked.publicProgress = publicProgress;
@@ -1852,7 +1842,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         delete tracked.continuationBoundary;
         if (assistant.phase === "failed") {
           await this.#recordApprovalResolution(surface, tracked, "failed");
-          tracked.assertCausalInputUnchanged?.();
           signal?.throwIfAborted();
           this.#turns.delete(surface);
           return {
@@ -1877,7 +1866,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       if (assistant.phase === "complete") {
         await this.#recordApprovalResolution(surface, tracked, "completed");
-        tracked.assertCausalInputUnchanged?.();
         signal?.throwIfAborted();
         this.#commitAnswer(surface, tracked.userTurnKey, assistant);
         this.#turns.delete(surface);
@@ -1893,7 +1881,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       if (assistant.phase === "failed") {
         await this.#recordApprovalResolution(surface, tracked, "failed");
-        tracked.assertCausalInputUnchanged?.();
         signal?.throwIfAborted();
         this.#turns.delete(surface);
         return {

@@ -20,11 +20,16 @@ export interface TurnOwnership {
   userTurnKey: string;
   readonly acceptedUserFingerprint: string;
   readonly acceptedLineageAnchor?: string;
-  /** Created only after exact composer readback, one activation, consumed composer,
-   * unique new user + matching assistant anchor and a live host input boundary. */
-  readonly assertCausalInputUnchanged?: () => void;
+  /** A receipt made from an exact composer/send and a unique paired logical turn.
+   * This is not authority to ignore later request edits after outside input. */
+  readonly causalReceipt?: boolean;
+  /** Input fencing proves the original send only through acceptance. Later input
+   * requires renewed visible author proof; it does not cancel observation. */
+  readonly inputUnchanged?: () => boolean;
   conversationRoute: string;
   pendingConversationRoute?: string;
+  /** Same-document navigation suspends delivery until the original request is re-proven. */
+  navigationSuspended?: boolean;
   readonly baselineUserLineageKeys: ReadonlySet<string>;
   identityPending?: boolean;
   ownershipWitness?: string;
@@ -54,17 +59,33 @@ export function baselineUserLineageKeys(snapshot: ChatGptSurfaceSnapshot): Reado
  */
 function ownedAuthorFingerprint(turn: ChatGptTurnObservation | undefined, tracked: TurnOwnership): string | undefined {
   // This receipt binds the submitted composer, not a subsequent display-text digest.
-  // Native owner cancellation and the host input boundary fence edits; same-document
-  // logical identity fences renderer replacement. Presentation cannot replace either.
-  if (tracked.assertCausalInputUnchanged && turn?.role === "user" && tracked.acceptedLineageAnchor
+  // Input exclusivity ends at acceptance: once outside input occurs, the rendered
+  // author must independently prove exact content, even with the same lineage.
+  if (tracked.causalReceipt && tracked.inputUnchanged?.() && turn?.role === "user" && tracked.acceptedLineageAnchor
     && turn.lineageAnchor === tracked.acceptedLineageAnchor) return tracked.acceptedUserFingerprint;
   const payload = authorFingerprint(turn, tracked.acceptedUserFingerprint);
   return payload;
 }
 
 function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwnership): boolean {
-  tracked.assertCausalInputUnchanged?.();
   const route = new URL(snapshot.url).origin + new URL(snapshot.url).pathname;
+  const expectedRoute = new URL(tracked.conversationRoute);
+  const currentRoute = new URL(route);
+  if (tracked.navigationSuspended && route !== tracked.conversationRoute) return false;
+  // Once a canonical route is owned, another ChatGPT conversation is a viewing
+  // detour, not a new authority or an instruction to release the active turn.
+  // Real cross-origin/auth navigation and main-document loss still fail closed.
+  if (route !== tracked.conversationRoute
+    && !isChatGptProvisionalConversationUrl(expectedRoute.href)
+    && expectedRoute.pathname !== "/") {
+    if (currentRoute.origin !== expectedRoute.origin || (currentRoute.pathname !== "/"
+      && !/^\/c\/[^/]+$/.test(currentRoute.pathname))) {
+      throw new Error("ChatGPT conversation or account ownership changed during the active Web turn");
+    }
+    tracked.navigationSuspended = true;
+    emitDiagnosticEvent("chatgpt_tela_work", "web_turn_observation_suspended", { reason_class: "different_conversation" });
+    return false;
+  }
   const users = snapshot.turns.filter(item => item.role === "user" && item.key === tracked.userTurnKey);
   const current = users[0];
   const renderedFingerprint = authorFingerprint(current, tracked.acceptedUserFingerprint);
@@ -72,7 +93,7 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
     : renderedFingerprint === tracked.acceptedUserFingerprint ? "matching" : "changed";
   const ownedFingerprint = ownedAuthorFingerprint(current, tracked);
   const payloadState = !current ? "unmounted" : ownedFingerprint === undefined ? "unavailable"
-    : ownedFingerprint === tracked.acceptedUserFingerprint ? (tracked.assertCausalInputUnchanged ? "causal" : "matching") : "changed";
+    : ownedFingerprint === tracked.acceptedUserFingerprint ? (tracked.causalReceipt && tracked.inputUnchanged?.() ? "causal" : "matching") : "changed";
   const anchorState = !current?.lineageAnchor || !tracked.acceptedLineageAnchor ? "unavailable"
     : current.lineageAnchor === tracked.acceptedLineageAnchor ? "matching" : "changed";
   const proofReason = current?.userPayloadReason;
@@ -80,6 +101,7 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
     ? proofReason : "unclassified";
   // One bounded witness per structural transition, never text, raw identifiers or polling.
   const witness = JSON.stringify([payloadState, renderedState, anchorState, reasonClass, users.length, route === tracked.conversationRoute,
+    tracked.inputUnchanged?.() ?? null, tracked.navigationSuspended === true,
     snapshot.turns.filter(item => item.role === "assistant").length]);
   if (tracked.ownershipWitness !== witness) {
     tracked.ownershipWitness = witness;
@@ -89,7 +111,9 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
       rendered_payload_state: renderedState,
       accepted_key_count: users.length, route_matches: route === tracked.conversationRoute,
       reason_class: reasonClass,
-      author_root_available: renderedFingerprint !== undefined, causal_receipt: tracked.assertCausalInputUnchanged !== undefined, witness_count: count,
+      author_root_available: renderedFingerprint !== undefined, causal_receipt: tracked.causalReceipt === true,
+      input_unchanged: tracked.inputUnchanged?.() ?? false, navigation_suspended: tracked.navigationSuspended === true,
+      witness_count: count,
     });
     else if (count === 65) emitDiagnosticEvent("chatgpt_tela_work", "web_turn_ownership_budget_reached", { witness_count: 64 });
   }
@@ -108,6 +132,16 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
       reason_class: "pending_route_changed", matching_user_count: accepted.length,
     });
     throw new Error("ChatGPT conversation changed during the active Web turn");
+  }
+  if (tracked.navigationSuspended) {
+    // Returning to a URL is not a conversation proof. A unique exact author and
+    // the accepted document-scoped anchor must be present before any delivery.
+    const returned = snapshot.turns.filter(item => item.role === "user"
+      && authorFingerprint(item, tracked.acceptedUserFingerprint) === tracked.acceptedUserFingerprint
+      && (!tracked.acceptedLineageAnchor || item.lineageAnchor === tracked.acceptedLineageAnchor));
+    if (returned.length !== 1) return false;
+    tracked.navigationSuspended = false;
+    emitDiagnosticEvent("chatgpt_tela_work", "web_turn_observation_resumed", { reason_class: "original_request_proven" });
   }
   if (route !== tracked.conversationRoute) {
     const previous = new URL(tracked.conversationRoute);
@@ -161,6 +195,9 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
     emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rejected", { reason_class: "accepted_user_changed" });
     throw new Error("ChatGPT accepted user identity changed during the active Web turn");
   }
+  // An input change is not evidence of a send, but it retires the sole
+  // author-unmounted causal shortcut until exact author identity is visible.
+  if (!current && tracked.inputUnchanged?.() === false) return false;
   // Missing author content is inconclusive, not evidence of a foreign request.
   // Do not deliver progress/results or accept a completed answer until proof returns.
   if (current && payloadState === "unavailable") return false;
@@ -196,7 +233,9 @@ export function resolveAssistantLineage(
     emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rejected", { reason_class: "foreign_request" });
     throw new Error("ChatGPT renderer request identity conflicts with the accepted request");
   }
-  const rekeyCandidate = newUsers.length === 1 && ownedAuthorFingerprint(newUsers[0], tracked) === tracked.acceptedUserFingerprint;
+  const rekeyCandidate = newUsers.length === 1
+    && ownedAuthorFingerprint(newUsers[0], tracked) === tracked.acceptedUserFingerprint
+    && (!tracked.acceptedLineageAnchor || newUsers[0]!.lineageAnchor === tracked.acceptedLineageAnchor);
   const identityPending = !routeProven || !acceptedUserPresent && !anchored && !rekeyCandidate;
   if (tracked.identityPending !== identityPending) {
     tracked.identityPending = identityPending;
@@ -242,7 +281,8 @@ export function resolveAssistantLineage(
   const user = snapshot.turns.find(item => item.role === "user" && item.key === nextKey);
   const matchingUsers = snapshot.turns.filter(item => item.role === "user"
     && ownedAuthorFingerprint(item, tracked) === tracked.acceptedUserFingerprint);
-  if (!user || ownedAuthorFingerprint(user, tracked) !== tracked.acceptedUserFingerprint || matchingUsers.length !== 1) {
+  if (!user || ownedAuthorFingerprint(user, tracked) !== tracked.acceptedUserFingerprint || matchingUsers.length !== 1
+    || tracked.acceptedLineageAnchor && user.lineageAnchor !== tracked.acceptedLineageAnchor) {
     emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rejected", {
       reason_class: "unproven_rekey", parent_user_present: user !== undefined,
       parent_fingerprint_matches: ownedAuthorFingerprint(user, tracked) === tracked.acceptedUserFingerprint,
