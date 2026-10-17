@@ -40,6 +40,22 @@ describe("Web epoch physical pressure", () => {
     })).toMatchObject({ estimatedEpochInputTokens: 96_196, shouldRollover: true });
   });
 
+  test("proven oversized fresh seed retains compatible delta within hard capacity, but output growth alone does not", () => {
+    const input = {
+      settledEpochTokens: 105_000, nextInputTokens: 1_000,
+      outputReserveTokens: 4_096, rolloverTokenLimit: 95_000,
+      contextWindowTokenLimit: 111_193,
+    };
+    expect(assessWebEpochPressure(input)).toMatchObject({shouldRollover: true});
+    expect(assessWebEpochPressure({...input, oversizedFreshSeed: true})).toEqual({
+      estimatedEpochInputTokens: 110_096,
+      effectiveRolloverTokenLimit: 111_193,
+      shouldRollover: false,
+    });
+    expect(assessWebEpochPressure({...input, oversizedFreshSeed: true, nextInputTokens: 3_000}))
+      .toMatchObject({shouldRollover: true});
+  });
+
   test("overflowed accumulated estimates are unknown instead of authorizing retention", () => {
     expect(assessWebEpochPressure({
       settledEpochTokens: Number.MAX_SAFE_INTEGER,

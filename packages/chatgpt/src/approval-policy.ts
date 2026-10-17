@@ -1,9 +1,16 @@
 export type ChatGptApprovalAutomationMode = "off" | "recognized_once";
 
+/** Display-only, bounded classification of a public card warning. Never approval authority. */
+export type ChatGptApprovalReviewReason =
+  | "tool_description_policy_directive"
+  | "suspicious_instruction"
+  | "provider_warning";
+
 export interface ChatGptApprovalCardObservation {
   readonly cardCount: number;
   /** Provider-observed warning; never eligible for automatic approval. */
   readonly requiresManualReview?: boolean;
+  readonly reviewReason?: ChatGptApprovalReviewReason;
   readonly denyCount: number;
   readonly allowCount: number;
   readonly allowOnceCount: number;

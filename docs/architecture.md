@@ -913,6 +913,30 @@ semantic surface snapshot, so card-only changes wake the observer. Approval proc
 an assistant message exists, after turn-lineage ambiguity checks. Diagnostic transitions contain only
 assistant phase, card count and policy mode; they never include card text or tool arguments.
 
+Visible provider security warnings are still manual-review decisions, including in any future
+user-selected automation mode. The replaceable provider adapter may classify a warning into a
+fixed, content-free reason (for example, tool-description policy directives); the accepted turn
+may surface that reason as progress and a bounded diagnostic event. Such a reason explains a
+wait, not whether a tool is dangerous or whether approval should be granted. Unknown warnings
+remain manual. Neither full access to local files nor a Tela preference overrides host/platform
+review. A ChatGPT-platform approval that happens *before* Tela receives a tool call is outside
+Tela's Web DOM visibility; rely on explicitly supplied host evidence rather than claiming to
+observe that card. Do not teach retries, auto-dismissal or automatic approval from warning text.
+
+#### Approval-blocker feedback and bounded improvement cycle
+
+One owned pending-card transition must expose that work is awaiting human action rather than
+reporting only generic model thinking. Link the fixed reason, policy mode, dispatch/receipt state
+and elapsed time to the same operation as its actual tool result and continuation. When a repeated
+blocker is evidenced, use the existing bounded incident/diagnostic record and maintenance task
+checkpoint: observation -> verified layer and exact owner -> cause or missing evidence -> smallest
+authorized source/doc correction -> synthetic regression -> source integration -> optional
+owner-authorized signed rollout -> account-backed acceptance. Prioritize the next **unresolved**
+action; preserve past receipts and never restart an accepted uncertain operation to gather evidence.
+Do not auto-create unrestricted execution grants, auto-edit host policies, or silently replace a
+user task with an engineering goal. A proposed root-cause correction and platform's approval
+decision are independent. This is a developer workflow, not a second runtime task scheduler.
+
 An accepted provider turn identity is also distinct from ChatGPT's renderer-local `data-turn-key`.
 ChatGPT may replace a provisional key when the server-hydrated turn arrives. Tela keeps its accepted
 provider handle stable and may rebind only the renderer key when exactly one assistant parent lineage is

@@ -63,6 +63,17 @@ Reserve output/reasoning headroom and account for accumulated Web context separa
 transferred deltas. Unknown usage remains an estimate. The current Web physical-limit adapter still
 uses isolated conservative calibration; dynamic capability/usage resolution remains unimplemented.
 
+An exact fresh seed can exceed the soft resident runway without exceeding the hard
+window, particularly when required authority is irreducible. Settlement records this
+fresh-seed condition independently of accumulated assistant/tool output. For that
+specific proven generation only, subsequent canonical deltas may use remaining hard
+capacity rather than immediately rotating and retransmitting the same authority.
+Generations that cross the soft boundary through output growth still rotate normally.
+The hard limit, output reserve, original authority and uncertain-send fencing are
+unchanged. This avoids a repeat-seed feedback loop but does not make oversized
+authority efficient; diagnose its production/duplication separately. Tests must
+distinguish both kinds of physical growth and avoid treating estimates as billing.
+
 One `CheckpointPreparationBudget` belongs to one Native planner invocation. Continuity recovery,
 fragmented request/history preparation and single checkpoint producers share it. No phase creates
 fresh allowance; same-budget producer decoration is idempotent. The independent policy module owns

@@ -1800,6 +1800,14 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             });
           }
         }
+        if (snapshot.approval?.requiresManualReview) {
+          emitDiagnosticEvent("chatgpt_tela_work", "approval_manual_review_required", {
+            // Renderer text is untrusted. Only an adapter-classified fixed category is reported.
+            reason_class: snapshot.approval.reviewReason ?? "provider_warning",
+            approval_mode: this.#approvalAutomationMode,
+            approval_card_count: snapshot.approval.cardCount,
+          });
+        }
       }
       const observedApproval = snapshot.approval;
       if (observedApproval?.cardCount === 1 && observedApproval.cardFingerprint
@@ -1819,7 +1827,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       signal?.throwIfAborted();
       const approvalPhase = tracked.approvalObservation.phase;
-      const approvalProgress = approvalPhase ? approvalObservationSummary(approvalPhase) : "";
+      const approvalProgress = approvalPhase
+        ? approvalObservationSummary(approvalPhase,
+          observedApproval?.requiresManualReview ? observedApproval.reviewReason ?? "provider_warning" : undefined)
+        : "";
       if (approvalProgress && tracked.approvalProgress !== approvalProgress) {
         tracked.approvalProgress = approvalProgress;
         tracked.observeAgain = true;

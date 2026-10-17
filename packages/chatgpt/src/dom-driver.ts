@@ -79,6 +79,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     alwaysAllowCount: 0,
     unknownCount: 0,
     requiresManualReview: false,
+    reviewReason: null,
     allowPoint: null,
     allowOncePoint: null,
     cardKey: null,
@@ -102,8 +103,18 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   if (cards.length !== 1) return result;
   // Warnings belong to human review, regardless of the ordinary one-shot policy.
   // Known provider wording is isolated here; structural alerts fail closed too.
+  const displayedText = cards[0].innerText || cards[0].textContent || '';
+  const suspiciousLabel = /(?:Suspicious Instruction|Suspicious Activity|의심스러운 지침|의심스러운 명령)/i.test(displayedText);
   result.requiresManualReview = [...cards[0].querySelectorAll('[role="alert"], [data-warning], [data-safety-warning]')].some(visible)
-    || /(?:Suspicious Instruction|Suspicious Activity|의심스러운 지침|의심스러운 명령)/i.test(cards[0].innerText || cards[0].textContent || '');
+    || suspiciousLabel;
+  // Classify only already-visible warnings. This fixed vocabulary, not the
+  // untrusted card body, crosses into diagnostics and model-facing progress.
+  // Unknown wording remains manual without teaching an approval bypass.
+  if (result.requiresManualReview) result.reviewReason =
+    /(?:tool description|도구 설명)/i.test(displayedText)
+      && /(?:classifier|approval outcome|risk label|분류기|승인 결과|위험 등급)/i.test(displayedText)
+      ? 'tool_description_policy_directive'
+      : suspiciousLabel ? 'suspicious_instruction' : 'provider_warning';
   const point = element => {
     const bounds = element.getBoundingClientRect();
     if (!Number.isFinite(bounds.left) || !Number.isFinite(bounds.top)
@@ -1788,7 +1799,9 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       phase = "approval_read";
       const card = await this.page.evaluate<undefined, {
         cardCount: number; denyCount: number; allowCount: number; allowOnceCount: number;
-        alwaysAllowCount: number; unknownCount: number; requiresManualReview?: boolean; cardKey: string | null; proofKey: string | null;
+        alwaysAllowCount: number; unknownCount: number; requiresManualReview?: boolean;
+        reviewReason?: "tool_description_policy_directive" | "suspicious_instruction" | "provider_warning" | null;
+        cardKey: string | null; proofKey: string | null;
         inputReceived?: boolean;
         receipt?: { cardKey: string; proofKey: string } | null;
       }>(INSPECT_APPROVAL_CARD, undefined, signal);
@@ -1839,6 +1852,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
         cardCount: card.cardCount, denyCount: card.denyCount, allowCount: card.allowCount,
         allowOnceCount: card.allowOnceCount, alwaysAllowCount: card.alwaysAllowCount,
         unknownCount: card.unknownCount, requiresManualReview: card.requiresManualReview === true,
+        ...(card.requiresManualReview && card.reviewReason ? { reviewReason: card.reviewReason } : {}),
         revisionFingerprint: fingerprint(JSON.stringify([card.cardKey, card.proofKey])),
         ...(card.cardCount === 1 && card.cardKey ? { cardFingerprint: diagnosticFingerprint(card.cardKey) } : {}),
         inputReceived: card.inputReceived === true,

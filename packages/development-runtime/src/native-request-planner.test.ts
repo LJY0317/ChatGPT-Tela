@@ -1176,6 +1176,34 @@ describe("Native request development Web planner", () => {
     second.settle?.({ status: "failed" });
   });
 
+  test('irreducible fresh authority above soft runway preserves one compatible physical Web generation', async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const model = chatGptWebModelId(chatGptWebFamilyKey('Observed Family'));
+    const instructions = 'S'.repeat(382_000);
+    const first = await planner(registered(), {
+      model, reasoning: {effort: 'high'}, instructions,
+      input: [{type: 'message', role: 'user', content: 'Seed the current request.'}],
+    });
+    expect(first.physicalContext.transferTokens).toBeGreaterThanOrEqual(95_000);
+    expect(first.diagnostics?.fresh_seed_exceeds_rollover).toBe(true);
+    first.settle?.({status: 'completed', documentGeneration: 1,
+      surfaceLeaseId: 'oversized-authority-page', answer: 'Seed accepted.'});
+    const continued = await planner(registered(), {
+      model, reasoning: {effort: 'high'}, instructions,
+      input: [
+        {type: 'message', role: 'user', content: 'Seed the current request.'},
+        {type: 'message', role: 'assistant', content: 'Seed accepted.'},
+        {type: 'message', role: 'user', content: 'Perform the next small step.'},
+      ],
+    });
+    expect(continued.physicalContext.mode).toBe('retained-delta');
+    expect(continued.webEpochId).toBe(first.webEpochId);
+    expect(continued.retainedSurfaceLeaseId).toBe('oversized-authority-page');
+    expect(continued.physicalContext.transferTokens).toBeLessThan(200);
+    expect(continued.diagnostics).toMatchObject({retained_delta: true, physical_rollover: false});
+    continued.settle?.({status: 'failed'});
+  });
+
   test('retained Web context continues for twenty bounded followups without repacking old revisions',async()=>{
     const model=chatGptWebModelId(chatGptWebFamilyKey('Observed Family'));
     let preparationCalls=0;

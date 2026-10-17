@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { ChatGptApprovalObservation } from "./approval-observation";
+import { ChatGptApprovalObservation, approvalObservationSummary } from "./approval-observation";
+
+test("review warnings project as fixed public progress, never as a copied card prompt", () => {
+  expect(approvalObservationSummary("pending", "tool_description_policy_directive"))
+    .toContain("tool-description instructions");
+  expect(approvalObservationSummary("pending", "provider_warning")).toContain("Manual security review");
+  expect(approvalObservationSummary("pending")).toBe("Approval needed in the Web browser.");
+});
 
 const card = { cardCount: 1, denyCount: 1, allowCount: 0, allowOnceCount: 1, alwaysAllowCount: 0,
   unknownCount: 0, revisionFingerprint: "proof-a", cardFingerprint: "a".repeat(24), inputReceived: false };

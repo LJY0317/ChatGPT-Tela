@@ -460,6 +460,17 @@ new request, retry, poller, capture enablement or idle work. Existing local rota
 A platform rejection before Tela receives a request still requires host/platform evidence; these logs
 cannot retroactively explain that rejection or make a blocked operation permissible.
 
+When an **owned Tela Web** approval card is visible, the provider may classify a public security
+warning into one fixed reason (`tool_description_policy_directive`, `suspicious_instruction`,
+or `provider_warning`). `approval_manual_review_required` records `reason_class`, policy mode
+and card count only on a changed observation; `approval_wait_transition` retains its distinct
+pending / dispatch / input-received / cleared phases. A pending warning also emits fixed
+human-readable progress without copying the card body into the model or logs. Classification is
+presentation evidence, not a platform risk finding, permission, proof of click receipt or
+authorization to resend. Changed or unknown text remains manual. Platform-owned ChatGPT tool
+approval UI outside the attached Web browser is **not** observable through this adapter;
+user-supplied screenshots or official platform status are separate evidence.
+
 ## Retention and cost
 
 Retained-prefix failures emit `web_retained_anchor_rejected` with fixed reason classes,

@@ -2311,6 +2311,30 @@ describe("ChatGPT semantic provider", () => {
     } finally { await surface.host.close(); }
   });
 
+  test("visible warning reaches the task as a fixed review reason without automatic approval", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.approveRecognizedCard = true;
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "recognized_once" });
+    try {
+      const submitting = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await submitting;
+      if (submitted.state !== "proven") throw new Error("fixture submit failed");
+      driver.queued.push({ ...driver.current, revision: "security-review", approval: {
+        ...recognizedApproval, requiresManualReview: true,
+        reviewReason: "tool_description_policy_directive",
+      } });
+      const event = await provider.waitForTurnEvent(surface.lease, submitted.value);
+      expect(event.state === "proven" && event.value).toMatchObject({
+        kind: "progress",
+        summary: expect.stringContaining("tool-description instructions about security or approval policy"),
+      });
+      expect(driver.approvalCalls).toBe(0);
+    } finally { await surface.host.close(); }
+  });
+
   test("cannot arm a tool result after the assistant already completed", async () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     const surface = await leaseFor(driver);

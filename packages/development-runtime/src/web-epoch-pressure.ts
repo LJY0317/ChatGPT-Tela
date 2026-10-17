@@ -5,6 +5,8 @@ export interface WebEpochPressureInput {
   readonly outputReserveTokens: number;
   readonly rolloverTokenLimit: number;
   readonly contextWindowTokenLimit: number;
+  /** Proven fresh seed itself exceeded soft runway, independently of later output growth. */
+  readonly oversizedFreshSeed?: boolean;
 }
 
 export interface WebEpochPressure {
@@ -31,7 +33,10 @@ export function assessWebEpochPressure(input: WebEpochPressureInput): WebEpochPr
     + input.outputReserveTokens;
   // An overflowed estimate cannot safely decide to keep a retained conversation.
   if (!Number.isSafeInteger(estimatedEpochInputTokens)) return undefined;
-  const effectiveRolloverTokenLimit = input.rolloverTokenLimit;
+  // Soft runway cannot be met by re-creating an irreducible seed. Only an
+  // explicitly proven oversized fresh seed may use remaining hard capacity.
+  const effectiveRolloverTokenLimit = input.oversizedFreshSeed
+    ? input.contextWindowTokenLimit : input.rolloverTokenLimit;
   return Object.freeze({
     estimatedEpochInputTokens,
     effectiveRolloverTokenLimit,

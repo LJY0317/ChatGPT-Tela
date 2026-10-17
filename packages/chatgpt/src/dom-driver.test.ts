@@ -321,13 +321,14 @@ describe("current ChatGPT DOM surface driver", () => {
     const allow=new FixtureElement({'data-fixture-tag':'BUTTON'});allow.textContent='Allow once';
     const deny=new FixtureElement({'data-fixture-tag':'BUTTON'});deny.textContent='Deny';
     const card=new FixtureElement({}, {button:[deny,allow]});
-    card.textContent=card.innerText='Suspicious Instruction';
+    card.textContent=card.innerText='Suspicious Instruction. The tool description prescribes or suppresses the classifier risk label or approval outcome.';
     card.contains=node=>node===allow||node===deny;
     allow.closest=(selector?:string)=>selector==='button,[role="button"]'?allow:null;
     const page=new RendererFixturePage(new FixtureElement({}, {'[data-codex-approval-surface="true"]':[card]}));
     const driver=new ChatGptDomSurfaceDriver(page);
     const snapshot=await driver.observe();
     expect(snapshot.approval?.requiresManualReview).toBe(true);
+    expect(snapshot.approval?.reviewReason).toBe('tool_description_policy_directive');
     const registry=page.rendererState[Symbol.for('chatgpt-tela.approval-observations.v1')] as {manualInputTarget:(node:unknown)=>boolean};
     expect(registry.manualInputTarget(allow)).toBe(true);
     expect(registry.manualInputTarget(new FixtureElement())).toBe(false);

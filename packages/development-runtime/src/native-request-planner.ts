@@ -234,6 +234,7 @@ interface CommittedRetainedContext {
   readonly routeIdentity: string;
   /** Monotonic input+estimated output of the exact owned physical generation. */
   readonly estimatedResidentTokens: number;
+  readonly oversizedFreshSeed: boolean;
   readonly physicalLimits?: ChatGptWebPhysicalLimits;
 }
 
@@ -375,6 +376,7 @@ function admittedRetainedContext(
     outputReserveTokens,
     rolloverTokenLimit: committed.physicalLimits.rolloverTokenLimit,
     contextWindowTokenLimit: committed.physicalLimits.contextWindowTokenLimit,
+    oversizedFreshSeed: committed.oversizedFreshSeed,
   }) : undefined;
   return Object.freeze({ physicalContext, media, ...(pressure ? { pressure } : {}) });
 }
@@ -782,6 +784,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     readonly previousResidentTokens: number;
     readonly inputTokens: number;
     readonly outputReserveTokens: number;
+    readonly oversizedFreshSeed: boolean;
     readonly physicalLimits?: ChatGptWebPhysicalLimits;
     readonly hotHistory?: { readonly opaqueFingerprint: string; readonly visibleHistory: string };
   }) => (outcome: DevelopmentWebTurnSettlement): void => {
@@ -824,6 +827,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       answerFingerprint: contentFingerprint(outcome.answer),
       routeIdentity: entry.routeIdentity,
       estimatedResidentTokens,
+      oversizedFreshSeed: entry.oversizedFreshSeed,
       ...(entry.physicalLimits ? { physicalLimits: entry.physicalLimits } : {}),
     }));
     if (entry.hotHistory) keepHotHistory(entry.threadId, entry.hotHistory);
@@ -997,6 +1001,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           threadId, pending, webEpochId: committed.webEpochId,
           inputHeadRevisionId: projection.headId, routeIdentity: currentRouteIdentity,
           previousResidentTokens: committed.estimatedResidentTokens,
+          oversizedFreshSeed: committed.oversizedFreshSeed,
           inputTokens: physicalContext.transferTokens + 1_024,
           outputReserveTokens: workingPolicy.outputReserveTokens,
           ...(committed.physicalLimits ? { physicalLimits: committed.physicalLimits } : {}),
@@ -1255,6 +1260,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         threadId, pending, webEpochId: epochId,
         inputHeadRevisionId: projection.headId, routeIdentity: currentRouteIdentity,
         previousResidentTokens: 0,
+        oversizedFreshSeed: !!physicalLimits && physicalContext.transferTokens >= physicalLimits.rolloverTokenLimit,
         inputTokens: physicalContext.transferTokens + 1_024,
         outputReserveTokens: workingPolicy.outputReserveTokens,
         ...(physicalLimits ? { physicalLimits } : {}),
