@@ -164,6 +164,29 @@ auditing all logs:
 bun run cli thread inspect --thread <Native-conversation-UUID> --slot 2 --minutes 30
 ```
 
+If the selected Native owner is stopped, orphaned, or its public status
+cannot be verified, use the **offline historical-only** fallback:
+
+```sh
+bun run cli thread evidence --thread <Native-conversation-UUID> --minutes 180
+```
+
+This deliberately performs no Native RPC or browser navigation, does not
+claim current thread ownership, and cannot approve, resume, cancel, or
+replay any task. A bounded diagnostic UUID fingerprint selects only
+allowlisted structural events and reports the last recorded approval
+transition, terminal/failure classification, and the gap between
+observations. A long elapsed gap does **not** prove the card remained
+visible for that entire period; current browser status stays
+`not_verified`. Missing/truncated sources are reported explicitly.
+For agents connected to Tela Chat, the same functionality is exposed as the
+separate **read-only** `inspect_native_evidence` capability (with opened
+`workspace_id`, exact `thread_id`, optional `minutes` up to 360).
+The unified development MCP also exposes
+`tela_chat_inspect_native_evidence`. Prefer this narrowly typed operation
+over arbitrary `exec_command` for status inspection; host security-review
+decisions remain outside Tela and are not disabled by the capability.
+
 Profile 1 is the default. The CLI authenticates the currently installed Codex
 service, checks the selected Native profile ownership before and after the read,
 asks the public app-server for `thread/read(includeTurns:false)` and at most

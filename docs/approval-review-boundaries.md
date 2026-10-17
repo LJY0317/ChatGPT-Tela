@@ -62,6 +62,19 @@ cannot select **Always allow**, authorize an ambiguous card, or approve
 warnings flagged `requiresManualReview`. An agent may triage these
 warnings but its assessment is not a substitute for human approval.
 
+**Manual one-shot consent and accepted request identity:** On a proven
+owned Web surface, a human may click a currently recognized approval-card
+control in the Control Center browser. The Electron input gate must
+classify the exact hit-tested target **before** revoking the accepted
+Web request's causal input witness. During the asynchronous hit test,
+the provider is fenced from releasing observations. A still-visible,
+unchanged card-local consent button preserves the original request's
+causal receipt; unknown/editing inputs revoke before their input is
+replayed. This matters when the canonical composer is much longer than
+the visibly truncated user bubble: truncated display text is not
+independent proof that the original submitted request changed. A real
+request edit, competing user turn or owner mismatch still fails closed.
+
 ### Agent-assisted eligibility and bounded automatic execution
 
 The provider-owned pure policy `reviewChatGptApprovalForAgent()` shares
@@ -151,6 +164,11 @@ identify what Tela executed. `approval_wait_transition`,
 `bridge_approval_observation_unavailable` describe owned Web evidence.
 `approval_agent_review` is the new bounded, content-free classification;
 it is diagnostic evidence and **not** a host approval or execution receipt.
+If the Native profile is unavailable, use `thread evidence --thread UUID
+--minutes 180` to inspect the historical wait and failure without live
+identity or click authority. The latest failure reason must not be confused
+with an inferred approval timeout: `accepted_user_changed` is a request
+identity failure, and `manual_review` is a human-consent gate.
 Record the first failing layer, source coverage and unknowns rather
 than treating silence as proof of refusal. Host cards seen only in
 ChatGPT UI need user-supplied or official host evidence. Never log

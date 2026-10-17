@@ -146,3 +146,99 @@ export async function inspectNativeThread(input: {
     },
   });
 }
+
+/**
+ * Read-only evidence for a known Native UUID even when its owning profile is
+ * stopped, orphaned, or the current Codex metadata schema cannot be proven.
+ * This is deliberately NOT a Native thread inspection, an ownership lease,
+ * a live browser observation, or permission to resume/replay/approve.
+ */
+export function inspectNativeThreadHistoricalEvidence(input: {
+  readonly threadId: string;
+  readonly diagnosticPaths: readonly string[];
+  readonly minutes?: number;
+  readonly nowMs?: number;
+}) {
+  if (!THREAD_ID.test(input.threadId)) throw new Error("historical evidence requires an exact Native UUID");
+  const minutes = input.minutes ?? 30;
+  // Unlike live Native inspection, this bounded local-log query may need
+  // to span a long approval wait after the original profile has retired.
+  if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > 360) {
+    throw new Error("--minutes must be an integer from 1 to 360");
+  }
+  const nowMs = input.nowMs ?? Date.now();
+  if (!Number.isFinite(nowMs)) throw new Error("invalid observation time");
+  const fingerprint = diagnosticFingerprint(input.threadId);
+  const logs = readDiagnosticSources(input.diagnosticPaths, {
+    fromMs: nowMs - minutes * 60_000, toMs: nowMs,
+  });
+  const events = logs.events.filter(event => event.scope_fingerprint === fingerprint
+    && ["chatgpt_tela_work", "chatgpt_tela_codex", "chatgpt_tela_browser"].includes(event.event));
+  const last = (stage: string) => events.filter(event => event.stage === stage).at(-1);
+  const pending = events.filter(event => event.stage === "approval_wait_transition"
+    && event.phase === "pending").at(-1);
+  const lastApproval = last("approval_wait_transition");
+  const lastManualReview = last("approval_manual_review_required");
+  const lastNativeFailure = events.filter(event =>
+    ["native_execution_failed", "web_turn_identity_rejected"].includes(event.stage)).at(-1);
+  const lastTerminal = events.filter(event =>
+    ["native_execution_failed", "native_turn_retired", "native_outcome_committed", "web_turn_failed"]
+      .includes(event.stage)).at(-1);
+  const pendingObserved = pending !== undefined && !events.some(event =>
+    event.stage === "approval_wait_transition"
+      && ["card_cleared", "task_progress"].includes(String(event.phase))
+      && Date.parse(event.ts) > Date.parse(pending.ts));
+  const terminalAfterPending = Boolean(pending && lastTerminal
+    && Date.parse(lastTerminal.ts) >= Date.parse(pending.ts));
+  const manualReason = pending && lastManualReview && Date.parse(lastManualReview.ts) >= Date.parse(pending.ts)
+    ? lastManualReview.reason_class : undefined;
+  const firstPendingAt = pending?.ts ?? null;
+  const observedUntil = events.at(-1)?.ts ?? null;
+  return Object.freeze({
+    contractVersion: 1 as const,
+    privacy: "allowlisted-structural-events-only" as const,
+    threadId: input.threadId,
+    scopeFingerprint: fingerprint,
+    identityVerified: false as const,
+    nativeOwner: "not_checked" as const,
+    browserCardCurrentlyVisible: "not_verified" as const,
+    contentRead: false as const,
+    mutating: false as const,
+    coverage: {
+      sourcesRead: logs.coverage.filter(item => item.state === "read").length,
+      sourcesUnavailable: logs.coverage.filter(item => item.state !== "read").length,
+      limited: logs.sourceLimitReached || logs.coverage.some(item => item.truncated || item.eventLimitReached),
+      eventsMatched: events.length,
+    },
+    lastObservedAt: observedUntil,
+    approval: {
+      lastPendingObservedAt: firstPendingAt,
+      lastTransition: lastApproval?.phase ?? "not_observed",
+      noClearanceRecordedAfterPending: pendingObserved,
+      reasonClass: manualReason ?? "unclassified",
+      nativeEndedAfterPending: terminalAfterPending,
+      // A time gap in logs never proves continuous pending or live browser state.
+      observedGapSeconds: pending && observedUntil
+        ? Math.max(0, Math.floor((Date.parse(observedUntil) - Date.parse(pending.ts)) / 1000)) : null,
+    },
+    lastNativeOutcome: lastTerminal
+      ? { at: lastTerminal.ts, stage: lastTerminal.stage,
+        ...(typeof lastTerminal.reason_class === "string" ? { reasonClass: lastTerminal.reason_class } : {}) }
+      : null,
+    lastNativeFailure: lastNativeFailure
+      ? { at: lastNativeFailure.ts, stage: lastNativeFailure.stage,
+        ...(typeof lastNativeFailure.reason_class === "string" ? { reasonClass: lastNativeFailure.reason_class } : {}) }
+      : null,
+    recentEvents: events.slice(-MAX_TIMELINE).map(event => ({
+      at: event.ts, stage: event.stage,
+      ...(typeof event.reason_class === "string" ? { reasonClass: event.reason_class } : {}),
+      ...(typeof event.phase === "string" ? { phase: event.phase } : {}),
+      ...(typeof event.manual_consent === "boolean" ? { manualConsent: event.manual_consent } : {}),
+    })),
+    continuation: {
+      canAutomaticallyApproveSecurityReview: false as const,
+      canAutomaticallyReplayAcceptedTurn: false as const,
+      nextAction: "verify_current_native_and_browser_owner_before_action" as const,
+    },
+  });
+}

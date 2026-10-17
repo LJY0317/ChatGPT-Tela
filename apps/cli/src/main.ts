@@ -25,7 +25,7 @@ import {
 } from "./product-config-selection";
 import { profileSlotFromArguments } from "./profile-selection";
 import { runWebDelegationCommand } from "./web-delegation";
-import { inspectNativeThread } from "./native-thread-inspection";
+import { inspectNativeThread, inspectNativeThreadHistoricalEvidence } from "./native-thread-inspection";
 import {
   readChatAgentProvidersConfig,
   readChatApprovedRootsConfig,
@@ -880,9 +880,20 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "thread") {
-    if (process.argv[3] !== "inspect") throw new Error("usage: chatgpt-tela thread inspect --thread UUID [--slot N] [--minutes 1-120]");
+    if (!["inspect", "evidence"].includes(process.argv[3] ?? "")) {
+      throw new Error("usage: chatgpt-tela thread inspect --thread UUID [--slot N] [--minutes 1-120] | thread evidence --thread UUID [--minutes 1-360]");
+    }
     const threadId = option("--thread");
     if (!threadId) throw new Error("thread inspect requires --thread UUID");
+    if (process.argv[3] === "evidence") {
+      // Historical logs are useful after Native termination, and cannot prove
+      // current profile ownership. Never connect, act, or show content here.
+      console.log(JSON.stringify(inspectNativeThreadHistoricalEvidence({
+        threadId, diagnosticPaths: diagnosticSourcePaths(productPaths.logsRoot),
+        ...(option("--minutes") ? { minutes: Number(option("--minutes")) } : {}),
+      }), null, 2));
+      return;
+    }
     const slotNumber = slot();
     const manifest = readOwnershipManifest(productPaths.installManifest);
     if (!manifest) throw new Error("thread inspect requires an owned Tela installation");

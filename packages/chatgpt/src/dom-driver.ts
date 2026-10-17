@@ -96,7 +96,9 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     if (current.length !== 1) return false;
     const card = current[0], observed = registry.cards.get(card);
     const button = node?.closest?.('button,[role="button"]');
+    const decision = button && normalize(button.getAttribute('aria-label') || button.textContent);
     return !!observed && observed.text === card.textContent && !!button && card.contains(button)
+      && ['Deny', 'Allow', 'Allow once', 'Always allow'].includes(decision)
       && visible(button) && !button.disabled && button.getAttribute('aria-disabled') !== 'true'
       && !button.closest('[inert]');
   };

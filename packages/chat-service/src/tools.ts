@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { inspectNativeThreadHistoricalEvidence } from "@chatgpt-tela/core";
 import { CHAT_PROCESS_STORE_FILENAME } from "@chatgpt-tela/product-lifecycle/chat-process-storage";
 import { ChatAgentManager, type ChatAgentDriver, type ChatAgentWriteMode } from "./agents";
 import { ChatChangeReviewer } from "./changes";
@@ -95,6 +96,7 @@ export const TELA_CHAT_FILE_IMPORT_CAPABILITIES = Object.freeze(["open_file_impo
 export const TELA_CHAT_CAPABILITIES = Object.freeze([
   ...TELA_CHAT_BASE_CAPABILITIES,
   "inspect_native_work",
+  "inspect_native_evidence",
   "export_file",
   ...TELA_CHAT_FILE_IMPORT_CAPABILITIES,
   ...TELA_CHAT_MANAGED_WORKTREE_CAPABILITIES,
@@ -183,6 +185,8 @@ export function createChatToolRuntime(input: {
   /** Optional authenticated, read-only peer contract; never import Codex runtime into Chat. */
   readonly inspectNativeWork?: (request: { readonly slot: number; readonly threadId: string;
     readonly minutes: number }) => Promise<unknown>;
+  /** Installed local diagnostic paths, never model/agent-provided paths. */
+  readonly historicalDiagnosticPaths?: readonly string[];
   readonly ownership?: {
     readonly installId: string;
     readonly productVersion: string;
@@ -245,6 +249,7 @@ export function createChatToolRuntime(input: {
     ...(exporter?.supported ? ["export_file" as const] : []),
     ...TELA_CHAT_BASE_CAPABILITIES,
     ...(input.inspectNativeWork ? ["inspect_native_work" as const] : []),
+    ...(input.historicalDiagnosticPaths ? ["inspect_native_evidence" as const] : []),
     ...(importer ? TELA_CHAT_FILE_IMPORT_CAPABILITIES : []),
     ...(worktrees ? TELA_CHAT_MANAGED_WORKTREE_CAPABILITIES : []),
     ...(agents ? TELA_CHAT_AGENT_CAPABILITIES : []),
@@ -289,6 +294,14 @@ export function createChatToolRuntime(input: {
           const minutes = optionalInteger(args.minutes, "minutes") ?? 30;
           if (slot < 1 || slot > 99 || minutes < 1 || minutes > 120) throw Error("invalid inspection slot or window");
           return await input.inspectNativeWork!({ slot, threadId, minutes });
+        }
+        case "inspect_native_evidence": {
+          workspaces.get(text(args.workspace_id, "workspace_id"));
+          const threadId = text(args.thread_id, "thread_id");
+          const minutes = optionalInteger(args.minutes, "minutes") ?? 180;
+          return inspectNativeThreadHistoricalEvidence({
+            threadId, minutes, diagnosticPaths: input.historicalDiagnosticPaths!,
+          });
         }
         case "export_file":
           return await exporter!.read(text(args.workspace_id, "workspace_id"), text(args.path, "path"));

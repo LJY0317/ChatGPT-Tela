@@ -326,10 +326,13 @@ describe("current ChatGPT DOM surface driver", () => {
   test("manual consent classifier releases only a current observed card, including warnings, without auto activation", async () => {
     const allow=new FixtureElement({'data-fixture-tag':'BUTTON'});allow.textContent='Allow once';
     const deny=new FixtureElement({'data-fixture-tag':'BUTTON'});deny.textContent='Deny';
-    const card=new FixtureElement({}, {button:[deny,allow]});
+    const disclosure=new FixtureElement({'data-fixture-tag':'BUTTON','aria-haspopup':'dialog'});disclosure.textContent='See details';
+    const card=new FixtureElement({}, {button:[deny,allow,disclosure]});
     card.textContent=card.innerText='Suspicious Instruction. The tool description prescribes or suppresses the classifier risk label or approval outcome.';
-    card.contains=node=>node===allow||node===deny;
+    card.contains=node=>node===allow||node===deny||node===disclosure;
     allow.closest=(selector?:string)=>selector==='button,[role="button"]'?allow:null;
+    deny.closest=(selector?:string)=>selector==='button,[role="button"]'?deny:null;
+    disclosure.closest=(selector?:string)=>selector==='button,[role="button"]'?disclosure:null;
     const page=new RendererFixturePage(new FixtureElement({}, {'[data-codex-approval-surface="true"]':[card]}));
     const driver=new ChatGptDomSurfaceDriver(page);
     const snapshot=await driver.observe();
@@ -337,6 +340,8 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(snapshot.approval?.reviewReason).toBe('tool_description_policy_directive');
     const registry=page.rendererState[Symbol.for('chatgpt-tela.approval-observations.v1')] as {manualInputTarget:(node:unknown)=>boolean};
     expect(registry.manualInputTarget(allow)).toBe(true);
+    expect(registry.manualInputTarget(deny)).toBe(true);
+    expect(registry.manualInputTarget(disclosure)).toBe(false);
     expect(registry.manualInputTarget(new FixtureElement())).toBe(false);
     await expect(driver.processApprovalCard('recognized_once')).resolves.toMatchObject({status:'none'});
     expect(page.actions).toEqual([]);

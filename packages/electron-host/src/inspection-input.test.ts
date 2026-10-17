@@ -28,9 +28,11 @@ test("viewing proof is pending until classified, survives selection and copy, an
   const f = fixture(); f.gate.setInteractive(true); f.allow();
   const observation = f.gate.observationCurrent(), strict = f.gate.current();
   f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
-  expect(strict.signal.aborted).toBe(true);
+  // Input is fenced as pending until its exact target is classified.
+  expect(strict.signal.aborted).toBe(false);
   expect(f.gate.observationCurrent().pending).toBe(true);
   await flush();
+  expect(strict.signal.aborted).toBe(true); // Viewing alone does not preserve strict submit proof.
   expect(f.gate.observationCurrent()).toEqual(observation);
   expect(f.sent).toEqual([down, up]);
   f.contents.sendInputEvent({type: 'keyDown', key: 'c', meta: true});
@@ -110,6 +112,8 @@ test("host input evidence survives owned input and viewing but fences external i
   f.gate.setInteractive(false); f.contents.sendInputEvent(down); await flush();
   expect(f.gate.current()).toEqual(original);
   f.gate.setInteractive(true); f.contents.sendInputEvent(down);
+  expect(f.gate.observationCurrent().pending).toBe(true);
+  await flush();
   expect(f.gate.current().revision).toBe(original.revision + 1);
   expect(original.signal.aborted).toBe(true);
   const second = f.gate.current();
@@ -121,7 +125,7 @@ test("host input evidence survives owned input and viewing but fences external i
   expect(last.signal.aborted).toBe(true);
 });
 
-test("external input diagnostics classify keys without changing authority or recording private input", () => {
+test("external input diagnostics classify keys without changing authority or recording private input", async () => {
   const scratch = mkdtempSync(join(tmpdir(), "tela-input-kind-")), file = join(scratch, "events.jsonl");
   const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
   process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
@@ -132,16 +136,17 @@ test("external input diagnostics classify keys without changing authority or rec
     for (const key of ["Shift", "ArrowDown", "Enter", "PRIVATE_KEY", "x"]) {
       const before = f.gate.current();
       f.contents.sendInputEvent({ type: "keyDown", key });
-      expect(before.signal.aborted).toBe(true);
+      expect(before.signal.aborted).toBe(!["Shift", "ArrowDown"].includes(key));
     }
     f.contents.sendInputEvent(down);
+    await flush(); // Classification is async, and revocation follows the hit test.
     f.gate.dispose(); f.gate.dispose();
     const raw = readFileSync(file, "utf8"), events = raw.trim().split("\n").map(line => JSON.parse(line));
     expect(events.filter(row => row.stage === "inspection_ownership_revoked").map(row => row.kind))
-      .toEqual(["modifier", "navigation", "activation", "other", "editing", "pointer"]);
+      .toEqual(["activation", "other", "editing", "pointer"]);
     expect(events.filter(row => row.stage === "inspection_owner_disposed")).toHaveLength(1);
     expect(events.find(row => row.stage === "inspection_owner_disposed"))
-      .toMatchObject({ reason_class: "surface_release", external_input_observed: true, input_revision: 6 });
+      .toMatchObject({ reason_class: "surface_release", external_input_observed: true, input_revision: 4 });
     expect(raw).not.toMatch(/PRIVATE_KEY|ArrowDown|Shift|Enter/);
   } finally {
     if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
@@ -158,10 +163,55 @@ test.each([false, true])("real manual consent passes in viewing and interact mod
     [Symbol.for('chatgpt-tela.approval-observations.v1')]:registry,
   });
   const before=f.gate.observationCurrent();
+  const strict=f.gate.current();
   f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
   expect(f.sent).toHaveLength(0); expect(f.gate.observationCurrent().pending).toBe(true);
   await flush();
   expect(f.sent).toEqual([down,up]); expect(f.gate.observationCurrent()).toEqual(before);
+  expect(f.gate.current().revision).toBe(strict.revision);
+  expect(strict.signal.aborted).toBe(false);
+  f.gate.dispose();
+});
+test("recognized consent preserves large accepted send while an unrelated input still revokes before dispatch", async () => {
+  const f = fixture(); f.gate.setInteractive(true);
+  let target: "approval" | "other" = "approval";
+  let release!: (result: boolean) => void;
+  let pendingTarget = false;
+  (f.contents as { executeJavaScript: () => Promise<unknown> }).executeJavaScript = async () => pendingTarget
+    ? new Promise<boolean>(resolve => { release = resolve; })
+    : target === "approval" ? "manual-consent" : false;
+  const initial = f.gate.current(), observed = f.gate.observationCurrent();
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
+  expect(f.gate.observationCurrent().pending).toBe(true);
+  expect(f.sent).toEqual([]);
+  await flush();
+  expect(f.sent).toEqual([down, up]);
+  expect(f.gate.observationCurrent()).toEqual(observed);
+  expect(initial.signal.aborted).toBe(false);
+  // A longer original request may be visibly truncated: only the unchanged
+  // causal input receipt, not visible text length, can carry its identity.
+  target = "other"; pendingTarget = true;
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
+  expect(initial.signal.aborted).toBe(false);
+  expect(f.gate.observationCurrent().pending).toBe(true);
+  release!(false);
+  await flush();
+  expect(initial.signal.aborted).toBe(true);
+  expect(f.gate.observationCurrent().revision).toBe(observed.revision + 1);
+  expect(f.sent).toEqual([down, up, down, up]);
+  f.gate.dispose();
+});
+test("pure modifier, navigation and copy never invalidate the prior accepted input; edits do", () => {
+  const f = fixture(); f.gate.setInteractive(true);
+  const strict = f.gate.current();
+  for (const key of [
+    { type: "keyDown", key: "Shift" }, { type: "keyDown", key: "ArrowDown" },
+    { type: "keyDown", key: "c", meta: true },
+  ]) f.contents.sendInputEvent(key);
+  expect(f.gate.current().revision).toBe(strict.revision);
+  expect(strict.signal.aborted).toBe(false);
+  f.contents.sendInputEvent({ type: "keyDown", key: "v", meta: true });
+  expect(strict.signal.aborted).toBe(true);
   f.gate.dispose();
 });
 test("unproven card controls stay blocked in viewing mode",async()=>{

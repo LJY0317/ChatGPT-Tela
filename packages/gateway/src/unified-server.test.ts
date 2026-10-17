@@ -65,6 +65,8 @@ describe("unified ChatGPT Tela development MCP", () => {
       expect(inspection?.annotations).toMatchObject({
         readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false,
       });
+      expect(listed.tools.find(tool => tool.name === "tela_chat_inspect_native_evidence")?.annotations)
+        .toMatchObject({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
       const inspected = await client.callTool({
         name: "tela_chat_inspect_native_work",
         arguments: { workspace_id: "chatws_fixture",
@@ -105,6 +107,18 @@ describe("unified ChatGPT Tela development MCP", () => {
           prompt: "Inspect this workspace",
           write_mode: "read_only",
         },
+      });
+
+      const evidence = await client.callTool({
+        name: "tela_chat_inspect_native_evidence",
+        arguments: { workspace_id: "chatws_fixture",
+          thread_id: "11111111-2222-7333-8444-555555555555", minutes: 180 },
+      });
+      expect(evidence.isError).not.toBe(true);
+      expect(JSON.parse(text(evidence))).toEqual({ capability: "inspect_native_evidence", ok: true });
+      expect(chatCalls[3]).toMatchObject({
+        capability: "inspect_native_evidence",
+        arguments_: { minutes: 180 },
       });
 
       const chatFailure = await client.callTool({

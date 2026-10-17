@@ -1,1 +1,1 @@
-export { inspectNativeThread } from "@chatgpt-tela/core";
+export { inspectNativeThread, inspectNativeThreadHistoricalEvidence } from "@chatgpt-tela/core";

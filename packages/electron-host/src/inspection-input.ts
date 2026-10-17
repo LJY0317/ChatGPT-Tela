@@ -89,7 +89,15 @@ export class InspectionInput {
     try { this.contents.sendInputEvent(input); } finally { this.#owned = previous; }
   };
   mouse = (event: { preventDefault(): void }, input: any): void => {
-    if (!this.#owned && !this.#observing && input.type === "mouseDown") this.#invalidateInput("pointer");
+    // A click cannot be declared foreign before its current card-local
+    // target is classified. In particular, a verified manual one-shot
+    // consent must preserve the original accepted request's causal fence.
+    // While the hit test is pending, observationCurrent().pending prevents
+    // any Web answer or tool continuation from crossing that boundary.
+    if (!this.#owned && !this.#observing && input.type === "mouseDown"
+      && (input.button !== "left" || !Number.isFinite(input.x) || !Number.isFinite(input.y))) {
+      this.#invalidateInput("pointer");
+    }
     if (input.type === "mouseDown") this.#recordInput("pointer_activation");
     if (this.#owned) return;
     if (input.type === "mouseWheel") return;
@@ -142,6 +150,11 @@ export class InspectionInput {
     })()`;
     void this.contents.executeJavaScript(code).then(allowed => {
       if (this.#pending !== pending || pending.revision !== this.#revision || observing !== this.#observing) return;
+      // Unknown/editing interactions still revoke before their first
+      // replayed input. 'manual-consent' is recognized by the current
+      // renderer and checked against the exact still-visible card on
+      // every gesture; it is not general permission to edit the request.
+      if (!observing && allowed !== 'manual-consent') this.#invalidateInput("pointer");
       if (++this.#classificationCount <= 16) withDiagnosticContext(this.#origin, () =>
         emitDiagnosticEvent('chatgpt_tela_browser', 'inspection_input_classified', {
           viewing_proven: allowed === true, manual_consent: allowed === 'manual-consent', interactive: !observing,
@@ -165,9 +178,14 @@ export class InspectionInput {
   };
   key = (event: { preventDefault(): void }, input: any): void => {
     if (!this.#owned && !this.#observing && input.type === "keyDown") {
-      this.#invalidateInput(keyKind(input));
       const copy = (input.meta || input.control) && !input.alt && !input.shift && input.key?.toLowerCase() === 'c';
-      if (!copy && !['modifier','navigation'].includes(keyKind(input))) this.#observationRevision++;
+      const kind = keyKind(input);
+      // Pure navigation, modifiers and copy do not edit the accepted
+      // request. Any activating/editing/unknown key still revokes.
+      if (!copy && !['modifier', 'navigation'].includes(kind)) {
+        this.#invalidateInput(kind);
+        this.#observationRevision++;
+      }
     }
     if (input.type === "keyDown") this.#recordInput("key_activation");
     if (!this.#observing || this.#owned) return;

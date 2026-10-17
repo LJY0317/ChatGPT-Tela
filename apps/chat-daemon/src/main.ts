@@ -1,4 +1,4 @@
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticSourcePaths, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { waitForChatShutdown } from "./shutdown";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -56,6 +56,8 @@ async function main(): Promise<void> {
     ? createChatToolRuntime({
         allowedRoots: roots.roots,
         stateRoot: paths.serviceState("chat"),
+        ...(ownership?.installId === installId
+          ? { historicalDiagnosticPaths: diagnosticSourcePaths(paths.logsRoot) } : {}),
         agentDriverFactories,
         ...(ownership?.installId === installId ? {
           inspectNativeWork: async (request: { slot: number; threadId: string; minutes: number }) => {
