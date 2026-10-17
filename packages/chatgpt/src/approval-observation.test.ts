@@ -84,6 +84,28 @@ test("detached trusted receipt survives immediate card removal once, without gra
   expect(otherTurn.recordInputReceipt(receipt, 4)).toBeUndefined();
   expect(otherTurn.audit.input_receipt_count).toBe(0);
 });
+test("after an owned approval dropdown rotates proof, only the prepared-choice receipt releases the success budget", () => {
+  const observation = new ChatGptApprovalObservation();
+  observation.observe(card, "before", true, 10);
+  const newRevision = "scoped-menu-choice-proof";
+  observation.dispatched(card.cardFingerprint, 20, newRevision);
+  expect(observation.recordInputReceipt({
+    cardFingerprint: card.cardFingerprint, revisionFingerprint: card.revisionFingerprint,
+  }, 21)).toBeUndefined();
+  expect(observation.audit.unverified_dispatch_count).toBe(1);
+  expect(observation.recordInputReceipt({
+    cardFingerprint: card.cardFingerprint, revisionFingerprint: newRevision,
+  }, 22)?.phase).toBe("input_received");
+  observation.observe(undefined, "before", true, 23);
+  expect(observation.audit.unverified_dispatch_count).toBe(1);
+  observation.observe(undefined, "after", true, 24);
+  expect(observation.audit).toMatchObject({
+    verified_success_count: 1, unverified_dispatch_count: 0,
+  });
+  const invalid = new ChatGptApprovalObservation();
+  invalid.observe(card, "start", true, 1);
+  expect(() => invalid.dispatched(card.cardFingerprint, 2, "")).toThrow("invalid approval dispatch revision");
+});
 
 test("late input evidence does not rewind cleared-card lifecycle or count disappearance twice", () => {
   const observation = new ChatGptApprovalObservation();

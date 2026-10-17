@@ -1845,7 +1845,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         signal?.throwIfAborted();
         if (action.status === "dispatched" || action.reason === "already_activated") {
           const card = action.status === "dispatched" ? action.cardFingerprint : observedApproval.cardFingerprint;
-          const transition = tracked.approvalObservation.dispatched(card, Date.now());
+          const transition = tracked.approvalObservation.dispatched(card, Date.now(),
+            action.status === "dispatched" ? action.revisionFingerprint : undefined);
           approvalTransitionDiagnostic(transition);
         }
       }

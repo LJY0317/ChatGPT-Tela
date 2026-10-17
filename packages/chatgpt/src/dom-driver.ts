@@ -84,6 +84,11 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     allowPoint: null,
     allowOncePoint: null,
     allowConversationPoint: null,
+    optionsDisclosureCount: 0,
+    optionsExpanded: false,
+    optionsPoint: null,
+    optionsAnchorStable: null,
+    optionsAttempted: false,
     cardKey: null,
     proofKey: null,
     targetState: "unprepared",
@@ -126,20 +131,21 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       || disclosureId && menu.getAttribute('aria-labelledby') === disclosureId);
   };
   if (cards.length !== 1) return result;
-  // Warnings belong to human review, regardless of the ordinary one-shot policy.
-  // Known provider wording is isolated here; structural alerts fail closed too.
-  const displayedText = cards[0].innerText || cards[0].textContent || '';
-  const suspiciousLabel = /(?:Suspicious (?:Instruction|Activity|content)|의심스러운 지침|의심스러운 명령|의심스러운 콘텐츠)/i.test(displayedText);
-  result.requiresManualReview = [...cards[0].querySelectorAll('[role="alert"], [data-warning], [data-safety-warning]')].some(visible)
-    || suspiciousLabel;
-  // Classify only already-visible warnings. This fixed vocabulary, not the
-  // untrusted card body, crosses into diagnostics and model-facing progress.
-  // Unknown wording remains manual without teaching an approval bypass.
-  if (result.requiresManualReview) result.reviewReason =
-    /(?:tool description|도구 설명)/i.test(displayedText)
+  // Warnings belong to human review whether rendered inside the card or
+  // inside its authenticated portal. Never reduce warning scope by opening
+  // a menu. Card/menu text stays inside the renderer; only fixed reasons leave.
+  const classifyWarning = container => {
+    const displayedText = container.innerText || container.textContent || '';
+    const suspicious = /(?:Suspicious (?:Instruction|Activity|content)|의심스러운 지침|의심스러운 명령|의심스러운 콘텐츠)/i.test(displayedText);
+    const hasAlert = [...container.querySelectorAll('[role="alert"], [data-warning], [data-safety-warning]')].some(visible);
+    if (!suspicious && !hasAlert) return;
+    result.requiresManualReview = true;
+    result.reviewReason ||= /(?:tool description|도구 설명)/i.test(displayedText)
       && /(?:classifier|approval outcome|risk label|분류기|승인 결과|위험 등급)/i.test(displayedText)
       ? 'tool_description_policy_directive'
-      : suspiciousLabel ? 'suspicious_instruction' : 'provider_warning';
+      : suspicious ? 'suspicious_instruction' : 'provider_warning';
+  };
+  classifyWarning(cards[0]);
   const point = element => {
     const bounds = element.getBoundingClientRect();
     if (!Number.isFinite(bounds.left) || !Number.isFinite(bounds.top)
@@ -156,12 +162,25 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     if (!node.childNodes?.length) return node.textContent || node.innerText || "";
     return [...node.childNodes].map(accessibleText).join("");
   };
+  let optionsDisclosure = null;
   for (const button of cards[0].querySelectorAll('button,[role="button"]')) {
     if (!visible(button)) continue;
     const label = normalize(button.getAttribute("aria-label") || accessibleText(button));
     // These explicitly identified disclosure controls do not grant or deny authority.
-    if ((label === "See details" && button.getAttribute("aria-haspopup") === "dialog")
-      || (label === "Approval options" && button.getAttribute("aria-haspopup") === "menu")) continue;
+    if (label === "See details" && button.getAttribute("aria-haspopup") === "dialog") continue;
+    if (label === "Approval options" && button.getAttribute("aria-haspopup") === "menu") {
+      result.optionsDisclosureCount += 1;
+      if (result.optionsDisclosureCount === 1) {
+        optionsDisclosure = button;
+        result.optionsExpanded = button.getAttribute("aria-expanded") === "true";
+        if (button.getAttribute("aria-expanded") === "false"
+          && button.getAttribute("aria-controls") && !button.disabled
+          && button.getAttribute("aria-disabled") !== "true" && !button.closest('[inert]')) {
+          result.optionsPoint = point(button);
+        }
+      }
+      continue;
+    }
     if (label === "Deny") result.denyCount += 1;
     else if (label === "Allow once") {
       result.allowOnceCount += 1;
@@ -186,6 +205,40 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     } else if (label === "Always allow") result.alwaysAllowCount += 1;
     else result.unknownCount += 1;
   }
+  // Only a uniquely expanded, structurally linked menu belongs to the current
+  // approval card. Global/foreign menus cannot become approval choices.
+  if (result.optionsDisclosureCount === 1 && result.optionsExpanded) {
+    const menus = [...document.querySelectorAll('[role="menu"]')].filter(visible);
+    if (menus.length === 1) {
+      const menu = menus[0], menuId = menu.getAttribute("id");
+      const disclosureId = optionsDisclosure.getAttribute("id");
+      if ((menuId && optionsDisclosure.getAttribute("aria-controls") === menuId)
+        || (disclosureId && menu.getAttribute("aria-labelledby") === disclosureId)) {
+        classifyWarning(menu);
+        for (const item of menu.querySelectorAll('[role="menuitem"]')) {
+          if (!visible(item)) continue;
+          const label = normalize(item.getAttribute("aria-label") || accessibleText(item));
+          if (!registry.manualInputTarget(item)) {
+            result.unknownCount += 1;
+          } else if (label === "Allow for this conversation"
+            || label === "Allow ChatGPT Tela for this conversation") {
+            result.allowConversationCount += 1;
+            if (result.allowConversationCount === 1) {
+              allowConversationButton = item;
+              result.allowConversationPoint = point(item);
+            }
+          } else if (label === "Always allow") {
+            result.alwaysAllowCount += 1;
+          } else if (label === "Allow once" || label === "Deny") {
+            // A menu may repeat known narrower choices already on the card.
+          } else {
+            // A second/unknown decision is not an implicit grant.
+            result.unknownCount += 1;
+          }
+        }
+      }
+    }
+  }
   // Raw card text and element references remain in the renderer. Only a disposable identity
   // crosses the boundary, so a delay cannot silently approve a replaced or changed request.
   const text = cards[0].textContent;
@@ -202,17 +255,26 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   result.cardKey = prior.cardKey;
   result.proofKey = prior.proofKey;
   result.inputReceived = prior.inputReceived === true;
+  result.optionsAttempted = prior.menuOpenAttempted === true;
+  result.optionsAnchorStable = prior.menuOpenAnchorText === undefined
+    ? null : prior.menuOpenAnchorText === text;
   if (prepare) {
     result.allowOncePoint = null;
     result.allowConversationPoint = null;
+    result.optionsPoint = null;
     result.targetState = "changed";
     // Only a proven exact permission choice may prepare its target. Ordinary
     // inspection never scrolls or consumes an activation attempt.
     const conversation = prepare.choice === 'allow_conversation';
-    const selected = conversation ? allowConversationButton : allowOnceButton;
+    const openingOptions = prepare.choice === 'open_options';
+    const selected = openingOptions ? optionsDisclosure : conversation ? allowConversationButton : allowOnceButton;
     if (prepare.cardKey !== prior.cardKey || prepare.proofKey !== prior.proofKey
+      || (prior.menuOpenAttempted && prior.menuOpenAnchorText !== text)
       || result.denyCount !== 1 || result.allowCount !== 0
-      || (conversation ? result.allowConversationCount !== 1 || result.alwaysAllowCount !== 0
+      || (openingOptions ? result.optionsDisclosureCount !== 1 || result.optionsExpanded
+          || result.allowOnceCount !== 1 || result.allowConversationCount !== 0
+          || result.alwaysAllowCount !== 0 || !selected?.getAttribute("aria-controls")
+        : conversation ? result.allowConversationCount !== 1 || result.alwaysAllowCount !== 0
         : result.allowOnceCount !== 1)
       || result.requiresManualReview || result.unknownCount !== 0 || !selected || selected.disabled
       || selected.getAttribute("aria-disabled") === "true") return result;
@@ -223,7 +285,10 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     const after = await inspectApproval();
     if (after.cardKey !== prepare.cardKey || after.proofKey !== prepare.proofKey
       || after.cardCount !== 1 || after.denyCount !== 1 || after.allowCount !== 0
-      || (conversation ? after.allowConversationCount !== 1 || after.alwaysAllowCount !== 0
+      || (openingOptions ? after.optionsDisclosureCount !== 1 || after.optionsExpanded
+          || after.allowOnceCount !== 1 || after.allowConversationCount !== 0
+          || after.alwaysAllowCount !== 0
+        : conversation ? after.allowConversationCount !== 1 || after.alwaysAllowCount !== 0
         : after.allowOnceCount !== 1)
       || after.requiresManualReview || after.unknownCount !== 0
       || !selected.isConnected || selected.disabled
@@ -249,7 +314,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       return result;
     }
     // Passive, card-local receipt of actual browser input. No click, authority or polling here.
-    if (prior.receiptButton !== selected && typeof selected.addEventListener === "function") {
+    if (!openingOptions && prior.receiptButton !== selected && typeof selected.addEventListener === "function") {
       prior.receiptButton = selected;
       const preparedProofKey = prior.proofKey;
       const preparedCardKey = prior.cardKey;
@@ -263,7 +328,12 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       selected.addEventListener("click", receive, { capture: true });
     }
     result.targetState = "ready";
-    if (conversation) result.allowConversationPoint = target;
+    if (openingOptions) {
+      prior.menuOpenAnchorText = text;
+      prior.menuOpenAttempted = true;
+      result.optionsPoint = target;
+    }
+    else if (conversation) result.allowConversationPoint = target;
     else result.allowOncePoint = target;
   }
   return result;
@@ -2071,6 +2141,11 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       readonly allowPoint: { readonly x: number; readonly y: number } | null;
       readonly allowOncePoint: { readonly x: number; readonly y: number } | null;
       readonly allowConversationPoint?: { readonly x: number; readonly y: number } | null;
+      readonly optionsDisclosureCount?: number;
+      readonly optionsExpanded?: boolean;
+      readonly optionsPoint?: { readonly x: number; readonly y: number } | null;
+      readonly optionsAnchorStable?: boolean | null;
+      readonly optionsAttempted?: boolean;
       readonly cardKey: string | null;
       readonly proofKey: string | null;
     };
@@ -2080,6 +2155,57 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       || fingerprint(JSON.stringify([observed.cardKey, observed.proofKey])) !== expected.revisionFingerprint)) {
       this.#diagnostic("approval_changed_before_activation", { reason_class: "observed_card_changed" });
       return Object.freeze({ status: "none" as const, reason: "card_changed" });
+    }
+    // An unverified menu-open outcome consumes this card's one-use
+    // automation opportunity. Never turn the next observation into a
+    // second chance to approve a possibly replaced tool request.
+    if (observed.cardKey && observed.optionsAttempted) {
+      return Object.freeze({ status: "none" as const, reason: "options_already_attempted" });
+    }
+    // A conversation-only option may be hidden under an explicit card-local
+    // disclosure. Open that one menu at most once per exact card, then re-prove
+    // the unchanged card and its freshly linked choices before any approval.
+    // Never open a dropdown on a warned, unknown or ambiguous card.
+    if (mode === "recognized_conversation" && observed.cardCount === 1
+      && !observed.requiresManualReview && observed.denyCount === 1
+      && observed.allowCount === 0 && observed.allowOnceCount === 1
+      && observed.allowConversationCount === 0 && observed.alwaysAllowCount === 0
+      && observed.unknownCount === 0 && observed.optionsDisclosureCount === 1
+      && !observed.optionsExpanded && observed.optionsPoint
+      && observed.cardKey && observed.proofKey) {
+      const opening = await this.page.evaluate<{ cardKey: string; proofKey: string; choice: string }, ApprovalObservation>(
+        INSPECT_APPROVAL_CARD, { cardKey: observed.cardKey, proofKey: observed.proofKey,
+          choice: "open_options" }, signal,
+      );
+      if (opening.cardKey !== observed.cardKey || opening.proofKey !== observed.proofKey
+        || opening.requiresManualReview || opening.targetState !== "ready" || !opening.optionsPoint) {
+        this.#diagnostic("approval_options_open_withheld", { reason_class: "target_unverified" });
+        return Object.freeze({ status: "none" as const, reason: "options_unverified" });
+      }
+      const cardKey = observed.cardKey;
+      this.#diagnostic("approval_options_open_started", { card_fingerprint: diagnosticFingerprint(cardKey) });
+      try {
+        await this.page.pointerClick(opening.optionsPoint, signal);
+      } catch (error) {
+        this.#diagnostic("approval_options_open_failed", {
+          reason_class: signal.aborted ? "owner_cancelled" : "dispatch_indeterminate",
+          automatic_retry: false,
+        });
+        throw error;
+      }
+      signal.throwIfAborted();
+      observed = await inspect();
+      if (observed.cardKey !== cardKey || observed.optionsAnchorStable !== true
+        || observed.optionsExpanded !== true || observed.optionsDisclosureCount !== 1
+        || observed.cardCount !== 1 || observed.denyCount !== 1 || observed.allowCount !== 0
+        || observed.allowOnceCount !== 1 || observed.allowConversationCount !== 1
+        || observed.alwaysAllowCount !== 0 || observed.unknownCount !== 0 || observed.requiresManualReview) {
+        this.#diagnostic("approval_options_open_withheld", { reason_class: "menu_unverified" });
+        return Object.freeze({ status: "none" as const, reason: "options_unverified" });
+      }
+      this.#diagnostic("approval_options_open_verified", {
+        card_fingerprint: diagnosticFingerprint(cardKey),
+      });
     }
     const decision = decideChatGptApproval(mode, observed);
     if (observed.cardCount > 0) this.#diagnostic("approval_policy", {
@@ -2112,6 +2238,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       await waitForDelay(delayMs, undefined, { signal });
       observed = await inspect();
       if (observed.cardKey !== cardKey || observed.proofKey !== proofKey
+        || (observed.optionsAttempted && observed.optionsAnchorStable !== true)
         || decideChatGptApproval(mode, observed).action !== decision.action) {
         this.#diagnostic("approval_changed_before_activation");
         return Object.freeze({ status: "none" as const, reason: "card_changed" });
@@ -2126,6 +2253,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
         choice: decision.preferredChoice }, signal,
     );
     if (prepared.cardKey !== observed.cardKey || prepared.proofKey !== observed.proofKey
+      || (prepared.optionsAttempted && prepared.optionsAnchorStable !== true)
       || decideChatGptApproval(mode, prepared).action !== decision.action) {
       this.#diagnostic("approval_changed_before_activation");
       return Object.freeze({ status: "none" as const, reason: "card_changed" });
@@ -2216,7 +2344,8 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     this.#diagnostic("approval_activated", { choice: prepared.choice,
       card_fingerprint: diagnosticFingerprint(prepared.cardKey), proof_fingerprint: diagnosticFingerprint(prepared.proofKey) });
     return Object.freeze({ status: "dispatched" as const, reason: prepared.choice,
-      cardFingerprint: diagnosticFingerprint(prepared.cardKey) });
+      cardFingerprint: diagnosticFingerprint(prepared.cardKey),
+      revisionFingerprint: fingerprint(JSON.stringify([prepared.cardKey, prepared.proofKey])) });
   }
 
   async replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void> {

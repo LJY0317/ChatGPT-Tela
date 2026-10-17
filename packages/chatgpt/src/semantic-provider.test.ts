@@ -94,6 +94,7 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   approvalCalls = 0;
   approvalDelays: number[] = [];
   approveRecognizedCard = false;
+  approvalPreparedRevision: string | undefined;
 
   constructor(initial: ChatGptSurfaceSnapshot) {
     this.current = structuredClone(initial);
@@ -116,7 +117,8 @@ class FixtureDriver implements ChatGptSurfaceDriver {
     this.approvalCalls += 1;
     this.approvalDelays.push(delayMs);
     return this.approveRecognizedCard
-      ? { status: "dispatched", reason: "allow_once", cardFingerprint: expected!.cardFingerprint }
+      ? { status: "dispatched", reason: "allow_once", cardFingerprint: expected!.cardFingerprint,
+        ...(this.approvalPreparedRevision ? { revisionFingerprint: this.approvalPreparedRevision } : {}) }
       : { status: "none", reason: "absent" };
   }
 
@@ -2324,6 +2326,41 @@ describe("ChatGPT semantic provider", () => {
       expect(await next()).toMatchObject({ kind: "progress", summary: "Approval card cleared; waiting for the task to resume." });
       expect(await next()).toMatchObject({ kind: "progress", summary: "The Web task progressed after the approval card cleared." });
       expect(await next()).toMatchObject({ kind: "completed", answer: "Verified result" });
+      expect(driver.approvalCalls).toBe(1);
+    } finally { await surface.host.close(); }
+  });
+  test("owned assistant accepts a trusted scoped-choice receipt after the approval menu changed revision", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.approveRecognizedCard = true;
+    driver.approvalPreparedRevision = "scoped-choice-proof";
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "recognized_conversation" });
+    try {
+      const submitting = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await submitting;
+      if (submitted.state !== "proven") throw new Error("fixture submit failed");
+      const pendingCard: ChatGptSurfaceSnapshot = { ...driver.current, revision: "scope-card-pending",
+        approval: recognizedApproval, turns: [...driver.current.turns, {
+          key: "assistant-scope", role: "assistant", parentUserTurnKey: "user-turn-1", phase: "thinking",
+        }] };
+      driver.queued.push(pendingCard);
+      driver.queued.push({ ...pendingCard, revision: "scope-receipt", approval: {
+        ...recognizedApproval, revisionFingerprint: "scoped-choice-proof",
+      }, approvalInputReceipt: {
+        cardFingerprint: recognizedApproval.cardFingerprint!,
+        revisionFingerprint: "scoped-choice-proof",
+      } });
+      const next = async () => {
+        const event = await provider.waitForTurnEvent(surface.lease, submitted.value);
+        if (event.state !== "proven") throw Error("approval event unproven");
+        return event.value;
+      };
+      expect(await next()).toMatchObject({ kind: "progress", summary: expect.stringContaining("Approval click sent") });
+      expect(await next()).toMatchObject({
+        kind: "progress", summary: "The Web browser received the approval click; the card is still pending.",
+      });
       expect(driver.approvalCalls).toBe(1);
     } finally { await surface.host.close(); }
   });

@@ -913,6 +913,10 @@ ChatGPT Tela can optionally auto-activate a **recognized approval card** in the 
 surface. It is off by default. With explicit automation enabled it prefers a
 uniquely exposed **Allow for this conversation** choice; if that choice is
 not available, it may use a recognized **Allow once** choice instead.
+For normal, unambiguous cards only, an explicitly opted-in conversation
+mode can open a uniquely identified `Approval options` menu once and
+verify its revealed conversation-scoped item before clicking it.
+An uncertain menu-opening outcome is never automatically retried.
 The historical `recognized_once` setting retains its narrower meaning.
 It never selects persistent **Always allow**. Unknown/ambiguous cards and host security warnings
 remain manual. The renderer exports only structural counts, coordinates, and disposable card identities to this policy; card text, tool

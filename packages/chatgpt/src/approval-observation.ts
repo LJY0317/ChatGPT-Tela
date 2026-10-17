@@ -95,8 +95,16 @@ export class ChatGptApprovalObservation {
     return cardFingerprint !== undefined && this.#dispatched.has(cardFingerprint);
   }
 
-  dispatched(cardFingerprint: string, now: number): ApprovalObservationTransition {
+  dispatched(cardFingerprint: string, now: number, approvedRevisionFingerprint?: string): ApprovalObservationTransition {
     if (this.#current?.cardFingerprint !== cardFingerprint) throw new Error("Approval dispatch belongs to a different observed card");
+    // Opening a linked menu can reveal the final scoped choice and rotate the
+    // renderer proof. The owned driver binds that newly prepared revision to
+    // the physical click; a stale pre-menu receipt must never count.
+    if (approvedRevisionFingerprint !== undefined) {
+      if (typeof approvedRevisionFingerprint !== "string" || approvedRevisionFingerprint.length < 1
+        || approvedRevisionFingerprint.length > 128) throw new Error("invalid approval dispatch revision");
+      this.#current.revision = approvedRevisionFingerprint;
+    }
     this.#dispatched.add(cardFingerprint);
     return this.#transition("dispatch_sent", now);
   }

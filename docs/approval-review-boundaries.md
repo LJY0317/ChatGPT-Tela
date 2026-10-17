@@ -83,7 +83,7 @@ the accepted input witness only if the card is unchanged, one visible
 `aria-controls` or `aria-labelledby`, and an enabled menu item has an
 exactly recognized decision label. An unlinked/duplicate/stale menu,
 foreign action or changed card still revokes/blocks delivery. This
-**does not automatically click** the menu or approve a safety warning,
+manual-input classifier never clicks a menu or approves a safety warning,
 and cannot alter a ChatGPT host-managed permission decision.
 
 ### Agent-assisted eligibility, conversation-scoped preference and verified approvals
@@ -99,10 +99,19 @@ owner-bound Web turn** may use its existing opt-in auto-approval path.
 The explicitly selected `recognized_conversation` mode prefers a
 uniquely visible **Allow for this conversation** choice on the currently
 owned Web card, without warnings, an ambiguous choice or a competing
-`Always allow` scope. If the choice is hidden in an unverified popover,
-only a clearly recognized one-shot control is used as fallback. The
-adapter never guesses the contents of a closed menu or selects
-`Always allow`. Existing `recognized_once` preferences remain one-shot.
+`Always allow` scope. If a normal card has one exact `Approval options`
+disclosure with a visible, hit-tested target and `aria-controls`, the
+provider may **open that disclosure once** (not grant approval), then
+revalidate the unchanged card body, its unique expanded linked menu,
+all exposed options, **warnings within the linked menu as well as the
+card**, and the exact conversation-scoped target. If menu
+opening or its revalidation is indeterminate, the renderer permanently
+fences that card from further automatic activation. A new scope choice
+rotates the prepared revision, which must be bound to the actual click
+receipt before it can be counted as verified success. The adapter never
+guesses the contents of a closed menu or selects `Always allow`.
+Warnings and unknown/ambiguous menu items remain human-only.
+Existing `recognized_once` preferences remain one-shot.
 The Control Center toggle selects the conversation mode on a fresh opt-in;
 `off` remains the default. This applies to Tela-owned Web approval cards,
 **not ChatGPT host-platform approval cards before tool ingress**.

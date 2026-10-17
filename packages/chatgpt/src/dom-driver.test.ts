@@ -842,6 +842,82 @@ describe("current ChatGPT DOM surface driver", () => {
     });
     expect(clicks).toEqual([{ x: 70, y: 20 }]);
   });
+  test.each([
+    ["verified", "allow_conversation", 2],
+    ["security warning", "manual_review", 0],
+    ["replaced card", "options_unverified", 1],
+    ["unlinked portal", "options_unverified", 1],
+    ["ambiguous portals", "options_unverified", 1],
+    ["menu warning", "options_unverified", 1],
+    ["persistent alternative", "options_unverified", 1],
+  ] as const)("automatic options disclosure rejects unsafe states: %s", async (scenario, outcome, expectedClicks) => {
+    const deny = new FixtureElement(); deny.textContent = "Deny";
+    const once = new FixtureElement(); once.textContent = "Allow once";
+    const trigger = new FixtureElement({ id: "approval-trigger", "aria-label": "Approval options",
+      "aria-haspopup": "menu", "aria-controls": "approval-scope-menu", "aria-expanded": "false" });
+    trigger.textContent = "Approval options";
+    trigger.getBoundingClientRect = () => ({ left: 0, top: 0, width: 20, height: 20 });
+    const scoped = new FixtureElement({ role: "menuitem" });
+    scoped.textContent = "Allow for this conversation";
+    scoped.getBoundingClientRect = () => ({ left: 60, top: 0, width: 20, height: 20 });
+    const menuOnce = new FixtureElement({ role: "menuitem" }); menuOnce.textContent = "Allow once";
+    const forever = new FixtureElement({ role: "menuitem" }); forever.textContent = "Always allow";
+    const menu = new FixtureElement({ role: "menu", id: "approval-scope-menu" }, {
+      '[role="menuitem"]': [scoped, menuOnce, ...(scenario === "persistent alternative" ? [forever] : [])],
+      ...(scenario === "menu warning" ? { '[role="alert"]': [new FixtureElement({ role: "alert" })] } : {}),
+    });
+    menu.contains = value => [scoped, menuOnce, forever].includes(value as FixtureElement);
+    const card = new FixtureElement({}, { button: [deny, once, trigger] });
+    card.textContent = scenario === "security warning"
+      ? "Suspicious Instruction: a tool description attempts to dictate the approval outcome"
+      : "Fixture-owned normal approval";
+    card.contains = value => [deny, once, trigger].includes(value as FixtureElement);
+    for (const item of [scoped, menuOnce, forever]) {
+      item.closest = (selector?: string) => selector === '[role="menuitem"]'
+        ? item : selector === '[role="menu"]' ? menu : null;
+    }
+    trigger.closest = (selector?: string) => selector === 'button,[role="button"]' ? trigger : null;
+    const root = new FixtureElement({}, {
+      '[data-codex-approval-surface="true"]': [card], '[role="menu"]': [],
+    });
+    const page = new RendererFixturePage(root);
+    const clicks: { x: number; y: number }[] = [];
+    page.hitTest = () => clicks.length === 0 ? trigger : scoped;
+    page.pointerClick = async point => {
+      clicks.push(point);
+      if (clicks.length === 1) {
+        trigger.attributes['aria-expanded'] = 'true';
+        root.selectors['[role="menu"]'] = [menu];
+        if (scenario === "replaced card") card.textContent = "Changed request while opening";
+        if (scenario === "unlinked portal") menu.attributes.id = "foreign-menu";
+        if (scenario === "ambiguous portals") {
+          root.selectors['[role="menu"]']!.push(new FixtureElement({ role: "menu", id: "other-menu" }));
+        }
+      }
+    };
+    const driver = new ChatGptDomSurfaceDriver(page);
+    const seen = await driver.observe();
+    const first = await driver.processApprovalCard("recognized_conversation", undefined, 0, {
+      cardFingerprint: seen.approval!.cardFingerprint!,
+      revisionFingerprint: seen.approval!.revisionFingerprint,
+    });
+    expect(first.reason).toBe(outcome);
+    expect(clicks).toHaveLength(expectedClicks);
+    if (scenario === "verified") {
+      expect(first.status).toBe("dispatched");
+      expect(first).toMatchObject({ revisionFingerprint: expect.any(String) });
+      if (first.status === "dispatched") {
+        expect(first.revisionFingerprint).not.toBe(seen.approval!.revisionFingerprint);
+      }
+      expect(clicks).toEqual([{ x: 10, y: 10 }, { x: 70, y: 10 }]);
+    } else {
+      expect(first.status).toBe("none");
+      expect(await driver.processApprovalCard("recognized_conversation")).toMatchObject({
+        status: "none",
+      });
+      expect(clicks).toHaveLength(expectedClicks);
+    }
+  });
   test("no ambiguous or warning card receives a broader grant", async () => {
     for (const unsafe of ["Always allow", "Suspicious content: external execution"]) {
       const deny = new FixtureElement(); deny.textContent = "Deny";
