@@ -76,16 +76,24 @@ export class ChatGptApprovalObservation {
         : this.#current.revision === approval.revisionFingerprint);
       if (!same) {
         const prior = this.#current?.cardFingerprint;
+        const replacedWithProgress = approval.cardCount === 1 && approval.cardFingerprint !== undefined
+          && canProgress && this.#current !== undefined && assistantVersion !== this.#current.assistantVersion;
         if (prior && approval.cardCount === 1 && approval.cardFingerprint) {
           if (!this.#clearance.has(prior)) this.#cardClearCount = Math.min(this.#cardClearCount + 1, Number.MAX_SAFE_INTEGER);
           this.#clearance.add(prior);
-          if (canProgress && assistantVersion !== this.#current!.assistantVersion) this.#resumed.add(prior);
+          if (replacedWithProgress) this.#resumed.add(prior);
           this.#verifyCard();
         }
+        // A changed card is presentation, not a new waiting allowance. Only an
+        // ended owned episode starts a fresh deadline; dispatch fences remain per card.
+        const priorResolved = this.#current?.phase === "task_progress"
+          || (prior !== undefined && (this.#verified.has(prior)
+            || (!this.#dispatched.has(prior) && replacedWithProgress)));
+        const seenAt = this.#current && !priorResolved ? this.#current.seenAt : now;
         this.#observedCount = Math.min(this.#observedCount + 1, Number.MAX_SAFE_INTEGER);
         const phase = this.wasDispatched(approval.cardFingerprint) ? "dispatch_sent" : "pending";
         this.#current = { ...(approval.cardFingerprint ? { cardFingerprint: approval.cardFingerprint } : {}), revision: approval.revisionFingerprint,
-          phase, seenAt: now, assistantVersion };
+          phase, seenAt, assistantVersion };
         return this.#transition(phase, now);
       }
       this.#current!.assistantVersion = assistantVersion;

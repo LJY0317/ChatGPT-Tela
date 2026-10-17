@@ -2702,7 +2702,7 @@ test('post-acceptance input does not cancel an observer; Native cancellation sti
 });
 
 
-test.each(["pending", "cleared_before", "preparation"] as const)("fake clock: approval milestones, ten-minute expiry and late-input fencing (%s)", async scenario => {
+test.each(["pending", "cleared_before", "preparation", "replacement"] as const)("fake clock: approval milestones, ten-minute expiry and late-input fencing (%s)", async scenario => {
   const driver = new FixtureDriver(fixture("ready-new-chat"));
   const surface = await leaseFor(driver);
   const provider = new ChatGptSemanticProvider({ approvalAutomationMode: scenario === "preparation" ? "recognized_once" : "off" });
@@ -2769,7 +2769,14 @@ test.each(["pending", "cleared_before", "preparation"] as const)("fake clock: ap
     pending = event(); await advance(0); await advance(180_000);
     expect(await pending).toMatchObject({ state: "proven", value: { summary: expect.stringContaining("rechecking") } });
     pending = event(); await advance(0); void pending.catch(() => {});
-    await advance(299_999); expect(stops).toBe(0);
+    if (scenario === "replacement") {
+      await advance(240_000); // Replace at nine minutes without receipt or owned progress.
+      driver.current = { ...driver.current, revision: "replacement-nine-minutes", approval: {
+        ...recognizedApproval, cardFingerprint: "b".repeat(24), revisionFingerprint: "replacement-proof" } };
+      changed!(await driver.observe());
+      await advance(0);
+    }
+    await advance(scenario === "replacement" ? 59_999 : 299_999); expect(stops).toBe(0);
     if (scenario === "cleared_before") {
       const { approval: _approval, ...cleared } = driver.current;
       driver.current = { ...cleared, revision: "cleared-before-expiry", turns: driver.current.turns.map(t => t.role === "assistant"

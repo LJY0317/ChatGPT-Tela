@@ -197,3 +197,42 @@ test("an ambiguous multi-card snapshot cannot establish the previous card's clea
   observation.observe({ ...ambiguous, cardCount: 2, revisionFingerprint: "ambiguous-two" }, "after", true, 3);
   expect(observation.audit).toMatchObject({ verified_success_count: 0, card_clear_count: 0 });
 });
+
+
+test("unresolved card replacement carries its deadline while verified approval starts a fresh episode", () => {
+  for (const trustedInput of [false, true]) {
+    const observation = new ChatGptApprovalObservation();
+    observation.observe(card, "before", true, 1_000);
+    observation.dispatched(card.cardFingerprint, 2_000);
+    if (trustedInput) observation.recordInputReceipt({ cardFingerprint: card.cardFingerprint,
+      revisionFingerprint: card.revisionFingerprint }, 3_000);
+    const second = { ...card, cardFingerprint: "b".repeat(24), revisionFingerprint: "proof-b" };
+    observation.observe(second, trustedInput ? "after" : "before", true, 541_000);
+    expect(observation.pendingElapsedMs(541_000)).toBe(trustedInput ? 0 : 540_000);
+    expect(nextApprovalWaitWakeMs(observation.pendingElapsedMs(601_000))).toBe(trustedInput ? 60_000 : 0);
+    expect(observation.wasDispatched(card.cardFingerprint)).toBe(true);
+  }
+});
+
+test("manual clearance and owned progress end the wait episode; hiding alone does not", () => {
+  for (const progress of [false, true]) {
+    const observation = new ChatGptApprovalObservation();
+    observation.observe(card, "before", true, 1_000);
+    observation.observe(undefined, "before", true, 200_000);
+    if (progress) observation.observe(undefined, "after", true, 201_000);
+    observation.observe({ ...card, cardFingerprint: "b".repeat(24), revisionFingerprint: "proof-b" },
+      progress ? "after" : "before", true, 541_000);
+    expect(observation.pendingElapsedMs(601_000)).toBe(progress ? 60_000 : 600_000);
+  }
+});
+
+
+test("the same hidden and reappearing card retains its original age and dispatch fence", () => {
+  const observation = new ChatGptApprovalObservation();
+  observation.observe(card, "before", true, 1_000);
+  observation.dispatched(card.cardFingerprint, 2_000);
+  observation.observe(undefined, "before", true, 500_000);
+  observation.observe(card, "before", true, 541_000);
+  expect(observation.pendingElapsedMs(601_000)).toBe(600_000);
+  expect(observation.wasDispatched(card.cardFingerprint)).toBe(true);
+});
