@@ -2702,10 +2702,10 @@ test('post-acceptance input does not cancel an observer; Native cancellation sti
 });
 
 
-test.each(["pending", "cleared_before"] as const)("fake clock: approval milestones, ten-minute expiry and late-input fencing (%s)", async scenario => {
+test.each(["pending", "cleared_before", "preparation"] as const)("fake clock: approval milestones, ten-minute expiry and late-input fencing (%s)", async scenario => {
   const driver = new FixtureDriver(fixture("ready-new-chat"));
   const surface = await leaseFor(driver);
-  const provider = new ChatGptSemanticProvider();
+  const provider = new ChatGptSemanticProvider({ approvalAutomationMode: scenario === "preparation" ? "recognized_once" : "off" });
   let now = 1_000;
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   const timers = new Map<number, { at: number; callback: () => void }>();
@@ -2735,6 +2735,22 @@ test.each(["pending", "cleared_before"] as const)("fake clock: approval mileston
     driver.queued.push({ ...driver.current, revision: "owned-pending", approval: recognizedApproval,
       turns: [...driver.current.turns, { key: "assistant-wait", role: "assistant", parentUserTurnKey: "user-turn-1", phase: "tool-wait" }] });
     const event = () => provider.waitForTurnEvent(surface.lease, submitted.value, owner.signal);
+    if (scenario === "preparation") {
+      let preparationSignal: AbortSignal | undefined;
+      driver.processApprovalCard = async (_mode, signal) => {
+        preparationSignal = signal;
+        return await new Promise(() => {}); // Simulate a renderer that ignores cancellation.
+      };
+      const preparing = event(); void preparing.catch(() => {});
+      await advance(0);
+      expect(preparationSignal?.aborted).toBe(false);
+      await advance(600_000);
+      await expect(preparing).rejects.toMatchObject({ code: "tela_web_approval_expired", retryable: false });
+      expect(preparationSignal?.aborted).toBe(true);
+      expect(stops).toBe(1);
+      await expect(event()).rejects.toThrow("not bound");
+      return;
+    }
     expect((await event()).state).toBe("proven");
     let changed: ((snapshot: ChatGptSurfaceSnapshot) => void) | undefined;
     driver.waitForChange = async (_revision: string, signal?: AbortSignal) => new Promise((resolve, reject) => {
