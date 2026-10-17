@@ -34,6 +34,17 @@ describe("product preferences", () => {
       expect(approvalDelayMilliseconds("2s")).toBe(2_000);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+  test("scoped approval preference persists without upgrading old grants or enabling automation by default", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tela-scoped-approval-"));
+    const path = join(dir, "preferences-v1.json");
+    try {
+      writeProductPreferences({ version: 1, approvalAutomation: "recognized_conversation", approvalDelay: "instant" }, path);
+      expect(readProductPreferences(path).approvalAutomation).toBe("recognized_conversation");
+      expect(DEFAULT_PRODUCT_PREFERENCES.approvalAutomation).toBe("off");
+      expect(parseProductPreferences({ version: 1, approvalAutomation: "recognized_once" }).approvalAutomation)
+        .toBe("recognized_once");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 
   test("unknown fields and persistent/full-access modes fail closed", () => {
     expect(() => parseProductPreferences({ version: 1, approvalAutomation: "always" })).toThrow("approval automation");

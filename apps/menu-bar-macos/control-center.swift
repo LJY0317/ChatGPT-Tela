@@ -835,10 +835,13 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       approval.controlSize = .small
       approval.target = self
       approval.action = #selector(toggleApproval(_:))
-      approval.state = approvalAutomation == "recognized_once" ? .on : .off
+      approval.state = approvalAutomation == "off" ? .off : .on
       approval.isEnabled = !preferenceError
-      approval.setAccessibilityLabel("Auto-approve one-time requests")
-      row("Auto-approve one-time requests", subtitle: "Only recognized requests. All other approvals stay manual.", control: approval, in: approvals)
+      approval.setAccessibilityLabel("Auto-approve recognized requests")
+      row("Auto-approve recognized requests", subtitle: approvalAutomation == "recognized_once"
+        ? "Existing one-shot mode. Switch off and on to prefer a clearly labeled conversation-only grant."
+        : "Prefer a clearly labeled conversation-only grant when offered. Security warnings stay manual.",
+        control: approval, in: approvals)
       divider(in: approvals)
       let delays: [(String, String)] = [
         ("instant", "Instant"), ("250ms", "0.25 seconds"), ("500ms", "0.5 seconds"),
@@ -853,7 +856,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       delayPicker.selectItem(at: delays.firstIndex(where: { $0.0 == approvalDelay }) ?? 0)
       delayPicker.target = self
       delayPicker.action = #selector(setApprovalDelay(_:))
-      delayPicker.isEnabled = !preferenceError && approvalAutomation == "recognized_once"
+      delayPicker.isEnabled = !preferenceError && approvalAutomation != "off"
       row("Wait before approving", control: delayPicker, in: approvals)
       append(secondary("Restart your Work profile to apply changes. This interrupts any active turn."), to: approvals)
       if preferenceError { append(secondary("Couldn't read approval settings."), to: approvals) }
@@ -1280,14 +1283,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   @objc private func toggleApproval(_ sender: NSSwitch) {
     do {
       var preferences = try TelaPreferencesStore.read(at: preferencesURL)
-      preferences.approvalAutomation = sender.state == .on ? "recognized_once" : "off"
+      preferences.approvalAutomation = sender.state == .on ? "recognized_conversation" : "off"
       try TelaPreferencesStore.write(preferences, at: preferencesURL)
       approvalAutomation = preferences.approvalAutomation
       preferenceError = false
       onPreferencesChanged?()
       renderCurrentPage()
     } catch {
-      sender.state = approvalAutomation == "recognized_once" ? .on : .off
+      sender.state = approvalAutomation == "off" ? .off : .on
       NSSound.beep()
     }
   }

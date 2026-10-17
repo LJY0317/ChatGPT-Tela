@@ -10,7 +10,7 @@ import {
 import { dirname, join } from "node:path";
 import { resolveProductPaths, type ProductPathOptions } from "@chatgpt-tela/product-lifecycle";
 
-export type ProductApprovalAutomationMode = "off" | "recognized_once";
+export type ProductApprovalAutomationMode = "off" | "recognized_once" | "recognized_conversation";
 export type ProductApprovalDelayPreset = "instant" | "250ms" | "500ms" | "1s" | "2s" | "5s" | "10s" | "15s";
 
 const APPROVAL_DELAY_MS: Readonly<Record<ProductApprovalDelayPreset, number>> = Object.freeze({
@@ -53,7 +53,8 @@ export function parseProductPreferences(value: unknown): ProductPreferences {
   if (extra.length > 0) throw new Error(`ChatGPT Tela preferences contain unknown fields: ${extra.join(", ")}`);
   if (item.version !== 1) throw new Error("unsupported ChatGPT Tela preferences version");
   const approvalAutomation = item.approvalAutomation ?? "off";
-  if (approvalAutomation !== "off" && approvalAutomation !== "recognized_once") {
+  if (approvalAutomation !== "off" && approvalAutomation !== "recognized_once"
+    && approvalAutomation !== "recognized_conversation") {
     throw new Error("ChatGPT Tela approval automation mode is invalid");
   }
   const approvalDelay = item.approvalDelay ?? "instant";

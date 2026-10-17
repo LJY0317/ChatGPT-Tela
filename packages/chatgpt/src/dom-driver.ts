@@ -76,12 +76,14 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     denyCount: 0,
     allowCount: 0,
     allowOnceCount: 0,
+    allowConversationCount: 0,
     alwaysAllowCount: 0,
     unknownCount: 0,
     requiresManualReview: false,
     reviewReason: null,
     allowPoint: null,
     allowOncePoint: null,
+    allowConversationPoint: null,
     cardKey: null,
     proofKey: null,
     targetState: "unprepared",
@@ -98,7 +100,8 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     const button = node?.closest?.('button,[role="button"]');
     const decision = button && normalize(button.getAttribute('aria-label') || button.textContent);
     return !!observed && observed.text === card.textContent && !!button && card.contains(button)
-      && ['Deny', 'Allow', 'Allow once', 'Always allow'].includes(decision)
+      && ['Deny', 'Allow', 'Allow once', 'Always allow',
+        'Allow for this conversation', 'Allow ChatGPT Tela for this conversation'].includes(decision)
       && visible(button) && !button.disabled && button.getAttribute('aria-disabled') !== 'true'
       && !button.closest('[inert]');
   };
@@ -125,6 +128,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
   };
   let allowOnceButton = null;
+  let allowConversationButton = null;
   // Use the control's accessible label, not visual shortcut decorations. A keyboard hint
   // is presentation, whereas an unknown decision remains an unknown decision.
   const accessibleText = node => {
@@ -150,6 +154,15 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     } else if (label === "Allow") {
       result.allowCount += 1;
       if (result.allowCount === 1) result.allowPoint = point(button);
+    } else if (label === "Allow for this conversation"
+      || label === "Allow ChatGPT Tela for this conversation") {
+      result.allowConversationCount += 1;
+      if (result.allowConversationCount === 1) {
+        allowConversationButton = button;
+        if (!button.disabled && button.getAttribute("aria-disabled") !== "true") {
+          result.allowConversationPoint = point(button);
+        }
+      }
     } else if (label === "Always allow") result.alwaysAllowCount += 1;
     else result.unknownCount += 1;
   }
@@ -157,10 +170,13 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   // crosses the boundary, so a delay cannot silently approve a replaced or changed request.
   const text = cards[0].textContent;
   let prior = registry.cards.get(cards[0]);
-  if (!prior || prior.text !== text || prior.button !== allowOnceButton) {
+  if (!prior || prior.text !== text || prior.button !== allowOnceButton
+    || prior.conversationButton !== allowConversationButton) {
     const key = registry.prefix + ":" + (++registry.next);
-    if (prior) Object.assign(prior, { text, button: allowOnceButton, proofKey: key });
-    else prior = { text, button: allowOnceButton, cardKey: key, proofKey: key, inputReceived: false };
+    if (prior) Object.assign(prior, { text, button: allowOnceButton,
+      conversationButton: allowConversationButton, proofKey: key });
+    else prior = { text, button: allowOnceButton, conversationButton: allowConversationButton,
+      cardKey: key, proofKey: key, inputReceived: false };
     registry.cards.set(cards[0], prior);
   }
   result.cardKey = prior.cardKey;
@@ -168,30 +184,37 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   result.inputReceived = prior.inputReceived === true;
   if (prepare) {
     result.allowOncePoint = null;
+    result.allowConversationPoint = null;
     result.targetState = "changed";
-    // Only a proven exact one-shot decision may prepare its target. Ordinary
+    // Only a proven exact permission choice may prepare its target. Ordinary
     // inspection never scrolls or consumes an activation attempt.
+    const conversation = prepare.choice === 'allow_conversation';
+    const selected = conversation ? allowConversationButton : allowOnceButton;
     if (prepare.cardKey !== prior.cardKey || prepare.proofKey !== prior.proofKey
-      || result.denyCount !== 1 || result.allowCount !== 0 || result.allowOnceCount !== 1
-      || result.requiresManualReview || result.unknownCount !== 0 || !allowOnceButton || allowOnceButton.disabled
-      || allowOnceButton.getAttribute("aria-disabled") === "true") return result;
-    allowOnceButton.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+      || result.denyCount !== 1 || result.allowCount !== 0
+      || (conversation ? result.allowConversationCount !== 1 || result.alwaysAllowCount !== 0
+        : result.allowOnceCount !== 1)
+      || result.requiresManualReview || result.unknownCount !== 0 || !selected || selected.disabled
+      || selected.getAttribute("aria-disabled") === "true") return result;
+    selected.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
     // Instant scroll plus synchronous geometry/hit testing flushes current layout.
     // Frame callbacks may stop in hidden windows and must never gate approval.
     // This preparation performs no input; dispatch remains on the host boundary.
     const after = await inspectApproval();
     if (after.cardKey !== prepare.cardKey || after.proofKey !== prepare.proofKey
       || after.cardCount !== 1 || after.denyCount !== 1 || after.allowCount !== 0
-      || after.allowOnceCount !== 1 || after.requiresManualReview || after.unknownCount !== 0
-      || !allowOnceButton.isConnected || allowOnceButton.disabled
-      || allowOnceButton.getAttribute("aria-disabled") === "true") return result;
-    const target = point(allowOnceButton);
+      || (conversation ? after.allowConversationCount !== 1 || after.alwaysAllowCount !== 0
+        : after.allowOnceCount !== 1)
+      || after.requiresManualReview || after.unknownCount !== 0
+      || !selected.isConnected || selected.disabled
+      || selected.getAttribute("aria-disabled") === "true") return result;
+    const target = point(selected);
     result.targetState = "outside_viewport";
     if (!target || target.x < 0 || target.y < 0
       || Math.round(target.x) >= innerWidth || Math.round(target.y) >= innerHeight) return result;
     const hit = document.elementFromPoint(Math.round(target.x), Math.round(target.y));
     result.targetState = "occluded";
-    if (hit !== allowOnceButton && !allowOnceButton.contains(hit)) {
+    if (hit !== selected && !selected.contains(hit)) {
       // Content-free witness at the failed hit-test boundary, never authority to click.
       // DOM labels, selectors, coordinates and element references stay in the renderer.
       result.obstruction = {
@@ -199,15 +222,15 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
           : hit.closest('dialog,[role="dialog"],[aria-modal="true"]') ? "dialog"
           : hit.closest('button,a,input,select,textarea,[role="button"]') ? "control" : "other",
         inCard: !!hit && cards[0].contains(hit),
-        pointerEventsNone: getComputedStyle(allowOnceButton).pointerEvents === "none",
-        inert: !!allowOnceButton.closest('[inert]'),
+        pointerEventsNone: getComputedStyle(selected).pointerEvents === "none",
+        inert: !!selected.closest('[inert]'),
         documentHidden: document.visibilityState === "hidden",
       };
       return result;
     }
     // Passive, card-local receipt of actual browser input. No click, authority or polling here.
-    if (prior.receiptButton !== allowOnceButton && typeof allowOnceButton.addEventListener === "function") {
-      prior.receiptButton = allowOnceButton;
+    if (prior.receiptButton !== selected && typeof selected.addEventListener === "function") {
+      prior.receiptButton = selected;
       const preparedProofKey = prior.proofKey;
       const preparedCardKey = prior.cardKey;
       const receive = event => {
@@ -215,12 +238,13 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
         prior.inputReceived = true;
         // One disposable receipt survives immediate removal. No element or card text is retained.
         registry.receipt = { cardKey: preparedCardKey, proofKey: preparedProofKey };
-        allowOnceButton.removeEventListener("click", receive, true);
+        selected.removeEventListener("click", receive, true);
       };
-      allowOnceButton.addEventListener("click", receive, { capture: true });
+      selected.addEventListener("click", receive, { capture: true });
     }
     result.targetState = "ready";
-    result.allowOncePoint = target;
+    if (conversation) result.allowConversationPoint = target;
+    else result.allowOncePoint = target;
   }
   return result;
 }`;
@@ -1820,6 +1844,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       phase = "approval_read";
       const card = await this.page.evaluate<undefined, {
         cardCount: number; denyCount: number; allowCount: number; allowOnceCount: number;
+        allowConversationCount?: number;
         alwaysAllowCount: number; unknownCount: number; requiresManualReview?: boolean;
         reviewReason?: "tool_description_policy_directive" | "suspicious_instruction" | "provider_warning" | null;
         cardKey: string | null; proofKey: string | null;
@@ -1871,7 +1896,8 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       }
       const approval = card.cardCount > 0 ? Object.freeze({
         cardCount: card.cardCount, denyCount: card.denyCount, allowCount: card.allowCount,
-        allowOnceCount: card.allowOnceCount, alwaysAllowCount: card.alwaysAllowCount,
+        allowOnceCount: card.allowOnceCount, allowConversationCount: card.allowConversationCount ?? 0,
+        alwaysAllowCount: card.alwaysAllowCount,
         unknownCount: card.unknownCount, requiresManualReview: card.requiresManualReview === true,
         ...(card.requiresManualReview && card.reviewReason ? { reviewReason: card.reviewReason } : {}),
         revisionFingerprint: fingerprint(JSON.stringify([card.cardKey, card.proofKey])),
@@ -2018,11 +2044,13 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       readonly denyCount: number;
       readonly allowCount: number;
       readonly allowOnceCount: number;
+      readonly allowConversationCount?: number;
       readonly alwaysAllowCount: number;
       readonly unknownCount: number;
       readonly requiresManualReview?: boolean;
       readonly allowPoint: { readonly x: number; readonly y: number } | null;
       readonly allowOncePoint: { readonly x: number; readonly y: number } | null;
+      readonly allowConversationPoint?: { readonly x: number; readonly y: number } | null;
       readonly cardKey: string | null;
       readonly proofKey: string | null;
     };
@@ -2045,10 +2073,12 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       always_allow_count: observed.alwaysAllowCount,
       unknown_count: observed.unknownCount,
     });
-    if (decision.action !== "approve_once") {
+    if (decision.action === "none") {
       return Object.freeze({ status: "none" as const, reason: decision.reason });
     }
-    if (!observed.cardKey || !observed.proofKey || !observed.allowOncePoint) {
+    const scoped = decision.action === "approve_conversation";
+    if (!observed.cardKey || !observed.proofKey
+      || !(scoped ? observed.allowConversationPoint : observed.allowOncePoint)) {
       return Object.freeze({ status: "none" as const, reason: "target_missing" });
     }
     if (observed.cardKey === this.#activatedApprovalCardKey) {
@@ -2062,7 +2092,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       await waitForDelay(delayMs, undefined, { signal });
       observed = await inspect();
       if (observed.cardKey !== cardKey || observed.proofKey !== proofKey
-        || decideChatGptApproval(mode, observed).action !== "approve_once") {
+        || decideChatGptApproval(mode, observed).action !== decision.action) {
         this.#diagnostic("approval_changed_before_activation");
         return Object.freeze({ status: "none" as const, reason: "card_changed" });
       }
@@ -2071,16 +2101,17 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       card_fingerprint: diagnosticFingerprint(observed.cardKey!),
       proof_fingerprint: diagnosticFingerprint(observed.proofKey!),
     });
-    const prepared = await this.page.evaluate<{ cardKey: string; proofKey: string }, ApprovalObservation>(
-      INSPECT_APPROVAL_CARD, { cardKey: observed.cardKey!, proofKey: observed.proofKey! }, signal,
+    const prepared = await this.page.evaluate<{ cardKey: string; proofKey: string; choice: string }, ApprovalObservation>(
+      INSPECT_APPROVAL_CARD, { cardKey: observed.cardKey!, proofKey: observed.proofKey!,
+        choice: decision.preferredChoice }, signal,
     );
     if (prepared.cardKey !== observed.cardKey || prepared.proofKey !== observed.proofKey
-      || decideChatGptApproval(mode, prepared).action !== "approve_once") {
+      || decideChatGptApproval(mode, prepared).action !== decision.action) {
       this.#diagnostic("approval_changed_before_activation");
       return Object.freeze({ status: "none" as const, reason: "card_changed" });
     }
     observed = prepared;
-    const target = observed.allowOncePoint;
+    const target = scoped ? observed.allowConversationPoint : observed.allowOncePoint;
     if (!target) {
       const obstruction = observed.obstruction;
       const revision = fingerprint(JSON.stringify([observed.cardKey, observed.proofKey]));
@@ -2109,7 +2140,8 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
         card_fingerprint: diagnosticFingerprint(observed.cardKey), proof_fingerprint: diagnosticFingerprint(observed.proofKey ?? "") });
       return Object.freeze({ status: "none" as const, reason: "already_activated" });
     }
-    return { status: "ready" as const, target, cardKey: observed.cardKey!, proofKey: observed.proofKey! };
+    return { status: "ready" as const, target, cardKey: observed.cardKey!, proofKey: observed.proofKey!,
+      choice: decision.preferredChoice };
   }
 
   async processApprovalCard(
@@ -2161,9 +2193,9 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       });
       throw error;
     }
-    this.#diagnostic("approval_activated", { choice: "allow_once",
+    this.#diagnostic("approval_activated", { choice: prepared.choice,
       card_fingerprint: diagnosticFingerprint(prepared.cardKey), proof_fingerprint: diagnosticFingerprint(prepared.proofKey) });
-    return Object.freeze({ status: "dispatched" as const, reason: "allow_once",
+    return Object.freeze({ status: "dispatched" as const, reason: prepared.choice,
       cardFingerprint: diagnosticFingerprint(prepared.cardKey) });
   }
 

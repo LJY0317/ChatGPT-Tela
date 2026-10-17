@@ -75,16 +75,26 @@ the visibly truncated user bubble: truncated display text is not
 independent proof that the original submitted request changed. A real
 request edit, competing user turn or owner mismatch still fails closed.
 
-### Agent-assisted eligibility and bounded automatic execution
+### Agent-assisted eligibility, conversation-scoped preference and verified approvals
 
 The provider-owned pure policy `reviewChatGptApprovalForAgent()` shares
 the **same one-shot decision** used immediately before input dispatch;
 the policy result cannot open an independent agent grant. It yields a
-small, fixed vocabulary: `absent`, `eligible_once`, `manual_review`,
+small, fixed vocabulary: `absent`, `eligible_once`, `eligible_conversation`, `manual_review`,
 `disabled`, `ambiguous`, `unrecognized` or `limit_reached`.
 Each report includes a next action and `agentMayApprove:false`; an
 ordinary `eligible_once` result only means an **already running,
 owner-bound Web turn** may use its existing opt-in auto-approval path.
+The explicitly selected `recognized_conversation` mode prefers a
+uniquely visible **Allow for this conversation** choice on the currently
+owned Web card, without warnings, an ambiguous choice or a competing
+`Always allow` scope. If the choice is hidden in an unverified popover,
+only a clearly recognized one-shot control is used as fallback. The
+adapter never guesses the contents of a closed menu or selects
+`Always allow`. Existing `recognized_once` preferences remain one-shot.
+The Control Center toggle selects the conversation mode on a fresh opt-in;
+`off` remains the default. This applies to Tela-owned Web approval cards,
+**not ChatGPT host-platform approval cards before tool ingress**.
 
 The profile's currently selected Web surface reports this classification
 through the typed bridge-preview contract. It is optional and **only
@@ -96,14 +106,20 @@ and neither a model judgment nor a profile preview alone authorizes
 the click. The exact card and revision are checked again immediately
 before the browser input.
 
-The automatic dispatcher is bounded to **at most 8 distinct dispatched
-one-shot cards per accepted Web turn**. Once the budget is exhausted,
+The automatic dispatcher is bounded to **at most 8 still-unverified
+automatic approval dispatches per accepted Web turn**, not 8 successful
+approvals. An exact card leaves the budget only after trusted input receipt,
+observed card clearance and renewed owned-assistant progress; clicking
+alone, hiding the card, or observing an unrelated Native result does not
+release its slot. The one-click card fingerprint fence remains in force
+even after success, so budget release never authorizes replay. Once
+8 dispatches remain unverified,
 the provider reports a manual-review action and will not approve another
 card or resume by replaying the accepted request. `approval_agent_review`
 diagnostics are content-free and bounded per turn; they distinguish
 eligibility, manual warning and limit reached. This additional limit
 has no new model calls, periodic monitoring, global approval ledger,
-or new user setting. Existing `off` remains the default.
+or periodic monitoring. Existing `off` remains the default.
 
 **Not yet implemented:** an agent-triggered `approve_once` API for an
 already pending card. Before implementing it, prove exact Native turn,

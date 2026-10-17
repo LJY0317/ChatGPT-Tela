@@ -66,6 +66,9 @@ describe("product profile native-target selection", () => {
         CHATGPT_TELA_APPROVAL_DELAY_MS: "2000",
       });
       expect(enabled.approvalAutomationMode).toBe("recognized_once");
+      expect(loadProductProfileRuntimeConfig({
+        ...common(root), CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "recognized_conversation",
+      }).approvalAutomationMode).toBe("recognized_conversation");
       expect(enabled.approvalAutomationDelayMs).toBe(2_000);
       expect(() => loadProductProfileRuntimeConfig({
         ...common(root),

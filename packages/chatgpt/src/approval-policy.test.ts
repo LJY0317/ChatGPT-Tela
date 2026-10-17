@@ -22,6 +22,27 @@ describe("ChatGPT approval automation policy", () => {
       preferredChoice: "allow_once",
     });
   });
+  test("explicit conversation preference selects only a current-conversation choice, never Always allow", () => {
+    const scoped = { ...observed, alwaysAllowCount: 0, allowConversationCount: 1 };
+    expect(decideChatGptApproval("recognized_conversation", scoped)).toEqual({
+      action: "approve_conversation", preferredChoice: "allow_conversation",
+    });
+    expect(reviewChatGptApprovalForAgent("recognized_conversation", scoped)).toMatchObject({
+      classification: "eligible_conversation", agentMayApprove: false,
+    });
+    expect(decideChatGptApproval("recognized_once", scoped)).toEqual({
+      action: "approve_once", preferredChoice: "allow_once",
+    });
+    // No explicit scoped choice: keep making progress with the known one-shot control.
+    expect(decideChatGptApproval("recognized_conversation", observed)).toEqual({
+      action: "approve_once", preferredChoice: "allow_once",
+    });
+    expect(decideChatGptApproval("recognized_conversation", {
+      ...scoped, requiresManualReview: true, reviewReason: "suspicious_instruction",
+    })).toEqual({ action: "none", reason: "manual_review" });
+    expect(decideChatGptApproval("recognized_conversation", { ...scoped, allowConversationCount: 2 }))
+      .toEqual({ action: "none", reason: "ambiguous" });
+  });
 
   test("a provider warning always requires human review", () => {
     expect(decideChatGptApproval("recognized_once", {...observed, requiresManualReview: true}))

@@ -117,7 +117,7 @@ export interface ChatGptSurfaceDriver {
     delayMs?: number,
     expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
   ): Promise<{ readonly status: "none"; readonly reason: string }
-    | { readonly status: "dispatched"; readonly reason: "allow_once"; readonly cardFingerprint: string }>;
+    | { readonly status: "dispatched"; readonly reason: "allow_once" | "allow_conversation"; readonly cardFingerprint: string }>;
   replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;
   clearComposerText(composerKey: string, signal?: AbortSignal): Promise<void>;
   appendComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void>;

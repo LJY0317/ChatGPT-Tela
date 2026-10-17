@@ -766,6 +766,57 @@ describe("current ChatGPT DOM surface driver", () => {
     expect((await driver.processApprovalCard("recognized_once")).status).toBe("none");
     expect(clicks).toBe(1);
   });
+  test("explicit conversation-only consent is preferred over once when user opts in, without selecting Always allow", async () => {
+    const deny = new FixtureElement(); deny.textContent = "Deny";
+    const once = new FixtureElement(); once.textContent = "Allow once";
+    const scoped = new FixtureElement(); scoped.textContent = "Allow for this conversation";
+    once.getBoundingClientRect = () => ({ left: 10, top: 10, width: 20, height: 20 });
+    scoped.getBoundingClientRect = () => ({ left: 60, top: 10, width: 20, height: 20 });
+    const card = new FixtureElement({}, { button: [deny, once, scoped] });
+    const page = new RendererFixturePage(new FixtureElement({}, {
+      '[data-codex-approval-surface="true"]': [card],
+    }));
+    page.hitTest = () => scoped;
+    const clicks: { x: number; y: number }[] = [];
+    page.pointerClick = async point => { clicks.push(point); };
+    const driver = new ChatGptDomSurfaceDriver(page);
+    expect((await driver.observe()).approval).toMatchObject({
+      denyCount: 1, allowOnceCount: 1, allowConversationCount: 1,
+      unknownCount: 0, requiresManualReview: false,
+    });
+    expect(await driver.processApprovalCard("recognized_conversation")).toMatchObject({
+      status: "dispatched", reason: "allow_conversation",
+    });
+    expect(clicks).toEqual([{ x: 70, y: 20 }]);
+  });
+  test("no ambiguous or warning card receives a broader grant", async () => {
+    for (const unsafe of ["Always allow", "Suspicious content: external execution"]) {
+      const deny = new FixtureElement(); deny.textContent = "Deny";
+      const once = new FixtureElement(); once.textContent = "Allow once";
+      const scoped = new FixtureElement(); scoped.textContent = "Allow for this conversation";
+      const buttons = [deny, once, scoped];
+      const card = new FixtureElement({}, { button: buttons });
+      if (unsafe === "Always allow") {
+        const forever = new FixtureElement(); forever.textContent = "Always allow";
+        buttons.push(forever);
+      } else card.textContent = unsafe;
+      const page = new RendererFixturePage(new FixtureElement({}, {
+        '[data-codex-approval-surface="true"]': [card],
+      }));
+      let clicks = 0;
+      page.pointerClick = async () => { clicks++; };
+      const outcome = await new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_conversation");
+      expect(outcome.reason).not.toBe("allow_conversation");
+      if (unsafe === "Always allow") {
+        // A known one-shot fallback is permitted, but the broad choice is not.
+        expect(outcome).toMatchObject({ status: "dispatched", reason: "allow_once" });
+        expect(clicks).toBe(1);
+      } else {
+        expect(outcome).toMatchObject({ status: "none", reason: "manual_review" });
+        expect(clicks).toBe(0);
+      }
+    }
+  });
   test("a visible external-execution warning remains manual even without an alert role", async () => {
     const deny = new FixtureElement(); deny.textContent = "Deny";
     const allow = new FixtureElement(); allow.textContent = "Allow once";

@@ -2197,7 +2197,7 @@ describe("ChatGPT semantic provider", () => {
       });
       const exhausted = await provider.waitForTurnEvent(surface.lease, submitted.value);
       expect(exhausted.state === "proven" && exhausted.value).toMatchObject({
-        kind: "progress", summary: expect.stringContaining("automatic one-shot approval limit"),
+        kind: "progress", summary: expect.stringContaining("remain unverified for this Web turn"),
       });
       expect(driver.approvalCalls).toBe(MAX_RECOGNIZED_APPROVALS_PER_TURN);
     } finally { await surface.host.close(); }

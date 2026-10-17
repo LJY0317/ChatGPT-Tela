@@ -61,7 +61,8 @@ test("cleared approval and generated progress do not count as local execution ev
   observation.observe({ ...card, inputReceived: true }, "before", true, 2);
   observation.observe(undefined, "before", true, 3);
   observation.observe(undefined, "refusal prose", true, 4);
-  expect(observation.audit).toEqual({ approval_count: 1, dispatch_count: 1, input_receipt_count: 1,
+  expect(observation.audit).toEqual({ approval_count: 1, dispatch_count: 1,
+    verified_success_count: 1, unverified_dispatch_count: 0, input_receipt_count: 1,
     card_clear_count: 1, native_result_count: 0 });
   observation.recordNativeResult();
   expect(observation.audit.native_result_count).toBe(1);
@@ -93,4 +94,36 @@ test("late input evidence does not rewind cleared-card lifecycle or count disapp
   expect(observation.phase).toBe("card_cleared");
   expect(observation.observe(undefined, "body", true, 4)).toBeUndefined();
   expect(observation.audit).toMatchObject({ input_receipt_count: 1, card_clear_count: 1 });
+  expect(observation.audit).toMatchObject({ verified_success_count: 0, unverified_dispatch_count: 1 });
+});
+test("only trusted input plus clearance plus new assistant progress releases an approval budget slot", () => {
+  const observation = new ChatGptApprovalObservation();
+  for (let index = 0; index < 18; index++) {
+    const c = { ...card, cardFingerprint: String(index).padStart(24, "x"),
+      revisionFingerprint: "revision-" + index };
+    observation.observe(c, "body-start-" + index, true, index * 100);
+    observation.dispatched(c.cardFingerprint, index * 100 + 1);
+    expect(observation.unverifiedDispatchCount).toBe(1);
+    observation.observe({ ...c, inputReceived: true }, "body-start-" + index, true, index * 100 + 2);
+    observation.observe(undefined, "body-start-" + index, true, index * 100 + 3);
+    expect(observation.unverifiedDispatchCount).toBe(1);
+    observation.observe(undefined, "body-next-" + index, true, index * 100 + 4);
+    expect(observation.unverifiedDispatchCount).toBe(0);
+  }
+  expect(observation.audit).toMatchObject({
+    dispatch_count: 18, verified_success_count: 18, unverified_dispatch_count: 0,
+    card_clear_count: 18, input_receipt_count: 18,
+  });
+});
+test("a vanished card, failed assistant, duplicate receipt or late evidence never masquerades as verified success", () => {
+  const observation = new ChatGptApprovalObservation();
+  observation.observe(card, "a", true, 0);
+  observation.dispatched(card.cardFingerprint, 1);
+  observation.observe(undefined, "a", false, 2);
+  observation.observe(undefined, "failed", false, 3);
+  expect(observation.unverifiedDispatchCount).toBe(1);
+  observation.recordNativeResult(); // Turn-level outcome does not prove this card was accepted.
+  expect(observation.unverifiedDispatchCount).toBe(1);
+  observation.recordInputReceipt({ cardFingerprint: card.cardFingerprint, revisionFingerprint: "incorrect" }, 4);
+  expect(observation.unverifiedDispatchCount).toBe(1);
 });

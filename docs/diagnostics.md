@@ -149,12 +149,14 @@ remain pre-ingress and cannot be approved by Tela. See
 
 When a current selected Web card is pending, its optional `browser.review`
 reports the provider policy classification (`eligible_once`,
-`manual_review`, `limit_reached`, `disabled`, `ambiguous`,
-`unrecognized`). It never grants an agent a new click capability:
-`eligible_once` only refers to the existing, explicitly opted-in
-owner-bound automation. An accepted Web turn dispatches no more than eight
-distinct one-shot cards; safety warnings and exhausted budgets remain
-manual. See `approval_agent_review` events for bounded structural triage.
+`eligible_conversation`, `manual_review`, `limit_reached`, `disabled`,
+`ambiguous`, `unrecognized`). It never grants an agent a new click
+capability: eligibility only refers to existing, explicitly opted-in
+owner-bound automation. An accepted Web turn permits at most eight
+**unverified** approval dispatches. Trusted receipt plus clearance and
+new assistant progress release the budget charge, but never its
+one-click identity fence. Security warnings and exhausted budgets stay
+manual. See `approval_agent_review` events for structural triage.
 
 When the user supplies an original Native conversation UUID, use one scoped,
 read-only inspection instead of searching private rollout files or repeatedly

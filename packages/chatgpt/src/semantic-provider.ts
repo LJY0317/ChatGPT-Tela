@@ -1813,7 +1813,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       const observedApproval = snapshot.approval;
       const approvalReview = reviewChatGptApprovalForAgent(
-        this.#approvalAutomationMode, observedApproval, tracked.approvalObservation.audit.dispatch_count,
+        this.#approvalAutomationMode, observedApproval, tracked.approvalObservation.unverifiedDispatchCount,
       );
       if (observedApproval?.cardCount) {
         const state = JSON.stringify([observedApproval.cardFingerprint ?? null,
@@ -1827,6 +1827,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             approval_mode: this.#approvalAutomationMode,
             ...(approvalReview.reviewReason ? { reason_class: approvalReview.reviewReason } : {}),
             dispatch_count: tracked.approvalObservation.audit.dispatch_count,
+            unverified_dispatch_count: tracked.approvalObservation.unverifiedDispatchCount,
             // No renderer text, coordinates or raw card identity enter diagnostics.
             ...(observedApproval.cardFingerprint ? { card_fingerprint: observedApproval.cardFingerprint } : {}),
           });
@@ -1835,7 +1836,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       if (observedApproval?.cardCount === 1 && observedApproval.cardFingerprint
         && !tracked.approvalObservation.wasDispatched(observedApproval.cardFingerprint)
         && assistant?.phase !== "failed" && driver.processApprovalCard
-        && approvalReview.classification === "eligible_once") {
+        && (approvalReview.classification === "eligible_once"
+          || approvalReview.classification === "eligible_conversation")) {
         signal?.throwIfAborted();
         const action = await driver.processApprovalCard(this.#approvalAutomationMode, signal,
           this.#approvalAutomationDelayMs, { cardFingerprint: observedApproval.cardFingerprint,
@@ -1851,7 +1853,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       const approvalPhase = tracked.approvalObservation.phase;
       const approvalProgress = approvalPhase
         ? approvalPhase === "pending" && approvalReview.classification === "limit_reached"
-          ? "The automatic one-shot approval limit for this Web turn was reached. Review the current card in the browser; Tela will not click another."
+          ? "Eight automatic approval dispatches remain unverified for this Web turn. Confirm the current card in the browser; verified successful approvals do not count toward this limit."
           : approvalObservationSummary(approvalPhase,
           observedApproval?.requiresManualReview ? observedApproval.reviewReason ?? "provider_warning" : undefined)
         : "";

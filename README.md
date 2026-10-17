@@ -60,9 +60,11 @@ current profile Web approval separately from the Native thread because
 profile-only browser evidence is not proof of one conversation's ownership.
 The host's own ChatGPT tool approval prompts are outside Tela ingress and
 cannot be granted by an agent; see [approval review boundaries](docs/approval-review-boundaries.md).
-For selected owned Web sessions, agents can inspect a bounded one-shot
-eligibility classification; the actual automatic click remains exclusive to
-the existing opt-in, owner-bound provider path with a finite per-turn limit.
+For selected owned Web sessions, agents can inspect a bounded one-shot or
+conversation-scoped eligibility classification; the actual automatic click
+remains exclusive to the opt-in owner-bound provider path. Up to eight
+automatic dispatches may remain **unverified** at a time. Verified
+approvals do not consume that budget; exact card replay fences remain.
 
 - Make installation, repair, upgrade, and **complete removal** first-class product lifecycles. Tela records
   what it owns and never relies on an undocumented cleanup checklist.
@@ -907,14 +909,19 @@ multi-profile setup.
 
 ### Optional approval automation
 
-ChatGPT Tela can optionally auto-activate a **recognized one-shot approval card** in the dedicated Codex/Web
-surface. It is off by default and never chooses a persistent **Always allow** action. Unknown/ambiguous cards
+ChatGPT Tela can optionally auto-activate a **recognized approval card** in the dedicated Codex/Web
+surface. It is off by default. With explicit automation enabled it prefers a
+uniquely exposed **Allow for this conversation** choice; if that choice is
+not available, it may use a recognized **Allow once** choice instead.
+The historical `recognized_once` setting retains its narrower meaning.
+It never selects persistent **Always allow**. Unknown/ambiguous cards and host security warnings
 remain manual. The renderer exports only structural counts, coordinates, and disposable card identities to this policy; card text, tool
 arguments, prompts, and HTML are not persisted or logged.
 
 ```sh
 bun run cli approval status
 bun run cli approval enable
+bun run cli approval enable-once
 bun run cli approval disable
 bun run cli approval delay 500ms
 ```
@@ -922,7 +929,7 @@ bun run cli approval delay 500ms
 Changing this preference applies to newly started/restarted Tela Codex profiles. It does not widen Native
 Codex sandbox/tool authority and does not bypass ChatGPT cards that Tela cannot structurally recognize.
 The optional delay is a bounded preset (`instant`, `250ms`, `500ms`, `1s`, `2s`, `5s`, `10s`, or `15s`).
-The delay applies only after a one-shot card is recognized. Tela rechecks that same unchanged card after
+The delay applies only after a card is recognized. Tela rechecks that same unchanged card after
 waiting and uses its current button position. An absent card does not delay normal responses; a changed,
 disabled, or previously activated card is never clicked automatically.
 

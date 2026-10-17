@@ -196,8 +196,9 @@ export function loadProductProfileRuntimeConfig(
     throw new Error("CHATGPT_TELA_PRODUCT_PUBLIC_MCP_ABI must be stable or unified-development");
   }
   const approvalAutomationMode = optional(env, "CHATGPT_TELA_APPROVAL_AUTOMATION_MODE") ?? "off";
-  if (approvalAutomationMode !== "off" && approvalAutomationMode !== "recognized_once") {
-    throw new Error("CHATGPT_TELA_APPROVAL_AUTOMATION_MODE must be off or recognized_once");
+  if (approvalAutomationMode !== "off" && approvalAutomationMode !== "recognized_once"
+    && approvalAutomationMode !== "recognized_conversation") {
+    throw new Error("CHATGPT_TELA_APPROVAL_AUTOMATION_MODE must be off, recognized_once or recognized_conversation");
   }
   const acceptanceSavedSlot = optional(env, "CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT");
   if (acceptanceSavedSlot !== undefined && !/^[1-9][0-9]?$/.test(acceptanceSavedSlot)) {

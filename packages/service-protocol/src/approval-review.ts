@@ -5,7 +5,7 @@
  */
 export type CodexAgentApprovalReviewContract = Readonly<{
   readonly contractVersion: 1;
-  readonly classification: "eligible_once" | "manual_review" | "disabled"
+  readonly classification: "eligible_once" | "eligible_conversation" | "manual_review" | "disabled"
     | "ambiguous" | "unrecognized" | "limit_reached";
   readonly nextAction: "existing_owned_turn_automation" | "human_browser_review";
   readonly agentMayApprove: false;
@@ -19,8 +19,8 @@ export function parseCodexAgentApprovalReview(value: unknown): CodexAgentApprova
   const item = value as Record<string, unknown>;
   const classification = item.classification;
   if (item.contractVersion !== 1 || item.agentMayApprove !== false
-    || !["eligible_once", "manual_review", "disabled", "ambiguous", "unrecognized", "limit_reached"].includes(String(classification))
-    || item.nextAction !== (classification === "eligible_once"
+    || !["eligible_once", "eligible_conversation", "manual_review", "disabled", "ambiguous", "unrecognized", "limit_reached"].includes(String(classification))
+    || item.nextAction !== (classification === "eligible_once" || classification === "eligible_conversation"
       ? "existing_owned_turn_automation" : "human_browser_review")
     || (item.reviewReason !== undefined
       && (classification !== "manual_review"

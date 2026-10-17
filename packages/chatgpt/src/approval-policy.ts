@@ -1,4 +1,5 @@
-export type ChatGptApprovalAutomationMode = "off" | "recognized_once";
+/** A conversation grant requires an explicitly selected mode AND an exact provider choice. */
+export type ChatGptApprovalAutomationMode = "off" | "recognized_once" | "recognized_conversation";
 
 /** Display-only, bounded classification of a public card warning. Never approval authority. */
 export type ChatGptApprovalReviewReason =
@@ -14,23 +15,28 @@ export interface ChatGptApprovalCardObservation {
   readonly denyCount: number;
   readonly allowCount: number;
   readonly allowOnceCount: number;
+  readonly allowConversationCount?: number;
   readonly alwaysAllowCount: number;
   readonly unknownCount: number;
 }
 
 export type ChatGptApprovalDecision =
   | { readonly action: "none"; readonly reason: "disabled" | "absent" | "ambiguous" | "unrecognized" | "manual_review" }
-  | { readonly action: "approve_once"; readonly preferredChoice: "allow_once" };
+  | { readonly action: "approve_once"; readonly preferredChoice: "allow_once" }
+  | { readonly action: "approve_conversation"; readonly preferredChoice: "allow_conversation" };
 
 /**
- * A finite per-accepted-Web-turn limit, not a timer or a quota reset on a DOM
- * revision. A new card is not evidence of a new owner or unlimited authority.
+ * A finite per-accepted-Web-turn limit on unresolved dispatches only: confirmed
+ * trusted-input + clearance + renewed task progress does not consume budget.
+ * A new card is not evidence of a new owner or unlimited authority.
  */
-export const MAX_RECOGNIZED_APPROVALS_PER_TURN = 8;
+export const MAX_UNVERIFIED_APPROVALS_PER_TURN = 8;
+/** Compatibility alias; it now counts unresolved dispatches, not successes. */
+export const MAX_RECOGNIZED_APPROVALS_PER_TURN = MAX_UNVERIFIED_APPROVALS_PER_TURN;
 
 export type ChatGptAgentApprovalReview = Readonly<{
   readonly contractVersion: 1;
-  readonly classification: "absent" | "eligible_once" | "manual_review"
+  readonly classification: "absent" | "eligible_once" | "eligible_conversation" | "manual_review"
     | "disabled" | "ambiguous" | "unrecognized" | "limit_reached";
   readonly nextAction: "none" | "existing_owned_turn_automation" | "human_browser_review";
   /** Existing turn-owned automation is distinct from a new agent/tool grant. */
@@ -51,9 +57,16 @@ export function decideChatGptApproval(
   if (observed.cardCount === 0) return Object.freeze({ action: "none", reason: "absent" });
   if (observed.cardCount !== 1 || observed.denyCount !== 1
     || observed.allowCount > 1 || observed.allowOnceCount > 1
+    || (observed.allowConversationCount ?? 0) > 1
     || (observed.allowCount > 0 && observed.allowOnceCount > 0)
     || observed.alwaysAllowCount > 1 || observed.unknownCount !== 0) {
     return Object.freeze({ action: "none", reason: "ambiguous" });
+  }
+  // Only the provider's *explicitly labeled current-conversation* control.
+  // Never confuse it with "Always allow" (which can outlive this conversation).
+  if (mode === "recognized_conversation" && observed.allowConversationCount === 1
+    && observed.allowCount === 0 && observed.alwaysAllowCount === 0) {
+    return Object.freeze({ action: "approve_conversation", preferredChoice: "allow_conversation" });
   }
   if (observed.allowOnceCount === 1) {
     return Object.freeze({ action: "approve_once", preferredChoice: "allow_once" });
@@ -69,10 +82,10 @@ export function decideChatGptApproval(
 export function reviewChatGptApprovalForAgent(
   mode: ChatGptApprovalAutomationMode,
   observed?: ChatGptApprovalCardObservation,
-  dispatchCount = 0,
+  unverifiedDispatchCount = 0,
 ): ChatGptAgentApprovalReview {
-  if (!Number.isSafeInteger(dispatchCount) || dispatchCount < 0) {
-    throw new Error("approval dispatch count is invalid");
+  if (!Number.isSafeInteger(unverifiedDispatchCount) || unverifiedDispatchCount < 0) {
+    throw new Error("unverified approval count is invalid");
   }
   if (!observed?.cardCount) {
     return Object.freeze({ contractVersion: 1, classification: "absent",
@@ -85,12 +98,15 @@ export function reviewChatGptApprovalForAgent(
   }
   const decision = decideChatGptApproval(mode, observed);
   const classification = decision.action === "approve_once"
-    ? dispatchCount >= MAX_RECOGNIZED_APPROVALS_PER_TURN ? "limit_reached" : "eligible_once"
+    || decision.action === "approve_conversation"
+    ? unverifiedDispatchCount >= MAX_UNVERIFIED_APPROVALS_PER_TURN ? "limit_reached"
+      : decision.action === "approve_conversation" ? "eligible_conversation" : "eligible_once"
     : decision.reason;
   return Object.freeze({
     contractVersion: 1,
     classification,
-    nextAction: classification === "eligible_once" ? "existing_owned_turn_automation"
+    nextAction: classification === "eligible_once" || classification === "eligible_conversation"
+      ? "existing_owned_turn_automation"
       : "human_browser_review",
     agentMayApprove: false,
   });
