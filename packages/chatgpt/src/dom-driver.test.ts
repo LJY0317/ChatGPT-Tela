@@ -341,7 +341,11 @@ describe("current ChatGPT DOM surface driver", () => {
     const registry=page.rendererState[Symbol.for('chatgpt-tela.approval-observations.v1')] as {manualInputTarget:(node:unknown)=>boolean};
     expect(registry.manualInputTarget(allow)).toBe(true);
     expect(registry.manualInputTarget(deny)).toBe(true);
-    expect(registry.manualInputTarget(disclosure)).toBe(false);
+    expect(registry.manualInputTarget(disclosure)).toBe(true);
+    disclosure.disabled=true;expect(registry.manualInputTarget(disclosure)).toBe(false);disclosure.disabled=false;
+    disclosure.attributes['aria-haspopup']='menu';expect(registry.manualInputTarget(disclosure)).toBe(false);
+    disclosure.attributes['aria-haspopup']='dialog';
+    disclosure.textContent='Unknown action';expect(registry.manualInputTarget(disclosure)).toBe(false);disclosure.textContent='See details';
     expect(registry.manualInputTarget(new FixtureElement())).toBe(false);
     await expect(driver.processApprovalCard('recognized_once')).resolves.toMatchObject({status:'none'});
     expect(page.actions).toEqual([]);

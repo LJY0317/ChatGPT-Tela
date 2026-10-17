@@ -128,7 +128,8 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       'Allow for this conversation', 'Allow ChatGPT Tela for this conversation'];
     if (card.contains(control)) {
       return allowed.includes(decision)
-        || (decision === 'Approval options' && control.getAttribute('aria-haspopup') === 'menu');
+        || (decision === 'Approval options' && control.getAttribute('aria-haspopup') === 'menu')
+        || (decision === 'See details' && control.getAttribute('aria-haspopup') === 'dialog');
     }
     // The provider may render a consent choice as a native button instead
     // of role=menuitem. Its role is not proof of authority: require the same

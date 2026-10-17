@@ -78,6 +78,13 @@ the visibly truncated user bubble: truncated display text is not
 independent proof that the original submitted request changed. A real
 request edit, competing user turn or owner mismatch still fails closed.
 
+**Card details navigation:** A human opening the current card's exact
+`See details` control with `aria-haspopup=dialog` preserves the accepted request
+witness. The same card, visible enabled target and exact control meaning must
+still be proven. This is viewing, never a grant to click or dismiss a warning;
+changed, disabled or unknown controls remain unclassified. It addresses a
+reproducible classifier boundary, not a proven historical incident cause.
+
 **Manual dropdown consent:** Opening a uniquely observed card-local
 `Approval options` disclosure is viewing/consent navigation, not a
 request edit. A human choice rendered in an out-of-card menu preserves
