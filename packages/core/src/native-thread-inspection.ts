@@ -194,6 +194,39 @@ export function inspectNativeThreadHistoricalEvidence(input: {
     ? lastManualReview.reason_class : undefined;
   const firstPendingAt = pending?.ts ?? null;
   const observedUntil = events.at(-1)?.ts ?? null;
+  // Correlation is deliberately time- and thread-scoped, not an assertion of
+  // causation or an authoritative Native turn identity. The original accepted
+  // operation may already have produced effects; no retry may follow from it.
+  const rejected = last("web_turn_identity_rejected");
+  const rejectionAt = rejected ? Date.parse(rejected.ts) : Number.NaN;
+  const preceding = (stage: string, withinMs: number) => events.filter(event =>
+    event.stage === stage && Number.isFinite(rejectionAt)
+    && Date.parse(event.ts) <= rejectionAt
+    && rejectionAt - Date.parse(event.ts) <= withinMs).at(-1);
+  const rendererPause = preceding("renderer_unresponsive", 30_000);
+  const revoked = preceding("inspection_ownership_revoked", 10_000);
+  const classified = preceding("inspection_input_classified", 10_000);
+  const nativeFailureFollowingRejection = events.some(event => event.stage === "native_execution_failed"
+    && Number.isFinite(rejectionAt) && Date.parse(event.ts) >= rejectionAt
+    && Date.parse(event.ts) - rejectionAt <= 30_000);
+  const ownershipFailureEvidence = rejected
+    ? Object.freeze({
+      classification: "response_ownership_rejected" as const,
+      rejectedAt: rejected.ts,
+      reasonClass: rejected.reason_class === "accepted_user_changed"
+        ? "accepted_user_changed" as const : "other_or_unclassified" as const,
+      precedingRendererUnresponsiveAt: rendererPause?.ts ?? null,
+      precedingInputOwnershipRevokedAt: revoked?.ts ?? null,
+      inputClassifierObservedAt: classified?.ts ?? null,
+      // Not-manual-consent does not prove a user edited or sent anything.
+      observedManualConsent: typeof classified?.manual_consent === "boolean"
+        ? classified.manual_consent : null,
+      nativeFailureFollowingRejection,
+      proofLevel: "same-thread-temporal-correlation-only" as const,
+      exactInputOriginVerified: false as const,
+      causalLinkProven: false as const,
+      canReplayAcceptedRequest: false as const,
+    }) : null;
   return Object.freeze({
     contractVersion: 1 as const,
     privacy: "allowlisted-structural-events-only" as const,
@@ -229,6 +262,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       ? { at: lastNativeFailure.ts, stage: lastNativeFailure.stage,
         ...(typeof lastNativeFailure.reason_class === "string" ? { reasonClass: lastNativeFailure.reason_class } : {}) }
       : null,
+    ownershipFailureEvidence,
     recentEvents: events.slice(-MAX_TIMELINE).map(event => ({
       at: event.ts, stage: event.stage,
       ...(typeof event.reason_class === "string" ? { reasonClass: event.reason_class } : {}),

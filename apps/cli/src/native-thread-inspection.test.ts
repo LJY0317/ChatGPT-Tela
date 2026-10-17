@@ -43,8 +43,12 @@ describe("one read-only conversation inspection by exact Native ID", () => {
         scope_fingerprint: scope, phase: "pending", content: "PRIVATE REQUEST" },
       { ts: "2026-10-17T08:05:23Z", event: "chatgpt_tela_work", stage: "approval_manual_review_required",
         scope_fingerprint: scope, reason_class: "provider_warning", approval_mode: "recognized_once" },
+      { ts: "2026-10-17T08:19:40Z", event: "chatgpt_tela_browser", stage: "renderer_unresponsive",
+        scope_fingerprint: scope, private_body: "SENSITIVE_RENDERED_BODY" },
+      { ts: "2026-10-17T08:19:45Z", event: "chatgpt_tela_browser", stage: "inspection_ownership_revoked",
+        scope_fingerprint: scope, private_input: "SENSITIVE_INPUT" },
       { ts: "2026-10-17T08:19:45Z", event: "chatgpt_tela_browser", stage: "inspection_input_classified",
-        scope_fingerprint: scope, manual_consent: true, raw_card: "SECRET CARD" },
+        scope_fingerprint: scope, manual_consent: false, raw_card: "SECRET CARD" },
       { ts: "2026-10-17T08:19:46Z", event: "chatgpt_tela_work", stage: "web_turn_identity_rejected",
         scope_fingerprint: scope, reason_class: "accepted_user_changed" },
       { ts: "2026-10-17T08:19:46Z", event: "chatgpt_tela_work", stage: "native_execution_failed",
@@ -61,18 +65,53 @@ describe("one read-only conversation inspection by exact Native ID", () => {
       expect(result).toMatchObject({
         identityVerified: false, nativeOwner: "not_checked",
         browserCardCurrentlyVisible: "not_verified", contentRead: false, mutating: false,
-        coverage: { eventsMatched: 6 },
+        coverage: { eventsMatched: 8 },
         approval: { reasonClass: "provider_warning", noClearanceRecordedAfterPending: true,
           nativeEndedAfterPending: true, observedGapSeconds: 863 },
         lastNativeFailure: { stage: "native_execution_failed", reasonClass: "request_changed" },
         lastNativeOutcome: { stage: "native_turn_retired", reasonClass: "execution_failed" },
+        ownershipFailureEvidence: {
+          classification: "response_ownership_rejected",
+          reasonClass: "accepted_user_changed",
+          precedingRendererUnresponsiveAt: new Date("2026-10-17T08:19:40Z").toISOString(),
+          precedingInputOwnershipRevokedAt: new Date("2026-10-17T08:19:45Z").toISOString(),
+          inputClassifierObservedAt: new Date("2026-10-17T08:19:45Z").toISOString(),
+          observedManualConsent: false,
+          nativeFailureFollowingRejection: true,
+          proofLevel: "same-thread-temporal-correlation-only",
+          exactInputOriginVerified: false, causalLinkProven: false, canReplayAcceptedRequest: false,
+        },
         continuation: { canAutomaticallyApproveSecurityReview: false, canAutomaticallyReplayAcceptedTurn: false },
       });
       const printed = JSON.stringify(result);
       expect(printed).not.toMatch(/PRIVATE|SECRET|FOREIGN/);
-      expect(result.recentEvents.some(row => row.manualConsent === true)).toBe(true);
+      expect(result.recentEvents.some(row => row.manualConsent === false)).toBe(true);
       expect(() => inspectNativeThreadHistoricalEvidence({ threadId: "wrong", diagnosticPaths: [] }))
         .toThrow("exact Native UUID");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  test("a renderer pause or manual-review log from another time/turn is never presented as a cause", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tela-thread-evidence-uncertainty-"));
+    const path = join(dir, "events.jsonl");
+    const scope_fingerprint = diagnosticFingerprint(THREAD);
+    writeFileSync(path, [
+      { ts: "2026-10-17T08:02:23Z", event: "chatgpt_tela_browser", stage: "renderer_unresponsive",
+        scope_fingerprint },
+      { ts: "2026-10-17T08:19:46Z", event: "chatgpt_tela_work", stage: "web_turn_identity_rejected",
+        scope_fingerprint, reason_class: "not-an-allowlisted-cause", private_payload: "SECRET" },
+    ].map(row => JSON.stringify(row)).join("\n") + "\n");
+    try {
+      const result = inspectNativeThreadHistoricalEvidence({
+        threadId: THREAD, diagnosticPaths: [path], nowMs: NOW, minutes: 30,
+      });
+      expect(result.ownershipFailureEvidence).toMatchObject({
+        reasonClass: "other_or_unclassified",
+        precedingRendererUnresponsiveAt: null, precedingInputOwnershipRevokedAt: null,
+        inputClassifierObservedAt: null, observedManualConsent: null,
+        nativeFailureFollowingRejection: false, causalLinkProven: false,
+      });
+      expect(result.lastNativeOutcome).toBeNull();
+      expect(JSON.stringify(result)).not.toContain("SECRET");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   test("a logged later clearance is not confused with an unresolved approval", () => {
