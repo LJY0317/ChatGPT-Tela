@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { startTurnDiagnosticSummary, diagnosticContext, capturePrivateDiagnosticValue, nativeTextHash, diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
+import { webObservationFailureReason, startTurnDiagnosticSummary, diagnosticContext, capturePrivateDiagnosticValue, nativeTextHash, diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import {
   bindNativeTurnRequest,
   extractNativeToolResults,
@@ -301,6 +301,7 @@ export class NativeResponsesGateway {
           turn_fingerprint: diagnosticFingerprint(failedOwner.turnId),
         }, () => emitDiagnosticEvent("chatgpt_tela_work", "native_execution_failed", {
           status: diagnosticFailureClass(error),
+          ...(webObservationFailureReason(error) ? { reason_class: webObservationFailureReason(error)! } : {}),
           turn_phase: owned.channel.phase,
           tool_round_count: owned.channel.toolRoundCount,
         }));

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InspectionInput } from "./inspection-input";
+import { runInNewContext } from "node:vm";
 function fixture() {
   const listeners = new Map<string, (...args: any[]) => void>();
   const sent: unknown[] = []; let copied = 0; let allowed = false;
@@ -23,6 +24,59 @@ function fixture() {
 const down = { type: "mouseDown" as const, x: 20, y: 20, button: "left" as const };
 const up = { ...down, type: "mouseUp" as const };
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+test("viewing proof is pending until classified, survives selection and copy, and never survives unknown or editing input", async () => {
+  const f = fixture(); f.gate.setInteractive(true); f.allow();
+  const observation = f.gate.observationCurrent(), strict = f.gate.current();
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
+  expect(strict.signal.aborted).toBe(true);
+  expect(f.gate.observationCurrent().pending).toBe(true);
+  await flush();
+  expect(f.gate.observationCurrent()).toEqual(observation);
+  expect(f.sent).toEqual([down, up]);
+  f.contents.sendInputEvent({type: 'keyDown', key: 'c', meta: true});
+  expect(f.gate.observationCurrent()).toEqual(observation);
+  f.contents.sendInputEvent({type: 'keyDown', key: 'x'});
+  expect(f.gate.observationCurrent().revision).toBe(observation.revision + 1);
+  f.gate.dispose(); expect(f.gate.observationCurrent().available).toBe(false);
+});
+test("unknown interactive clicks revoke observation before their input is released", async () => {
+  const f = fixture(); f.gate.setInteractive(true);
+  const before=f.gate.observationCurrent(); f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
+  expect(f.sent).toHaveLength(0); await flush();
+  expect(f.gate.observationCurrent().revision).toBe(before.revision+1);
+  expect(f.sent).toEqual([down,up]); f.gate.dispose();
+});
+test.each(['disclosure','popup','missing-region','duplicate-region','editable-region'])("actual hit-test only preserves a locally linked viewing control: %s", async mode => {
+  const f=fixture(); f.gate.setInteractive(true);
+  const region={id:'region',querySelector:()=>mode==='editable-region'?{}:null};
+  const parent={querySelectorAll:()=>[],contains:(value:unknown)=>value===region};
+  const button={parentElement:parent, textContent:'public disclosure',
+    closest:(selector:string)=>selector.startsWith('button')?button:null,
+    hasAttribute:()=>mode==='popup', matches:()=>true,
+    getAttribute:(name:string)=>name==='aria-controls'?'region':name==='aria-expanded'?'false':null};
+  f.contents.executeJavaScript=async (code?:string)=>runInNewContext(code!,{
+    document:{elementFromPoint:()=>button,querySelectorAll:()=>mode==='missing-region'?[]:mode==='duplicate-region'?[region,region]:[region],dispatchEvent(){}},
+    Event:class {},getComputedStyle:()=>({userSelect:'text'}),
+  });
+  const before=f.gate.observationCurrent();
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up); await flush();
+  expect(f.sent).toEqual([down,up]);
+  expect(f.gate.observationCurrent().revision).toBe(before.revision+(mode==='disclosure'?0:1));
+  expect(f.gate.observationCurrent().pending).toBe(false); f.gate.dispose();
+});
+test("viewing keyboard scrolls the main overflow pane when body has no scroll range", async () => {
+  const f=fixture(); f.gate.setInteractive(false);
+  class Pane { scrollHeight=800;clientHeight=800;scrollTop=0;parentElement:Pane|null=null; children:Pane[]=[];
+    querySelectorAll(){return this.children;} }
+  const body=new Pane(),main=new Pane(),pane=new Pane();
+  pane.scrollHeight=3000; main.children=[pane];
+  f.contents.executeJavaScript=async (code?:string)=>runInNewContext(code!,{
+    document:{activeElement:body,body,scrollingElement:body,querySelectorAll:()=>[main]},
+    HTMLElement:Pane,getComputedStyle:(node:Pane)=>({overflowY:node===pane?'auto':'visible'}),
+  });
+  f.contents.sendInputEvent({type:'keyDown',key:'PageDown'});await flush();
+  expect(pane.scrollTop).toBe(600);expect(body.scrollTop).toBe(0); f.gate.dispose();
+});
 test("viewing blocks controls and keys while owned automation still passes", async () => {
   const f = fixture(); f.gate.setInteractive(false);
   f.contents.sendInputEvent(down); f.contents.sendInputEvent(up); await flush();
@@ -40,7 +94,7 @@ test("selection replays only one allowed gesture and mode changes invalidate pen
   expect(f.sent).toEqual([down, up]);
   f.contents.sendInputEvent(down); f.gate.setInteractive(false); await flush();
   expect(f.sent).toHaveLength(2);
-  f.gate.setInteractive(true); f.contents.sendInputEvent(down); expect(f.sent).toHaveLength(3);
+  f.gate.setInteractive(true); f.contents.sendInputEvent(down); await flush(); expect(f.sent).toHaveLength(3);
   f.gate.dispose();
 });
 test("unavailable host cannot silently claim observation mode", () => {

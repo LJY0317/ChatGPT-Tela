@@ -311,14 +311,14 @@ export function fitFreshWebPhysicalContext(
     );
   }
 
-  const target = minimum.context.transferTokens < limits.rolloverTokenLimit ? "soft" as const : "hard" as const;
-  const targetLimit = target === "soft" ? limits.rolloverTokenLimit : limits.contextWindowTokenLimit;
-  if (target === "hard" && initial.context.transferTokens < limits.contextWindowTokenLimit) {
-    return projectFreshWebPhysicalContext(context, DEFAULT_PROJECTION_BUDGET, {
-      retentionStep: PROJECTION_RETENTION_STEPS,
-      fitTarget: "hard", protectedRevisionIds,
-    });
+  if (minimum.context.transferTokens >= limits.rolloverTokenLimit) {
+    // Exact active/authority context already exceeds the runway target. Do not
+    // fill the remaining hard window with optional archived evidence and force
+    // another cold epoch on the very next continuation.
+    return minimum;
   }
+  const target = "soft" as const;
+  const targetLimit = limits.rolloverTokenLimit;
 
   let lower = 0;
   let upper = PROJECTION_RETENTION_STEPS;

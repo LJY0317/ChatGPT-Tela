@@ -316,6 +316,16 @@ is written. Lost cache with intact published pointer yields zero summary calls;
 lost ledger, uncertain operations, changed scope and edited ancestry fail closed.
 Read historical details again through currently authorized Native tools.
 
+When irreducible instructions/current work already exceed the fresh-input target,
+minimize optional archived assistant/tool presentation instead of filling the
+remaining hard window. Required Native tool evidence and protected checkpoints
+remain exact. Do not raise rollover limits or re-summarize the same source merely
+to hide an oversized seed. `web_turn_plan` partitions the prepared seed into
+authority/user/checkpoint/protected-tool/other UTF-8 bytes and records the target,
+whether it exceeds the target/rollover threshold, prior settlement and existing
+rollover pressure. These are local estimates, not provider billing; unchanged
+checkpoints and a fresh browser do not imply retained physical context.
+
 Ordinary task checkpoint maintenance does not replace an owned retained Web
 conversation. Necessary fresh tasks contain one inline working bundle without a
 preload/ACK. Resident usage is a conservative, monotonic **estimate**, composed

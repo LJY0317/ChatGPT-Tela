@@ -19,6 +19,19 @@ function settled(fields: object = {}) {
     epoch_fingerprint: epoch, surface_fingerprint: surface, head_revision_fingerprint: head, document_generation: 1, ...fields });
 }
 
+test("seed byte partitions and pressure warnings remain observed estimates, missing historical fields stay unknown", () => {
+  const row=plan('checkpoint-delta',{fresh_seed_target:24000,fresh_seed_exceeds_target:true,
+    fresh_seed_exceeds_rollover:true,prior_settlement_present:true,seed_authority_bytes:100,
+    seed_user_bytes:200,seed_checkpoint_bytes:300,seed_protected_tool_bytes:400,seed_other_bytes:50});
+  const report=summarizeContextContinuity({events:[row],atMs:5000,scope});
+  expect(report.turns[0].summary.context.seedCost).toMatchObject({targetEstimate:24000,
+    exceedsTarget:true,exceedsRollover:true,priorSettlementPresent:true,authorityBytes:100,userBytes:200,
+    checkpointBytes:300,protectedToolBytes:400,otherBytes:50});
+  const old=summarizeContextContinuity({events:[plan('checkpoint-delta')],atMs:5000,scope});
+  expect(old.turns[0].summary.context.seedCost.authorityBytes).toBeUndefined();
+  expect(report.semanticRecall).toBe('not_evaluated');
+});
+
 test("context reuse links only to an exact locally committed predecessor without claiming semantic recall", () => {
   const rows = [plan("checkpoint-delta"), settled(), plan("retained-delta", {
     turn_fingerprint: turn2, base_revision_fingerprint: head, head_revision_fingerprint: "9".repeat(24), transfer_estimate: 50,

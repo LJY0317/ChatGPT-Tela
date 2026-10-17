@@ -10,6 +10,22 @@ const owner = (): TurnOwnership => ({ userTurnKey: user.key, acceptedUserFingerp
   conversationRoute: "https://chatgpt.com/c/owned", baselineUserLineageKeys: new Set() });
 const snapshot = (turns: readonly ChatGptTurnObservation[], url = "https://chatgpt.com/c/owned"): ChatGptSurfaceSnapshot => ({ revision: "fixture", url, turns, composers: [], sendControls: [] });
 
+test("a proven viewing gesture preserves accepted causality across canonical hydration, pending or unknown input never does", () => {
+  let state: "pending" | "unchanged" | "changed" = "pending";
+  const tracked: TurnOwnership = { ...owner(), conversationRoute: "https://chatgpt.com/c/local-chatgpt:00000000-0000-4000-8000-000000000000",
+    causalReceipt: true, inputUnchanged: () => false, observationInputState: () => state };
+  const decorated = { ...user, contentFingerprint: "rendered-preview-not-full-composer" };
+  expect(resolveAssistantLineage(snapshot([decorated, answer]), tracked)).toMatchObject({ identityPending: true, assistants: [] });
+  state = "unchanged";
+  // Rebind from the provisional route despite a strict fence revoked by viewing.
+  expect(resolveAssistantLineage(snapshot([decorated, answer]), tracked).assistants).toEqual([answer]);
+  expect(tracked.conversationRoute).toBe("https://chatgpt.com/c/owned");
+  state = "changed";
+  expect(() => resolveAssistantLineage(snapshot([decorated, answer]), tracked)).toThrow();
+  expect(resolveAssistantLineage(snapshot([user, answer]), tracked).assistants).toEqual([answer]);
+  expect(() => resolveAssistantLineage(snapshot([user, { ...answer, lineageAnchor: "foreign" }]), tracked)).toThrow();
+});
+
 function alternatives(values: string[]): ChatGptTurnObservation {
   return { ...unavailableUser, userPayloadReason: "ambiguous_author_root", candidateFingerprints: values,
     userPayloadStructure: { rootCount: 2, nestedRoots: true, equivalentRoots: false } };

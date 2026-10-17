@@ -29,6 +29,9 @@ export class InspectionInput {
   readonly #origin = diagnosticContext();
   #inputCount = 0;
   #unownedRevision = 0;
+  #observationRevision = 0;
+  #scrollCount = 0;
+  #classificationCount = 0;
   #inputAbort = new AbortController();
   #invalidateInput(kind: "pointer" | "modifier" | "navigation" | "editing" | "activation" | "other"): void {
     this.#unownedRevision++;
@@ -40,6 +43,9 @@ export class InspectionInput {
   current(): { readonly revision: number; readonly available: boolean; readonly signal: AbortSignal } {
     return { revision: this.#unownedRevision, signal: this.#inputAbort.signal, available: !this.#disposed
       && !!this.contents.on && !!this.contents.removeListener && !!this.contents.sendInputEvent };
+  }
+  observationCurrent() {
+    return { revision: this.#observationRevision, available: this.current().available, pending: !!this.#pending };
   }
   #recordInput(kind: "pointer_activation" | "key_activation"): void {
     if (++this.#inputCount > 64) return;
@@ -67,7 +73,15 @@ export class InspectionInput {
     }
     this.reset();
   }
-  reset(): void { this.#revision++; this.#pending = undefined; this.#selecting = false; }
+  #notifyObservationSettled(): void {
+    if (!this.#disposed) void this.contents.executeJavaScript(
+      `document.dispatchEvent(new Event('chatgpt-tela-inspection-settled'))`).catch(() => {});
+  }
+  reset(): void {
+    const pending = !!this.#pending;
+    this.#revision++; this.#pending = undefined; this.#selecting = false;
+    if (pending) this.#notifyObservationSettled();
+  }
   send = (input: Input): void => {
     if (this.#disposed || !this.contents.sendInputEvent) throw new Error("owned browser input is unavailable");
     const previous = this.#owned;
@@ -77,39 +91,82 @@ export class InspectionInput {
   mouse = (event: { preventDefault(): void }, input: any): void => {
     if (!this.#owned && !this.#observing && input.type === "mouseDown") this.#invalidateInput("pointer");
     if (input.type === "mouseDown") this.#recordInput("pointer_activation");
-    if (!this.#observing || this.#owned) return;
+    if (this.#owned) return;
     if (input.type === "mouseWheel") return;
     if (input.type === "mouseMove" && !this.#pending) return;
     if (input.type === "mouseUp" && this.#selecting) { this.#selecting = false; return; }
-    event.preventDefault();
     if (this.#pending) {
+      event.preventDefault();
       if (input.type === "mouseUp") this.#pending.up = input;
       if (input.type === "mouseMove") this.#pending.move = input;
       return;
     }
+    if (!this.#observing && input.type !== "mouseDown") return;
+    event.preventDefault();
     if (input.type !== "mouseDown" || input.button !== "left"
-      || !Number.isFinite(input.x) || !Number.isFinite(input.y)) return;
+      || !Number.isFinite(input.x) || !Number.isFinite(input.y)) {
+      if (!this.#observing) { this.#observationRevision++; this.send(input); }
+      return;
+    }
+    const observing = this.#observing;
     const pending = { revision: this.#revision, down: input } as Pending;
     this.#pending = pending;
     // One hit test per selection gesture, no pointer-move queries or idle polling.
     const code = `(() => {
       let node = document.elementFromPoint(${input.x}, ${input.y});
       if (!node) return false;
+      const button = node.closest('button[aria-expanded]');
+      if (button && !button.hasAttribute('aria-haspopup')
+        && !button.closest('form,[contenteditable]:not([contenteditable="false"])')) {
+        const id = button.getAttribute('aria-controls');
+        const local = button.parentElement;
+        const localIds = [...(local?.querySelectorAll('[id]') || [])];
+        if (localIds.length > 256) return false;
+        const labels = localIds
+          .filter(item => item.id === button.getAttribute('aria-labelledby'));
+        const ids = id ? [...document.querySelectorAll('[id]')] : [];
+        if (ids.length > 2048) return false;
+        const regions = ids.filter(item => item.id === id);
+        const region = id ? (regions.length === 1 ? regions[0] : undefined)
+          : labels.length === 1 && local?.querySelectorAll('button[aria-expanded]').length === 1 ? local : undefined;
+        const expanded = button.getAttribute('aria-expanded');
+        if (region && button.parentElement?.contains(region) && ['true','false'].includes(expanded)
+          && !region.querySelector('form,input,textarea,select,[contenteditable]:not([contenteditable="false"])')) return true;
+      }
       for (let ancestor = node; ancestor; ancestor = ancestor.parentElement) {
         if (ancestor.matches('a,button,input,textarea,select,summary,label,[contenteditable]:not([contenteditable="false"]),[role="button"],[role="link"],[role="tab"],[role="menuitem"],[tabindex]') || ancestor.onclick || ancestor.onmousedown) return false;
       }
       return !!node.textContent?.trim() && getComputedStyle(node).userSelect !== 'none';
     })()`;
     void this.contents.executeJavaScript(code).then(allowed => {
-      if (this.#pending !== pending || pending.revision !== this.#revision || !this.#observing || allowed !== true) return;
+      if (this.#pending !== pending || pending.revision !== this.#revision || observing !== this.#observing) return;
+      if (++this.#classificationCount <= 16) withDiagnosticContext(this.#origin, () =>
+        emitDiagnosticEvent('chatgpt_tela_browser', 'inspection_input_classified', {
+          viewing_proven: allowed === true, interactive: !observing,
+          observation_revision: this.#observationRevision + (allowed === true || observing ? 0 : 1),
+        }));
+      if (allowed !== true) {
+        if (observing) return;
+        this.#observationRevision++;
+      }
       this.send(pending.down);
       if (pending.move) this.send(pending.move);
       if (pending.up) this.send(pending.up);
       else this.#selecting = true;
-    }).catch(() => {}).finally(() => { if (this.#pending === pending) this.#pending = undefined; });
+    }).catch(() => { if (!observing) this.#observationRevision++; })
+      .finally(() => {
+        if (this.#pending !== pending) return;
+        this.#pending = undefined;
+        // Wake the existing renderer clock even when selection causes no DOM mutation.
+        this.#notifyObservationSettled();
+      });
   };
   key = (event: { preventDefault(): void }, input: any): void => {
-    if (!this.#owned && !this.#observing && input.type === "keyDown") this.#invalidateInput(keyKind(input));
+    if (!this.#owned && !this.#observing && input.type === "keyDown") {
+      this.#invalidateInput(keyKind(input));
+      const copy = (input.meta || input.control) && !input.alt && !input.shift && input.key?.toLowerCase() === 'c';
+      if (!copy && !['modifier','navigation'].includes(keyKind(input))) this.#observationRevision++;
+    }
     if (input.type === "keyDown") this.#recordInput("key_activation");
     if (!this.#observing || this.#owned) return;
     event.preventDefault();
@@ -125,11 +182,28 @@ export class InspectionInput {
     if (distance === undefined) return;
     // Scroll the focused pane/element without activating focused links or controls.
     void this.contents.executeJavaScript(`(() => {
+      const scrollable = node => node instanceof HTMLElement && node.clientHeight > 0 && node.scrollHeight > node.clientHeight
+        && /^(auto|scroll)$/.test(getComputedStyle(node).overflowY);
       let node = document.activeElement;
-      while (node && node !== document.body && node.scrollHeight <= node.clientHeight) node = node.parentElement;
-      const target = node && node !== document.body ? node : document.scrollingElement;
+      while (node && node !== document.body && !scrollable(node)) node = node.parentElement;
+      const stack = [...document.querySelectorAll('main,[role="main"]')].slice(0,8), panes = [];
+      let inspected = 0;
+      while (stack.length && inspected++ < 2048) {
+        const candidate = stack.shift();
+        if (scrollable(candidate)) panes.push(candidate);
+        for (const child of [...candidate.children].slice(0,2048-stack.length)) stack.push(child);
+      }
+      const target = scrollable(node) ? node : panes.sort((a,b) => b.clientHeight-a.clientHeight)[0] || document.scrollingElement;
       if (target) ${distance === "top" ? "target.scrollTop = 0" : distance === "bottom" ? "target.scrollTop = target.scrollHeight" : `target.scrollTop += ${distance}`};
-    })()`).catch(() => {});
+      return { available: !!target, above: Math.max(0,Math.round(target?.scrollTop || 0)),
+        below: Math.max(0,Math.round((target?.scrollHeight || 0)-(target?.clientHeight || 0)-(target?.scrollTop || 0))) };
+    })()`).then(value => {
+      if (++this.#scrollCount > 16 || !value || typeof value !== 'object') return;
+      const result = value as {available?: boolean; above?: number; below?: number};
+      withDiagnosticContext(this.#origin, () => emitDiagnosticEvent('chatgpt_tela_browser', 'inspection_scroll_observed', {
+        target_available: result.available === true, above_px: result.above ?? 0, below_px: result.below ?? 0,
+      }));
+    }).catch(() => {});
   };
   documentChanged = (): void => { this.reset(); };
   dispose(): void {

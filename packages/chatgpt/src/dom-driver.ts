@@ -51,7 +51,7 @@ interface RawTurn {
   readonly text?: string;
   readonly failureDetail?: string;
   readonly publicProgress?: readonly string[];
-  readonly progressProbe?: { readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
+  readonly progressProbe?: { readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
 }
 
 interface RawSnapshot {
@@ -585,9 +585,30 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
     // outside both user and answer bodies. Never treat an arbitrary disclosure as progress.
     const agentStarts = [...group.querySelectorAll('[data-chatgpt-agent-turn-start]')];
     const agentShell = agentStarts.length === 1 ? agentStarts[0].parentElement : undefined;
-    const ownedAgentShell = agentShell && group.contains(agentShell)
+    let ownedAgentShell = agentShell && group.contains(agentShell)
       && !agentShell.querySelector('[data-user-message-bubble], [data-markdown-text-style="assistant-message"], [data-turn-key]')
       ? agentShell : undefined;
+    // A start marker can be a sibling of the public disclosure rather than its
+    // child. Search only bounded sibling branches of that exact owned marker;
+    // never promote the whole keyed turn (which also contains user/final text).
+    let shellSearchDepth = 0, shellCandidateCount = 0;
+    if ((!ownedAgentShell || ownedAgentShell.querySelectorAll('button[aria-expanded][aria-labelledby]').length === 0) && agentStarts.length === 1) {
+      let parent = agentShell;
+      for (; parent && group.contains(parent) && shellSearchDepth < 4; parent = parent.parentElement) {
+        shellSearchDepth++;
+        if (parent.children.length > 64) { shellCandidateCount = 65; break; }
+        const candidates = [...parent.children].slice(0, 64).filter(branch =>
+          branch instanceof HTMLElement
+          && !branch.querySelector('[data-user-message-bubble], [data-markdown-text-style="assistant-message"], [data-turn-key]')
+          && branch.getAttribute('data-user-message-bubble') === null
+          && branch.getAttribute('data-markdown-text-style') !== 'assistant-message'
+          && branch.getAttribute('data-turn-key') === null
+          && branch.querySelectorAll('button[aria-expanded][aria-labelledby]').length === 1);
+        shellCandidateCount = candidates.length;
+        if (candidates.length === 1) { ownedAgentShell = candidates[0]; break; }
+        if (candidates.length > 1 || parent === group) break;
+      }
+    }
     const progressRoot = group.querySelector('[data-streaming-response-status]') || ownedAgentShell;
     const progressAnchors = progressRoot ? (progressRoot === ownedAgentShell
       ? [progressRoot] : [...progressRoot.querySelectorAll('[data-item-anchor]')]) : [];
@@ -686,7 +707,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         bodyProof: answerBody ? answerBodyProof(answerBody) : undefined,
         failureDetail: failure ? text(failure) : undefined,
         publicProgress,
-        progressProbe: { containerPresent: !!progressRoot, anchorCount: progressAnchors.length, titleCount: progressTitleCount, descriptionCount: progressDescriptionCount, containerVisible: !!progressRoot && visible(progressRoot), markerCount: agentStarts.length, agentShellEligible: !!ownedAgentShell, visibleAnchorCount, controlCount, visibleControlCount, localLabelCount, visibleLabelCount,
+        progressProbe: { containerPresent: !!progressRoot, anchorCount: progressAnchors.length, titleCount: progressTitleCount, descriptionCount: progressDescriptionCount, containerVisible: !!progressRoot && visible(progressRoot), markerCount: agentStarts.length, agentShellEligible: !!ownedAgentShell, shellSearchDepth, shellCandidateCount, visibleAnchorCount, controlCount, visibleControlCount, localLabelCount, visibleLabelCount,
           containerDisplay: progressStyle?.display === "none" ? "none" : progressStyle?.display === "contents" ? "contents" : "other",
           containerVisibilityHidden: progressStyle?.visibility === "hidden" || progressStyle?.visibility === "collapse",
           containerOpacityZero: progressStyle?.opacity === "0",
@@ -1764,6 +1785,8 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
             progress_visible_anchor_count: probe.visibleAnchorCount,
             progress_marker_count: probe.markerCount,
             progress_agent_shell_eligible: probe.agentShellEligible,
+            progress_shell_search_depth: probe.shellSearchDepth ?? 0,
+            progress_shell_candidate_count: probe.shellCandidateCount ?? 0,
             progress_control_count: probe.controlCount,
             progress_visible_control_count: probe.visibleControlCount,
             progress_local_label_count: probe.localLabelCount,

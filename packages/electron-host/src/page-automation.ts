@@ -196,12 +196,14 @@ function mutationClockBootstrap(): string {
     if (!state) {
       let revision = 0;
       const waiters = new Map();
-      const observer = new MutationObserver(() => {
+      const notify = () => {
         revision += 1;
         const ready = [...waiters.values()];
         waiters.clear();
         for (const resolve of ready) resolve(revision);
-      });
+      };
+      const observer = new MutationObserver(notify);
+      document.addEventListener('chatgpt-tela-inspection-settled', notify);
       observer.observe(document.documentElement || document, {
         subtree: true,
         childList: true,

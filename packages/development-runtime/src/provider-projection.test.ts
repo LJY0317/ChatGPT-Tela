@@ -5,6 +5,24 @@ import {
 } from "./provider-projection";
 
 describe("fresh Web provider projection", () => {
+  test.each([30_000, 111_193])("oversized exact seed minimizes optional history regardless of hard-window fit: %s", hardLimit => {
+    const authority = "S".repeat(100_000);
+    const context = { mode: "full" as const, headRevisionId: "u", activeRequestRevisionId: "u",
+      logicalTokens: 80_000, transferTokens: 80_000, segments: [
+        {type:"revision" as const, revisionId:"s",kind:"system" as const, content:authority},
+        {type:"revision" as const, revisionId:"a",kind:"assistant" as const, content:"A".repeat(60_000)},
+        {type:"revision" as const, revisionId:"u",kind:"user" as const,content:"continue"},
+      ] };
+    const initial=projectFreshWebPhysicalContext(context);
+    const fit=fitFreshWebPhysicalContext(context,{rolloverTokenLimit:24_000,contextWindowTokenLimit:hardLimit});
+    expect(initial.context.transferTokens).toBeLessThan(111_193);
+    expect(fit.context.transferTokens).toBeLessThan(initial.context.transferTokens);
+    expect(fit.context.transferTokens).toBeLessThan(hardLimit);
+    expect(fit.stats.retentionStep).toBe(0);
+    expect(fit.context.segments[0]?.content).toBe(authority);
+    expect(fit.context.segments.at(-1)?.content).toBe("continue");
+    expect(context.segments[1]?.content).toBe("A".repeat(60_000));
+  });
   test("proven Native continuation summary is atomic rather than legacy assistant truncation", () => {
     const summary = "Verified Native continuation, with limitations: " + "N".repeat(30_000);
     const context = {

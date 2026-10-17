@@ -1,3 +1,4 @@
+import { WebObservationUnproven, webObservationFailureReason, type WebObservationReason } from "@chatgpt-tela/core";
 import { WebSubmissionUnproven, webSubmissionFailureReason, type WebSubmissionProofReason } from "@chatgpt-tela/core";
 import { randomBytes } from "node:crypto";
 import { NativeProjectionUnsupported, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
@@ -56,7 +57,7 @@ export class ActiveTurnRegistry {
   readonly #nativeCallIdsByTurn = new Map<string, Set<string>>();
   readonly #capabilityByTurn = new Map<string, string>();
   // A fixed recovery classification only; never retain raw exceptions or request content.
-  readonly #retiredTurns = new Map<string, true | "handoff_probable" | "handoff_ambiguous" | "projection_unsupported" | NativeHistoryBootstrapRequired["recoveryReason"] | { readonly retainedContext: WebRetainedContextReason } | { readonly submission: WebSubmissionProofReason }>();
+  readonly #retiredTurns = new Map<string, true | "handoff_probable" | "handoff_ambiguous" | "projection_unsupported" | NativeHistoryBootstrapRequired["recoveryReason"] | { readonly retainedContext: WebRetainedContextReason } | { readonly submission: WebSubmissionProofReason } | { readonly observation: WebObservationReason }>();
   static readonly MAX_RETIRED_TURNS = 256;
   readonly #routeId: string | undefined;
 
@@ -94,7 +95,7 @@ export class ActiveTurnRegistry {
 
   retiredError(threadId: string, turnId: string): Error {
     const reason = this.#retiredTurns.get(threadId + "\u0000" + turnId);
-    if (reason && typeof reason === "object") return "submission" in reason
+    if (reason && typeof reason === "object") return "observation" in reason ? new WebObservationUnproven(reason.observation) : "submission" in reason
       ? new WebSubmissionUnproven(reason.submission) : new WebRetainedContextUnproven(reason.retainedContext);
     if (reason === "handoff_probable" || reason === "handoff_ambiguous") return new NativeWebHandoffUnproven(reason === "handoff_ambiguous" ? "ambiguous" : "probable");
     if (reason === "projection_unsupported") return new NativeProjectionUnsupported();
@@ -143,7 +144,8 @@ export class ActiveTurnRegistry {
       ? failure as { code?: unknown; recoveryReason?: unknown; proofState?: unknown } : undefined;
     const retainedContext = webRetainedContextFailureReason(failure);
     const submission = webSubmissionFailureReason(failure);
-    this.#retiredTurns.set(key, submission ? { submission } : retainedContext ? { retainedContext } : error?.code === "native_history_bootstrap_required"
+    const observation = webObservationFailureReason(failure);
+    this.#retiredTurns.set(key, observation ? { observation } : submission ? { submission } : retainedContext ? { retainedContext } : error?.code === "native_history_bootstrap_required"
       ? NativeHistoryBootstrapRequired.normalizeRecoveryReason(error.recoveryReason)
       : error?.code === "native_projection_unsupported" ? "projection_unsupported"
       : error?.code === "native_web_handoff_unproven" ? error.proofState === "ambiguous" ? "handoff_ambiguous" : "handoff_probable" : true);

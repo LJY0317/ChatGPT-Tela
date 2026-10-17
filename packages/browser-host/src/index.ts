@@ -38,6 +38,8 @@ export const BROWSER_INSPECTION_INPUT = createBrowserSurfaceCapability<{
  */
 export const BROWSER_INPUT_OWNERSHIP = createBrowserSurfaceCapability<{
   current(): { readonly revision: number; readonly available: boolean; readonly signal: AbortSignal };
+  /** Optional post-acceptance fence. Proven viewing gestures preserve it; unknown input does not. */
+  observationCurrent?(): { readonly revision: number; readonly available: boolean; readonly pending: boolean };
 }>("browser-input-ownership");
 
 /** A user closing this exact browser window, not a document/navigation or

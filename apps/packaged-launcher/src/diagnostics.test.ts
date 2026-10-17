@@ -23,6 +23,12 @@ test("packaged context report is scoped, structural and read-only", () => {
     expect(report.semanticRecall).toBe("not_evaluated");
     expect(JSON.stringify(report)).not.toContain("PRIVATE_CONTENT");
     expect(readdirSync(logsRoot).sort()).toEqual(before);
+    const compact = runPackagedDiagnosticsCommand(["diagnostics", "context", "--scope", scope,
+      "--at", "2026-10-16T00:01:00Z", "--minutes", "2", "--view", "summary", "--limit", "1"], {logsRoot}) as any;
+    expect(compact.view).toBe("summary"); expect(compact.turns).toHaveLength(1);
+    expect(compact.turns[0].plans).toBeUndefined(); expect(compact.sourceCoverage).toBeDefined();
+    expect(() => runPackagedDiagnosticsCommand(["diagnostics", "context", "--view", "unknown"], {logsRoot})).toThrow();
+    expect(() => runPackagedDiagnosticsCommand(["diagnostics", "context", "--limit", "65"], {logsRoot})).toThrow();
     expect(() => runPackagedDiagnosticsCommand(["diagnostics", "context", "--scope", "invalid"], { logsRoot })).toThrow();
     expect(() => runPackagedDiagnosticsCommand(["diagnostics", "context", "--minutes", "121"], { logsRoot })).toThrow();
   } finally { rmSync(logsRoot, { recursive: true, force: true }); }

@@ -7,7 +7,7 @@ const OPTIONS: Readonly<Record<string, readonly string[]>> = {
   list: [],
   decisions: [],
   inspect: ["--ref"],
-  context: ["--scope", "--at", "--minutes"],
+  context: ["--scope", "--at", "--minutes", "--view", "--limit"],
   capture: ["--minutes", "--mode"],
   activity: ["--at", "--minutes", "--symptom", "--report-origin", "--operation", "--recovered-at", "--output-started-at"],
   record: ["--at", "--minutes", "--symptom", "--report-origin", "--operation", "--recovered-at", "--output-started-at"],

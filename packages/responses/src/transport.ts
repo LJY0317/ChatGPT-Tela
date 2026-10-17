@@ -166,7 +166,7 @@ export async function handleNativeResponsesHttp(
           type: "invalid_request_error",
           code: "tela_native_turn_already_retired",
           retryable: false,
-          message: "This Native turn is already retired. Repeating it cannot recover missing history. Continue with a new, explicitly authorized Native turn and a verified checkpoint or handoff.",
+          message: "This Native turn is already retired. Repeating it cannot resume the interrupted operation. Continue with a new, explicitly authorized Native turn, reusing verified context and reconciling any uncertain operation first.",
           recovery: {
             kind: "authorized_native_continuation",
             requires_user_action: true,

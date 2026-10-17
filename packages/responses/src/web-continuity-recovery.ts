@@ -1,7 +1,16 @@
-import { webRetainedContextFailureReason, webSubmissionFailureReason } from "@chatgpt-tela/core";
+import { webRetainedContextFailureReason, webSubmissionFailureReason, webObservationFailureReason } from "@chatgpt-tela/core";
 
 /** Shared by HTTP and already-started SSE. Never expose an adapter exception. */
 export function webContinuityRecovery(error: unknown) {
+  const observationReason = webObservationFailureReason(error);
+  if (observationReason) return {
+    type: "invalid_request_error" as const, code: "tela_web_observation_unproven" as const,
+    reason: observationReason, retryable: false as const,
+    recovery: { kind: "reconcile_accepted_web_turn" as const, requires_user_action: true as const,
+      requires_new_native_turn: true as const, requires_new_conversation: false as const,
+      original_history_preserved: true as const, reuse_verified_context_first: true as const },
+    message: "The Web request was accepted, but its response could not be verified as belonging to the original request. Do not resend it automatically. Reconcile the existing operation before continuing in this conversation with a new authorized turn.",
+  };
   const submissionReason = webSubmissionFailureReason(error);
   if (submissionReason) return {
     type: "invalid_request_error" as const,

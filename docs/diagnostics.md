@@ -845,3 +845,29 @@ These failure-only events reuse existing parent/scope/operation correlation, can
 filtering and bounded rotation/retention. No paths, endpoint URLs, request/response bodies, stack
 traces, arbitrary error codes or exception messages are logged. No private capture, sampler, model
 call, execution retry or new session is added. Existing approval/body/context evidence is reused.
+
+
+## Accepted Web viewing and seed-cost evidence
+
+`inspection_input_classified` records at most 16 host hit-test outcomes per surface,
+without targets, coordinates or text. Strict submission input fencing remains separate
+from the same host's accepted-observation fence. Pending classification blocks delivery;
+only proven selection/locally linked disclosure or copy/navigation preserves observation.
+Unknown/editing input requires exact request proof. `web_turn_ownership_observed` adds
+observation-input state and expected/observed author character/root counts, never bodies.
+`inspection_scroll_observed` reports at most 16 keyboard-scroll range observations.
+Public-progress extraction records bounded marker-sibling search depth/candidate counts
+(65 means the sibling budget was exceeded), not hidden text or generic disclosures.
+
+An accepted ownership failure has a closed `tela_web_observation_unproven` reason;
+HTTP and started SSE share terminal, nonretryable recovery. The existing bounded
+retired-turn registry retains the reason rather than replacing it with a generic replay
+error. No retry, resubmission or automatic fresh-context recovery is authorized.
+
+`web_turn_plan` seed-byte partitions appear as `seedCost` in full and compact context
+reports. The partitions cover prepared segment text; encoded composer/protocol and media
+measurements remain separate. Flags show fresh-seed target/rollover excess and whether
+a prior local settlement existed. They help identify repeated reconstruction; they do
+not prove wasted billing or semantic recall. Missing old fields remain unknown. The
+packaged launcher accepts the same `--view summary --limit 1` options as the source CLI.
+All evidence uses existing bounded rotation; no cumulative archive or idle model work.

@@ -101,6 +101,14 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
         requestCheckpointReused: typeof row.request_checkpoint_reused === "boolean" ? row.request_checkpoint_reused : undefined,
         requestCheckpointProduced: typeof row.request_checkpoint_produced === "boolean" ? row.request_checkpoint_produced : undefined,
         checkpointCandidateCount: count(row.checkpoint_candidate_count),
+        seedCost: {
+          targetEstimate: count(row.fresh_seed_target),
+          exceedsTarget: typeof row.fresh_seed_exceeds_target === "boolean" ? row.fresh_seed_exceeds_target : undefined,
+          exceedsRollover: typeof row.fresh_seed_exceeds_rollover === "boolean" ? row.fresh_seed_exceeds_rollover : undefined,
+          priorSettlementPresent: typeof row.prior_settlement_present === "boolean" ? row.prior_settlement_present : undefined,
+          authorityBytes: count(row.seed_authority_bytes), userBytes: count(row.seed_user_bytes),
+          checkpointBytes: count(row.seed_checkpoint_bytes), protectedToolBytes: count(row.seed_protected_tool_bytes), otherBytes: count(row.seed_other_bytes),
+        },
         projectionOmittedAssistant: count(row.projection_omitted_assistant),
         projectionOmittedToolResults: count(row.projection_omitted_tool_results),
         projectionTruncatedAssistant: count(row.projection_truncated_assistant),
@@ -129,6 +137,8 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
     state.summary=summarizeTurnDiagnostics(observations);
     const latestPlan=state.plans.at(-1);
     state.summary.context.retentionLink=latestPlan?.retentionLink??"incomplete_evidence";
+    state.summary.context.seedCost=latestPlan?.seedCost;
+    if (latestPlan?.seedCost.exceedsRollover === true) state.summary.warnings.push("fresh_seed_exceeds_rollover");
     state.summary.context.projection=latestPlan?{
       omittedAssistant:latestPlan.projectionOmittedAssistant,omittedToolResults:latestPlan.projectionOmittedToolResults,
       truncatedAssistant:latestPlan.projectionTruncatedAssistant,truncatedToolResults:latestPlan.projectionTruncatedToolResults,

@@ -1278,6 +1278,13 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const inputOwner = surface.capability(BROWSER_INPUT_OWNERSHIP);
     // Capture before consequential input, never infer exclusivity from missing support.
     const inputBaseline = inputOwner?.current();
+    const observationBaseline = inputOwner?.observationCurrent?.();
+    const observationInputState = observationBaseline?.available && !observationBaseline.pending
+      ? (): "unchanged" | "pending" | "changed" => {
+        const now = inputOwner!.observationCurrent!();
+        if (!now.available || now.revision !== observationBaseline.revision) return "changed";
+        return now.pending ? "pending" : "unchanged";
+      } : undefined;
     const inputUnchanged = inputBaseline?.available && inputBaseline.signal && !inputBaseline.signal.aborted && Number.isSafeInteger(inputBaseline.revision)
       ? () => {
         const now = inputOwner!.current();
@@ -1537,6 +1544,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             userTurnKey: userTurn.key,
             acceptedUserFingerprint: acceptedFingerprint,
             ...(inputUnchanged ? { inputUnchanged } : {}),
+            ...(observationInputState ? { observationInputState } : {}),
+            acceptedUserCharacters: text.length,
             ...(causalReceipt ? { causalReceipt: true } : {}),
             ...(userTurn.lineageAnchor ? { acceptedLineageAnchor: userTurn.lineageAnchor } : {}),
             conversationRoute: new URL(snapshot.url).origin + new URL(snapshot.url).pathname,

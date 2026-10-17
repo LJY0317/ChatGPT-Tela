@@ -1,5 +1,6 @@
 import { WebSubmissionUnproven, WEB_SUBMISSION_PROOF_REASONS } from "@chatgpt-tela/core";
 import { describe, expect, test } from "bun:test";
+import { WebObservationUnproven } from "@chatgpt-tela/core";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -81,6 +82,42 @@ test("HTTP disconnect aborts its observer while a subsequent request reuses the 
 });
 
 describe("Native Responses HTTP transport", () => {
+  test.each(["conversation_changed", "request_changed", "lineage_conflict"] as const)("accepted observation failure remains terminal with original cause after retirement: %s", async reason => {
+    let sends=0;
+    const gateway=new NativeResponsesGateway(source,new ActiveTurnRegistry(),async turn=>{
+      sends++; turn.channel.markSubmitted(); turn.channel.markAccepted();
+      throw new WebObservationUnproven(reason,"PRIVATE_BROWSER_EXCEPTION");
+    });
+    try {
+      const first=await handleNativeResponsesHttp(post(body()),gateway);
+      expect(first.status).toBe(400); const receipt=await first.json();
+      expect(receipt.error).toMatchObject({code:"tela_web_observation_unproven",reason,retryable:false,
+        recovery:{requires_new_conversation:false,reuse_verified_context_first:true}});
+      expect(JSON.stringify(receipt)).not.toContain("PRIVATE_BROWSER_EXCEPTION");
+      const replay=await handleNativeResponsesHttp(post(body()),gateway);
+      expect(replay.status).toBe(400); expect(await replay.json()).toEqual(receipt); expect(sends).toBe(1);
+    } finally {await gateway.close();}
+  });
+
+  test("accepted observation failure after progress has identical SSE and retired replay recovery", async () => {
+    let fail!: (error:unknown)=>void;
+    const pending=new Promise<void>((_,reject)=>{fail=reject;}); let sends=0;
+    const gateway=new NativeResponsesGateway(source,new ActiveTurnRegistry(),async turn=>{
+      turn.channel.publishProgress("Preparing work"); sends++;
+      turn.channel.markSubmitted(); turn.channel.markAccepted(); await pending;
+    });
+    try {
+      const response=await handleNativeResponsesHttp(post(body()),gateway);
+      fail(new WebObservationUnproven("conversation_changed"));
+      const events=(await response.text()).split("\n").filter(line=>line.startsWith("data: {"))
+        .map(line=>JSON.parse(line.slice(6)));
+      const error=events.find(event=>event.type==='response.failed').response.error;
+      expect(error).toMatchObject({code:'tela_web_observation_unproven',reason:'conversation_changed',retryable:false});
+      expect(events.some(event=>event.type==='response.completed')).toBe(false);
+      const replay=await handleNativeResponsesHttp(post(body()),gateway);
+      expect(replay.status).toBe(400); expect((await replay.json()).error).toEqual(error); expect(sends).toBe(1);
+    } finally {await gateway.close();}
+  });
   test("completed-cycle continuation without proven new input is terminal rather than a reconnectable 409", async () => {
     let launches = 0;
     const owner = new AbortController();

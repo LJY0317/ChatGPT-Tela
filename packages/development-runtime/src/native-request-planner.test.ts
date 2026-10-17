@@ -1141,7 +1141,14 @@ describe("Native request development Web planner", () => {
     expect(second.diagnostics).toMatchObject({
       physical_rollover: true,
       provider_projection: true,
+      prior_settlement_present: true,
+      fresh_seed_target: 24_000,
+      fresh_seed_exceeds_target: false,
+      fresh_seed_exceeds_rollover: false,
     });
+    const seedByteFields = ['seed_authority_bytes','seed_user_bytes','seed_checkpoint_bytes','seed_protected_tool_bytes','seed_other_bytes'];
+    expect(seedByteFields.reduce((sum,key)=>sum+Number(second.diagnostics?.[key]),0))
+      .toBe(second.physicalContext.segments.reduce((sum,segment)=>sum+Buffer.byteLength(segment.content),0));
     expect(Number(second.diagnostics?.previous_epoch_input_estimate)).toBeGreaterThanOrEqual(95_000);
     second.settle?.({ status: "failed" });
   });

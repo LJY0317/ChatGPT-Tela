@@ -40,6 +40,10 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
       if (field === "unmounted" || field === "unavailable" || field === "matching" || field === "changed") safe[key] = field;
       continue;
     }
+    if (key === "observation_input_state") {
+      if (["unchanged", "pending", "changed", "unknown"].includes(String(field))) safe[key] = field as string;
+      continue;
+    }
     if (key === "source_kind") {
       if (field === "native-visible-prefix" || field === "native-request-prefix") safe[key] = field;
       continue;

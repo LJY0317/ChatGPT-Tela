@@ -304,7 +304,7 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   }
 }
 
-async function leaseFor(driver: FixtureDriver, inputOwner?: { current(): { revision: number; available: boolean; signal: AbortSignal } }) {
+async function leaseFor(driver: FixtureDriver, inputOwner?: { current(): { revision: number; available: boolean; signal: AbortSignal }; observationCurrent?(): { revision: number; available: boolean; pending: boolean } }) {
   const host = new ControlledBrowserHost(async () => ({
     async navigate() {},
     async reveal() {},
@@ -2464,10 +2464,11 @@ function causalSnapshot(driver: FixtureDriver): ChatGptSurfaceSnapshot {
       {key:'causal-assistant',role:'assistant',parentUserTurnKey:userKey,lineageAnchor:anchor,phase:'streaming'}] };
 }
 
-test.each(['matching', 'normalized', 'matching-revoked', 'normalized-revoked'] as const)('readable submission retains independent causal proof after preview changes: %s', async mode => {
+test.each(['matching', 'normalized', 'matching-revoked', 'normalized-revoked', 'viewing-revoked'] as const)('readable submission retains independent causal proof after preview changes: %s', async mode => {
   const driver = new FixtureDriver(fixture('ready-new-chat'));
   const inputAbort = new AbortController();
-  const surface = await leaseFor(driver, {current: () => ({revision: 0, available: true, signal: inputAbort.signal})});
+  const surface = await leaseFor(driver, {current: () => ({revision: 0, available: true, signal: inputAbort.signal}),
+    ...(mode === 'viewing-revoked' ? { observationCurrent: () => ({revision: 0, available: true, pending: false}) } : {})});
   const provider = new ChatGptSemanticProvider();
   const scratch = mkdtempSync(join(tmpdir(), 'tela-readable-proof-'));
   const file = join(scratch, 'events.jsonl'), prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
@@ -2484,7 +2485,8 @@ test.each(['matching', 'normalized', 'matching-revoked', 'normalized-revoked'] a
       {...receipt.turns[0]!, contentFingerprint: hash('expanded display')},
       {...receipt.turns[1]!, phase: 'complete', text: 'owned final'},
     ]};
-    const revoked = mode.endsWith('-revoked');
+    if (mode === 'viewing-revoked') inputAbort.abort(new Error('strict submission fence revoked by proven viewing'));
+    const revoked = mode.endsWith('-revoked') && mode !== 'viewing-revoked';
     if (revoked) {
       // After outside input, a different rendered author cannot borrow the
       // accepted causal receipt. It blocks result delivery without a resend.

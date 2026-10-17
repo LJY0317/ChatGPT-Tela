@@ -15,7 +15,7 @@ test("one equivalent containment chain is the same author payload regardless of 
     const roots = chain(Array(count).fill("한글 😀\r\nexact author text"));
     for (const ordered of [roots, [...roots].reverse()]) {
       expect(userPayload(bubble(ordered))).toEqual({ value: "한글 😀\nexact author text", reason: "author_payload",
-        rootCount: count, nestedRoots: true, equivalentRoots: true });
+        rootCount: count, nestedRoots: true, equivalentRoots: true, outerLength: 23, innerLength: 23 });
     }
   }
 });
@@ -34,7 +34,7 @@ test("different nested text, sibling duplicates and branching roots cannot suppl
 
 test("single, empty, oversized and missing author payloads preserve their bounds", () => {
   expect(userPayload(bubble([]))).toEqual({ reason: "author_root_missing", rootCount: 0, nestedRoots: false });
-  expect(userPayload(bubble(chain(["text"])))).toEqual({ value: "text", reason: "author_payload", rootCount: 1 });
+  expect(userPayload(bubble(chain(["text"])))).toEqual({ value: "text", reason: "author_payload", rootCount: 1, outerLength: 4 });
   expect(userPayload(bubble(chain(["", ""])))).toMatchObject({ reason: "author_payload_empty" });
   expect(userPayload(bubble(chain(["x".repeat(1_048_577), "text"])))).toMatchObject({ reason: "author_payload_budget" });
 });

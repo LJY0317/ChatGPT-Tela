@@ -285,6 +285,23 @@ class RendererFixturePage extends FakePage {
 }
 
 describe("current ChatGPT DOM surface driver", () => {
+  test.each([false, true])("marker siblings expose only unique public progress, ambiguous=%s", async ambiguous => {
+    const label=new FixtureElement({id:'public-label'}); label.innerText='Reviewing changes';
+    const button=new FixtureElement({'aria-expanded':'true','aria-labelledby':'public-label'});
+    const description=new FixtureElement(); description.childNodes=[{nodeType:3,textContent:'Checking the current patch.'}];
+    const shell=new FixtureElement({}, {'button[aria-expanded][aria-labelledby]':[button],'[id]':[label]});
+    shell.childNodes=[button,label,description];
+    const body=new FixtureElement({'data-markdown-text-style':'assistant-message'}); body.innerText='FINAL_EXCLUDED';
+    const group=new FixtureElement({'data-turn-key':'owned'}, {'[data-markdown-text-style="assistant-message"]':[body]});
+    const marker=Object.assign(new FixtureElement(),{parentElement:group});
+    group.selectors['[data-chatgpt-agent-turn-start]']=[marker];
+    group.childNodes=[marker,shell,body,...(ambiguous?[shell]:[])];
+    group.contains=node=>node===group||group.childNodes.includes(node as FixtureElement);
+    const driver=new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, {'[data-turn-key]':[group]})));
+    const turns=(await driver.observe()).turns;
+    expect(turns.find(t=>t.role==='assistant')?.publicProgress??[]).toEqual(ambiguous?[]:['Reviewing changes\n\nChecking the current patch.']);
+    expect(JSON.stringify(turns.find(t=>t.role==='assistant')?.publicProgress??[])).not.toContain('FINAL_EXCLUDED');
+  });
   test("exact composer focus for trusted synthetic typing never changes or submits a draft", async () => {
     const page = new FakePage();
     const driver = new ChatGptDomSurfaceDriver(page);

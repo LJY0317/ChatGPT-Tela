@@ -1176,6 +1176,17 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // The composer/hard-window preflight below must refuse irreducible oversize
     // rather than secretly spending an additional task conversation turn.
     const physicalContext = physicalMediaCost(boundContext, media);
+    // On-demand byte partition of the already prepared seed. No bodies or extra
+    // model work; irreducible user/authority/protected evidence stays explicit.
+    const seedBytes = { authority: 0, user: 0, checkpoint: 0, protectedTool: 0, other: 0 };
+    const protectedIds = new Set(protectedNativeEvidence);
+    for (const segment of boundContext.segments) {
+      const kind = segment.type === "checkpoint" ? "checkpoint"
+        : segment.kind === "system" || segment.kind === "developer" ? "authority"
+        : segment.kind === "user" || segment.kind === "steering" ? "user"
+        : segment.kind === "tool-result" && protectedIds.has(segment.revisionId) ? "protectedTool" : "other";
+      seedBytes[kind] += Buffer.byteLength(segment.content, "utf8");
+    }
     const transportAnchor = prepared.plan.mode === "checkpoint-delta"
       ? `checkpoint:${prepared.plan.checkpointId}`
       : `full:${projection.headId}`;
@@ -1202,6 +1213,13 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         checkpoint_candidate_count: candidates.length,
         logical_revision_count: projection.revisions.length,
         physical_rollover: pressure?.shouldRollover === true,
+        prior_settlement_present: committed !== undefined,
+        fresh_seed_target: workingPolicy.firstMessageTargetTokens,
+        fresh_seed_exceeds_target: physicalContext.transferTokens >= workingPolicy.firstMessageTargetTokens,
+        fresh_seed_exceeds_rollover: !!physicalLimits && physicalContext.transferTokens >= physicalLimits.rolloverTokenLimit,
+        seed_authority_bytes: seedBytes.authority, seed_user_bytes: seedBytes.user,
+        seed_checkpoint_bytes: seedBytes.checkpoint, seed_protected_tool_bytes: seedBytes.protectedTool,
+        seed_other_bytes: seedBytes.other,
         ...(pressure ? {
           previous_epoch_input_estimate: pressure.estimatedEpochInputTokens,
           previous_epoch_rollover_limit: pressure.effectiveRolloverTokenLimit,

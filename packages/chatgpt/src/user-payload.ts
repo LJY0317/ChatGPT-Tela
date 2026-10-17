@@ -19,11 +19,13 @@ export function userPayload(bubble: HTMLElement): { value?: string; candidates?:
     outer = outermost[0]!; inner = innermost[0]!;
   }
   const value = (outer.textContent ?? '').replace(/\r\n?/g, '\n');
+  structure.outerLength = value.length;
   if (value.length > 1_048_576) return { reason: 'author_payload_budget', ...structure };
   if (outer !== inner) {
     // For a DOM containment chain, equal endpoints prove that no intermediate
     // wrapper adds author text. Read only two payloads, never one per wrapper.
     const innerValue = (inner.textContent ?? '').replace(/\r\n?/g, '\n');
+    structure.innerLength = innerValue.length;
     if (innerValue.length > 1_048_576) return { reason: 'author_payload_budget', ...structure };
     structure.equivalentRoots = value === innerValue;
     if (!structure.equivalentRoots) return { reason: 'ambiguous_author_root', ...structure,

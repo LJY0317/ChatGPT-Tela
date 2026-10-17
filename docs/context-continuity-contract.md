@@ -1,7 +1,27 @@
 # Native / Web context continuity contract
 
+## Viewing versus submission evidence (source; awaiting installation)
+
+The strict host input fence still covers the exact composer/send through acceptance.
+After acceptance, an optional fence from that same host distinguishes pending hit-tests,
+proven viewing (selection, copy, navigation and locally linked disclosure controls),
+and unknown/editing input. Pending input authorizes no delivery. Unknown input requires
+fresh exact author proof; an unchanged anchor alone never authorizes a result. A viewing
+gesture does not invalidate an already accepted causal receipt. Document/account/Native
+ownership and conflicting user/assistant lineage remain mandatory. Unsupported hosts
+retain the stricter existing path; no resend, model call or new execution authority is added.
+The renderer's existing event clock wakes after a host hit-test, including selection with
+no DOM mutation. It adds no timer or idle sampler.
+
+Open Browser shows the currently owned physical Web page, not an archive of the full
+Native conversation. After a necessary physical rollover, earlier Native messages live
+in canonical history/checkpoints, not necessarily in scrollable Web bubbles. Keyboard
+viewing scrolls the focused overflow pane or the main conversation pane. Visible public
+progress is extracted only within the unique marker-owned disclosure branch; hidden
+subtrees, user bodies, final answers and ambiguous candidates remain excluded.
+
 This is the current contract and source implementation record, replacing dated source-candidate narratives.
-The source implementation was installed with the official signed local upgrade as
+The earlier working-context baseline was installed with the official signed local upgrade as
 `0.0.0-context-continuity-20261017.f1a482c.1`. Profile 1/2 and Web route readiness
 were checked without sending model messages. **Real account/model semantic or
 billing validation remains unperformed and user-owned.**
