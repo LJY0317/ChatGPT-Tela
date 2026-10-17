@@ -38,6 +38,7 @@ private struct ControlCenterBridgeSurface: Decodable { let id: String; let label
 
 private struct ControlCenterBridgePreview: Decodable {
   let approvalState: String?
+  let approvalObservationReason: String?
   let contractVersion: Int
   let slot: Int
   let activeSurfaceCount: Int
@@ -1746,7 +1747,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       if preview.selectedSurfaceId != nil && preview.approvalState == "pending" {
         bridgeMessage += "\nApproval is waiting in this browser session. Choose Interact to review and approve the card."
       } else if preview.selectedSurfaceId != nil && preview.approvalState == "unavailable" {
-        bridgeMessage += "\nApproval status could not be checked."
+        bridgeMessage += preview.approvalObservationReason == "automation_unavailable"
+          ? "\nApproval cannot be checked because this session has no page-observation capability."
+          : "\nApproval observation failed; do not assume the card was cleared."
       }
     } catch {
       guard revision == previewRevision else { return }

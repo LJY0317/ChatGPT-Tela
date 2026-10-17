@@ -222,6 +222,26 @@ describe("profile bridge preview server", () => {
       expect(calls).toBe(2);
     } finally { await server.close(); }
   });
+  test("read-only bridge reports fixed observation cause without page text or a guessed clearance", async () => {
+    const token = "t".repeat(48); const id = "surface_" + "b".repeat(32);
+    const server = await startProfileBridgePreviewServer({ slot: 2, bearerToken: token,
+      async observe(selected) { return {
+        activeSurfaceCount: 1, surfaces: [{ id, label: "Owned" }], selectedSurfaceId: selected ?? id,
+        approvalState: "unavailable", approvalObservationReason: "dom_observation_failed",
+        extra: "RAW PRIVATE WEB CARD",
+      }; },
+    });
+    try {
+      const result = await (await fetch(new URL("v1/bridge-preview", server.endpoint), {
+        headers: { authorization: `Bearer ${token}` },
+      })).json() as Record<string, unknown>;
+      expect(result).toMatchObject({
+        contractVersion: 1, slot: 2, approvalState: "unavailable",
+        approvalObservationReason: "dom_observation_failed",
+      });
+      expect(JSON.stringify(result)).not.toContain("RAW PRIVATE");
+    } finally { await server.close(); }
+  });
   test("serves only authenticated loopback read-only preview observations", async () => {
     let observations = 0;
     const token = "u".repeat(48);

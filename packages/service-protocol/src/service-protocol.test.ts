@@ -87,6 +87,18 @@ describe("private service protocol", () => {
       previewAvailable: false,
       imageBase64: "AQIDBA==",
     })).toThrow("must not include image data");
+    const id = "surface_" + "a".repeat(32);
+    const selected = { contractVersion: 1, slot: 2, activeSurfaceCount: 1, previewAvailable: false,
+      surfaces: [{ id, label: "Owned surface" }], selectedSurfaceId: id };
+    expect(parseCodexBridgePreviewContract({
+      ...selected, approvalState: "unavailable", approvalObservationReason: "dom_observation_failed",
+    })).toMatchObject({ approvalState: "unavailable", approvalObservationReason: "dom_observation_failed" });
+    expect(() => parseCodexBridgePreviewContract({ ...selected, approvalState: "cleared" })).toThrow();
+    expect(() => parseCodexBridgePreviewContract({
+      ...selected, approvalState: "pending", approvalObservationReason: "dom_observation_failed",
+    })).toThrow();
+    expect(() => parseCodexBridgePreviewContract({ ...selected, selectedSurfaceId: undefined,
+      approvalState: "pending" })).toThrow();
   });
 });
 

@@ -94,6 +94,7 @@ export const TELA_CHAT_FILE_IMPORT_CAPABILITIES = Object.freeze(["open_file_impo
 
 export const TELA_CHAT_CAPABILITIES = Object.freeze([
   ...TELA_CHAT_BASE_CAPABILITIES,
+  "inspect_native_work",
   "export_file",
   ...TELA_CHAT_FILE_IMPORT_CAPABILITIES,
   ...TELA_CHAT_MANAGED_WORKTREE_CAPABILITIES,
@@ -179,6 +180,9 @@ export function createChatToolRuntime(input: {
   readonly ownerWorker?: OwnedProcessWorkerConfig;
   readonly agentDrivers?: readonly ChatAgentDriver[];
   readonly agentDriverFactories?: readonly ChatAgentDriverFactory[];
+  /** Optional authenticated, read-only peer contract; never import Codex runtime into Chat. */
+  readonly inspectNativeWork?: (request: { readonly slot: number; readonly threadId: string;
+    readonly minutes: number }) => Promise<unknown>;
   readonly ownership?: {
     readonly installId: string;
     readonly productVersion: string;
@@ -240,6 +244,7 @@ export function createChatToolRuntime(input: {
   const capabilities = (): readonly TelaChatCapability[] => Object.freeze([
     ...(exporter?.supported ? ["export_file" as const] : []),
     ...TELA_CHAT_BASE_CAPABILITIES,
+    ...(input.inspectNativeWork ? ["inspect_native_work" as const] : []),
     ...(importer ? TELA_CHAT_FILE_IMPORT_CAPABILITIES : []),
     ...(worktrees ? TELA_CHAT_MANAGED_WORKTREE_CAPABILITIES : []),
     ...(agents ? TELA_CHAT_AGENT_CAPABILITIES : []),
@@ -271,6 +276,19 @@ export function createChatToolRuntime(input: {
           const workspace = workspaces.open(text(args.path, "workspace path"));
           const reviewBaseline = await changes.initializeWorkspace(workspace.id);
           return Object.freeze({ ...workspace, ...discoverWorkspaceInstructions(workspace.root), reviewBaseline });
+        }
+        case "inspect_native_work": {
+          // The open workspace is a user-approved Chat context gate, not
+          // permission to mutate a Native thread or choose another profile.
+          workspaces.get(text(args.workspace_id, "workspace_id"));
+          const threadId = text(args.thread_id, "thread_id");
+          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(threadId)) {
+            throw Error("Native thread identity must be an exact UUID");
+          }
+          const slot = optionalInteger(args.slot, "slot") ?? 1;
+          const minutes = optionalInteger(args.minutes, "minutes") ?? 30;
+          if (slot < 1 || slot > 99 || minutes < 1 || minutes > 120) throw Error("invalid inspection slot or window");
+          return await input.inspectNativeWork!({ slot, threadId, minutes });
         }
         case "export_file":
           return await exporter!.read(text(args.workspace_id, "workspace_id"), text(args.path, "path"));

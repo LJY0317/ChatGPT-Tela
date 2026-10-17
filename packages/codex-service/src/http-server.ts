@@ -70,6 +70,8 @@ function contextAttachmentCanarySlot(pathname: string): number | undefined {
 export async function startCodexServiceHttpServer(input: {
   readonly service: CodexService;
   readonly bearerToken?: string;
+  /** Optional, owner-verified structural inspection; not a Native turn mutation. */
+  readonly inspectWork?: (slot: number, threadId: string, minutes: number) => Promise<unknown>;
 }): Promise<CodexServiceHttpServer> {
   const bearerToken = input.bearerToken ?? randomBytes(36).toString("base64url");
   if (bearerToken.length < 32) throw new Error("Tela Codex service bearer token is too short");
@@ -98,6 +100,31 @@ export async function startCodexServiceHttpServer(input: {
           return Response.json(await input.service.terminalSession(Number(terminalMatch[1])), {
             headers: { "cache-control": "no-store" },
           });
+        }
+        const inspectMatch = request.method === "POST"
+          ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/work-inspection$/.exec(url.pathname) : null;
+        if (inspectMatch && input.inspectWork) {
+          const body = await request.json().catch(() => undefined) as unknown;
+          if (!body || typeof body !== "object" || Array.isArray(body)) return error(400, "invalid work inspection request");
+          const fields = body as Record<string, unknown>;
+          const threadId = fields.threadId, minutes = fields.minutes;
+          if (typeof threadId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(threadId)
+            || !Number.isSafeInteger(minutes) || (minutes as number) < 1 || (minutes as number) > 120
+            || Object.keys(fields).some(key => !["threadId", "minutes"].includes(key))) {
+            return error(400, "invalid work inspection request");
+          }
+          try {
+            const observed = await input.inspectWork(Number(inspectMatch[1]), threadId, minutes as number);
+            return Response.json(observed, { headers: { "cache-control": "no-store" } });
+          } catch {
+            // Native/DOM/service errors may carry private paths or source text.
+            // An authenticated peer still gets only an invariant, fixed error.
+            emitDiagnosticEvent("chatgpt_tela_codex", "work_inspection_failed", {
+              reason_class: "inspection_unavailable",
+              slot: Number(inspectMatch[1]),
+            });
+            return error(409, "work inspection unavailable; verify the selected owner and try again later");
+          }
         }
         const accountMatch = request.method === "GET"
           ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/account-check$/.exec(url.pathname) : null;

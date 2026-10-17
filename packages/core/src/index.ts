@@ -26,3 +26,4 @@ export * from "./web-submission-error";
 export * from "./web-observation-error";
 
 export * from "./diagnostic-turn-summary";
+export * from "./native-thread-inspection";

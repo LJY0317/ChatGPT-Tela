@@ -90,6 +90,7 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
     readonly selectedSurfaceId?: string;
     readonly jpeg?: Uint8Array;
     readonly approvalState?: "pending" | "none" | "unavailable";
+    readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed";
   }>;
   /**
    * Open one visible control-plane ChatGPT surface using the same persistent ChatGPT Tela profile partition.
@@ -435,15 +436,27 @@ export async function startElectronDevelopmentRuntime(
       const capability = selected ? browserHost.selectedCapability(selected, BROWSER_READ_ONLY_PREVIEW) : undefined;
       const automation = selected ? browserHost.selectedCapability(selected, BROWSER_PAGE_AUTOMATION) : undefined;
       let approvalState: "pending" | "none" | "unavailable" = "unavailable";
+      let approvalObservationReason: "automation_unavailable" | "dom_observation_failed" | undefined;
       if (automation) {
         try {
           const observation = await new ChatGptDomSurfaceDriver(automation).observe();
           approvalState = observation.approval?.cardCount ? "pending" : "none";
-        } catch { /* An unavailable observation cannot assert that approval cleared. */ }
+        } catch {
+          // Never interpret a failed DOM read as clearance or as authorization to click.
+          approvalObservationReason = "dom_observation_failed";
+        }
+      } else if (selected) {
+        approvalObservationReason = "automation_unavailable";
+      }
+      if (approvalObservationReason) {
+        emitDiagnosticEvent("chatgpt_tela_work", "bridge_approval_observation_unavailable", {
+          reason_class: approvalObservationReason,
+        });
       }
       return Object.freeze({ activeSurfaceCount: surfaces.length, surfaces,
         ...(selected ? { selectedSurfaceId: selected } : {}),
         ...(selected ? { approvalState } : {}),
+        ...(approvalObservationReason ? { approvalObservationReason } : {}),
         ...(capability ? { jpeg: await capability.captureJpeg() } : {}),
       });
     },

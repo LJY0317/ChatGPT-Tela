@@ -135,6 +135,18 @@ and makes no model calls. It does not reduce cold-checkpoint inference time.
 
 ### Exact Native conversation inspection by ID
 
+For a connected Tela Chat agent, prefer its `inspect_native_work`
+read-only capability (opened workspace ID + exact Native thread UUID,
+optional profile slot/minutes) over composing a `bun -e` diagnostic
+script through `exec_command`. The authenticated Codex-service
+inspection checks the Native owner, projects bounded logs, observes
+current profile Web approval and verifies the owner stayed unchanged.
+Web card state is **profile-scoped**, not proof it belongs to that
+Native conversation. `unavailable` includes a fixed observation
+failure reason where supported; ChatGPT host-owned approval cards
+remain pre-ingress and cannot be approved by Tela. See
+[approval review boundaries](approval-review-boundaries.md).
+
 When the user supplies an original Native conversation UUID, use one scoped,
 read-only inspection instead of searching private rollout files or repeatedly
 auditing all logs:

@@ -53,6 +53,13 @@ wait without searching the user's private messages:
 See [diagnostics](docs/diagnostics.md) for limits. The CLI cannot approve
 provider security reviews or attest the state of an inaccessible host card;
 unattended execution cannot be promised while human review is outstanding.
+Tela Chat additionally exposes an optional authenticated `inspect_native_work`
+read-only capability (opened workspace ID, exact Native thread UUID and
+optional profile/window), without an arbitrary shell command. It reports
+current profile Web approval separately from the Native thread because
+profile-only browser evidence is not proof of one conversation's ownership.
+The host's own ChatGPT tool approval prompts are outside Tela ingress and
+cannot be granted by an agent; see [approval review boundaries](docs/approval-review-boundaries.md).
 
 - Make installation, repair, upgrade, and **complete removal** first-class product lifecycles. Tela records
   what it owns and never relies on an undocumented cleanup checklist.

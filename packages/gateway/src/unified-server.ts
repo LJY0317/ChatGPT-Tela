@@ -21,6 +21,7 @@ interface ChatToolDefinition {
   readonly title: string;
   readonly description: string;
   readonly inputSchema: z.ZodObject<z.ZodRawShape>;
+  readonly readOnly?: true;
 }
 
 const workspaceId = z.string().min(1).max(512);
@@ -32,6 +33,19 @@ const agentPrompt = z.string().min(1).max(256 * 1024);
 const agentWriteMode = z.enum(["read_only", "workspace_write"]).optional();
 
 export const UNIFIED_CHAT_TOOL_DEFINITIONS: readonly ChatToolDefinition[] = Object.freeze([
+  {
+    name: "tela_chat_inspect_native_work",
+    capability: "inspect_native_work",
+    title: "Inspect one owned Native Work conversation",
+    description: "Read-only owner-checked Native turn status, bounded diagnostic events and current profile Web approval observation for an exact supplied thread UUID. No shell commands, credentials, screenshots, browser clicks, tool approval, or Native turn changes. Host approval cards remain outside Tela's control.",
+    inputSchema: z.object({
+      workspace_id: workspaceId,
+      thread_id: z.string().uuid(),
+      slot: z.number().int().min(1).max(99).optional(),
+      minutes: z.number().int().min(1).max(120).optional(),
+    }),
+    readOnly: true,
+  },
   {
     name: "tela_chat_open_workspace",
     capability: "open_workspace",
@@ -228,6 +242,8 @@ export function createUnifiedDevelopmentMcpServer(input: {
       readonly title: string;
       readonly description: string;
       readonly inputSchema: z.ZodTypeAny;
+      readonly annotations?: { readonly readOnlyHint: true; readonly destructiveHint: false;
+        readonly idempotentHint: true; readonly openWorldHint: false };
     },
     handler: (arguments_: Readonly<Record<string, unknown>>) => Promise<{
       readonly content: readonly { readonly type: "text"; readonly text: string }[];
@@ -240,6 +256,8 @@ export function createUnifiedDevelopmentMcpServer(input: {
       title: definition.title,
       description: definition.description,
       inputSchema: definition.inputSchema,
+      ...(definition.readOnly ? { annotations: { readOnlyHint: true, destructiveHint: false,
+        idempotentHint: true, openWorldHint: false } } : {}),
     }, async arguments_ => {
       try {
         const result = await input.chat.call(definition.capability, arguments_ as Readonly<Record<string, unknown>>);

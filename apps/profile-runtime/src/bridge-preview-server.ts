@@ -41,7 +41,7 @@ export async function startProfileBridgePreviewServer(input: {
   readonly runSavedDeleteAcceptance?: () => Promise<Omit<CodexSavedDeleteAcceptanceContract, "slot">>;
   readonly recoverSyntheticSavedChat?: () => Promise<Omit<CodexSyntheticRecoveryContract, "slot">>;
   readonly reveal?: (id: string, interactive?: boolean) => Promise<void>;
-  readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable" }>;
+  readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable"; readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed" }>;
   readonly probeModelSelection?: () => Promise<{
     readonly familyCount: number;
     readonly exercised: boolean;
@@ -207,6 +207,8 @@ export async function startProfileBridgePreviewServer(input: {
         ...(observed.surfaces ? { surfaces: observed.surfaces } : {}),
         ...(observed.selectedSurfaceId ? { selectedSurfaceId: observed.selectedSurfaceId } : {}),
         ...(observed.selectedSurfaceId && observed.approvalState ? { approvalState: observed.approvalState } : {}),
+        ...(observed.selectedSurfaceId && observed.approvalState === "unavailable" && observed.approvalObservationReason
+          ? { approvalObservationReason: observed.approvalObservationReason } : {}),
         previewAvailable: jpeg !== undefined,
         ...(jpeg ? { imageMimeType: "image/jpeg", imageBase64: Buffer.from(jpeg).toString("base64") } : {}),
       }, { headers: { "cache-control": "no-store" } });
