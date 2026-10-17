@@ -267,7 +267,7 @@ class FixtureElement {
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
   getClientRects() { return [{}]; }
   getBoundingClientRect() { return { left: 0, top: 0, width: 20, height: 20 }; }
-  closest() { return this.selectors.form?.[0] ?? null; }
+  closest(_selector?: string) { return this.selectors.form?.[0] ?? null; }
   cloneNode() { return this; }
 }
 
@@ -348,6 +348,59 @@ describe("current ChatGPT DOM surface driver", () => {
     card.textContent='Replaced request';expect(registry.manualInputTarget(allow)).toBe(false);
     await driver.observe();expect(registry.manualInputTarget(allow)).toBe(true);
     allow.disabled=true;expect(registry.manualInputTarget(allow)).toBe(false);
+  });
+  test("a human approval-options menu preserves input identity only through a uniquely linked visible portal", async () => {
+    const deny = new FixtureElement({ 'data-fixture-tag': 'BUTTON' }); deny.textContent = 'Deny';
+    const allow = new FixtureElement({ 'data-fixture-tag': 'BUTTON' }); allow.textContent = 'Allow once';
+    const disclosure = new FixtureElement({ 'data-fixture-tag': 'BUTTON', 'id': 'approval-trigger',
+      'aria-haspopup': 'menu', 'aria-controls': 'approval-options-menu', 'aria-expanded': 'false' });
+    disclosure.textContent = 'Approval options';
+    const portal = new FixtureElement({ 'id': 'approval-options-menu', 'role': 'menu' });
+    const scoped = new FixtureElement({ 'role': 'menuitem' });
+    scoped.textContent = 'Allow ChatGPT Tela for this conversation';
+    const foreign = new FixtureElement({ 'role': 'menuitem' });
+    foreign.textContent = 'Unrelated UI action';
+    const card = new FixtureElement({}, { button: [deny, allow, disclosure] });
+    card.textContent = 'Owned request: opaque local test data';
+    card.contains = value => [deny, allow, disclosure].includes(value as FixtureElement);
+    portal.contains = value => value === scoped || value === foreign;
+    const controlSelector = 'button,[role="button"]';
+    const itemSelector = '[role="menuitem"]';
+    disclosure.closest = (selector?: string) => selector === controlSelector ? disclosure : null;
+    scoped.closest = (selector?: string) => selector === itemSelector ? scoped : selector === '[role="menu"]' ? portal : null;
+    foreign.closest = (selector?: string) => selector === itemSelector ? foreign : selector === '[role="menu"]' ? portal : null;
+    const root = new FixtureElement({}, {
+      '[data-codex-approval-surface="true"]': [card],
+      '[role="menu"]': [portal],
+    });
+    const page = new RendererFixturePage(root);
+    const driver = new ChatGptDomSurfaceDriver(page);
+    await driver.observe();
+    const registry = page.rendererState[Symbol.for('chatgpt-tela.approval-observations.v1')] as {
+      manualInputTarget: (node: unknown) => boolean;
+    };
+    expect(registry.manualInputTarget(disclosure)).toBe(true);
+    expect(registry.manualInputTarget(scoped)).toBe(false); // menu is not opened yet
+    disclosure.attributes['aria-expanded'] = 'true';
+    expect(registry.manualInputTarget(scoped)).toBe(true);
+    expect(registry.manualInputTarget(foreign)).toBe(false);
+    portal.attributes['id'] = 'unrelated-menu';
+    expect(registry.manualInputTarget(scoped)).toBe(false);
+    portal.attributes['id'] = 'approval-options-menu';
+    root.selectors['[role="menu"]']!.push(new FixtureElement({ role: 'menu' }));
+    expect(registry.manualInputTarget(scoped)).toBe(false);
+    root.selectors['[role="menu"]']!.pop();
+    scoped.disabled = true;
+    expect(registry.manualInputTarget(scoped)).toBe(false);
+    scoped.disabled = false;
+    card.textContent = 'Replaced request';
+    expect(registry.manualInputTarget(scoped)).toBe(false);
+    await driver.observe();
+    expect(registry.manualInputTarget(scoped)).toBe(true);
+    const otherCard = new FixtureElement();
+    root.selectors['[data-codex-approval-surface="true"]']!.push(otherCard);
+    expect(registry.manualInputTarget(scoped)).toBe(false);
+    expect(page.actions).toEqual([]); // Classification is passive; no approvals were dispatched.
   });
   test("exact composer focus for trusted synthetic typing never changes or submits a draft", async () => {
     const page = new FakePage();

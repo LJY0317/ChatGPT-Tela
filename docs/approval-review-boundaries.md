@@ -75,6 +75,17 @@ the visibly truncated user bubble: truncated display text is not
 independent proof that the original submitted request changed. A real
 request edit, competing user turn or owner mismatch still fails closed.
 
+**Manual dropdown consent:** Opening a uniquely observed card-local
+`Approval options` disclosure is viewing/consent navigation, not a
+request edit. A human choice rendered in an out-of-card menu preserves
+the accepted input witness only if the card is unchanged, one visible
+`role=menu` is linked to the single expanded disclosure through
+`aria-controls` or `aria-labelledby`, and an enabled menu item has an
+exactly recognized decision label. An unlinked/duplicate/stale menu,
+foreign action or changed card still revokes/blocks delivery. This
+**does not automatically click** the menu or approve a safety warning,
+and cannot alter a ChatGPT host-managed permission decision.
+
 ### Agent-assisted eligibility, conversation-scoped preference and verified approvals
 
 The provider-owned pure policy `reviewChatGptApprovalForAgent()` shares
@@ -118,8 +129,8 @@ the provider reports a manual-review action and will not approve another
 card or resume by replaying the accepted request. `approval_agent_review`
 diagnostics are content-free and bounded per turn; they distinguish
 eligibility, manual warning and limit reached. This additional limit
-has no new model calls, periodic monitoring, global approval ledger,
-or periodic monitoring. Existing `off` remains the default.
+has no new model calls, periodic monitoring or global approval ledger.
+Existing `off` remains the default.
 
 **Not yet implemented:** an agent-triggered `approve_once` API for an
 already pending card. Before implementing it, prove exact Native turn,

@@ -49,11 +49,15 @@ test("agent can inspect only historical structural approval evidence after Nativ
   const base = mkdtempSync(join(tmpdir(), "tela-chat-offline-evidence-"));
   const root = join(base, "workspace"); mkdirSync(root);
   const log = join(base, "local-structural-events.jsonl");
+  // The read deliberately filters to the last 180 minutes. Fixed calendar
+  // timestamps become expired test data as wall time passes.
+  const pendingAt = new Date(Date.now() - 90 * 60_000).toISOString();
+  const failedAt = new Date(Date.now() - 10 * 60_000).toISOString();
   writeFileSync(log, [
-    { ts: "2026-10-17T08:05:23Z", event: "chatgpt_tela_work", stage: "approval_wait_transition",
+    { ts: pendingAt, event: "chatgpt_tela_work", stage: "approval_wait_transition",
       scope_fingerprint: diagnosticFingerprint(THREAD), phase: "pending",
       raw_card: "SENSITIVE_APPROVAL" },
-    { ts: "2026-10-17T09:24:44Z", event: "chatgpt_tela_work", stage: "native_execution_failed",
+    { ts: failedAt, event: "chatgpt_tela_work", stage: "native_execution_failed",
       scope_fingerprint: diagnosticFingerprint(THREAD), reason_class: "request_changed" },
   ].map(x => JSON.stringify(x)).join("\n") + "\n");
   const offline = createChatToolRuntime({

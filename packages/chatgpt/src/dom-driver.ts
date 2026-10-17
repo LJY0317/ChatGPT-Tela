@@ -90,20 +90,40 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     inputReceived: false,
     receipt: registry.receipt || null,
   };
-  // This provider-owned classifier only releases a real user's card-local click.
-  // It performs no activation and grants no Native/tool authority. It rechecks the
-  // exact observed card contents on every gesture, so a replaced card fails closed.
+  // This provider-owned classifier identifies human consent/navigation input,
+  // not authority to approve. Recheck the exact card on every gesture. Approval
+  // options may render in a portal outside the card: only an accessible, uniquely
+  // linked, currently expanded menu can preserve the accepted input witness.
   registry.manualInputTarget = node => {
     const current = [...document.querySelectorAll('[data-testid="tool-approval-card"], [data-codex-approval-surface="true"]')].filter(visible);
     if (current.length !== 1) return false;
     const card = current[0], observed = registry.cards.get(card);
-    const button = node?.closest?.('button,[role="button"]');
-    const decision = button && normalize(button.getAttribute('aria-label') || button.textContent);
-    return !!observed && observed.text === card.textContent && !!button && card.contains(button)
-      && ['Deny', 'Allow', 'Allow once', 'Always allow',
-        'Allow for this conversation', 'Allow ChatGPT Tela for this conversation'].includes(decision)
-      && visible(button) && !button.disabled && button.getAttribute('aria-disabled') !== 'true'
-      && !button.closest('[inert]');
+    const control = node?.closest?.('[role="menuitem"]') || node?.closest?.('button,[role="button"]');
+    if (!observed || observed.text !== card.textContent || !control || !visible(control)
+      || control.disabled || control.getAttribute('aria-disabled') === 'true'
+      || control.closest('[inert]')) return false;
+    const decision = normalize(control.getAttribute('aria-label') || control.textContent);
+    const allowed = ['Deny', 'Allow', 'Allow once', 'Always allow',
+      'Allow for this conversation', 'Allow ChatGPT Tela for this conversation'];
+    if (card.contains(control)) {
+      return allowed.includes(decision)
+        || (decision === 'Approval options' && control.getAttribute('aria-haspopup') === 'menu');
+    }
+    // Never infer that an unrelated global menu belongs to this request.
+    if (control.getAttribute('role') !== 'menuitem' || !allowed.includes(decision)) return false;
+    const menu = control.closest('[role="menu"]');
+    const menus = [...document.querySelectorAll('[role="menu"]')].filter(visible);
+    if (!menu || menus.length !== 1 || menus[0] !== menu || !menu.contains(control)) return false;
+    const disclosures = [...card.querySelectorAll('button,[role="button"]')].filter(button =>
+      visible(button) && button.getAttribute('aria-haspopup') === 'menu'
+      && normalize(button.getAttribute('aria-label') || button.textContent) === 'Approval options'
+      && !button.disabled && button.getAttribute('aria-disabled') !== 'true'
+      && !button.closest('[inert]'));
+    if (disclosures.length !== 1 || disclosures[0].getAttribute('aria-expanded') !== 'true') return false;
+    const disclosure = disclosures[0];
+    const menuId = menu.getAttribute('id'), disclosureId = disclosure.getAttribute('id');
+    return !!(menuId && disclosure.getAttribute('aria-controls') === menuId
+      || disclosureId && menu.getAttribute('aria-labelledby') === disclosureId);
   };
   if (cards.length !== 1) return result;
   // Warnings belong to human review, regardless of the ordinary one-shot policy.
