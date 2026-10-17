@@ -1775,3 +1775,16 @@ an effective startup catalog and visible Web model rows. Inventory checks verify
 on demand and coalesce overlapping checks; they do not run an idle polling service.
 The menu and Control Center share one inventory and profile presentation, excluding
 superseded reads so older results cannot overwrite an in-progress connection.
+
+### Native local compaction identity and settlement
+
+The request-content view consumed by Native projection also defines compaction's request-owned
+source. Model/effort, claimed lineage and the canonical environment/media/goal evidence complete the
+operation identity; streaming and transport correlation affect delivery only. JSON object key order
+is not source identity. Ownership validation still precedes cache lookup and every final delivery.
+The one bounded operation table retains success/failure promises, coalesces source-equivalent retries
+and rejects changed source without re-execution. Failure phase/reason belongs to the operation, not
+the latest observer. Cleanup is observed independently and preserves the first failure; success is
+published only after the owned watch closes. Source fitting remains conservative and shared with
+other Web checkpoint producers. A failed fit is not permission to shorten history or silently start
+another summarization. Cross-layer diagnostics follow the same boundaries without granting authority.

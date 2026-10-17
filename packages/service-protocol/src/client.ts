@@ -2,7 +2,7 @@ import type {
   NativeToolInvocation,
   NativeToolResult,
 } from "@chatgpt-tela/core";
-import { diagnosticContext } from "@chatgpt-tela/core";
+import { diagnosticContext, diagnosticDurationMs, diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   parseChatCapabilityContract,
   parseCodexTerminalSessionContract,
@@ -41,6 +41,12 @@ function errorMessage(value: unknown, fallback: string): string {
   return typeof message === "string" && message.trim() ? message : fallback;
 }
 
+/** Keeps observed HTTP status through forwarding without exposing response payloads to diagnostics. */
+export class ServiceHttpError extends Error {
+  readonly code = "tela_service_http_error";
+  constructor(readonly httpStatus: number, message: string) { super(message); this.name = "ServiceHttpError"; }
+}
+
 export class LocalServiceClient {
   readonly descriptor: ServiceRuntimeDescriptor;
 
@@ -54,22 +60,39 @@ export class LocalServiceClient {
     body?: unknown,
     signal?: AbortSignal,
   ): Promise<unknown> {
-    const response = await fetch(new URL(path, this.descriptor.endpoint), {
-      method,
-      headers: {
-        authorization: `Bearer ${this.descriptor.bearerToken}`,
-        ...(diagnosticContext().request_fingerprint ? { "x-tela-diagnostic-parent": diagnosticContext().request_fingerprint! } : {}),
-        ...(diagnosticContext().scope_fingerprint ? { "x-tela-diagnostic-scope": diagnosticContext().scope_fingerprint! } : {}),
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      ...(signal ? { signal } : {}),
-    });
-    const value = await response.json().catch(() => undefined) as unknown;
-    if (!response.ok) {
-      throw new Error(errorMessage(value, `${this.descriptor.service} service request failed with HTTP ${response.status}`));
+    const started = Date.now(); let phase: "transport" | "decode" | "http" = "transport";
+    try {
+      const response = await fetch(new URL(path, this.descriptor.endpoint), {
+        method,
+        headers: {
+          authorization: `Bearer ${this.descriptor.bearerToken}`,
+          ...(diagnosticContext().request_fingerprint ? { "x-tela-diagnostic-parent": diagnosticContext().request_fingerprint! } : {}),
+          ...(diagnosticContext().scope_fingerprint ? { "x-tela-diagnostic-scope": diagnosticContext().scope_fingerprint! } : {}),
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(signal ? { signal } : {}),
+      });
+      phase = "decode";
+      const value = await response.json().catch(error => {
+        emitDiagnosticEvent("chatgpt_tela_service", "service_response_decode_failed", {
+          service: this.descriptor.service, phase: "decode", http_status: response.status,
+          ...diagnosticFailureFields(error), abort_observed: signal?.aborted === true,
+        });
+        return undefined;
+      }) as unknown;
+      phase = "http";
+      if (!response.ok) {
+        throw new ServiceHttpError(response.status, errorMessage(value, `${this.descriptor.service} service request failed with HTTP ${response.status}`));
+      }
+      return value;
+    } catch (error) {
+      emitDiagnosticEvent("chatgpt_tela_service", "service_request_failed", {
+        service: this.descriptor.service, phase, ...diagnosticFailureFields(error),
+        duration_ms: diagnosticDurationMs(started), abort_observed: signal?.aborted === true,
+      });
+      throw error;
     }
-    return value;
   }
 
   async status(signal?: AbortSignal): Promise<ServiceStatus> {

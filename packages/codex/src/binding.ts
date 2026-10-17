@@ -44,9 +44,17 @@ export class RolloutFileCurrentTurnSource implements CanonicalCurrentTurnSource 
   }
 }
 
+export type NativeBindingReason = "claim_invalid" | "owner_unavailable" | "owner_changed" | "lineage_changed" | "agent_changed" | "owner_read_failed";
+export class NativeBindingError extends Error {
+  readonly code = "tela_native_binding_unproven";
+  constructor(readonly reason: NativeBindingReason, message: string, options?: ErrorOptions) {
+    super(message, options); this.name = "NativeBindingError";
+  }
+}
+
 function validateOwner(claim: Omit<NativeTurnClaim, "requestKind">, evidence: CanonicalCurrentTurnEvidence): void {
   if (claim.parentThreadId !== evidence.parentThreadId) {
-    throw new Error("native request thread lineage does not match canonical Codex state");
+    throw new NativeBindingError("lineage_changed", "native request thread lineage does not match canonical Codex state");
   }
   const rootSentinelMatchesCanonicalRoot = claim.parentThreadId === undefined
     && evidence.parentThreadId === undefined
@@ -55,7 +63,7 @@ function validateOwner(claim: Omit<NativeTurnClaim, "requestKind">, evidence: Ca
   if (claim.agentName !== undefined
     && !rootSentinelMatchesCanonicalRoot
     && claim.agentName !== evidence.agentName) {
-    throw new Error("native request agent identity does not match canonical Codex state");
+    throw new NativeBindingError("agent_changed", "native request agent identity does not match canonical Codex state");
   }
 }
 
@@ -100,10 +108,15 @@ export async function bindNativeTurnRequest(
 
 /** Verify an inert summary request against the same canonical current-turn owner. */
 export async function bindNativeCompactionRequest(body: unknown, source: CanonicalCurrentTurnSource) {
-  const claim = parseNativeCompactionClaim(body);
-  const evidence = await source.currentTurn(claim.threadId);
-  if (!evidence || evidence.threadId !== claim.threadId || evidence.turnId !== claim.turnId) {
-    throw new Error("Native compaction request does not name the canonical current turn");
+  let claim: ReturnType<typeof parseNativeCompactionClaim>;
+  try { claim = parseNativeCompactionClaim(body); }
+  catch (cause) { throw new NativeBindingError("claim_invalid", "Native compaction claim is invalid", { cause }); }
+  let evidence: CanonicalCurrentTurnEvidence | undefined;
+  try { evidence = await source.currentTurn(claim.threadId); }
+  catch (cause) { throw new NativeBindingError("owner_read_failed", "Native compaction owner could not be read", { cause }); }
+  if (!evidence) throw new NativeBindingError("owner_unavailable", "Native compaction current owner is unavailable");
+  if (evidence.threadId !== claim.threadId || evidence.turnId !== claim.turnId) {
+    throw new NativeBindingError("owner_changed", "Native compaction request does not name the canonical current turn");
   }
   validateOwner(claim, evidence);
   return Object.freeze({ claim, evidence });

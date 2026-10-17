@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { diagnosticDurationMs, diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticDurationMs, diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { startWebHttpServer, type WebHttpServer } from "@chatgpt-tela/http-host";
 import type { ServiceStatus } from "@chatgpt-tela/service-protocol";
 import { chatCapabilityCatalog } from "./capability-contracts";
@@ -149,23 +149,25 @@ export async function startChatService(input: {
           if (typeof record.capability !== "string") {
             return Response.json({ error: { type: "tela_chat_invalid_request", message: "capability is required" } }, { status: 400 });
           }
+          const diagnosticCapability = input.tools.capabilities.includes(record.capability as TelaChatCapability)
+            ? record.capability : "unknown";
           const startedAt = Date.now();
           emitDiagnosticEvent("chatgpt_tela_chat", "capability_call_start", {
-            capability: record.capability,
+            capability: diagnosticCapability,
           });
           try {
             const result = await input.tools.call(record.capability as TelaChatCapability, record.arguments ?? {});
             emitDiagnosticEvent("chatgpt_tela_chat", "capability_call_complete", {
-              capability: record.capability,
+              capability: diagnosticCapability,
               duration_ms: diagnosticDurationMs(startedAt),
               ...resultDiagnosticFields(result),
             });
             return Response.json({ contractVersion: 1, service: "chat", capability: record.capability, result });
           } catch (error) {
             emitDiagnosticEvent("chatgpt_tela_chat", "capability_call_failed", {
-              capability: record.capability,
+              capability: diagnosticCapability,
               duration_ms: diagnosticDurationMs(startedAt),
-              reason_class: diagnosticFailureClass(error),
+              ...diagnosticFailureFields(error), phase: "capability",
             });
             return Response.json({ error: { type: "tela_chat_capability_error",
               message: error instanceof Error ? error.message : String(error) } }, { status: 409 });

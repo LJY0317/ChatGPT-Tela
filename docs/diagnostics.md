@@ -808,3 +808,33 @@ completion, independently of final delivery. It contains no answer or element/at
 `web_retained_anchor_rejected` continues to distinguish missing committed proof from later body
 absence or a changed digest. A lossless generic DOM representation handles elements outside the
 normalized author grammar; remaining unavailable proof never permits text-equality fallback.
+
+### Compaction and tool/service failure boundaries
+
+Compaction uses a shared request-source projection, model/effort and canonical Native owner/environment
+for operation identity. Wire delivery and correlation metadata do not change that identity. Every
+request, including cached/coalesced waiters, still proves current ownership before delivery; changed
+source/model/environment is rejected without another model call. Failed results remain coalesced.
+
+`compaction_operation_observed` records new/coalesced/cached state and comparison booleans for source
+and wire, linked by the disposable operation fingerprint. `compaction_source_observed` records logical
+and transfer estimates, the current provider source limit and fit result. `compaction_rejected` preserves
+the original failure phase/reason even for a cached failure, plus HTTP status and fixed failure class.
+Binding reasons distinguish malformed claims, absent/changed owners, lineage/agent changes and failed
+owner reads. `compaction_release_failed` records cleanup separately; it cannot erase the primary
+failure or publish a successful operation before cleanup. Oversized source still needs a verified
+readable checkpoint; diagnostics never authorize truncation, a resend or another summary attempt.
+
+Private service calls distinguish transport, response decoding and HTTP rejection, retaining status
+through a typed error. Gateway distinguishes descriptor lookup, invocation and status observation,
+including parent cancellation versus its own deadline. Chat capability and Native invocation failures
+share a bounded classifier (four causal nodes; 4096 message characters per node, fixed outputs only).
+Standard missing-file/type/timeout/transport failures remain distinguishable through wrappers. MCP
+uses the installed SDK's public timeout code in its adapter and records connect/invoke and cleanup
+failures separately. Returned MCP errors and thrown errors remain distinct; opaque upstream errors
+may still be unknown. No inference about actual tool execution follows from these diagnostics.
+
+These failure-only events reuse existing parent/scope/operation correlation, canonical incident
+filtering and bounded rotation/retention. No paths, endpoint URLs, request/response bodies, stack
+traces, arbitrary error codes or exception messages are logged. No private capture, sampler, model
+call, execution retry or new session is added. Existing approval/body/context evidence is reused.

@@ -1,3 +1,5 @@
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -83,14 +85,27 @@ export async function connectCodexTurnBridge(input: {
     });
     const client = new Client({ name: input.clientName ?? "chatgpt-tela-remote-turn-bridge", version: "0.0.0" }, { capabilities: {} });
     active.add(client);
+    let phase = "connect";
     try {
       await client.connect(transport as unknown as Transport);
       if (closed) throw new Error("remote turn bridge is closed");
+      phase = "invoke";
       return await operation(client);
+    } catch (error) {
+      const evidence = diagnosticFailureFields(error);
+      emitDiagnosticEvent("chatgpt_tela_mcp", "native_mcp_call_failed", {
+        phase, ...evidence,
+        reason_class: error instanceof McpError && error.code === ErrorCode.RequestTimeout ? "timeout" : evidence.reason_class,
+      });
+      throw error;
     } finally {
       active.delete(client);
-      await transport.terminateSession().catch(() => {});
-      await client.close().catch(() => {});
+      await transport.terminateSession().catch(error => emitDiagnosticEvent("chatgpt_tela_mcp", "native_mcp_cleanup_failed", {
+        phase: "terminate_session", ...diagnosticFailureFields(error),
+      }));
+      await client.close().catch(error => emitDiagnosticEvent("chatgpt_tela_mcp", "native_mcp_cleanup_failed", {
+        phase: "close", ...diagnosticFailureFields(error),
+      }));
     }
   }
   // Verify authentication/readiness before publishing this bridge, then release the lease.

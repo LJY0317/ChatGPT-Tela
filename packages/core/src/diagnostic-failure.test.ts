@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DIAGNOSTIC_FAILURE_CLASSES, diagnosticFailureClass } from "./diagnostic-failure";
+import { DIAGNOSTIC_FAILURE_CLASSES, diagnosticFailureClass, diagnosticFailureFields } from "./diagnostic-failure";
 
 describe("bounded diagnostic failure classifications", () => {
   test("distinguishes observed product failures using only fixed enumerations", () => {
@@ -37,4 +37,16 @@ describe("bounded diagnostic failure classifications", () => {
       get() { throw new Error("private getter secret must not be propagated"); },
     }))).toBe("unknown");
   });
+});
+
+test("bounded cause inspection recovers standard failures without private exception data", () => {
+ const error = new Error("PRIVATE_OUTER", {cause:Object.assign(new Error("PRIVATE_FILE"), {code:"ENOENT"})});
+ expect(diagnosticFailureFields(error)).toMatchObject({reason_class:"not_found",cause_depth:1,error_inspection_complete:true});
+ expect(diagnosticFailureClass(new TypeError("PRIVATE_ARGUMENT"))).toBe("type_error");
+ const cycle = new Error("PRIVATE_CYCLE"); Object.assign(cycle,{cause:cycle});
+ expect(diagnosticFailureFields(cycle)).toMatchObject({reason_class:"unknown",error_inspection_complete:false});
+ let deep:any=Object.assign(new Error("PRIVATE_LEAF"),{code:"ENOENT"});
+ for(let i=0;i<8;i++)deep=new Error("PRIVATE_WRAPPER",{cause:deep});
+ expect(diagnosticFailureFields(deep)).toMatchObject({reason_class:"unknown",cause_depth:4,error_inspection_complete:false});
+ expect(JSON.stringify(diagnosticFailureFields(error))).not.toContain("PRIVATE_");
 });

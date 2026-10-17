@@ -1,4 +1,4 @@
-import { diagnosticDurationMs, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticDurationMs, diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import type { BackendServiceId, ServiceStatus } from "@chatgpt-tela/service-protocol";
 
 export interface GatewayBackendClient {
@@ -27,9 +27,10 @@ export class BackendUnavailableError extends Error {
 function timeoutSignal(timeoutMs: number, parent?: AbortSignal): { readonly signal: AbortSignal; close(): void } {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("backend timeout must be a positive integer");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error("backend request timed out")), timeoutMs);
+  const timer = setTimeout(() => controller.abort(new DOMException("backend request timed out", "TimeoutError")), timeoutMs);
   const onAbort = () => controller.abort(parent?.reason);
-  parent?.addEventListener("abort", onAbort, { once: true });
+  if (parent?.aborted) onAbort();
+  else parent?.addEventListener("abort", onAbort, { once: true });
   return {
     signal: controller.signal,
     close() {
@@ -67,6 +68,7 @@ export class IndependentBackendRouter {
     }
     const deadline = timeoutSignal(this.#timeoutMs, signal);
     try {
+      deadline.signal.throwIfAborted();
       const status = await client.status(deadline.signal);
       if (status.service !== service) throw new Error("backend returned a different service identity");
       emitDiagnosticEvent("chatgpt_tela_gateway", "backend_status_complete", {
@@ -82,6 +84,8 @@ export class IndependentBackendRouter {
       });
     } catch (error) {
       emitDiagnosticEvent("chatgpt_tela_gateway", "backend_status_failed", {
+        ...diagnosticFailureFields(error), phase: "status",
+        deadline_expired: deadline.signal.aborted && !signal?.aborted, parent_aborted: signal?.aborted === true,
         service,
         aborted: deadline.signal.aborted,
         duration_ms: diagnosticDurationMs(startedAt),
@@ -117,6 +121,7 @@ export class IndependentBackendRouter {
     const deadline = timeoutSignal(this.#timeoutMs, signal);
     emitDiagnosticEvent("chatgpt_tela_gateway", "backend_call_start", { service });
     try {
+      deadline.signal.throwIfAborted();
       const result = await operation(client, deadline.signal);
       emitDiagnosticEvent("chatgpt_tela_gateway", "backend_call_complete", {
         service,
@@ -125,6 +130,8 @@ export class IndependentBackendRouter {
       return result;
     } catch (error) {
       emitDiagnosticEvent("chatgpt_tela_gateway", "backend_call_failed", {
+        ...diagnosticFailureFields(error), phase: "invoke",
+        deadline_expired: deadline.signal.aborted && !signal?.aborted, parent_aborted: signal?.aborted === true,
         service,
         aborted: deadline.signal.aborted,
         duration_ms: diagnosticDurationMs(startedAt),

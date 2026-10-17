@@ -173,3 +173,18 @@ test("disconnected capability work continues to block shutdown until its actual 
     await service.close();
   } finally { release.resolve(); await finished.promise; await service.close(); rmSync(f.base, { recursive: true, force: true }); }
 });
+
+test("unknown caller capability names cannot leak private input into structural diagnostics",async()=>{
+ const {observeDiagnosticEvents}=await import('@chatgpt-tela/core');const events:any[]=[];
+ const stop=observeDiagnosticEvents(row=>{if(row.stage.startsWith('capability_call_'))events.push(row)});
+ const f=shutdownFixture();const service=await startChatService({bearerToken:f.token,tools:{...f.tools,
+  async call(){throw Error('PRIVATE_FAILURE /some/user/source')},
+ }});
+ try{
+  const response=await fetch(new URL('v1/call',service.endpoint),{method:'POST',headers:{authorization:`Bearer ${f.token}`,'content-type':'application/json'},
+   body:JSON.stringify({capability:'PRIVATE_CAPABILITY',arguments:{}})});
+  expect(response.status).toBe(409);
+  expect(events.map(row=>row.capability)).toEqual(['unknown','unknown']);
+  expect(JSON.stringify(events)).not.toMatch(/PRIVATE_|some\/user/);
+ }finally{stop?.();await service.close();rmSync(f.base,{recursive:true,force:true})}
+});

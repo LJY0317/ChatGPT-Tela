@@ -1,4 +1,4 @@
-import { diagnosticDurationMs, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticDurationMs, diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import type { BackendServiceId } from "@chatgpt-tela/service-protocol";
 
 const DISPLAY_NAME: Readonly<Record<BackendServiceId, string>> = Object.freeze({
@@ -23,6 +23,7 @@ export async function dynamicBackendCall<TClient, TResult>(input: {
     client = await input.resolveClient();
   } catch (error) {
     emitDiagnosticEvent("chatgpt_tela_gateway", "backend_call_failed", {
+      ...diagnosticFailureFields(error), phase: "descriptor_lookup",
       service: input.service,
       duration_ms: diagnosticDurationMs(startedAt),
     });
@@ -42,6 +43,7 @@ export async function dynamicBackendCall<TClient, TResult>(input: {
     return result;
   } catch (error) {
     emitDiagnosticEvent("chatgpt_tela_gateway", "backend_call_failed", {
+      ...diagnosticFailureFields(error), phase: "invoke",
       service: input.service,
       duration_ms: diagnosticDurationMs(startedAt),
     });

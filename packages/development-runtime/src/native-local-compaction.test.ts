@@ -1,3 +1,4 @@
+import {observeDiagnosticEvents,structuralDiagnosticEvent} from "@chatgpt-tela/core";
 import {expect,test} from 'bun:test';
 import {chatGptWebModelId,chatGptWebFamilyKey} from '@chatgpt-tela/chatgpt';
 import type {CanonicalCurrentTurnEvidence} from '@chatgpt-tela/codex';
@@ -15,7 +16,7 @@ test('local compaction retains full source, returns an ordinary summary and coal
  let calls=0;const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical},summarize:async source=>{calls++;expect(source.physicalContext.segments.map(x=>x.content)).toEqual(['Observed old result','Summarize the task']);return 'Readable Native summary'}});
  const [a,b]=await Promise.all([router(request(body())),router(request(body()))]);
  expect(calls).toBe(1);expect(a?.status).toBe(200);expect(await a?.json()).toEqual(await b?.json());
- const stream=await router(request(body({stream:true})));expect(stream?.status).toBe(400); // one operation cannot change its wire source
+ const stream=await router(request(body({stream:true})));expect(stream?.status).toBe(200); expect(await stream?.text()).toContain('response.completed'); // presentation is not source identity
  const out=await router(request(body()));expect((await out?.json()).output[0]).toMatchObject({type:'message',role:'assistant',content:[{type:'output_text',text:'Readable Native summary',annotations:[]}]});
 });
 
@@ -179,4 +180,69 @@ test("local compaction receives attributed inter-agent evidence through the shar
   }});
   const response=await router(request(body({input:[agent,{type:"message",role:"user",content:"Summarize"}]})));
   expect(response?.status).toBe(200);expect(calls).toBe(1);
+});
+
+test('compaction retries preserve source identity across correlation metadata and transport options',async()=>{
+ let calls=0;const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical},summarize:async()=>{calls++;return 'Same source summary'}});
+ expect((await router(request(body())))?.status).toBe(200);
+ const retry=body({stream:true,client_metadata:{'x-codex-turn-metadata':JSON.stringify({request_kind:'compaction',thread_id:'thread',turn_id:'turn',retry_count:5}),trace_id:'PRIVATE_CORRELATION'}});
+ expect((await router(request(retry)))?.status).toBe(200);expect(calls).toBe(1);
+ const changed=body({instructions:'Different summary source instruction'});
+ expect((await router(request(changed)))?.status).toBe(400);expect(calls).toBe(1);
+});
+test('oversized-source rejection remains stable across retries without another summary attempt',async()=>{
+ let calls=0;const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical},summarize:async()=>{calls++;return 'must not run'}});
+ const source=body({input:[{type:'message',role:'user',content:'P'.repeat(405_000)}]});
+ expect((await router(request(source)))?.status).toBe(422);
+ expect((await router(request({...source,stream:true})))?.status).toBe(422);expect(calls).toBe(0);
+});
+
+test('compaction diagnostics preserve original failure phase across metadata-only retries',async()=>{
+ const events:any[]=[];const stop=observeDiagnosticEvents(row=>{if(row.stage.startsWith('compaction_'))events.push(row)});
+ try{
+  const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical},summarize:async()=>{throw Error('PRIVATE_SUMMARY_ERROR')}});
+  expect((await router(request(body())))?.status).toBe(400);
+  expect((await router(request(body({stream:true}))))?.status).toBe(400);
+  const rejected=events.filter(row=>row.stage==='compaction_rejected');expect(rejected).toHaveLength(2);
+  expect(rejected[0]).toMatchObject({phase:'summary',reason_class:'stage_failed',state:'new'});
+  expect(rejected[1]).toMatchObject({phase:'summary',reason_class:'stage_failed',state:'cached',source_matches:true,wire_matches:false});
+  expect(rejected[1].operation_fingerprint).toBe(rejected[0].operation_fingerprint);
+  expect(structuralDiagnosticEvent(rejected[1])).toEqual(rejected[1]);
+  expect(JSON.stringify(events)).not.toMatch(/PRIVATE_|Observed old result|Summarize the task/);
+ }finally{stop?.()}
+});
+test('compaction diagnostics distinguish malformed, absent, changed and unreadable owner',async()=>{
+ for(const [kind,current] of [
+  ['owner_unavailable',async()=>undefined],['owner_changed',async()=>({...canonical,turnId:'foreign'})],
+  ['owner_read_failed',async()=>{throw Object.assign(new Error('PRIVATE_OWNER'),{code:'ENOENT'})}],
+ ] as const){
+  const events:any[]=[];const stop=observeDiagnosticEvents(row=>{if(row.stage==='compaction_rejected')events.push(row)});
+  try{const router=createNativeLocalCompactionRouter({source:{currentTurn:current},summarize:async()=>{throw Error('must not run')}});
+   expect((await router(request(body())))?.status).toBe(400);
+   expect(events[0]).toMatchObject({phase:'binding',reason_class:kind});
+  }finally{stop?.()}
+ }
+});
+test('failed compaction cleanup records its own phase and preserves the primary failure',async()=>{
+ const events:any[]=[];const stop=observeDiagnosticEvents(row=>{if(row.stage.startsWith('compaction_'))events.push(row)});
+ try{const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical,
+  async watchTurn(){return {signal:new AbortController().signal,async close(){throw Error('PRIVATE_CLOSE')}}}},
+  summarize:async()=>{throw Error('PRIVATE_SUMMARY')}});
+  expect((await router(request(body())))?.status).toBe(400);
+  expect(events.find(row=>row.stage==='compaction_release_failed')).toMatchObject({phase:'release',prior_failure:true});
+  expect(events.find(row=>row.stage==='compaction_rejected')).toMatchObject({phase:'summary'});
+  expect(events.some(row=>row.stage==='compaction_completed')).toBe(false);
+ }finally{stop?.()}
+});
+
+test('compaction identity is key-order independent and still fences changed model and canonical environment',async()=>{
+ let calls=0,environment=canonical;
+ const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>environment},summarize:async()=>{calls++;return 'Exact bound source'}});
+ const original=body();expect((await router(request(original)))?.status).toBe(200);
+ const reordered={...original,input:[{content:'Observed old result',role:'user',type:'message'},{content:'Summarize the task',role:'user',type:'message'}]};
+ expect((await router(request(reordered)))?.status).toBe(200);expect(calls).toBe(1);
+ expect((await router(request(body({reasoning:{effort:'high'}}))))?.status).toBe(400);expect(calls).toBe(1);
+ expect((await router(request(body({tools:[{type:'function',name:'fixture',parameters:{type:'object'}}]}))))?.status).toBe(400);expect(calls).toBe(1);
+ environment={...canonical,cwd:'/other-fixture'};
+ expect((await router(request(original)))?.status).toBe(400);expect(calls).toBe(1);
 });

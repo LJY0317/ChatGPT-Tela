@@ -19,15 +19,21 @@ export const DIAGNOSTIC_FAILURE_CLASSES = [
   "timeout",
   "transport_failure",
   "unavailable",
+  "not_found",
+  "type_error",
+  "http_rejected",
   "unknown",
 ] as const;
 
 export type DiagnosticFailureClass = typeof DIAGNOSTIC_FAILURE_CLASSES[number];
 
-export function diagnosticFailureClass(error: unknown): DiagnosticFailureClass {
+function directFailureClass(error: unknown): DiagnosticFailureClass {
   try {
     if (!error || typeof error !== "object") return "unknown";
     const item = error as { readonly name?: unknown; readonly code?: unknown; readonly message?: unknown };
+    if (item.name === "TypeError") return "type_error";
+    if (item.code === "ENOENT") return "not_found";
+    if (item.code === "tela_service_http_error") return "http_rejected";
     if (item.name === "AbortError") return "aborted";
     if (item.name === "TimeoutError" || item.code === "ETIMEDOUT") return "timeout";
     if (item.code === "ENOSPC") return "storage_capacity";
@@ -37,7 +43,7 @@ export function diagnosticFailureClass(error: unknown): DiagnosticFailureClass {
       return "transport_failure";
     }
     if (item.code === "native_auto_handoff_unavailable") return "unavailable";
-    const message = typeof item.message === "string" ? item.message : "";
+    const message = typeof item.message === "string" ? item.message.slice(0, 4096) : "";
     if (message.includes("process operation registry is at capacity")
       || message.includes("process session identity capacity exhausted")) return "capacity_exhausted";
     if (message.includes("process operation store exceeds its byte limit")) return "storage_capacity";
@@ -54,4 +60,29 @@ export function diagnosticFailureClass(error: unknown): DiagnosticFailureClass {
     // reason for the primary request to fail.
   }
   return "unknown";
+}
+
+/** Inspect a bounded causal chain; no messages, arbitrary codes or stacks cross this boundary. */
+export function diagnosticFailureFields(error: unknown): Readonly<{
+  reason_class: DiagnosticFailureClass; cause_depth: number; error_inspection_complete: boolean; http_status?: number;
+}> {
+  const seen = new Set<object>(); let value = error, depth = 0;
+  let httpStatus: number | undefined;
+  try {
+    for (; depth < 4 && value && typeof value === "object"; depth++) {
+      if (seen.has(value)) return { reason_class: "unknown", cause_depth: depth, error_inspection_complete: false };
+      seen.add(value);
+      const item = value as { code?: unknown; httpStatus?: unknown; cause?: unknown };
+      if (item.code === "tela_service_http_error" && Number.isInteger(item.httpStatus)
+        && Number(item.httpStatus) >= 400 && Number(item.httpStatus) <= 599) httpStatus = Number(item.httpStatus);
+      const reason = directFailureClass(value);
+      if (reason !== "unknown") return { reason_class: reason, cause_depth: depth, error_inspection_complete: true,
+        ...(httpStatus === undefined ? {} : { http_status: httpStatus }) };
+      value = item.cause;
+    }
+    return { reason_class: "unknown", cause_depth: depth, error_inspection_complete: value == null };
+  } catch { return { reason_class: "unknown", cause_depth: depth, error_inspection_complete: false }; }
+}
+export function diagnosticFailureClass(error: unknown): DiagnosticFailureClass {
+  return diagnosticFailureFields(error).reason_class;
 }

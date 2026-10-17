@@ -370,6 +370,13 @@ function messageKind(role: unknown): RevisionKind {
   throw new Error(`unsupported Native message role: ${String(role)}`);
 }
 
+/** Request-owned author source shared by projection and compaction identity. Transport is separate. */
+export function nativeRequestContentSource(value: unknown): { readonly instructions: unknown; readonly input: unknown } {
+  const body = record(value);
+  if (!body) throw new Error("Native request planner requires an object request body");
+  return { instructions: body.instructions, input: body.input };
+}
+
 /**
  * Deterministically project the complete current Native request into a logical active path.
  *
@@ -388,8 +395,7 @@ export function projectNativeRequestContext(
   currentNativeGoal?: NativeThreadGoalObservation,
   currentNativeGoalState?: "absent" | "unavailable",
 ): NativeRequestContextProjection {
-  const body = record(value);
-  if (!body) throw new Error("Native request planner requires an object request body");
+  const body = nativeRequestContentSource(value);
   const taskId = nativeTaskId.trim();
   if (!taskId) throw new Error("Native request context requires a native task id");
   const projected: ProjectedNativeRevision[] = [];

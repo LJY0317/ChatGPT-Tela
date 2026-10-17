@@ -1,4 +1,4 @@
-import { diagnosticDurationMs, emitDiagnosticEvent, type NativeToolInvocation } from "@chatgpt-tela/core";
+import { diagnosticDurationMs, diagnosticFailureFields, emitDiagnosticEvent, type NativeToolInvocation } from "@chatgpt-tela/core";
 import type { RemoteTurnBridge, TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import { turnCapabilityRoute } from "@chatgpt-tela/runtime";
 
@@ -80,6 +80,7 @@ export class RoutedCodexTurnBridge implements TurnBridgeBackend {
       return result;
     } catch (error) {
       emitDiagnosticEvent("chatgpt_tela_codex", "tool_invoke_failed", {
+        ...diagnosticFailureFields(error), phase: "invoke",
         mode: invocation.mode,
         duration_ms: diagnosticDurationMs(startedAt),
       });

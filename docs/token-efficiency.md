@@ -278,3 +278,9 @@ call, checkpoint or whole-history transfer, and reject changed source attributes
 when display text matches. Unsupported elements use one bounded lossless representation rather
 than a growing tag exception table. Local normalization is not an extra inference step. Existing
 cold/repeat/append/edit/recovery cost gates still apply; unavailable proof grants no fallback send.
+
+Compaction retry gates must cover transport/correlation-only changes (one summary result or the same
+cached pre-send failure), JSON key order, changed source/instructions/model/environment (no new call),
+concurrent waiters and revoked owners. Diagnostics and canonical failure replay add no model calls,
+new physical sessions or full-history projection beyond the original operation. Source fitting uses
+the provider capability limit and includes full readable evidence; oversized input remains blocked.

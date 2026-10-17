@@ -49,3 +49,10 @@ describe("independent gateway backend routing", () => {
     await expect(router.withBackend("codex", async () => "codex-ok")).resolves.toBe("codex-ok");
   });
 });
+
+test("an already cancelled Gateway owner cannot begin a backend call", async()=>{
+ const router=new IndependentBackendRouter();router.mount(client("chat","ready"));
+ const owner=new AbortController();owner.abort(new DOMException("fixture stopped","AbortError"));let calls=0;
+ await expect(router.withBackend("chat",async()=>{calls++;return "must not run"},owner.signal)).rejects.toBeInstanceOf(BackendUnavailableError);
+ expect(calls).toBe(0);
+});
