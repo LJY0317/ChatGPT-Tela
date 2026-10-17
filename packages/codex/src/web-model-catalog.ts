@@ -1,4 +1,5 @@
 import type { CodexAppServerRpc } from "./app-server";
+import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid model catalog response");
   return value as Record<string, unknown>;
@@ -37,11 +38,28 @@ export async function refreshAdmittedWebModelCatalog(
 ): Promise<readonly string[]> {
   if (!admittedIds.length || new Set(admittedIds).size !== admittedIds.length
     || admittedIds.some(id => !id.startsWith("chatgpt-tela-web/"))) throw new Error("Invalid admitted Web catalog");
-  const response = object(await rpc.request("tela/modelCatalog/refresh", { includeHidden: true }, signal));
-  if (response.contractVersion !== 1) throw new Error("Unsupported Tela catalog refresh contract");
-  const visible = visibleWebModels(response.catalog);
-  if (visible.length !== admittedIds.length || !admittedIds.every(id => visible.includes(id))) {
-    throw new Error("Engine catalog does not match admitted Web models");
+  let phase = "request";
+  const startedAt = performance.now();
+  let visibleCount: number | undefined;
+  try {
+    const result = await rpc.request("tela/modelCatalog/refresh", { includeHidden: true }, signal);
+    phase = "response_validation";
+    const response = object(result);
+    if (response.contractVersion !== 1) throw new Error("Unsupported Tela catalog refresh contract");
+    const visible = visibleWebModels(response.catalog);
+    visibleCount = visible.length;
+    phase = "admission_match";
+    if (visible.length !== admittedIds.length || !admittedIds.every(id => visible.includes(id))) {
+      throw new Error("Engine catalog does not match admitted Web models");
+    }
+    return visible;
+  } catch (error) {
+    emitDiagnosticEvent("chatgpt_tela_codex", "web_catalog_refresh_failed", {
+      ...diagnosticFailureFields(error), phase, admitted_count: admittedIds.length,
+      ...(visibleCount === undefined ? {} : { visible_count: visibleCount }),
+      duration_ms: Math.max(0, Math.round(performance.now() - startedAt)),
+      abort_observed: signal.aborted,
+    });
+    throw error;
   }
-  return visible;
 }

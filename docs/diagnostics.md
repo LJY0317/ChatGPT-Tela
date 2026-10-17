@@ -496,6 +496,13 @@ references. Tela implements these concepts independently behind its own runtime 
 | Model discovery, startup, ownership and package/lifecycle faults | Existing readiness/catalog/profile/controller/lifecycle diagnostics included in the common structural reader and category report |
 | CPU/resource snapshot and transport health | Existing bounded `diagnostics desktop`, authenticated product `status`/`doctor`, and permission-scoped Chat process status; no continuous OS monitoring |
 
+Web engine admission records `web_catalog_refresh_failed` with `request`, `response_validation`
+or `admission_match`, elapsed time, cancellation and model counts; no model IDs or exception prose.
+`web_admission_failed` retains the shared bounded causal classification, and `web_reconnect_failed`
+records the underlying local failure before HTTP translation. A reconnect HTTP 409 alone proves
+neither an active Web turn nor Native retirement. Correlate these stages before choosing recovery;
+an in-flight preparation is joined without a second refresh, and no failed request is replayed.
+
 Reference-specific provider names, launcher layouts, request types and hardcoded known-tool lists are not
 copied: Tela discovers its own capabilities and maintains Native authority. A log-only PID is not treated
 as permission to inspect or signal a process. macOS unified-log/tunnel transcripts and server-side model

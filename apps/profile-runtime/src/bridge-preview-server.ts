@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { startWebHttpServer, type WebHttpServer } from "@chatgpt-tela/http-host";
 import type { AccountCheck } from "./account-check";
 import type { AccountDisplay } from "./account-display";
@@ -95,7 +96,10 @@ export async function startProfileBridgePreviewServer(input: {
         try {
           await input.reconnectWeb();
           return Response.json(input.webState(), { headers: { "cache-control": "no-store" } });
-        } catch {
+        } catch (error) {
+          emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_reconnect_failed", {
+            ...diagnosticFailureFields(error), slot: input.slot,
+          });
           return Response.json({ error: { message: "Web reconnection did not complete. Native remains available. Finish any active Web turn before retrying." } },
             { status: 409, headers: { "cache-control": "no-store" } });
         }

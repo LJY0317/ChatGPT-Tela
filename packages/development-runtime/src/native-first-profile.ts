@@ -1,6 +1,6 @@
 import { augmentNativeCodexModelCatalog } from "./web-model-catalog";
 import { augmentCodexAppServerModelList } from "./app-server-model-list";
-import { classifyNetworkFailure, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { classifyNetworkFailure, diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { resolve } from "node:path";
 import { appServerCurrentTurnSource, appServerCompactionHistorySource, appServerNativeHandoffSource, connectCodexAppServerWebSocket, refreshAdmittedWebModelCatalog } from "@chatgpt-tela/codex";
 import { chatGptWebModelId, CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider, parseChatGptWebModelId, type ChatGptWebModelFamily, type ChatGptHistoryUiReadiness, type SavedChatCleanupAcceptanceReceipt, type SyntheticSavedChatRecoveryReceipt } from "@chatgpt-tela/chatgpt";
@@ -432,9 +432,11 @@ export async function startNativeFirstProductProfileRuntime(
         setState("ready");
       } catch (error) {
         const failure = webPreparationFailureDetail(error);
+        const diagnostic = diagnosticFailureFields(error);
         emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_admission_failed", {
+          ...diagnostic,
           phase: webPhase,
-          reason_class: signal.aborted ? "cancelled" : failure?.reasonClass ?? "unknown",
+          reason_class: signal.aborted ? "cancelled" : failure?.reasonClass ?? diagnostic.reason_class,
           ...(failure ? { proof_stage: failure.stage } : {}),
           duration_ms: Math.max(0, Math.round(performance.now() - startedAt)),
         });
