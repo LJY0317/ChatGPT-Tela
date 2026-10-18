@@ -1,7 +1,9 @@
+import { prepareApprovalWithinDeadline } from "./approval-preparation";
 import { createHash } from "node:crypto";
 import { setTimeout as waitForDelay } from "node:timers/promises";
 import type { BrowserPageAutomation } from "@chatgpt-tela/browser-host";
 import { configuredDiagnosticRoot, privateDiagnosticCaptureEnabled, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { decideChatGptApproval, type ChatGptApprovalAutomationMode } from "./approval-policy";
 import { assistantMarkdown } from "./answer-markdown";
 import { assistantBody } from "./answer-body";
 import { userPayload } from "./user-payload";
@@ -59,6 +61,287 @@ interface RawSnapshot {
   readonly turns: readonly RawTurn[];
 }
 
+const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare) {
+  const visible = element => element instanceof HTMLElement
+    && getComputedStyle(element).display !== "none"
+    && getComputedStyle(element).visibility !== "hidden"
+    && getComputedStyle(element).opacity !== "0"
+    && element.getClientRects().length > 0;
+  const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
+  const decideApproval = (${decideChatGptApproval.toString()});
+  const registryKey = Symbol.for("chatgpt-tela.approval-observations.v1");
+  const registry = globalThis[registryKey] ||= { cards: new WeakMap(), prefix: crypto.randomUUID(), next: 0, receipt: null };
+  // Candidate discovery: marked provider cards and accessible dialogs with Allow/Deny controls.
+  // Prefer the innermost card if provider wrappers overlap; distinct cards stay ambiguous.
+  const isAllowButton = label => ['Allow', 'Allow once', 'Allow for this conversation'].includes(label)
+    || /^Allow(?: once| .* for this conversation)?$/.test(label);
+  const discover = (includeWrappers = false) => {
+    const marked = [...document.querySelectorAll('[data-testid="tool-approval-card"], [data-codex-approval-surface="true"]')].filter(visible);
+    const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].filter(card => visible(card)
+      && [...card.querySelectorAll('button,[role="button"]')].some(button =>
+        visible(button) && isAllowButton(normalize(button.getAttribute('aria-label') || button.textContent || button.innerText))));
+    const candidates = [...new Set([...marked, ...dialogs])];
+    return includeWrappers ? candidates : candidates.filter(card => !candidates.some(other => other !== card && card.contains(other)));
+  };
+  const cards = discover();
+  const result = {
+    cardCount: cards.length,
+    denyCount: 0,
+    allowCount: 0,
+    allowOnceCount: 0,
+    allowConversationCount: 0,
+    alwaysAllowCount: 0,
+    unknownCount: 0,
+    allowPoint: null,
+    allowOncePoint: null,
+    allowConversationPoint: null,
+    optionsDisclosureCount: 0,
+    optionsExpanded: false,
+    optionsPoint: null,
+    optionsAnchorStable: null,
+    optionsAttempted: false,
+    cardKey: null,
+    proofKey: null,
+    targetState: "unprepared",
+    inputReceived: false,
+    receipt: registry.receipt || null,
+  };
+  // This provider-owned classifier identifies human consent/navigation input,
+  // not authority to approve. Recheck the exact card on every gesture. Approval
+  // options may render in a portal outside the card: only an accessible, uniquely
+  // linked, currently expanded menu can preserve the accepted input witness.
+  registry.manualInputTarget = node => {
+    const current = discover();
+    if (current.length !== 1) return false;
+    const card = current[0], observed = registry.cards.get(card);
+    const control = node?.closest?.('[role="menuitem"]') || node?.closest?.('button,[role="button"]');
+    if (!observed || observed.text !== card.textContent || !control || !visible(control)
+      || control.disabled || control.getAttribute('aria-disabled') === 'true'
+      || control.closest('[inert]')) return false;
+    const decision = normalize(control.getAttribute('aria-label') || control.textContent);
+    const allowed = ['Deny', 'Allow', 'Allow once', 'Always allow', 'Allow for this conversation'];
+    const isConsentChoice = allowed.includes(decision) || /^Allow .* for this conversation$/.test(decision);
+    if (card.contains(control)) {
+      return isConsentChoice
+        || (decision === 'Approval options' && control.getAttribute('aria-haspopup') === 'menu')
+        || (decision === 'See details' && control.getAttribute('aria-haspopup') === 'dialog');
+    }
+    // The provider may render a consent choice as a native button instead
+    // of role=menuitem. Its role is not proof of authority: require the same
+    // uniquely linked, expanded, card-owned menu and exact choice label.
+    if (!isConsentChoice
+      || (control.getAttribute('role') !== 'menuitem'
+        && control.tagName !== 'BUTTON' && control.getAttribute('role') !== 'button')) return false;
+    const menu = control.closest('[role="menu"]');
+    const menus = [...document.querySelectorAll('[role="menu"]')].filter(visible);
+    if (!menu || menus.length !== 1 || menus[0] !== menu || !menu.contains(control)) return false;
+    const disclosures = [...card.querySelectorAll('button,[role="button"]')].filter(button =>
+      visible(button) && button.getAttribute('aria-haspopup') === 'menu'
+      && normalize(button.getAttribute('aria-label') || button.textContent) === 'Approval options'
+      && !button.disabled && button.getAttribute('aria-disabled') !== 'true'
+      && !button.closest('[inert]'));
+    if (disclosures.length !== 1 || disclosures[0].getAttribute('aria-expanded') !== 'true') return false;
+    const disclosure = disclosures[0];
+    const menuId = menu.getAttribute('id'), disclosureId = disclosure.getAttribute('id');
+    return !!(menuId && disclosure.getAttribute('aria-controls') === menuId
+      || disclosureId && menu.getAttribute('aria-labelledby') === disclosureId);
+  };
+  if (cards.length !== 1) return result;
+  const point = element => {
+    const bounds = element.getBoundingClientRect();
+    if (!Number.isFinite(bounds.left) || !Number.isFinite(bounds.top)
+      || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)
+      || bounds.width <= 0 || bounds.height <= 0) return null;
+    return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+  };
+  let allowButton = null;
+  let allowOnceButton = null;
+  let allowConversationButton = null;
+  // Use the control's accessible label, not visual shortcut decorations. A keyboard hint
+  // is presentation, whereas an unknown decision remains an unknown decision.
+  const accessibleText = node => {
+    if (node instanceof HTMLElement && node.getAttribute("aria-hidden") === "true") return "";
+    if (!node.childNodes?.length) return node.textContent || node.innerText || "";
+    return [...node.childNodes].map(accessibleText).join("");
+  };
+  let optionsDisclosure = null;
+  const isConversationChoice = label => label === "Allow for this conversation"
+    || /^Allow .* for this conversation$/.test(label);
+  for (const button of cards[0].querySelectorAll('button,[role="button"]')) {
+    if (!visible(button)) continue;
+    const label = normalize(button.getAttribute("aria-label") || accessibleText(button));
+    // These explicitly identified disclosure controls do not grant or deny authority.
+    if ((label === "See details" && button.getAttribute("aria-haspopup") === "dialog") || label === "Copy details") continue;
+    if (label === "Approval options" && button.getAttribute("aria-haspopup") === "menu") {
+      result.optionsDisclosureCount += 1;
+      if (result.optionsDisclosureCount === 1) {
+        optionsDisclosure = button;
+        result.optionsExpanded = button.getAttribute("aria-expanded") === "true";
+        if (button.getAttribute("aria-expanded") === "false"
+          && button.getAttribute("aria-controls") && !button.disabled
+          && button.getAttribute("aria-disabled") !== "true" && !button.closest('[inert]')) {
+          result.optionsPoint = point(button);
+        }
+      }
+      continue;
+    }
+    if (label === "Deny") result.denyCount += 1;
+    else if (label === "Allow once") {
+      result.allowOnceCount += 1;
+      if (result.allowOnceCount === 1) {
+        allowOnceButton = button;
+        if (!button.disabled && button.getAttribute("aria-disabled") !== "true") {
+          result.allowOncePoint = point(button);
+        }
+      }
+    } else if (label === "Allow") {
+      result.allowCount += 1;
+      if (result.allowCount === 1) { allowButton = button; result.allowPoint = point(button); }
+    } else if (isConversationChoice(label)) {
+      result.allowConversationCount += 1;
+      if (result.allowConversationCount === 1) {
+        allowConversationButton = button;
+        if (!button.disabled && button.getAttribute("aria-disabled") !== "true") {
+          result.allowConversationPoint = point(button);
+        }
+      }
+    } else if (label === "Always allow") result.alwaysAllowCount += 1;
+    else result.unknownCount += 1;
+  }
+  // Only a uniquely expanded, structurally linked menu belongs to the current
+  // approval card. Global/foreign menus cannot become approval choices.
+  if (result.optionsDisclosureCount === 1 && result.optionsExpanded) {
+    const menus = [...document.querySelectorAll('[role="menu"]')].filter(visible);
+    if (menus.length === 1) {
+      const menu = menus[0], menuId = menu.getAttribute("id");
+      const disclosureId = optionsDisclosure.getAttribute("id");
+      if ((menuId && optionsDisclosure.getAttribute("aria-controls") === menuId)
+        || (disclosureId && menu.getAttribute("aria-labelledby") === disclosureId)) {
+        // A native button with role=menuitem is one control, not two variants.
+        const choices = [...new Set(menu.querySelectorAll('[role="menuitem"],button,[role="button"]'))];
+        for (const item of choices) {
+          if (!visible(item)) continue;
+          const label = normalize(item.getAttribute("aria-label") || accessibleText(item));
+          if (!registry.manualInputTarget(item)) {
+            result.unknownCount += 1;
+          } else if (isConversationChoice(label)) {
+            result.allowConversationCount += 1;
+            if (result.allowConversationCount === 1) {
+              allowConversationButton = item;
+              result.allowConversationPoint = point(item);
+            }
+          } else if (label === "Always allow") {
+            result.alwaysAllowCount += 1;
+          } else if (label === "Allow once" || label === "Deny") {
+            // A menu may repeat known narrower choices already on the card.
+          } else {
+            // A second/unknown decision is not an implicit grant.
+            result.unknownCount += 1;
+          }
+        }
+      }
+    }
+  }
+  // Raw card text and element references remain in the renderer. Only a disposable identity
+  // crosses the boundary, so a delay cannot silently approve a replaced or changed request.
+  const text = cards[0].textContent;
+  let prior = registry.cards.get(cards[0]);
+  if (!prior || prior.text !== text || prior.button !== allowOnceButton || prior.allowButton !== allowButton
+    || prior.conversationButton !== allowConversationButton) {
+    const key = registry.prefix + ":" + (++registry.next);
+    if (prior) Object.assign(prior, { text, button: allowOnceButton, allowButton,
+      conversationButton: allowConversationButton, proofKey: key });
+    else prior = { text, button: allowOnceButton, allowButton, conversationButton: allowConversationButton,
+      cardKey: key, proofKey: key, inputReceived: false };
+    registry.cards.set(cards[0], prior);
+  }
+  result.cardKey = prior.cardKey;
+  result.proofKey = prior.proofKey;
+  result.inputReceived = prior.inputReceived === true;
+  result.optionsAttempted = prior.menuOpenAttempted === true;
+  result.optionsAnchorStable = prior.menuOpenAnchorText === undefined
+    ? null : prior.menuOpenAnchorText === text;
+  if (prepare) {
+    result.allowPoint = null;
+    result.allowOncePoint = null;
+    result.allowConversationPoint = null;
+    result.optionsPoint = null;
+    result.targetState = "changed";
+    // Only a proven exact permission choice may prepare its target. Ordinary
+    // inspection never scrolls or consumes an activation attempt.
+    const conversation = prepare.choice === 'allow_conversation';
+    const openingOptions = prepare.choice === 'open_options';
+    const selected = openingOptions ? optionsDisclosure : conversation ? allowConversationButton
+      : prepare.choice === 'allow' ? allowButton : allowOnceButton;
+    const eligible = observation => openingOptions
+      ? observation.cardCount === 1
+        && observation.optionsDisclosureCount === 1 && !observation.optionsExpanded
+      : decideApproval('full_access', observation).preferredChoice === prepare.choice;
+    if (prepare.cardKey !== prior.cardKey || prepare.proofKey !== prior.proofKey
+      || (prior.menuOpenAttempted && prior.menuOpenAnchorText !== text)
+      || !eligible(result) || !selected || !visible(selected) || selected.disabled
+      || selected.getAttribute("aria-disabled") === "true" || selected.closest('[inert]')
+      || (openingOptions && !selected.getAttribute("aria-controls"))) return result;
+    selected.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+    // Instant scroll plus synchronous geometry/hit testing flushes current layout.
+    // Frame callbacks may stop in hidden windows and must never gate approval.
+    // This preparation performs no input; dispatch remains on the host boundary.
+    const after = await inspectApproval();
+    if (after.cardKey !== prepare.cardKey || after.proofKey !== prepare.proofKey
+      || !eligible(after) || !selected.isConnected || !visible(selected) || selected.disabled
+      || selected.getAttribute("aria-disabled") === "true" || selected.closest('[inert]')) return result;
+    const target = point(selected);
+    result.targetState = "outside_viewport";
+    if (!target || target.x < 0 || target.y < 0
+      || Math.round(target.x) >= innerWidth || Math.round(target.y) >= innerHeight) return result;
+    const hit = document.elementFromPoint(Math.round(target.x), Math.round(target.y));
+    result.targetState = "occluded";
+    if (hit !== selected && !selected.contains(hit)) {
+      // Content-free witness at the failed hit-test boundary, never authority to click.
+      // DOM labels, selectors, coordinates and element references stay in the renderer.
+      result.obstruction = {
+        kind: !hit ? "none" : hit === document.documentElement || hit === document.body ? "document"
+          : hit.closest('dialog,[role="dialog"],[aria-modal="true"]') ? "dialog"
+          : hit.closest('button,a,input,select,textarea,[role="button"]') ? "control" : "other",
+        inCard: !!hit && cards[0].contains(hit),
+        pointerEventsNone: getComputedStyle(selected).pointerEvents === "none",
+        inert: !!selected.closest('[inert]'),
+        documentHidden: document.visibilityState === "hidden",
+      };
+      return result;
+    }
+    // Passive, card-local receipt of actual browser input. No click, authority or polling here.
+    if (!openingOptions && prior.receiptButton !== selected && typeof selected.addEventListener === "function") {
+      prior.receiptButton = selected;
+      const preparedProofKey = prior.proofKey;
+      const preparedCardKey = prior.cardKey;
+      const receive = event => {
+        if (!event.isTrusted) return;
+        prior.inputReceived = true;
+        // One disposable receipt survives immediate removal. No element or card text is retained.
+        registry.receipt = { cardKey: preparedCardKey, proofKey: preparedProofKey };
+        selected.removeEventListener("click", receive, true);
+      };
+      selected.addEventListener("click", receive, { capture: true });
+    }
+    result.targetState = "ready";
+    if (openingOptions) {
+      prior.menuOpenAnchorText = text;
+      prior.menuOpenAttempted = true;
+      result.optionsPoint = target;
+    }
+    else if (conversation) result.allowConversationPoint = target;
+    else if (prepare.choice === "allow") result.allowPoint = target;
+    else result.allowOncePoint = target;
+  }
+  return result;
+}`;
+
+/**
+ * Current ChatGPT composer renderer variants observed across the supported Web surface.
+ * The semantic layer still requires exactly one visible/editable element and one matching
+ * send control in its ancestor form; this selector list does not weaken that proof.
+ */
 export const CHATGPT_CURRENT_COMPOSER_SELECTOR = [
   '[data-testid="prompt-textarea"]',
   '#prompt-textarea',
@@ -1563,7 +1846,10 @@ const ACTIVATE_SEND = String.raw`function (argument) {
 const PREPARE_STOP_GENERATION = String.raw`function (expected) {
   const snapshot = (${OBSERVE_CHATGPT_SURFACE})();
   const assistant = snapshot.turns.filter(item => item.role === 'assistant').at(-1);
-  if (!assistant) return { status: 'unavailable' };
+  const user = snapshot.turns.filter(item => item.role === 'user').at(-1);
+  if (!assistant || !user || assistant.key !== expected.assistantKey
+    || user.key !== expected.userKey || user.contentText !== expected.userContent || assistant.parentUserTurnKey !== expected.userKey
+    || assistant.lineageAnchor !== expected.anchor) return { status: 'ownership_changed' };
   const visible = node => node instanceof HTMLElement && getComputedStyle(node).display !== 'none'
     && getComputedStyle(node).visibility !== 'hidden' && getComputedStyle(node).opacity !== '0'
     && node.getClientRects().length > 0;
@@ -1641,6 +1927,7 @@ function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
  * before exposing the snapshot to the provider/runtime boundary.
  */
 export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
+  #activatedApprovalCardKey: string | undefined;
   #stopAttemptedTurn: string | undefined;
   #lastObstructionRevision: string | undefined;
   #progressProbeTurnKey: string | undefined;
@@ -1671,6 +1958,15 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     let phase = "surface_read";
     try {
       const raw = await this.page.evaluate<undefined, RawSnapshot>(OBSERVE_CHATGPT_SURFACE, undefined, signal);
+      phase = "approval_read";
+      const card = await this.page.evaluate<undefined, {
+        cardCount: number; denyCount: number; allowCount: number; allowOnceCount: number;
+        allowConversationCount?: number;
+        alwaysAllowCount: number; unknownCount: number;
+        cardKey: string | null; proofKey: string | null;
+        inputReceived?: boolean;
+        receipt?: { cardKey: string; proofKey: string } | null;
+      }>(INSPECT_APPROVAL_CARD, undefined, signal);
       phase = "snapshot_projection";
       // Observe only existing reads. Deduplicate bounded structural states, never prose/token
       // changes. Report streaming exclusions too; a settled-only probe misses their cause.
@@ -1714,9 +2010,23 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
           });
         }
       }
+      const approval = card.cardCount > 0 ? Object.freeze({
+        cardCount: card.cardCount, denyCount: card.denyCount, allowCount: card.allowCount,
+        allowOnceCount: card.allowOnceCount, allowConversationCount: card.allowConversationCount ?? 0,
+        alwaysAllowCount: card.alwaysAllowCount,
+        unknownCount: card.unknownCount,
+        revisionFingerprint: fingerprint(JSON.stringify([card.cardKey, card.proofKey])),
+        ...(card.cardCount === 1 && card.cardKey ? { cardFingerprint: diagnosticFingerprint(card.cardKey) } : {}),
+        inputReceived: card.inputReceived === true,
+      }) : undefined;
       const captureRoot = configuredDiagnosticRoot();
       const privateCapture = !!captureRoot && privateDiagnosticCaptureEnabled(captureRoot);
       const snapshot = {
+        ...(approval ? { approval } : {}),
+        ...(card.receipt ? { approvalInputReceipt: Object.freeze({
+          cardFingerprint: diagnosticFingerprint(card.receipt.cardKey),
+          revisionFingerprint: fingerprint(JSON.stringify([card.receipt.cardKey, card.receipt.proofKey])),
+        }) } : {}),
         url: raw.url,
         composers: Object.freeze(raw.composers.map(composer)),
         sendControls: Object.freeze(raw.sendControls.map((control): ChatGptSendObservation => Object.freeze({ ...control }))),
@@ -1828,6 +2138,263 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     await this.page.evaluate(FOCUS_COMPOSER, { composerKey }, signal);
     await this.page.clearFocusedEditable(signal);
     return true;
+  }
+
+  async #prepareApprovalCard(
+    mode: ChatGptApprovalAutomationMode,
+    signal: AbortSignal,
+    delayMs: number,
+    expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
+  ) {
+    type ApprovalObservation = {
+      readonly targetState?: "unprepared" | "changed" | "outside_viewport" | "occluded" | "ready";
+      readonly obstruction?: {
+        readonly kind: string;
+        readonly inCard: boolean;
+        readonly pointerEventsNone: boolean;
+        readonly inert: boolean;
+        readonly documentHidden: boolean;
+      };
+      readonly cardCount: number;
+      readonly denyCount: number;
+      readonly allowCount: number;
+      readonly allowOnceCount: number;
+      readonly allowConversationCount?: number;
+      readonly alwaysAllowCount: number;
+      readonly unknownCount: number;
+      readonly allowPoint: { readonly x: number; readonly y: number } | null;
+      readonly allowOncePoint: { readonly x: number; readonly y: number } | null;
+      readonly allowConversationPoint?: { readonly x: number; readonly y: number } | null;
+      readonly optionsDisclosureCount?: number;
+      readonly optionsExpanded?: boolean;
+      readonly optionsPoint?: { readonly x: number; readonly y: number } | null;
+      readonly optionsAnchorStable?: boolean | null;
+      readonly optionsAttempted?: boolean;
+      readonly cardKey: string | null;
+      readonly proofKey: string | null;
+    };
+    const inspect = () => this.page.evaluate<undefined, ApprovalObservation>(INSPECT_APPROVAL_CARD, undefined, signal);
+    let observed = await inspect();
+    if (expected && (!observed.cardKey || diagnosticFingerprint(observed.cardKey) !== expected.cardFingerprint
+      || fingerprint(JSON.stringify([observed.cardKey, observed.proofKey])) !== expected.revisionFingerprint)) {
+      this.#diagnostic("approval_changed_before_activation", { reason_class: "observed_card_changed" });
+      return Object.freeze({ status: "none" as const, reason: "card_changed" });
+    }
+    // An unverified menu-open outcome consumes this card's one-use
+    // automation opportunity. Never turn the next observation into a
+    // second chance to approve a possibly replaced tool request.
+    if (observed.cardKey && observed.optionsAttempted) {
+      return Object.freeze({ status: "none" as const, reason: "options_already_attempted" });
+    }
+    // A conversation-only option may be hidden under an explicit card-local
+    // disclosure. Open that one menu at most once per exact card, then re-prove
+    // the unchanged card and its freshly linked choices before any approval.
+    if (mode !== "off" && observed.cardCount === 1
+      && observed.allowConversationCount === 0 && observed.optionsDisclosureCount === 1
+      && !observed.optionsExpanded && observed.optionsPoint
+      && observed.cardKey && observed.proofKey) {
+      const opening = await this.page.evaluate<{ cardKey: string; proofKey: string; choice: string }, ApprovalObservation>(
+        INSPECT_APPROVAL_CARD, { cardKey: observed.cardKey, proofKey: observed.proofKey,
+          choice: "open_options" }, signal,
+      );
+      if (opening.cardKey !== observed.cardKey || opening.proofKey !== observed.proofKey
+        || opening.targetState !== "ready" || !opening.optionsPoint) {
+        this.#diagnostic("approval_options_open_withheld", { reason_class: "target_unverified" });
+        return Object.freeze({ status: "none" as const, reason: "options_unverified" });
+      }
+      const cardKey = observed.cardKey;
+      this.#diagnostic("approval_options_open_started", { card_fingerprint: diagnosticFingerprint(cardKey) });
+      try {
+        await this.page.pointerClick(opening.optionsPoint, signal);
+      } catch (error) {
+        this.#diagnostic("approval_options_open_failed", {
+          reason_class: signal.aborted ? "owner_cancelled" : "dispatch_indeterminate",
+          automatic_retry: false,
+        });
+        throw error;
+      }
+      signal.throwIfAborted();
+      observed = await inspect();
+      if (observed.cardKey !== cardKey || observed.optionsAnchorStable !== true
+        || observed.optionsExpanded !== true || observed.optionsDisclosureCount !== 1
+        || decideChatGptApproval(mode, observed).action !== "approve_conversation") {
+        this.#diagnostic("approval_options_open_withheld", { reason_class: "menu_unverified" });
+        return Object.freeze({ status: "none" as const, reason: "options_unverified" });
+      }
+      this.#diagnostic("approval_options_open_verified", {
+        card_fingerprint: diagnosticFingerprint(cardKey),
+      });
+    }
+    const decision = decideChatGptApproval(mode, observed);
+    if (observed.cardCount > 0) this.#diagnostic("approval_policy", {
+      mode,
+      action: decision.action,
+      card_count: observed.cardCount,
+      deny_count: observed.denyCount,
+      allow_count: observed.allowCount,
+      allow_once_count: observed.allowOnceCount,
+      always_allow_count: observed.alwaysAllowCount,
+      unknown_count: observed.unknownCount,
+    });
+    if (decision.action === "none") {
+      return Object.freeze({ status: "none" as const, reason: decision.reason });
+    }
+    const targetPoint = (value: ApprovalObservation) => decision.preferredChoice === "allow_conversation"
+      ? value.allowConversationPoint : decision.preferredChoice === "allow" ? value.allowPoint : value.allowOncePoint;
+    if (!observed.cardKey || !observed.proofKey
+      || !targetPoint(observed)) {
+      return Object.freeze({ status: "none" as const, reason: observed.targetState === "occluded" || observed.targetState === "outside_viewport"
+        ? observed.targetState : "target_missing" });
+    }
+    if (observed.cardKey === this.#activatedApprovalCardKey) {
+      this.#diagnostic("approval_activation_withheld", { reason_class: "already_activated",
+        card_fingerprint: diagnosticFingerprint(observed.cardKey), proof_fingerprint: diagnosticFingerprint(observed.proofKey ?? "") });
+      return Object.freeze({ status: "none" as const, reason: "already_activated" });
+    }
+    if (delayMs > 0) {
+      const cardKey = observed.cardKey;
+      const proofKey = observed.proofKey;
+      await waitForDelay(delayMs, undefined, { signal });
+      observed = await inspect();
+      if (observed.cardKey !== cardKey || observed.proofKey !== proofKey
+        || (observed.optionsAttempted && observed.optionsAnchorStable !== true)
+        || (decideChatGptApproval(mode, observed) as { preferredChoice?: string }).preferredChoice !== decision.preferredChoice) {
+        this.#diagnostic("approval_changed_before_activation");
+        return Object.freeze({ status: "none" as const, reason: "card_changed" });
+      }
+    }
+    this.#diagnostic("approval_preparation_target", {
+      card_fingerprint: diagnosticFingerprint(observed.cardKey!),
+      proof_fingerprint: diagnosticFingerprint(observed.proofKey!),
+    });
+    const prepared = await this.page.evaluate<{ cardKey: string; proofKey: string; choice: string }, ApprovalObservation>(
+      INSPECT_APPROVAL_CARD, { cardKey: observed.cardKey!, proofKey: observed.proofKey!,
+        choice: decision.preferredChoice }, signal,
+    );
+    if (prepared.cardKey !== observed.cardKey || prepared.proofKey !== observed.proofKey
+      || (prepared.optionsAttempted && prepared.optionsAnchorStable !== true)
+      || (decideChatGptApproval(mode, prepared) as { preferredChoice?: string }).preferredChoice !== decision.preferredChoice) {
+      this.#diagnostic("approval_changed_before_activation");
+      return Object.freeze({ status: "none" as const, reason: "card_changed" });
+    }
+    observed = prepared;
+    const target = targetPoint(observed);
+    if (!target) {
+      const obstruction = observed.obstruction;
+      const revision = fingerprint(JSON.stringify([observed.cardKey, observed.proofKey]));
+      if (observed.targetState === "occluded" && obstruction && revision !== this.#lastObstructionRevision) {
+        // One retained revision, no growing history or retry loop. Only new revisions
+        // produce another canonical incident while the same target stays obstructed.
+        this.#lastObstructionRevision = revision;
+        this.#diagnostic("approval_target_failed", {
+          reason_class: "occluded", dispatch_started: false,
+          card_fingerprint: diagnosticFingerprint(observed.cardKey!),
+          proof_fingerprint: diagnosticFingerprint(observed.proofKey!),
+          target_kind: ["none", "document", "dialog", "control", "other"].includes(obstruction.kind)
+            ? obstruction.kind : "unknown",
+          hit_in_card: obstruction.inCard === true,
+          target_pointer_events_none: obstruction.pointerEventsNone === true,
+          target_inert: obstruction.inert === true,
+          document_hidden: obstruction.documentHidden === true,
+        });
+      }
+      this.#diagnostic("approval_target_missing", { preferred: decision.preferredChoice,
+        reason_class: observed.targetState ?? "target_missing" });
+      return Object.freeze({ status: "none" as const, reason: "target_missing" });
+    }
+    if (observed.cardKey === this.#activatedApprovalCardKey) {
+      this.#diagnostic("approval_activation_withheld", { reason_class: "already_activated",
+        card_fingerprint: diagnosticFingerprint(observed.cardKey), proof_fingerprint: diagnosticFingerprint(observed.proofKey ?? "") });
+      return Object.freeze({ status: "none" as const, reason: "already_activated" });
+    }
+    return { status: "ready" as const, target, cardKey: observed.cardKey!, proofKey: observed.proofKey!,
+      choice: decision.preferredChoice };
+  }
+
+  /** Public provider Stop only, bound to the current user/assistant lineage. */
+  async stopGeneration(expected: { readonly assistantKey: string; readonly userTurnKey: string; readonly userFingerprint: string }, signal?: AbortSignal): Promise<{
+    readonly status: "stopped" | "stop_sent" | "unavailable" | "ownership_changed";
+  }> {
+    signal?.throwIfAborted();
+    const raw = await this.page.evaluate<undefined, RawSnapshot>(OBSERVE_CHATGPT_SURFACE, undefined, signal);
+    const assistant = raw.turns.filter(item => item.role === "assistant").at(-1);
+    const user = raw.turns.filter(item => item.role === "user").at(-1);
+    if (!assistant || !user || turn(assistant).key !== expected.assistantKey
+      || turn(assistant).parentUserTurnKey !== expected.userTurnKey || turn(user).key !== expected.userTurnKey
+      || turn(user).contentFingerprint !== expected.userFingerprint) {
+      return { status: "ownership_changed" };
+    }
+    if (this.#stopAttemptedTurn === expected.assistantKey) return { status: "stop_sent" };
+    const target = await this.page.evaluate<{ assistantKey: string; userKey: string; userContent: string | undefined; anchor?: string }, {
+      status: "ready" | "unavailable" | "ownership_changed"; point?: { x: number; y: number };
+    }>(PREPARE_STOP_GENERATION, { assistantKey: assistant.key, userKey: user.key, userContent: user.contentText,
+      ...(assistant.lineageAnchor ? { anchor: assistant.lineageAnchor } : {}) }, signal);
+    if (target.status !== "ready" || !target.point) return { status: target.status === "ownership_changed" ? "ownership_changed" : "unavailable" };
+    signal?.throwIfAborted();
+    // Commit before dispatch: an uncertain click cannot be repeated.
+    this.#stopAttemptedTurn = expected.assistantKey;
+    await this.page.pointerClick(target.point, signal);
+    signal?.throwIfAborted();
+    const after = await this.page.evaluate( PREPARE_STOP_GENERATION, { assistantKey: assistant.key,
+      userKey: user.key, userContent: user.contentText, ...(assistant.lineageAnchor ? { anchor: assistant.lineageAnchor } : {}) }, signal) as { status: string; stopCount?: number };
+    return { status: after.status === "ownership_changed" ? "ownership_changed"
+      : after.stopCount === 0 ? "stopped" : "stop_sent" };
+  }
+
+  async processApprovalCard(
+    mode: ChatGptApprovalAutomationMode,
+    signal?: AbortSignal,
+    delayMs = 0,
+    expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
+  ): ReturnType<NonNullable<ChatGptSurfaceDriver["processApprovalCard"]>> {
+    if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 15_000) {
+      throw new Error("ChatGPT approval delay must be 0-15000ms");
+    }
+    const started = performance.now();
+    this.#diagnostic("approval_preparation_started", { consent_delay_ms: delayMs });
+    const prepare = (scope: AbortSignal) => this.#prepareApprovalCard(mode, scope, delayMs, expected);
+    let prepared: Awaited<ReturnType<typeof prepare>>;
+    try {
+      prepared = await prepareApprovalWithinDeadline(
+        prepare, signal, delayMs,
+      );
+      signal?.throwIfAborted();
+      this.#diagnostic("approval_preparation_settled", {
+        outcome: prepared.status, duration_ms: Math.max(0, Math.round(performance.now() - started)),
+      });
+    } catch (error) {
+      this.#diagnostic("approval_preparation_failed", {
+        reason_class: signal?.aborted ? "owner_cancelled"
+          : error instanceof DOMException && error.name === "TimeoutError" ? "preparation_timeout" : "preparation_failed",
+        duration_ms: Math.max(0, Math.round(performance.now() - started)), dispatch_started: false,
+      });
+      throw error;
+    }
+    if (prepared.status !== "ready") return prepared;
+    // A concurrent preparation must still respect the single activation fence.
+    if (prepared.cardKey === this.#activatedApprovalCardKey) {
+      this.#diagnostic("approval_activation_withheld", { reason_class: "already_activated" });
+      return Object.freeze({ status: "none" as const, reason: "already_activated" });
+    }
+    // An ambiguous activation must never be retried against the same card.
+    this.#activatedApprovalCardKey = prepared.cardKey;
+    this.#diagnostic("approval_dispatch_started", { card_fingerprint: diagnosticFingerprint(prepared.cardKey) });
+    try {
+      await this.page.pointerClick(prepared.target, signal);
+    } catch (error) {
+      this.#diagnostic("approval_dispatch_failed", {
+        reason_class: signal?.aborted ? "owner_cancelled" : "dispatch_indeterminate",
+        card_fingerprint: diagnosticFingerprint(prepared.cardKey),
+        proof_fingerprint: diagnosticFingerprint(prepared.proofKey),
+        automatic_retry: false,
+      });
+      throw error;
+    }
+    this.#diagnostic("approval_activated", { choice: prepared.choice,
+      card_fingerprint: diagnosticFingerprint(prepared.cardKey), proof_fingerprint: diagnosticFingerprint(prepared.proofKey) });
+    return Object.freeze({ status: "dispatched" as const, reason: prepared.choice,
+      cardFingerprint: diagnosticFingerprint(prepared.cardKey),
+      revisionFingerprint: fingerprint(JSON.stringify([prepared.cardKey, prepared.proofKey])) });
   }
 
   async replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void> {

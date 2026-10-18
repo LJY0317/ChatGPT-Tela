@@ -11,6 +11,8 @@ const agentRun = descriptor("arbitrary_execution", "owned_agent", "inspect_befor
 
 /** Exhaustive Tela-owned mapping; no external tool names or model identities. */
 export const CHAT_CAPABILITY_SEMANTICS: Readonly<Record<TelaChatCapability, ChatCapabilitySemantics>> = Object.freeze({
+  inspect_native_work: descriptor("read", "service", "observe_again", "bounded_result"),
+  inspect_native_evidence: descriptor("read", "service", "observe_again", "bounded_result"),
   open_workspace: descriptor("service_state", "approved_root", "inspect_before_repeat", "bounded_result"),
   export_file: descriptor("service_state", "workspace", "inspect_before_repeat", "bounded_result"),
   open_file_import: descriptor("service_state", "workspace", "inspect_before_repeat", "user_confirmation"),

@@ -1,5 +1,6 @@
 import { createBrowserSurfaceCapability } from "@chatgpt-tela/browser-host";
 import type { BrowserMemoryFile } from "@chatgpt-tela/browser-host";
+import type { ChatGptApprovalCardObservation, ChatGptApprovalAutomationMode } from "./approval-policy";
 
 export interface ChatGptComposerObservation {
   readonly key: string;
@@ -59,6 +60,15 @@ export interface ChatGptTurnObservation {
 
 export interface ChatGptSurfaceSnapshot {
   readonly revision: string;
+  /** Structural approval state; no card text or tool arguments cross this boundary. */
+  readonly approval?: ChatGptApprovalCardObservation & {
+    readonly revisionFingerprint: string;
+    /** Disposable card identity and trusted input receipt; neither proves approval acceptance. */
+    readonly cardFingerprint?: string;
+    readonly inputReceived?: boolean;
+  };
+  /** Last prepared trusted input, independent of the card's continued presence. Not approval authority. */
+  readonly approvalInputReceipt?: { readonly cardFingerprint: string; readonly revisionFingerprint: string };
   readonly url: string;
   readonly composers: readonly ChatGptComposerObservation[];
   readonly sendControls: readonly ChatGptSendObservation[];
@@ -96,6 +106,19 @@ export interface ChatGptSurfaceDriver {
    * renderer for classification; arbitrary/user-authored drafts must return false unchanged.
    */
   recoverContextPreloadArtifact?(composerKey: string, signal?: AbortSignal): Promise<boolean>;
+  /**
+   * Optionally handle one visible ChatGPT tool-approval card. The implementation must
+   * keep card text/tool arguments inside the renderer and activate only a unique supported choice.
+   * Dispatch is not approval receipt. The provider supplies the exact previously observed card proof.
+   */
+  processApprovalCard?(
+    mode: ChatGptApprovalAutomationMode,
+    signal?: AbortSignal,
+    delayMs?: number,
+    expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
+  ): Promise<{ readonly status: "none"; readonly reason: string }
+    | { readonly status: "dispatched"; readonly reason: "allow" | "allow_once" | "allow_conversation";
+        readonly cardFingerprint: string; readonly revisionFingerprint?: string }>;
   /** Stop only the exact owned assistant through the provider's public Stop affordance.
    * Absence of generation controls is not proof of successful remote task completion. */
   stopGeneration?(

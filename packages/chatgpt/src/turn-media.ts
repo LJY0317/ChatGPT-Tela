@@ -69,12 +69,18 @@ export function prepareWebTurnMedia(
     const bound = matches[0];
     // Text is untrusted model context. The exact typed evidence list is the only media
     // ownership link, including through a nested checkpoint's inert JSON source.
-    if (!bound || references.has(evidence.id)) {
-      throw new Error("Web media evidence reference is unavailable or duplicated");
-    }
-    if ((evidence.kind !== "image" && evidence.kind !== "file")
-      || evidence.sha256 === undefined || evidence.bytes === undefined) {
-      throw new Error("Web media evidence has an unsupported format");
+    if (matches.length !== 1 || !bound || bound.type !== evidence.type
+      || bound.kind !== evidence.kind || bound.origin !== evidence.origin
+      || bound.source !== evidence.source || bound.availability !== evidence.availability
+      || bound.transfer !== evidence.transfer || bound.sha256 !== evidence.sha256
+      || bound.bytes !== evidence.bytes || bound.reason !== evidence.reason
+      || (evidence.source !== "native_request" && evidence.source !== "native_thread_read")
+      || evidence.availability !== "verified_inline_bytes"
+      || evidence.transfer !== "not_transferred"
+      || (evidence.kind !== "image" && evidence.kind !== "file")
+      || evidence.sha256 === undefined || evidence.bytes === undefined
+      || references.has(evidence.id)) {
+      throw new Error("Web media lacks exact Native evidence and physical revision ownership");
     }
     references.add(evidence.id);
     const size = file.bytes.byteLength;

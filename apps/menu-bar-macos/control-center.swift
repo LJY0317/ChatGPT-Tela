@@ -49,6 +49,30 @@ private struct ControlCenterDelegationCapacity: Decodable {
 }
 
 private struct ControlCenterBridgeSurface: Decodable { let id: String; let label: String }
+private struct ControlCenterApprovalWait: Decodable {
+  let phase: String
+  let elapsedMs: Int
+  let operationState: String
+
+  var statusText: String {
+    if operationState == "stopping" { return "Ending this Web operation; remote outcome unconfirmed." }
+    let seconds = max(0, elapsedMs) / 1000
+    let elapsed = "\(seconds / 60)m \(seconds % 60)s"
+    if phase == "card_cleared" { return "Card cleared; task progress unconfirmed · \(elapsed)" }
+    return "Approval waiting · \(elapsed)"
+  }
+}
+
+private struct ControlCenterBridgePreview: Decodable {
+  let approvalState: String?
+  let approvalObservationReason: String?
+  let approvalWait: ControlCenterApprovalWait?
+  let contractVersion: Int
+  let slot: Int
+  let activeSurfaceCount: Int
+  let surfaces: [ControlCenterBridgeSurface]?
+  let selectedSurfaceId: String?
+  let previewAvailable: Bool
   let imageMimeType: String?
   let imageBase64: String?
 }
@@ -242,6 +266,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var changingChatFolders = false
   private var launchingMaintenance = false
   private var operationInProgress: Bool { changingProfile || changingServices || changingChatFolders || savingConfiguration || settingUp || launchingMaintenance }
+  private var approvalAutomation = "off"
+  private var approvalDelay = "instant"
   private var bridgeImage: NSImage?
   private var bridgeMessage = "No preview requested yet."
   private var selectedPreviewSlot: Int?
@@ -840,6 +866,37 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         append(secondary("Saved folder access is not active yet. Applying it restarts only Chat and interrupts running Chat commands."), to:folders)
         let apply = actionButton("Apply Chat settings…", action:#selector(applyChatFolders))
         apply.isEnabled = !operationInProgress; folders.addArrangedSubview(apply)
+      }
+      if !chatFolderMessage.isEmpty { append(secondary(chatFolderMessage), to:folders) }
+      let approvals = card("Approvals")
+      let approval = NSSwitch()
+      approval.controlSize = .small
+      approval.target = self
+      approval.action = #selector(toggleApproval(_:))
+      approval.state = approvalAutomation == "off" ? .off : .on
+      approval.isEnabled = !preferenceError
+      approval.setAccessibilityLabel("Full access approval")
+      row("Full access approval", subtitle: "Allow for this conversation when available; otherwise allow once.",
+        control: approval, in: approvals)
+      divider(in: approvals)
+      let delays: [(String, String)] = [
+        ("instant", "Instant"), ("250ms", "0.25 seconds"), ("500ms", "0.5 seconds"),
+        ("1s", "1 second"), ("2s", "2 seconds"), ("5s", "5 seconds"),
+        ("10s", "10 seconds"), ("15s", "15 seconds")
+      ]
+      let delayPicker = NSPopUpButton()
+      for (preset, title) in delays {
+        delayPicker.addItem(withTitle: title)
+        delayPicker.lastItem?.representedObject = preset
+      }
+      delayPicker.selectItem(at: delays.firstIndex(where: { $0.0 == approvalDelay }) ?? 0)
+      delayPicker.target = self
+      delayPicker.action = #selector(setApprovalDelay(_:))
+      delayPicker.isEnabled = !preferenceError && approvalAutomation != "off"
+      row("Wait before approving", control: delayPicker, in: approvals)
+      append(secondary("Restart your Work profile to apply changes. This interrupts any active turn."), to: approvals)
+      if preferenceError { append(secondary("Couldn't read approval settings."), to: approvals) }
+      let connections = card("Connection details")
       for (index, service) in ["gateway", "chat", "codex"].enumerated() {
         if index > 0 { divider(in: connections) }
         let titles = ["gateway": "Tela connection", "chat": "Chat", "codex": "Work / Codex"]
@@ -1259,6 +1316,36 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     }
   }
 
+  @objc private func toggleApproval(_ sender: NSSwitch) {
+    do {
+      var preferences = try TelaPreferencesStore.read(at: preferencesURL)
+      preferences.approvalAutomation = sender.state == .on ? "full_access" : "off"
+      try TelaPreferencesStore.write(preferences, at: preferencesURL)
+      approvalAutomation = preferences.approvalAutomation
+      preferenceError = false
+      onPreferencesChanged?()
+      renderCurrentPage()
+    } catch {
+      sender.state = approvalAutomation == "off" ? .off : .on
+      NSSound.beep()
+    }
+  }
+
+  @objc private func setApprovalDelay(_ sender: NSPopUpButton) {
+    guard let preset = sender.selectedItem?.representedObject as? String,
+          TelaPreferencesStore.delays.contains(preset) else { return }
+    do {
+      var preferences = try TelaPreferencesStore.read(at: preferencesURL)
+      preferences.approvalDelay = preset
+      try TelaPreferencesStore.write(preferences, at: preferencesURL)
+      approvalDelay = preset
+      preferenceError = false
+      onPreferencesChanged?()
+    } catch {
+      let prior = sender.itemArray.firstIndex(where: { $0.representedObject as? String == approvalDelay }) ?? 0
+      sender.selectItem(at: prior)
+      NSSound.beep()
+    }
   }
 
   @objc private func toggleProfile(_ sender: NSSwitch) {
@@ -1565,6 +1652,28 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let previousServices = serviceStates
     let previousIngress = ingressStatus
     let previousProfiles = profiles
+    let previousApproval = approvalAutomation
+    let previousDelay = approvalDelay
+    let previousPreferenceError = preferenceError
+    async let gateway = serviceState("gateway")
+    async let chat = serviceState("chat")
+    async let codex = serviceState("codex")
+    async let ingress = loadIngressStatus()
+    serviceStates = ["gateway": await gateway, "chat": await chat, "codex": await codex]
+    ingressStatus = await ingress
+    await loadProfiles()
+    refreshProfileAccounts()
+    if let preferences = try? TelaPreferencesStore.read(at: preferencesURL) {
+      approvalAutomation = preferences.approvalAutomation
+      approvalDelay = preferences.approvalDelay ?? "instant"
+      preferenceError = false
+    } else {
+      preferenceError = true
+    }
+    if previousChatFolders != chatFolders || previousChatFoldersApplied != chatFoldersApplied || previousChatFoldersAvailable != chatFoldersAvailable || previousServices != serviceStates || previousIngress != ingressStatus
+      || previousProfiles != profiles || previousProfileError != workInventory.error || previousApproval != approvalAutomation
+      || previousDelay != approvalDelay || previousPreferenceError != preferenceError {
+      renderCurrentPage()
     }
   }
 
@@ -1685,6 +1794,15 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       } else {
         bridgeMessage = "Choose a Web session to view its snapshot or open its browser."
       }
+      if preview.selectedSurfaceId != nil, let wait = preview.approvalWait {
+        bridgeMessage += "\n\(wait.statusText)"
+      }
+      if preview.selectedSurfaceId != nil && preview.approvalState == "pending" {
+        bridgeMessage += "\nApproval is waiting in this browser session. Choose Interact to review the card."
+      } else if preview.selectedSurfaceId != nil && preview.approvalState == "unavailable" {
+        bridgeMessage += preview.approvalObservationReason == "automation_unavailable"
+          ? "\nApproval cannot be checked because this session has no page-observation capability."
+          : "\nApproval observation failed; do not assume the card was cleared."
       }
     } catch {
       guard revision == previewRevision else { return }

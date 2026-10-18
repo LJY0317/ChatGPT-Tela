@@ -47,6 +47,7 @@ import {
   resolveProductPreferencesPath,
   writeProductConfig,
   writeProductPreferences,
+  type ProductApprovalDelayPreset,
   type ProductConfig,
 } from "@chatgpt-tela/product-config";
 import {
@@ -110,6 +111,23 @@ function electronExecutable(): string {
   const path = resolve(repoRoot, "node_modules/.bin", name);
   if (!existsSync(path)) throw new Error(`Electron executable is missing: ${path}`);
   return path;
+}
+
+function manageApprovalPreferences(): void {
+  const subcommand = process.argv[3] ?? "status";
+  const path = resolveProductPreferencesPath();
+  const current = readProductPreferences(path);
+  if (subcommand === "status") { console.log(JSON.stringify({ path, ...current }, null, 2)); return; }
+  if (subcommand === "delay") {
+    const preset = process.argv[4] as ProductApprovalDelayPreset | undefined;
+    if (!preset) throw new Error("usage: chatgpt-tela approval delay <instant|250ms|500ms|1s|2s|5s|10s|15s>");
+    writeProductPreferences({ ...current, approvalDelay: preset }, path);
+    console.log(JSON.stringify({ path, ...readProductPreferences(path), appliesTo: "new-or-restarted-codex-profiles" }, null, 2)); return;
+  }
+  if (subcommand !== "enable" && subcommand !== "disable") throw new Error("usage: chatgpt-tela approval <status|enable|disable|delay PRESET>");
+  const approvalAutomation = subcommand === "enable" ? "full_access" : "off";
+  writeProductPreferences({ ...current, approvalAutomation }, path);
+  console.log(JSON.stringify({ path, approvalAutomation, approvalDelay: current.approvalDelay ?? "instant", appliesTo: "new-or-restarted-codex-profiles" }, null, 2));
 }
 
 function serviceDescriptorPath(
@@ -832,6 +850,10 @@ async function main(): Promise<void> {
     await manageChatRoots(productPaths);
     return;
   }
+  if (command === "approval") {
+    manageApprovalPreferences();
+    return;
+  }
   if (command === "ingress") {
     await manageIngress(productPaths);
     return;
@@ -1061,6 +1083,7 @@ async function main(): Promise<void> {
     + "  chat store-openai-api-key (--from-env <NAME> | --stdin)\n"
     + "  chat delete-openai-api-key\n"
     + "  chat disable-openai-agent\n"
+    + "  approval [status|enable|disable|delay PRESET]\n"
     + "  ingress status\n"
     + "  ingress adopt-existing\n"
     + "  setup [--slot <n>]\n"

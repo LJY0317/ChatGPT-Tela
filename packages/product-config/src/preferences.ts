@@ -10,8 +10,24 @@ import {
 import { dirname, join } from "node:path";
 import { resolveProductPaths, type ProductPathOptions } from "@chatgpt-tela/product-lifecycle";
 
+export type ProductApprovalAutomationMode = "off" | "full_access";
+export type ProductApprovalDelayPreset = "instant" | "250ms" | "500ms" | "1s" | "2s" | "5s" | "10s" | "15s";
+
+const APPROVAL_DELAY_MS: Readonly<Record<ProductApprovalDelayPreset, number>> = Object.freeze({
+  instant: 0,
+  "250ms": 250,
+  "500ms": 500,
+  "1s": 1_000,
+  "2s": 2_000,
+  "5s": 5_000,
+  "10s": 10_000,
+  "15s": 15_000,
+});
+
 export interface ProductPreferences {
   readonly version: 1;
+  readonly approvalAutomation: ProductApprovalAutomationMode;
+  readonly approvalDelay?: ProductApprovalDelayPreset;
   /** Target identities chosen by the user; never evidence of live route ownership. */
   readonly workProfileConnections?: readonly string[];
   /** Explicit owner-only acceptance window; never enables saved Web chats by default. */
@@ -20,16 +36,34 @@ export interface ProductPreferences {
 
 export const DEFAULT_PRODUCT_PREFERENCES: ProductPreferences = Object.freeze({
   version: 1,
+  approvalAutomation: "off",
+  approvalDelay: "instant",
 });
+
+export function approvalDelayMilliseconds(preset: ProductApprovalDelayPreset | undefined): number {
+  return APPROVAL_DELAY_MS[preset ?? "instant"];
+}
 
 export function parseProductPreferences(value: unknown): ProductPreferences {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("ChatGPT Tela preferences must be a JSON object");
   }
   const item = value as Record<string, unknown>;
-  const extra = Object.keys(item).filter(key => !["version", "workProfileConnections", "savedChatAcceptance"].includes(key));
+  const extra = Object.keys(item).filter(key => !["version", "approvalAutomation", "approvalDelay", "workProfileConnections", "savedChatAcceptance"].includes(key));
   if (extra.length > 0) throw new Error(`ChatGPT Tela preferences contain unknown fields: ${extra.join(", ")}`);
   if (item.version !== 1) throw new Error("unsupported ChatGPT Tela preferences version");
+  const storedApprovalAutomation = item.approvalAutomation ?? "off";
+  const approvalAutomation = storedApprovalAutomation === "recognized_once"
+    || storedApprovalAutomation === "recognized_conversation"
+    ? "full_access"
+    : storedApprovalAutomation;
+  if (approvalAutomation !== "off" && approvalAutomation !== "full_access") {
+    throw new Error("ChatGPT Tela approval automation mode is invalid");
+  }
+  const approvalDelay = item.approvalDelay ?? "instant";
+  if (typeof approvalDelay !== "string" || !Object.hasOwn(APPROVAL_DELAY_MS, approvalDelay)) {
+    throw new Error("ChatGPT Tela approval delay preset is invalid");
+  }
   const connections = item.workProfileConnections;
   if (connections !== undefined && (!Array.isArray(connections) || connections.length > 32
     || connections.some(id => typeof id !== "string" || !/^[a-zA-Z0-9._-]{1,160}$/.test(id))
@@ -48,6 +82,8 @@ export function parseProductPreferences(value: unknown): ProductPreferences {
   }
   return Object.freeze({
     version: 1,
+    approvalAutomation,
+    approvalDelay: approvalDelay as ProductApprovalDelayPreset,
     ...(connections === undefined ? {} : { workProfileConnections: Object.freeze([...connections as string[]]) }),
     ...(acceptance === undefined ? {} : { savedChatAcceptance: Object.freeze({
       slot: (acceptance as { slot: number }).slot,
