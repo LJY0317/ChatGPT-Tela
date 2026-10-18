@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { realpath } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { posix, resolve } from "node:path";
 
 export interface ProfileLaunch {
   readonly kind: "direct" | "macos-application";
@@ -12,9 +12,10 @@ export interface ProfileLaunch {
 /** The caller supplies the receipt-verified runtime executable, not an app-name search. */
 export function profileLaunch(command: readonly [string, ...string[]], platform = process.platform): ProfileLaunch {
   if (command.some(value => !value || value.includes("\0"))) throw new Error("profile launch command is invalid");
-  const executable = resolve(command[0]);
-  const macos = dirname(executable), contents = dirname(macos), bundle = dirname(contents);
-  if (platform === "darwin" && basename(macos) === "MacOS" && basename(contents) === "Contents" && bundle.endsWith(".app")) {
+  // The requested OS determines path semantics, including in cross-OS tests.
+  const executable = platform === "darwin" ? posix.resolve(command[0]) : resolve(command[0]);
+  const macos = posix.dirname(executable), contents = posix.dirname(macos), bundle = posix.dirname(contents);
+  if (platform === "darwin" && posix.basename(macos) === "MacOS" && posix.basename(contents) === "Contents" && bundle.endsWith(".app")) {
     return Object.freeze({kind: "macos-application", executable, command: ["/usr/bin/open", "-W", "-n", "-a", bundle, "--args", ...command.slice(1)] as const});
   }
   // CLI fixtures and other OS runtimes remain ordinary supervised child processes.

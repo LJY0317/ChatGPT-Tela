@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LocalOriginalThreadOwner, LocalProfileBinding } from "./cross-profile-thread-relay";
@@ -8,6 +8,9 @@ import {
   type OneChatCheckpointHandoffAdapters,
 } from "./one-chat-checkpoint-handoff";
 import { SqliteOneChatHandoffJournal } from "./one-chat-handoff-journal";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 const SOURCE = "12345678-1234-4123-8123-123456789abc";
 const DEST = "abcdef12-1234-4123-8123-123456789abc";
@@ -25,9 +28,10 @@ const sourceBinding = binding(1, "1"), destBinding = binding(2, "4");
 const open = new Set<SqliteOneChatHandoffJournal>();
 const dirs = new Set<string>();
 afterEach(() => {
-  for (const journal of open) journal.close();
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-  open.clear(); dirs.clear();
+  try {
+    for (const journal of open) journal.close();
+    for (const dir of dirs) removeFixture(dir);
+  } finally { open.clear(); dirs.clear(); }
 });
 
 function fixture() {

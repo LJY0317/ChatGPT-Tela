@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { constants, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineNativeTurnAuthority, nativeEvidenceRef } from "@chatgpt-tela/core";
@@ -30,6 +30,13 @@ test("exact Native owner can restore workspace image through a bounded no-follow
     writeFileSync(path,png);
     const source=[candidate(path,1),candidate(path,2)];
     const result=await resolveNativeHistoricalImages({authority:authority(root),candidates:source});
+    if (constants.O_NOFOLLOW === undefined) {
+      // Windows has no supported no-follow descriptor contract for this path.
+      // Fail closed instead of reading a private image via a weaker file API.
+      expect(result.assets).toHaveLength(0);
+      expect(result.unavailable.map(entry=>entry.reason)).toEqual(["native_authority_unavailable","native_authority_unavailable"]);
+      return;
+    }
     expect(result.assets).toHaveLength(2);
     expect(result.uniqueFiles).toBe(1);
     expect(result.uniqueBytes).toBe(png.length);
@@ -56,9 +63,15 @@ test("foreign, native-enforced, outside-root, missing and symlink paths cannot b
     expect(native.assets).toHaveLength(0);
     expect(native.unavailable.every(entry=>entry.reason==="native_authority_unavailable")).toBe(true);
     const restricted=await resolveNativeHistoricalImages({authority:authority(root),candidates});
-    expect(restricted.assets).toHaveLength(1);
-    expect(restricted.unavailable.map(item=>item.reason).sort())
-      .toEqual(["missing_file","outside_workspace","unsafe_path"]);
+    if (constants.O_NOFOLLOW === undefined) {
+      expect(restricted.assets).toHaveLength(0);
+      expect(restricted.unavailable.map(item=>item.reason).sort())
+        .toEqual(["native_authority_unavailable","native_authority_unavailable","native_authority_unavailable","outside_workspace"]);
+    } else {
+      expect(restricted.assets).toHaveLength(1);
+      expect(restricted.unavailable.map(item=>item.reason).sort())
+        .toEqual(["missing_file","outside_workspace","unsafe_path"]);
+    }
     const forged=await resolveNativeHistoricalImages({
       authority:authority(root),candidates:[{...candidate(safe),currentTurnId:"forged"}],
     });

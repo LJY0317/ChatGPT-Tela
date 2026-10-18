@@ -7,6 +7,9 @@ import { buildPackagedPayload, createEd25519PackagedPayloadSigner, resolveProduc
   packagedUpgradeJournalPath, readPackagedUpgradeJournal, planSignedPackagedUpgradeFromPayload, type PackagedUpgradeJournal, type ServiceRegistrationCommandRunner } from "@chatgpt-tela/product-lifecycle";
 import { runPackagedLifecycleCommand } from "./lifecycle";
 import { cleanupMaintenanceWindow, runMaintenanceCommand, stageMaintenanceWindow, resolveMaintenanceWindowSource } from "./maintenance";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 class FakeManager implements ServiceRegistrationCommandRunner {
   readonly loaded = new Set<string>();
@@ -79,7 +82,7 @@ test("signed review -> repair -> upgrade -> keep-data removal uses fake OS manag
     expect(removed.success).toBe(true); expect(removed.preservedCount).toBeGreaterThan(0);
     expect(existsSync(binary.path)).toBe(false); expect(readFileSync(sentinel, "utf8")).toBe("untouched project");
     expect(readFileSync(join(paths.configRoot, "saved-settings.json"), "utf8")).toBe("preserve settings");
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { removeFixture(root); }
 });
 
 test("apply requires review and rejects unknown/ambiguous operation arguments", async () => {
@@ -95,9 +98,15 @@ test("temporary maintenance binaries clean up only their exact owned snapshot", 
     writeFileSync(join(source, "launcher"), "launcher"); writeFileSync(join(source, "ui"), "ui");
     staged = stageMaintenanceWindow({ launcher: join(source, "launcher"), ui: join(source, "ui") });
     writeFileSync(join(staged, "unrelated.txt"), "preserve");
+    if (process.platform === "win32") {
+      // This temporary signed UI is macOS-only. Windows has no POSIX uid proof;
+      // its cleanup gate must refuse ownership rather than delete the directory.
+      expect(() => cleanupMaintenanceWindow(staged!)).toThrow("unsafe maintenance ownership");
+      return;
+    }
     expect(() => cleanupMaintenanceWindow(staged!)).toThrow("unknown files"); expect(existsSync(staged)).toBe(true);
     rmSync(join(staged, "unrelated.txt")); cleanupMaintenanceWindow(staged); expect(existsSync(staged)).toBe(false); staged = undefined;
-  } finally { if (staged) rmSync(staged, { recursive: true, force: true }); rmSync(source, { recursive: true, force: true }); }
+  } finally { if (staged) removeFixture(staged); removeFixture(source); }
 });
 
 
@@ -112,7 +121,7 @@ test("damaged installation stages only a signed same-version repair source", asy
     writeFileSync(join(f.first, "ui/chatgpt-tela-menu-bar"), "tampered");
     await expect(resolveSource(f.first)).rejects.toThrow();
     expect(readOwnershipManifest(resolveProductPaths(options).installManifest)?.productVersion).toBe("1.0.0");
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { removeFixture(root); }
 });
 
 test("explicit remove-data plan removes only owned settings and preserves a project", async () => {
@@ -131,7 +140,7 @@ test("explicit remove-data plan removes only owned settings and preserves a proj
     expect((await runMaintenanceCommand(["maintenance","apply","uninstall","--remove-data","--review-token",review.reviewToken],options) as any).success).toBe(true);
     expect(existsSync(paths.configRoot)).toBe(false);
     expect(readFileSync(join(f.home,"project.txt"),"utf8")).toBe("project");
-  } finally { rmSync(root, { recursive:true,force:true }); }
+  } finally { removeFixture(root); }
 });
 
 for (const supported of [true, false]) test(`maintenance cancellation review binds source/checkpoint and supports recovery staging: ${supported}`, async () => {
@@ -184,5 +193,5 @@ for (const supported of [true, false]) test(`maintenance cancellation review bin
     expect(f.runner.running.has("chatgpt-tela-chat.service")).toBe(true);
     expect(readPackagedUpgradeJournal(journalPath)).toBeUndefined();
     expect(readFileSync(paths.installManifest)).toEqual(manifest);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { removeFixture(root); }
 });

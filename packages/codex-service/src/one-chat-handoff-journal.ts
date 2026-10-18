@@ -37,6 +37,7 @@ function requiredId(id: string): void {
 
 export class SqliteOneChatHandoffJournal implements OneChatHandoffJournal {
   readonly #database: DatabaseSync;
+  #closed = false;
   constructor(path: string) {
     const parent = dirname(path);
     mkdirSync(parent, { recursive: true, mode: 0o700 });
@@ -62,7 +63,11 @@ export class SqliteOneChatHandoffJournal implements OneChatHandoffJournal {
     `);
   }
 
-  close(): void { this.#database.close(); }
+  close(): void {
+    if (this.#closed) return;
+    this.#database.close();
+    this.#closed = true;
+  }
 
   get(operationId: string): HandoffJournalRecord | undefined {
     requiredId(operationId);
