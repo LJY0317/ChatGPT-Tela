@@ -261,6 +261,9 @@ export function chatCapabilityCatalog(
 ): readonly ChatCapabilityContract[] {
   const allowed = new Set(available);
   const needle = query.trim().toLowerCase();
+  const exact = TELA_CHAT_CAPABILITY_CONTRACTS.find(contract =>
+    allowed.has(contract.capability) && contract.capability.toLowerCase() === needle);
+  if (exact) return Object.freeze([Object.freeze({ ...exact, semantics: CHAT_CAPABILITY_SEMANTICS[exact.capability] })]);
   return Object.freeze(TELA_CHAT_CAPABILITY_CONTRACTS.filter(contract => {
     if (!allowed.has(contract.capability)) return false;
     if (!needle) return true;
