@@ -35,11 +35,15 @@ if (!groups.length || !files.length) throw new Error("No Windows test files were
 console.log(`Windows CI will run ${files.length} test files from ${groups.length} workspaces in separate Bun processes.`);
 if (process.argv.includes("--list")) process.exit(0);
 
+const failures: string[] = [];
 for (const file of files) {
   console.log(`Testing ${file}`);
   const result = spawnSync(process.execPath, ["test", file], { stdio: "inherit", windowsHide: true });
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(`Windows tests failed in ${file}: exit ${result.status}, signal ${result.signal ?? "none"}`);
+    failures.push(`${file}: exit ${result.status}, signal ${result.signal ?? "none"}`);
   }
+}
+if (failures.length > 0) {
+  throw new Error(`Windows tests failed in ${failures.length} file(s):\n${failures.join("\n")}`);
 }

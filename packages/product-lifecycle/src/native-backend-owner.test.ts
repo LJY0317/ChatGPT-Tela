@@ -1,15 +1,17 @@
 import { afterEach, expect, test } from "bun:test";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { acquireNativeBackendOwnership } from "./native-backend-owner";
 import { resolveProductPaths } from "./layout";
 import { ensureOwnershipManifest } from "./ownership-store";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+const removeFixture = registerTemporaryFixtureCleanup();
+afterEach(() => { for (const root of roots.splice(0)) removeFixture(root); });
 async function fixture() {
   const root = mkdtempSync(join(tmpdir(), "tela-backend-owner-")); roots.push(root);
   const paths = resolveProductPaths({ platform: "linux", home: root, environment: {} });

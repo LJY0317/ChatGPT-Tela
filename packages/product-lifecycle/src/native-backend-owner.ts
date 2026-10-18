@@ -45,11 +45,15 @@ export async function acquireNativeBackendOwnership(input: {
     let db: DatabaseSync | undefined;
     try {
       db = new DatabaseSync(temporary);
+      // Bun 1.4 on Windows can retain a prepared statement's SQLite handle
+      // after close(), preventing removal of this unpublished hardlink.
+      // Encode only the validated manifest ID as a hex literal, never SQL text.
+      const installIdHex = Buffer.from(manifest.installId, "utf8").toString("hex");
       db.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=1;
         CREATE TABLE authority (install_id TEXT PRIMARY KEY);
         CREATE TABLE backends (scope TEXT PRIMARY KEY, nonce TEXT NOT NULL, owner_pid INTEGER NOT NULL,
-          backend_pid INTEGER, phase TEXT NOT NULL);`);
-      db.prepare("INSERT INTO authority VALUES (?)").run(manifest.installId);
+          backend_pid INTEGER, phase TEXT NOT NULL);
+        INSERT INTO authority VALUES (CAST(X'${installIdHex}' AS TEXT));`);
       db.close(); db = undefined; chmodSync(temporary, 0o600);
       try { linkSync(temporary, path); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
