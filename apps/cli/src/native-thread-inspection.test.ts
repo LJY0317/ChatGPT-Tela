@@ -45,8 +45,6 @@ describe("one read-only conversation inspection by exact Native ID", () => {
     writeFileSync(path, [
       { ts: "2026-10-17T08:05:23Z", event: "chatgpt_tela_work", stage: "approval_wait_transition",
         scope_fingerprint: scope, phase: "pending", content: "PRIVATE REQUEST" },
-      { ts: "2026-10-17T08:05:23Z", event: "chatgpt_tela_work", stage: "approval_manual_review_required",
-        scope_fingerprint: scope, reason_class: "provider_warning", approval_mode: "recognized_once" },
       { ts: "2026-10-17T08:19:40Z", event: "chatgpt_tela_browser", stage: "renderer_unresponsive",
         scope_fingerprint: scope, private_body: "SENSITIVE_RENDERED_BODY" },
       { ts: "2026-10-17T08:19:45Z", event: "chatgpt_tela_browser", stage: "inspection_ownership_revoked",
@@ -69,8 +67,8 @@ describe("one read-only conversation inspection by exact Native ID", () => {
       expect(result).toMatchObject({
         identityVerified: false, nativeOwner: "not_checked",
         browserCardCurrentlyVisible: "not_verified", contentRead: false, mutating: false,
-        coverage: { eventsMatched: 8 },
-        approval: { reasonClass: "provider_warning", noClearanceRecordedAfterPending: true,
+        coverage: { eventsMatched: 7 },
+        approval: { noClearanceRecordedAfterPending: true,
           nativeEndedAfterPending: true, observedGapSeconds: 863 },
         lastNativeFailure: { stage: "native_execution_failed", reasonClass: "request_changed" },
         lastNativeOutcome: { stage: "native_turn_retired", reasonClass: "execution_failed" },
@@ -85,7 +83,7 @@ describe("one read-only conversation inspection by exact Native ID", () => {
           proofLevel: "same-thread-temporal-correlation-only",
           exactInputOriginVerified: false, causalLinkProven: false, canReplayAcceptedRequest: false,
         },
-        continuation: { canAutomaticallyApproveSecurityReview: false, canAutomaticallyReplayAcceptedTurn: false },
+        continuation: { canAutomaticallyReplayAcceptedTurn: false },
       });
       const printed = JSON.stringify(result);
       expect(printed).not.toMatch(/PRIVATE|SECRET|FOREIGN/);
@@ -164,11 +162,6 @@ describe("one read-only conversation inspection by exact Native ID", () => {
         content: "SECRET SHOULD NOT APPEAR" },
       { ts: "2026-10-17T08:05:23Z", event: "chatgpt_tela_work", stage: "approval_wait_transition",
         scope_fingerprint: scope, phase: "pending", card_fingerprint: "aaaaaaaabbbbbbbbcccccccc" },
-      { ts: "2026-10-17T08:05:23Z", event: "chatgpt_tela_work", stage: "approval_manual_review_required",
-        scope_fingerprint: scope, reason_class: "provider_warning", approval_mode: "recognized_once" },
-      { ts: "2026-10-17T08:05:24Z", event: "chatgpt_tela_work", stage: "approval_manual_review_required",
-        scope_fingerprint: diagnosticFingerprint("a different thread"),
-        reason_class: "unrelated", raw_prompt: "SECRET OTHER CHAT" },
     ].map(row => JSON.stringify(row)).join("\n") + "\n");
     const rpc = fixtureReader();
     try {
@@ -179,14 +172,12 @@ describe("one read-only conversation inspection by exact Native ID", () => {
         contractVersion: 1, threadId: THREAD, slot: 2, identityVerified: true,
         native: { state: "active", historyMode: "paginated", recentTurns: [{ id: TURN, status: "inProgress" }] },
         diagnostics: {
-          coverage: { eventsMatched: 3 },
+          coverage: { eventsMatched: 2 },
           lastWebPlan: { transferEstimate: 109966, retainedSurface: false },
-          reviewEvidence: { reasonClass: "provider_warning", approvalMode: "recognized_once",
-            currentlyVisible: "not_verified", stillPendingInAvailableEvents: true },
+          approvalWaitEvidence: { currentlyVisible: "not_verified", stillPendingInAvailableEvents: true },
         },
-        continuation: { classification: "last_observed_manual_review",
-          nextAction: "inspect_current_owned_approval_before_any_click",
-          canAutomaticallyApproveSecurityReview: false, canAutomaticallyReplayAcceptedTurn: false },
+        continuation: { classification: "approval_wait_observed",
+          nextAction: "inspect_current_owned_approval", canAutomaticallyReplayAcceptedTurn: false },
       });
       expect(rpc.calls.map(c => c.method)).toEqual(["thread/read", "thread/turns/list"]);
       expect(rpc.calls[0]!.params.includeTurns).toBe(false);
@@ -214,8 +205,8 @@ describe("one read-only conversation inspection by exact Native ID", () => {
         rpc: fixtureReader(), threadId: THREAD, slot: 2,
         diagnosticPaths: [path], nowMs: NOW, minutes: 30,
       });
-      expect(result.diagnostics.reviewEvidence).toBeNull();
-      expect(result.continuation.classification).toBe("in_progress_without_verified_review");
+      expect(result.diagnostics.approvalWaitEvidence).toBeNull();
+      expect(result.continuation.classification).toBe("in_progress_without_verified_approval");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   test("exact owner status supports both documented Native status wire shapes but rejects unknown values", async () => {

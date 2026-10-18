@@ -25,30 +25,25 @@ describe("product preferences", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  test("recognized_once persists without any endpoint, account, or secret material", () => {
+  test("full_access persists without any endpoint, account, or secret material", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-preferences-write-"));
     try {
       const path = join(root, "preferences-v1.json");
-      writeProductPreferences({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "2s" }, path);
-      expect(readProductPreferences(path)).toEqual({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "2s" });
+      writeProductPreferences({ version: 1, approvalAutomation: "full_access", approvalDelay: "2s" }, path);
+      expect(readProductPreferences(path)).toEqual({ version: 1, approvalAutomation: "full_access", approvalDelay: "2s" });
       expect(approvalDelayMilliseconds("2s")).toBe(2_000);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
-  test("scoped approval preference persists without upgrading old grants or enabling automation by default", () => {
-    const dir = mkdtempSync(join(tmpdir(), "tela-scoped-approval-"));
-    const path = join(dir, "preferences-v1.json");
-    try {
-      writeProductPreferences({ version: 1, approvalAutomation: "recognized_conversation", approvalDelay: "instant" }, path);
-      expect(readProductPreferences(path).approvalAutomation).toBe("recognized_conversation");
-      expect(DEFAULT_PRODUCT_PREFERENCES.approvalAutomation).toBe("off");
-      expect(parseProductPreferences({ version: 1, approvalAutomation: "recognized_once" }).approvalAutomation)
-        .toBe("recognized_once");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+  test("existing enabled approval preferences normalize to full_access", () => {
+    expect(parseProductPreferences({ version: 1, approvalAutomation: "recognized_conversation" }).approvalAutomation)
+      .toBe("full_access");
+    expect(parseProductPreferences({ version: 1, approvalAutomation: "recognized_once" }).approvalAutomation)
+      .toBe("full_access");
   });
 
-  test("unknown fields and persistent/full-access modes fail closed", () => {
+  test("unknown fields and unknown modes fail closed", () => {
     expect(() => parseProductPreferences({ version: 1, approvalAutomation: "always" })).toThrow("approval automation");
-    expect(() => parseProductPreferences({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "30s" })).toThrow("approval delay");
+    expect(() => parseProductPreferences({ version: 1, approvalAutomation: "full_access", approvalDelay: "30s" })).toThrow("approval delay");
     expect(() => parseProductPreferences({ version: 1, approvalAutomation: "off", secret: "x" })).toThrow("unknown fields");
   });
 
@@ -75,13 +70,13 @@ test("Work connection choices survive reload without replacing approval settings
   const root = mkdtempSync(join(tmpdir(), "tela-work-choice-"));
   const path = join(root, "preferences-v1.json");
   try {
-    writeProductPreferences({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "2s" }, path);
+    writeProductPreferences({ version: 1, approvalAutomation: "full_access", approvalDelay: "2s" }, path);
     setWorkProfileConnection("default", true, path);
     setWorkProfileConnection("local.profile2", true, path);
     setWorkProfileConnection("default", true, path);
     expect(readProductPreferences(path).workProfileConnections).toEqual(["default", "local.profile2"]);
     setWorkProfileConnection("default", false, path);
-    expect(readProductPreferences(path)).toEqual({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "2s", workProfileConnections: ["local.profile2"] });
+    expect(readProductPreferences(path)).toEqual({ version: 1, approvalAutomation: "full_access", approvalDelay: "2s", workProfileConnections: ["local.profile2"] });
     expect(() => setWorkProfileConnection("../invalid", true, path)).toThrow("identities");
     expect(readProductPreferences(path).workProfileConnections).toEqual(["local.profile2"]);
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -92,7 +87,7 @@ test("saved-chat acceptance is exact-slot, 15-minute bounded, and removable with
   const path = join(root, "preferences-v1.json");
   const now = 1_800_000_000_000;
   try {
-    writeProductPreferences({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "250ms" }, path);
+    writeProductPreferences({ version: 1, approvalAutomation: "full_access", approvalDelay: "250ms" }, path);
     expect(savedChatAcceptanceSlot(readProductPreferences(path), now)).toBeUndefined();
     armSavedChatAcceptance(2, path, now);
     const lease = readProductPreferences(path);
@@ -106,7 +101,7 @@ test("saved-chat acceptance is exact-slot, 15-minute bounded, and removable with
     expect(readProductPreferences(path).savedChatAcceptance?.slot).toBe(2);
     expect(consumeSavedChatAcceptance(2, path, now)).toBe(true);
     expect(consumeSavedChatAcceptance(2, path, now)).toBe(false);
-    expect(readProductPreferences(path)).toEqual({ version: 1, approvalAutomation: "recognized_once", approvalDelay: "250ms" });
+    expect(readProductPreferences(path)).toEqual({ version: 1, approvalAutomation: "full_access", approvalDelay: "250ms" });
     armSavedChatAcceptance(1, path, now);
     expect(savedChatAcceptanceSlot(readProductPreferences(path), now)).toBe(1);
     clearSavedChatAcceptance(path);

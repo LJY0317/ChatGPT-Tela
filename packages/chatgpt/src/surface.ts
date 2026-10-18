@@ -107,8 +107,8 @@ export interface ChatGptSurfaceDriver {
    */
   recoverContextPreloadArtifact?(composerKey: string, signal?: AbortSignal): Promise<boolean>;
   /**
-   * Optionally handle one structurally recognized ChatGPT tool-approval card. The implementation must
-   * keep card text/tool arguments inside the renderer and must never activate an unrecognized choice.
+   * Optionally handle one visible ChatGPT tool-approval card. The implementation must
+   * keep card text/tool arguments inside the renderer and activate only a unique supported choice.
    * Dispatch is not approval receipt. The provider supplies the exact previously observed card proof.
    */
   processApprovalCard?(

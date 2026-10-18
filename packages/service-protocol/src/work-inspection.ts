@@ -66,9 +66,15 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
       return typeof row.stage !== "string" || !SAFE_STAGE.test(row.stage)
         || time(row.at) === null;
     })) throw Error("invalid bounded diagnostic events");
-  const review = diag.reviewEvidence === null ? null : object(diag.reviewEvidence);
-  if (review && (typeof review.reasonClass !== "string" || !SAFE_REASON.test(review.reasonClass)
-    || review.currentlyVisible !== "not_verified")) throw Error("invalid historical approval evidence");
+  const approvalWait = diag.approvalWaitEvidence === null ? null : object(diag.approvalWaitEvidence);
+  if (approvalWait && (typeof approvalWait.lastObservedAt !== "string"
+    || time(approvalWait.lastObservedAt) === null
+    || !Number.isSafeInteger(approvalWait.waitingSeconds)
+    || (approvalWait.waitingSeconds as number) < 0
+    || approvalWait.stillPendingInAvailableEvents !== true
+    || approvalWait.currentlyVisible !== "not_verified")) {
+    throw Error("invalid historical approval wait evidence");
+  }
   return Object.freeze({
     contractVersion: 1 as const,
     slot: expectedSlot, threadId: expectedThreadId, identityVerified: true as const,
@@ -82,9 +88,10 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
     diagnostics: Object.freeze({
       scopeFingerprint: diag.fingerprint as string,
       lastObservedAt: time(diag.lastObservedAt),
-      historicalApproval: review ? {
-        reasonClass: review.reasonClass as string,
-        lastObservedAt: time(review.lastObservedAt),
+      approvalWaitEvidence: approvalWait ? {
+        lastObservedAt: time(approvalWait.lastObservedAt),
+        waitingSeconds: approvalWait.waitingSeconds as number,
+        stillPendingInAvailableEvents: true as const,
         currentlyVisible: "not_verified" as const,
       } : null,
       recentEvents: (diag.recentEvents as Record<string, unknown>[]).map(item => Object.freeze({

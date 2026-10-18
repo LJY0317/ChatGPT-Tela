@@ -71,17 +71,15 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   const decideApproval = (${decideChatGptApproval.toString()});
   const registryKey = Symbol.for("chatgpt-tela.approval-observations.v1");
   const registry = globalThis[registryKey] ||= { cards: new WeakMap(), prefix: crypto.randomUUID(), next: 0, receipt: null };
-  // Candidate discovery is deliberately wider than execution: marked provider
-  // cards and accessible dialogs with the exact connector heading are candidates.
+  // Candidate discovery: marked provider cards and accessible dialogs with Allow/Deny controls.
   // Prefer the innermost card if provider wrappers overlap; distinct cards stay ambiguous.
-  const connectorHeading = card => [...card.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]')]
-    .some(heading => visible(heading) && normalize(heading.textContent || heading.innerText) === 'ChatGPT Tela');
+  const isAllowButton = label => ['Allow', 'Allow once', 'Allow for this conversation'].includes(label)
+    || /^Allow(?: once| .* for this conversation)?$/.test(label);
   const discover = (includeWrappers = false) => {
     const marked = [...document.querySelectorAll('[data-testid="tool-approval-card"], [data-codex-approval-surface="true"]')].filter(visible);
     const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].filter(card => visible(card)
-      && connectorHeading(card) && [...card.querySelectorAll('button,[role="button"]')].some(button =>
-        visible(button) && ['Allow', 'Allow once', 'Allow for this conversation']
-          .includes(normalize(button.getAttribute('aria-label') || button.textContent || button.innerText))));
+      && [...card.querySelectorAll('button,[role="button"]')].some(button =>
+        visible(button) && isAllowButton(normalize(button.getAttribute('aria-label') || button.textContent || button.innerText))));
     const candidates = [...new Set([...marked, ...dialogs])];
     return includeWrappers ? candidates : candidates.filter(card => !candidates.some(other => other !== card && card.contains(other)));
   };
@@ -90,13 +88,10 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     cardCount: cards.length,
     denyCount: 0,
     allowCount: 0,
-    genericAllowIsCurrentAction: cards.length === 1 && connectorHeading(cards[0]),
     allowOnceCount: 0,
     allowConversationCount: 0,
     alwaysAllowCount: 0,
     unknownCount: 0,
-    requiresManualReview: false,
-    reviewReason: null,
     allowPoint: null,
     allowOncePoint: null,
     allowConversationPoint: null,
@@ -124,17 +119,17 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       || control.disabled || control.getAttribute('aria-disabled') === 'true'
       || control.closest('[inert]')) return false;
     const decision = normalize(control.getAttribute('aria-label') || control.textContent);
-    const allowed = ['Deny', 'Allow', 'Allow once', 'Always allow',
-      'Allow for this conversation', 'Allow ChatGPT Tela for this conversation'];
+    const allowed = ['Deny', 'Allow', 'Allow once', 'Always allow', 'Allow for this conversation'];
+    const isConsentChoice = allowed.includes(decision) || /^Allow .* for this conversation$/.test(decision);
     if (card.contains(control)) {
-      return allowed.includes(decision)
+      return isConsentChoice
         || (decision === 'Approval options' && control.getAttribute('aria-haspopup') === 'menu')
         || (decision === 'See details' && control.getAttribute('aria-haspopup') === 'dialog');
     }
     // The provider may render a consent choice as a native button instead
     // of role=menuitem. Its role is not proof of authority: require the same
     // uniquely linked, expanded, card-owned menu and exact choice label.
-    if (!allowed.includes(decision)
+    if (!isConsentChoice
       || (control.getAttribute('role') !== 'menuitem'
         && control.tagName !== 'BUTTON' && control.getAttribute('role') !== 'button')) return false;
     const menu = control.closest('[role="menu"]');
@@ -152,23 +147,6 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       || disclosureId && menu.getAttribute('aria-labelledby') === disclosureId);
   };
   if (cards.length !== 1) return result;
-  // Warnings belong to human review whether rendered inside the card or
-  // inside its authenticated portal. Never reduce warning scope by opening
-  // a menu. Card/menu text stays inside the renderer; only fixed reasons leave.
-  const classifyWarning = container => {
-    const displayedText = container.innerText || container.textContent || '';
-    const suspicious = /(?:Suspicious (?:Instruction|Activity|content)|의심스러운 지침|의심스러운 명령|의심스러운 콘텐츠)/i.test(displayedText);
-    const hasAlert = [...container.querySelectorAll('[role="alert"], [data-warning], [data-safety-warning]')].some(visible);
-    if (!suspicious && !hasAlert) return;
-    result.requiresManualReview = true;
-    result.reviewReason ||= /(?:tool description|도구 설명)/i.test(displayedText)
-      && /(?:classifier|approval outcome|risk label|분류기|승인 결과|위험 등급)/i.test(displayedText)
-      ? 'tool_description_policy_directive'
-      : suspicious ? 'suspicious_instruction' : 'provider_warning';
-  };
-  for (const container of discover(true)) {
-    if (container === cards[0] || container.contains(cards[0])) classifyWarning(container);
-  }
   const point = element => {
     const bounds = element.getBoundingClientRect();
     if (!Number.isFinite(bounds.left) || !Number.isFinite(bounds.top)
@@ -187,11 +165,13 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     return [...node.childNodes].map(accessibleText).join("");
   };
   let optionsDisclosure = null;
+  const isConversationChoice = label => label === "Allow for this conversation"
+    || /^Allow .* for this conversation$/.test(label);
   for (const button of cards[0].querySelectorAll('button,[role="button"]')) {
     if (!visible(button)) continue;
     const label = normalize(button.getAttribute("aria-label") || accessibleText(button));
     // These explicitly identified disclosure controls do not grant or deny authority.
-    if (label === "See details" && button.getAttribute("aria-haspopup") === "dialog") continue;
+    if ((label === "See details" && button.getAttribute("aria-haspopup") === "dialog") || label === "Copy details") continue;
     if (label === "Approval options" && button.getAttribute("aria-haspopup") === "menu") {
       result.optionsDisclosureCount += 1;
       if (result.optionsDisclosureCount === 1) {
@@ -217,8 +197,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     } else if (label === "Allow") {
       result.allowCount += 1;
       if (result.allowCount === 1) { allowButton = button; result.allowPoint = point(button); }
-    } else if (label === "Allow for this conversation"
-      || label === "Allow ChatGPT Tela for this conversation") {
+    } else if (isConversationChoice(label)) {
       result.allowConversationCount += 1;
       if (result.allowConversationCount === 1) {
         allowConversationButton = button;
@@ -238,7 +217,6 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       const disclosureId = optionsDisclosure.getAttribute("id");
       if ((menuId && optionsDisclosure.getAttribute("aria-controls") === menuId)
         || (disclosureId && menu.getAttribute("aria-labelledby") === disclosureId)) {
-        classifyWarning(menu);
         // A native button with role=menuitem is one control, not two variants.
         const choices = [...new Set(menu.querySelectorAll('[role="menuitem"],button,[role="button"]'))];
         for (const item of choices) {
@@ -246,8 +224,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
           const label = normalize(item.getAttribute("aria-label") || accessibleText(item));
           if (!registry.manualInputTarget(item)) {
             result.unknownCount += 1;
-          } else if (label === "Allow for this conversation"
-            || label === "Allow ChatGPT Tela for this conversation") {
+          } else if (isConversationChoice(label)) {
             result.allowConversationCount += 1;
             if (result.allowConversationCount === 1) {
               allowConversationButton = item;
@@ -297,9 +274,9 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     const selected = openingOptions ? optionsDisclosure : conversation ? allowConversationButton
       : prepare.choice === 'allow' ? allowButton : allowOnceButton;
     const eligible = observation => openingOptions
-      ? observation.cardCount === 1 && !observation.requiresManualReview
+      ? observation.cardCount === 1
         && observation.optionsDisclosureCount === 1 && !observation.optionsExpanded
-      : decideApproval(conversation ? 'recognized_conversation' : 'recognized_once', observation).preferredChoice === prepare.choice;
+      : decideApproval('full_access', observation).preferredChoice === prepare.choice;
     if (prepare.cardKey !== prior.cardKey || prepare.proofKey !== prior.proofKey
       || (prior.menuOpenAttempted && prior.menuOpenAnchorText !== text)
       || !eligible(result) || !selected || !visible(selected) || selected.disabled
@@ -1984,10 +1961,8 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       phase = "approval_read";
       const card = await this.page.evaluate<undefined, {
         cardCount: number; denyCount: number; allowCount: number; allowOnceCount: number;
-        genericAllowIsCurrentAction?: boolean;
         allowConversationCount?: number;
-        alwaysAllowCount: number; unknownCount: number; requiresManualReview?: boolean;
-        reviewReason?: "tool_description_policy_directive" | "suspicious_instruction" | "provider_warning" | null;
+        alwaysAllowCount: number; unknownCount: number;
         cardKey: string | null; proofKey: string | null;
         inputReceived?: boolean;
         receipt?: { cardKey: string; proofKey: string } | null;
@@ -2037,11 +2012,9 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       }
       const approval = card.cardCount > 0 ? Object.freeze({
         cardCount: card.cardCount, denyCount: card.denyCount, allowCount: card.allowCount,
-        genericAllowIsCurrentAction: card.genericAllowIsCurrentAction === true,
         allowOnceCount: card.allowOnceCount, allowConversationCount: card.allowConversationCount ?? 0,
         alwaysAllowCount: card.alwaysAllowCount,
-        unknownCount: card.unknownCount, requiresManualReview: card.requiresManualReview === true,
-        ...(card.requiresManualReview && card.reviewReason ? { reviewReason: card.reviewReason } : {}),
+        unknownCount: card.unknownCount,
         revisionFingerprint: fingerprint(JSON.stringify([card.cardKey, card.proofKey])),
         ...(card.cardCount === 1 && card.cardKey ? { cardFingerprint: diagnosticFingerprint(card.cardKey) } : {}),
         inputReceived: card.inputReceived === true,
@@ -2185,12 +2158,10 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       readonly cardCount: number;
       readonly denyCount: number;
       readonly allowCount: number;
-      readonly genericAllowIsCurrentAction?: boolean;
       readonly allowOnceCount: number;
       readonly allowConversationCount?: number;
       readonly alwaysAllowCount: number;
       readonly unknownCount: number;
-      readonly requiresManualReview?: boolean;
       readonly allowPoint: { readonly x: number; readonly y: number } | null;
       readonly allowOncePoint: { readonly x: number; readonly y: number } | null;
       readonly allowConversationPoint?: { readonly x: number; readonly y: number } | null;
@@ -2218,9 +2189,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     // A conversation-only option may be hidden under an explicit card-local
     // disclosure. Open that one menu at most once per exact card, then re-prove
     // the unchanged card and its freshly linked choices before any approval.
-    // Never open a dropdown on a warned, unknown or ambiguous card.
-    if (mode === "recognized_conversation" && observed.cardCount === 1
-      && !observed.requiresManualReview
+    if (mode !== "off" && observed.cardCount === 1
       && observed.allowConversationCount === 0 && observed.optionsDisclosureCount === 1
       && !observed.optionsExpanded && observed.optionsPoint
       && observed.cardKey && observed.proofKey) {
@@ -2229,7 +2198,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
           choice: "open_options" }, signal,
       );
       if (opening.cardKey !== observed.cardKey || opening.proofKey !== observed.proofKey
-        || opening.requiresManualReview || opening.targetState !== "ready" || !opening.optionsPoint) {
+        || opening.targetState !== "ready" || !opening.optionsPoint) {
         this.#diagnostic("approval_options_open_withheld", { reason_class: "target_unverified" });
         return Object.freeze({ status: "none" as const, reason: "options_unverified" });
       }
@@ -2260,7 +2229,6 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     if (observed.cardCount > 0) this.#diagnostic("approval_policy", {
       mode,
       action: decision.action,
-      requires_manual_review: observed.requiresManualReview === true,
       card_count: observed.cardCount,
       deny_count: observed.denyCount,
       allow_count: observed.allowCount,

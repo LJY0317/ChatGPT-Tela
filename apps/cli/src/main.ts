@@ -129,22 +129,19 @@ function manageApprovalPreferences(): void {
       path,
       ...readProductPreferences(path),
       appliesTo: "new-or-restarted-codex-profiles",
-      persistentApproval: false,
     }, null, 2));
     return;
   }
-  if (subcommand !== "enable" && subcommand !== "enable-once" && subcommand !== "disable") {
-    throw new Error("usage: chatgpt-tela approval <status|enable|enable-once|disable|delay PRESET>");
+  if (subcommand !== "enable" && subcommand !== "disable") {
+    throw new Error("usage: chatgpt-tela approval <status|enable|disable|delay PRESET>");
   }
-  const approvalAutomation = subcommand === "enable" ? "recognized_conversation"
-    : subcommand === "enable-once" ? "recognized_once" : "off";
+  const approvalAutomation = subcommand === "enable" ? "full_access" : "off";
   writeProductPreferences({ ...current, approvalAutomation }, path);
   console.log(JSON.stringify({
     path,
     approvalAutomation,
     approvalDelay: current.approvalDelay ?? "instant",
     appliesTo: "new-or-restarted-codex-profiles",
-    persistentApproval: false,
   }, null, 2));
 }
 

@@ -94,9 +94,8 @@ approvals do not consume that budget; exact card replay fences remain.
 - Keep the desktop launcher and embedded Chromium browser host outside core correctness logic.
 - On macOS, keep the hidden Codex/Web bridge out of the Dock and expose product status/control through one
   lightweight on-demand menu-bar surface rather than another always-visible launcher app.
-- Optional approval automation is explicit and defaults off. When enabled, it may activate only one
-  structurally recognized one-shot approval; ambiguous/unknown cards and persistent **Always allow** choices
-  remain manual/fail-closed.
+- Approval automation is explicit and defaults off. Full access prefers **Allow for this conversation**, then
+  **Allow once** or **Allow**. Approval text and connector names do not affect the choice.
 - Support macOS, Windows, and Linux by default and verify all three in CI.
 - Stay quiet when idle and collect deeper diagnostics only at a bounded failure boundary.
 
@@ -907,33 +906,27 @@ Optional isolated ChatGPT accounts need their own Plugin connection because Chat
 isolated. They still use the same Gateway endpoint; ordinary single-account users do not traverse the
 multi-profile setup.
 
-### Optional approval automation
+### Full access approval
 
-ChatGPT Tela can optionally auto-activate a **recognized approval card** in the dedicated Codex/Web
-surface. It is off by default. With explicit automation enabled it prefers a
-uniquely exposed **Allow for this conversation** choice; if that choice is
-not available, it may use a recognized **Allow once** choice instead.
-For normal, unambiguous cards only, an explicitly opted-in conversation
-mode can open a uniquely identified `Approval options` menu once and
-verify its revealed conversation-scoped item before clicking it.
-An uncertain menu-opening outcome is never automatically retried.
-The historical `recognized_once` setting retains its narrower meaning.
-It never selects persistent **Always allow**. Unknown/ambiguous cards and host security warnings
-remain manual. The renderer exports only structural counts, coordinates, and disposable card identities to this policy; card text, tool
-arguments, prompts, and HTML are not persisted or logged.
+Approval automation is off by default. When enabled, Tela considers one visible approval card in the owned
+Codex/Web surface, without matching a connector name or analyzing the card text. It prefers **Allow for this
+conversation**; otherwise it chooses **Allow once**, then generic **Allow**. A unique visible **Deny** control
+and one unambiguous eligible card-local target are required. If the conversation choice is inside the card's
+**Approval options** menu, Tela opens that menu once and verifies the same card and linked choice before clicking.
+The existing owner, cancellation, target visibility, trusted input and card-clearance checks still govern dispatch
+and its outcome. ChatGPT host approvals before Tela receives a tool call remain outside this browser feature.
 
 ```sh
 bun run cli approval status
 bun run cli approval enable
-bun run cli approval enable-once
 bun run cli approval disable
 bun run cli approval delay 500ms
 ```
 
-Changing this preference applies to newly started/restarted Tela Codex profiles. It does not widen Native
-Codex sandbox/tool authority and does not bypass ChatGPT cards that Tela cannot structurally recognize.
+Changing this preference applies to newly started/restarted Tela Codex profiles. It controls Tela-owned
+browser approval cards; ChatGPT host approvals before Tela receives a tool call are outside this setting.
 The optional delay is a bounded preset (`instant`, `250ms`, `500ms`, `1s`, `2s`, `5s`, `10s`, or `15s`).
-The delay applies only after a card is recognized. Tela rechecks that same unchanged card after
+The delay applies only after an eligible card is observed. Tela rechecks that same unchanged card after
 waiting and uses its current button position. An absent card does not delay normal responses; a changed,
 disabled, or previously activated card is never clicked automatically.
 

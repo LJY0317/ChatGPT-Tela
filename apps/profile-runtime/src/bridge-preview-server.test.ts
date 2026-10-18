@@ -230,9 +230,8 @@ describe("profile bridge preview server", () => {
         ...(selected ? {
           selectedSurfaceId: id, approvalState: "pending" as const,
           approvalWait: {phase:"dispatch_sent" as const,elapsedMs:120000,expiresAfterMs:600000 as const,unverifiedDispatchCount:1,operationState:"waiting" as const,rawCard:"SECRET INJECTED"},
-          approvalReview: { contractVersion: 1 as const, classification: "manual_review" as const,
-            nextAction: "human_browser_review" as const, agentMayApprove: false as const,
-            reviewReason: "provider_warning" as const,
+          approvalReview: { contractVersion: 1 as const, classification: "eligible_conversation" as const,
+            nextAction: "existing_owned_turn_automation" as const, agentMayApprove: false as const,
             cardBody: "SECRET INJECTED IN CARD",
           },
         } : {}),
@@ -247,7 +246,7 @@ describe("profile bridge preview server", () => {
         headers,
       })).json() as any;
       expect(selected.approvalReview).toMatchObject({
-        classification: "manual_review", nextAction: "human_browser_review", agentMayApprove: false,
+        classification: "eligible_conversation", nextAction: "existing_owned_turn_automation", agentMayApprove: false,
       });
       expect(selected.approvalWait).toEqual({phase:"dispatch_sent",elapsedMs:120000,expiresAfterMs:600000,unverifiedDispatchCount:1,operationState:"waiting"});
       // In-process adapter's projection is a typed allowlist, not the raw page.

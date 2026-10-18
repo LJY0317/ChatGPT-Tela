@@ -202,7 +202,7 @@ export function analyzeDiagnosticEvents(input: { events: readonly StructuralDiag
       localSilenceWhileOthersProgress: observedOtherProgress, instanceCount: instances.length,
       hostContinuation: input.outputStartedAtMs !== undefined ? "host-reported" : "unverified" },
     timeline: target.slice(-DIAGNOSTIC_LIMITS.timeline), nearbyAnomalies: failures.slice(-16),
-    gaps: ["Local response delivery is not proof of host display or model continuation.", "Scope/profile fingerprints are correlation signals, not authenticated account identities.", "Missing, rotated or unreadable evidence is not evidence of success.", "External host rejection before Tela ingress has no local tool receipt; a host report does not prove its internal cause.", "Approval acceptance does not grant or prove downstream safety review acceptance.", "Server-side reasoning and exact Web quota/token accounting are not observable."],
+    gaps: ["Local response delivery is not proof of host display or model continuation.", "Scope/profile fingerprints are correlation signals, not authenticated account identities.", "Missing, rotated or unreadable evidence is not evidence of success.", "External host rejection before Tela ingress has no local tool receipt; a host report does not prove its internal cause.", "Server-side reasoning and exact Web quota/token accounting are not observable."],
   };
 }
 

@@ -1628,7 +1628,7 @@ describe("ChatGPT semantic provider", () => {
       const driver = new FixtureDriver(fixture("ready-new-chat"));
       driver.approveRecognizedCard = true;
       const surface = await leaseFor(driver);
-      const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "recognized_once" });
+      const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "full_access" });
       try {
         const submitting = provider.submitTurn(surface.lease, request());
         while (driver.current.revision === "r1") await Promise.resolve();
@@ -2102,7 +2102,7 @@ describe("ChatGPT semantic provider", () => {
   });
 
   test("an unresolved approval cannot commit a progress reply after a tool result", async () => {
-    for (const mode of ["off", "recognized_once"] as const) {
+    for (const mode of ["off", "full_access"] as const) {
       const driver = new FixtureDriver(fixture("ready-new-chat"));
       const surface = await leaseFor(driver);
       const provider = new ChatGptSemanticProvider({ approvalAutomationMode: mode });
@@ -2153,7 +2153,7 @@ describe("ChatGPT semantic provider", () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.approveRecognizedCard = true;
     const surface = await leaseFor(driver);
-    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "recognized_once" });
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "full_access" });
     try {
       const pending = provider.submitTurn(surface.lease, request());
       while (driver.current.revision === "r1") await Promise.resolve();
@@ -2173,7 +2173,7 @@ describe("ChatGPT semantic provider", () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.processApprovalCard = async () => ({status:"none",reason:reason!});
     const surface = await leaseFor(driver);
-    const provider = new ChatGptSemanticProvider({approvalAutomationMode:"recognized_once"});
+    const provider = new ChatGptSemanticProvider({approvalAutomationMode:"full_access"});
     let accepted: any;
     try {
       const pending = provider.submitTurn(surface.lease, request());
@@ -2193,7 +2193,7 @@ describe("ChatGPT semantic provider", () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.approveRecognizedCard = true;
     const surface = await leaseFor(driver);
-    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "recognized_once" });
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "full_access" });
     try {
       const submitting = provider.submitTurn(surface.lease, request());
       while (driver.current.revision === "r1") await Promise.resolve();
@@ -2230,7 +2230,7 @@ describe("ChatGPT semantic provider", () => {
     driver.approveRecognizedCard = true;
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({
-      approvalAutomationMode: "recognized_once",
+      approvalAutomationMode: "full_access",
       approvalAutomationDelayMs: 1,
     });
     const scratch = mkdtempSync(join(tmpdir(), "tela-approval-resolution-"));
@@ -2313,7 +2313,7 @@ describe("ChatGPT semantic provider", () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.approveRecognizedCard = true;
     const surface = await leaseFor(driver);
-    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "recognized_once" });
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "full_access" });
     try {
       const submitting = provider.submitTurn(surface.lease, request());
       while (driver.current.revision === "r1") await Promise.resolve();
@@ -2354,7 +2354,7 @@ describe("ChatGPT semantic provider", () => {
     driver.approveRecognizedCard = true;
     driver.approvalPreparedRevision = "scoped-choice-proof";
     const surface = await leaseFor(driver);
-    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "recognized_conversation" });
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "full_access" });
     try {
       const submitting = provider.submitTurn(surface.lease, request());
       while (driver.current.revision === "r1") await Promise.resolve();
@@ -2389,7 +2389,7 @@ describe("ChatGPT semantic provider", () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.approveRecognizedCard = true;
     const surface = await leaseFor(driver);
-    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "recognized_once" });
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "full_access" });
     try {
       const submitting = provider.submitTurn(surface.lease, request());
       while (driver.current.revision === "r1") await Promise.resolve();
@@ -2404,25 +2404,22 @@ describe("ChatGPT semantic provider", () => {
     } finally { await surface.host.close(); }
   });
 
-  test("visible warning reaches the task as a fixed review reason without automatic approval", async () => {
+  test("approval wait progress does not analyze card text", async () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.approveRecognizedCard = true;
     const surface = await leaseFor(driver);
-    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "recognized_once" });
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "off" });
     try {
       const submitting = provider.submitTurn(surface.lease, request());
       while (driver.current.revision === "r1") await Promise.resolve();
       driver.queued.push(acceptedSnapshot(driver));
       const submitted = await submitting;
       if (submitted.state !== "proven") throw new Error("fixture submit failed");
-      driver.queued.push({ ...driver.current, revision: "security-review", approval: {
-        ...recognizedApproval, requiresManualReview: true,
-        reviewReason: "tool_description_policy_directive",
-      } });
+      driver.queued.push({ ...driver.current, revision: "approval-card", approval: recognizedApproval });
       const event = await provider.waitForTurnEvent(surface.lease, submitted.value);
       expect(event.state === "proven" && event.value).toMatchObject({
         kind: "progress",
-        summary: expect.stringContaining("tool-description instructions about security or approval policy"),
+        summary: "Approval needed in the Web browser.",
       });
       expect(driver.approvalCalls).toBe(0);
     } finally { await surface.host.close(); }
@@ -2726,7 +2723,7 @@ test('post-acceptance input does not cancel an observer; Native cancellation sti
 test.each(["pending", "cleared_before", "preparation", "replacement", "hidden", "forgotten", "handoff"] as const)("fake clock: approval milestones, ten-minute expiry and late-input fencing (%s)", async scenario => {
   const driver = new FixtureDriver(fixture("ready-new-chat"));
   const surface = await leaseFor(driver);
-  const provider = new ChatGptSemanticProvider({ approvalAutomationMode: scenario === "preparation" ? "recognized_once" : "off" });
+  const provider = new ChatGptSemanticProvider({ approvalAutomationMode: scenario === "preparation" ? "full_access" : "off" });
   let now = 1_000;
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   const timers = new Map<number, { at: number; callback: () => void }>();
@@ -2857,7 +2854,7 @@ test.each(["pending", "cleared_before", "preparation", "replacement", "hidden", 
 test.each(["owned", "changed_author"] as const)("public cancellation aborts pending approval and freshly proves Stop ownership (%s)", async scenario => {
   const driver = new FixtureDriver(fixture("ready-new-chat"));
   const surface = await leaseFor(driver);
-  const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "recognized_once" });
+  const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "full_access" });
   let preparationSignal: AbortSignal | undefined;
   let began!: () => void;
   const preparing = new Promise<void>(resolve => { began = resolve; });

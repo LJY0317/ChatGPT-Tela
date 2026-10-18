@@ -158,10 +158,10 @@ Prioritize these evidenced usability/correctness blockers before claiming replac
    logical conversation route, in addition to the physical lease/generation. SPA navigation is not a
    renderer hydration proof. Rekeying requires one matching user and one unambiguous assistant lineage;
    identity loss fails the request without replay, foreign-answer delivery or history edits.
-2. Prepare recognized one-shot approval targets with exact card proof, viewport positioning and hit
+2. Prepare the preferred Full access approval choice with exact card proof, viewport positioning and hit
    testing before trusted input. Track dispatch separately from receipt: pending approval, click sent,
    card still present and resumed tool execution are different observations. Never repeat an uncertain
-   click or treat a security warning as approval. Surface unresolved manual action in the session UI.
+   click an unverified target. Surface unresolved action in the session UI.
 3. Carry only browser-public progress titles/descriptions through an owned incremental response channel.
    Preserve Native response commit/cancellation semantics; progress cannot commit a final answer or grant
    tool authority. Do not collect hidden reasoning or add a separate polling loop.
@@ -901,17 +901,16 @@ Both paths are bounded and structural. If a catalog path changes or becomes ambi
 privacy-safe counts/stages, clears only its dedicated probe surface, and fails closed; it never clicks an
 arbitrary card or treats an unbound submission as equivalent to selecting **ChatGPT Tela**.
 
-Approval automation defaults to `off`. Explicit `recognized_once` and
-`recognized_conversation` preferences share a pure choice resolver with renderer
-preparation. Candidate discovery is separate from execution: marked provider
-cards and connector-owned accessible dialogs are candidates, while exact choice
-uniqueness, unchanged card/revision, owner, hit testing and one-shot input fences
-govern dispatch. Auxiliary controls, Deny count and a separate persistent choice
-are metadata, not global vetoes. Generic Allow requires exact card-local connector
-identity; persistent Always allow remains unselected. Nested candidate wrappers
-retain their complete warning scope. Trusted input, clearance, owned progress and
-Native result are separate evidence. One unresolved dispatch blocks another;
-verified successful approvals have no count limit. See
+Approval automation defaults to `off`; its sole enabled mode is `full_access`.
+Marked provider cards and accessible dialogs with Allow controls are candidates;
+connector names and card text do not influence selection. On one unambiguous
+card, the pure resolver prefers **Allow for this conversation**, then **Allow
+once**, then generic **Allow**. A visible **Deny** control, unchanged card and
+revision, current owner, hit testing and one-shot input fence are verified
+before dispatch. A conversation choice in **Approval options** is opened once
+and linked back to the same card before selection. Trusted input, clearance,
+owned progress and Native result remain separate evidence. One unresolved
+dispatch blocks another. See
 [approval lifecycle and review boundaries](approval-review-boundaries.md).
 
 Program-owned approval timers publish 30-second/two-minute progress, revalidate
@@ -920,21 +919,16 @@ Stop fence delivery before a bounded provider Stop attempt and physical release.
 No timer implies Deny, accepted-task failure/success or permission to resend;
 unconfirmed remote cancellation remains uncertain.
 
-Visible provider security warnings are still manual-review decisions, including in any future
-user-selected automation mode. The replaceable provider adapter may classify a warning into a
-fixed, content-free reason (for example, tool-description policy directives); the accepted turn
-may surface that reason as progress and a bounded diagnostic event. Such a reason explains a
-wait, not whether a tool is dangerous or whether approval should be granted. Unknown warnings
-remain manual. Neither full access to local files nor a Tela preference overrides host/platform
-review. A ChatGPT-platform approval that happens *before* Tela receives a tool call is outside
+Approval-card text and warning language do not enter a risk classifier or affect the selected
+control. A ChatGPT-platform approval that happens *before* Tela receives a tool call is outside
 Tela's Web DOM visibility; rely on explicitly supplied host evidence rather than claiming to
-observe that card. Do not teach retries, auto-dismissal or automatic approval from warning text.
+observe that card. Do not infer its state from missing Tela events.
 
 #### Approval-blocker feedback and bounded improvement cycle
 
-One owned pending-card transition must expose that work is awaiting human action rather than
-reporting only generic model thinking. Link the fixed reason, policy mode, dispatch/receipt state
-and elapsed time to the same operation as its actual tool result and continuation. When a repeated
+One owned pending-card transition must expose whether its owner-bound turn can act automatically
+or needs interaction, rather than reporting only generic model thinking. Link structural eligibility,
+dispatch/receipt state and elapsed time to the same operation as its actual tool result and continuation. When a repeated
 blocker is evidenced, use the existing bounded incident/diagnostic record and maintenance task
 checkpoint: observation -> verified layer and exact owner -> cause or missing evidence -> smallest
 authorized source/doc correction -> synthetic regression -> source integration -> optional

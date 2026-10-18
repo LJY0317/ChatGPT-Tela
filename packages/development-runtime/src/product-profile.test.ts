@@ -57,27 +57,27 @@ describe("product profile native-target selection", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  test("approval automation is explicit and limited to recognized one-shot cards", () => {
+  test("approval automation accepts full access only", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-product-approval-"));
     try {
       const enabled = loadProductProfileRuntimeConfig({
         ...common(root),
-        CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "recognized_once",
+        CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "full_access",
         CHATGPT_TELA_APPROVAL_DELAY_MS: "2000",
       });
-      expect(enabled.approvalAutomationMode).toBe("recognized_once");
+      expect(enabled.approvalAutomationMode).toBe("full_access");
       expect(loadProductProfileRuntimeConfig({
-        ...common(root), CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "recognized_conversation",
-      }).approvalAutomationMode).toBe("recognized_conversation");
+        ...common(root), CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "full_access",
+      }).approvalAutomationMode).toBe("full_access");
       expect(enabled.approvalAutomationDelayMs).toBe(2_000);
       expect(() => loadProductProfileRuntimeConfig({
         ...common(root),
-        CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "recognized_once",
+        CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "full_access",
         CHATGPT_TELA_APPROVAL_DELAY_MS: "15001",
       })).toThrow("APPROVAL_DELAY_MS");
       expect(() => loadProductProfileRuntimeConfig({
         ...common(root),
-        CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "full_access",
+        CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: "unsupported",
       })).toThrow("APPROVAL_AUTOMATION_MODE");
     } finally {
       rmSync(root, { recursive: true, force: true });

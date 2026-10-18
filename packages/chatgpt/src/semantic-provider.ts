@@ -80,7 +80,7 @@ export interface ChatGptSemanticProviderOptions {
    * Production defaults to 5s; tests may set 0 because fixture state is synchronous.
    */
   readonly connectorDraftPersistenceSettleMs?: number;
-  /** Optional local approval policy. Disabled by default and never selects persistent Always allow. */
+  /** Optional local approval policy. Disabled by default. */
   readonly approvalAutomationMode?: ChatGptApprovalAutomationMode;
   /** Optional bounded delay before inspecting the current one-shot approval card. */
   readonly approvalAutomationDelayMs?: number;
@@ -1954,14 +1954,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             });
           }
         }
-        if (snapshot.approval?.requiresManualReview) {
-          emitDiagnosticEvent("chatgpt_tela_work", "approval_manual_review_required", {
-            // Renderer text is untrusted. Only an adapter-classified fixed category is reported.
-            reason_class: snapshot.approval.reviewReason ?? "provider_warning",
-            approval_mode: this.#approvalAutomationMode,
-            approval_card_count: snapshot.approval.cardCount,
-          });
-        }
       }
       const observedApproval = snapshot.approval;
       const approvalReview = reviewChatGptApprovalForAgent(
@@ -1977,7 +1969,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             classification: approvalReview.classification,
             next_action: approvalReview.nextAction,
             approval_mode: this.#approvalAutomationMode,
-            ...(approvalReview.reviewReason ? { reason_class: approvalReview.reviewReason } : {}),
             dispatch_count: tracked.approvalObservation.audit.dispatch_count,
             unverified_dispatch_count: tracked.approvalObservation.unverifiedDispatchCount,
             // No renderer text, coordinates or raw card identity enter diagnostics.
@@ -2013,8 +2004,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       const approvalProgress = overdueHumanReview ?? preparationFailure ?? (approvalPhase
         ? approvalPhase === "pending" && approvalReview.classification === "limit_reached"
           ? "A previous automatic approval remains unverified. Review the existing operation in the browser; Tela will not click another card or resend the request."
-          : approvalObservationSummary(approvalPhase,
-          observedApproval?.requiresManualReview ? observedApproval.reviewReason ?? "provider_warning" : undefined)
+          : approvalObservationSummary(approvalPhase)
         : "");
       if (approvalProgress && tracked.approvalProgress !== approvalProgress) {
         tracked.approvalProgress = approvalProgress;

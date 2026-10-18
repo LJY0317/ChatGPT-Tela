@@ -11,7 +11,7 @@ tested, and dogfooded through Tela's own authority boundaries:
 | Reference workflow | Tela owner | Retirement-ready gate | Current state |
 | --- | --- | --- | --- |
 | DevSpace local patches | Tela Chat | the maintainer can read/edit local files directly from ordinary Chat, with approved folders, instructions, bounded transactional edits and reliable command execution | **advanced partial** — installed connector read/edit/create/command/replay/current and historical Git-review proof passes; installed folder controls exist. Ordinary-Chat onboarding/daily use remains. Delegated providers and richer cards are optional scope |
-| Permity | product UI + ChatGPT semantic approval policy | Tela covers every Permity behavior the maintainer still relies on, with explicit policy/UX decisions for any deliberately rejected behavior | **partial** — opt-in fail-closed recognized one-shot approval and product preference/diagnostics are absorbed; general allowlist/full-access policy, bounded delays, unknown-approval evidence/review, browser/AX adapters, and Work-handoff policy are not yet assimilated |
+| Permity | product UI + ChatGPT Web approval controls | **partial** — Full access approval and product preference/diagnostics are absorbed; bounded delays, approval evidence/history, browser/AX adapters, and Work-handoff behavior remain |
 | LJY's Menu Bar | product UI / lifecycle | Tela's own menu bar/Control Center covers the surviving daily controls without importing backend authority into the UI | **partial** — split-service/profile control, approval preference, diagnostics, bridge preview, updates/settings surfaces and signed lifecycle ownership exist; legacy DevSpace controls remain useful until no longer necessary |
 
 ## Completion rule
@@ -117,12 +117,9 @@ active/recent foreign worktrees as a consequence of Tela parity progress.
 
 ## Permity assimilation backlog
 
-Tela intentionally does **not** broaden approval authority just to mimic Permity. The current safe default is
-approval automation off; when enabled, Tela recognizes only one structurally unambiguous one-shot approval.
-Before Permity can be considered retirement-ready, the maintainer's still-used Permity behaviors must be
-audited and each one either implemented with an explicit Tela policy or deliberately rejected with a documented
-replacement workflow. The audit includes allowlist/full-access modes, delays, evidence/history, desktop/browser
-adapters, and Chat-to-Work handoff behavior.
+Tela has one explicit approval automation switch, off by default. Full access selects the conversation-scoped
+choice when offered, otherwise a one-shot choice, on one structurally unambiguous card. The current Permity
+assimilation backlog is limited to delays, evidence/history, desktop/browser adapters, and Chat-to-Work handoff.
 
 ## LJY's Menu Bar assimilation backlog
 

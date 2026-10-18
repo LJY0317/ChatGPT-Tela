@@ -39,8 +39,8 @@ A transport commit attests local delivery only; it does not prove Desktop render
 `inspection_input_classified.manual_consent` distinguishes a real user's card-local action
 from passive viewing. The provider rechecks the currently observed unique card and enabled
 control; the host releases the existing user gesture without inventing one. This does not
-edit the submitted request or grant Native execution authority. Provider warnings require
-manual review and remain visible; ordinary automatic one-shot approval cannot accept them.
+edit the submitted request or grant Native execution authority. Automatic approval follows
+the configured Full access preference and the current card-local controls.
 
 `native_seed_authority_observed` records fresh-seed system/developer segment counts, total,
 unique, duplicate and largest byte sizes, plus Native instructions bytes. Content hashes
@@ -140,7 +140,7 @@ read-only capability (opened workspace ID + exact Native thread UUID,
 optional profile slot/minutes) over composing a `bun -e` diagnostic
 script through `exec_command`. The authenticated Codex-service
 inspection checks the Native owner, projects bounded logs, observes
-current profile Web approval and verifies the owner stayed unchanged.
+current profile Web approval and reports historical approval-wait evidence.
 Web card state is **profile-scoped**, not proof it belongs to that
 Native conversation. `unavailable` includes a fixed observation
 failure reason where supported; ChatGPT host-owned approval cards
@@ -148,15 +148,12 @@ remain pre-ingress and cannot be approved by Tela. See
 [approval review boundaries](approval-review-boundaries.md).
 
 When a current selected Web card is pending, its optional `browser.review`
-reports the provider policy classification (`eligible_once`,
-`eligible_conversation`, `manual_review`, `limit_reached`, `disabled`,
-`ambiguous`, `unrecognized`). It never grants an agent a new click
-capability: eligibility only refers to existing, explicitly opted-in
-owner-bound automation. An accepted Web turn permits at most eight
-**unverified** approval dispatches. Trusted receipt plus clearance and
-new assistant progress release the budget charge, but never its
-one-click identity fence. Security warnings and exhausted budgets stay
-manual. See `approval_agent_review` events for structural triage.
+reports structural eligibility (`eligible_once`, `eligible_conversation`,
+`limit_reached`, `disabled`, `ambiguous`, `unrecognized`). It never grants an
+agent a new click capability: eligibility refers to existing owner-bound
+automation. An unresolved dispatch blocks another until trusted receipt,
+card clearance and new assistant progress verify its outcome. See
+`approval_agent_review` events for structural status.
 
 When the user supplies an original Native conversation UUID, use one scoped,
 read-only inspection instead of searching private rollout files or repeatedly
@@ -542,7 +539,7 @@ Private artifacts have no upload/export path. Analyze them locally and return on
 classifications/counts; never return raw files through model tools or include them in Git/releases.
 
 The capture is read-only, does not click approvals, resend requests, alter permissions, change models,
-or attach to the official Desktop app. Native/Work authority and existing approval policy remain intact.
+or attach to the official Desktop app. Native/Work authority remains intact.
 The browser capture has a three-second deadline and deduplication. A diagnostic failure never replaces
 an execution result. Enabling capture can add active-request latency; leave it disabled for ordinary use.
 
@@ -573,15 +570,10 @@ new request, retry, poller, capture enablement or idle work. Existing local rota
 A platform rejection before Tela receives a request still requires host/platform evidence; these logs
 cannot retroactively explain that rejection or make a blocked operation permissible.
 
-When an **owned Tela Web** approval card is visible, the provider may classify a public security
-warning into one fixed reason (`tool_description_policy_directive`, `suspicious_instruction`,
-or `provider_warning`). `approval_manual_review_required` records `reason_class`, policy mode
-and card count only on a changed observation; `approval_wait_transition` retains its distinct
-pending / dispatch / input-received / cleared phases. A pending warning also emits fixed
-human-readable progress without copying the card body into the model or logs. Classification is
-presentation evidence, not a platform risk finding, permission, proof of click receipt or
-authorization to resend. Changed or unknown text remains manual. Platform-owned ChatGPT tool
-approval UI outside the attached Web browser is **not** observable through this adapter;
+For an **owned Tela Web** approval card, the adapter uses structural card and control observations only;
+it does not classify card text or warning language. `approval_wait_transition` retains its distinct
+pending / dispatch / input-received / cleared phases. Card text is not copied into model progress or logs.
+Platform-owned ChatGPT tool approval UI outside the attached Web browser is **not** observable through this adapter;
 user-supplied screenshots or official platform status are separate evidence.
 
 ## Retention and cost

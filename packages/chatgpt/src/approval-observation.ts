@@ -1,5 +1,4 @@
 import type { ChatGptSurfaceSnapshot } from "./surface";
-import type { ChatGptApprovalReviewReason } from "./approval-policy";
 
 export type ApprovalObservationPhase = "pending" | "dispatch_sent" | "input_received" | "card_cleared" | "task_progress";
 export interface ApprovalObservationTransition {
@@ -145,12 +144,9 @@ export class ChatGptApprovalObservation {
   }
 }
 
-export function approvalObservationSummary(phase: ApprovalObservationPhase, reviewReason?: ChatGptApprovalReviewReason): string {
+export function approvalObservationSummary(phase: ApprovalObservationPhase): string {
   switch (phase) {
-    case "pending": return reviewReason === "tool_description_policy_directive"
-      ? "Manual review needed: the Web approval card flags tool-description instructions about security or approval policy. Review it in the browser; Tela will not override or resend the request."
-      : reviewReason ? "Manual security review needed in the Web browser. Tela will not override the warning."
-      : "Approval needed in the Web browser.";
+    case "pending": return "Approval needed in the Web browser.";
     case "dispatch_sent": return "Approval click sent; waiting for the Web browser to receive and process it.";
     case "input_received": return "The Web browser received the approval click; the card is still pending.";
     case "card_cleared": return "Approval card cleared; waiting for the task to resume.";

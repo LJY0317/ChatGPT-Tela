@@ -121,7 +121,7 @@ describe("private service protocol", () => {
     expect(() => parseCodexBridgePreviewContract({ ...selected, approvalState: "pending",
       approvalReview: { ...review, agentMayApprove: true } })).toThrow();
     expect(() => parseCodexBridgePreviewContract({ ...selected, approvalState: "pending",
-      approvalReview: { ...review, classification: "manual_review" } })).toThrow();
+      approvalReview: { ...review, classification: "unsupported" } })).toThrow();
   });
 });
 

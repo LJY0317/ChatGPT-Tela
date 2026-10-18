@@ -80,10 +80,11 @@ sandbox, approval, or destructive-action authority.
 
 ## Approval automation
 
-Tela approval automation is optional and defaults off. `recognized_once` may activate only a single
-structurally recognized one-shot tool approval. It never selects persistent **Always allow** and never treats
-an unknown/ambiguous approval layout as consent. Approval card text, raw HTML, prompts, tool arguments, and
-tool output are not collected for this decision.
+Tela approval automation is optional and defaults off. `full_access` prefers **Allow for this conversation**,
+then **Allow once** or generic **Allow**, on one visible card in the owned Web surface. Connector names and card
+text do not determine the choice. A unique visible **Deny** control and one unambiguous eligible target are
+required. The browser still verifies ownership, cancellation, the current target and input receipt. ChatGPT host
+approvals before Tela ingress are outside this feature.
 
 ## Authentication
 

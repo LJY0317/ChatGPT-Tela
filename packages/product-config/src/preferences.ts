@@ -10,7 +10,7 @@ import {
 import { dirname, join } from "node:path";
 import { resolveProductPaths, type ProductPathOptions } from "@chatgpt-tela/product-lifecycle";
 
-export type ProductApprovalAutomationMode = "off" | "recognized_once" | "recognized_conversation";
+export type ProductApprovalAutomationMode = "off" | "full_access";
 export type ProductApprovalDelayPreset = "instant" | "250ms" | "500ms" | "1s" | "2s" | "5s" | "10s" | "15s";
 
 const APPROVAL_DELAY_MS: Readonly<Record<ProductApprovalDelayPreset, number>> = Object.freeze({
@@ -52,9 +52,12 @@ export function parseProductPreferences(value: unknown): ProductPreferences {
   const extra = Object.keys(item).filter(key => !["version", "approvalAutomation", "approvalDelay", "workProfileConnections", "savedChatAcceptance"].includes(key));
   if (extra.length > 0) throw new Error(`ChatGPT Tela preferences contain unknown fields: ${extra.join(", ")}`);
   if (item.version !== 1) throw new Error("unsupported ChatGPT Tela preferences version");
-  const approvalAutomation = item.approvalAutomation ?? "off";
-  if (approvalAutomation !== "off" && approvalAutomation !== "recognized_once"
-    && approvalAutomation !== "recognized_conversation") {
+  const storedApprovalAutomation = item.approvalAutomation ?? "off";
+  const approvalAutomation = storedApprovalAutomation === "recognized_once"
+    || storedApprovalAutomation === "recognized_conversation"
+    ? "full_access"
+    : storedApprovalAutomation;
+  if (approvalAutomation !== "off" && approvalAutomation !== "full_access") {
     throw new Error("ChatGPT Tela approval automation mode is invalid");
   }
   const approvalDelay = item.approvalDelay ?? "instant";

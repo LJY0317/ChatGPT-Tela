@@ -35,7 +35,7 @@ private struct ControlCenterProfilesEnvelope: Decodable {
 }
 
 private struct ControlCenterBridgeSurface: Decodable { let id: String; let label: String }
-private struct ControlCenterApprovalReview: Decodable { let classification: String; let reviewReason: String? }
+private struct ControlCenterApprovalReview: Decodable { let classification: String }
 private struct ControlCenterApprovalWait: Decodable {
   let phase: String
   let elapsedMs: Int
@@ -853,10 +853,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       approval.action = #selector(toggleApproval(_:))
       approval.state = approvalAutomation == "off" ? .off : .on
       approval.isEnabled = !preferenceError
-      approval.setAccessibilityLabel("Auto-approve recognized requests")
-      row("Auto-approve recognized requests", subtitle: approvalAutomation == "recognized_once"
-        ? "Existing one-shot mode. Switch off and on to prefer a clearly labeled conversation-only grant."
-        : "Prefer a clearly labeled conversation-only grant when offered. Security warnings stay manual.",
+      approval.setAccessibilityLabel("Full access approval")
+      row("Full access approval", subtitle: "Allow for this conversation when available; otherwise allow once.",
         control: approval, in: approvals)
       divider(in: approvals)
       let delays: [(String, String)] = [
@@ -1299,7 +1297,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   @objc private func toggleApproval(_ sender: NSSwitch) {
     do {
       var preferences = try TelaPreferencesStore.read(at: preferencesURL)
-      preferences.approvalAutomation = sender.state == .on ? "recognized_conversation" : "off"
+      preferences.approvalAutomation = sender.state == .on ? "full_access" : "off"
       try TelaPreferencesStore.write(preferences, at: preferencesURL)
       approvalAutomation = preferences.approvalAutomation
       preferenceError = false
@@ -1769,21 +1767,12 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         bridgeMessage += "\n\(wait.statusText)"
       }
       if preview.selectedSurfaceId != nil && preview.approvalState == "pending" {
-        if preview.approvalReview?.classification == "manual_review" {
-          let reason: String
-          switch preview.approvalReview?.reviewReason {
-          case "tool_description_policy_directive": reason = "The tool description requires review."
-          case "suspicious_instruction": reason = "The card contains an instruction that requires review."
-          case "provider_warning": reason = "The Web provider displayed a security warning."
-          default: reason = "Manual review is required."
-          }
-          bridgeMessage += "\n\(reason) Open Interact to inspect the card."
-        } else if preview.approvalReview?.classification == "limit_reached" {
+        if preview.approvalReview?.classification == "limit_reached" {
           bridgeMessage += "\nA previous approval has not been confirmed. Open Interact to inspect the current card; Tela will not click again while its outcome is uncertain."
         } else if preview.approvalReview?.classification == "eligible_conversation" {
-          bridgeMessage += "\nThe card matches the configured conversation approval policy; only its owning Work turn may act on it. Use Interact if it remains blocked."
+          bridgeMessage += "\nThe owning Work turn will allow this conversation when available, otherwise allow once."
         } else if preview.approvalReview?.classification == "eligible_once" {
-          bridgeMessage += "\nThe card matches the configured one-shot policy; only its owning Work turn may act on it. Use Interact if it remains blocked."
+          bridgeMessage += "\nThe owning Work turn will allow this request once."
         } else {
           bridgeMessage += "\nApproval is waiting in this browser session. Choose Interact to review the card."
         }

@@ -1,10 +1,7 @@
 import { expect, test } from "bun:test";
 import { ChatGptApprovalObservation, approvalObservationSummary, overdueHumanApprovalSummary, nextApprovalWaitWakeMs } from "./approval-observation";
 
-test("review warnings project as fixed public progress, never as a copied card prompt", () => {
-  expect(approvalObservationSummary("pending", "tool_description_policy_directive"))
-    .toContain("tool-description instructions");
-  expect(approvalObservationSummary("pending", "provider_warning")).toContain("Manual security review");
+test("approval progress is generic and does not classify card text", () => {
   expect(approvalObservationSummary("pending")).toBe("Approval needed in the Web browser.");
 });
 

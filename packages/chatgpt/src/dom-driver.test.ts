@@ -336,8 +336,6 @@ describe("current ChatGPT DOM surface driver", () => {
     const page=new RendererFixturePage(new FixtureElement({}, {'[data-codex-approval-surface="true"]':[card]}));
     const driver=new ChatGptDomSurfaceDriver(page);
     const snapshot=await driver.observe();
-    expect(snapshot.approval?.requiresManualReview).toBe(true);
-    expect(snapshot.approval?.reviewReason).toBe('tool_description_policy_directive');
     const registry=page.rendererState[Symbol.for('chatgpt-tela.approval-observations.v1')] as {manualInputTarget:(node:unknown)=>boolean};
     expect(registry.manualInputTarget(allow)).toBe(true);
     expect(registry.manualInputTarget(deny)).toBe(true);
@@ -347,7 +345,7 @@ describe("current ChatGPT DOM surface driver", () => {
     disclosure.attributes['aria-haspopup']='dialog';
     disclosure.textContent='Unknown action';expect(registry.manualInputTarget(disclosure)).toBe(false);disclosure.textContent='See details';
     expect(registry.manualInputTarget(new FixtureElement())).toBe(false);
-    await expect(driver.processApprovalCard('recognized_once')).resolves.toMatchObject({status:'none'});
+    await expect(driver.processApprovalCard('off')).resolves.toMatchObject({status:'none'});
     expect(page.actions).toEqual([]);
     card.textContent='Replaced request';expect(registry.manualInputTarget(allow)).toBe(false);
     await driver.observe();expect(registry.manualInputTarget(allow)).toBe(true);
@@ -435,9 +433,8 @@ describe("current ChatGPT DOM surface driver", () => {
     const driver = new ChatGptDomSurfaceDriver(page);
     const observed = await driver.observe();
     if (scenario === "provider warning") {
-      expect(observed.approval).toMatchObject({ requiresManualReview: true });
-      expect(await driver.processApprovalCard("recognized_conversation"))
-        .toMatchObject({ status: "none", reason: "manual_review" });
+      expect(await driver.processApprovalCard("off"))
+        .toMatchObject({ status: "none", reason: "disabled" });
     }
     const registry = page.rendererState[Symbol.for("chatgpt-tela.approval-observations.v1")] as {
       manualInputTarget(node: unknown): boolean;
@@ -841,12 +838,13 @@ describe("current ChatGPT DOM surface driver", () => {
   test.each(["marked", "dialog", "nested", "warning wrapper", "foreign heading", "duplicate choice", "disabled"])(
     "candidate discovery and exact execution tolerate structure changes: %s", async scenario => {
     const heading = new FixtureElement(); heading.textContent = scenario === "foreign heading" ? "Other connector" : "ChatGPT Tela";
+    const deny = new FixtureElement(); deny.textContent = "Deny";
     const allow = new FixtureElement(); allow.textContent = scenario === "dialog" ? "Allow" : "Allow once";
     if (scenario === "disabled") allow.disabled = true;
     const extra = new FixtureElement(); extra.textContent = "Copy details";
     const duplicate = new FixtureElement(); duplicate.textContent = allow.textContent;
-    const card = new FixtureElement({}, {button:[allow,extra,...(scenario === "duplicate choice" ? [duplicate] : [])],h2:[heading]});
-    const wrapper = new FixtureElement({ role: "dialog" }, {button:[allow],h2:[heading]});
+    const card = new FixtureElement({}, {button:[deny,allow,extra,...(scenario === "duplicate choice" ? [duplicate] : [])],h2:[heading]});
+    const wrapper = new FixtureElement({ role: "dialog" }, {button:[deny,allow],h2:[heading]});
     wrapper.contains = node => node === card || node === wrapper;
     if (scenario === "warning wrapper") wrapper.textContent = "Suspicious Instruction";
     const root = new FixtureElement({}, {
@@ -856,8 +854,8 @@ describe("current ChatGPT DOM surface driver", () => {
     const page = new RendererFixturePage(root); page.hitTest = () => allow;
     let clicks = 0; page.pointerClick = async () => { clicks++; };
     const driver = new ChatGptDomSurfaceDriver(page);
-    const result = await driver.processApprovalCard("recognized_once");
-    const eligible = ["marked", "dialog", "nested"].includes(scenario);
+    const result = await driver.processApprovalCard("full_access");
+    const eligible = ["marked", "dialog", "nested", "warning wrapper", "foreign heading"].includes(scenario);
     expect(result.status).toBe(eligible ? "dispatched" : "none");
     expect(clicks).toBe(eligible ? 1 : 0);
   });
@@ -895,17 +893,21 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(clicks).toBe(["stopped", "still running"].includes(scenario) ? 1 : 0);
   });
 
-  test("current approval surface is observed but an unknown options button stays manual", async () => {
+  test("generic Allow remains eligible when an unrelated options button is present", async () => {
     const buttons = ["Deny", "Allow", "Approval options"].map(label => {
       const button = new FixtureElement(); button.innerText = label; return button;
     });
     const card = new FixtureElement({}, { button: buttons });
-    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, {
+    const page = new RendererFixturePage(new FixtureElement({}, {
       '[data-codex-approval-surface="true"]': [card],
-    })));
+    }));
+    page.hitTest = () => buttons[1]!;
+    let clicks = 0; page.pointerClick = async () => { clicks++; };
+    const driver = new ChatGptDomSurfaceDriver(page);
     const observed = await driver.observe();
     expect(observed.approval).toMatchObject({ cardCount: 1, denyCount: 1, allowCount: 1, allowOnceCount: 0, unknownCount: 1 });
-    expect(await driver.processApprovalCard("recognized_once")).toEqual({ status: "none", reason: "unrecognized" });
+    expect(await driver.processApprovalCard("full_access")).toMatchObject({ status: "dispatched", reason: "allow" });
+    expect(clicks).toBe(1);
   });
   test("accessible one-shot approval excludes hidden keyboard hints and explicit disclosures", async () => {
     const control = (label: string, hint: string) => {
@@ -926,11 +928,11 @@ describe("current ChatGPT DOM surface driver", () => {
     page.pointerClick = async () => { clicks++; };
     const driver = new ChatGptDomSurfaceDriver(page);
     expect((await driver.observe()).approval).toMatchObject({ denyCount: 1, allowOnceCount: 1, unknownCount: 0 });
-    expect((await driver.processApprovalCard("recognized_once")).status).toBe("dispatched");
+    expect((await driver.processApprovalCard("full_access")).status).toBe("dispatched");
     const unknown = new FixtureElement(); unknown.textContent = "Synthetic new decision";
     card.selectors.button!.push(unknown);
     expect((await driver.observe()).approval?.unknownCount).toBe(1);
-    expect((await driver.processApprovalCard("recognized_once")).status).toBe("none");
+    expect((await driver.processApprovalCard("full_access")).status).toBe("none");
     expect(clicks).toBe(1);
   });
   test("explicit conversation-only consent is preferred over once when user opts in, without selecting Always allow", async () => {
@@ -949,9 +951,9 @@ describe("current ChatGPT DOM surface driver", () => {
     const driver = new ChatGptDomSurfaceDriver(page);
     expect((await driver.observe()).approval).toMatchObject({
       denyCount: 1, allowOnceCount: 1, allowConversationCount: 1,
-      unknownCount: 0, requiresManualReview: false,
+      unknownCount: 0,
     });
-    expect(await driver.processApprovalCard("recognized_conversation")).toMatchObject({
+    expect(await driver.processApprovalCard("full_access")).toMatchObject({
       status: "dispatched", reason: "allow_conversation",
     });
     expect(clicks).toEqual([{ x: 70, y: 20 }]);
@@ -960,11 +962,11 @@ describe("current ChatGPT DOM surface driver", () => {
     ["verified", "allow_conversation", 2],
     ["verified native buttons", "allow_conversation", 2],
     ["button menuitem", "allow_conversation", 2],
-    ["security warning", "manual_review", 0],
+    ["security warning", "allow_conversation", 2],
     ["replaced card", "options_unverified", 1],
     ["unlinked portal", "options_unverified", 1],
     ["ambiguous portals", "options_unverified", 1],
-    ["menu warning", "options_unverified", 1],
+    ["menu warning", "allow_conversation", 2],
     ["persistent alternative", "allow_conversation", 2],
   ] as const)("automatic options disclosure rejects unsafe states: %s", async (scenario, outcome, expectedClicks) => {
     const deny = new FixtureElement(); deny.textContent = "Deny";
@@ -1017,13 +1019,14 @@ describe("current ChatGPT DOM surface driver", () => {
     };
     const driver = new ChatGptDomSurfaceDriver(page);
     const seen = await driver.observe();
-    const first = await driver.processApprovalCard("recognized_conversation", undefined, 0, {
+    const first = await driver.processApprovalCard("full_access", undefined, 0, {
       cardFingerprint: seen.approval!.cardFingerprint!,
       revisionFingerprint: seen.approval!.revisionFingerprint,
     });
     expect(first.reason).toBe(outcome);
     expect(clicks).toHaveLength(expectedClicks);
-    if (scenario === "verified" || scenario === "verified native buttons" || scenario === "persistent alternative" || scenario === "button menuitem") {
+    if (scenario === "verified" || scenario === "verified native buttons" || scenario === "persistent alternative"
+      || scenario === "button menuitem" || scenario === "security warning" || scenario === "menu warning") {
       expect(first.status).toBe("dispatched");
       expect(first).toMatchObject({ revisionFingerprint: expect.any(String) });
       if (first.status === "dispatched") {
@@ -1032,7 +1035,7 @@ describe("current ChatGPT DOM surface driver", () => {
       expect(clicks).toEqual([{ x: 10, y: 10 }, { x: 70, y: 10 }]);
     } else {
       expect(first.status).toBe("none");
-      expect(await driver.processApprovalCard("recognized_conversation")).toMatchObject({
+      expect(await driver.processApprovalCard("full_access")).toMatchObject({
         status: "none",
       });
       expect(clicks).toHaveLength(expectedClicks);
@@ -1055,19 +1058,14 @@ describe("current ChatGPT DOM surface driver", () => {
       let clicks = 0;
       page.hitTest = () => scoped;
       page.pointerClick = async () => { clicks++; };
-      const outcome = await new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_conversation");
+      const outcome = await new ChatGptDomSurfaceDriver(page).processApprovalCard("full_access");
 
-      if (unsafe === "Always allow") {
-        // A known one-shot fallback is permitted, but the broad choice is not.
-        expect(outcome).toMatchObject({ status: "dispatched", reason: "allow_conversation" });
-        expect(clicks).toBe(1);
-      } else {
-        expect(outcome).toMatchObject({ status: "none", reason: "manual_review" });
-        expect(clicks).toBe(0);
-      }
+      // Both Always allow alternative and warnings permit allow_conversation without broadening
+      expect(outcome).toMatchObject({ status: "dispatched", reason: "allow_conversation" });
+      expect(clicks).toBe(1);
     }
   });
-  test("a visible external-execution warning remains manual even without an alert role", async () => {
+  test("a visible external-execution warning remains manual when approval is off", async () => {
     const deny = new FixtureElement(); deny.textContent = "Deny";
     const allow = new FixtureElement(); allow.textContent = "Allow once";
     const card = new FixtureElement({}, { button: [deny, allow] });
@@ -1079,11 +1077,14 @@ describe("current ChatGPT DOM surface driver", () => {
     page.pointerClick = async () => { dispatched++; };
     const driver = new ChatGptDomSurfaceDriver(page);
     expect((await driver.observe()).approval).toMatchObject({
-      cardCount: 1, requiresManualReview: true, reviewReason: "suspicious_instruction",
+      cardCount: 1,
     });
-    expect(await driver.processApprovalCard("recognized_once"))
-      .toEqual({ status: "none", reason: "manual_review" });
+    expect(await driver.processApprovalCard("off"))
+      .toEqual({ status: "none", reason: "disabled" });
     expect(dispatched).toBe(0);
+    expect(await driver.processApprovalCard("full_access"))
+      .toMatchObject({ status: "dispatched", reason: "allow_once" });
+    expect(dispatched).toBe(1);
   });
   test("trusted receipt survives immediate removal in actual renderer script; synthetic clicks do not count", async () => {
     const deny = new FixtureElement(); deny.textContent = "Deny";
@@ -1108,7 +1109,7 @@ describe("current ChatGPT DOM surface driver", () => {
       receive?.({ isTrusted: true });
       document.selectors['[data-codex-approval-surface="true"]'] = [];
     };
-    expect((await driver.processApprovalCard("recognized_once")).status).toBe("dispatched");
+    expect((await driver.processApprovalCard("full_access")).status).toBe("dispatched");
     const after = await driver.observe();
     expect(after.approval).toBeUndefined();
     expect(after.approvalInputReceipt).toEqual({ cardFingerprint: before.approval!.cardFingerprint!,
@@ -1131,7 +1132,7 @@ describe("current ChatGPT DOM surface driver", () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const outcome = await Promise.race([
-        new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once", owner.signal),
+        new ChatGptDomSurfaceDriver(page).processApprovalCard("full_access", owner.signal),
         new Promise<"frame_wait_stalled"> (resolve => { timer = setTimeout(() => resolve("frame_wait_stalled"), 100); }),
       ]);
       expect(outcome).toMatchObject({ status: "dispatched" });
@@ -1162,8 +1163,8 @@ describe("current ChatGPT DOM surface driver", () => {
         const page = new RendererFixturePage(document); page.hitTest = () => blocker;
         let clicks = 0; page.pointerClick = async () => { clicks++; };
         const driver = new ChatGptDomSurfaceDriver(page);
-        expect((await driver.processApprovalCard("recognized_once")).status).toBe("none");
-        expect((await driver.processApprovalCard("recognized_once")).status).toBe("none");
+        expect((await driver.processApprovalCard("full_access")).status).toBe("none");
+        expect((await driver.processApprovalCard("full_access")).status).toBe("none");
         let raw = readFileSync(file, "utf8");
         const witnesses = () => raw.trim().split("\n").map(line => JSON.parse(line)).filter(event => event.stage === "approval_target_failed");
         expect(witnesses()).toHaveLength(1);
@@ -1171,7 +1172,7 @@ describe("current ChatGPT DOM surface driver", () => {
         expect(witnesses()[0]).toMatchObject({ reason_class: "occluded", dispatch_started: false,
           target_kind: kind, hit_in_card: blocker !== null, target_pointer_events_none: true, target_inert: false, document_hidden: true });
         card.textContent += " changed revision";
-        expect((await driver.processApprovalCard("recognized_once")).status).toBe("none");
+        expect((await driver.processApprovalCard("full_access")).status).toBe("none");
         raw = readFileSync(file, "utf8");
         expect(witnesses()).toHaveLength(2);
         expect(raw).not.toMatch(/PRIVATE_|elementFromPoint|selector/);
@@ -1202,7 +1203,7 @@ describe("current ChatGPT DOM surface driver", () => {
       // The renderer holds one hit-test function for this evaluation; resolve the latest fixture state.
       page.hitTest = () => mutation === "occluded" ? new FixtureElement() : allow;
       let clicks = 0; page.pointerClick = async () => { clicks++; };
-      expect((await new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once")).status).toBe("none");
+      expect((await new ChatGptDomSurfaceDriver(page).processApprovalCard("full_access")).status).toBe("none");
       expect(clicks).toBe(0);
     },
   );
@@ -1242,7 +1243,7 @@ describe("current ChatGPT DOM surface driver", () => {
       const abort = new AbortController();
       const timer = setTimeout(() => abort.abort(), 50);
       try {
-        const result = await new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once", abort.signal, 15_000);
+        const result = await new ChatGptDomSurfaceDriver(page).processApprovalCard("full_access", abort.signal, 15_000);
         expect(result.status).toBe("none");
         expect(page.inspections).toBe(1);
         expect(page.actions).toEqual([]);
@@ -1262,13 +1263,13 @@ describe("current ChatGPT DOM surface driver", () => {
     const expected = { cardFingerprint: before.cardFingerprint!, revisionFingerprint: before.revisionFingerprint };
     // Same element, changed request proof: no pointer dispatch and no budget consumption.
     card.textContent = "Changed synthetic request";
-    expect(await driver.processApprovalCard("recognized_once", undefined, 0, expected))
+    expect(await driver.processApprovalCard("full_access", undefined, 0, expected))
       .toEqual({ status: "none", reason: "card_changed" });
     expect(clicks).toBe(0);
     const current = (await driver.observe()).approval!;
     expect(current.cardFingerprint).toBe(before.cardFingerprint);
     expect(current.revisionFingerprint).not.toBe(before.revisionFingerprint);
-    expect((await driver.processApprovalCard("recognized_once", undefined, 0,
+    expect((await driver.processApprovalCard("full_access", undefined, 0,
       { cardFingerprint: current.cardFingerprint!, revisionFingerprint: current.revisionFingerprint })).status).toBe("dispatched");
     expect(clicks).toBe(1);
   });
@@ -1276,7 +1277,7 @@ describe("current ChatGPT DOM surface driver", () => {
   test("delayed approval rechecks the same card and uses its current target", async () => {
     const page = new ApprovalPage();
     page.observations = [approvalCard, { ...approvalCard, allowOncePoint: { x: 30, y: 40 } }];
-    const result = await new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once", undefined, 1);
+    const result = await new ChatGptDomSurfaceDriver(page).processApprovalCard("full_access", undefined, 1);
     expect(result.status).toBe("dispatched");
     expect(page.inspections).toBe(2);
     expect(page.actions).toEqual(["pointer:30,40"]);
@@ -1292,7 +1293,7 @@ describe("current ChatGPT DOM surface driver", () => {
     ]) {
       const page = new ApprovalPage();
       page.observations = [approvalCard, changed];
-      const result = await new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once", undefined, 1);
+      const result = await new ChatGptDomSurfaceDriver(page).processApprovalCard("full_access", undefined, 1);
       expect(result.status).toBe("none");
       expect(page.actions).toEqual([]);
     }
@@ -1303,10 +1304,10 @@ describe("current ChatGPT DOM surface driver", () => {
     page.observations = [approvalCard, approvalCard];
     page.preparedTarget = null;
     const driver = new ChatGptDomSurfaceDriver(page);
-    expect((await driver.processApprovalCard("recognized_once")).reason).toBe("target_missing");
+    expect((await driver.processApprovalCard("full_access")).reason).toBe("target_missing");
     expect(page.actions).toEqual([]);
     page.preparedTarget = { x: 30, y: 40 };
-    expect((await driver.processApprovalCard("recognized_once")).status).toBe("dispatched");
+    expect((await driver.processApprovalCard("full_access")).status).toBe("dispatched");
     expect(page.actions).toEqual(["pointer:30,40"]);
   });
 
@@ -1325,7 +1326,7 @@ describe("current ChatGPT DOM surface driver", () => {
     const file = join(scratch, "events.jsonl"), prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
     process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
     try {
-      await expect(new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once"))
+      await expect(new ChatGptDomSurfaceDriver(page).processApprovalCard("full_access"))
         .rejects.toMatchObject({ name: "TimeoutError" });
       release(approvalCard); await Promise.resolve(); await Promise.resolve();
       expect(page.actions).toEqual([]);
@@ -1355,7 +1356,7 @@ describe("current ChatGPT DOM surface driver", () => {
     }
     const page = new CancelledTargetPage(); page.observations = [approvalCard];
     const owner = new AbortController();
-    const pending = new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once", owner.signal);
+    const pending = new ChatGptDomSurfaceDriver(page).processApprovalCard("full_access", owner.signal);
     await preparing; owner.abort(new DOMException("Owner ended", "AbortError"));
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     release(approvalCard); await Promise.resolve(); await Promise.resolve();
@@ -1365,7 +1366,7 @@ describe("current ChatGPT DOM surface driver", () => {
     const page = new ApprovalPage();
     page.observations = [approvalCard];
     const abort = new AbortController();
-    const operation = new ChatGptDomSurfaceDriver(page).processApprovalCard("recognized_once", abort.signal, 15_000);
+    const operation = new ChatGptDomSurfaceDriver(page).processApprovalCard("full_access", abort.signal, 15_000);
     await Promise.resolve();
     abort.abort();
     await expect(operation).rejects.toThrow();
@@ -1376,9 +1377,9 @@ describe("current ChatGPT DOM surface driver", () => {
     const page = new ApprovalPage();
     page.observations = [approvalCard, { ...approvalCard, proofKey: "proof-2" }, { ...approvalCard, cardKey: "card-2" }];
     const driver = new ChatGptDomSurfaceDriver(page);
-    expect((await driver.processApprovalCard("recognized_once")).status).toBe("dispatched");
-    expect((await driver.processApprovalCard("recognized_once")).reason).toBe("already_activated");
-    expect((await driver.processApprovalCard("recognized_once")).status).toBe("dispatched");
+    expect((await driver.processApprovalCard("full_access")).status).toBe("dispatched");
+    expect((await driver.processApprovalCard("full_access")).reason).toBe("already_activated");
+    expect((await driver.processApprovalCard("full_access")).status).toBe("dispatched");
     expect(page.actions).toHaveLength(2);
   });
 
@@ -1389,8 +1390,8 @@ describe("current ChatGPT DOM surface driver", () => {
     const page = new FailedActivationPage();
     page.observations = [approvalCard, approvalCard];
     const driver = new ChatGptDomSurfaceDriver(page);
-    await expect(driver.processApprovalCard("recognized_once")).rejects.toThrow("indeterminate");
-    expect((await driver.processApprovalCard("recognized_once")).reason).toBe("already_activated");
+    await expect(driver.processApprovalCard("full_access")).rejects.toThrow("indeterminate");
+    expect((await driver.processApprovalCard("full_access")).reason).toBe("already_activated");
   });
 
   test("recognizes current ChatGPT composer renderer variants without broad page-wide textbox matching", () => {

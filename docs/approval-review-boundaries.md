@@ -1,7 +1,6 @@
 # Approval visibility, agent diagnosis and remote review
 
-This contract distinguishes three different authorities which can show
-visually similar approval prompts. A UI warning is not an API grant.
+This contract distinguishes the Tela-owned Web approval surface from ChatGPT host approvals that occur before Tela ingress.
 
 ## 1. ChatGPT platform tool card (before Tela ingress)
 
@@ -29,9 +28,7 @@ time window, and no arbitrary script, supplied credential or writable
 action. Its capability semantics declare `read`; the optional
 unified-development MCP tool also advertises read-only annotations.
 The ChatGPT host still decides whether a tool needs review. No metadata
-guarantees automatic approval. If it requires human review, use its own
-visible confirmation path, including a mobile card when available; do
-not automate clicks with an alternate tool or relocated command.
+guarantees automatic approval. A host-owned card remains outside the browser adapter; Tela cannot observe or act on it.
 
 ## 2. Tela-owned Web browser tool card (after owned Web admission)
 
@@ -55,15 +52,14 @@ is **profile-scoped**, never automatically attributed to a supplied
 Native conversation UUID. Native `thread/read(includeTurns:false)`
 and bounded paginated latest-turn reads independently establish status.
 
-Tela automation defaults off. On an already owned Web operation, explicit
-`recognized_once` or `recognized_conversation` preferences select one exact,
-unique current-action choice. Discovery accepts marked provider cards and
-accessible dialogs with the exact connector heading; nested wrappers represent
-one candidate and retain their warning scope. Unknown auxiliary controls and
-Deny cardinality do not veto an otherwise proven target. Generic `Allow` needs
-the card-local connector heading; explicit `Allow once` does not borrow that
-meaning from arbitrary page text. Persistent `Always allow` is never selected.
-Warnings still require human review. Platform pre-ingress review is independent.
+Tela automation defaults off. In `full_access` mode, one visible approval card
+on an already owned Web operation is eligible without connector-name matching
+or card-text analysis. The resolver prefers **Allow for this conversation**,
+then **Allow once**, then generic **Allow**. It requires one visible **Deny**
+control and one unambiguous current choice, then rechecks the unchanged card,
+owner, cancellation and hit-tested target before input. A conversation choice
+inside **Approval options** is opened once and verified against that same card.
+Platform-owned pre-ingress review is a separate surface outside this adapter.
 
 **Manual one-shot consent and accepted request identity:** On a proven
 owned Web surface, a human may click a currently recognized approval-card
@@ -81,8 +77,7 @@ request edit, competing user turn or owner mismatch still fails closed.
 **Card details navigation:** A human opening the current card's exact
 `See details` control with `aria-haspopup=dialog` preserves the accepted request
 witness. The same card, visible enabled target and exact control meaning must
-still be proven. This is viewing, never a grant to click or dismiss a warning;
-changed, disabled or unknown controls remain unclassified. It addresses a
+still be proven. This is viewing; changed, disabled or unknown controls remain unclassified. It addresses a
 reproducible classifier boundary, not a proven historical incident cause.
 
 **Manual dropdown consent:** Opening a uniquely observed card-local
@@ -96,23 +91,22 @@ instead of a `role=menuitem`, but its role never grants authority:
 the unique expanded menu, precise card linkage, visible/active target
 and recognized decision label are still mandatory. An unlinked/duplicate/
 stale menu, foreign action or changed card revokes/blocks delivery. This
-manual-input classifier never clicks a menu or approves a safety warning,
-and cannot alter a ChatGPT host-managed permission decision.
+manual-input classifier proves the user's current target before preserving
+request identity and cannot alter a ChatGPT host-managed permission decision.
 
 ### Agent-assisted eligibility, conversation-scoped preference and verified approvals
 
 The provider-owned pure policy `reviewChatGptApprovalForAgent()` shares
-the **same one-shot decision** used immediately before input dispatch;
+the **same choice decision** used immediately before input dispatch;
 the policy result cannot open an independent agent grant. It yields a
-small, fixed vocabulary: `absent`, `eligible_once`, `eligible_conversation`, `manual_review`,
+small, fixed vocabulary: `absent`, `eligible_once`, `eligible_conversation`,
 `disabled`, `ambiguous`, `unrecognized` or `limit_reached`.
 Each report includes a next action and `agentMayApprove:false`; an
 ordinary `eligible_once` result only means an **already running,
 owner-bound Web turn** may use its existing opt-in auto-approval path.
-The explicitly selected `recognized_conversation` mode prefers a unique
-**Allow for this conversation** choice. An exact card-local **Approval options**
-disclosure may be opened once, followed by unchanged-card, unique linked-menu,
-warning and target revalidation. Native buttons and menuitems are deduplicated;
+Full access prefers a unique **Allow for this conversation** choice. A card-local
+**Approval options** disclosure may be opened once, followed by unchanged-card,
+unique linked-menu and target revalidation. Native buttons and menuitems are deduplicated;
 a button with `role=menuitem` is one control. Auxiliary controls and a separate
 persistent choice do not make the chosen narrower control ambiguous.
 The same pure choice resolver runs in policy and renderer preparation, before
@@ -160,7 +154,7 @@ at 30 seconds (visible pending state), two minutes (prolonged wait), five minute
 (fresh owner/lineage, renderer and eligibility observation), and ten minutes
 (terminate the owned accepted operation). The ten-minute deadline fences result
 and approval delivery before bounded owner-verified public Stop dispatch.
-It never selects Deny, assumes approval success, or resubmits an accepted task.
+It does not assume approval success or resubmit an accepted task.
 Native cancellation and browser Stop share the provider cancellation contract.
 Stop delivery, observed disappearance of generation controls, surface release,
 and remote execution outcome remain distinct. A missing/failed Stop proof keeps
@@ -173,9 +167,8 @@ active Web turn, browser surface, single user-granted task scope,
 card fingerprint/revision and current backend owner in one transaction.
 A future request should carry a short-lived one-use, owner-bound
 intent without raw arguments, and dispatch **only through the existing
-provider-owned approval engine** under `recognized_once`. User-provided
-text, model classification, a screenshot or a profile-wide card count
-is never an authority lease; a host security warning remains human-only.
+provider-owned approval engine. User-provided text, model classification,
+a screenshot or a profile-wide card count is never an authority lease.
 The result must distinguish `dispatched`, trusted input, card
 clearance and actual Native task continuation, and an indeterminate
 dispatch must never be retried automatically.
@@ -204,10 +197,9 @@ When the owner is away from the Mac:
 
 1. A **host-owned ChatGPT card** requires the host's own review UI.
    The local agent cannot approve or acknowledge it.
-2. For a **Tela-owned Web card**, a safe recognized-once approval may
-   follow existing explicit opt-in rules. Warnings and ambiguous cards
-   require a person's review in the authenticated interactive browser
-   or another officially supported user interface.
+2. For a **Tela-owned Web card**, explicitly enabled Full access uses the
+   conversation-scoped choice when available, otherwise a one-shot choice.
+   Ambiguous card-local choices remain unresolved for the owning operation.
 3. A future phone-friendly Tela approval inbox would need authenticated
    user identity, a short-lived owner-bound review nonce, current exact
    card fingerprint, deliberate user action, single-use dispatch,
@@ -215,22 +207,20 @@ When the owner is away from the Mac:
    revocation. **This is not implemented** and must not be emulated
    with an agent-controlled hidden approval API.
 4. Unknown host state, owner mismatch, stale card, failed DOM read
-   or an uncertain accepted turn remains blocked with a clear next
-   human action. Never retry by switching tools to evade a host decision.
+   or an uncertain accepted turn remains unresolved with a clear next action.
 
 ## Failure evidence and rollout
 
 Use `capability_call_start/complete` and durable process status to
 identify what Tela executed. `approval_wait_transition`,
-`approval_manual_review_required` and
 `bridge_approval_observation_unavailable` describe owned Web evidence.
-`approval_agent_review` is the new bounded, content-free classification;
-it is diagnostic evidence and **not** a host approval or execution receipt.
+`approval_agent_review` reports bounded structural eligibility; it does not
+carry card text or serve as a host approval or execution receipt.
 If the Native profile is unavailable, use `thread evidence --thread UUID
---minutes 180` to inspect the historical wait and failure without live
+--minutes 180` to inspect historical approval-wait evidence and failures without live
 identity or click authority. The latest failure reason must not be confused
 with an inferred approval timeout: `accepted_user_changed` is a request
-identity failure, and `manual_review` is a human-consent gate.
+identity failure, and `unrecognized` indicates that no supported visible choice was proven.
 Record the first failing layer, source coverage and unknowns rather
 than treating silence as proof of refusal. Host cards seen only in
 ChatGPT UI need user-supplied or official host evidence. Never log

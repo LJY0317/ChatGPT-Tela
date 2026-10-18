@@ -45,7 +45,7 @@ enum TelaPreferencesStore {
     }
     let value = try JSONDecoder().decode(TelaPreferences.self, from: Data(contentsOf: url))
     guard value.version == 1,
-          ["off", "recognized_once", "recognized_conversation"].contains(value.approvalAutomation),
+          ["off", "full_access", "recognized_once", "recognized_conversation"].contains(value.approvalAutomation),
           delays.contains(value.approvalDelay ?? "instant") else {
       throw NSError(domain: "ChatGPTTelaPreferences", code: 2)
     }
