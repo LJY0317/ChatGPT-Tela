@@ -910,7 +910,8 @@ revision, current owner, hit testing and one-shot input fence are verified
 before dispatch. A conversation choice in **Approval options** is opened once
 and linked back to the same card before selection. Trusted input, clearance,
 owned progress and Native result remain separate evidence. One unresolved
-dispatch blocks another. See
+dispatch blocks reactivation of **the same approval card**, not a distinct
+new card with its own verified owner, visible target and one-shot input proof. See
 [approval lifecycle and review boundaries](approval-review-boundaries.md).
 
 An unresolved approval card is a waiting human decision, not a timed failure.

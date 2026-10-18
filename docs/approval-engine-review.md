@@ -11,7 +11,7 @@ Behavioral reference: upstream [codex-chatgpt-web approval handler](https://gith
 - Card text and warning language are not inspected as risk signals.
 - Before input, the existing owner, cancellation, card/revision, target visibility, hit test and one-shot dispatch checks still apply.
 - A conversation choice hidden in Approval options is opened once, then linked back to the unchanged card before selection.
-- Input receipt, card clearance, owned assistant progress and Native tool result remain separate evidence. An unresolved dispatch blocks another attempt.
+- Input receipt, card clearance, owned assistant progress and Native tool result remain separate evidence. An unresolved dispatch blocks reactivation of **that same card**, not a different independently owner-verified card. Neither a prior card's unchanging assistant text nor an old unresolved clearance state may act as a cumulative cross-card gate.
 
 ## Scope
 

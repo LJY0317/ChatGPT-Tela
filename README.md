@@ -62,9 +62,11 @@ The host's own ChatGPT tool approval prompts are outside Tela ingress and
 cannot be granted by an agent; see [approval review boundaries](docs/approval-review-boundaries.md).
 For selected owned Web sessions, agents can inspect a bounded one-shot or
 conversation-scoped eligibility classification; the actual automatic click
-remains exclusive to the opt-in owner-bound provider path. Up to eight
-automatic dispatches may remain **unverified** at a time. Verified
-approvals do not consume that budget; exact card replay fences remain.
+remains exclusive to the opt-in owner-bound provider path. A previously
+activated card cannot be clicked again, but its pending clearance or
+assistant-progress evidence does **not** block a distinct newly identified
+owned card. Each card must independently satisfy the current owner, target,
+trusted-input, cancellation and one-shot dispatch checks.
 
 - Make installation, repair, upgrade, and **complete removal** first-class product lifecycles. Tela records
   what it owns and never relies on an undocumented cleanup checklist.
