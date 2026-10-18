@@ -107,7 +107,7 @@ describe("profile-owned read-only Work inspection", () => {
       expect(JSON.stringify(report)).not.toContain("PRIVATE DOM");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
-  test("agent sees bounded policy eligibility on a profile card without authority over that Native conversation", async () => {
+  test("agent sees approval waiting without authority over that Native conversation", async () => {
     const f = harness(), root = mkdtempSync(join(tmpdir(), "tela-agent-approval-review-"));
     const service = {
       ...f.service,
@@ -115,9 +115,7 @@ describe("profile-owned read-only Work inspection", () => {
         contractVersion: 1 as const, slot: 2, activeSurfaceCount: 1, previewAvailable: true,
         imageMimeType: "image/jpeg" as const, imageBase64: "SENSITIVE_BROWSER_FRAME",
         approvalState: "pending" as const,
-        approvalWait: {phase:"dispatch_sent" as const,elapsedMs:120000,expiresAfterMs:600000 as const,unverifiedDispatchCount:1,operationState:"waiting" as const},
-        approvalReview: { contractVersion: 1 as const, classification: "eligible_once" as const,
-          nextAction: "existing_owned_turn_automation" as const, agentMayApprove: false as const },
+        approvalWait: {phase:"dispatch_sent" as const,elapsedMs:120000,unverifiedDispatchCount:1,operationState:"waiting" as const},
       }; },
     };
     try {
@@ -127,9 +125,7 @@ describe("profile-owned read-only Work inspection", () => {
       })(2, threadId);
       expect(report.browser).toMatchObject({
         approvalState: "pending", attributableToThread: false,
-        wait: {phase:"dispatch_sent",elapsedMs:120000,expiresAfterMs:600000,unverifiedDispatchCount:1,operationState:"waiting"},
-        review: { classification: "eligible_once", nextAction: "existing_owned_turn_automation",
-          agentMayApprove: false },
+        wait: {phase:"dispatch_sent",elapsedMs:120000,unverifiedDispatchCount:1,operationState:"waiting"},
       });
       expect(JSON.stringify(report)).not.toContain("SENSITIVE_BROWSER_FRAME");
       expect(f.calls.map(x => x.method)).toEqual(["thread/read", "thread/turns/list"]);

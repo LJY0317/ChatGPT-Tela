@@ -102,29 +102,13 @@ describe("private service protocol", () => {
     })).toThrow();
     expect(() => parseCodexBridgePreviewContract({ ...selected, selectedSurfaceId: undefined,
       approvalState: "pending" })).toThrow();
-    const wait = {phase:"card_cleared",elapsedMs:540000,expiresAfterMs:600000,unverifiedDispatchCount:1,operationState:"waiting",rawCard:"PRIVATE"};
+    const wait = {phase:"card_cleared",elapsedMs:540000,unverifiedDispatchCount:1,operationState:"waiting",rawCard:"PRIVATE"};
     const waiting = parseCodexBridgePreviewContract({...selected,approvalState:"none",approvalWait:wait});
-    expect(waiting.approvalWait).toEqual({phase:"card_cleared",elapsedMs:540000,expiresAfterMs:600000,unverifiedDispatchCount:1,operationState:"waiting"});
+    expect(waiting.approvalWait).toEqual({phase:"card_cleared",elapsedMs:540000,unverifiedDispatchCount:1,operationState:"waiting"});
     expect(() => parseCodexBridgePreviewContract({...selected,selectedSurfaceId:undefined,approvalWait:wait})).toThrow();
-    for (const invalid of [{elapsedMs:-1},{elapsedMs:Infinity},{expiresAfterMs:3600000},{operationState:"complete"},{phase:"approved"},{unverifiedDispatchCount:0.5}, {phase:["pending"]}, {operationState:["waiting"]}]) {
+    for (const invalid of [{elapsedMs:-1},{elapsedMs:Infinity},{operationState:"complete"},{phase:"approved"},{unverifiedDispatchCount:0.5}, {phase:["pending"]}, {operationState:["waiting"]}]) {
       expect(() => parseCodexBridgePreviewContract({...selected,approvalWait:{...wait,...invalid}})).toThrow();
     }
-    const review = { contractVersion: 1, classification: "eligible_once",
-      nextAction: "existing_owned_turn_automation", agentMayApprove: false,
-      rawCardText: "SENSITIVE UNTRUSTED CARD BODY" };
-    const reported = parseCodexBridgePreviewContract({ ...selected, approvalState: "pending",
-      approvalReview: review });
-    expect(reported.approvalReview).toEqual({
-      contractVersion: 1, classification: "eligible_once",
-      nextAction: "existing_owned_turn_automation", agentMayApprove: false,
-    });
-    expect(JSON.stringify(reported)).not.toContain("SENSITIVE");
-    expect(() => parseCodexBridgePreviewContract({ ...selected, approvalReview: review }))
-      .toThrow("approval review ownership");
-    expect(() => parseCodexBridgePreviewContract({ ...selected, approvalState: "pending",
-      approvalReview: { ...review, agentMayApprove: true } })).toThrow();
-    expect(() => parseCodexBridgePreviewContract({ ...selected, approvalState: "pending",
-      approvalReview: { ...review, classification: "unsupported" } })).toThrow();
   });
 });
 

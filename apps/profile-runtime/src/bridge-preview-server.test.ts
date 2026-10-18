@@ -222,33 +222,25 @@ describe("profile bridge preview server", () => {
       expect(calls).toBe(2);
     } finally { await server.close(); }
   });
-  test("selected Web review is projected only as policy metadata, never raw card contents", async () => {
+  test("selected Web approval wait excludes private card contents", async () => {
     const token = "k".repeat(48), id = "surface_" + "e".repeat(32);
     const server = await startProfileBridgePreviewServer({ slot: 2, bearerToken: token,
       async observe(selected) { return {
         activeSurfaceCount: 2, surfaces: [{ id, label: "Owned" }, { id: "surface_" + "f".repeat(32), label: "Other" }],
         ...(selected ? {
           selectedSurfaceId: id, approvalState: "pending" as const,
-          approvalWait: {phase:"dispatch_sent" as const,elapsedMs:120000,expiresAfterMs:600000 as const,unverifiedDispatchCount:1,operationState:"waiting" as const,rawCard:"SECRET INJECTED"},
-          approvalReview: { contractVersion: 1 as const, classification: "eligible_conversation" as const,
-            nextAction: "existing_owned_turn_automation" as const, agentMayApprove: false as const,
-            cardBody: "SECRET INJECTED IN CARD",
-          },
+          approvalWait: {phase:"dispatch_sent" as const,elapsedMs:120000,unverifiedDispatchCount:1,operationState:"waiting" as const,rawCard:"SECRET INJECTED"},
         } : {}),
       }; },
     });
     try {
       const headers = { authorization: `Bearer ${token}` };
       const unselected = await (await fetch(new URL("v1/bridge-preview", server.endpoint), { headers })).json() as any;
-      expect(unselected.approvalReview).toBeUndefined();
       expect(unselected.approvalWait).toBeUndefined();
       const selected = await (await fetch(new URL(`v1/bridge-preview?surfaceId=${id}`, server.endpoint), {
         headers,
       })).json() as any;
-      expect(selected.approvalReview).toMatchObject({
-        classification: "eligible_conversation", nextAction: "existing_owned_turn_automation", agentMayApprove: false,
-      });
-      expect(selected.approvalWait).toEqual({phase:"dispatch_sent",elapsedMs:120000,expiresAfterMs:600000,unverifiedDispatchCount:1,operationState:"waiting"});
+      expect(selected.approvalWait).toEqual({phase:"dispatch_sent",elapsedMs:120000,unverifiedDispatchCount:1,operationState:"waiting"});
       // In-process adapter's projection is a typed allowlist, not the raw page.
       expect(JSON.stringify(selected)).not.toContain("SECRET INJECTED");
     } finally { await server.close(); }

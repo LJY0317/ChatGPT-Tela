@@ -913,11 +913,11 @@ owned progress and Native result remain separate evidence. One unresolved
 dispatch blocks another. See
 [approval lifecycle and review boundaries](approval-review-boundaries.md).
 
-Program-owned approval timers publish 30-second/two-minute progress, revalidate
-at five minutes and retire the owned operation at ten minutes. Expiry and Native
-Stop fence delivery before a bounded provider Stop attempt and physical release.
-No timer implies Deny, accepted-task failure/success or permission to resend;
-unconfirmed remote cancellation remains uncertain.
+An unresolved approval card is a waiting human decision, not a timed failure.
+Tela no longer wakes the browser just to revalidate at arbitrary milestones or
+terminates a task after ten minutes. A user cancellation, revoked Native owner
+or explicitly configured Web-turn timeout still takes effect; no state
+authorizes resending an accepted request.
 
 Approval-card text and warning language do not enter a risk classifier or affect the selected
 control. A ChatGPT-platform approval that happens *before* Tela receives a tool call is outside

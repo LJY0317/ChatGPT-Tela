@@ -17,21 +17,7 @@ export class ChatGptApprovalObservation {
   readonly #trustedInput = new Set<string>();
   readonly #clearance = new Set<string>();
   readonly #resumed = new Set<string>();
-  #observedCount = 0;
-  #inputReceiptCount = 0;
   readonly #received = new Set<string>();
-  #cardClearCount = 0;
-  #nativeResultCount = 0;
-
-  /** Local execution evidence is independent of card disappearance or generated prose. */
-  recordNativeResult(): void { this.#nativeResultCount = Math.min(this.#nativeResultCount + 1, Number.MAX_SAFE_INTEGER); }
-  get audit() {
-    return Object.freeze({ approval_count: this.#observedCount, dispatch_count: this.#dispatched.size,
-      verified_success_count: this.#verified.size,
-      unverified_dispatch_count: this.#dispatched.size - this.#verified.size,
-      input_receipt_count: this.#inputReceiptCount, card_clear_count: this.#cardClearCount,
-      native_result_count: this.#nativeResultCount });
-  }
   get unverifiedDispatchCount(): number { return this.#dispatched.size - this.#verified.size; }
   /** Read-only age of the unresolved current card; never a grant or timeout. */
   pendingElapsedMs(now: number): number | undefined {
@@ -60,7 +46,6 @@ export class ChatGptApprovalObservation {
     this.#verifyCard();
     if (this.#current!.phase === "card_cleared" || this.#current!.phase === "task_progress") {
       // A delayed receipt enriches evidence; it must not rewind the observed card lifecycle.
-      this.#inputReceiptCount = Math.min(this.#inputReceiptCount + 1, Number.MAX_SAFE_INTEGER);
       return Object.freeze({ phase: "input_received",
         ...(this.#current!.cardFingerprint ? { cardFingerprint: this.#current!.cardFingerprint } : {}),
         elapsedMs: Math.max(0, now - this.#current!.seenAt) });
@@ -78,7 +63,6 @@ export class ChatGptApprovalObservation {
         const replacedWithProgress = approval.cardCount === 1 && approval.cardFingerprint !== undefined
           && canProgress && this.#current !== undefined && assistantVersion !== this.#current.assistantVersion;
         if (prior && approval.cardCount === 1 && approval.cardFingerprint) {
-          if (!this.#clearance.has(prior)) this.#cardClearCount = Math.min(this.#cardClearCount + 1, Number.MAX_SAFE_INTEGER);
           this.#clearance.add(prior);
           if (replacedWithProgress) this.#resumed.add(prior);
           this.#verifyCard();
@@ -89,7 +73,6 @@ export class ChatGptApprovalObservation {
           || (prior !== undefined && (this.#verified.has(prior)
             || (!this.#dispatched.has(prior) && replacedWithProgress)));
         const seenAt = this.#current && !priorResolved ? this.#current.seenAt : now;
-        this.#observedCount = Math.min(this.#observedCount + 1, Number.MAX_SAFE_INTEGER);
         const phase = this.wasDispatched(approval.cardFingerprint) ? "dispatch_sent" : "pending";
         this.#current = { ...(approval.cardFingerprint ? { cardFingerprint: approval.cardFingerprint } : {}), revision: approval.revisionFingerprint,
           phase, seenAt, assistantVersion };
@@ -132,8 +115,6 @@ export class ChatGptApprovalObservation {
   get cardFingerprint(): string | undefined { return this.#current?.cardFingerprint; }
 
   #transition(phase: ApprovalObservationPhase, now: number): ApprovalObservationTransition {
-    if (phase === "input_received") this.#inputReceiptCount = Math.min(this.#inputReceiptCount + 1, Number.MAX_SAFE_INTEGER);
-    if (phase === "card_cleared") this.#cardClearCount = Math.min(this.#cardClearCount + 1, Number.MAX_SAFE_INTEGER);
     const key = this.#current?.cardFingerprint;
     if (key && phase === "card_cleared") this.#clearance.add(key);
     if (key && phase === "task_progress") this.#resumed.add(key);
@@ -151,28 +132,6 @@ export function approvalObservationSummary(phase: ApprovalObservationPhase): str
     case "input_received": return "The Web browser received the approval click; the card is still pending.";
     case "card_cleared": return "Approval card cleared; waiting for the task to resume.";
     case "task_progress": return "The Web task progressed after the approval card cleared.";
-  }
-}
-
-/** Program-owned milestones; no model calls or repeated LLM monitoring. */
-export const APPROVAL_WAIT_MILESTONES_MS = Object.freeze([30_000, 120_000, 300_000, 600_000]);
-export function nextApprovalWaitWakeMs(elapsedMs: number | undefined): number | undefined {
-  if (elapsedMs === undefined || !Number.isFinite(elapsedMs)) return;
-  const next = APPROVAL_WAIT_MILESTONES_MS.find(value => value > elapsedMs);
-  return next === undefined ? 0 : next - elapsedMs;
-}
-export function overdueHumanApprovalSummary(elapsedMs: number | undefined): string | undefined {
-  if (elapsedMs === undefined || !Number.isFinite(elapsedMs) || elapsedMs < 30_000) return;
-  if (elapsedMs < 120_000) return "Web approval has been waiting for thirty seconds. Review the current card in the owned browser.";
-  if (elapsedMs < 300_000) return "Web approval still requires review after two minutes. The accepted request will not be resent.";
-  return "Web approval has waited five minutes. Tela is rechecking the owned card, request and browser; unresolved approval ends this Web operation at ten minutes without resending it.";
-}
-export class ChatGptApprovalExpired extends Error {
-  readonly code = "tela_web_approval_expired";
-  readonly retryable = false;
-  constructor() {
-    super("Web approval remained unresolved for ten minutes. The owned operation was terminated locally and browser stop was attempted where ownership could be proven. Remote execution outcome remains uncertain; do not resend automatically. Reconcile the existing operation before continuing.");
-    this.name = "ChatGptApprovalExpired";
   }
 }
 

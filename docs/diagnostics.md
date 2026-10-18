@@ -178,13 +178,11 @@ failure reason where supported; ChatGPT host-owned approval cards
 remain pre-ingress and cannot be approved by Tela. See
 [approval review boundaries](approval-review-boundaries.md).
 
-When a current selected Web card is pending, its optional `browser.review`
-reports structural eligibility (`eligible_once`, `eligible_conversation`,
-`limit_reached`, `disabled`, `ambiguous`, `unrecognized`). It never grants an
-agent a new click capability: eligibility refers to existing owner-bound
-automation. An unresolved dispatch blocks another until trusted receipt,
-card clearance and new assistant progress verify its outcome. See
-`approval_agent_review` events for structural status.
+When a current selected Web card is pending, `browser.approvalState` and the
+optional `browser.approvalWait` report only the existing owner-bound waiting
+state. No second agent classifier or authority is involved. An unresolved
+automatic dispatch cannot cause repeated clicks; a missing observation
+does not terminate the accepted task.
 
 When the user supplies an original Native conversation UUID, use one scoped,
 read-only inspection instead of searching private rollout files or repeatedly

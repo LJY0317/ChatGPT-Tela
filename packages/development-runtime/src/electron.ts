@@ -15,7 +15,6 @@ import {
   CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS,
   ChatGptSemanticProvider,
   ChatGptDomSurfaceDriver,
-  reviewChatGptApprovalForAgent,
   selectChatGptWebModel,
   isChatGptTemporaryChatUrl,
   createChatGptContextAttachment,
@@ -27,7 +26,6 @@ import {
   type ChatGptConnectorObservation,
   type ChatGptWebModelFamily,
   type ChatGptWebModelSelectionCanary,
-  type ChatGptAgentApprovalReview,
   type WebConversationProvider,
   type WebContextCheckpointProvider,
 } from "@chatgpt-tela/chatgpt";
@@ -93,8 +91,6 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
     readonly jpeg?: Uint8Array;
     readonly approvalState?: "pending" | "none" | "unavailable";
     readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed";
-    /** Structural recommendation, not a permission or a proven Native turn binding. */
-    readonly approvalReview?: ChatGptAgentApprovalReview;
     readonly approvalWait?: import("@chatgpt-tela/chatgpt").WebApprovalWaitProjection;
   }>;
   /**
@@ -438,12 +434,10 @@ export async function startElectronDevelopmentRuntime(
       const automation = selected ? browserHost.selectedCapability(selected, BROWSER_PAGE_AUTOMATION) : undefined;
       let approvalState: "pending" | "none" | "unavailable" = "unavailable";
       let approvalObservationReason: "automation_unavailable" | "dom_observation_failed" | undefined;
-      let observedApproval: Parameters<typeof reviewChatGptApprovalForAgent>[1];
       if (automation) {
         try {
           const observation = await new ChatGptDomSurfaceDriver(automation).observe();
           approvalState = observation.approval?.cardCount ? "pending" : "none";
-          observedApproval = observation.approval;
         } catch {
           // Never interpret a failed DOM read as clearance or as authorization to click.
           approvalObservationReason = "dom_observation_failed";
@@ -457,14 +451,10 @@ export async function startElectronDevelopmentRuntime(
         });
       }
       const approvalWait = selected ? provider.inspectApprovalWait?.(browserHost.selectedSurfaceLease(selected)) : undefined;
-      const approvalReview = observedApproval?.cardCount
-        ? reviewChatGptApprovalForAgent(input.approvalAutomationMode ?? "off", observedApproval, approvalWait?.unverifiedDispatchCount ?? 0)
-        : undefined;
       return Object.freeze({ activeSurfaceCount: surfaces.length, surfaces,
         ...(selected ? { selectedSurfaceId: selected } : {}),
         ...(selected ? { approvalState } : {}),
         ...(approvalObservationReason ? { approvalObservationReason } : {}),
-        ...(approvalReview ? { approvalReview } : {}),
         ...(approvalWait ? { approvalWait } : {}),
         ...(capability ? { jpeg: await capability.captureJpeg() } : {}),
       });

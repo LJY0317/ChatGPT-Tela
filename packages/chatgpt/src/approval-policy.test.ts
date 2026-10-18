@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decideChatGptApproval, reviewChatGptApprovalForAgent } from "./approval-policy";
+import { decideChatGptApproval } from "./approval-policy";
 
 describe("ChatGPT approval automation policy", () => {
   const observed = {
@@ -32,11 +32,6 @@ describe("ChatGPT approval automation policy", () => {
     expect(decideChatGptApproval("full_access", withConversation)).toEqual({
       action: "approve_conversation",
       preferredChoice: "allow_conversation",
-    });
-    expect(reviewChatGptApprovalForAgent("full_access", withConversation)).toMatchObject({
-      classification: "eligible_conversation",
-      nextAction: "existing_owned_turn_automation",
-      agentMayApprove: false,
     });
   });
 
@@ -89,39 +84,4 @@ describe("ChatGPT approval automation policy", () => {
     });
   });
 
-  test("agent-facing inspection shares policy but grants no independent approval authority", () => {
-    expect(reviewChatGptApprovalForAgent("full_access", observed)).toEqual({
-      contractVersion: 1,
-      classification: "eligible_once",
-      nextAction: "existing_owned_turn_automation",
-      agentMayApprove: false,
-    });
-    expect(reviewChatGptApprovalForAgent("off", observed)).toMatchObject({
-      classification: "disabled",
-      nextAction: "human_browser_review",
-      agentMayApprove: false,
-    });
-    expect(reviewChatGptApprovalForAgent("full_access", undefined)).toMatchObject({
-      classification: "absent",
-      nextAction: "none",
-      agentMayApprove: false,
-    });
-    expect(reviewChatGptApprovalForAgent("full_access", { ...observed, cardCount: 2 }))
-      .toMatchObject({ classification: "ambiguous" });
-    expect(reviewChatGptApprovalForAgent("full_access", { ...observed, allowOnceCount: 0 }))
-      .toMatchObject({ classification: "unrecognized" });
-  });
-
-  test("one unresolved dispatch blocks another while verified approvals have no count limit", () => {
-    expect(reviewChatGptApprovalForAgent("full_access", observed, 0).classification).toBe("eligible_once");
-    for (const used of [1, 8, 38]) {
-      expect(reviewChatGptApprovalForAgent("full_access", observed, used)).toMatchObject({
-        classification: "limit_reached",
-        nextAction: "human_browser_review",
-        agentMayApprove: false,
-      });
-    }
-    expect(() => reviewChatGptApprovalForAgent("full_access", observed, -1)).toThrow();
-    expect(() => reviewChatGptApprovalForAgent("full_access", observed, 1.5)).toThrow();
-  });
 });

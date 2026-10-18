@@ -178,7 +178,6 @@ export interface WebContextCheckpointProvider {
 export interface WebApprovalWaitProjection {
   readonly phase: "pending" | "dispatch_sent" | "input_received" | "card_cleared" | "task_progress";
   readonly elapsedMs: number;
-  readonly expiresAfterMs: 600000;
   readonly unverifiedDispatchCount: number;
   readonly operationState: "waiting" | "stopping";
 }

@@ -3,7 +3,7 @@ import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core
 import { startWebHttpServer, type WebHttpServer } from "@chatgpt-tela/http-host";
 import type { AccountCheck } from "./account-check";
 import type { AccountDisplay } from "./account-display";
-import { parseCodexApprovalWait, type CodexApprovalWaitContract, parseCodexAccountDisplayContract, parseCodexAgentApprovalReview, parseCodexHistoryUiContract, parseCodexSavedDeleteAcceptanceContract, parseCodexSyntheticRecoveryContract, type CodexHistoryUiContract, type CodexSavedDeleteAcceptanceContract, type CodexSyntheticRecoveryContract } from "@chatgpt-tela/service-protocol";
+import { parseCodexApprovalWait, type CodexApprovalWaitContract, parseCodexAccountDisplayContract, parseCodexHistoryUiContract, parseCodexSavedDeleteAcceptanceContract, parseCodexSyntheticRecoveryContract, type CodexHistoryUiContract, type CodexSavedDeleteAcceptanceContract, type CodexSyntheticRecoveryContract } from "@chatgpt-tela/service-protocol";
 
 const MAX_JPEG_BYTES = 4 * 1024 * 1024;
 
@@ -41,7 +41,7 @@ export async function startProfileBridgePreviewServer(input: {
   readonly runSavedDeleteAcceptance?: () => Promise<Omit<CodexSavedDeleteAcceptanceContract, "slot">>;
   readonly recoverSyntheticSavedChat?: () => Promise<Omit<CodexSyntheticRecoveryContract, "slot">>;
   readonly reveal?: (id: string, interactive?: boolean) => Promise<void>;
-  readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable"; readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed"; readonly approvalWait?: CodexApprovalWaitContract; readonly approvalReview?: { readonly contractVersion: 1; readonly classification: "absent" | "eligible_once" | "eligible_conversation" | "disabled" | "ambiguous" | "unrecognized" | "limit_reached"; readonly nextAction: "none" | "existing_owned_turn_automation" | "human_browser_review"; readonly agentMayApprove: false } }>;
+  readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable"; readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed"; readonly approvalWait?: CodexApprovalWaitContract }>;
   readonly probeModelSelection?: () => Promise<{
     readonly familyCount: number;
     readonly exercised: boolean;
@@ -209,8 +209,6 @@ export async function startProfileBridgePreviewServer(input: {
         ...(observed.selectedSurfaceId && observed.approvalState ? { approvalState: observed.approvalState } : {}),
         ...(observed.selectedSurfaceId && observed.approvalState === "unavailable" && observed.approvalObservationReason
           ? { approvalObservationReason: observed.approvalObservationReason } : {}),
-        ...(observed.selectedSurfaceId && observed.approvalState === "pending" && observed.approvalReview
-          ? { approvalReview: parseCodexAgentApprovalReview(observed.approvalReview) } : {}),
         ...(observed.selectedSurfaceId && observed.approvalWait ? { approvalWait: parseCodexApprovalWait(observed.approvalWait) } : {}),
         previewAvailable: jpeg !== undefined,
         ...(jpeg ? { imageMimeType: "image/jpeg", imageBase64: Buffer.from(jpeg).toString("base64") } : {}),

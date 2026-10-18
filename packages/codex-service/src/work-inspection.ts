@@ -52,7 +52,6 @@ export function createCodexWorkInspector(input: {
       readonly observationReason?: "automation_unavailable" | "dom_observation_failed"
         | "bridge_preview_failed" | "no_active_surface" | "surface_not_selected";
       readonly wait?: NonNullable<Awaited<ReturnType<typeof input.service.bridgePreview>>["approvalWait"]>;
-      readonly review?: NonNullable<Awaited<ReturnType<typeof input.service.bridgePreview>>["approvalReview"]>;
     };
     let observedPreview: Awaited<ReturnType<typeof input.service.bridgePreview>> | undefined;
     try {
@@ -72,8 +71,6 @@ export function createCodexWorkInspector(input: {
         approvalState: selectedSurface ? preview.approvalState ?? "unavailable" : "unavailable",
         ...(observationReason ? { observationReason } : {}),
         ...(selectedSurface && preview.approvalWait ? { wait: preview.approvalWait } : {}),
-        ...(selectedSurface && preview.approvalState === "pending" && preview.approvalReview
-          ? { review: preview.approvalReview } : {}),
       };
     } else {
       // Browser status is supplemental: a failed current observation must not

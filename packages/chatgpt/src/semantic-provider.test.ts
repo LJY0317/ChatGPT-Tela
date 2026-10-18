@@ -2248,10 +2248,6 @@ describe("ChatGPT semantic provider", () => {
       approvalAutomationMode: "full_access",
       approvalAutomationDelayMs: 1,
     });
-    const scratch = mkdtempSync(join(tmpdir(), "tela-approval-resolution-"));
-    const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
-    const file = join(scratch, "events.jsonl");
-    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
     try {
       const submitting = provider.submitTurn(surface.lease, request());
       while (driver.current.revision === "r1") await Promise.resolve();
@@ -2307,20 +2303,10 @@ describe("ChatGPT semantic provider", () => {
         },
         evidence: ["one assistant descendant reached complete state"],
       });
-      const rows = readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line));
-      const resolutions = rows.filter(row => row.stage === "approval_turn_resolution");
-      expect(resolutions).toHaveLength(1);
-      expect(resolutions[0]).toMatchObject({ approval_count: 1, dispatch_count: 1, card_clear_count: 1,
-        native_result_count: 0, execution_evidence: "unverified", decision_evidence: "unverified", assistant_phase: "completed" });
-      expect(rows.filter(row => row.stage === "approval_resolution_anomaly")).toHaveLength(1);
-      expect(readFileSync(file, "utf8")).not.toContain("approved and finished");
       expect(() => new ChatGptSemanticProvider({ approvalAutomationDelayMs: 15_001 }))
         .toThrow("0-15000ms");
     } finally {
       await surface.host.close();
-      if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
-      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
-      rmSync(scratch, { recursive: true, force: true });
     }
   });
 
@@ -2735,136 +2721,44 @@ test('post-acceptance input does not cancel an observer; Native cancellation sti
 });
 
 
-test.each(["pending", "cleared_before", "preparation", "replacement", "hidden", "forgotten", "handoff"] as const)("fake clock: approval milestones, ten-minute expiry and late-input fencing (%s)", async scenario => {
+test("manual approval remains pending beyond ten minutes and can complete without a forced Stop", async () => {
   const driver = new FixtureDriver(fixture("ready-new-chat"));
   const surface = await leaseFor(driver);
-  const provider = new ChatGptSemanticProvider({ approvalAutomationMode: scenario === "preparation" ? "full_access" : "off" });
-  let now = 1_000;
-  const clock = spyOn(Date, "now").mockImplementation(() => now);
-  const timers = new Map<number, { at: number; callback: () => void }>();
-  let timerId = 0;
-  const owner = new AbortController();
-  const watchdog = setTimeout(() => owner.abort(new Error("fake clock stalled")), 2000);
-  const timeout = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
-    const id = ++timerId; timers.set(id, { at: now + ms, callback }); return id;
-  }) as typeof setTimeout);
-  const clear = spyOn(globalThis, "clearTimeout").mockImplementation(((id: number) => { timers.delete(id); }) as typeof clearTimeout);
-  let stops = 0;
-  (driver as ChatGptSurfaceDriver).stopGeneration = async expected => {
-    expect(expected).toEqual({ assistantKey: "assistant-wait", userTurnKey: "user-turn-1",
-      userFingerprint: driver.current.turns.find(t => t.role === "user")!.contentFingerprint! });
-    stops++; return { status: "stop_sent" };
-  };
-  const advance = async (ms: number) => {
-    now += ms;
-    for (const [id, timer] of [...timers]) if (timer.at <= now) { timers.delete(id); timer.callback(); }
-    for (let i = 0; i < 100; i++) await Promise.resolve();
-  };
+  const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "off" });
   try {
-    const submitting = provider.submitTurn(surface.lease, request());
+    const sending = provider.submitTurn(surface.lease, request());
     while (driver.current.revision === "r1") await Promise.resolve();
     driver.queued.push(acceptedSnapshot(driver));
-    const submitted = await submitting;
-    if (submitted.state !== "proven") throw Error("fixture submission failed");
-    driver.queued.push({ ...driver.current, revision: "owned-pending", approval: recognizedApproval,
-      turns: [...driver.current.turns, { key: "assistant-wait", role: "assistant", parentUserTurnKey: "user-turn-1", phase: "tool-wait" }] });
-    const event = () => provider.waitForTurnEvent(surface.lease, submitted.value, owner.signal);
-    expect(provider.inspectApprovalWait(surface.lease)).toBeUndefined();
-    expect(provider.inspectApprovalWait({ ...surface.lease })).toBeUndefined();
-    if (scenario === "preparation") {
-      let preparationSignal: AbortSignal | undefined;
-      driver.processApprovalCard = async (_mode, signal) => {
-        preparationSignal = signal;
-        return await new Promise(() => {}); // Simulate a renderer that ignores cancellation.
-      };
-      const preparing = event(); void preparing.catch(() => {});
-      await advance(0);
-      expect(preparationSignal?.aborted).toBe(false);
-      await advance(600_000);
-      await expect(preparing).rejects.toMatchObject({ code: "tela_web_approval_expired", retryable: false });
-      expect(preparationSignal?.aborted).toBe(true);
-      expect(stops).toBe(1);
-      await expect(event()).rejects.toThrow("not bound");
-      return;
-    }
-    expect((await event()).state).toBe("proven");
-    expect(provider.inspectApprovalWait(surface.lease)).toMatchObject({ phase: "pending", elapsedMs: 0,
-      expiresAfterMs: 600000, unverifiedDispatchCount: 0, operationState: "waiting" });
-    if (scenario === "forgotten") {
-      await advance(600_000);
-      expect(stops).toBe(1);
-      await expect(event()).rejects.toThrow("not bound");
-      return;
-    }
-    if (scenario === "handoff") {
-      driver.current = { ...driver.current, turns: driver.current.turns.map(t => {
-        if (t.role !== "user") return t;
-        const { contentFingerprint: _fingerprint, ...pending } = t;
-        return pending;
-      }) };
-      driver.waitForChange = async () => new Promise(() => {}); // Adapter ignores abort while identity is pending.
-      const handoff = provider.armToolContinuation(surface.lease, submitted.value, "pending-call");
-      void handoff.catch(() => {});
-      await advance(0);
-      await advance(600_000);
-      await expect(handoff).rejects.toMatchObject({ code: "tela_web_approval_expired" });
-      expect(stops).toBe(0);
-      return;
-    }
-    let changed: ((snapshot: ChatGptSurfaceSnapshot) => void) | undefined;
-    driver.waitForChange = async (_revision: string, signal?: AbortSignal) => new Promise((resolve, reject) => {
-      changed = resolve;
-      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
-    });
-    let pending = event();
-    await advance(0);
-    await advance(29_999);
-    expect(stops).toBe(0);
-    await advance(1);
-    expect(provider.inspectApprovalWait(surface.lease)).toMatchObject({ phase: "pending", elapsedMs: 30_000 });
-    expect(await pending).toMatchObject({ state: "proven", value: { kind: "progress", summary: expect.stringContaining("thirty seconds") } });
-    pending = event(); await advance(0); await advance(90_000);
-    expect(await pending).toMatchObject({ state: "proven", value: { summary: expect.stringContaining("two minutes") } });
-    pending = event(); await advance(0); await advance(180_000);
-    expect(await pending).toMatchObject({ state: "proven", value: { summary: expect.stringContaining("rechecking") } });
-    pending = event(); await advance(0); void pending.catch(() => {});
-    if (scenario === "replacement" || scenario === "hidden") {
-      await advance(240_000); // Replace at nine minutes without receipt or owned progress.
-      if (scenario === "replacement") driver.current = { ...driver.current, revision: "replacement-nine-minutes", approval: {
-        ...recognizedApproval, cardFingerprint: "b".repeat(24), revisionFingerprint: "replacement-proof" } };
-      else {
-        const { approval: _approval, ...hidden } = driver.current;
-        driver.current = { ...hidden, revision: "hidden-nine-minutes" };
-      }
-      changed!(await driver.observe());
-      await advance(0);
-      if (scenario === "hidden") {
-        expect(await pending).toMatchObject({ state: "proven", value: { kind: "progress", summary: expect.stringContaining("card cleared") } });
-        expect(provider.inspectApprovalWait(surface.lease)).toMatchObject({ phase: "card_cleared", elapsedMs: 540_000 });
-        pending = event(); void pending.catch(() => {}); await advance(0);
-      }
-    }
-    await advance(scenario === "replacement" || scenario === "hidden" ? 59_999 : 299_999); expect(stops).toBe(0);
-    if (scenario === "cleared_before") {
+    const submitted = await sending;
+    if (submitted.state !== "proven") throw Error("fixture submit");
+    driver.queued.push({ ...driver.current, revision: "approval-pending", approval: recognizedApproval,
+      turns: [...driver.current.turns, { key: "assistant-wait", role: "assistant",
+        parentUserTurnKey: "user-turn-1", phase: "tool-wait" }] });
+    expect(await provider.waitForTurnEvent(surface.lease, submitted.value))
+      .toMatchObject({ state: "proven", value: { kind: "progress", summary: "Approval needed in the Web browser." } });
+    const started = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => started + 61 * 60_000);
+    try {
+      const status = provider.inspectApprovalWait(surface.lease);
+      expect(status).toMatchObject({ phase: "pending", operationState: "waiting" });
+      expect(status?.elapsedMs).toBeGreaterThanOrEqual(61 * 60_000);
       const { approval: _approval, ...cleared } = driver.current;
-      driver.current = { ...cleared, revision: "cleared-before-expiry", turns: driver.current.turns.map(t => t.role === "assistant"
-        ? { ...t, phase: "complete", text: "verified owned final", contentFingerprint: hash("verified owned final") } : t) };
-      changed!(await driver.observe());
-      expect(await pending).toMatchObject({ state: "proven", value: { kind: "progress", summary: expect.stringContaining("card cleared") } });
-      await event(); // Owned task progress is proven before the deadline, beyond mere clearance.
-      await advance(2);
-      expect(await event()).toMatchObject({ state: "proven", value: { kind: "completed", answer: "verified owned final" } });
-      expect(stops).toBe(0);
-      return;
-    }
-    await advance(1); await expect(pending).rejects.toMatchObject({ code: "tela_web_approval_expired", retryable: false }); expect(stops).toBe(1);
-    driver.current = { ...driver.current, approval: { ...recognizedApproval, inputReceived: true } };
-    await expect(event()).rejects.toThrow("not bound");
-    expect(provider.inspectApprovalWait(surface.lease)).toBeUndefined();
-    expect(driver.approvalCalls).toBe(0);
-  } finally { clock.mockRestore(); timeout.mockRestore(); clear.mockRestore(); clearTimeout(watchdog); await surface.host.close(); }
+      driver.queued.push({ ...cleared, revision: "manual-approval-complete",
+        turns: cleared.turns.map(turn => turn.role === "assistant"
+          ? { ...turn, phase: "complete", text: "finished after manual approval" } : turn) });
+      let completed = false;
+      for (let i = 0; i < 5; i++) {
+        const event = await provider.waitForTurnEvent(surface.lease, submitted.value);
+        if (event.state === "proven" && event.value.kind === "completed") {
+          expect(event.value.answer).toBe("finished after manual approval");
+          completed = true;
+          break;
+        }
+      }
+      expect(completed).toBe(true);
+    } finally { clock.mockRestore(); }
+  } finally { await surface.host.close(); }
 });
-
 
 test.each(["owned", "changed_author"] as const)("public cancellation aborts pending approval and freshly proves Stop ownership (%s)", async scenario => {
   const driver = new FixtureDriver(fixture("ready-new-chat"));

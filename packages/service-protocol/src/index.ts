@@ -3,8 +3,8 @@ import { dirname } from "node:path";
 import { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
 export { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
 export { parseCodexWorkInspectionContract } from "./work-inspection";
-export { parseCodexAgentApprovalReview, parseCodexApprovalWait, type CodexApprovalWaitContract, type CodexAgentApprovalReviewContract } from "./approval-review";
-import { parseCodexAgentApprovalReview, parseCodexApprovalWait, type CodexApprovalWaitContract, type CodexAgentApprovalReviewContract } from "./approval-review";
+export { parseCodexApprovalWait, type CodexApprovalWaitContract } from "./approval-review";
+import { parseCodexApprovalWait, type CodexApprovalWaitContract } from "./approval-review";
 import type {
   NativeToolCatalogEntry,
   NativeToolInvocation,
@@ -145,7 +145,6 @@ export interface CodexBridgePreviewContract {
   readonly imageBase64?: string;
   readonly approvalState?: "pending" | "none" | "unavailable";
   readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed";
-  readonly approvalReview?: CodexAgentApprovalReviewContract;
   readonly approvalWait?: CodexApprovalWaitContract;
 }
 
@@ -246,12 +245,6 @@ export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePrev
       || !["automation_unavailable", "dom_observation_failed"].includes(String(approvalObservationReason)))) {
     throw new Error("invalid approval observation reason");
   }
-  const rawReview = item.approvalReview;
-  let approvalReview: CodexAgentApprovalReviewContract | undefined;
-  if (rawReview !== undefined) {
-    if (selected === undefined || approvalState !== "pending") throw new Error("invalid approval review ownership");
-    approvalReview = parseCodexAgentApprovalReview(rawReview);
-  }
   const approvalWait = item.approvalWait === undefined ? undefined : parseCodexApprovalWait(item.approvalWait);
   if (approvalWait && selected === undefined) throw new Error("invalid approval wait ownership");
   const imageMimeType = item.imageMimeType;
@@ -274,7 +267,6 @@ export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePrev
     ...(selected ? { selectedSurfaceId: selected as string } : {}),
     ...(approvalState ? { approvalState: approvalState as NonNullable<CodexBridgePreviewContract["approvalState"]> } : {}),
     ...(approvalObservationReason ? { approvalObservationReason: approvalObservationReason as NonNullable<CodexBridgePreviewContract["approvalObservationReason"]> } : {}),
-    ...(approvalReview ? { approvalReview } : {}),
     ...(approvalWait ? { approvalWait } : {}),
     ...(item.previewAvailable ? { imageMimeType: "image/jpeg" as const, imageBase64: imageBase64 as string } : {}),
   });

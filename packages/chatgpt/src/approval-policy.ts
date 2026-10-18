@@ -15,15 +15,6 @@ export type ChatGptApprovalDecision =
   | { readonly action: "approve_once"; readonly preferredChoice: "allow_once" | "allow" }
   | { readonly action: "approve_conversation"; readonly preferredChoice: "allow_conversation" };
 
-export type ChatGptAgentApprovalReview = Readonly<{
-  readonly contractVersion: 1;
-  readonly classification: "absent" | "eligible_once" | "eligible_conversation"
-    | "disabled" | "ambiguous" | "unrecognized" | "limit_reached";
-  readonly nextAction: "none" | "existing_owned_turn_automation" | "human_browser_review";
-  /** Existing turn-owned automation is distinct from a new agent/tool grant. */
-  readonly agentMayApprove: false;
-}>;
-
 /**
  * Resolve one currently observed card to one visible choice. Card text and
  * connector names do not participate in this decision.
@@ -60,36 +51,4 @@ export function decideChatGptApproval(
   if (allow > 1) return Object.freeze({ action: "none", reason: "ambiguous" });
 
   return Object.freeze({ action: "none", reason: "unrecognized" });
-}
-
-/**
- * Model-safe guidance from the same structural policy as dispatch.
- * The consumer must separately prove current turn/surface ownership before
- * dispatch; this review never issues or enlarges approval authority.
- */
-export function reviewChatGptApprovalForAgent(
-  mode: ChatGptApprovalAutomationMode,
-  observed?: ChatGptApprovalCardObservation,
-  unverifiedDispatchCount = 0,
-): ChatGptAgentApprovalReview {
-  if (!Number.isSafeInteger(unverifiedDispatchCount) || unverifiedDispatchCount < 0) {
-    throw new Error("unverified approval count is invalid");
-  }
-  if (!observed?.cardCount) {
-    return Object.freeze({ contractVersion: 1, classification: "absent",
-      nextAction: "none", agentMayApprove: false });
-  }
-  const decision = decideChatGptApproval(mode, observed);
-  const classification = decision.action === "approve_once" || decision.action === "approve_conversation"
-    ? (unverifiedDispatchCount > 0 ? "limit_reached"
-      : decision.action === "approve_conversation" ? "eligible_conversation" : "eligible_once")
-    : decision.reason;
-  return Object.freeze({
-    contractVersion: 1,
-    classification,
-    nextAction: classification === "eligible_once" || classification === "eligible_conversation"
-      ? "existing_owned_turn_automation"
-      : "human_browser_review",
-    agentMayApprove: false,
-  });
 }
