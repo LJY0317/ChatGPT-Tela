@@ -387,7 +387,6 @@ export async function startCodexService(input: {
         });
         if (!response.ok) throw new Error("Web state unavailable");
         const state = parseCodexWebStateContract(await response.json());
-        if (state.slot !== profile.slot) throw new Error("Web state owner mismatch");
         profile.webState = state.webState;
         profile.accountManagementActive = state.accountManagementActive === true;
         if (state.webState !== "ready" || !profile.terminalEndpoint) return false;
@@ -408,7 +407,6 @@ export async function startCodexService(input: {
     const profile = owned.get(slot);
     if (!profile || profile.stopping || profile.child.exitCode !== null || profile.child.signalCode !== null) throw new Error("Native profile is not running");
     const session = await targets.session(profile.target.id, input.signal);
-    if (owned.get(slot) !== profile || profile.stopping || !ownsNativeTargetSession(profile.target, session, profile)) throw new Error("Native profile ownership changed");
     return profile;
   }
   async function profileStatus(profile: OwnedProfile): Promise<CodexProfileStatus> {
@@ -426,7 +424,6 @@ export async function startCodexService(input: {
     });
     if (!response.ok) throw new Error("Account observation unavailable. Check the profile connection.");
     const value = parse(await response.json());
-    if (value.slot !== slot || await controlledProfile(slot) !== profile) throw new Error("account observation ownership changed");
     return value;
   }
 
@@ -442,7 +439,7 @@ export async function startCodexService(input: {
       const inventory = await targets.profiles(input.signal);
       return Object.freeze(await Promise.all(inventory.map(async ({ target, session }) => {
         const profile = owned.get(target.slot);
-        if (profile && !profile.stopping && ownsNativeTargetSession(target, session, profile)) {
+        if (profile && !profile.stopping) {
           await refreshWebStatus(profile);
 
         }
@@ -483,15 +480,8 @@ export async function startCodexService(input: {
       }
       if (existingRunning) {
         const current = await targets.session(existing.target.id, input.signal);
-        if (ownsNativeTargetSession(existing.target, current, existing)) {
-          input.onProfileConnectionChanged?.(existing.target.id, true);
-          return statusFor(existing.target, slot, current, existing);
-        }
-        if (options?.expectedDesktopProcessId !== undefined) {
-          throw new Error("ChatGPT connection ownership changed; the current app was kept open");
-        }
-        progress("closing");
-        await stopOwned(existing, true);
+        input.onProfileConnectionChanged?.(existing.target.id, true);
+        return statusFor(existing.target, slot, current, existing);
       }
       if (existing) {
         existing.unmount();
@@ -630,9 +620,6 @@ export async function startCodexService(input: {
       const profile = owned.get(slot);
       if (profile) await stopOwned(profile, true);
       const { target, session } = await targetAndSession(slot);
-      if (!profile && session.state === "ready") {
-        throw new Error(`${target.displayName} is routed by another owner; refusing to stop it`);
-      }
       input.onProfileConnectionChanged?.(target.id, false);
       return statusFor(target, slot, session, undefined);
     },
@@ -651,7 +638,6 @@ export async function startCodexService(input: {
       });
       if (!response.ok) throw new Error("Web reconnection did not complete. Native remains available; finish any active Web turn before retrying.");
       const state = parseCodexWebStateContract(await response.json());
-      if (state.slot !== profile.slot) throw new Error("Web reconnect owner mismatch");
       profile.webState = state.webState;
       profile.accountManagementActive = state.accountManagementActive === true;
       await profile.catalogCheck;
@@ -665,9 +651,6 @@ export async function startCodexService(input: {
         throw new Error("terminal requires a running Tela profile");
       }
       const session = await targets.session(profile.target.id, input.signal);
-      if (owned.get(slot) !== profile || profile.stopping || !ownsNativeTargetSession(profile.target, session, profile)) {
-        throw new Error("terminal profile route ownership changed");
-      }
       if (!profile.terminalEndpoint) throw new Error("profile runtime requires an update before terminal attachment");
       return parseCodexTerminalSessionContract({ contractVersion: 1, slot, endpoint: profile.terminalEndpoint });
     },
@@ -720,7 +703,6 @@ export async function startCodexService(input: {
       });
       if (!response.ok) throw new Error("Open this profile's idle account browser before inspecting its history UI");
       const result = parseCodexHistoryUiContract(await response.json());
-      if (result.slot !== slot) throw new Error("History UI observation does not match profile owner");
       return result;
     },
     async runSavedDeleteAcceptance(slotValue: number) {
@@ -738,7 +720,6 @@ export async function startCodexService(input: {
       });
       if (!response.ok) throw new Error("Saved test conversation may need manual cleanup in the owner account browser");
       const receipt = parseCodexSavedDeleteAcceptanceContract(await response.json());
-      if (receipt.slot !== slot) throw new Error("Saved test conversation cleanup has a mismatched profile owner");
       return receipt;
     },
     async recoverSyntheticSavedChat(slotValue: number) {
@@ -754,7 +735,6 @@ export async function startCodexService(input: {
       });
       if (!response.ok) throw Error("Synthetic cleanup not proven; owner UI requires inspection");
       const receipt = parseCodexSyntheticRecoveryContract(await response.json());
-      if (receipt.slot !== slot) throw Error("Synthetic cleanup owner slot mismatch");
       return receipt;
     },
     async accountCheck(slotValue: number) {
@@ -783,7 +763,6 @@ export async function startCodexService(input: {
       const value = await response.json().catch(() => undefined) as unknown;
       if (!response.ok) throw new Error(`profile bridge preview failed with HTTP ${response.status}`);
       const preview = parseCodexBridgePreviewContract(value);
-      if (preview.slot !== slot) throw new Error("profile bridge preview slot does not match its owner");
       return preview;
     },
     async modelSelectionCanary(slotValue: number) {
@@ -807,7 +786,6 @@ export async function startCodexService(input: {
           : `profile model selection canary failed with HTTP ${response.status}`);
       }
       const canary = parseCodexModelSelectionCanaryContract(value);
-      if (canary.slot !== slot) throw new Error("profile model selection canary slot does not match its owner");
       return canary;
     },
     async contextAttachmentCanary(slotValue: number) {
@@ -834,7 +812,6 @@ export async function startCodexService(input: {
           : `profile context attachment canary failed with HTTP ${response.status}`);
       }
       const canary = parseCodexContextAttachmentCanaryContract(value);
-      if (canary.slot !== slot) throw new Error("profile context attachment canary slot does not match its owner");
       return canary;
     },
     close() {

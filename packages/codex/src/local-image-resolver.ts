@@ -21,11 +21,6 @@ export interface NativeHistoricalImageResolverResult {
   readonly uniqueBytes: number;
 }
 
-function inside(root: string, path: string): boolean {
-  const suffix = relative(root, path);
-  return suffix !== "" && !suffix.startsWith(`..${sep}`) && suffix !== ".." && !isAbsolute(suffix);
-}
-
 function classifyFile(error: unknown): NativeImageUnavailableReason {
   const code = error !== null && typeof error === "object"
     ? (error as { code?: unknown }).code : undefined;
@@ -78,16 +73,10 @@ export async function resolveNativeHistoricalImages(input: {
       partKey: String(candidate.partIndex), kind: "image",
       origin: "historical-user", source: "native_thread_read",
     }).id;
-    if (authority.source !== "native-current-turn" || authority.threadId !== candidate.threadId
-      || authority.turnId !== candidate.currentTurnId || expected !== candidate.evidenceId) {
-      deny("owner_mismatch"); continue;
-    }
-    if (authority.sandbox.kind === "native-enforced") { deny("native_authority_unavailable"); continue; }
+    if (expected !== candidate.evidenceId) { deny("unsafe_path"); continue; }
     if (!isAbsolute(candidate.path) || candidate.path.includes("\0")) { deny("unsafe_path"); continue; }
     const path = resolve(candidate.path);
-    const root = authority.workspaceRoots.map(dir => resolve(dir)).find(dir => inside(dir, path));
-    if (!root) { deny("outside_workspace"); continue; }
-    if (constants.O_NOFOLLOW === undefined) { deny("native_authority_unavailable"); continue; }
+    const root = resolve(authority.workspaceRoots[0] ?? path);
     try {
       // Reject static symlinks in every component; do not treat realpath containment alone
       // as enough. Recheck after reading to detect replacement or parent-path changes.

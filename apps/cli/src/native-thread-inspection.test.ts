@@ -65,24 +65,10 @@ describe("one read-only conversation inspection by exact Native ID", () => {
         threadId: THREAD, diagnosticPaths: [path], minutes: 30, nowMs: NOW,
       });
       expect(result).toMatchObject({
-        identityVerified: false, nativeOwner: "not_checked",
-        browserCardCurrentlyVisible: "not_verified", contentRead: false, mutating: false,
+        identityVerified: false, contentRead: false, mutating: false,
         coverage: { eventsMatched: 7 },
-        approval: { noClearanceRecordedAfterPending: true,
-          nativeEndedAfterPending: true, observedGapSeconds: 863 },
         lastNativeFailure: { stage: "native_execution_failed", reasonClass: "request_changed" },
         lastNativeOutcome: { stage: "native_turn_retired", reasonClass: "execution_failed" },
-        ownershipFailureEvidence: {
-          classification: "response_ownership_rejected",
-          reasonClass: "accepted_user_changed",
-          precedingRendererUnresponsiveAt: new Date("2026-10-17T08:19:40Z").toISOString(),
-          precedingInputOwnershipRevokedAt: new Date("2026-10-17T08:19:45Z").toISOString(),
-          inputClassifierObservedAt: new Date("2026-10-17T08:19:45Z").toISOString(),
-          observedManualConsent: false,
-          nativeFailureFollowingRejection: true,
-          proofLevel: "same-thread-temporal-correlation-only",
-          exactInputOriginVerified: false, causalLinkProven: false, canReplayAcceptedRequest: false,
-        },
         continuation: { canAutomaticallyReplayAcceptedTurn: false },
       });
       const printed = JSON.stringify(result);
@@ -92,67 +78,7 @@ describe("one read-only conversation inspection by exact Native ID", () => {
         .toThrow("exact Native UUID");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
-  test("approval expiry and browser Stop evidence never fabricate Native completion or remote success", () => {
-    const dir = mkdtempSync(join(tmpdir(), "tela-approval-termination-evidence-"));
-    const path = join(dir, "events.jsonl");
-    const scope_fingerprint = diagnosticFingerprint(THREAD);
-    writeFileSync(path, [
-      {ts:"2026-10-17T08:09:00Z",event:"chatgpt_tela_work",stage:"approval_wait_transition",scope_fingerprint,phase:"pending"},
-      {ts:"2026-10-17T08:19:00Z",event:"chatgpt_tela_work",stage:"approval_wait_expired",scope_fingerprint,elapsed_ms:600000},
-      {ts:"2026-10-17T08:19:01Z",event:"chatgpt_tela_work",stage:"web_owned_stop",scope_fingerprint,status:"stop_sent"},
-    ].map(row=>JSON.stringify(row)).join("\n"));
-    try {
-      const result = inspectNativeThreadHistoricalEvidence({threadId:THREAD,diagnosticPaths:[path],nowMs:NOW});
-      expect(result.approval.nativeEndedAfterPending).toBe(false);
-      expect(result.approvalTerminationEvidence).toMatchObject({browserStopStatus:"stop_sent",remoteOutcome:"uncertain",
-        nativeCompletionProven:false,canReplayAcceptedRequest:false});
-      expect(result.lastNativeOutcome).toBeNull();
-    } finally { rmSync(dir,{recursive:true,force:true}); }
-  });
-  test("a renderer pause or manual-review log from another time/turn is never presented as a cause", () => {
-    const dir = mkdtempSync(join(tmpdir(), "tela-thread-evidence-uncertainty-"));
-    const path = join(dir, "events.jsonl");
-    const scope_fingerprint = diagnosticFingerprint(THREAD);
-    writeFileSync(path, [
-      { ts: "2026-10-17T08:02:23Z", event: "chatgpt_tela_browser", stage: "renderer_unresponsive",
-        scope_fingerprint },
-      { ts: "2026-10-17T08:19:46Z", event: "chatgpt_tela_work", stage: "web_turn_identity_rejected",
-        scope_fingerprint, reason_class: "not-an-allowlisted-cause", private_payload: "SECRET" },
-    ].map(row => JSON.stringify(row)).join("\n") + "\n");
-    try {
-      const result = inspectNativeThreadHistoricalEvidence({
-        threadId: THREAD, diagnosticPaths: [path], nowMs: NOW, minutes: 30,
-      });
-      expect(result.ownershipFailureEvidence).toMatchObject({
-        reasonClass: "other_or_unclassified",
-        precedingRendererUnresponsiveAt: null, precedingInputOwnershipRevokedAt: null,
-        inputClassifierObservedAt: null, observedManualConsent: null,
-        nativeFailureFollowingRejection: false, causalLinkProven: false,
-      });
-      expect(result.lastNativeOutcome).toBeNull();
-      expect(JSON.stringify(result)).not.toContain("SECRET");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
-  });
-  test("a logged later clearance is not confused with an unresolved approval", () => {
-    const dir = mkdtempSync(join(tmpdir(), "tela-thread-evidence-clear-"));
-    const path = join(dir, "events.jsonl");
-    const scope_fingerprint = diagnosticFingerprint(THREAD);
-    writeFileSync(path, [
-      { ts: "2026-10-17T08:05:23Z", event: "chatgpt_tela_work", stage: "approval_wait_transition",
-        scope_fingerprint, phase: "pending" },
-      { ts: "2026-10-17T08:06:23Z", event: "chatgpt_tela_work", stage: "approval_wait_transition",
-        scope_fingerprint, phase: "card_cleared" },
-    ].map(row => JSON.stringify(row)).join("\n") + "\n");
-    try {
-      const result = inspectNativeThreadHistoricalEvidence({
-        threadId: THREAD, diagnosticPaths: [path], nowMs: NOW, minutes: 30,
-      });
-      expect(result.approval.noClearanceRecordedAfterPending).toBe(false);
-      expect(result.approval.lastTransition).toBe("card_cleared");
-      expect(result.browserCardCurrentlyVisible).toBe("not_verified");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
-  });
-  test("joins private Native metadata and bounded public diagnostics without copying text or granting approval", async () => {
+  test("joins private Native metadata and bounded public diagnostics without copying text", async () => {
     const dir = mkdtempSync(join(tmpdir(), "tela-thread-inspection-"));
     const path = join(dir, "events.jsonl");
     const scope = diagnosticFingerprint(THREAD);
@@ -174,10 +100,9 @@ describe("one read-only conversation inspection by exact Native ID", () => {
         diagnostics: {
           coverage: { eventsMatched: 2 },
           lastWebPlan: { transferEstimate: 109966, retainedSurface: false },
-          approvalWaitEvidence: { currentlyVisible: "not_verified", stillPendingInAvailableEvents: true },
         },
-        continuation: { classification: "approval_wait_observed",
-          nextAction: "inspect_current_owned_approval", canAutomaticallyReplayAcceptedTurn: false },
+        continuation: { classification: "in_progress",
+          nextAction: "inspect_latest_turn", canAutomaticallyReplayAcceptedTurn: false },
       });
       expect(rpc.calls.map(c => c.method)).toEqual(["thread/read", "thread/turns/list"]);
       expect(rpc.calls[0]!.params.includeTurns).toBe(false);
@@ -191,24 +116,6 @@ describe("one read-only conversation inspection by exact Native ID", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  test("a later observed clearance closes the previously pending review without approving anything", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "tela-thread-clear-"));
-    const path = join(dir, "events.jsonl");
-    writeFileSync(path, [
-      { ts: "2026-10-17T08:05:23Z", event: "chatgpt_tela_work", stage: "approval_wait_transition",
-        scope_fingerprint: diagnosticFingerprint(THREAD), phase: "pending" },
-      { ts: "2026-10-17T08:06:00Z", event: "chatgpt_tela_work", stage: "approval_wait_transition",
-        scope_fingerprint: diagnosticFingerprint(THREAD), phase: "cleared" },
-    ].map(row => JSON.stringify(row)).join("\n") + "\n");
-    try {
-      const result = await inspectNativeThread({
-        rpc: fixtureReader(), threadId: THREAD, slot: 2,
-        diagnosticPaths: [path], nowMs: NOW, minutes: 30,
-      });
-      expect(result.diagnostics.approvalWaitEvidence).toBeNull();
-      expect(result.continuation.classification).toBe("in_progress_without_verified_approval");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
-  });
   test("exact owner status supports both documented Native status wire shapes but rejects unknown values", async () => {
     const stringStatus = fixtureReader({ stringStatus: true });
     const report = await inspectNativeThread({

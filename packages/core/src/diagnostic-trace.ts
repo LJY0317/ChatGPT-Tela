@@ -6,7 +6,7 @@ import { diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent } from
 import { diagnosticFailureFields } from "./diagnostic-failure";
 import { classifyNetworkFailure } from "./network-failure";
 
-/** Observes public MCP calls without changing cancellation, approval or invocation authority. */
+/** Observes public MCP calls without changing cancellation or invocation authority. */
 export async function traceDiagnosticToolCall<T>(tool: string, arguments_: unknown, extra: unknown, invoke: () => Promise<T>): Promise<T> {
   const metadata = extra && typeof extra === "object" ? extra as { requestId?: string | number; _meta?: Record<string,unknown>; sessionId?: string; signal?: AbortSignal } : {};
   const scope = metadata._meta?.["openai/session"];

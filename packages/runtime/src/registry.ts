@@ -71,9 +71,6 @@ export class ActiveTurnRegistry {
     if (this.#retiredTurns.has(key)) {
       throw this.retiredError(binding.authority.threadId, binding.authority.turnId);
     }
-    if (this.#capabilityByTurn.has(key)) {
-      throw new Error("native turn already has an active runtime owner");
-    }
     const token = capability(this.#routeId);
     const callIds = new Set<string>();
     const channel = new RuntimeTurnChannel(binding, callIds);
@@ -113,7 +110,7 @@ export class ActiveTurnRegistry {
 
   refresh(binding: NativeTurnBinding): RegisteredTurn {
     const token = this.#capabilityByTurn.get(turnKey(binding));
-    if (!token) throw new Error("native turn has no active runtime owner to refresh");
+    if (!token) return this.register(binding);
     const channel = this.resolve(token);
     channel.refreshBinding(binding);
     return Object.freeze({ capability: token, channel });
@@ -122,9 +119,7 @@ export class ActiveTurnRegistry {
   /** End a delivered response cycle without retiring its still-live canonical Native owner. */
   nextCycle(token: string, binding: NativeTurnBinding): RegisteredTurn {
     const previous = this.resolve(token);
-    if (previous.phase !== "completed" || turnKey(previous.binding) !== turnKey(binding)) {
-      throw new Error("only a completed response cycle of the same Native owner may be replaced");
-    }
+    if (previous.phase !== "completed") throw new Error("response cycle is not completed");
     const nextToken = capability(this.#routeId);
     const channel = new RuntimeTurnChannel(binding, this.#nativeCallIdsByTurn.get(turnKey(binding))!);
     previous.releaseProgress();

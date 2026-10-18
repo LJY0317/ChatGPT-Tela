@@ -86,8 +86,6 @@ export interface ProductProfileRuntimeConfig {
   readonly internalMcpToken: string;
   readonly uiToken: string;
   readonly publicMcpAbi: ProductProfilePublicMcpAbi;
-  readonly approvalAutomationMode: import("@chatgpt-tela/chatgpt").ChatGptApprovalAutomationMode;
-  readonly approvalAutomationDelayMs: number;
   /** Explicit owner acceptance only; consumer Work defaults to Temporary Chat. */
   readonly acceptanceSavedChat: boolean;
   /** Explicit diagnostic deadline only. Normal task lifetime belongs to Native turn authority. */
@@ -195,10 +193,6 @@ export function loadProductProfileRuntimeConfig(
   if (publicMcpAbi !== "stable" && publicMcpAbi !== "unified-development") {
     throw new Error("CHATGPT_TELA_PRODUCT_PUBLIC_MCP_ABI must be stable or unified-development");
   }
-  const approvalAutomationMode = optional(env, "CHATGPT_TELA_APPROVAL_AUTOMATION_MODE") ?? "off";
-  if (approvalAutomationMode !== "off" && approvalAutomationMode !== "full_access") {
-    throw new Error("CHATGPT_TELA_APPROVAL_AUTOMATION_MODE must be off or full_access");
-  }
   const acceptanceSavedSlot = optional(env, "CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT");
   if (acceptanceSavedSlot !== undefined && !/^[1-9][0-9]?$/.test(acceptanceSavedSlot)) {
     throw new Error("CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT must be an exact profile slot from 1 to 99");
@@ -231,14 +225,7 @@ export function loadProductProfileRuntimeConfig(
     internalMcpToken,
     uiToken,
     publicMcpAbi,
-    approvalAutomationMode,
     acceptanceSavedChat: acceptanceSavedSlot === String(browserProfile.slot),
-    approvalAutomationDelayMs: boundedNonnegativeInteger(
-      optional(env, "CHATGPT_TELA_APPROVAL_DELAY_MS"),
-      "CHATGPT_TELA_APPROVAL_DELAY_MS",
-      0,
-      15_000,
-    ),
     ...(optional(env, "CHATGPT_TELA_CHECKPOINT_PREPARATION_POLICY") !== undefined ? {
       checkpointPreparationPolicy: checkpointPreparationPolicy(JSON.parse(required(env, "CHATGPT_TELA_CHECKPOINT_PREPARATION_POLICY"))),
     } : {}),
@@ -381,8 +368,6 @@ export async function startProductProfileRuntime(
       profileId: config.browserProfile.profileId,
       chatGptUrl: CHATGPT_TEMPORARY_CHAT_URL,
       connectorName: publicIdentity.connectorName,
-      approvalAutomationMode: config.approvalAutomationMode,
-      approvalAutomationDelayMs: config.approvalAutomationDelayMs,
       currentTurnSource: source,
       compactionHistory: async (threadId, turnId) => {
         if (!routedTarget) throw new Error("Native compaction history target is not ready");

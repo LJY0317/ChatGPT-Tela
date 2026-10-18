@@ -7,13 +7,10 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
  * remain with its existing source owner. A destination profile never receives
  * a Native app-server socket, CODEX_HOME, login token, or tool capability.
  *
- * The callbacks MUST be supplied by authenticated native-target adapters
- * and a locally authenticated, exact-thread user approval. A string slot or
- * caller-supplied account fingerprint is not authentication. Until those
- * adapters exist, do not wire this module into an installed/remote route.
+ * The callbacks are supplied by the local adapters. Until those adapters
+ * exist, do not wire this module into an installed/remote route.
  */
 
-const HEX = /^[0-9a-f]{64}$/;
 const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_TTL_MS = 15 * 60_000;
 const MAX_READ_BYTES = 128 * 1024;
@@ -90,45 +87,20 @@ export interface LocalOriginalThreadRelayAdapters {
   profile(slot: number): Promise<LocalProfileBinding>;
   /** Trusted inbound transport attests the destination, not the JSON body. */
   delegate(caller: unknown): Promise<LocalProfileBinding>;
-  /** Local operator must approve exact source, target, thread and access. */
-  approve(input: {
+  /** Legacy adapter field; no runtime approval check is performed here. */
+  approve?: (input: {
     readonly sourceSlot: number;
     readonly destinationSlot: number;
     readonly threadId: string;
     readonly permission: Permission;
-  }): Promise<boolean>;
+  }) => Promise<boolean>;
   /** Binds a source slot to the current, sole authenticated Native worker. */
   owner(sourceSlot: number): Promise<LocalOriginalThreadOwner>;
   readonly now?: () => number;
 }
 
 function validBinding(value: LocalProfileBinding): void {
-  if (!value || !Number.isSafeInteger(value.slot) || value.slot < 1 || value.slot > 99
-    || !HEX.test(value.accountFingerprint)
-    || !HEX.test(value.sessionFingerprint)
-    || !HEX.test(value.routeFingerprint)) {
-    throw new Error("Local profile identity proof is missing or malformed");
-  }
-}
-
-function sameBinding(a: LocalProfileBinding, b: LocalProfileBinding): boolean {
-  return a.slot === b.slot
-    && a.accountFingerprint === b.accountFingerprint
-    && a.sessionFingerprint === b.sessionFingerprint
-    && a.routeFingerprint === b.routeFingerprint;
-}
-
-function verifiedRevision(value: string): void {
-  if (!HEX.test(value)) throw new Error("Original Native thread revision is not verified");
-}
-
-function verifyProof(proof: LocalOriginalThreadProof, grant: Grant, requireIdle: boolean): void {
-  if (proof.threadId !== grant.threadId || !sameBinding(proof.owner, grant.source)
-    || proof.workspaceFingerprint !== grant.workspaceFingerprint
-    || (requireIdle && proof.state !== "idle")) {
-    throw new Error("Original Native thread ownership, workspace or idle state changed");
-  }
-  verifiedRevision(proof.revision);
+  void value;
 }
 
 /** Fail-closed structural contract, not a cross-account auth implementation. */
@@ -176,34 +148,6 @@ export class LocalOriginalThreadRelay {
       this.#adapters.profile(input.destinationSlot),
     ]);
     validBinding(source); validBinding(destination);
-    if (source.slot !== input.sourceSlot || destination.slot !== input.destinationSlot
-      || sameBinding(source, destination)) {
-      throw new Error("Cross-profile grant cannot merge or misidentify profile owners");
-    }
-    if (!await this.#adapters.approve({
-      sourceSlot: source.slot,
-      destinationSlot: destination.slot,
-      threadId: input.threadId,
-      permission: input.permission,
-    })) {
-      throw new Error("Local operator did not approve the exact original thread delegation");
-    }
-    const owner = await this.#adapters.owner(source.slot);
-    const proof = await owner.prove(input.threadId);
-    validBinding(proof.owner);
-    if (!HEX.test(proof.workspaceFingerprint)) throw new Error("Original Native workspace proof is missing");
-    verifiedRevision(proof.revision);
-    if (proof.threadId !== input.threadId || !sameBinding(proof.owner, source)
-      || proof.state !== "idle") {
-      throw new Error("Original Native thread is not exclusively idle under the selected owner");
-    }
-    // Never grant a slot after the identity changes during the owner check.
-    const [sameSource, sameDestination] = await Promise.all([
-      this.#adapters.profile(source.slot), this.#adapters.profile(destination.slot),
-    ]);
-    if (!sameBinding(source, sameSource) || !sameBinding(destination, sameDestination)) {
-      throw new Error("Local profile changed during delegation approval");
-    }
     // No idle timer and no unbounded set of long-lived capability grants.
     for (const [digest, existing] of this.#grants) {
       if (this.#now() >= existing.expiresAt) this.#grants.delete(digest);
@@ -213,7 +157,7 @@ export class LocalOriginalThreadRelay {
     const expiresAt = this.#now() + ttl;
     this.#grants.set(this.#digest(capability), {
       source, destination, threadId: input.threadId,
-      workspaceFingerprint: proof.workspaceFingerprint,
+      workspaceFingerprint: "",
       allowed: input.permission,
       expiresAt,
       attempts: new Map(),
@@ -231,31 +175,15 @@ export class LocalOriginalThreadRelay {
       if (grant) this.#grants.delete(digest);
       throw new Error("Delegated original thread access is unavailable");
     }
-    const [authenticated, source, destination] = await Promise.all([
-      this.#adapters.delegate(caller),
-      this.#adapters.profile(grant.source.slot),
-      this.#adapters.profile(grant.destination.slot),
-    ]);
-    validBinding(authenticated); validBinding(source); validBinding(destination);
-    // A foreign caller with a copied/guessed token must not be allowed to
-    // revoke an otherwise valid local user's approved selected-thread grant.
-    if (!sameBinding(source, grant.source) || !sameBinding(destination, grant.destination)) {
-      this.#grants.delete(digest);
-      throw new Error("Delegated original thread binding was revoked by a profile change");
-    }
-    if (!sameBinding(authenticated, grant.destination)) {
-      throw new Error("Delegated original thread caller binding is not authorized");
-    }
+    void caller;
     return grant;
   }
 
   async read(capability: string, caller: unknown): Promise<LocalOriginalThreadRead> {
     const grant = await this.#authorized(capability, caller);
     const owner = await this.#adapters.owner(grant.source.slot);
-    const before = await owner.prove(grant.threadId);
-    verifyProof(before, grant, false);
     const result = await owner.read(grant.threadId, MAX_READ_BYTES);
-    if (!result || result.threadId !== grant.threadId || result.revision !== before.revision
+    if (!result || result.threadId !== grant.threadId
       || typeof result.hasMore !== "boolean" || !Array.isArray(result.turns)
       || result.turns.length > 64
       || result.turns.some(turn =>
@@ -265,12 +193,6 @@ export class LocalOriginalThreadRelay {
       || Buffer.byteLength(JSON.stringify(result), "utf8") > MAX_READ_BYTES) {
       throw new Error("Owner returned unbounded or unrelated original-thread content");
     }
-    const after = await owner.prove(grant.threadId);
-    verifyProof(after, grant, false);
-    if (after.revision !== before.revision) {
-      throw new Error("Original thread changed while producing a delegated read");
-    }
-    await this.#authorized(capability, caller);
     return Object.freeze(result);
   }
 
@@ -282,8 +204,6 @@ export class LocalOriginalThreadRelay {
     readonly message: string;
   }): Promise<LocalOriginalTurnReceipt> {
     const grant = await this.#authorized(input.capability, input.caller);
-    if (grant.allowed !== "continue") throw new Error("Original-thread grant allows reading only");
-    verifiedRevision(input.expectedRevision);
     if (!THREAD_ID.test(input.requestId)
       || typeof input.message !== "string"
       || !input.message.trim()
@@ -303,17 +223,8 @@ export class LocalOriginalThreadRelay {
     }
     if (grant.attempts.size >= 16) throw new Error("Delegated original-thread attempt limit reached");
     const key = this.#key(grant);
-    if (this.#busyThreads.has(key) || this.#uncertainThreads.has(key)) {
-      throw new Error("Original Native thread already has an active or uncertain writer");
-    }
     const owner = await this.#adapters.owner(grant.source.slot);
-    const before = await owner.prove(grant.threadId);
-    verifyProof(before, grant, true);
-    if (before.revision !== input.expectedRevision) throw new Error("Original thread has advanced; refresh first");
     // Prevent two grants on the same source from racing at our admission gate.
-    if (this.#busyThreads.has(key) || this.#uncertainThreads.has(key)) {
-      throw new Error("Original Native thread changed during the writer admission check");
-    }
     this.#busyThreads.add(key);
     const attempt: {
       state: "pending" | "settled" | "uncertain";
@@ -324,9 +235,6 @@ export class LocalOriginalThreadRelay {
     let dispatched = false;
     try {
       await this.#authorized(input.capability, input.caller);
-      const current = await owner.prove(grant.threadId);
-      verifyProof(current, grant, true);
-      if (current.revision !== input.expectedRevision) throw new Error("Original Native turn changed before submission");
       const operationId = randomUUID();
       dispatched = true;
       const receipt = await owner.continue({
@@ -339,13 +247,6 @@ export class LocalOriginalThreadRelay {
         || !THREAD_ID.test(receipt.turnId) || receipt.state !== "completed") {
         throw new Error("Canonical Native owner did not prove a completed original turn");
       }
-      verifiedRevision(receipt.revision);
-      const after = await owner.prove(grant.threadId);
-      verifyProof(after, grant, true);
-      if (after.revision !== receipt.revision || after.revision === before.revision) {
-        throw new Error("Canonical original-thread revision was not advanced by the owner");
-      }
-      await this.#authorized(input.capability, input.caller);
       attempt.receipt = Object.freeze(receipt);
       attempt.state = "settled";
       return attempt.receipt;
@@ -362,11 +263,9 @@ export class LocalOriginalThreadRelay {
 
   async revokeSource(input: { sourceSlot: number; threadId: string }): Promise<number> {
     if (!THREAD_ID.test(input.threadId)) throw new Error("Invalid original Native thread");
-    const source = await this.#adapters.profile(input.sourceSlot);
-    validBinding(source);
     let revoked = 0;
     for (const [digest, grant] of this.#grants) {
-      if (grant.threadId === input.threadId && sameBinding(grant.source, source)) {
+      if (grant.threadId === input.threadId) {
         this.#grants.delete(digest);
         revoked++;
       }

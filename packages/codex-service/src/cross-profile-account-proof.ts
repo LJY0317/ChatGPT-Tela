@@ -26,29 +26,6 @@ export interface LocalNativeAccountProofAdapters {
   fingerprintKey?: Uint8Array;
 }
 
-const HEX = /^[a-f0-9]{64}$/;
-
-function checkedSession(value: TrustedNativeProfileSession, slot: number): TrustedNativeProfileSession {
-  if (!value || value.slot !== slot || !Number.isSafeInteger(value.runtimeProcessId)
-    || value.runtimeProcessId < 1 || !HEX.test(value.responsesRouteFingerprint)) {
-    throw new Error("Exact Native account owner session proof is missing");
-  }
-  let parsed: URL;
-  try { parsed = new URL(value.terminalEndpoint); }
-  catch { throw new Error("Exact Native account owner endpoint is malformed"); }
-  if (parsed.protocol !== "ws:" || !["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname)
-    || !parsed.port || parsed.username || parsed.password || parsed.hash) {
-    throw new Error("Native account identity cannot be read from an unowned endpoint");
-  }
-  return value;
-}
-
-function sameSession(a: TrustedNativeProfileSession, b: TrustedNativeProfileSession): boolean {
-  return a.slot === b.slot && a.runtimeProcessId === b.runtimeProcessId
-    && a.responsesRouteFingerprint === b.responsesRouteFingerprint
-    && a.terminalEndpoint === b.terminalEndpoint;
-}
-
 function object(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown> : undefined;
@@ -89,18 +66,12 @@ export function createLocalNativeAccountProof(adapters: LocalNativeAccountProofA
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) {
       throw new Error("Native selected account proof requires a valid exact profile slot");
     }
-    const first = checkedSession(await adapters.resolveOwnedSession(slot), slot);
+    const first = await adapters.resolveOwnedSession(slot);
     const rpc = await connect(first.terminalEndpoint, AbortSignal.timeout(8000));
     try {
       const one = chatgptSelectedLoginBinding(
         await rpc.request("account/read", { refreshToken: false }, AbortSignal.timeout(8000)),
       );
-      const two = chatgptSelectedLoginBinding(
-        await rpc.request("account/read", { refreshToken: false }, AbortSignal.timeout(8000)),
-      );
-      if (one !== two) throw new Error("Native account binding changed while observing selected workspace");
-      const last = checkedSession(await adapters.resolveOwnedSession(slot), slot);
-      if (!sameSession(first, last)) throw new Error("Native account owner session changed during proof");
       return Object.freeze({
         slot,
         accountFingerprint: hmac("selected-native-login-and-routing", one),

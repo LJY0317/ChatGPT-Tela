@@ -34,25 +34,6 @@ const agentId = string(512);
 
 export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] = Object.freeze([
   {
-    capability: "inspect_native_work",
-    description: "Read-only, exact UUID and profile owner-verified Native turn and Web approval status. Requires an opened Tela Chat workspace. No shell command, injected service credential, conversation body, screenshot, approval click, retry or Native turn mutation. A profile Web card is not proof of this Native thread's approval; host-platform approval cards are unobservable before tool ingress.",
-    inputSchema: object({
-      workspace_id: workspaceId,
-      thread_id: Object.freeze({ type: "string", format: "uuid", maxLength: 36 }),
-      slot: integer(1, 99),
-      minutes: integer(1, 120),
-    }, ["workspace_id", "thread_id"]),
-  },
-  {
-    capability: "inspect_native_evidence",
-    description: "Read-only, exact-UUID historical Tela diagnostic evidence for one Native conversation, even when its profile is stopped. Requires an opened workspace. Returns bounded structural approval wait, failure and input-classification events only, with missing-log coverage; no content, shell, service credentials, current Native/browser ownership claims, approval click, retry, or mutation. An older pending log does not prove a card is visible now.",
-    inputSchema: object({
-      workspace_id: workspaceId,
-      thread_id: Object.freeze({ type: "string", format: "uuid", maxLength: 36 }),
-      minutes: integer(1, 360),
-    }, ["workspace_id", "thread_id"]),
-  },
-  {
     capability: "open_workspace",
     description: "Open or reuse one locally approved workspace root. Reuse the returned workspace_id for continued work. Follow returned root instructions; before working under a subtree listed in availableInstructionFiles, read its applicable instruction file. If instructionScanComplete is false, do not assume undiscovered subtrees have no instructions. A Git workspace also establishes or reuses a private last-shown review baseline when safe. The workspace remains user-owned.",
     inputSchema: object({ path }, ["path"]),

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import {
   BROWSER_READ_ONLY_PREVIEW,
   BROWSER_INSPECTION_INPUT,
-  BROWSER_PAGE_AUTOMATION,
   type BrowserHost,
   type BrowserSurfaceLease,
 } from "@chatgpt-tela/browser-host";
@@ -14,7 +13,6 @@ import {
 import {
   CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS,
   ChatGptSemanticProvider,
-  ChatGptDomSurfaceDriver,
   selectChatGptWebModel,
   isChatGptTemporaryChatUrl,
   createChatGptContextAttachment,
@@ -89,9 +87,6 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
     readonly surfaces?: readonly { readonly id: string; readonly label: string }[];
     readonly selectedSurfaceId?: string;
     readonly jpeg?: Uint8Array;
-    readonly approvalState?: "pending" | "none" | "unavailable";
-    readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed";
-    readonly approvalWait?: import("@chatgpt-tela/chatgpt").WebApprovalWaitProjection;
   }>;
   /**
    * Open one visible control-plane ChatGPT surface using the same persistent ChatGPT Tela profile partition.
@@ -115,8 +110,6 @@ export interface ElectronDevelopmentRuntimeOptions {
     readonly checkpointPreparationPolicy?: import("./checkpoint-preparation-budget").CheckpointPreparationPolicy;
   };
   readonly provider?: WebConversationProvider;
-  readonly approvalAutomationMode?: import("@chatgpt-tela/chatgpt").ChatGptApprovalAutomationMode;
-  readonly approvalAutomationDelayMs?: number;
   readonly webTurnTimeoutMs?: number;
   readonly accountIdentityObserver?: ChatGptAccountIdentityObserver;
   /** Test/provider seam; production uses the ChatGPT semantic model-picker implementation. */
@@ -225,10 +218,6 @@ export async function startElectronDevelopmentRuntime(
   const provider = input.provider ?? new ChatGptSemanticProvider({
     requireTemporaryChat: isChatGptTemporaryChatUrl(input.chatGptUrl ?? ""),
     ...(input.connectorName ? { connectorName: input.connectorName } : {}),
-    ...(input.approvalAutomationMode ? { approvalAutomationMode: input.approvalAutomationMode } : {}),
-    ...(input.approvalAutomationDelayMs !== undefined
-      ? { approvalAutomationDelayMs: input.approvalAutomationDelayMs }
-      : {}),
   });
   const checkpointCache = input.context?.checkpointCache;
   const historyCheckpointCache = input.context?.historyCheckpointCache;
@@ -431,31 +420,8 @@ export async function startElectronDevelopmentRuntime(
       const surfaces = browserHost.listSurfaces();
       const selected = id ?? (surfaces.length === 1 ? surfaces[0]!.id : undefined);
       const capability = selected ? browserHost.selectedCapability(selected, BROWSER_READ_ONLY_PREVIEW) : undefined;
-      const automation = selected ? browserHost.selectedCapability(selected, BROWSER_PAGE_AUTOMATION) : undefined;
-      let approvalState: "pending" | "none" | "unavailable" = "unavailable";
-      let approvalObservationReason: "automation_unavailable" | "dom_observation_failed" | undefined;
-      if (automation) {
-        try {
-          const observation = await new ChatGptDomSurfaceDriver(automation).observe();
-          approvalState = observation.approval?.cardCount ? "pending" : "none";
-        } catch {
-          // Never interpret a failed DOM read as clearance or as authorization to click.
-          approvalObservationReason = "dom_observation_failed";
-        }
-      } else if (selected) {
-        approvalObservationReason = "automation_unavailable";
-      }
-      if (approvalObservationReason) {
-        emitDiagnosticEvent("chatgpt_tela_work", "bridge_approval_observation_unavailable", {
-          reason_class: approvalObservationReason,
-        });
-      }
-      const approvalWait = selected ? provider.inspectApprovalWait?.(browserHost.selectedSurfaceLease(selected)) : undefined;
       return Object.freeze({ activeSurfaceCount: surfaces.length, surfaces,
         ...(selected ? { selectedSurfaceId: selected } : {}),
-        ...(selected ? { approvalState } : {}),
-        ...(approvalObservationReason ? { approvalObservationReason } : {}),
-        ...(approvalWait ? { approvalWait } : {}),
         ...(capability ? { jpeg: await capability.captureJpeg() } : {}),
       });
     },

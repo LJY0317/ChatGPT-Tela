@@ -6,7 +6,7 @@ import {
   createCodexWorkInspector,
 } from "@chatgpt-tela/codex-service";
 import { WebDelegationStore } from "../../../packages/codex-service/src/web-delegation";
-import { approvalDelayMilliseconds, consumeSavedChatAcceptance, readProductPreferences, setWorkProfileConnection } from "@chatgpt-tela/product-config";
+import { consumeSavedChatAcceptance, readProductPreferences, setWorkProfileConnection } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import {
   removeServiceRuntimeDescriptor,
@@ -38,8 +38,6 @@ async function main(): Promise<void> {
     profileRuntimeEnvironment: slot => {
       const preferences = readProductPreferences();
       return {
-        CHATGPT_TELA_APPROVAL_AUTOMATION_MODE: preferences.approvalAutomation,
-        CHATGPT_TELA_APPROVAL_DELAY_MS: String(approvalDelayMilliseconds(preferences.approvalDelay)),
         // Override an ambient setting. Only the exact local 15-minute owner
         // acceptance lease can enable saved Chat for the next profile start.
         CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT: consumeSavedChatAcceptance(slot)

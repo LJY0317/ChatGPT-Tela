@@ -1,4 +1,4 @@
-import { diagnosticSourcePaths, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { waitForChatShutdown } from "./shutdown";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -22,8 +22,6 @@ import {
   removeServiceRuntimeDescriptor,
   writeServiceRuntimeDescriptor,
 } from "@chatgpt-tela/service-protocol";
-import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
-import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
 
 function required(key: string): string {
   const value = process.env[key]?.trim();
@@ -56,21 +54,7 @@ async function main(): Promise<void> {
     ? createChatToolRuntime({
         allowedRoots: roots.roots,
         stateRoot: paths.serviceState("chat"),
-        ...(ownership?.installId === installId
-          ? { historicalDiagnosticPaths: diagnosticSourcePaths(paths.logsRoot) } : {}),
         agentDriverFactories,
-        ...(ownership?.installId === installId ? {
-          inspectNativeWork: async (request: { slot: number; threadId: string; minutes: number }) => {
-            // This is an optional peer read. A missing Codex service must not
-            // prevent Tela Chat from serving its own workspace capabilities.
-            const current = await new LocalServiceSupervisor({ installId }).current({
-              service: "codex", descriptorPath: join(paths.serviceRuntime("codex"), "descriptor.json"),
-            });
-            if (!current) throw Error("the owned Codex service is not available for inspection");
-            return new CodexServiceClient(descriptorForService(current.descriptor, "codex"))
-              .inspectWork(request.slot, request.threadId, request.minutes, AbortSignal.timeout(20_000));
-          },
-        } : {}),
         ...(process.env.CHATGPT_TELA_WORKSPACE_FILES_EXECUTABLE
           ? { filePublisherExecutable: process.env.CHATGPT_TELA_WORKSPACE_FILES_EXECUTABLE } : {}),
         ownership: {

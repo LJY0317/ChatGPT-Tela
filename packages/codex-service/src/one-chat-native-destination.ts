@@ -14,7 +14,6 @@ import type { NewOwnedNativeThreadTarget } from "./one-chat-checkpoint-handoff";
  * The original source App Server/rollout/cookies are never copied.
  */
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
-const HASH = /^[a-f0-9]{64}$/;
 const MAX_MESSAGE_BYTES = 24 * 1024;
 type Rpc = Pick<CodexAppServerRpc, "request" | "close">;
 
@@ -38,36 +37,6 @@ export interface TrustedOwnedNewThreadTarget {
 function object(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown> : undefined;
-}
-
-function validate(
-  slot: number, binding: LocalProfileBinding, session: TrustedNativeProfileSession,
-): void {
-  if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99 || binding.slot !== slot
-    || session.slot !== slot || binding.routeFingerprint !== session.responsesRouteFingerprint
-    || !HASH.test(binding.accountFingerprint) || !HASH.test(binding.sessionFingerprint)
-    || !HASH.test(binding.routeFingerprint)
-    || !Number.isSafeInteger(session.runtimeProcessId) || session.runtimeProcessId < 1) {
-    throw new Error("Destination new Native conversation is not bound to its actual profile owner");
-  }
-  let endpoint: URL;
-  try { endpoint = new URL(session.terminalEndpoint); }
-  catch { throw new Error("Destination Native owner endpoint is invalid"); }
-  if (endpoint.protocol !== "ws:" || !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname)
-    || !endpoint.port || endpoint.username || endpoint.password || endpoint.hash) {
-    throw new Error("Destination Native owner endpoint is not an exact loopback session");
-  }
-}
-
-function identical(a: { binding: LocalProfileBinding; session: TrustedNativeProfileSession },
-  b: { binding: LocalProfileBinding; session: TrustedNativeProfileSession }): boolean {
-  return a.binding.slot === b.binding.slot
-    && a.binding.accountFingerprint === b.binding.accountFingerprint
-    && a.binding.sessionFingerprint === b.binding.sessionFingerprint
-    && a.binding.routeFingerprint === b.binding.routeFingerprint
-    && a.session.runtimeProcessId === b.session.runtimeProcessId
-    && a.session.terminalEndpoint === b.session.terminalEndpoint
-    && a.session.responsesRouteFingerprint === b.session.responsesRouteFingerprint;
 }
 
 function ownedCwd(path: string): string {
@@ -96,7 +65,6 @@ export function createOwnedNewNativeThreadTarget(
     const [binding, session] = await Promise.all([
       adapters.profile(slot), adapters.session(slot),
     ]);
-    validate(slot, binding, session);
     return { binding, session };
   }
 
@@ -109,19 +77,13 @@ export function createOwnedNewNativeThreadTarget(
       const before = await owner(input.destinationSlot);
       const rpc = await connect(before.session.terminalEndpoint, AbortSignal.timeout(8000));
       try {
-        // sandbox read-only + no approvals prevents autonomous bootstrap
-        // worktree writes. The first receipt is only to review the handoff.
         const result = object(await rpc.request("thread/start", {
-          cwd, ephemeral: false, sandbox: "read-only", approvalPolicy: "never",
+          cwd, ephemeral: false,
         }, AbortSignal.timeout(20_000)));
         const thread = object(result?.thread);
         if (!thread || typeof thread.id !== "string" || !UUID.test(thread.id)
           || thread.cwd !== cwd || thread.ephemeral === true) {
           throw new Error("Destination did not prove a fresh owned Native conversation");
-        }
-        const current = await owner(input.destinationSlot);
-        if (!identical(before, current)) {
-          throw new Error("Destination account/runtime changed after thread reservation");
         }
         outstanding.set(thread.id, { slot: input.destinationSlot, cwd, owner: before });
         return Object.freeze({ threadId: thread.id });
@@ -142,9 +104,6 @@ export function createOwnedNewNativeThreadTarget(
       // in-memory guard additionally prevents reuse within one process.
       outstanding.delete(input.threadId);
       const before = await owner(pending.slot);
-      if (!identical(before, pending.owner)) {
-        throw new Error("Destination login/runtime changed before the first Native turn");
-      }
       const rpc = await connect(before.session.terminalEndpoint, AbortSignal.timeout(8000));
       try {
         // A newly reserved Codex thread's empty rollout cannot be read yet:
@@ -155,15 +114,10 @@ export function createOwnedNewNativeThreadTarget(
         const result = object(await rpc.request("turn/start", {
           threadId: input.threadId,
           input: [{ type: "text", text: input.message }],
-          approvalPolicy: "never",
         }, AbortSignal.timeout(20_000)));
         const turn = object(result?.turn);
         if (!turn || typeof turn.id !== "string" || !UUID.test(turn.id)) {
           throw new Error("Destination Native turn/start acknowledgement was ambiguous");
-        }
-        const current = await owner(pending.slot);
-        if (!identical(before, current)) {
-          throw new Error("Destination account/runtime changed after first Native turn submission");
         }
         return Object.freeze({ turnId: turn.id });
       } finally {

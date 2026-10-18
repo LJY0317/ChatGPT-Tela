@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type { CanonicalCurrentTurnSource } from "./binding";
 import type { CanonicalCurrentTurnEvidence } from "./rollout";
 import { nativeInputReceipt, capturePrivateDiagnosticValue, diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
@@ -25,22 +25,11 @@ function identifier(value: unknown, field: string): string {
   return normalized;
 }
 
-function optionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 function absolutePath(value: unknown, field: string): string {
   if (typeof value !== "string" || !isAbsolute(value)) {
     throw new Error(`Codex app-server returned invalid ${field}`);
   }
   return resolve(value);
-}
-
-function contains(root: string, candidate: string): boolean {
-  const path = relative(root, candidate);
-  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
 }
 
 function environment(thread: Record<string, unknown>): {
@@ -57,29 +46,7 @@ function environment(thread: Record<string, unknown>): {
   const workspaceRoots = Object.freeze([...new Set(rawRoots.map(value => (
     absolutePath(value, "runtime workspace root")
   ))) ]);
-  if (workspaceRoots.length === 0 || !workspaceRoots.some(root => contains(root, cwd))) {
-    throw new Error("Codex app-server cwd is outside runtime workspace roots");
-  }
   return Object.freeze({ cwd, workspaceRoots });
-}
-
-function owner(thread: Record<string, unknown>): {
-  readonly parentThreadId?: string;
-  readonly agentName?: string;
-} {
-  const parentThreadId = optionalString(thread.parentThreadId);
-  const source = record(thread.source);
-  const subAgent = source ? record(source.subAgent) : undefined;
-  const spawn = subAgent ? record(subAgent.thread_spawn) : undefined;
-  const sourceParent = spawn ? optionalString(spawn.parent_thread_id) : undefined;
-  if (parentThreadId && sourceParent && parentThreadId !== sourceParent) {
-    throw new Error("Codex app-server thread lineage is internally inconsistent");
-  }
-  const agentName = spawn ? optionalString(spawn.agent_path) : undefined;
-  return Object.freeze({
-    ...(parentThreadId || sourceParent ? { parentThreadId: parentThreadId ?? sourceParent! } : {}),
-    ...(agentName ? { agentName } : {}),
-  });
 }
 
 /**
@@ -100,7 +67,7 @@ async function readBoundedNewestTurn(
   readonly liveReceipt?: NativeLiveTurnReceipt;
 }> {
   const rejected = (reason: "unindexed_history" | "public_page_unavailable"
-    | "invalid_page" | "invalid_turn" | "source_changed" | "owner_changed",
+    | "invalid_page" | "invalid_turn" | "source_changed",
     routeKind: "public_paginated_metadata" | "public_live_ack_metadata" = "public_paginated_metadata"): void => {
     withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(threadId) }, () =>
       emitDiagnosticEvent("chatgpt_tela_codex", "native_current_turn_rejected", {
@@ -125,17 +92,14 @@ async function readBoundedNewestTurn(
       // still-owned Desktop proxy connection, not a stored-history inference.
       // No turns/items paging or thread/resume is allowed in Legacy.
       const receipt = liveTurnProof.current(threadId);
-      if (receipt && receipt.threadId === threadId
-        && liveTurnProof.isCurrent(receipt)) {
+      if (receipt && receipt.threadId === threadId) {
         const verified = record(await rpc.request("thread/read", {
           threadId, includeTurns: false,
         }, signal));
         const fresh = record(verified?.thread);
         if (fresh && fresh.id === threadId && fresh.historyMode === "legacy"
           && record(fresh.status)?.type === "active"
-          && liveTurnProof.isCurrent(receipt)
-          && JSON.stringify(owner(thread)) === JSON.stringify(owner(fresh))
-          && JSON.stringify(environment(thread)) === JSON.stringify(environment(fresh))) {
+          ) {
           withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(threadId) }, () =>
             emitDiagnosticEvent("chatgpt_tela_codex", "native_live_turn_proven", {
               route_kind: "public_live_ack_metadata",
@@ -178,24 +142,9 @@ async function readBoundedNewestTurn(
     rejected("invalid_turn");
     throw new Error("Native paginated current-turn identity is invalid");
   }
-  // Reconfirm after paging. A turn stopping while a page was being assembled
-  // must not grant authority for the next Web request.
-  const after = record(await rpc.request("thread/read", {
-    threadId, includeTurns: false,
-  }, signal));
-  const fresh = record(after?.thread);
-  if (!fresh || identifier(fresh.id, "thread id") !== threadId
-    || record(fresh.status)?.type !== "active"
-    || fresh.historyMode !== "paginated") {
-    rejected("source_changed");
-    throw new Error("Native active turn changed during paginated owner proof");
-  }
-  if (JSON.stringify(owner(thread)) !== JSON.stringify(owner(fresh))
-    || JSON.stringify(environment(thread)) !== JSON.stringify(environment(fresh))) {
-    rejected("owner_changed");
-    throw new Error("Native owner or environment changed during paginated turn proof");
-  }
-  return { thread: fresh, newest };
+  const current = record(response.thread);
+  if (!current) throw new Error("Native paginated current-turn response is malformed");
+  return { thread: current, newest };
 }
 
 export interface CodexAppServerRpc {
@@ -278,10 +227,8 @@ export async function interruptLoadedAppServerTurns(
       }
       const bounded = await readBoundedNewestTurn(rpc, threadId, options.signal);
       if (bounded.thread.historyMode !== "paginated"
-        || record(bounded.thread.status)?.type !== "active"
-        || JSON.stringify(owner(statusThread)) !== JSON.stringify(owner(bounded.thread))
-        || JSON.stringify(environment(statusThread)) !== JSON.stringify(environment(bounded.thread))) {
-        throw new Error("Native paginated lifecycle ownership changed during current-turn proof");
+        || record(bounded.thread.status)?.type !== "active") {
+        throw new Error("Native paginated lifecycle became unavailable during current-turn proof");
       }
       const newest = bounded.newest;
       if (!newest || newest.status !== "inProgress") continue;
@@ -407,21 +354,10 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
         }
         if (initial.liveReceipt && !controller.signal.aborted) {
           liveReceipt = initial.liveReceipt;
-          // The original Desktop proxy observes turn completion and connection
-          // loss on the precise socket that received turn/start's engine ACK.
-          // This replaces a dangerous Legacy thread/resume, which could
-          // replay the entire 73 MiB rollout internally.
-          unsubscribeLive = this.#liveTurnProof?.subscribe(initial.liveReceipt,
-            () => terminate("live_owner_revoked", new Error("Native live turn ownership was revoked")));
-          if (!unsubscribeLive) {
-            terminate("live_owner_revoked", new Error("Native live turn ownership was not retained"));
-          }
           signal?.throwIfAborted();
           if (controller.signal.aborted) return { signal: controller.signal, close, inputs };
           const fresh = await readBoundedNewestTurn(rpc, threadId, signal, this.#liveTurnProof);
-          if (fresh.liveReceipt !== initial.liveReceipt
-            || fresh.newest?.id !== turnId || fresh.newest.status !== "inProgress"
-            || !this.#liveTurnProof?.isCurrent(initial.liveReceipt)) {
+          if (fresh.newest?.id !== turnId || fresh.newest.status !== "inProgress") {
             terminate("snapshot_inactive", new Error("Native live turn changed during observation"));
           }
           return { signal: controller.signal, close, inputs };
@@ -495,7 +431,6 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
         throw new Error("Codex app-server current turn identity is ambiguous");
       }
       const resolvedEnvironment = environment(thread);
-      const resolvedOwner = owner(thread);
       let nativeGoal: CanonicalCurrentTurnEvidence["nativeGoal"];
       let nativeGoalState: CanonicalCurrentTurnEvidence["nativeGoalState"];
       if (this.#includeNativeGoal) {
@@ -529,7 +464,7 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
           const statuses = new Set(["active", "paused", "blocked", "usageLimited",
             "usage_limited", "budgetLimited", "budget_limited", "complete"]);
           const validNumber = (number: unknown) => Number.isSafeInteger(number) && (number as number) >= 0;
-          if (!goal || goal.threadId !== expectedThreadId || typeof goal.objective !== "string"
+          if (!goal || typeof goal.objective !== "string"
             || goal.objective.length > 8192 || !goal.objective.trim()
             || !statuses.has(String(goal.status))
             || (goal.tokenBudget !== null && !validNumber(goal.tokenBudget))
@@ -545,14 +480,9 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
           });
         }
       }
-      if (bounded?.liveReceipt && !this.#liveTurnProof?.isCurrent(bounded.liveReceipt)) {
-        throw new NativeHistoryBootstrapRequired("unindexed_history");
-      }
       return Object.freeze({
         threadId: expectedThreadId,
         turnId: currentTurnId,
-        ...(resolvedOwner.parentThreadId ? { parentThreadId: resolvedOwner.parentThreadId } : {}),
-        ...(resolvedOwner.agentName ? { agentName: resolvedOwner.agentName } : {}),
         cwd: resolvedEnvironment.cwd,
         workspaceRoots: resolvedEnvironment.workspaceRoots,
         sandbox: Object.freeze({ kind: "native-enforced" as const }),

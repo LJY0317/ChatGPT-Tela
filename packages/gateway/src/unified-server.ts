@@ -34,31 +34,6 @@ const agentWriteMode = z.enum(["read_only", "workspace_write"]).optional();
 
 export const UNIFIED_CHAT_TOOL_DEFINITIONS: readonly ChatToolDefinition[] = Object.freeze([
   {
-    name: "tela_chat_inspect_native_work",
-    capability: "inspect_native_work",
-    title: "Inspect one owned Native Work conversation",
-    description: "Read-only owner-checked Native turn status, bounded diagnostic events and current profile Web approval observation for an exact supplied thread UUID. No shell commands, credentials, screenshots, browser clicks, tool approval, or Native turn changes. Host approval cards remain outside Tela's control.",
-    inputSchema: z.object({
-      workspace_id: workspaceId,
-      thread_id: z.string().uuid(),
-      slot: z.number().int().min(1).max(99).optional(),
-      minutes: z.number().int().min(1).max(120).optional(),
-    }),
-    readOnly: true,
-  },
-  {
-    name: "tela_chat_inspect_native_evidence",
-    capability: "inspect_native_evidence",
-    title: "Inspect historical Native work evidence",
-    description: "Read-only, bounded approval/failure event history by exact Native UUID even when its profile is stopped. No shell, credentials, raw conversation, browser input or mutation.",
-    inputSchema: z.object({
-      workspace_id: workspaceId,
-      thread_id: z.string().uuid(),
-      minutes: z.number().int().min(1).max(360).optional(),
-    }),
-    readOnly: true,
-  },
-  {
     name: "tela_chat_open_workspace",
     capability: "open_workspace",
     title: "Open Tela Chat workspace",
@@ -147,21 +122,21 @@ export const UNIFIED_CHAT_TOOL_DEFINITIONS: readonly ChatToolDefinition[] = Obje
     name: "tela_chat_inspect_worktree",
     capability: "inspect_worktree",
     title: "Inspect managed worktree",
-    description: "Inspect exact ownership, cleanliness, and removability of one Tela-managed worktree.",
+    description: "Inspect cleanliness and removability of one Tela-managed worktree.",
     inputSchema: z.object({ worktree_id: z.string().min(1).max(512) }),
   },
   {
     name: "tela_chat_remove_worktree",
     capability: "remove_worktree",
     title: "Remove managed worktree",
-    description: "Remove one managed worktree only when Tela can re-prove exact ownership and safe clean state.",
+    description: "Remove one managed worktree when it is in a removable clean state.",
     inputSchema: z.object({ worktree_id: z.string().min(1).max(512) }),
   },
   {
     name: "tela_chat_list_worktrees",
     capability: "list_worktrees",
     title: "List managed worktrees",
-    description: "List Tela-managed worktree ownership records.",
+    description: "List Tela-managed worktrees.",
     inputSchema: z.object({}),
   },
   {
@@ -245,7 +220,7 @@ export function createUnifiedDevelopmentMcpServer(input: {
     version: CHATGPT_TELA_UNIFIED_DEVELOPMENT_MCP_SERVER_VERSION,
   }, {
     capabilities: { tools: { listChanged: false } },
-    instructions: "Development unified ChatGPT Tela MCP. If one tool or backend is unavailable or has a technical failure, continue the same user goal with another available capability, including switching between Chat and Codex. Git writes in an opened workspace can use apply_patch, exec_command, or another available tool under that route's own authorization. Tela Codex control tools use the current active Native turn capability.",
+    instructions: "Development unified ChatGPT Tela MCP. If one tool or backend is unavailable or has a technical failure, continue the same user goal with another available capability, including switching between Chat and Codex. Git writes in an opened workspace can use apply_patch, exec_command, or another available tool. Tela Codex control tools use the current active Native turn capability.",
   });
 
   const registerChatTool = server.registerTool.bind(server) as unknown as (

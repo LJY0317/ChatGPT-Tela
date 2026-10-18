@@ -169,19 +169,8 @@ export interface WebContextCheckpointProvider {
   ): Promise<SemanticObservation<WebContextCheckpointResult>>;
 }
 
-/** Read-only status of an exact provider-owned unresolved approval episode. */
-export interface WebApprovalWaitProjection {
-  readonly phase: "pending" | "dispatch_sent" | "input_received" | "card_cleared" | "task_progress";
-  readonly elapsedMs: number;
-  readonly unverifiedDispatchCount: number;
-  readonly operationState: "waiting" | "stopping";
-}
-
 /** Product locators and DOM structure stay behind this semantic provider boundary. */
 export interface WebConversationProvider {
-  /** Synchronous owned-state projection only; no browser read, click or authority grant. */
-  inspectApprovalWait?(surface: BrowserSurfaceLease): WebApprovalWaitProjection | undefined;
-
   observeCapabilities(
     surface: BrowserSurfaceLease,
     signal?: AbortSignal,
@@ -234,7 +223,6 @@ export * from "./history-ui";
 export * from "./saved-history-delete";
 export * from "./saved-history-acceptance";
 export * from "./saved-history-recovery";
-export * from "./approval-policy";
 export * from "./dom-driver";
 export * from "./session";
 export * from "./semantic-provider";

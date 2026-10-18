@@ -5,8 +5,6 @@ export { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./ch
 export { parseCodexWorkInspectionContract } from "./work-inspection";
 export { parseCodexWebDelegationCapacityContract, type CodexWebDelegationCapacityContract,
   type WebDelegationBlockCode, type WebDelegationMode } from "./web-delegation-capacity";
-export { parseCodexApprovalWait, type CodexApprovalWaitContract } from "./approval-review";
-import { parseCodexApprovalWait, type CodexApprovalWaitContract } from "./approval-review";
 import type {
   NativeToolCatalogEntry,
   NativeToolInvocation,
@@ -145,9 +143,6 @@ export interface CodexBridgePreviewContract {
   readonly previewAvailable: boolean;
   readonly imageMimeType?: "image/jpeg";
   readonly imageBase64?: string;
-  readonly approvalState?: "pending" | "none" | "unavailable";
-  readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed";
-  readonly approvalWait?: CodexApprovalWaitContract;
 }
 
 export interface CodexModelSelectionCanaryContract {
@@ -238,17 +233,6 @@ export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePrev
   const selected = item.selectedSurfaceId;
   if (selected !== undefined && (typeof selected !== "string" || !Array.isArray(surfaces)
     || !surfaces.some(row => row.id === selected))) throw new Error("invalid selected browser surface");
-  const approvalState = item.approvalState;
-  const approvalObservationReason = item.approvalObservationReason;
-  if (approvalState !== undefined && (!["pending", "none", "unavailable"].includes(String(approvalState))
-    || selected === undefined)) throw new Error("invalid selected approval state");
-  if (approvalObservationReason !== undefined
-    && (approvalState !== "unavailable"
-      || !["automation_unavailable", "dom_observation_failed"].includes(String(approvalObservationReason)))) {
-    throw new Error("invalid approval observation reason");
-  }
-  const approvalWait = item.approvalWait === undefined ? undefined : parseCodexApprovalWait(item.approvalWait);
-  if (approvalWait && selected === undefined) throw new Error("invalid approval wait ownership");
   const imageMimeType = item.imageMimeType;
   const imageBase64 = item.imageBase64;
   if (item.previewAvailable) {
@@ -267,9 +251,6 @@ export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePrev
     previewAvailable: item.previewAvailable,
     ...(surfaces ? { surfaces: Object.freeze(surfaces.map(row => Object.freeze({ id: row.id, label: row.label }))) } : {}),
     ...(selected ? { selectedSurfaceId: selected as string } : {}),
-    ...(approvalState ? { approvalState: approvalState as NonNullable<CodexBridgePreviewContract["approvalState"]> } : {}),
-    ...(approvalObservationReason ? { approvalObservationReason: approvalObservationReason as NonNullable<CodexBridgePreviewContract["approvalObservationReason"]> } : {}),
-    ...(approvalWait ? { approvalWait } : {}),
     ...(item.previewAvailable ? { imageMimeType: "image/jpeg" as const, imageBase64: imageBase64 as string } : {}),
   });
 }

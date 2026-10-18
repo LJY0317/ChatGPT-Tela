@@ -349,8 +349,6 @@ export async function startNativeFirstProductProfileRuntime(
             },
           },
           turns, mcp: { kind: "external", abi: identity.webContract },
-          approvalAutomationMode: config.approvalAutomationMode,
-          approvalAutomationDelayMs: config.approvalAutomationDelayMs,
           ...(config.webTurnTimeoutMs !== undefined ? { webTurnTimeoutMs: config.webTurnTimeoutMs } : {}),
           // An earlier profile/account binding must be re-proven during Web
           // discovery. Separate account namespaces prevent a later intentional
