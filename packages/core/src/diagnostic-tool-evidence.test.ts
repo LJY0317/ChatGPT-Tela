@@ -32,7 +32,7 @@ test("shared MCP tracing preserves returned and thrown errors and excludes paylo
     expect(errors).toHaveLength(2);
     expect(errors.map(x=>x.delivery)).toEqual(["mcp_callback_returned","mcp_callback_thrown"]);
     expect(errors.every(x=>typeof x.reason_class === "string")).toBe(true);
-    expect(rows.filter(x=>x.stage==="tool_settled")).toHaveLength(3);
+    expect(rows.filter(x=>x.stage==="tool_settled")).toHaveLength(2);
   }finally{
     if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;
     await new Promise(resolve=>setImmediate(resolve));rmSync(root,{recursive:true,force:true});

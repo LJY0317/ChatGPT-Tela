@@ -16,6 +16,7 @@ import type {
  * may be huge even when a public page request appears bounded.
  */
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+const HASH = /^[a-f0-9]{64}$/;
 const MAX_PAGE = 4;
 const MAX_PAGE_BYTES = 128 * 1024;
 
@@ -35,6 +36,35 @@ export interface NativeOriginalReaderAdapters {
   readonly connect?: (endpoint: string, signal: AbortSignal) => Promise<Rpc>;
   /** Independent process-local HMAC domain for workspace/revision evidence. */
   readonly fingerprintKey?: Uint8Array;
+}
+
+function validOwner(binding: LocalProfileBinding, session: TrustedNativeProfileSession): void {
+  if (binding.slot !== session.slot || !HASH.test(binding.accountFingerprint)
+    || !HASH.test(binding.sessionFingerprint)
+    || !HASH.test(binding.routeFingerprint)
+    || binding.routeFingerprint !== session.responsesRouteFingerprint
+    || !Number.isSafeInteger(session.runtimeProcessId) || session.runtimeProcessId < 1) {
+    throw new Error("Original Native reader cannot prove exact profile owner");
+  }
+  let endpoint: URL;
+  try { endpoint = new URL(session.terminalEndpoint); }
+  catch { throw new Error("Original Native reader has no owner-bound endpoint"); }
+  if (endpoint.protocol !== "ws:" || !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname)
+    || !endpoint.port || endpoint.username || endpoint.password || endpoint.hash) {
+    throw new Error("Original Native reader cannot attach to an unowned endpoint");
+  }
+}
+
+function sameOwner(a: LocalProfileBinding, b: LocalProfileBinding): boolean {
+  return a.slot === b.slot && a.routeFingerprint === b.routeFingerprint
+    && a.accountFingerprint === b.accountFingerprint
+    && a.sessionFingerprint === b.sessionFingerprint;
+}
+
+function sameSession(a: TrustedNativeProfileSession, b: TrustedNativeProfileSession): boolean {
+  return a.slot === b.slot && a.runtimeProcessId === b.runtimeProcessId
+    && a.terminalEndpoint === b.terminalEndpoint
+    && a.responsesRouteFingerprint === b.responsesRouteFingerprint;
 }
 
 interface IndexedSnapshot {
@@ -140,10 +170,19 @@ export function createReadOnlyOriginalNativeThreadOwner(
       adapters.profile(adapters.sourceSlot),
       adapters.resolveOwnedSession(adapters.sourceSlot),
     ]);
+    validOwner(binding, session);
     const signal = AbortSignal.timeout(15_000);
     const rpc = await connect(session.terminalEndpoint, signal);
     try {
       const result = await fn(rpc, session, signal);
+      const [latestBinding, latestSession] = await Promise.all([
+        adapters.profile(adapters.sourceSlot),
+        adapters.resolveOwnedSession(adapters.sourceSlot),
+      ]);
+      validOwner(latestBinding, latestSession);
+      if (!sameOwner(binding, latestBinding) || !sameSession(session, latestSession)) {
+        throw new Error("Original Native owner account or runtime changed during read");
+      }
       return { result, binding };
     } finally {
       await rpc.close();
@@ -172,6 +211,9 @@ export function createReadOnlyOriginalNativeThreadOwner(
       }
       const { result } = await withOwner(async (rpc, _session, signal) => {
         const before = await snapshot(rpc, threadId, signal);
+        if (before.state !== "idle") {
+          throw new Error("Original Native thread must be idle for a consistent delegated preview");
+        }
         const page = object(await rpc.request("thread/turns/list", {
           threadId, sortDirection: "desc", itemsView: "summary", limit: MAX_PAGE,
         }, signal));
@@ -199,7 +241,7 @@ export function createReadOnlyOriginalNativeThreadOwner(
           throw new Error("Original Native selected-thread page does not match its latest turn");
         }
         const after = await snapshot(rpc, threadId, signal);
-        if (before.metadata !== after.metadata) {
+        if (before.metadata !== after.metadata || after.state !== "idle") {
           throw new Error("Original Native thread changed during page capture");
         }
         const preview = {

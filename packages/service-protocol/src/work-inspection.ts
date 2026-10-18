@@ -1,9 +1,12 @@
 import { diagnosticFingerprint } from "@chatgpt-tela/core";
+import { parseCodexApprovalWait } from "./approval-review";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SAFE_STAGE = /^[a-z][a-z0-9_]{0,63}$/;
 const SAFE_REASON = /^[a-z][a-z0-9_]{0,63}$/;
 const STATUS = ["inProgress", "completed", "failed", "interrupted"] as const;
+const APPROVAL = ["pending", "none", "unavailable"] as const;
+const CAUSE = ["automation_unavailable", "dom_observation_failed", "bridge_preview_failed", "no_active_surface", "surface_not_selected"] as const;
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("invalid work inspection contract");
@@ -36,8 +39,16 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
     || (browser.activeSurfaceCount !== null && (!Number.isSafeInteger(browser.activeSurfaceCount)
       || (browser.activeSurfaceCount as number) < 0 || (browser.activeSurfaceCount as number) > 128))
     || typeof browser.selectedSurface !== "boolean"
+    || !APPROVAL.includes(browser.approvalState as typeof APPROVAL[number])
     || host.visibility !== "outside_tela_pre_ingress" || host.agentMayApprove !== false
+    || browser.approvalAuthority !== "observation_only"
     || diag.fingerprint !== diagnosticFingerprint(expectedThreadId)) throw Error("work inspection identity or authority is unproven");
+  if (browser.observationReason !== undefined
+    && (browser.approvalState !== "unavailable" || !CAUSE.includes(browser.observationReason as typeof CAUSE[number]))) {
+    throw Error("invalid browser observation reason");
+  }
+  const wait = browser.wait === undefined ? undefined : parseCodexApprovalWait(browser.wait);
+  if (wait && browser.selectedSurface !== true) throw Error("unowned approval wait");
   if (!Array.isArray(native.recentTurns) || native.recentTurns.length > 4
     || native.recentTurns.some(item => {
       const row = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
@@ -50,6 +61,15 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
       return typeof row.stage !== "string" || !SAFE_STAGE.test(row.stage)
         || time(row.at) === null;
     })) throw Error("invalid bounded diagnostic events");
+  const approvalWait = diag.approvalWaitEvidence === null ? null : object(diag.approvalWaitEvidence);
+  if (approvalWait && (typeof approvalWait.lastObservedAt !== "string"
+    || time(approvalWait.lastObservedAt) === null
+    || !Number.isSafeInteger(approvalWait.waitingSeconds)
+    || (approvalWait.waitingSeconds as number) < 0
+    || approvalWait.stillPendingInAvailableEvents !== true
+    || approvalWait.currentlyVisible !== "not_verified")) {
+    throw Error("invalid historical approval wait evidence");
+  }
   return Object.freeze({
     contractVersion: 1 as const,
     slot: expectedSlot, threadId: expectedThreadId, identityVerified: true as const,
@@ -63,6 +83,12 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
     diagnostics: Object.freeze({
       scopeFingerprint: diag.fingerprint as string,
       lastObservedAt: time(diag.lastObservedAt),
+      approvalWaitEvidence: approvalWait ? {
+        lastObservedAt: time(approvalWait.lastObservedAt),
+        waitingSeconds: approvalWait.waitingSeconds as number,
+        stillPendingInAvailableEvents: true as const,
+        currentlyVisible: "not_verified" as const,
+      } : null,
       recentEvents: (diag.recentEvents as Record<string, unknown>[]).map(item => Object.freeze({
         at: time(item.at), stage: item.stage as string,
         ...(reason(item.reasonClass) ? { reasonClass: reason(item.reasonClass)! } : {}),
@@ -73,6 +99,9 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
       attributableToThread: false as const,
       activeSurfaceCount: browser.activeSurfaceCount as number | null,
       selectedSurface: browser.selectedSurface as boolean,
+      approvalState: browser.approvalState as typeof APPROVAL[number],
+      ...(browser.observationReason ? { observationReason: browser.observationReason as typeof CAUSE[number] } : {}),
+      ...(wait ? { wait } : {}),
     }),
     hostPlatformReview: Object.freeze({
       visibility: "outside_tela_pre_ingress" as const, agentMayApprove: false as const,

@@ -174,6 +174,7 @@ export async function startCodexServiceHttpServer(input: {
         if (historyMatch && input.service.inspectAccountBrowserHistoryUi) {
           const slot = Number(historyMatch[1]);
           const result = parseCodexHistoryUiContract(await input.service.inspectAccountBrowserHistoryUi(slot));
+          if (result.slot !== slot) throw new Error("History UI observation profile ownership mismatch");
           return Response.json(result, { headers: { "cache-control": "no-store" } });
         }
         const savedDeleteMatch = request.method === "POST"
@@ -181,6 +182,7 @@ export async function startCodexServiceHttpServer(input: {
         if (savedDeleteMatch && input.service.runSavedDeleteAcceptance) {
           const slot = Number(savedDeleteMatch[1]);
           const receipt = parseCodexSavedDeleteAcceptanceContract(await input.service.runSavedDeleteAcceptance(slot));
+          if (receipt.slot !== slot) throw new Error("Saved Chat delete acceptance profile ownership mismatch");
           return Response.json(receipt, { headers: { "cache-control": "no-store" } });
         }
         const syntheticRecoveryMatch = request.method === "POST"
@@ -188,6 +190,7 @@ export async function startCodexServiceHttpServer(input: {
         if (syntheticRecoveryMatch && input.service.recoverSyntheticSavedChat) {
           const slot = Number(syntheticRecoveryMatch[1]);
           const receipt = parseCodexSyntheticRecoveryContract(await input.service.recoverSyntheticSavedChat(slot));
+          if (receipt.slot !== slot) throw Error("Synthetic saved cleanup receipt from different profile");
           return Response.json(receipt, { headers: { "cache-control": "no-store" } });
         }
         const bridgeSlot = request.method === "GET" ? previewSlot(url.pathname) : undefined;

@@ -117,17 +117,32 @@ function manageApprovalPreferences(): void {
   const subcommand = process.argv[3] ?? "status";
   const path = resolveProductPreferencesPath();
   const current = readProductPreferences(path);
-  if (subcommand === "status") { console.log(JSON.stringify({ path, ...current }, null, 2)); return; }
+  if (subcommand === "status") {
+    console.log(JSON.stringify({ path, ...current }, null, 2));
+    return;
+  }
   if (subcommand === "delay") {
     const preset = process.argv[4] as ProductApprovalDelayPreset | undefined;
     if (!preset) throw new Error("usage: chatgpt-tela approval delay <instant|250ms|500ms|1s|2s|5s|10s|15s>");
     writeProductPreferences({ ...current, approvalDelay: preset }, path);
-    console.log(JSON.stringify({ path, ...readProductPreferences(path), appliesTo: "new-or-restarted-codex-profiles" }, null, 2)); return;
+    console.log(JSON.stringify({
+      path,
+      ...readProductPreferences(path),
+      appliesTo: "new-or-restarted-codex-profiles",
+    }, null, 2));
+    return;
   }
-  if (subcommand !== "enable" && subcommand !== "disable") throw new Error("usage: chatgpt-tela approval <status|enable|disable|delay PRESET>");
+  if (subcommand !== "enable" && subcommand !== "disable") {
+    throw new Error("usage: chatgpt-tela approval <status|enable|disable|delay PRESET>");
+  }
   const approvalAutomation = subcommand === "enable" ? "full_access" : "off";
   writeProductPreferences({ ...current, approvalAutomation }, path);
-  console.log(JSON.stringify({ path, approvalAutomation, approvalDelay: current.approvalDelay ?? "instant", appliesTo: "new-or-restarted-codex-profiles" }, null, 2));
+  console.log(JSON.stringify({
+    path,
+    approvalAutomation,
+    approvalDelay: current.approvalDelay ?? "instant",
+    appliesTo: "new-or-restarted-codex-profiles",
+  }, null, 2));
 }
 
 function serviceDescriptorPath(
@@ -885,6 +900,10 @@ async function main(): Promise<void> {
       descriptorPath: serviceDescriptorPath(productPaths, "codex") });
     if (!running) throw new Error("thread inspect requires the installed Codex service");
     const codex = new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
+    const before = (await codex.profiles(AbortSignal.timeout(10_000))).find(item => item.slot === slotNumber);
+    if (!before || before.controlState !== "running" || before.targetSessionState !== "ready") {
+      throw new Error("the selected profile's Native owner is not ready");
+    }
     const session = await codex.terminalSession(slotNumber, AbortSignal.timeout(10_000));
     const rpc = await connectCodexAppServerWebSocket(session.endpoint, { signal: AbortSignal.timeout(10_000) });
     try {
@@ -893,6 +912,15 @@ async function main(): Promise<void> {
         diagnosticPaths: diagnosticSourcePaths(productPaths.logsRoot),
         ...(option("--minutes") ? { minutes: Number(option("--minutes")) } : {}),
       });
+      // A read from a stale owner must not be presented as current evidence.
+      const after = (await codex.profiles(AbortSignal.timeout(10_000))).find(item => item.slot === slotNumber);
+      const again = await codex.terminalSession(slotNumber, AbortSignal.timeout(10_000));
+      if (!after || after.controlState !== "running" || after.targetSessionState !== "ready"
+        || after.childProcessId !== before.childProcessId
+        || after.responsesRouteFingerprint !== before.responsesRouteFingerprint
+        || again.endpoint !== session.endpoint) {
+        throw new Error("profile Native owner changed during read-only inspection");
+      }
       console.log(JSON.stringify(report, null, 2));
     } finally {
       await rpc.close().catch(() => {});
@@ -1083,7 +1111,7 @@ async function main(): Promise<void> {
     + "  chat store-openai-api-key (--from-env <NAME> | --stdin)\n"
     + "  chat delete-openai-api-key\n"
     + "  chat disable-openai-agent\n"
-    + "  approval [status|enable|disable|delay PRESET]\n"
+    + "  approval [status|enable|disable]\n"
     + "  ingress status\n"
     + "  ingress adopt-existing\n"
     + "  setup [--slot <n>]\n"

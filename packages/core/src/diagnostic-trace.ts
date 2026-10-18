@@ -6,7 +6,7 @@ import { diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent } from
 import { diagnosticFailureFields } from "./diagnostic-failure";
 import { classifyNetworkFailure } from "./network-failure";
 
-/** Observes public MCP calls without changing cancellation or invocation authority. */
+/** Observes public MCP calls without changing cancellation, approval or invocation authority. */
 export async function traceDiagnosticToolCall<T>(tool: string, arguments_: unknown, extra: unknown, invoke: () => Promise<T>): Promise<T> {
   const metadata = extra && typeof extra === "object" ? extra as { requestId?: string | number; _meta?: Record<string,unknown>; sessionId?: string; signal?: AbortSignal } : {};
   const scope = metadata._meta?.["openai/session"];
@@ -30,7 +30,7 @@ export async function traceDiagnosticToolCall<T>(tool: string, arguments_: unkno
     try {
       const result=await invoke(); capturePrivateDiagnosticValue("tool_result",result); resultBytes=diagnosticSerializedBytes(result);
       errorResult=Boolean(result && typeof result === "object" && (result as {isError?:unknown}).isError === true);
-      if (errorResult) emit("tool_error",{phase:"returned_error",error_result:true, delivery:"mcp_callback_returned"});
+      if (errorResult) emit("tool_error",{phase:"returned_error",error_result:true, reason_class:"unknown", delivery:"mcp_callback_returned"});
       return result;
     } catch (error) {
       outcome="failed";

@@ -103,7 +103,7 @@ export interface WebDelegationRecord {
    * that no result was delivered, and content never enters this journal. */
   readonly toolResultItems?: number;
   readonly toolResultCoverage?: "live-events" | "history-summary";
-  readonly failure?: "transport_or_ack" | "turn_failed" | "result_unavailable";
+  readonly failure?: "owner_changed" | "transport_or_ack" | "turn_failed" | "result_unavailable";
 }
 /** One final-answer contract shared by live result, recovery and CLI delivery. */
 export function verifiedWebDelegationAnswer(record: WebDelegationRecord): string | undefined {
@@ -295,8 +295,13 @@ export interface WebDelegationAdapters {
   store: WebDelegationStore;
   changed?(record: WebDelegationRecord): void;
 }
+function sameOwner(record: WebDelegationRecord, current: Awaited<ReturnType<WebDelegationAdapters["owner"]>>) {
+  return JSON.stringify(record.owner) === JSON.stringify(current.binding)
+    && JSON.stringify(record.session) === JSON.stringify(current.session);
+}
+
 /** A NEW durable Native-owned thread with an explicit sandbox, routed to Web.
- * The provider receives unrestricted execution authority for this delegation. */
+ * Never resumes a personal thread or silently elevates read-only delegation. */
 export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
   id: string; slot: number; cwd: string; prompt: string; signal: AbortSignal; mode?: WebDelegationMode;
 }): Promise<WebDelegationRecord> {
@@ -324,14 +329,24 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       record = adapters.store.save({ ...record!, ...change }); adapters.changed?.(record);
     };
     update({ selection });
-    const prove = async () => {};
+    const prove = async () => { if (!sameOwner(record!, await adapters.owner(input.slot))) throw Error("Web job owner changed"); };
+    await prove();
     update({ state: "creating" });
+    const sandbox = mode === "write" ? "workspace-write" : "read-only";
     const started = object(await rpc.request("thread/start", {
       cwd: input.cwd, model: selection.model, ephemeral: false, historyMode: "paginated",
+      sandbox, approvalPolicy: "never",
     }, input.signal));
     const thread = object(started?.thread);
     if (!thread || typeof thread.id !== "string" || !UUID.test(thread.id)) throw Error("New Web job thread was not proven");
     update({ threadId: thread.id, state: "created" });
+    const reportedSandbox = object(started?.sandbox)?.type;
+    if (thread.cwd !== input.cwd || thread.ephemeral === true || thread.historyMode !== "paginated"
+      || started?.model !== selection.model || started.approvalPolicy !== "never"
+      || reportedSandbox !== (mode === "write" ? "workspaceWrite" : "readOnly")) {
+      throw Error("New Web job model or requested sandbox authority was not proven");
+    }
+    await prove();
     let resolveDone!: () => void, rejectDone!: (error: Error) => void;
     const done = new Promise<void>((resolve, reject) => { resolveDone = resolve; rejectDone = reject; });
     void done.catch(() => {});
@@ -373,9 +388,13 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     try {
       input.signal.throwIfAborted();
       update({ state: "submitting" });
+      const sandboxPolicy = mode === "write"
+        ? { type: "workspaceWrite", writableRoots: [input.cwd], networkAccess: false }
+        : { type: "readOnly" };
       const response = object(await rpc.request("turn/start", {
         threadId: record.threadId, model: selection.model, effort: selection.effort,
         input: [{ type: "text", text: input.prompt, textElements: [] }],
+        sandboxPolicy, approvalPolicy: "never",
       }, input.signal));
       const turn = object(response?.turn);
       if (typeof turn?.id !== "string" || !UUID.test(turn.id)) throw Error("Web job submission ACK is uncertain");
@@ -384,6 +403,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       for (const [method, event] of pending) accept(method, event);
       pending.length = 0;
       await done;
+      await prove();
       const completed = completedAnswer([...messages.values()]);
       if (!completed) throw Error("Web job completed without a proven final answer");
       update({ state: "completed", taskOutcome: "unassessed", ...completed,
@@ -407,6 +427,7 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
   if (!record) throw Error("Web job was not found");
   if (verifiedWebDelegationAnswer(record)) return record;
   if (!record.threadId || !record.turnId) throw Error("No acknowledged Web turn; do not retry an uncertain submission");
+  if (!sameOwner(record, await adapters.owner(record.slot))) throw Error("Web job owner changed");
   const rpc = await adapters.connect(record.session.terminalEndpoint);
   try {
     const response = object(await rpc.request("thread/turns/list", {
@@ -415,6 +436,7 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
     if (!Array.isArray(response?.data) || response.data.length !== 1) throw Error("Web job turn summary is unavailable");
     const turn = object(response.data[0]);
     if (turn?.id !== record.turnId) throw Error("Web job turn changed");
+    if (!sameOwner(record, await adapters.owner(record.slot))) throw Error("Web job owner changed during recovery");
     if (turn.status === "inProgress") return record;
     if (turn.status === "failed" || turn.status === "interrupted") {
       return adapters.store.save({ ...record, state: "failed", failure: "turn_failed" });

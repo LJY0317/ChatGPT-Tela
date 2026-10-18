@@ -482,7 +482,10 @@ export class AppServerCompactionHistorySource {
       }, active));
       const current = record(after?.thread);
       if (current?.id !== threadId || record(current.status)?.type !== "active"
-        || current.historyMode !== "paginated") {
+        || current.historyMode !== "paginated"
+        || JSON.stringify(current.cwd) !== JSON.stringify(metadata.cwd)
+        || JSON.stringify(current.environments) !== JSON.stringify(metadata.environments)
+        || JSON.stringify(current.source) !== JSON.stringify(metadata.source)) {
         throw new Error("Native compaction anchor changed while being verified");
       }
       return found;
@@ -563,7 +566,18 @@ export class AppServerCompactionHistorySource {
       cursor = next;
     }
     if (!exhausted) throw new NativeHistoryBootstrapRequired();
-    return { id: threadId, turns: turns.reverse(), historyMode: "paginated" };
+    const fresh = record(await rpc.request("thread/read", {
+      threadId, includeTurns: false,
+    }, signal));
+    const same = record(fresh?.thread);
+    if (!same || same.id !== threadId || record(same.status)?.type !== "active"
+      || same.historyMode !== "paginated"
+      || JSON.stringify(same.cwd) !== JSON.stringify(thread.cwd)
+      || JSON.stringify(same.environments) !== JSON.stringify(thread.environments)
+      || JSON.stringify(same.source) !== JSON.stringify(thread.source)) {
+      throw new Error("Native compaction history changed during paginated reconstruction");
+    }
+    return { ...same, turns: turns.reverse() };
   }
 
   /**
@@ -600,6 +614,9 @@ export class AppServerCompactionHistorySource {
           throw new Error("Native visible prefix does not belong to the exact current turn");
         }
       };
+      const owner = (thread: Record<string, unknown>) => ({
+        id: thread.id, cwd: thread.cwd, environments: thread.environments, source: thread.source,
+      });
       const before = await metadata();
       await proveCurrent();
       const entries: { turnId: string; item: Record<string, unknown> }[] = [];
@@ -646,6 +663,9 @@ export class AppServerCompactionHistorySource {
       }
       await proveCurrent();
       const after = await metadata();
+      if (JSON.stringify(owner(before)) !== JSON.stringify(owner(after))) {
+        throw new Error("Native visible prefix ownership changed during reconstruction");
+      }
       active.throwIfAborted();
       const { visible, ...evidence } = sanitizeVisibleHistory(entries.reverse(), threadId, currentTurnId);
       const content = JSON.stringify({
@@ -655,7 +675,7 @@ export class AppServerCompactionHistorySource {
       });
       if (Buffer.byteLength(content, "utf8") > 16 * 1024 * 1024) throw new NativeHistoryBootstrapRequired();
       const digest = createHash("sha256").update(JSON.stringify(canonicalDigestValue({
-        kind: "native-visible-prefix", threadId, source: JSON.parse(content),
+        kind: "native-visible-prefix", owner: owner(before), threadId, source: JSON.parse(content),
       }))).digest("hex");
       return Object.freeze({ kind: "native-visible-prefix", threadId, currentTurnId,
         digest, contentDigest: createHash("sha256").update(content).digest("hex"),

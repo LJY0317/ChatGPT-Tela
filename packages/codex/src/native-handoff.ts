@@ -201,8 +201,11 @@ export class AppServerNativeHandoffSource {
       }, active));
       const updated = record(after?.thread);
       if (updated?.id !== threadId || record(updated.status)?.type !== "active"
-        || updated.historyMode !== "paginated") {
-        throw new Error("Native handoff source thread is no longer active or paginated");
+        || updated.historyMode !== "paginated"
+        || JSON.stringify(updated.cwd) !== JSON.stringify(metadata.cwd)
+        || JSON.stringify(updated.environments) !== JSON.stringify(metadata.environments)
+        || JSON.stringify(updated.source) !== JSON.stringify(metadata.source)) {
+        throw new Error("Native handoff thread changed during public source read");
       }
       if (handoff) await reproveCurrentHandoffTurn(rpc, threadId, currentTurnId, active);
       return handoff;
@@ -290,8 +293,11 @@ export class AppServerNativeHandoffSource {
       }, active));
       const fresh = record(after?.thread);
       if (fresh?.id !== threadId || record(fresh.status)?.type !== "active"
-        || fresh.historyMode !== "paginated") {
-        throw new Error("Native handoff source thread is no longer active or paginated");
+        || fresh.historyMode !== "paginated"
+        || JSON.stringify(fresh.cwd) !== JSON.stringify(metadata.cwd)
+        || JSON.stringify(fresh.environments) !== JSON.stringify(metadata.environments)
+        || JSON.stringify(fresh.source) !== JSON.stringify(metadata.source)) {
+        throw new Error("Native handoff thread changed during public source verification");
       }
       if (verified) await reproveCurrentHandoffTurn(rpc, threadId, currentTurnId, active);
       return verified;

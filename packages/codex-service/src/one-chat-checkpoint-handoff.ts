@@ -80,6 +80,12 @@ function binding(value: LocalProfileBinding, slot: number): void {
   }
 }
 
+function sameBinding(a: LocalProfileBinding, b: LocalProfileBinding): boolean {
+  return a.slot === b.slot && a.accountFingerprint === b.accountFingerprint
+    && a.sessionFingerprint === b.sessionFingerprint
+    && a.routeFingerprint === b.routeFingerprint;
+}
+
 function checkedWorkspace(w: ExactNativeWorkspaceCheckpoint, threadId: string, fingerprint: string): void {
   if (w.threadId !== threadId || w.workspaceFingerprint !== fingerprint
     || !isAbsolute(w.cwd) || w.cwd.length > 2048 || /[\u0000-\u001f\u007f]/.test(w.cwd)
@@ -147,11 +153,12 @@ export async function handoffOneSelectedNativeConversation(
     readonly sourceSlot: number;
     readonly destinationSlot: number;
     readonly sourceThreadId: string;
-    readonly explicitlySelectedAndApproved?: boolean;
+    readonly explicitlySelectedAndApproved: boolean;
   },
   adapters: OneChatCheckpointHandoffAdapters,
 ): Promise<OneChatCheckpointHandoffReceipt> {
-  if (!UUID.test(input.operationId) || !UUID.test(input.sourceThreadId)
+  if (!input.explicitlySelectedAndApproved
+    || !UUID.test(input.operationId) || !UUID.test(input.sourceThreadId)
     || !Number.isSafeInteger(input.sourceSlot) || !Number.isSafeInteger(input.destinationSlot)
     || input.sourceSlot < 1 || input.destinationSlot < 1
     || input.sourceSlot > 99 || input.destinationSlot > 99
@@ -165,10 +172,14 @@ export async function handoffOneSelectedNativeConversation(
   ]);
   binding(sourceBinding, input.sourceSlot);
   binding(destinationBinding, input.destinationSlot);
+  if (sameBinding(sourceBinding, destinationBinding)) {
+    throw new Error("One-chat handoff source and destination session must be independently owned");
+  }
   const before = await source.prove(input.sourceThreadId);
   if (before.threadId !== input.sourceThreadId || before.state !== "idle"
-    || !HASH.test(before.revision) || !HASH.test(before.workspaceFingerprint)) {
-    throw new Error("Selected source Native thread is not idle or its checkpoint is malformed");
+    || !HASH.test(before.revision) || !HASH.test(before.workspaceFingerprint)
+    || !sameBinding(before.owner, sourceBinding)) {
+    throw new Error("Selected source Native thread must be idle and exactly owner-proven");
   }
   const [recent, workspace] = await Promise.all([
     source.read(input.sourceThreadId, 128 * 1024),
@@ -183,9 +194,15 @@ export async function handoffOneSelectedNativeConversation(
     sourceThreadId: input.sourceThreadId, workspace, recent,
   });
   const after = await source.prove(input.sourceThreadId);
+  const [sourceNow, destinationNow] = await Promise.all([
+    adapters.profile(input.sourceSlot), adapters.profile(input.destinationSlot),
+  ]);
   if (after.revision !== before.revision || after.state !== "idle"
-    || after.workspaceFingerprint !== before.workspaceFingerprint) {
-    throw new Error("One-chat handoff source checkpoint changed before new thread admission");
+    || after.workspaceFingerprint !== before.workspaceFingerprint
+    || !sameBinding(after.owner, before.owner)
+    || !sameBinding(sourceNow, sourceBinding)
+    || !sameBinding(destinationNow, destinationBinding)) {
+    throw new Error("One-chat handoff source/destination changed before new thread admission");
   }
 
   const intentFingerprint = createHash("sha256").update(JSON.stringify({
@@ -209,6 +226,11 @@ export async function handoffOneSelectedNativeConversation(
     }
     targetId = target.threadId;
     adapters.journal.markCreated(input.operationId, intentFingerprint, targetId);
+    const latestDestination = await adapters.profile(input.destinationSlot);
+    binding(latestDestination, input.destinationSlot);
+    if (!sameBinding(latestDestination, destinationBinding)) {
+      throw new Error("Destination Native account changed after new thread creation");
+    }
     const result = await adapters.destination.seed({
       destinationSlot: input.destinationSlot,
       threadId: targetId,

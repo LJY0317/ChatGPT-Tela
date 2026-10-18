@@ -90,6 +90,8 @@ export async function inspectNativeThread(input: {
   const correlated = logs.events.filter(event => event.scope_fingerprint === fingerprint
     && (event.event === "chatgpt_tela_work" || event.event === "chatgpt_tela_codex"));
   const last = (stage: string) => correlated.filter(event => event.stage === stage).at(-1);
+  const pending = last("approval_wait_transition");
+  const pendingStillObserved = pending?.phase === "pending";
   const lastPlan = last("web_turn_plan");
   const lastObserved = correlated.at(-1);
   const coverage = {
@@ -105,6 +107,14 @@ export async function inspectNativeThread(input: {
     ...(typeof lastPlan.retained_surface === "boolean" ? { retainedSurface: lastPlan.retained_surface } : {}),
     ...(typeof lastPlan.retained_delta === "boolean" ? { retainedDelta: lastPlan.retained_delta } : {}),
   } : null;
+  const approvalWaitEvidence = pendingStillObserved ? {
+    lastObservedAt: pending.ts,
+    waitingSeconds: Math.max(0, Math.floor((nowMs - Date.parse(pending.ts)) / 1000)),
+    stillPendingInAvailableEvents: true,
+    /** A past log is not a live browser proof; never grant/replay from it. */
+    currentlyVisible: "not_verified",
+  } : null;
+
   return Object.freeze({
     contractVersion: 1,
     privacy: "read-only-metadata-and-structural-diagnostics",
@@ -116,6 +126,7 @@ export async function inspectNativeThread(input: {
       coverage,
       lastObservedAt: lastObserved?.ts ?? null,
       lastWebPlan,
+      approvalWaitEvidence,
       recentEvents: correlated.slice(-MAX_TIMELINE).map(event => ({
         at: event.ts, stage: event.stage,
         ...(typeof event.turn_phase === "string" ? { turnPhase: event.turn_phase } : {}),
@@ -124,10 +135,11 @@ export async function inspectNativeThread(input: {
       })),
     },
     continuation: {
-      classification: recentTurns[0]?.status === "inProgress"
-        ? "in_progress"
+      classification: approvalWaitEvidence ? "approval_wait_observed"
+        : recentTurns[0]?.status === "inProgress" ? "in_progress_without_verified_approval"
         : "no_active_turn_verified",
-      nextAction: "inspect_latest_turn",
+      nextAction: approvalWaitEvidence ? "inspect_current_owned_approval"
+        : "inspect_latest_turn_and_resume_only_if_explicitly_authorized",
       canAutomaticallyReplayAcceptedTurn: false,
     },
   });
@@ -147,6 +159,8 @@ export function inspectNativeThreadHistoricalEvidence(input: {
 }) {
   if (!THREAD_ID.test(input.threadId)) throw new Error("historical evidence requires an exact Native UUID");
   const minutes = input.minutes ?? 30;
+  // Unlike live Native inspection, this bounded local-log query may need
+  // to span a long approval wait after the original profile has retired.
   if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > 360) {
     throw new Error("--minutes must be an integer from 1 to 360");
   }
@@ -159,11 +173,23 @@ export function inspectNativeThreadHistoricalEvidence(input: {
   const events = logs.events.filter(event => event.scope_fingerprint === fingerprint
     && ["chatgpt_tela_work", "chatgpt_tela_codex", "chatgpt_tela_browser"].includes(event.event));
   const last = (stage: string) => events.filter(event => event.stage === stage).at(-1);
+  const pending = events.filter(event => event.stage === "approval_wait_transition"
+    && event.phase === "pending").at(-1);
+  const lastApproval = last("approval_wait_transition");
+  const expiry = last("approval_wait_expired");
+  const stop = last("web_owned_stop");
   const lastNativeFailure = events.filter(event =>
     ["native_execution_failed", "web_turn_identity_rejected"].includes(event.stage)).at(-1);
   const lastTerminal = events.filter(event =>
     ["native_execution_failed", "native_turn_retired", "native_outcome_committed", "web_turn_failed"]
       .includes(event.stage)).at(-1);
+  const pendingObserved = pending !== undefined && !events.some(event =>
+    event.stage === "approval_wait_transition"
+      && ["card_cleared", "task_progress"].includes(String(event.phase))
+      && Date.parse(event.ts) > Date.parse(pending.ts));
+  const terminalAfterPending = Boolean(pending && lastTerminal
+    && Date.parse(lastTerminal.ts) >= Date.parse(pending.ts));
+  const firstPendingAt = pending?.ts ?? null;
   const observedUntil = events.at(-1)?.ts ?? null;
   // Correlation is deliberately time- and thread-scoped, not an assertion of
   // causation or an authoritative Native turn identity. The original accepted
@@ -180,12 +206,32 @@ export function inspectNativeThreadHistoricalEvidence(input: {
   const nativeFailureFollowingRejection = events.some(event => event.stage === "native_execution_failed"
     && Number.isFinite(rejectionAt) && Date.parse(event.ts) >= rejectionAt
     && Date.parse(event.ts) - rejectionAt <= 30_000);
+  const ownershipFailureEvidence = rejected
+    ? Object.freeze({
+      classification: "response_ownership_rejected" as const,
+      rejectedAt: rejected.ts,
+      reasonClass: rejected.reason_class === "accepted_user_changed"
+        ? "accepted_user_changed" as const : "other_or_unclassified" as const,
+      precedingRendererUnresponsiveAt: rendererPause?.ts ?? null,
+      precedingInputOwnershipRevokedAt: revoked?.ts ?? null,
+      inputClassifierObservedAt: classified?.ts ?? null,
+      // Not-manual-consent does not prove a user edited or sent anything.
+      observedManualConsent: typeof classified?.manual_consent === "boolean"
+        ? classified.manual_consent : null,
+      nativeFailureFollowingRejection,
+      proofLevel: "same-thread-temporal-correlation-only" as const,
+      exactInputOriginVerified: false as const,
+      causalLinkProven: false as const,
+      canReplayAcceptedRequest: false as const,
+    }) : null;
   return Object.freeze({
     contractVersion: 1 as const,
     privacy: "allowlisted-structural-events-only" as const,
     threadId: input.threadId,
     scopeFingerprint: fingerprint,
     identityVerified: false as const,
+    nativeOwner: "not_checked" as const,
+    browserCardCurrentlyVisible: "not_verified" as const,
     contentRead: false as const,
     mutating: false as const,
     coverage: {
@@ -195,6 +241,15 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       eventsMatched: events.length,
     },
     lastObservedAt: observedUntil,
+    approval: {
+      lastPendingObservedAt: firstPendingAt,
+      lastTransition: lastApproval?.phase ?? "not_observed",
+      noClearanceRecordedAfterPending: pendingObserved,
+      nativeEndedAfterPending: terminalAfterPending,
+      // A time gap in logs never proves continuous pending or live browser state.
+      observedGapSeconds: pending && observedUntil
+        ? Math.max(0, Math.floor((Date.parse(observedUntil) - Date.parse(pending.ts)) / 1000)) : null,
+    },
     lastNativeOutcome: lastTerminal
       ? { at: lastTerminal.ts, stage: lastTerminal.stage,
         ...(typeof lastTerminal.reason_class === "string" ? { reasonClass: lastTerminal.reason_class } : {}) }
@@ -203,6 +258,18 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       ? { at: lastNativeFailure.ts, stage: lastNativeFailure.stage,
         ...(typeof lastNativeFailure.reason_class === "string" ? { reasonClass: lastNativeFailure.reason_class } : {}) }
       : null,
+    approvalTerminationEvidence: expiry || stop ? {
+      expiryObservedAt: expiry?.ts ?? null,
+      browserStopObservedAt: stop?.ts ?? null,
+      browserStopStatus: stop && ["stopped", "stop_sent", "unavailable", "ownership_changed", "unconfirmed"].includes(String(stop.status))
+        ? stop.status : "not_verified",
+      // UI generation controls disappearing does not settle remote tool effects.
+      remoteOutcome: "uncertain" as const,
+      nativeCompletionProven: false as const,
+      canReplayAcceptedRequest: false as const,
+      proofLevel: "historical-thread-scoped-events-only" as const,
+    } : null,
+    ownershipFailureEvidence,
     recentEvents: events.slice(-MAX_TIMELINE).map(event => ({
       at: event.ts, stage: event.stage,
       ...(typeof event.reason_class === "string" ? { reasonClass: event.reason_class } : {}),
@@ -211,7 +278,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
     })),
     continuation: {
       canAutomaticallyReplayAcceptedTurn: false as const,
-      nextAction: "inspect_latest_turn" as const,
+      nextAction: "verify_current_native_and_browser_owner_before_action" as const,
     },
   });
 }

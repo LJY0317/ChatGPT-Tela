@@ -211,12 +211,23 @@ export class NativeResponsesGateway {
     if (cleanup) priorRuns.push(cleanup);
     if (priorRuns.length) {
       await Promise.allSettled(priorRuns);
+      // Authority may change while old physical cleanup is finishing.
+      binding = await bindNativeTurnRequest(body, this.source);
+      this.#controller.signal.throwIfAborted();
       withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(binding.authority.threadId),
         turn_fingerprint: diagnosticFingerprint(binding.authority.turnId) }, () =>
         emitDiagnosticEvent("chatgpt_tela_work", "native_prior_execution_settled", { prior_run_count: priorRuns.length,
-          execution_restarted: false }));
+          execution_restarted: false, current_authority_proven: true }));
     }
     let registered = this.turns.active(binding.authority.threadId, binding.authority.turnId);
+
+    // Canonical environment/lineage cannot change under an existing Native owner.
+    if (registered && (JSON.stringify(registered.channel.binding.authority) !== JSON.stringify(binding.authority)
+      || registered.channel.binding.canonicalEvidence.parentThreadId !== binding.canonicalEvidence.parentThreadId
+      || registered.channel.binding.canonicalEvidence.agentName !== binding.canonicalEvidence.agentName)) {
+      this.#retire(key, new Error("Native owner changed"), "owner_changed");
+      throw new Error("Native owner changed under the active response cycle");
+    }
     let lifetime = this.#lifetimes.get(key);
     if (registered && lifetime?.delivered) {
       lifetime.watch?.signal.throwIfAborted();

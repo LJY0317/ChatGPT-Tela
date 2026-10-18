@@ -235,7 +235,9 @@ export function loadProductProfileRuntimeConfig(
     acceptanceSavedChat: acceptanceSavedSlot === String(browserProfile.slot),
     approvalAutomationDelayMs: boundedNonnegativeInteger(
       optional(env, "CHATGPT_TELA_APPROVAL_DELAY_MS"),
-      "CHATGPT_TELA_APPROVAL_DELAY_MS", 0, 15_000,
+      "CHATGPT_TELA_APPROVAL_DELAY_MS",
+      0,
+      15_000,
     ),
     ...(optional(env, "CHATGPT_TELA_CHECKPOINT_PREPARATION_POLICY") !== undefined ? {
       checkpointPreparationPolicy: checkpointPreparationPolicy(JSON.parse(required(env, "CHATGPT_TELA_CHECKPOINT_PREPARATION_POLICY"))),

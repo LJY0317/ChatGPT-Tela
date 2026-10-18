@@ -226,7 +226,9 @@ export async function startElectronDevelopmentRuntime(
     requireTemporaryChat: isChatGptTemporaryChatUrl(input.chatGptUrl ?? ""),
     ...(input.connectorName ? { connectorName: input.connectorName } : {}),
     ...(input.approvalAutomationMode ? { approvalAutomationMode: input.approvalAutomationMode } : {}),
-    ...(input.approvalAutomationDelayMs !== undefined ? { approvalAutomationDelayMs: input.approvalAutomationDelayMs } : {}),
+    ...(input.approvalAutomationDelayMs !== undefined
+      ? { approvalAutomationDelayMs: input.approvalAutomationDelayMs }
+      : {}),
   });
   const checkpointCache = input.context?.checkpointCache;
   const historyCheckpointCache = input.context?.historyCheckpointCache;
@@ -436,8 +438,18 @@ export async function startElectronDevelopmentRuntime(
         try {
           const observation = await new ChatGptDomSurfaceDriver(automation).observe();
           approvalState = observation.approval?.cardCount ? "pending" : "none";
-        } catch { approvalObservationReason = "dom_observation_failed"; }
-      } else if (selected) approvalObservationReason = "automation_unavailable";
+        } catch {
+          // Never interpret a failed DOM read as clearance or as authorization to click.
+          approvalObservationReason = "dom_observation_failed";
+        }
+      } else if (selected) {
+        approvalObservationReason = "automation_unavailable";
+      }
+      if (approvalObservationReason) {
+        emitDiagnosticEvent("chatgpt_tela_work", "bridge_approval_observation_unavailable", {
+          reason_class: approvalObservationReason,
+        });
+      }
       const approvalWait = selected ? provider.inspectApprovalWait?.(browserHost.selectedSurfaceLease(selected)) : undefined;
       return Object.freeze({ activeSurfaceCount: surfaces.length, surfaces,
         ...(selected ? { selectedSurfaceId: selected } : {}),
