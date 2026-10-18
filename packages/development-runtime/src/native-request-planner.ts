@@ -1,3 +1,4 @@
+import { classifyWebPreparationFailure } from "./web-preparation-diagnostics";
 import { CheckpointPreparationBudget, CheckpointPreparationBudgetExceeded } from "./checkpoint-preparation-budget";
 import { createHash } from "node:crypto";
 import {
@@ -7,6 +8,7 @@ import {
 import {
   RevisionLineage,
   NativeProjectionUnsupported,
+  WebContextFitFailed,
   emitDiagnosticEvent,
   diagnosticFingerprint,
   planPhysicalContext,
@@ -843,9 +845,15 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
   const plan = async (turn: RegisteredTurn, nativeRequest: unknown, preparation?: Parameters<DevelopmentWebTurnPlanner>[2]): Promise<DevelopmentWebTurnPlan> => {
     // Failure-only stage observations are local to this request, not attached to errors.
     // Observer errors must not replace the original planner exception.
+    let lastStage = "request_parse";
+    let fitProjection: NativeRequestContextProjection | undefined;
+    let fitBudget: number | undefined;
+    let fitCheckpoint = false;
     const stage = (value: Parameters<NonNullable<NonNullable<Parameters<DevelopmentWebTurnPlanner>[2]>["onPlannerStage"]>>[0]): void => {
+      lastStage = value;
       try { preparation?.onPlannerStage?.(value); } catch { /* Diagnostics are best effort. */ }
     };
+    try {
     stage("request_parse");
     const threadId = turn.channel.binding.authority.threadId;
     if (pendingByTask.has(threadId)) {
@@ -1030,6 +1038,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         return content;
       },
     });
+    fitProjection = projection;
+    fitBudget = freshBudgetTokens;
+    fitCheckpoint = selected !== undefined;
     stage("physical_context_fit");
     let prepared = await prepareWebContext({
       lineage: projection.lineage,
@@ -1043,9 +1054,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       && checkpointProducer) {
       const anchor = workingCheckpointAnchor(projection);
       if (!anchor) {
-        throw new Error(
-          `Native request context cannot preserve its newest revision within the ${prepared.budgetTokens}-token Web budget`,
-        );
+        throw new WebContextFitFailed("newest_revision_oversize", {
+          required: prepared.logicalTokens, budget: prepared.budgetTokens,
+        });
       }
       // A current system/developer instruction is not historical work that may
       // be replaced by lossy prose. Keep it exact or refuse the oversized task.
@@ -1139,6 +1150,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         });
         requestCheckpointProduced = true;
         selectedContent = new Map([[selected.checkpoint.id, selected.content]]);
+        fitCheckpoint = true;
         stage("physical_context_fit");
         prepared = await prepareWebContext({
           lineage: projection.lineage,
@@ -1150,9 +1162,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       }
     }
     if (prepared.status !== "ready") {
-      throw new Error(
-        `Native request context requires a checkpoint to fit the ${prepared.budgetTokens}-token Web budget`,
-      );
+      throw new WebContextFitFailed("checkpoint_required", {
+        required: prepared.logicalTokens, budget: prepared.budgetTokens,
+      });
     }
     // A Native source-bound checkpoint/handoff (or exact bounded original
     // history) is atomic transport context. Provider-level assistant
@@ -1267,6 +1279,24 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         ...(hotCandidate ? { hotHistory: hotCandidate } : {}),
       }),
     });
+    } catch (error) {
+      if (lastStage === "physical_context_fit" && fitProjection) {
+        // Failure-only numeric evidence; no request, revision identity or exception prose.
+        const revisions = fitProjection.revisions;
+        const size = (kinds: readonly string[]) => revisions.filter(item => kinds.includes(item.revision.kind))
+          .reduce((n, item) => n + Buffer.byteLength(item.content, "utf8"), 0);
+        emitDiagnosticEvent("chatgpt_tela_codex", "native_context_fit_rejected", {
+          reason_class: classifyWebPreparationFailure(error), phase: "physical_context_fit",
+          logical_estimate: revisions.reduce((n, item) => n + item.revision.estimatedTokens, 0),
+          revision_count: revisions.length, checkpoint_selected: fitCheckpoint,
+          largest_revision_bytes: revisions.reduce((n, item) => Math.max(n, Buffer.byteLength(item.content, "utf8")), 0),
+          authority_bytes: size(["system", "developer"]), user_bytes: size(["user", "steering"]),
+          tool_bytes: size(["tool-call", "tool-result"]), media_count: fitProjection.media.length,
+          ...(fitBudget === undefined ? {} : { fit_budget: fitBudget }),
+        });
+      }
+      throw error;
+    }
   };
   const planner: DevelopmentWebTurnPlanner = async (turn, request, preparation) => {
     const threadId = turn.channel.binding.authority.threadId;

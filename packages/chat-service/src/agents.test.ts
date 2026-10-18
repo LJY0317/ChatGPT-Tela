@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatWorkspaceRegistry } from "./workspaces";
@@ -50,7 +50,6 @@ describe("Tela Chat durable agents", () => {
       await f.manager.close();
       persisted.agents[0].status = "running";
       persisted.turns[0].status = "running";
-      const { writeFileSync } = await import("node:fs");
       writeFileSync(f.storePath, JSON.stringify(persisted));
       const reopened = new ChatAgentManager({ workspaces: f.workspaces, storePath: f.storePath, drivers: [driver] });
       try {
@@ -60,6 +59,71 @@ describe("Tela Chat durable agents", () => {
         await reopened.stop(f.workspace.id, reader.id);
       } finally { await reopened.close(); }
     } finally { await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+  });
+
+  test("sibling approved roots within one checkout share a writer fence, including legacy unknown mode", async () => {
+    const driver: ChatAgentDriver = { id: "fixture", async run(_input, _callbacks, signal) {
+      await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+      return { response: "stopped" };
+    } };
+    const f = fixture(driver);
+    const left = join(f.root, "left"), right = join(f.root, "right");
+    mkdirSync(join(f.root, ".git")); mkdirSync(left); mkdirSync(right);
+    const leftWorkspace = f.workspaces.open(left), rightWorkspace = f.workspaces.open(right);
+    try {
+      const first = await f.manager.start({ workspaceId: leftWorkspace.id, target: "fixture", prompt: "writer", writeMode: "workspace_write" });
+      await expect(f.manager.start({ workspaceId: rightWorkspace.id, target: "fixture", prompt: "second writer", writeMode: "workspace_write" }))
+        .rejects.toThrow("active or unresolved writable agent");
+      const prior = JSON.parse(readFileSync(f.storePath, "utf8"));
+      await f.manager.stop(leftWorkspace.id, first.id);
+      await f.manager.close();
+      prior.agents[0].status = "running";
+      prior.turns[0].status = "running";
+      delete prior.turns[0].writeMode;
+      writeFileSync(f.storePath, JSON.stringify(prior));
+      const reopened = new ChatAgentManager({ workspaces: f.workspaces, storePath: f.storePath, drivers: [driver] });
+      try {
+        await expect(reopened.start({ workspaceId: rightWorkspace.id, target: "fixture", prompt: "legacy conflict", writeMode: "workspace_write" }))
+          .rejects.toThrow("active or unresolved writable agent");
+      } finally { await reopened.close(); }
+    } finally { await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+  });
+
+  test("a parent writer still fences a nested Git checkout it could modify", async () => {
+    const driver: ChatAgentDriver = { id: "fixture", async run(_input, _callbacks, signal) {
+      await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+      return { response: "stopped" };
+    } };
+    const f = fixture(driver);
+    const nested = join(f.root, "separate-checkout");
+    mkdirSync(join(f.root, ".git")); mkdirSync(nested); mkdirSync(join(nested, ".git"));
+    const secondWorkspace = f.workspaces.open(nested);
+    try {
+      const first = await f.manager.start({ workspaceId: f.workspace.id, target: "fixture", prompt: "outer", writeMode: "workspace_write" });
+      await expect(f.manager.start({ workspaceId: secondWorkspace.id, target: "fixture", prompt: "inner", writeMode: "workspace_write" }))
+        .rejects.toThrow("active or unresolved writable agent");
+      await f.manager.stop(f.workspace.id, first.id);
+    } finally { await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+  });
+
+  test("independent sibling checkouts can run separate writers", async () => {
+    const driver: ChatAgentDriver = { id: "fixture", async run(_input, _callbacks, signal) {
+      await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+      return { response: "stopped" };
+    } };
+    const f = fixture(driver);
+    const sibling = join(f.base, "other-project");
+    mkdirSync(sibling); mkdirSync(join(f.root, ".git")); mkdirSync(join(sibling, ".git"));
+    const registry = new ChatWorkspaceRegistry({ allowedRoots: [f.root, sibling], storePath: join(f.base, "other-workspaces.json") });
+    const firstWorkspace = registry.open(f.root), secondWorkspace = registry.open(sibling);
+    const manager = new ChatAgentManager({ workspaces: registry, storePath: join(f.base, "other-agents.json"), drivers: [driver] });
+    try {
+      const first = await manager.start({ workspaceId: firstWorkspace.id, target: "fixture", prompt: "first", writeMode: "workspace_write" });
+      const second = await manager.start({ workspaceId: secondWorkspace.id, target: "fixture", prompt: "second", writeMode: "workspace_write" });
+      expect(first.status).toBe("running"); expect(second.status).toBe("running");
+      await manager.stop(firstWorkspace.id, first.id);
+      await manager.stop(secondWorkspace.id, second.id);
+    } finally { await manager.close(); await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
   });
 
   test("start and continue persist provider continuation but never persist prompts", async () => {

@@ -1,5 +1,9 @@
+import { webContextFitFailureReason } from "@chatgpt-tela/core";
+
 /** Fixed categories for Tela-owned preparation errors. Never return exception prose or identifiers. */
 export function classifyWebPreparationFailure(error: unknown): string {
+  const fit = webContextFitFailureReason(error);
+  if (fit) return fit;
   if (!(error instanceof Error)) return "unclassified";
   if ((error as Error & { readonly code?: unknown }).code === "native_projection_unsupported") {
     return "request_projection_unsupported";

@@ -1,4 +1,4 @@
-import { NativeWebHandoffUnproven } from "@chatgpt-tela/core";
+import { WebContextFitFailed, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { capturePrivateDiagnosticValue, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
@@ -54,9 +54,11 @@ export function assertWebMessageFitsComposer(input: Pick<BrowserTurnRunInput,
     input.media,
   ).length;
   if (messageChars > input.physicalLimits.composerCharLimit) {
-    throw new Error(
-      `Fresh ChatGPT Web message requires ${messageChars} characters, exceeding the ${input.physicalLimits.composerCharLimit}-character browser message limit; Native context was left unchanged`,
-    );
+    emitDiagnosticEvent("chatgpt_tela_codex", "native_context_fit_rejected", {
+      reason_class: "composer_window_exceeded", phase: "composer_preflight",
+      required_chars: messageChars, composer_limit: input.physicalLimits.composerCharLimit,
+    });
+    throw new WebContextFitFailed("composer_window_exceeded");
   }
 }
 

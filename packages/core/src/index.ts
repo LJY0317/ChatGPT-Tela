@@ -19,6 +19,7 @@ export * from "./diagnostic-context-continuity";
 export * from "./diagnostic-tool-evidence";
 export * from "./web-retained-context";
 export * from "./native-projection-error";
+export * from "./web-context-fit-error";
 
 export * from "./native-web-handoff-error";
 

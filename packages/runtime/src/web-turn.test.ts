@@ -425,7 +425,7 @@ describe("browser turn runner", () => {
         composerCharLimit: 100,
       },
       prepareForSubmit: async () => { order.push("prepare"); },
-    })).rejects.toThrow("browser message limit");
+    })).rejects.toMatchObject({code:"web_context_fit_failed",reason:"composer_window_exceeded"});
     expect(order).toEqual([]);
     expect(channel.phase).toBe("prepared");
   });

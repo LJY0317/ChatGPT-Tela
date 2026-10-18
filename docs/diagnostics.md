@@ -1,5 +1,24 @@
 # Diagnostic evidence
 
+## Native-to-Web preparation triage
+
+Start with `chatgpt-tela diagnostics context --at <ISO-time> --minutes 15 --view summary`.
+Each turn's `summary.diagnosis` joins the first observed failed boundary, planner phase,
+checkpoint preparation plan/refusal, physical-fit measurements and subsequent replay denials.
+Read coverage limits before interpreting an absent event. `unclassified` remains unknown;
+a later `retired_turn` is a replay rejection, not the original failure's explanation.
+
+Checkpoint plans report a **conservative upper bound**, not actual model calls or billing.
+Source bytes/items and fragment counts are recorded before budget admission, so a zero-call
+refusal remains explainable. Physical-fit failures record numeric authority/user/tool sizes,
+largest revision, checkpoint selection and budget only on failure; no context bodies,
+identifiers or exception text are added. The existing bounded event/incident retention applies.
+
+Known fit failures use one typed, nonretryable decision across initial HTTP, progressed SSE
+and same-runtime retired replay. Original Native context is preserved. Neither a diagnostic
+label nor a new turn authorizes replay of an uncertain operation. Unknown historical fit
+failures cannot be reconstructed retroactively from these new fields.
+
 ## Observation compatibility evidence design
 
 For an owned submission, preserve the first structural failure independently of the final snapshot.

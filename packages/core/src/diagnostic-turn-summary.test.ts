@@ -63,3 +63,50 @@ test('partial tool projection and repeated send boundary remain explicit',()=>{
  expect(r.cost.toolText).toMatchObject({total:10,complete:false});
  expect(r.warnings).toContain('repeated_send_boundary');
 });
+
+test('preflight budget cause survives generic retirement and replay without claiming actual calls',()=>{
+ const rows=[e('native_cycle_observation_started'),e('native_checkpoint_preparation_planned',{
+  planned_model_calls:59,planned_transfer_estimate:5784080,model_call_budget:8,transfer_budget:791240,
+  fragment_count:30,source_bytes:12000000,completed_receipt_count:0}),
+  e('native_checkpoint_preparation_rejected',{reason_class:'model_calls',admitted_model_calls:0}),
+  e('web_preparation_failed',{reason_class:'history_bootstrap_required',phase:'context_plan',planner_stage:'native_continuity'}),
+  e('native_execution_failed'),e('native_turn_retired'),e('native_replay_rejected',{reason_class:'retired_turn'})];
+ const r=summarizeTurnDiagnostics(rows);
+ expect(r.diagnosis.firstFailure).toMatchObject({stage:'native_checkpoint_preparation_rejected',reason:'model_calls',plannerStage:'native_continuity'});
+ expect(r.diagnosis.checkpointPlan).toMatchObject({estimateKind:'conservative_upper_bound',modelCalls:59,callBudget:8,completedReceipts:0});
+ expect(r.diagnosis.budgetRefusal).toEqual({reason:'model_calls',admittedCalls:0});
+ expect(r.diagnosis.replayDenials).toBe(1);expect(r.context.summaryAttempts).toBe(0);expect(r.submission.activations).toBe(0);
+});
+
+test('cycle receipt includes preparation before generic execution failure',()=>{
+ const root=mkdtempSync(join(tmpdir(),'tela-cycle-preflight-')),file=join(root,'events.jsonl');
+ const old=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+ const observer=startTurnDiagnosticSummary(scope,turn,request)!;
+ try{
+  withDiagnosticContext({scope_fingerprint:scope,turn_fingerprint:turn,request_fingerprint:request},()=>{
+   emitDiagnosticEvent('chatgpt_tela_work','web_preparation_failed',{reason_class:'unclassified',planner_stage:'physical_context_fit',phase:'context_plan'});
+   emitDiagnosticEvent('chatgpt_tela_work','native_execution_failed');
+  });observer.finish();
+  const rows=readFileSync(file,'utf8').trim().split('\n').map(s=>JSON.parse(s));
+  expect(rows.find(x=>x.stage==='native_cycle_summary').first_reason_class).toBe('unclassified');
+  expect(summarizeTurnDiagnostics(rows).diagnosis.certainty).toBe('insufficient_evidence');
+ }finally{observer.finish();if(old===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=old;rmSync(root,{recursive:true,force:true});}
+});
+
+test('generic unknown failure cannot claim a classified cause',()=>{
+ const r=summarizeTurnDiagnostics([e('native_execution_failed',{reason_class:'unknown'}),e('native_turn_retired')]);
+ expect(r.diagnosis.certainty).toBe('insufficient_evidence');
+ const composer=summarizeTurnDiagnostics([e('native_context_fit_rejected',{reason_class:'composer_window_exceeded',phase:'composer_preflight',required_chars:5000,composer_limit:1000})]);
+ expect(composer.diagnosis.fitRefusal).toMatchObject({phase:'composer_preflight',requiredChars:5000,composerLimit:1000});
+ expect(composer.diagnosis.certainty).toBe('classified_boundary');
+});
+
+test('optional checkpoint refusal is not the cause of a later admitted task failure or a successful final',()=>{
+ const optional=[e('native_checkpoint_preparation_rejected',{reason_class:'model_calls',admitted_model_calls:0}),
+  e('native_working_checkpoint_deferred'),e('web_turn_plan',{context_mode:'retained-delta'})];
+ const success=summarizeTurnDiagnostics([...optional,e('native_outcome_committed',{outcome:'final'})]);
+ expect(success.diagnosis.firstFailure).toBeUndefined();expect(success.warnings).toEqual([]);
+ const failed=summarizeTurnDiagnostics([...optional,e('native_execution_failed',{reason_class:'unknown'})]);
+ expect(failed.diagnosis.firstFailure).toMatchObject({stage:'native_execution_failed',reason:'unknown'});
+ expect(failed.diagnosis.certainty).toBe('insufficient_evidence');
+});

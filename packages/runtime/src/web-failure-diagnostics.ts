@@ -1,4 +1,4 @@
-import { webRetainedContextFailureReason, webSubmissionFailureReason } from "@chatgpt-tela/core";
+import { webContextFitFailureReason, webRetainedContextFailureReason, webSubmissionFailureReason } from "@chatgpt-tela/core";
 
 /** Classify only owned failure boundaries; exception prose and identifiers never leave this adapter. */
 export function webExecutionFailureFields(error: unknown, signal?: AbortSignal) {
@@ -21,6 +21,8 @@ export function webExecutionFailureFields(error: unknown, signal?: AbortSignal) 
     "consequential action requires proven state; observed ambiguous": "observation_ambiguous",
   };
   const kind = (value: unknown) => {
+    const fitReason = webContextFitFailureReason(value);
+    if (fitReason) return fitReason;
     const submissionReason = webSubmissionFailureReason(value);
     if (submissionReason) return submissionReason;
     const retainedReason = webRetainedContextFailureReason(value);

@@ -509,8 +509,11 @@ describe("Electron development runtime composition", () => {
         },
         body: JSON.stringify(compactableNativeRequest()),
       });
-      expect(response.status).toBe(409);
-      expect(await response.text()).toContain("requires a checkpoint");
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: {
+        code: "tela_web_context_fit_failed", retryable: false,
+        recovery: { reason: "checkpoint_required" },
+      } });
       expect(provider.submitted).toBeUndefined();
       expect(await cache.list("thread-1")).toEqual([]);
     } finally {

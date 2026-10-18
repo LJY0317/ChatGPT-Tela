@@ -1,3 +1,4 @@
+import { WebContextFitFailed } from "@chatgpt-tela/core";
 import { BROWSER_DOCUMENT_LIFETIME, captureBrowserDiagnosticEvidence, type BrowserHost } from "@chatgpt-tela/browser-host";
 import { classifyNetworkFailure, diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, observeDiagnosticInventory, observeDiagnosticContextPressure, capturePrivateDiagnosticValue, isWebContextPlannerStage, type WebContextPlannerStage } from "@chatgpt-tela/core";
 import {
@@ -406,6 +407,10 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           });
           emitDiagnosticEvent("chatgpt_tela_work", "web_preparation_failed", {
             phase: preparationPhase, reason_class: classifyWebPreparationFailure(error),
+            ...(error instanceof WebContextFitFailed ? {
+              ...(error.estimates.required === undefined ? {} : { required_estimate: error.estimates.required }),
+              ...(error.estimates.budget === undefined ? {} : { fit_budget: error.estimates.budget }),
+            } : {}),
             ...(preparationPhase === "context_plan" && plannerStage ? { planner_stage: plannerStage } : {}),
             network_kind: classifyNetworkFailure(error),
             duration_ms: diagnosticDurationMs(preparationStartedAt),

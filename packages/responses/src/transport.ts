@@ -1,3 +1,4 @@
+import { webContextFitRecovery } from "./web-context-fit-recovery";
 import { nativeHandoffRecovery } from "./native-handoff-recovery";
 import type {
   NativeGatewayOutcome,
@@ -137,6 +138,8 @@ export async function handleNativeResponsesHttp(
       progress.signal.abort();
     } else outcome = await pending;
   } catch (error) {
+    const fitRecovery = webContextFitRecovery(error);
+    if (fitRecovery) return Response.json({ error: fitRecovery }, { status: 400 });
     const handoffRecovery = nativeHandoffRecovery(error);
     if (handoffRecovery) return Response.json({ error: handoffRecovery }, { status: 400 });
     const projectionRecovery = nativeProjectionRecovery(error);

@@ -1,3 +1,4 @@
+import { WebContextFitFailed } from "@chatgpt-tela/core";
 import { describe, expect, test } from "bun:test";
 import {
   fitFreshWebPhysicalContext,
@@ -55,7 +56,7 @@ describe("fresh Web provider projection", () => {
     // requirement; silently clipping the only trusted checkpoint is not.
     expect(() => fitFreshWebPhysicalContext(context, {
       rolloverTokenLimit: 4_000, contextWindowTokenLimit: 5_000,
-    }, ["native-source"])).toThrow("Native context was left unchanged");
+    }, ["native-source"])).toThrow(WebContextFitFailed);
   });
   test("bounds settled assistant/tool evidence while preserving authority, tool linkage, registry and active request", () => {
     const hugeAssistant = "A".repeat(30_000);
@@ -183,6 +184,6 @@ describe("fresh Web provider projection", () => {
     expect(() => fitFreshWebPhysicalContext(context, {
       rolloverTokenLimit: 95_000,
       contextWindowTokenLimit: 111_193,
-    })).toThrow("Native context was left unchanged");
+    })).toThrow(WebContextFitFailed);
   });
 });

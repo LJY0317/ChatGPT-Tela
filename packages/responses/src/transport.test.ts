@@ -761,3 +761,28 @@ test("streamed handoff failure keeps reconciliation advice and a terminal retire
   expect(await retry.json()).toMatchObject({error:{code:"tela_native_handoff_reconciliation_required"}});
  }finally{await gateway.close();}
 });
+
+test('fit failures preserve identical terminal cause over HTTP, progressed SSE and retired replay',async()=>{
+ const {WebContextFitFailed,WEB_CONTEXT_FIT_REASONS}=await import('@chatgpt-tela/core');
+ for(const reason of WEB_CONTEXT_FIT_REASONS){
+  let expected:unknown;
+  for(const stream of [false,true]){
+   let launches=0;
+   const gateway=new NativeResponsesGateway(source,new ActiveTurnRegistry(),async turn=>{
+    launches++;if(stream)turn.channel.publishProgress('Preparing context.');
+    throw new WebContextFitFailed(reason,{required:123456,budget:24000});
+   });
+   const response=await handleNativeResponsesHttp(post(body([],stream)),gateway);
+   let error:any;
+   if(stream){
+    expect(response.status).toBe(200);
+    const frames=(await response.text()).split('\n').filter(l=>l.startsWith('data: {')).map(l=>JSON.parse(l.slice(6)));
+    error=frames.find(f=>f.type==='response.failed').response.error;
+   }else{expect(response.status).toBe(400);error=(await response.json() as any).error;expected=error;}
+   expect(error).toEqual(expected);
+   expect(error).toMatchObject({code:'tela_web_context_fit_failed',retryable:false,recovery:{reason,requires_new_conversation:false}});
+   const replay=await handleNativeResponsesHttp(post(body([],false)),gateway);
+   expect(replay.status).toBe(400);expect((await replay.json() as any).error).toEqual(error);expect(launches).toBe(1);
+  }
+ }
+});

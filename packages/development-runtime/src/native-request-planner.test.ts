@@ -1420,7 +1420,7 @@ describe("Native request development Web planner", () => {
       await expect(createNativeRequestDevelopmentWebTurnPlanner({
         checkpointCache: cache,
         budgetTokens: 30,
-      })(registered(), request)).rejects.toThrow("requires a checkpoint");
+      })(registered(), request)).rejects.toMatchObject({ code: "web_context_fit_failed", reason: "checkpoint_required" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1594,11 +1594,11 @@ describe("Native request development Web planner", () => {
           { type: "message", role: "user", content: "B".repeat(20) },
         ],
       };
-      await expect(planner(registered(), request)).rejects.toThrow("requires a checkpoint");
+      await expect(planner(registered(), request)).rejects.toMatchObject({ code: "web_context_fit_failed", reason: "checkpoint_required" });
       expect(producerCalls).toBe(1);
       expect(await cache.list("thread-1")).toHaveLength(1);
 
-      await expect(planner(registered(), request)).rejects.toThrow("requires a checkpoint");
+      await expect(planner(registered(), request)).rejects.toMatchObject({ code: "web_context_fit_failed", reason: "checkpoint_required" });
       expect(producerCalls).toBe(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1803,3 +1803,17 @@ test('uncertain readable-prefix model stage is not replayed by a new planner or 
     expect(await options.checkpointCache.list('thread-1')).toHaveLength(0);
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 30_000);
+
+test('failed context fitting retains numeric source composition without private request bytes',async()=>{
+ const {observeDiagnosticEvents,WebContextFitFailed}=await import('@chatgpt-tela/core');
+ const rows:any[]=[];
+ const stop=observeDiagnosticEvents(row=>{if(row.stage==='native_context_fit_rejected')rows.push(row);});
+ try{
+  const planner=createNativeRequestDevelopmentWebTurnPlanner({budgetTokens:1});
+  await expect(planner(registered(),{instructions:'PRIVATE AUTHORITY',input:[{type:'message',role:'user',content:'PRIVATE REQUEST'}]}))
+   .rejects.toBeInstanceOf(WebContextFitFailed);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({phase:'physical_context_fit',fit_budget:1,checkpoint_selected:false,revision_count:2,authority_bytes:17,user_bytes:15});
+  expect(JSON.stringify(rows)).not.toContain('PRIVATE');
+ }finally{stop?.();}
+});

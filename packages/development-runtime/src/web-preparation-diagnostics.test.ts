@@ -25,3 +25,9 @@ test("typed projection failure is classified without exposing private exception 
   const error = Object.assign(new Error("PRIVATE message"), { code: "native_projection_unsupported" });
   expect(classifyWebPreparationFailure(error)).toBe("request_projection_unsupported");
 });
+
+test('fit classification uses a closed typed boundary rather than private exception prose',async()=>{
+ const {WebContextFitFailed,WEB_CONTEXT_FIT_REASONS}=await import('@chatgpt-tela/core');
+ for(const reason of WEB_CONTEXT_FIT_REASONS) expect(classifyWebPreparationFailure(new WebContextFitFailed(reason))).toBe(reason);
+ expect(classifyWebPreparationFailure(Object.assign(new Error('private'),{code:'web_context_fit_failed',reason:'private-path'}))).toBe('unclassified');
+});

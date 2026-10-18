@@ -32,6 +32,10 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
   const safe: Record<string, string | number | boolean> = { ts: new Date(row.ts).toISOString(), event: row.event, stage: row.stage };
   for (const [key, field] of Object.entries(row).slice(0, 64)) {
     if (["ts", "event", "stage"].includes(key) || !SAFE_NAME.test(key) || FORBIDDEN.test(key)) continue;
+    if (key === "estimate_kind") {
+      if (field === "conservative_upper_bound") safe[key] = field;
+      continue;
+    }
     if (key === "proof_stage") {
       if (typeof field === "string" && SAFE_PROOF_STAGES.has(field)) safe[key] = field;
       continue;

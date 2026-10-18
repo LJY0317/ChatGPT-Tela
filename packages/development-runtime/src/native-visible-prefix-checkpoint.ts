@@ -345,6 +345,8 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     plannedNodes = next;
   }
   emitDiagnosticEvent("chatgpt_tela_codex", "native_checkpoint_preparation_planned", {
+    source_kind: source.kind, source_bytes: sourceBytes, source_item_count: source.sourceItemCount,
+    fragment_count: fragments.length, estimate_kind: "conservative_upper_bound",
     planned_model_calls: plannedCalls, planned_transfer_estimate: plannedInput,
     model_call_budget: budget.policy.maxModelCalls, transfer_budget: budget.policy.maxInputTokens,
     elapsed_budget_ms: budget.policy.maxElapsedMs, completed_receipt_count: completed.size,

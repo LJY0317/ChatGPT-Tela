@@ -3,6 +3,8 @@ import type {
   WebPhysicalContextSegment,
 } from "@chatgpt-tela/chatgpt";
 
+import { WebContextFitFailed } from "@chatgpt-tela/core";
+
 export const WEB_HISTORICAL_TOOL_ENTRY_TOKENS = 1_000;
 export const WEB_HISTORICAL_TOOL_TOTAL_TOKENS = 10_000;
 export const WEB_HISTORICAL_ASSISTANT_ENTRY_TOKENS = 5_000;
@@ -294,7 +296,7 @@ export function fitFreshWebPhysicalContext(
   if (!Number.isSafeInteger(limits.rolloverTokenLimit) || limits.rolloverTokenLimit <= 0
     || !Number.isSafeInteger(limits.contextWindowTokenLimit) || limits.contextWindowTokenLimit <= 0
     || limits.contextWindowTokenLimit < limits.rolloverTokenLimit) {
-    throw new Error("Web provider physical limits are invalid");
+    throw new WebContextFitFailed("invalid_physical_limits");
   }
   const initial = projectFreshWebPhysicalContext(context, DEFAULT_PROJECTION_BUDGET, { protectedRevisionIds });
   if (initial.context.mode === "retained-delta"
@@ -306,9 +308,9 @@ export function fitFreshWebPhysicalContext(
     { retentionStep: 0, fitTarget: "hard", protectedRevisionIds },
   );
   if (minimum.context.transferTokens >= limits.contextWindowTokenLimit) {
-    throw new Error(
-      `Fresh ChatGPT Web projection requires ${minimum.context.transferTokens} estimated tokens after all reducible settled provider evidence was minimized, exceeding the ${limits.contextWindowTokenLimit}-token physical Web window; Native context was left unchanged`,
-    );
+    throw new WebContextFitFailed("physical_window_exceeded", {
+      required: minimum.context.transferTokens, budget: limits.contextWindowTokenLimit,
+    });
   }
 
   if (minimum.context.transferTokens >= limits.rolloverTokenLimit) {

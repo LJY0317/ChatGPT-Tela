@@ -4,7 +4,7 @@ import { structuralDiagnosticEvent, type StructuralDiagnosticEvent } from './dia
 
 const fp = (x: unknown): x is string => typeof x === 'string' && /^[a-f0-9]{24}$/.test(x);
 const number = (x: unknown): x is number => Number.isSafeInteger(x) && Number(x) >= 0;
-const relevant = (stage: string) => /^(native_|web_turn_|web_context_|web_send_|browser_message_prepared|context_checkpoint_|http_transport_|inspection_ownership_revoked|tool_started|tool_settled|tool_failed|tool_error|web_media_upload_started|mcp_native_result_projected|approval_turn_resolution)/.test(stage);
+const relevant = (stage: string) => /^(native_|web_turn_|web_context_|web_send_|web_preparation_failed|browser_message_prepared|context_checkpoint_|http_transport_|inspection_ownership_revoked|tool_started|tool_settled|tool_failed|tool_error|web_media_upload_started|mcp_native_result_projected|approval_turn_resolution)/.test(stage);
 
 /** Counts observed local events, never provider billing, comprehension or effect authority. */
 export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEvent[]) {
@@ -20,7 +20,21 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
   const unique = (stage: string) => new Set(at(stage).map(e=>e.operation_fingerprint).filter(fp)).size;
   const plans=at('web_turn_plan'), lastPlan=plans.at(-1), acceptance=at('web_turn_identity_accepted').at(-1);
   const final=rows.some(e=>e.stage==='native_outcome_committed'&&e.outcome==='final');
-  const failure=rows.find(e=>/^(web_turn_acceptance_timeout|native_execution_failed|web_preparation_failed)$/.test(e.stage));
+  const terminalFailure=rows.find(e=>/^(web_turn_acceptance_timeout|native_execution_failed|web_preparation_failed)$/.test(e.stage));
+  const terminalIndex=terminalFailure?rows.indexOf(terminalFailure):rows.length;
+  // Optional maintenance may refuse its budget while the retained task still succeeds.
+  // A later admitted plan or explicit deferral separates that refusal from execution failure.
+  const causalRefusal=rows.slice(0,terminalIndex).find((e,index)=>
+    /^(native_checkpoint_preparation_rejected|native_context_source_rejected|native_context_fit_rejected)$/.test(e.stage)
+    && (terminalFailure || e.stage!=='native_checkpoint_preparation_rejected')
+    && !rows.slice(index+1,terminalIndex).some(next=>
+      /^(native_working_checkpoint_deferred|web_turn_plan|web_turn_identity_accepted)$/.test(next.stage)));
+  const failure=causalRefusal??terminalFailure;
+  const firstFailureReason=failure?.first_reason_class??failure?.reason_class;
+  const preparationFailure=at('web_preparation_failed')[0];
+  const checkpointPlan=at('native_checkpoint_preparation_planned').at(-1);
+  const budgetRefusal=at('native_checkpoint_preparation_rejected')[0];
+  const fitRefusal=at('native_context_fit_rejected')[0];
   const last=rows.at(-1), retired=at('native_turn_retired').at(-1);
   const state=final?'completed':failure?'failed':retired?'retired_without_final':events.length>512?'unknown':'in_progress';
   const bytes=sum('web_send_activation_started','composer_wire_bytes');
@@ -43,6 +57,19 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
     ...(failure&&final?['recovered_failure_observed']:[]),...(!final&&retired?['retired_without_final']:[]),
     ...(bytes.complete&&body.complete&&protocol.complete&&bytes.total!==body.total+protocol.total?['composer_byte_partition_mismatch']:[]),...(repeatActivations?['repeated_send_boundary']:[]),...(at('native_tool_result_error').length?['tool_reported_error']:[])];
   return {
+    diagnosis:{ firstFailure:failure?{at:failure.ts,stage:failure.stage,reason:failure.first_reason_class??failure.reason_class??failure.stage,
+      phase:failure.phase,plannerStage:preparationFailure?.planner_stage}:undefined,
+      preparation:preparationFailure?{phase:preparationFailure.phase,plannerStage:preparationFailure.planner_stage,
+        reason:preparationFailure.reason_class,requiredEstimate:preparationFailure.required_estimate,fitBudget:preparationFailure.fit_budget}:undefined,
+      checkpointPlan:checkpointPlan?{estimateKind:'conservative_upper_bound',modelCalls:checkpointPlan.planned_model_calls,
+        inputEstimate:checkpointPlan.planned_transfer_estimate,callBudget:checkpointPlan.model_call_budget,inputBudget:checkpointPlan.transfer_budget,
+        sourceBytes:checkpointPlan.source_bytes,fragments:checkpointPlan.fragment_count,completedReceipts:checkpointPlan.completed_receipt_count}:undefined,
+      budgetRefusal:budgetRefusal?{reason:budgetRefusal.reason_class,admittedCalls:budgetRefusal.admitted_model_calls}:undefined,
+      fitRefusal:fitRefusal?{reason:fitRefusal.reason_class,phase:fitRefusal.phase,requiredChars:fitRefusal.required_chars,composerLimit:fitRefusal.composer_limit,logicalEstimate:fitRefusal.logical_estimate,budget:fitRefusal.fit_budget,
+        revisions:fitRefusal.revision_count,checkpointSelected:fitRefusal.checkpoint_selected,largestRevisionBytes:fitRefusal.largest_revision_bytes,
+        authorityBytes:fitRefusal.authority_bytes,userBytes:fitRefusal.user_bytes,toolBytes:fitRefusal.tool_bytes,mediaCount:fitRefusal.media_count}:undefined,
+      replayDenials:at('native_replay_rejected').length,
+      certainty:typeof firstFailureReason==='string'&&!['unknown','unclassified'].includes(firstFailureReason)?'classified_boundary':'insufficient_evidence'},
     contractVersion:1, state, localFinalCommitted:final, durationMs:duration,completedAt:terminal?.ts,observationThrough:last?.ts,warnings,
     timing:{preparationToPlanMs:elapsed('native_response_observer_started','web_turn_plan'),
       sendToAcceptanceMs:elapsed('web_send_activation_started','web_turn_identity_accepted'),
