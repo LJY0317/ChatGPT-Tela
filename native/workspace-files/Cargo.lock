@@ -347,6 +347,7 @@ name = "tela-workspace-files"
 version = "0.1.0"
 dependencies = [
  "cap-fs-ext",
+ "cap-primitives",
  "cap-std",
  "getrandom 0.3.4",
  "serde",

@@ -1,5 +1,9 @@
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
-use cap_std::fs::{Dir, Metadata, MetadataExt};
+use cap_std::fs::{Dir, Metadata};
+#[cfg(unix)]
+use cap_std::fs::MetadataExt;
+#[cfg(windows)]
+use cap_primitives::fs::metadata::_WindowsByHandle;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path};
