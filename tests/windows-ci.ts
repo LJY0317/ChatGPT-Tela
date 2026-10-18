@@ -2,42 +2,44 @@ import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
-// Bun on Windows can crash in one long-running test process after many files.
-// Run every original app/package test, but give each workspace its own process.
+// Bun on Windows can crash after collecting many tests in one process, even
+// when the command is scoped to a single package. Keep every original test,
+// but isolate each test file to identify a genuine failing file and avoid
+// carrying native handles across otherwise independent test suites.
 const testFile = /\.(?:test|spec)\.(?:ts|tsx|js|jsx|mts|mjs|cjs)$/;
 
-function countTests(directory: string): number {
-  let found = 0;
+function testFiles(directory: string): string[] {
+  const found: string[] = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.isDirectory() && entry.name !== "node_modules" && entry.name !== "dist") {
-      found += countTests(join(directory, entry.name));
+      found.push(...testFiles(join(directory, entry.name)));
     } else if (entry.isFile() && testFile.test(entry.name)) {
-      found++;
+      found.push(join(directory, entry.name).replaceAll("\\", "/"));
     }
   }
-  return found;
+  return found.sort();
 }
 
 const groups: string[] = [];
-let files = 0;
+const files: string[] = [];
 for (const root of ["apps", "packages"]) {
   for (const entry of readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     const target = join(root, entry.name);
-    const count = entry.isDirectory() ? countTests(target) : entry.isFile() && testFile.test(entry.name) ? 1 : 0;
-    if (!count) continue;
+    const matched = entry.isDirectory() ? testFiles(target) : entry.isFile() && testFile.test(entry.name) ? [target.replaceAll("\\", "/")] : [];
+    if (!matched.length) continue;
     groups.push(`./${root}/${entry.name}`);
-    files += count;
+    files.push(...matched);
   }
 }
-if (!groups.length || !files) throw new Error("No Windows test files were discovered");
-console.log(`Windows CI will run ${files} test files across ${groups.length} isolated Bun processes.`);
+if (!groups.length || !files.length) throw new Error("No Windows test files were discovered");
+console.log(`Windows CI will run ${files.length} test files from ${groups.length} workspaces in separate Bun processes.`);
 if (process.argv.includes("--list")) process.exit(0);
 
-for (const group of groups) {
-  console.log(`Testing ${group}`);
-  const result = spawnSync(process.execPath, ["test", group], { stdio: "inherit", windowsHide: true });
+for (const file of files) {
+  console.log(`Testing ${file}`);
+  const result = spawnSync(process.execPath, ["test", file], { stdio: "inherit", windowsHide: true });
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(`Windows tests failed in ${group}: exit ${result.status}, signal ${result.signal ?? "none"}`);
+    throw new Error(`Windows tests failed in ${file}: exit ${result.status}, signal ${result.signal ?? "none"}`);
   }
 }
