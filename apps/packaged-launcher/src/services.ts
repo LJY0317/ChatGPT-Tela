@@ -1,6 +1,6 @@
 import { ownedServiceShutdown } from "./service-shutdown";
 import {
-  PackagedPlatformServiceController, resolveProductPaths, withPackagedTransitionOwner,
+  PackagedPlatformServiceController, ServiceRegistrationManager, resolveProductPaths, withPackagedTransitionOwner,
   type ProductPathOptions, type ServiceRegistrationCommandRunner, type PackagedServiceControlIdentity, type TelaServiceId,
 } from "@chatgpt-tela/product-lifecycle";
 import { verifyInstalledPackage } from "./runtime";
@@ -34,6 +34,16 @@ async function runPackagedServicesOwned(args: readonly string[], input: {
       return { service, resource };
     }),
   };
+  const manager = new ServiceRegistrationManager({
+    ...(input.runner ? { runner: input.runner } : {}), platform: blueprint.platform,
+  });
+  // Prove all registrations before the first mutation; a foreign registration
+  // must not turn a three-service request into a partially applied operation.
+  for (const entry of blueprint.services) {
+    if (await manager.observe(entry.resource, ownership) !== "owned") {
+      throw new Error(`installed ${entry.service} registration ownership could not be verified; services preserved`);
+    }
+  }
   const shutdown = ownedServiceShutdown(ownership.installId, resolveProductPaths(input.pathOptions));
   const controller = new PackagedPlatformServiceController({
     blueprint, shutdownService: input.shutdownService ?? shutdown,
@@ -46,6 +56,9 @@ async function runPackagedServicesOwned(args: readonly string[], input: {
   if (action !== "start") await controller.prepare(order);
   for (const service of order) {
     try {
+      // Re-prove at each mutation as well as during preflight.
+      const resource = blueprint.services.find(entry => entry.service === service)!.resource;
+      if (await manager.observe(resource, ownership) !== "owned") throw new Error("registration changed");
       if (chatRestart) { await controller.quiesce(service); await controller.resume(service); }
       else if (action === "start") await controller.resume(service);
       else await controller.quiesce(service);
