@@ -42,9 +42,6 @@ export async function startProfileBridgePreviewServer(input: {
   readonly recoverSyntheticSavedChat?: () => Promise<Omit<CodexSyntheticRecoveryContract, "slot">>;
   readonly reveal?: (id: string, interactive?: boolean) => Promise<void>;
   readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable"; readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed"; readonly approvalWait?: CodexApprovalWaitContract; readonly approvalReview?: { readonly contractVersion: 1; readonly classification: "absent" | "eligible_once" | "eligible_conversation" | "disabled" | "ambiguous" | "unrecognized" | "limit_reached"; readonly nextAction: "none" | "existing_owned_turn_automation" | "human_browser_review"; readonly agentMayApprove: false } }>;
-  /** Activity-only maintenance scan, without DOM, screenshot or UI text. */
-  readonly observeActivity?: () => { readonly activeSurfaceCount: number; readonly accountManagementActive: boolean }
-    | Promise<{ readonly activeSurfaceCount: number; readonly accountManagementActive: boolean }>;
   readonly probeModelSelection?: () => Promise<{
     readonly familyCount: number;
     readonly exercised: boolean;
@@ -196,21 +193,6 @@ export async function startProfileBridgePreviewServer(input: {
         if (body.interactive !== undefined && typeof body.interactive !== "boolean") return new Response(null, { status: 400 });
         try { await input.reveal(body.surfaceId, body.interactive === true); return new Response(null, { status: 204 }); }
         catch { return Response.json({ error: { message: "Selected Web session has ended. Refresh the session list." } }, { status: 409 }); }
-      }
-      if (request.method === "GET" && url.pathname === "/v1/bridge-activity") {
-        if (!input.observeActivity) return new Response(null, { status: 409 });
-        try {
-          const result = await input.observeActivity();
-          if (!Number.isSafeInteger(result.activeSurfaceCount) || result.activeSurfaceCount < 0
-            || result.activeSurfaceCount > 128 || typeof result.accountManagementActive !== "boolean") {
-            throw Error("Unknown activity");
-          }
-          return Response.json({ contractVersion: 1, slot: input.slot,
-            activeSurfaceCount: result.activeSurfaceCount,
-            accountManagementActive: result.accountManagementActive },
-          { headers: { "cache-control": "no-store" } });
-        } catch { return Response.json({ error: "profile_activity_unknown" }, { status: 409,
-          headers: { "cache-control": "no-store" } }); }
       }
       if (request.method !== "GET" || url.pathname !== "/v1/bridge-preview") return new Response(null, { status: 404 });
       const observed = await input.observe(url.searchParams.get("surfaceId") ?? undefined);

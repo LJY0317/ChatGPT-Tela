@@ -86,8 +86,6 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
    * Multiple surfaces require explicit selection of a currently owned lease.
    */
   revealBridgeSurface(id: string, interactive?: boolean): Promise<void>;
-  /** Exact owned Web surface census; never captures pixels or reads DOM. */
-  inspectBridgeActivity(): { readonly activeSurfaceCount: number };
   observeBridgePreview(id?: string): Promise<{
     readonly activeSurfaceCount: number;
     readonly surfaces?: readonly { readonly id: string; readonly label: string }[];
@@ -437,9 +435,6 @@ export async function startElectronDevelopmentRuntime(
       if (!controls) throw new Error("browser inspection input controls are unavailable");
       controls.setInteractive(interactive);
       await browserHost.revealSurface(id);
-    },
-    inspectBridgeActivity() {
-      return Object.freeze({ activeSurfaceCount: browserHost.listSurfaces().length });
     },
     async observeBridgePreview(id?: string) {
       const surfaces = browserHost.listSurfaces();

@@ -2,8 +2,6 @@ import { expect, test } from "bun:test";
 import { ProfileConnectionError } from "./profile-operation";
 import { startCodexService } from "./controller";
 import type { CodexNativeTargetAdapter } from "./native-target";
-import type { RemoteTurnBridge } from "@chatgpt-tela/mcp";
-import { RoutedCodexTurnBridge } from "./routed-turn-bridge";
 
 function fixture(state: string, targetState: string, desktopProcessId?: number) {
   const target = { slot: 1, adapterKind: "default-desktop" as const, id: "default", displayName: "ChatGPT", state: targetState, managed: true };
@@ -17,37 +15,6 @@ function fixture(state: string, targetState: string, desktopProcessId?: number) 
   };
   return { adapter, quits: () => quits };
 }
-
-test("service shutdown rechecks a tool accepted after maintenance readiness and restores admission on refusal", async () => {
-  const native = fixture("available", "stopped");
-  const service = await startCodexService({ config: {}, profileRuntimeCommand: ["unused"],
-    nativeTargetAdapter: native.adapter });
-  const router = service.tools as RoutedCodexTurnBridge;
-  let release!: (value: { callId: string; content: string; isError: boolean }) => void;
-  const pending = new Promise<{ callId: string; content: string; isError: boolean }>(resolve => { release = resolve; });
-  const bridge: RemoteTurnBridge = {
-    async inventory() { return []; },
-    invoke: async () => pending,
-    async close() {},
-  };
-  const unmount = router.mount("ProfileA1", bridge);
-  const capability = `turnr_ProfileA1_${"a".repeat(43)}`;
-  const invocation = router.invoke(capability, { callId: "accepted", wireName: "test-native-tool",
-    mode: "structured", arguments: {} });
-  try {
-    expect(router.activeOperationCount).toBe(1);
-    await expect(service.close()).rejects.toThrow("in-flight Native tool work");
-    expect(router.activeOperationCount).toBe(1);
-    // Refusal cannot strand the service with its tool routing closed.
-    expect(await router.inventory(capability)).toEqual([]);
-    expect(native.quits()).toBe(0);
-  } finally {
-    release({ callId: "accepted", content: "completed", isError: false });
-    await invocation;
-    unmount();
-    await service.close();
-  }
-});
 
 test("reopen consent is bound to the observed Desktop PID; replacement apps remain open", async () => {
   const native = fixture("restart-required", "running", 456);

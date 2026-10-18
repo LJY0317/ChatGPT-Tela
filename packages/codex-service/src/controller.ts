@@ -42,7 +42,6 @@ import {
 import { profileLaunch, verifyProfileRuntimeProcess } from "./profile-launch";
 import { RoutedCodexTurnBridge } from "./routed-turn-bridge";
 import { createProfileSupervisorLease, type ProfileSupervisorLease } from "./profile-supervision";
-import { inspectLoadedNativeActivity } from "./native-maintenance-activity";
 
 // Native and Web preparation share an authenticated startup lease and bounded deadline.
 const CHILD_START_TIMEOUT_MS = 5 * 60_000;
@@ -115,9 +114,6 @@ export interface CodexService {
   readonly config: CodexServiceConfig;
   readonly tools: TurnBridgeBackend;
   serviceStatus(): ServiceStatus;
-  /** Fresh, read-only, fail-closed installed service shutdown admission.
-   * No specific turn is exempted without separate current Native authority. */
-  shutdownReadiness?(): Promise<"ready" | "blocked">;
   profiles(): Promise<readonly CodexProfileStatus[]>;
   startProfile(slot: number, options?: ProfileStartOptions): Promise<CodexProfileStatus>;
   waitWebPreparation(slot: number): Promise<CodexProfileStatus>;
@@ -137,14 +133,6 @@ export interface CodexService {
   modelSelectionCanary(slot: number): Promise<CodexModelSelectionCanaryContract>;
   close(): Promise<void>;
   readonly activeProfileCount: number;
-}
-
-/** Emitted only before any owned profile cleanup or Native interrupt begins. */
-export class CodexShutdownNotStartedError extends Error {
-  constructor() {
-    super("Tela Codex has in-flight Native tool work; normal shutdown was not started");
-    this.name = "CodexShutdownNotStartedError";
-  }
 }
 
 function routeId(): string {
@@ -341,69 +329,6 @@ export async function startCodexService(input: {
     return targets.resolve(slot, input.signal);
   };
 
-  const observeIdleWeb = async (profile: OwnedProfile, signal: AbortSignal): Promise<boolean> => {
-    const response = await fetch(new URL("v1/bridge-activity", profile.bridgePreviewUrl), {
-      headers: { authorization: `Bearer ${profile.uiToken}` }, signal,
-    });
-    if (!response.ok) return false;
-    const body = await response.json().catch(() => undefined) as unknown;
-    const item = body && typeof body === "object" && !Array.isArray(body)
-      ? body as Record<string, unknown> : undefined;
-    return item?.contractVersion === 1 && item.slot === profile.slot
-      && item.activeSurfaceCount === 0 && item.accountManagementActive === false;
-  };
-
-  const inspectShutdownReadiness = async (): Promise<"ready" | "blocked"> => {
-    if (stopping || input.signal?.aborted || starting.size > 0
-      || routedBridge.activeOperationCount > 0) return "blocked";
-    // There are no managed profiles or routed operations to interrupt. This
-    // service may stop without inspecting an external Desktop it does not own.
-    if (owned.size === 0 && routedBridge.routeCount === 0) return "ready";
-    try {
-      const before = await targets.maintenanceProfiles?.(input.signal);
-      if (!before) return "blocked";
-      if (owned.size > 99 || before.length > 99) return "blocked";
-      if (before.some(({ target, session }) =>
-        !owned.has(target.slot) && (target.state === "running"
-          || session.state === "ready" || session.desktopProcessId !== undefined))) {
-        return "blocked";
-      }
-      const checked = new Set<number>();
-      for (const profile of owned.values()) {
-        if (profile.stopping || profile.accountManagementActive || profile.webState !== "ready"
-          || !profile.terminalEndpoint || checked.has(profile.slot)) return "blocked";
-        checked.add(profile.slot);
-        const exact = before.find(item => item.target.slot === profile.slot);
-        if (!exact || !ownsNativeTargetSession(exact.target, exact.session, profile)) return "blocked";
-        const signal = input.signal
-          ? AbortSignal.any([input.signal, AbortSignal.timeout(12_000)])
-          : AbortSignal.timeout(12_000);
-        if (!await observeIdleWeb(profile, signal)) return "blocked";
-        const rpc = await connectCodexAppServerWebSocket(profile.terminalEndpoint, { signal });
-        try {
-          const native = await inspectLoadedNativeActivity(rpc, signal);
-          if (native.activeThreadCount > 0) return "blocked";
-        } finally { await rpc.close(); }
-        if (!await observeIdleWeb(profile, signal)) return "blocked";
-        const after = await targets.session(profile.target.id, signal);
-        if (!ownsNativeTargetSession(profile.target, after, profile)) return "blocked";
-      }
-      const after = await targets.maintenanceProfiles?.(input.signal);
-      if (!after) return "blocked";
-      const identity = (items: typeof before) => JSON.stringify(items.map(({ target, session }) =>
-        [target.slot, target.id, target.adapterKind, target.state, session.state,
-          session.desktopProcessId ?? null, session.responsesRouteFingerprint ?? null]));
-      return !stopping && starting.size === 0 && routedBridge.activeOperationCount === 0
-        && checked.size === owned.size && identity(before) === identity(after)
-        ? "ready" : "blocked";
-    } catch {
-      emitDiagnosticEvent("chatgpt_tela_codex", "maintenance_activity_unproven", {
-        reason_class: "read_only_inspection_unavailable",
-      });
-      return "blocked";
-    }
-  };
-
   const interruptNativeTurns = async (slot: number, session: CodexNativeTargetSession): Promise<void> => {
     if (!session.endpoint) return;
     const count = await interruptLoadedAppServerTurns(session.endpoint, {
@@ -513,7 +438,6 @@ export async function startCodexService(input: {
       return Object.freeze({ contractVersion: 1 as const, service: "codex" as const, instanceId,
         state: stopping ? "stopping" as const : "ready" as const });
     },
-    shutdownReadiness: inspectShutdownReadiness,
     async profiles() {
       const inventory = await targets.profiles(input.signal);
       return Object.freeze(await Promise.all(inventory.map(async ({ target, session }) => {
@@ -916,15 +840,7 @@ export async function startCodexService(input: {
     close() {
       if (closing) return closing;
       stopping = true;
-      routedBridge.closeAdmission();
       closing = (async () => {
-        // A tool accepted AFTER the preceding read-only readiness snapshot
-        // must not be interrupted by the service shutdown. Closing admission
-        // and checking the in-flight count are synchronous in this process;
-        // refusal restores admission without touching an owned child.
-        if (routedBridge.activeOperationCount !== 0) {
-          throw new CodexShutdownNotStartedError();
-        }
         // Admission is closed before taking this snapshot. An already-admitted
         // start may publish its child late; drain it before enumerating owners.
         await Promise.all([...starting.values()]);
@@ -937,7 +853,6 @@ export async function startCodexService(input: {
       })().catch(error => {
         closing = undefined;
         stopping = false;
-        routedBridge.reopenAdmission();
         throw error;
       });
       return closing;

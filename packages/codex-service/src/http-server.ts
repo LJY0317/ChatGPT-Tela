@@ -11,7 +11,7 @@ import {
   parseCodexSyntheticRecoveryContract,
 } from "@chatgpt-tela/service-protocol";
 import { ProfileConnectionError } from "./profile-operation";
-import { CodexShutdownNotStartedError, type CodexService } from "./controller";
+import type { CodexService } from "./controller";
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
@@ -37,14 +37,6 @@ function bearer(request: Request): string | undefined {
 
 function error(status: number, message: string): Response {
   return Response.json({ error: { type: "tela_codex_service_error", message } }, { status });
-}
-
-function shutdownNotStarted(instanceId: string): Response {
-  return Response.json({ contractVersion: 1, service: "codex",
-    instanceId, shutdown: "not-started",
-    error: { type: "tela_codex_shutdown_blocked",
-      message: "Other Native or Web work is active or cannot be proved idle" } },
-  { status: 409, headers: { "cache-control": "no-store" } });
 }
 
 function slot(pathname: string, action: "start" | "stop" | "web-reconnect"): number | undefined {
@@ -95,15 +87,7 @@ export async function startCodexServiceHttpServer(input: {
       const url = new URL(request.url);
       try {
         if (request.method === "GET" && url.pathname === "/v1/status") {
-          const status = input.service.serviceStatus();
-          if (url.searchParams.get("shutdown-readiness") === "1") {
-            const readiness = await input.service.shutdownReadiness?.().catch(() => "blocked" as const)
-              ?? "blocked";
-            return Response.json({ ...status, shutdownReadiness: readiness }, {
-              headers: { "cache-control": "no-store" },
-            });
-          }
-          return Response.json(status);
+          return Response.json(input.service.serviceStatus());
         }
         if (request.method === "GET" && url.pathname === "/v1/codex/profiles") {
           const profiles = await input.service.profiles();
@@ -339,21 +323,7 @@ export async function startCodexServiceHttpServer(input: {
         if (request.method === "POST" && url.pathname === "/v1/shutdown") {
           // Acknowledgement authorizes payload replacement. A refused child
           // cleanup must return failure while service/control ownership survives.
-          if (await input.service.shutdownReadiness?.().catch(() => "blocked" as const) !== "ready") {
-            return shutdownNotStarted(input.service.instanceId);
-          }
-          try {
-            await input.service.close();
-          } catch (cause) {
-            // A newly admitted tool may appear after readiness but before
-            // close's synchronous admission fence. Only this typed, no-quit
-            // refusal is safe to classify as 'not-started'. Other failures
-            // may have already changed an owner; preserve uncertainty.
-            if (cause instanceof CodexShutdownNotStartedError) {
-              return shutdownNotStarted(input.service.instanceId);
-            }
-            throw cause;
-          }
+          await input.service.close();
           lifecycle.afterResponse(resolveShutdown);
           return Response.json({ status: "shutting-down" });
         }
