@@ -6,7 +6,7 @@ import { AppServerCompactionHistorySource } from "@chatgpt-tela/codex";
 import { restoreNativeHistoricalImages } from "@chatgpt-tela/codex";
 import { defineNativeTurnAuthority } from "@chatgpt-tela/core";
 import { NativeIngressMediaRegistry, prepareNativeIngressTurnMedia } from "@chatgpt-tela/core";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { constants, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -389,6 +389,14 @@ test("owner-authorized Native localImage is restored only for its same historica
       threadId:"thread",turnId:"current",cwd:root,workspaceRoots:[root],
       sandbox:{kind:"read-only",network:"restricted"},
     }));
+    if (constants.O_NOFOLLOW === undefined) {
+      // The Native reader cannot safely reject symlink traversal here.
+      // Preserve its fail-closed behavior instead of weakening media access.
+      expect(restored.inlineAssets).toHaveLength(0);
+      expect(restored.references.find(ref=>ref.kind==="image")?.availability).toBe("unavailable");
+      expect(restored.content).not.toContain(path);
+      return;
+    }
     expect(restored.inlineAssets).toHaveLength(1);
     expect(restored.references.find(ref=>ref.kind==="image")?.id).toBe(original?.id);
     expect(restored.references.find(ref=>ref.kind==="image")?.availability).toBe("verified_inline_bytes");

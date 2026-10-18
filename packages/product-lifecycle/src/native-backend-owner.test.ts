@@ -1,15 +1,17 @@
 import { afterEach, expect, test } from "bun:test";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { acquireNativeBackendOwnership } from "./native-backend-owner";
 import { resolveProductPaths } from "./layout";
 import { ensureOwnershipManifest } from "./ownership-store";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+const removeFixture = registerTemporaryFixtureCleanup();
+afterEach(() => { for (const root of roots.splice(0)) removeFixture(root); });
 async function fixture() {
   const root = mkdtempSync(join(tmpdir(), "tela-backend-owner-")); roots.push(root);
   const paths = resolveProductPaths({ platform: "linux", home: root, environment: {} });
@@ -41,23 +43,30 @@ test("owner loss preserves live backend authority, and only proven absence allow
   const f = await fixture();
   const module = pathToFileURL(join(import.meta.dir, "native-backend-owner.ts")).href;
   const layout = pathToFileURL(join(import.meta.dir, "layout.ts")).href;
+  // The test harness owns the backend independently of the short-lived
+  // owner. Windows may terminate a process's children when the owner exits;
+  // that must not turn this *live-backend* recovery test into an absent case.
+  const backend = Bun.spawn([process.execPath, "-e", "setInterval(()=>{},100000)"], {
+    stdin: "ignore", stdout: "ignore", stderr: "ignore",
+  });
   const script = `import {acquireNativeBackendOwnership} from ${JSON.stringify(module)};
     import {resolveProductPaths} from ${JSON.stringify(layout)};
     const lease=await acquireNativeBackendOwnership({nativeHome:${JSON.stringify(f.nativeHome)},paths:resolveProductPaths({platform:'linux',home:${JSON.stringify(f.root)},environment:{}})});
     lease.beginSpawn();
-    const child=Bun.spawn([process.execPath,'-e','setInterval(()=>{},100000)'],{stdin:'ignore',stdout:'ignore',stderr:'ignore'});
-    lease.attachBackend(child.pid);console.log(child.pid);
+    lease.attachBackend(${backend.pid});console.log("admitted");
     await Bun.stdin.stream().getReader().read();process.exit(23);`;
-  const owner = Bun.spawn([process.execPath, "-e", script], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-  const reader = owner.stdout.getReader(), first = await reader.read(); reader.releaseLock();
-  const backendPid = Number(new TextDecoder().decode(first.value).trim());
-  expect(Number.isSafeInteger(backendPid) && backendPid > 0).toBe(true);
-  owner.stdin.write("exit"); owner.stdin.end(); expect(await owner.exited).toBe(23);
   try {
+    const owner = Bun.spawn([process.execPath, "-e", script], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    const reader = owner.stdout.getReader(), first = await reader.read(); reader.releaseLock();
+    expect(new TextDecoder().decode(first.value).trim()).toBe("admitted");
+    owner.stdin.write("exit"); owner.stdin.end(); expect(await owner.exited).toBe(23);
+    expect(Number.isSafeInteger(backend.pid) && backend.pid > 0).toBe(true);
+    process.kill(backend.pid, 0);
     await expect(acquireNativeBackendOwnership(f)).rejects.toThrow("Previous Native backend is still running");
-  } finally { try { process.kill(backendPid, "SIGTERM"); } catch { /* Fixture already exited. */ } }
-  const end = Date.now() + 5000;
-  while (Date.now() < end) { try { process.kill(backendPid, 0); } catch { break; } await Bun.sleep(10); }
+  } finally {
+    backend.kill();
+    await backend.exited;
+  }
   const next = (await acquireNativeBackendOwnership(f))!; next.cancelBeforeSpawn();
 });
 
