@@ -282,7 +282,7 @@ class RendererFixturePage extends FakePage {
       return runInNewContext(`(${source})(argument)`, Object.assign(this.rendererState, {
         argument, innerWidth: 800, innerHeight: 600, requestAnimationFrame: (callback: () => void) => this.animationFrame(callback),
         document: Object.assign(this.document, { documentElement: this.document, elementFromPoint: this.hitTest }), HTMLElement: FixtureElement, HTMLButtonElement: FixtureElement,
-        getComputedStyle: (element: FixtureElement) => ({ display: element.getAttribute("data-fixture-display") ?? "block", visibility: element.getAttribute("data-fixture-visibility") ?? "visible", opacity: element.getAttribute("data-fixture-opacity") ?? "1", pointerEvents: element.getAttribute("data-fixture-pointer-events") ?? "auto" }),
+        getComputedStyle: (element: FixtureElement) => ({ display: element.getAttribute("data-fixture-display") ?? "block", visibility: element.getAttribute("data-fixture-visibility") ?? "visible", opacity: element.getAttribute("data-fixture-opacity") ?? "1", pointerEvents: element.getAttribute("data-fixture-pointer-events") ?? "auto", overflowY: element.getAttribute("data-fixture-overflow-y") ?? "visible" }),
         location: { href: "https://chatgpt.com/" }, crypto: { randomUUID: () => "synthetic-card" },
       })) as Result;
     }
@@ -1140,6 +1140,60 @@ describe("current ChatGPT DOM surface driver", () => {
       expect(clicks).toEqual([{ x: 20, y: 30 }]);
     } finally { clearTimeout(timer); owner.abort(); }
   });
+  test("approval diagnosis preserves missing menu linkage and clipped target evidence without card data", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "tela-approval-probe-"));
+    const file = join(scratch, "events.jsonl");
+    const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+    class DiagnosticElement extends FixtureElement {
+      parentElement: DiagnosticElement | null = null;
+      id = "PRIVATE_ELEMENT_ID";
+      clientWidth = 200; clientHeight = 50; clientLeft = 0; clientTop = 0;
+      scrollTop = 100; scrollLeft = 0; scrollWidth = 200; scrollHeight = 500;
+      hasAttribute(name: string) { return this.getAttribute(name) !== null; }
+      matches(selector: string) { return selector.includes(":disabled") && this.disabled; }
+    }
+    try {
+      const deny = new DiagnosticElement(); deny.textContent = "Deny";
+      const allow = new DiagnosticElement(); allow.textContent = "Allow once";
+      allow.getBoundingClientRect = () => ({ left: 10, top: 90, width: 80, height: 30 });
+      const disclosure = new DiagnosticElement({ "aria-label": "Approval options", "aria-haspopup": "menu", "aria-expanded": "false" });
+      const card = new DiagnosticElement({}, { button: [deny, allow, disclosure] });
+      card.textContent = "PRIVATE_CARD_CONTENT";
+      const viewport = new DiagnosticElement({ "data-fixture-overflow-y": "hidden" });
+      viewport.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 50 });
+      card.parentElement = viewport; allow.parentElement = card;
+      const blocker = new DiagnosticElement(); blocker.textContent = "PRIVATE_BLOCKER_CONTENT";
+      const document = Object.assign(new DiagnosticElement({}, { '[data-codex-approval-surface="true"]': [card] }), {
+        hasFocus: () => false, visibilityState: "hidden",
+      });
+      const page = new RendererFixturePage(document); page.hitTest = () => blocker;
+      let clicks = 0; page.pointerClick = async () => { clicks++; };
+      const driver = new ChatGptDomSurfaceDriver(page);
+      await driver.processApprovalCard("full_access");
+      const first = readFileSync(file, "utf8");
+      await driver.processApprovalCard("full_access");
+      const rows = readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const probes = rows.filter(row => /approval_(structure|control|layout)_observed/.test(row.stage));
+      expect(probes.length).toBeGreaterThan(0);
+      expect(probes).toEqual(first.trim().split("\n").map(line => JSON.parse(line))
+        .filter(row => /approval_(structure|control|layout)_observed/.test(row.stage)));
+      for (const row of probes) expect(structuralDiagnosticEvent(row)).toEqual(row);
+      expect(probes.find(row => row.stage === "approval_structure_observed" && row.phase === "observed"))
+        .toMatchObject({ probe_available: true, popup_menu_count: 1, popup_with_controls_count: 0,
+          options_disclosure_count: 1, options_ready: false, document_hidden: true });
+      expect(probes.find(row => row.stage === "approval_control_observed" && row.kind === "options"))
+        .toMatchObject({ popup_menu: true, controls_present: false, collapsed: true });
+      expect(probes.find(row => row.stage === "approval_layout_observed" && row.phase === "target" && row.depth === 2))
+        .toMatchObject({ scroll_top: 100, height: 50, overflow_y_clips: true, target_center_outside_y: true });
+      expect(first).not.toMatch(/PRIVATE_|Approval options|Allow once/);
+      expect(clicks).toBe(0);
+    } finally {
+      if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
   test.each(["none", "document", "dialog", "control", "other"] as const)(
     "obstructed approval records bounded content-free %s evidence without input", async kind => {
       const scratch = mkdtempSync(join(tmpdir(), "tela-approval-obstruction-"));
@@ -1222,7 +1276,7 @@ describe("current ChatGPT DOM surface driver", () => {
     }
     override async evaluate<Argument, Result>(source: string, argument: Argument): Promise<Result> {
       if (source.includes('[data-testid="tool-approval-card"]')) {
-        if (argument) return { ...this.lastObservation,
+        if ((argument as { choice?: string } | undefined)?.choice) return { ...this.lastObservation,
           allowOncePoint: this.preparedTarget === undefined ? this.lastObservation.allowOncePoint : this.preparedTarget,
         } as Result;
         this.inspections += 1;

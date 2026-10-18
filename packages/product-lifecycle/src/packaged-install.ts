@@ -16,7 +16,6 @@ import { resolveProductPaths, type ProductPathOptions, type ProductPaths, type T
 import type { OwnershipObservation } from "./uninstall";
 import { packagedInstallSpecFromPayload, readPackagedProductManifest } from "./packaged-manifest";
 import { assertChatProcessStoreCompatible } from "./chat-process-storage";
-import { verifyPackagedPayloadSignature, type PackagedPayloadTrustedKeys } from "./packaged-signature";
 import { assertNoActivePackagedTransition } from "./packaged-transition";
 
 export interface PackagedServiceLaunchSpec {
@@ -523,31 +522,6 @@ export async function applyPackagedInstallFromPayload(input: {
     ...(input.environment ? { environment: input.environment } : {}),
     ...(input.runner ? { runner: input.runner } : {}),
   });
-}
-
-export async function planSignedPackagedInstallFromPayload(input: {
-  readonly payloadSourcePath: string;
-  readonly trustedKeys: PackagedPayloadTrustedKeys;
-  readonly platform?: NodeJS.Platform;
-  readonly home?: string;
-  readonly environment?: Readonly<Record<string, string | undefined>>;
-  readonly runner?: ServiceRegistrationCommandRunner;
-}): Promise<PlannedPackagedInstall> {
-  verifyPackagedPayloadSignature({ payloadRoot: input.payloadSourcePath, trustedKeys: input.trustedKeys });
-  return planPackagedInstallFromPayload(input);
-}
-
-export async function applySignedPackagedInstallFromPayload(input: {
-  readonly planned: PlannedPackagedInstall;
-  readonly payloadSourcePath: string;
-  readonly trustedKeys: PackagedPayloadTrustedKeys;
-  readonly platform?: NodeJS.Platform;
-  readonly home?: string;
-  readonly environment?: Readonly<Record<string, string | undefined>>;
-  readonly runner?: ServiceRegistrationCommandRunner;
-}): ReturnType<typeof applyPackagedInstallFromPayload> {
-  verifyPackagedPayloadSignature({ payloadRoot: input.payloadSourcePath, trustedKeys: input.trustedKeys });
-  return applyPackagedInstallFromPayload(input);
 }
 
 /** Persist only the reviewed identity before acquiring the shared initial-install lock. */

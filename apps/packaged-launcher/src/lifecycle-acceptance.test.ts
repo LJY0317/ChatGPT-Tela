@@ -1,10 +1,9 @@
 import { expect, test } from "bun:test";
-import { generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildPackagedPayload, createEd25519PackagedPayloadSigner, prepareOwnedDirectory, CURRENT_PACKAGED_LIFECYCLE,
+  buildPackagedPayload, prepareOwnedDirectory, CURRENT_PACKAGED_LIFECYCLE,
   readOwnershipManifest, resolveProductPaths, packagedUninstallJournalPath, withPackagedTransitionOwner,
   type ServiceRegistrationCommandResult, type ServiceRegistrationCommandRunner,
   PackagedServiceShutdownNotStartedError, packagedUpgradeJournalPath,
@@ -43,15 +42,13 @@ class LifecycleServices implements ServiceRegistrationCommandRunner {
   }
 }
 
-test("signed install -> update -> keep-data removal -> reinstall -> complete removal preserves external ChatGPT state", async () => {
+test("install -> update -> keep-data removal -> reinstall -> complete removal preserves external ChatGPT state", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-lifecycle-acceptance-"));
   try {
     const home = join(root, "home");
     const input = join(root, "input");
     mkdirSync(home); mkdirSync(join(input, "electron"), { recursive: true });
-    const keys = generateKeyPairSync("ed25519");
-    const publicKey = join(root, "trusted.pem");
-    writeFileSync(publicKey, keys.publicKey.export({ type: "spki", format: "pem" }));
+
     writeFileSync(join(input, "electron", "electron"), "fixture", { mode: 0o755 });
     writeFileSync(join(input, "runtime.cjs"), "module.exports = {};\n");
     const payload = (version: string) => {
@@ -63,7 +60,6 @@ test("signed install -> update -> keep-data removal -> reinstall -> complete rem
           { executableSourcePath: join(input, "launcher") }])) as Record<"gateway" | "chat" | "codex", { executableSourcePath: string }>,
         profileRuntime: { electronBundleSourcePath: join(input, "electron"),
           electronExecutableRelativePath: "electron", entrypointSourcePath: join(input, "runtime.cjs"), setupEntrypointSourcePath: join(input, "runtime.cjs") },
-        signer: createEd25519PackagedPayloadSigner({ keyId: "acceptance-only", privateKey: keys.privateKey }),
       });
       return outputPath;
     };
@@ -80,7 +76,7 @@ test("signed install -> update -> keep-data removal -> reinstall -> complete rem
     const external = [join(home, "official-app"), join(home, "default-config.toml"), join(home, "native-conversation.txt"), join(home, "user-project.txt")];
     for (const path of external) writeFileSync(path, "external fixture: preserve exactly\n");
     const execute = (command: string, mode: "dry-run" | "apply", source: string) => runPackagedLifecycleCommand(
-      [command, `--${mode}`, "--trusted-public-key", publicKey], { ...options, defaultPayloadRoot: source });
+      [command, `--${mode}`, ], { ...options, defaultPayloadRoot: source });
     await execute("install", "dry-run", first);
     expect(existsSync(paths.installManifest)).toBe(false);
     const installed = await execute("install", "apply", first) as { verify: { ready: boolean } };
@@ -200,7 +196,7 @@ test("signed install -> update -> keep-data removal -> reinstall -> complete rem
     await execute("upgrade", "dry-run", next);
     assertSaved();
     expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("1.0.0");
-    const upgrade = ["upgrade", "--apply", "--payload", next, "--trusted-public-key", publicKey];
+    const upgrade = ["upgrade", "--apply", "--payload", next, ];
     await expect(runPackagedLifecycleCommand(upgrade, { ...options, async prepareShutdownService(service) {
       if (service === "chat") throw new PackagedServiceShutdownNotStartedError(service);
     } })).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);

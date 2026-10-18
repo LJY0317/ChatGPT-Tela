@@ -32,18 +32,15 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
   private let nextStep = NSTextField(wrappingLabelWithString: "")
   private let planText = NSTextField(wrappingLabelWithString: "Review an operation before applying it.")
   private let packageLabel = NSTextField(labelWithString: "No package selected")
-  private let keyLabel = NSTextField(labelWithString: "No release key selected")
   private let picker = NSPopUpButton()
   private let removeData = NSButton(checkboxWithTitle: "Also remove Tela settings, saved logins, and credentials", target: nil, action: nil)
   private let reviewButton = NSButton(title: "Review changes", target: nil, action: nil)
   private let applyButton = NSButton(title: "Apply…", target: nil, action: nil)
   private let packageButton = NSButton(title: "Choose package…", target: nil, action: nil)
-  private let keyButton = NSButton(title: "Choose trusted release key…", target: nil, action: nil)
   private let progress = NSProgressIndicator()
   private let packageSection = NSBox()
   private let removalSection = NSBox()
   private var package: URL?
-  private var key: URL?
   private var review: TelaMaintenanceReview?
   private var busy = false
   private var completedRemoval = false
@@ -87,26 +84,25 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
 
     picker.addItems(withTitles: ["Update Tela", "Repair this installation", "Remove Tela"])
     picker.target = self; picker.action = #selector(selectionChanged)
-    for (button, selector) in [(packageButton, #selector(choosePackage)), (keyButton, #selector(chooseKey)),
+    for (button, selector) in [(packageButton, #selector(choosePackage)),
       (reviewButton, #selector(reviewChanges)), (applyButton, #selector(applyChanges))] {
       button.bezelStyle = .rounded; button.target = self; button.action = selector
     }
-    packageButton.setAccessibilityLabel("Choose signed Tela package")
-    keyButton.setAccessibilityLabel("Choose trusted release key")
+    packageButton.setAccessibilityLabel("Choose Tela package")
     operationHelp.textColor = .secondaryLabelColor
     content.addArrangedSubview(section("Action", views: [picker, operationHelp]))
 
-    for field in [packageLabel, keyLabel] {
+    for field in [packageLabel] {
       field.font = .systemFont(ofSize: 12)
       field.textColor = .secondaryLabelColor
       field.lineBreakMode = .byTruncatingMiddle
       field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
-    let trust = NSTextField(wrappingLabelWithString: "Use a signed package and an independently trusted release key. Preview releases do not download updates automatically.")
+    let trust = NSTextField(wrappingLabelWithString: "Choose an extracted Tela package from a trusted source. Preview releases do not download updates automatically.")
     trust.font = .systemFont(ofSize: 12); trust.textColor = .secondaryLabelColor
-    configureSection(packageSection, title: "Package and verification key", views: [
-      selectionRow("Signed package", value: packageLabel, button: packageButton),
-      selectionRow("Trusted release key", value: keyLabel, button: keyButton), trust,
+    configureSection(packageSection, title: "Package", views: [
+      selectionRow("Tela package", value: packageLabel, button: packageButton),
+      trust,
     ])
     content.addArrangedSubview(packageSection)
     removeData.target = self; removeData.action = #selector(selectionChanged); removeData.state = .off
@@ -206,13 +202,13 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     packageButton.title = "Choose…"
     switch operation {
     case "repair":
-      operationHelp.stringValue = "Choose a signed package matching the installed version. Your Tela settings and logins are kept."
+      operationHelp.stringValue = "Choose a package matching the installed version. Your Tela settings and logins are kept."
     case "uninstall":
       operationHelp.stringValue = "Remove Tela and its background services. Your projects and original ChatGPT data are kept."
     case "cancel-upgrade":
-      operationHelp.stringValue = "Keep the installed version and restore previously running services. Choose its retained signed package. Available only before file replacement starts."
+      operationHelp.stringValue = "Keep the installed version and restore previously running services. Choose its retained package. Available only before file replacement starts."
     default:
-      operationHelp.stringValue = "Choose the new signed Tela package. You will review its changes before updating."
+      operationHelp.stringValue = "Choose the new Tela package. You will review its changes before updating."
     }
     packageSection.isHidden = operation == "uninstall"
     removalSection.isHidden = operation != "uninstall"
@@ -221,9 +217,8 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     window.defaultButtonCell = (review == nil ? reviewButton : applyButton).cell as? NSButtonCell
     picker.isEnabled = !busy && !completedRemoval
     packageButton.isEnabled = !busy && operation != "uninstall" && !completedRemoval
-    keyButton.isEnabled = packageButton.isEnabled
     removeData.isEnabled = !busy && operation == "uninstall" && !completedRemoval
-    reviewButton.isEnabled = !busy && !completedRemoval && (operation == "uninstall" || (package != nil && key != nil))
+    reviewButton.isEnabled = !busy && !completedRemoval && (operation == "uninstall" || package != nil)
     applyButton.isEnabled = !busy && review != nil && review?.blockers.isEmpty == true && !completedRemoval
     if busy || completedRemoval {
       nextStep.stringValue = ""
@@ -235,9 +230,7 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     } else if operation == "uninstall" {
       nextStep.stringValue = "Choose whether to keep your Tela data, then review the removal."
     } else if package == nil {
-      nextStep.stringValue = "Choose a signed package to begin."
-    } else if key == nil {
-      nextStep.stringValue = "Choose the independently trusted release key to verify this package."
+      nextStep.stringValue = "Choose a package to begin."
     } else {
       nextStep.stringValue = "Ready to review. No changes will be made during review."
     }
@@ -250,18 +243,13 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
   }
   @objc private func choosePackage() {
     let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true
-    panel.allowsMultipleSelection = false; panel.message = operation == "cancel-upgrade" ? "Select the signed package for the currently installed version, not the newer update." : "Select an extracted signed Tela package."
+    panel.allowsMultipleSelection = false; panel.message = operation == "cancel-upgrade" ? "Select the package for the currently installed version, not the newer update." : "Select an extracted Tela package."
     if panel.runModal() == .OK { package = panel.url; packageLabel.stringValue = package?.lastPathComponent ?? "No package selected"; selectionChanged() }
-  }
-  @objc private func chooseKey() {
-    let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-    panel.message = "Select the release public key you trust independently of this package."
-    if panel.runModal() == .OK { key = panel.url; keyLabel.stringValue = key?.lastPathComponent ?? "No release key selected"; selectionChanged() }
   }
   private func arguments(_ mode: String) -> [String] {
     var result = ["maintenance", mode, operation]
     if operation == "uninstall" { if removeData.state == .on { result.append("--remove-data") } }
-    else if let package, let key { result += ["--payload", package.path, "--trusted-public-key", key.path] }
+    else if let package { result += ["--payload", package.path] }
     return result
   }
   private nonisolated static func execute(_ launcher: String, _ arguments: [String]) -> (Int32, Data) {
@@ -294,7 +282,7 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
   }
   @objc private func reviewChanges() {
     guard !busy else { return }; busy = true; review = nil
-    message.stringValue = "Checking signature, ownership, and planned changes…"; updateControls()
+    message.stringValue = "Checking package, ownership, and planned changes…"; updateControls()
     let path = launcher, args = arguments("review")
     Task {
       let result = await Task.detached { Self.execute(path, args) }.value
@@ -310,8 +298,8 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
         message.stringValue = observed.blockers.isEmpty ? "Review complete. No changes applied."
           : "These changes cannot be applied yet. No changes applied."
       } else { message.stringValue = operation == "cancel-upgrade"
-          ? "Couldn't verify cancellation. Select the signed installed-version package and trusted key. Cancellation also requires launcher support and no file replacement. Otherwise resume with the original update package. No changes applied."
-          : "Couldn't review these changes. Check the package and trusted key. Repair needs the installed version; an unfinished transition needs its original package. No changes applied." }
+          ? "Couldn't verify cancellation. Select the signed installed-version package. Cancellation also requires launcher support and no file replacement. Otherwise resume with the original update package. No changes applied."
+          : "Couldn't review these changes. Check the package. Repair needs the installed version; an unfinished transition needs its original package. No changes applied." }
       updateControls()
     }
   }

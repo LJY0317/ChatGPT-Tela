@@ -2,25 +2,21 @@ import { ownedServiceShutdown } from "./service-shutdown";
 import {
   existsSync,
   lstatSync,
-  readFileSync,
   realpathSync,
 } from "node:fs";
 import { resolve } from "node:path";
 import {
   resolveProductPaths,
-  cancelSignedPackagedUpgrade,
-  planSignedPackagedUpgradeCancellation,
-  applySignedPackagedInstallFromPayload,
-  applySignedPackagedRepairFromPayload,
-  applySignedPackagedUpgradeWithRecovery,
-  assertPackagedUpgradeRecoveryArtifact,
+  cancelPackagedUpgrade,
+  planPackagedUpgradeCancellation,
+  applyPackagedInstallFromPayload,
+  applyPackagedRepairFromPayload,
+  applyPackagedUpgradeWithRecovery,
   reviewPackagedRecoveryArtifact,
   PackagedPlatformServiceController,
-  planSignedPackagedInstallFromPayload,
-  planSignedPackagedRepairFromPayload,
-  planSignedPackagedUpgradeFromPayload,
-  readPackagedPayloadSignature,
-  type PackagedPayloadTrustedKeys,
+  planPackagedInstallFromPayload,
+  planPackagedRepairFromPayload,
+  planPackagedUpgradeFromPayload,
   type ServiceRegistrationCommandRunner,
   type TelaServiceId,
 } from "@chatgpt-tela/product-lifecycle";
@@ -32,12 +28,7 @@ export type PackagedLifecycleMode = "dry-run" | "apply";
 export interface ParsedPackagedLifecycleCommand {
   readonly command: PackagedLifecycleCommand;
   readonly mode: PackagedLifecycleMode;
-  readonly trustedPublicKeyPath: string;
   readonly payloadSourcePath?: string;
-  readonly recoveryPayloadPath?: string;
-  readonly recoveryPublicKeyPath?: string;
-  /** Caller-supplied out-of-band public keys for already-owned historical recovery slots. */
-  readonly retainedRecoveryKeys: readonly { readonly keyId: string; readonly path: string }[];
 }
 
 export interface PackagedLifecycleOptions {
@@ -64,77 +55,20 @@ export function parsePackagedLifecycleCommand(arguments_: readonly string[]): Pa
     throw new Error("packaged lifecycle command must be install, repair, upgrade, or cancel-upgrade");
   }
   let mode: PackagedLifecycleMode | undefined;
-  let trustedPublicKeyPath: string | undefined;
   let payloadSourcePath: string | undefined;
-  let recoveryPayloadPath: string | undefined, recoveryPublicKeyPath: string | undefined;
-  const retainedRecoveryKeys: { keyId: string; path: string }[] = [];
-  for (let index = 1; index < arguments_.length; index += 1) {
-    const item = arguments_[index]!;
-    if (item === "--dry-run" || item === "--apply") {
-      const nextMode: PackagedLifecycleMode = item === "--dry-run" ? "dry-run" : "apply";
+  for (let index = 1; index < arguments_.length; index++) {
+    const option = arguments_[index];
+    if (option === "--dry-run" || option === "--apply") {
       if (mode) throw new Error("choose exactly one of --dry-run or --apply");
-      mode = nextMode;
-      continue;
-    }
-    if (item === "--trusted-public-key") {
-      if (trustedPublicKeyPath) throw new Error("--trusted-public-key may be specified only once");
-      trustedPublicKeyPath = oneValue(arguments_, index, item);
-      index += 1;
-      continue;
-    }
-    if (item === "--payload") {
+      mode = option === "--apply" ? "apply" : "dry-run";
+    } else if (option === "--payload") {
       if (payloadSourcePath) throw new Error("--payload may be specified only once");
-      payloadSourcePath = oneValue(arguments_, index, item);
-      index += 1;
-      continue;
-    }
-    if (item === "--recovery-payload" || item === "--recovery-public-key") {
-      const value = oneValue(arguments_, index, item);
-      if (item === "--recovery-payload") {
-        if (recoveryPayloadPath) throw new Error("duplicate recovery payload");
-        recoveryPayloadPath = value;
-      } else {
-        if (recoveryPublicKeyPath) throw new Error("duplicate recovery public key");
-        recoveryPublicKeyPath = value;
-      }
-      index += 1; continue;
-    }
-    if (item === "--retained-recovery-key") {
-      const keyId = oneValue(arguments_, index, item);
-      const path = oneValue(arguments_, index + 1, item);
-      if (!/^[a-zA-Z0-9._-]{1,128}$/.test(keyId)
-        || retainedRecoveryKeys.some(entry => entry.keyId === keyId)) {
-        throw new Error("retained recovery key id is invalid or duplicated");
-      }
-      retainedRecoveryKeys.push({ keyId, path });
-      index += 2; continue;
-    }
-    throw new Error(`unknown packaged lifecycle argument: ${item}`);
+      payloadSourcePath = oneValue(arguments_, index++, option);
+    } else throw new Error(`unknown lifecycle option: ${option}`);
   }
   if (!mode) throw new Error("choose exactly one of --dry-run or --apply");
-  if (!trustedPublicKeyPath) throw new Error("--trusted-public-key is required");
-  if (command === "cancel-upgrade" && !payloadSourcePath) throw new Error("cancel-upgrade requires --payload for the signed source package");
-  if (Boolean(recoveryPayloadPath) !== Boolean(recoveryPublicKeyPath)
-    || (recoveryPayloadPath && command !== "upgrade")) throw new Error("upgrade recovery requires both signed source payload and public key");
-  if (retainedRecoveryKeys.length && (command !== "upgrade" || !recoveryPayloadPath)) {
-    throw new Error("historical recovery keys require an explicit signed upgrade recovery source");
-  }
-  return Object.freeze({
-    command,
-    mode,
-    trustedPublicKeyPath,
-    retainedRecoveryKeys: Object.freeze(retainedRecoveryKeys.map(item => Object.freeze(item))),
-    ...(payloadSourcePath ? { payloadSourcePath } : {}),
-    ...(recoveryPayloadPath ? { recoveryPayloadPath, recoveryPublicKeyPath: recoveryPublicKeyPath! } : {}),
-  });
-}
-
-function realRegularFile(path: string, field: string): string {
-  const absolute = resolve(path);
-  if (!existsSync(absolute)) throw new Error(`${field} is missing: ${absolute}`);
-  const stat = lstatSync(absolute);
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${field} must be a real regular file`);
-  return realpathSync(absolute);
+  if (command === "cancel-upgrade" && !payloadSourcePath) throw new Error("cancel-upgrade requires --payload for the retained source package");
+  return Object.freeze({ command, mode, ...(payloadSourcePath ? { payloadSourcePath } : {}) });
 }
 
 function realDirectory(path: string, field: string): string {
@@ -143,12 +77,6 @@ function realDirectory(path: string, field: string): string {
   const stat = lstatSync(absolute);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`${field} must be a real directory`);
   return realpathSync(absolute);
-}
-
-function trustedKeys(payloadSourcePath: string, trustedPublicKeyPath: string): PackagedPayloadTrustedKeys {
-  const envelope = readPackagedPayloadSignature(payloadSourcePath);
-  const publicKey = readFileSync(realRegularFile(trustedPublicKeyPath, "trusted release public key"));
-  return Object.freeze({ [envelope.keyId]: publicKey });
 }
 
 function lifecycleEnvironment(input: PackagedLifecycleOptions) {
@@ -169,12 +97,11 @@ export async function runPackagedLifecycleCommand(
     parsed.payloadSourcePath ?? options.defaultPayloadRoot ?? payloadRootForLauncherExecutable(),
     "packaged payload",
   );
-  const keys = trustedKeys(payloadSourcePath, parsed.trustedPublicKeyPath);
   const environment = lifecycleEnvironment(options);
 
   if (parsed.command === "cancel-upgrade") {
-    const input = { sourcePayloadPath: payloadSourcePath, trustedKeys: keys, ...environment };
-    const reviewed = await planSignedPackagedUpgradeCancellation(input);
+    const input = { sourcePayloadPath: payloadSourcePath, ...environment };
+    const reviewed = await planPackagedUpgradeCancellation(input);
     if (parsed.mode === "dry-run") return Object.freeze({ command: parsed.command, mode: parsed.mode,
       installId: reviewed.journal.installId, productVersion: reviewed.journal.fromVersion,
       abandonedVersion: reviewed.journal.toVersion, phase: reviewed.journal.phase,
@@ -184,14 +111,13 @@ export async function runPackagedLifecycleCommand(
       waitUntilReady: options.waitUntilReady ?? (options.runner ? undefined : ownedServiceShutdown(reviewed.journal.installId, resolveProductPaths(environment)).ready),
       ...(options.runner ? { runner: options.runner } : {}),
       ...(options.userId === undefined ? {} : { userId: options.userId }) });
-    const result = await cancelSignedPackagedUpgrade({ ...input, services });
+    const result = await cancelPackagedUpgrade({ ...input, services });
     return Object.freeze({ command: parsed.command, mode: parsed.mode, productVersion: reviewed.journal.fromVersion, ...result });
   }
 
   if (parsed.command === "install") {
-    const planned = await planSignedPackagedInstallFromPayload({
+    const planned = await planPackagedInstallFromPayload({
       payloadSourcePath,
-      trustedKeys: keys,
       ...environment,
     });
     if (parsed.mode === "dry-run") {
@@ -203,10 +129,9 @@ export async function runPackagedLifecycleCommand(
         plan: planned.plan,
       });
     }
-    const result = await applySignedPackagedInstallFromPayload({
+    const result = await applyPackagedInstallFromPayload({
       planned,
       payloadSourcePath,
-      trustedKeys: keys,
       ...environment,
     });
     return Object.freeze({
@@ -220,9 +145,8 @@ export async function runPackagedLifecycleCommand(
   }
 
   if (parsed.command === "repair") {
-    const plan = await planSignedPackagedRepairFromPayload({
+    const plan = await planPackagedRepairFromPayload({
       payloadSourcePath,
-      trustedKeys: keys,
       ...environment,
     });
     if (parsed.mode === "dry-run") {
@@ -244,41 +168,20 @@ export async function runPackagedLifecycleCommand(
       ...(options.runner ? { runner: options.runner } : {}),
       ...(options.userId === undefined ? {} : { userId: options.userId }),
     });
-    const result = await applySignedPackagedRepairFromPayload({
+    const result = await applyPackagedRepairFromPayload({
       plan,
       payloadSourcePath,
-      trustedKeys: keys,
       services,
       ...environment,
     });
     return Object.freeze({ command: parsed.command, mode: parsed.mode, ...result });
   }
 
-  const plan = await planSignedPackagedUpgradeFromPayload({
+  const plan = await planPackagedUpgradeFromPayload({
     payloadSourcePath,
-    trustedKeys: keys,
     ...environment,
   });
-  const recovery = parsed.recoveryPayloadPath ? {
-    sourcePayloadPath: realDirectory(parsed.recoveryPayloadPath, "signed recovery payload"),
-    // These are explicitly out-of-band caller keys, never untrusted cached
-    // recovery-slot keys. The existing recovery journal verifies every older
-    // slot against the caller's corresponding key before retirement.
-    trustedKeys: (() => {
-      const sourceKeys = trustedKeys(parsed.recoveryPayloadPath!, parsed.recoveryPublicKeyPath!);
-      for (const item of parsed.retainedRecoveryKeys) {
-        if (Object.hasOwn(sourceKeys, item.keyId)) throw Error("retained key duplicates current recovery source authority");
-      }
-      return {
-        ...sourceKeys,
-        ...Object.fromEntries(parsed.retainedRecoveryKeys.map(({ keyId, path }) =>
-          [keyId, readFileSync(realRegularFile(path, "trusted historical recovery public key"))])),
-      } satisfies PackagedPayloadTrustedKeys;
-    })(),
-  } : undefined;
-  if (recovery) assertPackagedUpgradeRecoveryArtifact(plan, recovery);
-  const recoveryKeys = recovery?.trustedKeys ?? keys;
-  const recoveryReview = reviewPackagedRecoveryArtifact(plan, recoveryKeys, recovery);
+  const recoveryReview = reviewPackagedRecoveryArtifact(plan);
   if (parsed.mode === "dry-run") {
     return Object.freeze({
       command: parsed.command,
@@ -307,10 +210,9 @@ export async function runPackagedLifecycleCommand(
   const upgradeInput = {
     plan,
     payloadSourcePath,
-    trustedKeys: keys,
     services,
     ...environment,
   };
-  const result = await applySignedPackagedUpgradeWithRecovery({ ...upgradeInput, ...(recovery ? { recovery } : {}) });
+  const result = await applyPackagedUpgradeWithRecovery(upgradeInput);
   return Object.freeze({ command: parsed.command, mode: parsed.mode, ...result });
 }

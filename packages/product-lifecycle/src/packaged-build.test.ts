@@ -1,5 +1,5 @@
+import { packagedPayloadFingerprint } from "./packaged-payload";
 import { describe, expect, test } from "bun:test";
-import { generateKeyPairSync } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -15,7 +15,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPackagedPayload } from "./packaged-build";
 import { packagedInstallSpecFromPayload, readPackagedProductManifest } from "./packaged-manifest";
-import { createEd25519PackagedPayloadSigner, verifyPackagedPayloadSignature } from "./packaged-signature";
 
 function fixture(root: string) {
   const input = join(root, "input");
@@ -30,13 +29,13 @@ function fixture(root: string) {
   return input;
 }
 
-describe("signed packaged payload builder", () => {
-  test("stages a multi-file launcher/services/profile-runtime layout and signs its tree fingerprint", () => {
+describe("packaged payload builder", () => {
+  test("stages a multi-file launcher/services/profile-runtime layout and fingerprints its final tree", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-packaged-build-"));
     const input = fixture(root);
     const output = join(root, "output");
-    const keys = generateKeyPairSync("ed25519");
-    const signer = createEd25519PackagedPayloadSigner({ keyId: "release-fixture", privateKey: keys.privateKey });
+
+
     try {
       const built = buildPackagedPayload({
         outputPath: output,
@@ -56,7 +55,6 @@ describe("signed packaged payload builder", () => {
         workspaceFilesSourcePath: join(input, "chat"),
         chatProcessStore: { readVersions: [1, 2], writeVersion: 2 },
         lifecycle: { transitionLaunch: 1, sourceCancellation: 1 },
-        signer,
       });
       expect(built.manifest.workspaceFiles).toEqual({ executable: `helpers/tela-workspace-files${process.platform === "win32" ? ".exe" : ""}`, protocolVersion: 2 });
       expect(built.manifest.lifecycle).toEqual({ transitionLaunch: 1, sourceCancellation: 1 });
@@ -70,38 +68,36 @@ describe("signed packaged payload builder", () => {
       expect(existsSync(join(output, "services", "gateway"))).toBe(true);
       expect(existsSync(join(output, "runtime", "profile-runtime.cjs"))).toBe(true);
       expect(existsSync(join(output, "ui", "chatgpt-tela-menu-bar"))).toBe(true);
-      expect(verifyPackagedPayloadSignature({ payloadRoot: output, trustedKeys: { "release-fixture": keys.publicKey } }))
-        .toEqual(built.signature);
+      expect(packagedPayloadFingerprint(output)).toBe(built.payloadFingerprint);
       const spec = packagedInstallSpecFromPayload(output);
       expect(spec.services).toEqual([
         { service: "gateway", executableRelativePath: "chatgpt-tela", arguments: ["service", "gateway"] },
         { service: "chat", executableRelativePath: "chatgpt-tela", arguments: ["service", "chat"] },
         { service: "codex", executableRelativePath: "chatgpt-tela", arguments: ["service", "codex"] },
       ]);
-      expect(readPackagedProductManifest(output).integrity?.keyId).toBe("release-fixture");
       expect(built.manifest.chatProcessStore).toEqual({ readVersions: [1, 2], writeVersion: 2 });
       const manifestPath = join(output, "chatgpt-tela-package-v1.json"), manifestBytes = readFileSync(manifestPath);
       writeFileSync(manifestPath, JSON.stringify({ ...built.manifest, chatProcessStore: { readVersions: [1], writeVersion: 1 } }));
-      expect(() => verifyPackagedPayloadSignature({ payloadRoot: output, trustedKeys: { "release-fixture": keys.publicKey } })).toThrow();
+      expect(packagedPayloadFingerprint(output)).not.toBe(built.payloadFingerprint);
       writeFileSync(manifestPath, manifestBytes);
       const { lifecycle, ...withoutLifecycle } = built.manifest;
       writeFileSync(manifestPath, JSON.stringify(withoutLifecycle));
-      expect(() => verifyPackagedPayloadSignature({ payloadRoot: output, trustedKeys: { "release-fixture": keys.publicKey } })).toThrow();
+      expect(packagedPayloadFingerprint(output)).not.toBe(built.payloadFingerprint);
       writeFileSync(manifestPath, manifestBytes);
       writeFileSync(join(output, built.manifest.workspaceFiles!.executable), "tampered-helper");
-      expect(() => verifyPackagedPayloadSignature({ payloadRoot: output, trustedKeys: { "release-fixture": keys.publicKey } })).toThrow();
+      expect(packagedPayloadFingerprint(output)).not.toBe(built.payloadFingerprint);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("signature verification fails after any signed payload byte changes", () => {
-    const root = mkdtempSync(join(tmpdir(), "tela-packaged-signature-drift-"));
+  test("the receipt fingerprint changes when payload bytes change", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-packaged-fingerprint-drift-"));
     const input = fixture(root);
     const output = join(root, "output");
-    const keys = generateKeyPairSync("ed25519");
+
     try {
-      buildPackagedPayload({
+      const built = buildPackagedPayload({
         outputPath: output,
         productVersion: "1.2.3",
         launcherSourcePath: join(input, "launcher"),
@@ -115,11 +111,9 @@ describe("signed packaged payload builder", () => {
           electronExecutableRelativePath: "bin/electron",
           entrypointSourcePath: join(input, "profile-runtime.cjs"),
         },
-        signer: createEd25519PackagedPayloadSigner({ keyId: "release-fixture", privateKey: keys.privateKey }),
       });
       writeFileSync(join(output, "services", "chat"), "tampered\n");
-      expect(() => verifyPackagedPayloadSignature({ payloadRoot: output, trustedKeys: { "release-fixture": keys.publicKey } }))
-        .toThrow("fingerprint");
+      expect(packagedPayloadFingerprint(output)).not.toBe(built.payloadFingerprint);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -129,7 +123,7 @@ describe("signed packaged payload builder", () => {
     if (process.platform === "win32") return;
     const root = mkdtempSync(join(tmpdir(), "tela-packaged-symlink-"));
     const input = fixture(root);
-    const keys = generateKeyPairSync("ed25519");
+
     try {
       symlinkSync("loop", join(input, "electron", "bin", "loop"));
       expect(() => buildPackagedPayload({
@@ -146,7 +140,6 @@ describe("signed packaged payload builder", () => {
           electronExecutableRelativePath: "bin/electron",
           entrypointSourcePath: join(input, "profile-runtime.cjs"),
         },
-        signer: createEd25519PackagedPayloadSigner({ keyId: "release-fixture", privateKey: keys.privateKey }),
       })).toThrow();
       rmSync(join(input, "electron", "bin", "loop"));
       symlinkSync("bin", join(input, "electron", "electron-copy"));
@@ -165,7 +158,6 @@ describe("signed packaged payload builder", () => {
           electronExecutableRelativePath: "bin/electron",
           entrypointSourcePath: join(input, "profile-runtime.cjs"),
         },
-        signer: createEd25519PackagedPayloadSigner({ keyId: "release-fixture", privateKey: keys.privateKey }),
       });
       expect(lstatSync(join(output, "electron", "electron-copy")).isSymbolicLink()).toBe(true);
       rmSync(join(input, "electron", "electron-copy"), { force: true });
@@ -187,7 +179,6 @@ describe("signed packaged payload builder", () => {
           electronExecutableRelativePath: "bin/electron",
           entrypointSourcePath: join(input, "profile-runtime.cjs"),
         },
-        signer: createEd25519PackagedPayloadSigner({ keyId: "release-fixture", privateKey: keys.privateKey }),
       })).toThrow("symlink");
     } finally {
       rmSync(root, { recursive: true, force: true });

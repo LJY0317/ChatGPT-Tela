@@ -23,7 +23,7 @@ function manifest() {
 }
 
 describe("packaged product manifest", () => {
-  test("lifecycle protocol is explicit, signed-layout-only and refuses unknown versions", () => {
+  test("lifecycle protocol is explicit, launcher-layout-only and refuses unknown versions", () => {
     const base = manifest();
     expect(parsePackagedProductManifest(base).lifecycle).toBeUndefined();
     const signed = { ...base, launcher: { executable: "tela" }, profileRuntime: { executable: "electron", entrypoint: "entry" },
@@ -35,7 +35,7 @@ describe("packaged product manifest", () => {
       expect(() => parsePackagedProductManifest({ ...signed, lifecycle })).toThrow("protocol");
     }
     expect(() => parsePackagedProductManifest({ ...base, lifecycle: { transitionLaunch: 1, sourceCancellation: 1 } }))
-      .toThrow("signed launcher");
+      .toThrow("launcher");
   });
   test("Chat storage compatibility is retained in the package manifest rather than inferred from release names", () => {
     const base = manifest();
@@ -71,7 +71,7 @@ describe("packaged product manifest", () => {
       services: { ...base.services, chat: { ...base.services.chat, arguments: ["bad\narg"] } } })).toThrow("invalid");
   });
 
-  test("signed launcher layout is all-or-none and keeps the launcher at the payload root", () => {
+  test("launcher layout is all-or-none and keeps the launcher at the payload root", () => {
     const base = manifest();
     const signed = {
       ...base,
@@ -80,7 +80,7 @@ describe("packaged product manifest", () => {
       menuBar: { executable: "ui/chatgpt-tela-menu-bar" },
       integrity: { signature: "ed25519-sha256-tree-v1", keyId: "release-key" },
     };
-    expect(parsePackagedProductManifest(signed).integrity?.keyId).toBe("release-key");
+    expect(Object.hasOwn(parsePackagedProductManifest(signed), "integrity")).toBe(false);
     expect(parsePackagedProductManifest(signed).menuBar?.executable).toBe("ui/chatgpt-tela-menu-bar");
     const root = mkdtempSync(join(tmpdir(), "tela-package-menu-bar-"));
     try {

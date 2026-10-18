@@ -110,8 +110,8 @@ export function verifyInstalledPackage(input: {
 }) {
   const payloadRoot = realpathSync(resolve(input.payloadRoot));
   const manifest = readPackagedProductManifest(payloadRoot);
-  if (!manifest.launcher || !manifest.profileRuntime || !manifest.integrity) {
-    throw new Error("installed package does not declare the signed launcher layout");
+  if (!manifest.launcher || !manifest.profileRuntime) {
+    throw new Error("installed package does not declare the launcher layout");
   }
   const expectedLauncher = regularPayloadFile(payloadRoot, manifest.launcher.executable, "packaged launcher executable");
   if (input.launcherExecutablePath && realpathSync(resolve(input.launcherExecutablePath)) !== expectedLauncher) {
@@ -172,7 +172,7 @@ export function resolvePackagedMenuBarLaunch(input: {
     throw new Error("packaged ChatGPT Tela menu bar is available only on macOS");
   }
   const { payloadRoot, manifest } = verifyInstalledPackage(input);
-  if (!manifest.menuBar) throw new Error("installed package does not declare the signed macOS menu bar layout");
+  if (!manifest.menuBar) throw new Error("installed package does not declare the macOS menu bar layout");
   return Object.freeze({
     payloadRoot,
     executable: regularPayloadFile(payloadRoot, manifest.menuBar.executable, "packaged menu bar executable"),

@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from "node:crypto";
+
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -13,11 +13,10 @@ import { fileURLToPath } from "node:url";
 import {
   CURRENT_PACKAGED_LIFECYCLE,
   readPackagedProductManifest,
-  verifyPackagedPayloadSignature,
+  packagedPayloadFingerprint,
 } from "@chatgpt-tela/product-lifecycle";
 
 const repoRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
-const KEY_ID = "ci-ephemeral-ed25519";
 
 function run(command: string, arguments_: readonly string[], cwd = repoRoot): void {
   const result = spawnSync(command, [...arguments_], {
@@ -67,7 +66,7 @@ function smokeLauncher(path: string): void {
     || !combined.includes("chatgpt-tela install")
     || !combined.includes("chatgpt-tela uninstall")
     || !combined.includes("chatgpt-tela cancel-upgrade")
-    || !combined.includes("--trusted-public-key")) {
+  ) {
     throw new Error(`packaged launcher did not execute its expected CLI boundary (exit=${result.status ?? -1})`);
   }
 }
@@ -76,9 +75,7 @@ async function main(): Promise<void> {
   ensureElectronDistribution();
   const root = mkdtempSync(join(tmpdir(), "chatgpt-tela-package-smoke-"));
   const output = join(root, "payload");
-  const privateKeyPath = join(root, "release-private.pem");
-  const keys = generateKeyPairSync("ed25519");
-  writeFileSync(privateKeyPath, keys.privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+
   const workspaceFiles = join(repoRoot, "build", "workspace-files-target", "release", executableName("tela-workspace-files"));
   try {
     const arguments_ = [
@@ -86,23 +83,22 @@ async function main(): Promise<void> {
       "apps/package-build/src/main.ts",
       "--output", output,
       "--version", "0.0.0-ci-smoke",
-      "--signing-key", privateKeyPath,
-      "--key-id", KEY_ID,
+
       ...(existsSync(workspaceFiles) ? ["--workspace-files", workspaceFiles] : []),
       ...(process.platform === "darwin" ? ["--mac-codesign-identity", "-"] : []),
     ];
     run(process.execPath, arguments_);
 
     const manifest = readPackagedProductManifest(output);
-    if (!manifest.launcher || !manifest.profileRuntime || !manifest.integrity) {
-      throw new Error("package smoke payload is missing launcher/profile runtime/integrity metadata");
+    if (!manifest.launcher || !manifest.profileRuntime) {
+      throw new Error("package smoke payload is missing launcher/profile runtime metadata");
     }
     if (manifest.lifecycle?.transitionLaunch !== CURRENT_PACKAGED_LIFECYCLE.transitionLaunch
       || manifest.lifecycle?.sourceCancellation !== CURRENT_PACKAGED_LIFECYCLE.sourceCancellation) {
-      throw new Error("package smoke payload is missing the current signed lifecycle protocol");
+      throw new Error("package smoke payload is missing the current lifecycle protocol");
     }
-    if (manifest.integrity.keyId !== KEY_ID) throw new Error("package smoke payload uses the wrong signing key id");
-    const signature = verifyPackagedPayloadSignature({ payloadRoot: output, trustedKeys: { [KEY_ID]: keys.publicKey } });
+
+    const payloadFingerprint = packagedPayloadFingerprint(output);
 
     const launcherPath = join(output, executableName("chatgpt-tela"));
     regularFile(launcherPath, "packaged launcher");
@@ -140,7 +136,7 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({
       platform: process.platform,
       productVersion: manifest.productVersion,
-      payloadFingerprint: signature.payloadFingerprint,
+      payloadFingerprint,
       launcher: manifest.launcher.executable,
       services: manifest.services,
       profileRuntime: manifest.profileRuntime,

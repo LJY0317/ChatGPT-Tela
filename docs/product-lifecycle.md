@@ -14,7 +14,7 @@ requires its own execution-recovery acceptance, even after a Work/Codex candidat
 
 ## Persistent format compatibility
 
-Source packages declare Chat process-store read/write versions in their signed manifest. Lifecycle
+Source packages declare Chat process-store read/write versions in their package manifest. Lifecycle
 planning/application, the post-shutdown replacement boundary and Chat startup check the existing
 bounded physical store. Incompatible readers or format downgrades refuse without rewriting state.
 The shared filename remains stable; the JSON header versions the format. Gateway/Codex startup does
@@ -246,9 +246,8 @@ Foreign files, orphaned markers, changed payload bytes, and changed definitions 
 The source package builder now supplies the actual multi-file runtime payload. It compiles a stable launcher
 and separate Gateway/Chat/Codex executables, carries the Electron/profile runtime, and on macOS includes the
 signed AppKit menu-bar executable under the same owned payload tree. It writes
-`chatgpt-tela-package-v1.json`, performs platform-native signing before freezing the tree, and signs the tree
-fingerprint with Ed25519. Signed install and signed upgrade verify that release signature before entering their
-existing ownership transitions. The stable OS registration invokes only the launcher; the launcher re-proves
+`chatgpt-tela-package-v1.json` and performs platform-native signing before freezing the tree
+fingerprint. Install and upgrade use the same fingerprint and ownership transitions. The stable OS registration invokes only the launcher; the launcher re-proves
 the owned payload receipt and dispatches the exact service executable declared by the installed manifest.
 
 The menu-bar process is UI, not a fourth backend service. It may be launched from the installed launcher on
@@ -346,19 +345,12 @@ repair. A failed resume leaves completed checkpoints in the journal so retry res
 services. Repair and upgrade journals are mutually exclusive, and package launch/install plus ordinary source
 start and destructive uninstall apply are blocked while either transition is incomplete.
 
-Signed repair plan/apply entrypoints verify the same Ed25519 package signature boundary as signed
-install/upgrade. The packaged launcher exposes a pre-release operator CLI for `install`, `repair`, and
-`upgrade`; every command requires exactly one of `--dry-run`/`--apply` and an explicit
-`--trusted-public-key <pem>`. The key is intentionally external to the package being verified, so replacing a
-payload and its embedded metadata cannot redefine trust. Planning verifies the target signature before it
-observes or reserves install state, and apply verifies the target signature again before mutation. A wrong
-key therefore fails before ownership manifest/service-registration creation.
-
-For the common package-directory flow, the payload defaults to the directory containing the launcher. A
-caller may select another target with `--payload <directory>`. Running a known-good same-version package gives
-repair its trusted source bytes; running the new target package gives upgrade its replacement bytes. This CLI
-is not yet the final consumer trust UX: public release packaging must pin the trusted release key set in the
-signed installer/updater rather than requiring users to supply PEM files manually.
+Install, repair and upgrade share the common ownership and payload-fingerprint implementation. The
+packaged launcher requires exactly one of `--dry-run`/`--apply`; the payload defaults to its directory
+and `--payload <directory>` selects another package. Planning fingerprints the target, and apply proves
+that its bytes still match the plan. There is no separate Tela package-signature or manual public-key layer.
+Platform code signing and release provenance remain distribution concerns. Use a trusted same-version
+package for repair and run the target package's launcher for an upgrade.
 
 ## Natural-language self-maintenance target
 
@@ -373,7 +365,7 @@ then invoke only the corresponding signed lifecycle operation. Destructive data 
 
 Because a running executable is a poor authority for replacing or deleting itself, the final consumer flow
 uses a signed **external maintenance helper**. The helper is launched from outside the installed binary root,
-inherits only the verified lifecycle plan and pinned release trust, stops exact-owned Tela services, performs
+inherits the verified lifecycle plan, stops exact-owned Tela services, performs
 install/repair/upgrade/uninstall, verifies the resulting ownership/runtime state, restarts Tela when the
 operation requires it, and cleans itself up when finished. This also gives Windows, macOS, and Linux one
 consistent product contract instead of depending on platform-specific self-deletion behavior.

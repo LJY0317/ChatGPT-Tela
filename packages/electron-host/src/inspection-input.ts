@@ -1,3 +1,4 @@
+import { inspectionTargetProbe } from "./inspection-diagnostics";
 import type { ElectronWebContentsLike } from "./page-automation";
 import { diagnosticContext, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 
@@ -10,7 +11,7 @@ function keyKind(input: any): "modifier" | "navigation" | "editing" | "activatio
   if (["Backspace", "Delete"].includes(input.key) || (typeof input.key === "string" && [...input.key].length === 1)) return "editing";
   return "other";
 }
-type Pending = { revision: number; down: Input; up?: Input; move?: Input };
+type Pending = { sequence: number; revision: number; down: Input; up?: Input; move?: Input };
 // A frozen renderer must not keep a human's intercepted input pending forever.
 // The event is discarded, not replayed or granted new request authority.
 const DEFAULT_INPUT_CLASSIFICATION_DEADLINE_MS = 5_000;
@@ -38,11 +39,13 @@ export class InspectionInput {
   #observationRevision = 0;
   #scrollCount = 0;
   #classificationCount = 0;
+  #pointerSequence = 0;
   #inputAbort = new AbortController();
-  #invalidateInput(kind: "pointer" | "modifier" | "navigation" | "editing" | "activation" | "other"): void {
+  #invalidateInput(kind: "pointer" | "modifier" | "navigation" | "editing" | "activation" | "other", sequence = 0): void {
     this.#unownedRevision++;
     if (this.#unownedRevision <= 16) withDiagnosticContext(this.#origin, () =>
-      emitDiagnosticEvent("chatgpt_tela_browser", "inspection_ownership_revoked", { input_revision: this.#unownedRevision, kind, interactive: !this.#observing }));
+      emitDiagnosticEvent("chatgpt_tela_browser", "inspection_ownership_revoked", { input_revision: this.#unownedRevision, kind, interactive: !this.#observing, input_sequence: sequence,
+        observation_revision: this.#observationRevision }));
     this.#inputAbort.abort(new Error("browser input ownership changed"));
     this.#inputAbort = new AbortController();
   }
@@ -76,9 +79,12 @@ export class InspectionInput {
     }
     this.#observing = !interactive;
     if (this.#interactive !== interactive) {
+      const previous = this.#interactive;
       this.#interactive = interactive;
       withDiagnosticContext(this.#origin, () => emitDiagnosticEvent("chatgpt_tela_browser", "inspection_mode_changed", {
-        interactive, input_revision: this.#revision + 1,
+        interactive, previous_mode_known: previous !== undefined, previous_interactive: previous === true,
+        input_revision: this.#revision + 1, pending_input: !!this.#pending,
+        ownership_revision: this.#unownedRevision, observation_revision: this.#observationRevision,
       }));
     }
     this.reset();
@@ -162,7 +168,7 @@ export class InspectionInput {
       return;
     }
     const observing = this.#observing;
-    const pending = { revision: this.#revision, down: input } as Pending;
+    const pending = { sequence: ++this.#pointerSequence, revision: this.#revision, down: input } as Pending;
     this.#pending = pending;
     this.#pendingDeadline = setTimeout(() => {
       if (this.#pending !== pending) return;
@@ -174,67 +180,99 @@ export class InspectionInput {
       withDiagnosticContext(this.#origin, () => emitDiagnosticEvent("chatgpt_tela_browser",
         "inspection_input_classification_unavailable", {
           reason_class: "renderer_timeout", input_replayed: false,
-          ownership_revoked: false, deadline_ms: this.classificationDeadlineMs,
+          ownership_revoked: false, input_sequence: pending.sequence, deadline_ms: this.classificationDeadlineMs,
         }));
       this.#notifyObservationSettled();
     }, this.classificationDeadlineMs);
     this.#pendingDeadline.unref?.();
     // One hit test per selection gesture, no pointer-move queries or idle polling.
     const code = `(() => {
-      let node = document.elementFromPoint(${input.x}, ${input.y});
-      if (!node) return false;
-      const approval = globalThis[Symbol.for('chatgpt-tela.approval-observations.v1')];
-      if (approval?.manualInputTarget?.(node) === true) return 'manual-consent';
-      const button = node.closest('button[aria-expanded]');
-      if (button && !button.hasAttribute('aria-haspopup')
-        && !button.closest('form,[contenteditable]:not([contenteditable="false"])')) {
-        const id = button.getAttribute('aria-controls');
-        const local = button.parentElement;
-        const localIds = [...(local?.querySelectorAll('[id]') || [])];
-        if (localIds.length > 256) return false;
-        const labels = localIds
-          .filter(item => item.id === button.getAttribute('aria-labelledby'));
-        const ids = id ? [...document.querySelectorAll('[id]')] : [];
-        if (ids.length > 2048) return false;
-        const regions = ids.filter(item => item.id === id);
-        const region = id ? (regions.length === 1 ? regions[0] : undefined)
-          : labels.length === 1 && local?.querySelectorAll('button[aria-expanded]').length === 1 ? local : undefined;
-        const expanded = button.getAttribute('aria-expanded');
-        if (region && button.parentElement?.contains(region) && ['true','false'].includes(expanded)
-          && !region.querySelector('form,input,textarea,select,[contenteditable]:not([contenteditable="false"])')) return true;
-      }
-      for (let ancestor = node; ancestor; ancestor = ancestor.parentElement) {
-        if (ancestor.matches('a,button,input,textarea,select,summary,label,[contenteditable]:not([contenteditable="false"]),[role="button"],[role="link"],[role="tab"],[role="menuitem"],[tabindex]') || ancestor.onclick || ancestor.onmousedown) return false;
-      }
-      return !!node.textContent?.trim() && getComputedStyle(node).userSelect !== 'none';
+      const hit = document.elementFromPoint(${input.x}, ${input.y});
+      let reason = 'unclassified';
+      const decide = (value, category) => { reason = category; return value; };
+      const classify = () => {
+        let node = hit;
+        if (!node) return decide(false, 'missing_hit');
+        const approval = globalThis[Symbol.for('chatgpt-tela.approval-observations.v1')];
+        if (approval?.manualInputTarget?.(node) === true) return decide('manual-consent', 'manual_consent');
+        const button = node.closest('button[aria-expanded]');
+        if (button && !button.hasAttribute('aria-haspopup')
+          && !button.closest('form,[contenteditable]:not([contenteditable="false"])')) {
+          const id = button.getAttribute('aria-controls');
+          const local = button.parentElement;
+          const localIds = [...(local?.querySelectorAll('[id]') || [])];
+          if (localIds.length > 256) return decide(false, 'local_region_budget');
+          const labels = localIds
+            .filter(item => item.id === button.getAttribute('aria-labelledby'));
+          const ids = id ? [...document.querySelectorAll('[id]')] : [];
+          if (ids.length > 2048) return decide(false, 'region_budget');
+          const regions = ids.filter(item => item.id === id);
+          const region = id ? (regions.length === 1 ? regions[0] : undefined)
+            : labels.length === 1 && local?.querySelectorAll('button[aria-expanded]').length === 1 ? local : undefined;
+          const expanded = button.getAttribute('aria-expanded');
+          if (region && button.parentElement?.contains(region) && ['true','false'].includes(expanded)
+            && !region.querySelector('form,input,textarea,select,[contenteditable]:not([contenteditable="false"])')) return decide(true, 'linked_disclosure');
+        }
+        for (let ancestor = node; ancestor; ancestor = ancestor.parentElement) {
+          if (ancestor.matches('a,button,input,textarea,select,summary,label,[contenteditable]:not([contenteditable="false"]),[role="button"],[role="link"],[role="tab"],[role="menuitem"],[tabindex]') || ancestor.onclick || ancestor.onmousedown) return decide(false, 'interactive_control');
+        }
+        const selectable = !!node.textContent?.trim() && getComputedStyle(node).userSelect !== 'none';
+        return decide(selectable, selectable ? 'text_selection' : 'nonselectable');
+      };
+      const allowed = classify();
+      let nodes = [], probeAvailable = true;
+      try { nodes = (${inspectionTargetProbe.toString()})(hit); } catch { probeAvailable = false; }
+      return { allowed, reason, nodes, probeAvailable };
     })()`;
-    void this.contents.executeJavaScript(code).then(allowed => {
+    let dispatchStarted = false, dispatchedCount = 0;
+    const ownershipRevision = this.#unownedRevision;
+    void this.contents.executeJavaScript(code).then(value => {
+      const result = value as { allowed: boolean | "manual-consent"; reason?: string;
+        nodes?: Record<string, string | number | boolean>[]; probeAvailable?: boolean };
+      const allowed = result.allowed;
       if (this.#pending !== pending || pending.revision !== this.#revision || observing !== this.#observing) return;
       // Unknown/editing interactions still revoke before their first
       // replayed input. 'manual-consent' is recognized by the current
       // renderer and checked against the exact still-visible card on
       // every gesture; it is not general permission to edit the request.
-      if (!observing && allowed !== 'manual-consent') this.#invalidateInput("pointer");
-      if (++this.#classificationCount <= 16) withDiagnosticContext(this.#origin, () =>
+      if (!observing && allowed !== 'manual-consent') this.#invalidateInput("pointer", pending.sequence);
+      if (++this.#classificationCount <= 16) withDiagnosticContext(this.#origin, () => {
         emitDiagnosticEvent('chatgpt_tela_browser', 'inspection_input_classified', {
+          input_sequence: pending.sequence, input_revision: pending.revision,
+          reason_class: ["missing_hit", "manual_consent", "local_region_budget", "region_budget", "linked_disclosure", "interactive_control", "text_selection", "nonselectable"].includes(result.reason ?? "") ? result.reason! : "unclassified",
+          probe_available: result.probeAvailable === true,
           viewing_proven: allowed === true, manual_consent: allowed === 'manual-consent', interactive: !observing,
           observation_revision: this.#observationRevision + (allowed === true || allowed === 'manual-consent' || observing ? 0 : 1),
-        }));
+        });
+        for (const node of result.nodes ?? []) emitDiagnosticEvent('chatgpt_tela_browser', 'inspection_target_observed', {
+          input_sequence: pending.sequence, ...node,
+        });
+      });
       if (allowed !== true && allowed !== 'manual-consent') {
         if (observing) return;
         this.#observationRevision++;
       }
-      this.send(pending.down);
-      if (pending.move) this.send(pending.move);
-      if (pending.up) this.send(pending.up);
+      dispatchStarted = true;
+      this.send(pending.down); dispatchedCount++;
+      if (pending.move) { this.send(pending.move); dispatchedCount++; }
+      if (pending.up) { this.send(pending.up); dispatchedCount++; }
       else this.#selecting = true;
+      if (this.#classificationCount <= 16) withDiagnosticContext(this.#origin, () =>
+        emitDiagnosticEvent('chatgpt_tela_browser', 'inspection_input_dispatched', {
+          input_sequence: pending.sequence, event_count: dispatchedCount,
+          viewing_proven: allowed === true, manual_consent: allowed === 'manual-consent',
+          observation_revision: this.#observationRevision, ownership_revision: this.#unownedRevision,
+        }));
     }).catch(() => {
       if (this.#pending !== pending) return;
       // A failed *read-only* hit test did not send the intercepted gesture.
       // Unknown input is not an edit if it was never delivered.
       withDiagnosticContext(this.#origin, () => emitDiagnosticEvent("chatgpt_tela_browser",
         "inspection_input_classification_unavailable", {
-          reason_class: "renderer_rejected", input_replayed: false, ownership_revoked: false,
+          reason_class: dispatchStarted ? "input_dispatch_failed" : "renderer_rejected",
+          input_sequence: pending.sequence, dispatch_started: dispatchStarted,
+          input_replayed: dispatchedCount > 0, dispatch_uncertain: dispatchStarted,
+          ownership_revoked: this.#unownedRevision !== ownershipRevision,
         }));
     })
       .finally(() => {

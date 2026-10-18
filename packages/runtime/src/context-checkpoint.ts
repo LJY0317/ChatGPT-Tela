@@ -1,5 +1,5 @@
 import { BROWSER_DOCUMENT_LIFETIME, BROWSER_INPUT_OWNERSHIP, captureBrowserDiagnosticEvidence, type BrowserHost, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { emitDiagnosticEvent, webObservationFailureReason, diagnosticFailureClass } from "@chatgpt-tela/core";
 import {
   requireProven,
   WebCheckpointOperationClosed,
@@ -106,6 +106,8 @@ export async function runBrowserContextCheckpoint(
   } catch (error) {
     failed = true; failure = error;
     emitDiagnosticEvent("chatgpt_tela_work", "context_checkpoint_failed", {
+      observation_failure: webObservationFailureReason(error) ?? "none",
+      failure_class: diagnosticFailureClass(error),
       reason_class: input.signal?.aborted ? "owner_cancelled"
         : documentBoundary?.signal.aborted ? "document_lost" : "provider_error",
       surface_acquired: surface !== undefined,

@@ -29,7 +29,8 @@ import {
 import { FilesystemOwnershipObserver, type OwnershipObservation, type UninstallObserver } from "./uninstall";
 
 export const PACKAGED_PAYLOAD_RECEIPT = ".chatgpt-tela-payload-v1.json";
-export const PACKAGED_PAYLOAD_SIGNATURE = "chatgpt-tela-package-signature-v1.json";
+// Reserved by the v1 receipt hash format for installed packages predating native-only signing.
+const PACKAGED_PAYLOAD_SIGNATURE = "chatgpt-tela-package-signature-v1.json";
 
 type DirectoryResource = Extract<OwnedResource, { readonly kind: "directory" }>;
 

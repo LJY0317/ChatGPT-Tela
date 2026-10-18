@@ -1323,8 +1323,8 @@ an explicit bounded migration tool over teaching current runtime code every reti
 
 
 CI begins with all three operating systems. Real-device-only behavior remains explicitly unverified
-until exercised on that device class. Each CI OS also builds the real multi-file package payload with an
-ephemeral Ed25519 key, verifies the signed tree/manifest, and executes the compiled stable launcher boundary;
+until exercised on that device class. Each CI OS also builds the real multi-file package payload and
+verifies the payload fingerprint/manifest, and executes the compiled stable launcher boundary;
 this catches platform-specific standalone compilation and Electron staging regressions in addition to tests.
 
 ## Diagnostics and performance

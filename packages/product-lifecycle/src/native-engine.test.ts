@@ -16,7 +16,7 @@ function metadata(sha256: string) {
     patchSha256: "b".repeat(64), capabilities: ["model-local-compaction-v1"] });
 }
 
-test("engine metadata requires a signed layout, portable paths and explicit supported capability", () => {
+test("engine metadata requires a launcher layout, portable paths and explicit supported capability", () => {
   const engine = metadata("c".repeat(64));
   for (const change of [{ executable: "../codex" }, { executable: "/codex" }, { sha256: "bad" },
     { capabilities: ["unknown"] }, { platform: "unknown" }, { upstreamCommit: "bad" }, { surprise: true }]) {
@@ -24,7 +24,7 @@ test("engine metadata requires a signed layout, portable paths and explicit supp
   }
   expect(() => parsePackagedProductManifest({ version: 1, product: "chatgpt-tela", productVersion: "1.0.0",
     nativeEngine: engine, services: Object.fromEntries(["gateway", "chat", "codex"].map(key => [key, { executable: key }])),
-  })).toThrow("signed launcher");
+  })).toThrow("launcher layout");
 });
 
 test("wrong bytes or platform never execute; version mismatch and escaping links fail closed", () => {

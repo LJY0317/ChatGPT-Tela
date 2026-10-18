@@ -21,11 +21,6 @@ import {
 } from "./packaged-manifest";
 import { nativeEngineFileSha256, nativeEngineHelperName, verifyNativeEngineArtifact } from "./native-engine";
 import { packagedPayloadFingerprint } from "./packaged-payload";
-import {
-  writePackagedPayloadSignature,
-  type PackagedPayloadSignatureEnvelope,
-  type PackagedPayloadSigner,
-} from "./packaged-signature";
 import type { TelaServiceId } from "./layout";
 
 export interface PackagedPayloadBuildServiceInput {
@@ -52,7 +47,6 @@ export interface PackagedPayloadBuildInput {
   readonly chatProcessStore?: PackagedProductManifest["chatProcessStore"];
   readonly lifecycle?: PackagedProductManifest["lifecycle"];
   readonly nativeEngine?: Omit<PackagedNativeEngine, "executable"> & { readonly executableSourcePath: string };
-  readonly signer: PackagedPayloadSigner;
   readonly finalizeStagedPayload?: (input: {
     readonly outputPath: string;
     readonly manifest: PackagedProductManifest;
@@ -62,7 +56,6 @@ export interface PackagedPayloadBuildInput {
 export interface BuiltPackagedPayload {
   readonly outputPath: string;
   readonly manifest: PackagedProductManifest;
-  readonly signature: PackagedPayloadSignatureEnvelope;
   readonly payloadFingerprint: string;
 }
 
@@ -242,15 +235,11 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
     ...(workspaceFiles ? { workspaceFiles } : {}),
     ...(input.chatProcessStore ? { chatProcessStore: input.chatProcessStore } : {}),
     ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
-    integrity: {
-      signature: "ed25519-sha256-tree-v1",
-      keyId: input.signer.keyId,
-    },
     services: serviceManifest,
   });
   writeFileSync(join(outputPath, PACKAGED_PRODUCT_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
   input.finalizeStagedPayload?.({ outputPath, manifest });
-  // OS code signing may change executable bytes; bind the release signature to the final artifact.
+  // OS code signing may change executable bytes; compute the receipt fingerprint from the final artifact.
   if (manifest.nativeEngine) {
     manifest = parsePackagedProductManifest({ ...manifest, nativeEngine: {
       ...manifest.nativeEngine,
@@ -259,11 +248,9 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
     writeFileSync(join(outputPath, PACKAGED_PRODUCT_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     verifyNativeEngineArtifact({ payloadRoot: outputPath, engine: manifest.nativeEngine! });
   }
-  const signature = writePackagedPayloadSignature({ payloadRoot: outputPath, signer: input.signer });
   return Object.freeze({
     outputPath,
     manifest,
-    signature,
     payloadFingerprint: packagedPayloadFingerprint(outputPath),
   });
 }

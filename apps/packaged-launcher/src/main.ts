@@ -23,10 +23,10 @@ Usage:
   chatgpt-tela services restart chat
   chatgpt-tela chat roots
   chatgpt-tela chat <allow-root|disallow-root> --path <folder>
-  chatgpt-tela install (--dry-run | --apply) --trusted-public-key <release-public-key.pem> [--payload <package-directory>]
-  chatgpt-tela repair  (--dry-run | --apply) --trusted-public-key <release-public-key.pem> [--payload <package-directory>]
-  chatgpt-tela upgrade (--dry-run | --apply) --trusted-public-key <release-public-key.pem> [--payload <package-directory>] [--recovery-payload <signed-source> --recovery-public-key <source-key.pem> [--retained-recovery-key <key-id> <historical-public-key.pem>]...]
-  chatgpt-tela cancel-upgrade (--dry-run | --apply) --trusted-public-key <release-public-key.pem> --payload <source-package-directory>
+  chatgpt-tela install (--dry-run | --apply) [--payload <package-directory>]
+  chatgpt-tela repair  (--dry-run | --apply) [--payload <package-directory>]
+  chatgpt-tela upgrade (--dry-run | --apply) [--payload <package-directory>]
+  chatgpt-tela cancel-upgrade (--dry-run | --apply) --payload <source-package-directory>
   chatgpt-tela uninstall (--dry-run | --apply) [--remove-data]
   chatgpt-tela work [--slot <profile>] [--thread <id>] [--model <id>] [--cwd <folder>]
   chatgpt-tela diagnostics [list|decisions|inspect|record|activity|capture]
@@ -36,7 +36,7 @@ The package directory defaults to the directory containing this launcher. Use --
 Internal runtime commands:
   chatgpt-tela service <gateway|chat|codex>
   chatgpt-tela menu-bar
-  chatgpt-tela maintenance-open [--operation <repair|upgrade|cancel-upgrade> --payload <signed-package> --trusted-public-key <key>]
+  chatgpt-tela maintenance-open [--operation <repair|upgrade|cancel-upgrade> --payload <package>]
 `;
 
 function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat" | "codex" {

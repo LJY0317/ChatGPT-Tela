@@ -13,7 +13,6 @@ import { fileURLToPath } from "node:url";
 import {
   buildPackagedPayload,
   CURRENT_PACKAGED_LIFECYCLE,
-  createEd25519PackagedPayloadSigner,
   parsePackagedNativeEngine,
   CURRENT_CHAT_PROCESS_STORE_COMPATIBILITY,
 } from "@chatgpt-tela/product-lifecycle";
@@ -87,9 +86,6 @@ function macCodesign(outputPath: string, identity: string): void {
 async function main(): Promise<void> {
   const outputPath = resolve(requiredOption("--output"));
   const productVersion = requiredOption("--version");
-  const signingKeyPath = realRegularFile(requiredOption("--signing-key"), "signing key");
-  const keyId = requiredOption("--key-id");
-  const privateKey = readFileSync(signingKeyPath);
   const macCodesignIdentity = process.platform === "darwin" ? requiredOption("--mac-codesign-identity") : undefined;
   const workspaceFilesSourcePath = option("--workspace-files");
   const nativeEnginePath = option("--native-engine");
@@ -150,7 +146,6 @@ async function main(): Promise<void> {
         ...nativeEngineMetadata,
         executableSourcePath: realRegularFile(nativeEnginePath, "Native engine executable"),
       } } : {}),
-      signer: createEd25519PackagedPayloadSigner({ keyId, privateKey }),
       ...(macCodesignIdentity
         ? { finalizeStagedPayload: ({ outputPath: staged }) => macCodesign(staged, macCodesignIdentity) }
         : {}),
@@ -160,7 +155,6 @@ async function main(): Promise<void> {
       outputPath: built.outputPath,
       productVersion: built.manifest.productVersion,
       payloadFingerprint: built.payloadFingerprint,
-      signingKeyId: built.signature.keyId,
       services: built.manifest.services,
       launcher: built.manifest.launcher,
       profileRuntime: built.manifest.profileRuntime,

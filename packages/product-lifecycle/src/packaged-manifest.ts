@@ -37,11 +37,6 @@ export interface PackagedNativeEngine {
   readonly capabilities: readonly ["model-local-compaction-v1"] | readonly ["model-local-compaction-v1", "model-catalog-refresh-v1"] | readonly ["model-local-compaction-v1", "model-catalog-refresh-v1", "model-catalog-seed-v1"];
 }
 
-export interface PackagedProductManifestIntegrity {
-  readonly signature: "ed25519-sha256-tree-v1";
-  readonly keyId: string;
-}
-
 export const CURRENT_PACKAGED_LIFECYCLE = Object.freeze({ transitionLaunch: 1 as const, sourceCancellation: 1 as const });
 export interface PackagedLifecycleProtocol {
   readonly transitionLaunch: 1;
@@ -59,7 +54,6 @@ export interface PackagedProductManifest {
   readonly workspaceFiles?: { readonly executable: string; readonly protocolVersion: 2 };
   readonly chatProcessStore?: ChatProcessStoreCompatibility;
   readonly lifecycle?: PackagedLifecycleProtocol;
-  readonly integrity?: PackagedProductManifestIntegrity;
   readonly services: Readonly<Record<TelaServiceId, PackagedProductManifestService>>;
 }
 
@@ -142,16 +136,6 @@ function menuBar(value: unknown): PackagedProductManifestMenuBar | undefined {
   return Object.freeze({ executable: relativePayloadPath(item.executable, "packaged menu bar executable") });
 }
 
-function integrity(value: unknown): PackagedProductManifestIntegrity | undefined {
-  if (value === undefined) return undefined;
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("packaged integrity must be an object");
-  const item = value as Record<string, unknown>;
-  const extra = Object.keys(item).filter(key => !["signature", "keyId"].includes(key));
-  if (extra.length > 0) throw new Error(`packaged integrity contains unknown fields: ${extra.join(", ")}`);
-  if (item.signature !== "ed25519-sha256-tree-v1") throw new Error("packaged integrity signature algorithm is unsupported");
-  return Object.freeze({ signature: "ed25519-sha256-tree-v1", keyId: oneLine(item.keyId, "packaged integrity key id") });
-}
-
 export function parsePackagedNativeEngine(value: unknown): PackagedNativeEngine {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("packaged Native engine must be an object");
   const item = value as Record<string, unknown>;
@@ -214,13 +198,12 @@ export function parsePackagedProductManifest(value: unknown): PackagedProductMan
   const parsedLauncher = launcher(item.launcher);
   const parsedRuntime = profileRuntime(item.profileRuntime);
   const parsedMenuBar = menuBar(item.menuBar);
-  const parsedIntegrity = integrity(item.integrity);
   const nativeEngine = item.nativeEngine === undefined ? undefined : parsePackagedNativeEngine(item.nativeEngine);
-  if (lifecycle && !(parsedLauncher && parsedRuntime && parsedIntegrity)) throw new Error("lifecycle protocol requires the signed launcher layout");
-  if (workspaceFiles && !(parsedLauncher && parsedRuntime && parsedIntegrity)) throw new Error("file publisher requires the signed launcher layout");
-  if (nativeEngine && !(parsedLauncher && parsedRuntime && parsedIntegrity)) throw new Error("packaged Native engine requires the signed launcher layout");
-  if ((parsedLauncher || parsedRuntime || parsedIntegrity) && !(parsedLauncher && parsedRuntime && parsedIntegrity)) {
-    throw new Error("packaged launcher, profile runtime, and integrity must be declared together");
+  if (lifecycle && !(parsedLauncher && parsedRuntime)) throw new Error("lifecycle protocol requires the launcher layout");
+  if (workspaceFiles && !(parsedLauncher && parsedRuntime)) throw new Error("file publisher requires the launcher layout");
+  if (nativeEngine && !(parsedLauncher && parsedRuntime)) throw new Error("packaged Native engine requires the launcher layout");
+  if ((parsedLauncher || parsedRuntime) && !(parsedLauncher && parsedRuntime)) {
+    throw new Error("packaged launcher, profile runtime must be declared together");
   }
   return Object.freeze({
     version: 1,
@@ -233,7 +216,6 @@ export function parsePackagedProductManifest(value: unknown): PackagedProductMan
     ...(workspaceFiles ? { workspaceFiles } : {}),
     ...(item.chatProcessStore === undefined ? {} : { chatProcessStore: parseChatProcessStoreCompatibility(item.chatProcessStore) }),
     ...(lifecycle ? { lifecycle } : {}),
-    ...(parsedIntegrity ? { integrity: parsedIntegrity } : {}),
     services: Object.freeze({
       gateway: service(services.gateway, "packaged gateway service"),
       chat: service(services.chat, "packaged chat service"),

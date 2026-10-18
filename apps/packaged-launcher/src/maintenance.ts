@@ -7,7 +7,7 @@ import { readOwnershipManifest, resolveProductPaths, readPackagedUpgradeJournal,
   packagedUpgradeJournalPath, packagedRepairJournalPath } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { parsePackagedLifecycleCommand, runPackagedLifecycleCommand, type PackagedLifecycleOptions } from "./lifecycle";
-import { readPackagedProductManifest } from "@chatgpt-tela/product-lifecycle";
+import { packagedPayloadFingerprint, readPackagedProductManifest } from "@chatgpt-tela/product-lifecycle";
 import { resolvePackagedMenuBarLaunch } from "./runtime";
 
 const OWNER = "maintenance-owner.json";
@@ -35,7 +35,7 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
   }
   const mode = args[1], operation = args[2];
   if (!(mode === "review" || mode === "apply") || !(operation === "upgrade" || operation === "repair" || operation === "cancel-upgrade" || operation === "uninstall")) {
-    throw new Error("usage: maintenance <review|apply> <upgrade|repair|cancel-upgrade|uninstall> [--payload folder --trusted-public-key file] [--remove-data] [--review-token token]");
+    throw new Error("usage: maintenance <review|apply> <upgrade|repair|cancel-upgrade|uninstall> [--payload folder] [--remove-data] [--review-token token]");
   }
   const rest = [...args.slice(3)];
   const tokenIndex = rest.indexOf("--review-token");
@@ -46,18 +46,15 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
   if (rest.includes("--apply") || rest.includes("--dry-run")) throw new Error("maintenance mode is explicit");
   if (operation === "uninstall" && (rest.length > 1 || rest.some(x => x !== "--remove-data"))) throw new Error("uninstall only accepts --remove-data");
   const removeData = rest.includes("--remove-data");
-  if (operation !== "uninstall" && (!rest.includes("--payload") || !rest.includes("--trusted-public-key"))) {
-    throw new Error("maintenance requires an explicit package and independent trusted public key");
+  if (operation !== "uninstall" && !rest.includes("--payload")) {
+    throw new Error("maintenance requires an explicit package");
   }
   const raw = record(operation === "uninstall"
     ? await runProductUninstall({ mode: "dry-run", removeData, ...options, ...(options.runner ? { serviceRegistrationRunner: options.runner } : {}) })
     : await runPackagedLifecycleCommand([operation, "--dry-run", ...rest], options));
-  // Bind review to the complete observed plan, package signature, and external trust key bytes.
-  const identity = operation === "uninstall" ? [] : ["--payload", "--trusted-public-key"].map(flag => {
-    const index = rest.indexOf(flag);
-    const file = flag === "--payload" ? join(rest[index + 1]!, "chatgpt-tela-package-signature-v1.json") : rest[index + 1]!;
-    return digest(readFileSync(file));
-  });
+  // Bind the review to the complete plan and exact package bytes.
+  const identity = operation === "uninstall" ? []
+    : [packagedPayloadFingerprint(realpathSync(rest[rest.indexOf("--payload") + 1]!))];
   const reviewToken = digest(canonical({ operation, raw, identity }));
   if (mode === "apply") {
     if (token !== reviewToken) throw new Error("The installation or package changed. Review the operation again.");

@@ -60,6 +60,7 @@ interface TrackedTurn extends TurnOwnership {
   missingPublicProgressCaptured?: boolean;
   approvalProgress?: string;
   approvalPendingCaptured?: boolean;
+  approvalFailureCaptured?: string;
   readonly approvalObservation: ChatGptApprovalObservation;
   observeAgain?: boolean;
   readonly operationAbort: AbortController;
@@ -1758,6 +1759,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             action.status === "dispatched" ? action.revisionFingerprint : undefined));
         } else {
           preparationFailure = approvalPreparationFailureSummary(action.reason);
+          const failure = JSON.stringify([observedApproval.cardFingerprint, observedApproval.revisionFingerprint, action.reason]);
+          if (tracked.approvalFailureCaptured !== failure) {
+            tracked.approvalFailureCaptured = failure;
+            await waitOwned(signal, () => captureBrowserDiagnosticEvidence(surface, "approval_preparation_failed"));
+          }
         }
       }
       signal?.throwIfAborted();

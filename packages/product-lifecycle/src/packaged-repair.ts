@@ -31,10 +31,6 @@ import {
   packagedRepairJournalPath,
   readPackagedTransitionValue,
 } from "./packaged-transition";
-import {
-  verifyPackagedPayloadSignature,
-  type PackagedPayloadTrustedKeys,
-} from "./packaged-signature";
 
 const QUIESCE_ORDER = Object.freeze(["gateway", "codex", "chat"] as const);
 const RESUME_ORDER = Object.freeze(["chat", "codex", "gateway"] as const);
@@ -495,25 +491,6 @@ async function applyPackagedRepairOwned(input: {
   }
   rmSync(journalPath, { force: false });
   return resultFrom(input.plan, "repaired", serviceOutcomes, journal.resumedServices);
-}
-
-export async function planSignedPackagedRepairFromPayload(input: {
-  readonly payloadSourcePath: string;
-  readonly trustedKeys: PackagedPayloadTrustedKeys;
-  readonly platform?: NodeJS.Platform;
-  readonly home?: string;
-  readonly environment?: Readonly<Record<string, string | undefined>>;
-  readonly runner?: ServiceRegistrationCommandRunner;
-}): Promise<PackagedRepairPlan> {
-  verifyPackagedPayloadSignature({ payloadRoot: input.payloadSourcePath, trustedKeys: input.trustedKeys });
-  return planPackagedRepairFromPayload(input);
-}
-
-export async function applySignedPackagedRepairFromPayload(input: Parameters<typeof applyPackagedRepairFromPayload>[0] & {
-  readonly trustedKeys: PackagedPayloadTrustedKeys;
-}): ReturnType<typeof applyPackagedRepairFromPayload> {
-  verifyPackagedPayloadSignature({ payloadRoot: input.payloadSourcePath, trustedKeys: input.trustedKeys });
-  return applyPackagedRepairFromPayload(input);
 }
 
 export async function applyPackagedRepairFromPayload(input: Parameters<typeof applyPackagedRepairOwned>[0]): ReturnType<typeof applyPackagedRepairOwned> {

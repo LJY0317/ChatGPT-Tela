@@ -1,10 +1,9 @@
 import { expect, test } from "bun:test";
-import { generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPackagedPayload, createEd25519PackagedPayloadSigner, resolveProductPaths, readOwnershipManifest, prepareOwnedDirectory,
-  packagedUpgradeJournalPath, readPackagedUpgradeJournal, planSignedPackagedUpgradeFromPayload, type PackagedUpgradeJournal, type ServiceRegistrationCommandRunner } from "@chatgpt-tela/product-lifecycle";
+import { buildPackagedPayload, resolveProductPaths, readOwnershipManifest, prepareOwnedDirectory,
+  packagedUpgradeJournalPath, readPackagedUpgradeJournal, planPackagedUpgradeFromPayload, type PackagedUpgradeJournal, type ServiceRegistrationCommandRunner } from "@chatgpt-tela/product-lifecycle";
 import { runPackagedLifecycleCommand } from "./lifecycle";
 import { cleanupMaintenanceWindow, runMaintenanceCommand, stageMaintenanceWindow, resolveMaintenanceWindowSource } from "./maintenance";
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
@@ -30,30 +29,29 @@ class FakeManager implements ServiceRegistrationCommandRunner {
 }
 
 function fixture(root: string, supportsCancellation = true) {
-  const keys = generateKeyPairSync("ed25519"), input = join(root, "input"), home = join(root, "home");
+  const input = join(root, "input"), home = join(root, "home");
   mkdirSync(join(input, "electron", "bin"), { recursive: true }); mkdirSync(home);
   for (const name of ["launcher", "gateway", "chat", "codex", "menu-bar"]) writeFileSync(join(input, name), name, { mode: 0o755 });
   writeFileSync(join(input, "electron/bin/electron"), "electron", { mode: 0o755 });
   writeFileSync(join(input, "profile.cjs"), "module.exports={};");
-  const key = join(root, "public.pem"); writeFileSync(key, keys.publicKey.export({ type: "spki", format: "pem" }));
+
   const build = (version: string) => {
     const payload = join(root, version);
     buildPackagedPayload({ outputPath: payload, productVersion: version, launcherSourcePath: join(input, "launcher"),
       menuBarSourcePath: join(input, "menu-bar"),
       ...(supportsCancellation ? { lifecycle: { transitionLaunch: 1 as const, sourceCancellation: 1 as const } } : {}),
       services: { gateway: { executableSourcePath: join(input, "gateway") }, chat: { executableSourcePath: join(input, "chat") }, codex: { executableSourcePath: join(input, "codex") } },
-      profileRuntime: { electronBundleSourcePath: join(input, "electron"), electronExecutableRelativePath: "bin/electron", entrypointSourcePath: join(input, "profile.cjs") },
-      signer: createEd25519PackagedPayloadSigner({ keyId: "fixture", privateKey: keys.privateKey }) });
+      profileRuntime: { electronBundleSourcePath: join(input, "electron"), electronExecutableRelativePath: "bin/electron", entrypointSourcePath: join(input, "profile.cjs") },});
     return payload;
   };
-  return { home, key, first: build("1.0.0"), second: build("2.0.0"), runner: new FakeManager() };
+  return { home, first: build("1.0.0"), second: build("2.0.0"), runner: new FakeManager() };
 }
 
-test("signed review -> repair -> upgrade -> keep-data removal uses fake OS manager and preserves unrelated data", async () => {
+test("review -> repair -> upgrade -> keep-data removal uses fake OS manager and preserves unrelated data", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-maintenance-test-"));
   try {
     const f = fixture(root), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner, executingBinaryPath: join(root, "external-launcher") };
-    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first, "--trusted-public-key", f.key], options);
+    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first, ], options);
     const paths = resolveProductPaths(options), ownership = readOwnershipManifest(paths.installManifest)!;
     await prepareOwnedDirectory({ manifestPath: paths.installManifest, installId: ownership.installId, productVersion: ownership.productVersion,
       resource: { kind: "directory", id: "product-config", owner: "product", path: paths.configRoot, dataClass: "config" } });
@@ -62,16 +60,17 @@ test("signed review -> repair -> upgrade -> keep-data removal uses fake OS manag
     if (binary.kind !== "directory") throw new Error("missing fixture binary");
     const sentinel = join(f.home, "project.txt"); writeFileSync(sentinel, "untouched project");
     const damaged = join(binary.path, "services/chat"); writeFileSync(damaged, "damaged");
-    const repairArgs = ["--payload", f.first, "--trusted-public-key", f.key];
+    const repairArgs = ["--payload", f.first, ];
     const reviewed = await runMaintenanceCommand(["maintenance", "review", "repair", ...repairArgs], options) as any;
     expect(readFileSync(damaged, "utf8")).toBe("damaged");
-    const originalKey = readFileSync(f.key); writeFileSync(f.key, Buffer.concat([originalKey, Buffer.from("\n")]));
+    const sourceBinary = join(f.first, "services/chat");
+    const originalBytes = readFileSync(sourceBinary); writeFileSync(sourceBinary, "changed package");
     await expect(runMaintenanceCommand(["maintenance", "apply", "repair", ...repairArgs, "--review-token", reviewed.reviewToken], options)).rejects.toThrow("changed");
-    expect(readFileSync(damaged, "utf8")).toBe("damaged"); writeFileSync(f.key, originalKey);
+    expect(readFileSync(damaged, "utf8")).toBe("damaged"); writeFileSync(sourceBinary, originalBytes);
     const fresh = await runMaintenanceCommand(["maintenance", "review", "repair", ...repairArgs], options) as any;
     expect((await runMaintenanceCommand(["maintenance", "apply", "repair", ...repairArgs, "--review-token", fresh.reviewToken], options) as any).success).toBe(true);
     expect(readFileSync(damaged, "utf8")).toBe("chat");
-    const updateArgs = ["--payload", f.second, "--trusted-public-key", f.key];
+    const updateArgs = ["--payload", f.second, ];
     const update = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...updateArgs], options) as any;
     expect(update.fromVersion).toBe("1.0.0"); expect(update.toVersion).toBe("2.0.0");
     expect((await runMaintenanceCommand(["maintenance", "apply", "upgrade", ...updateArgs, "--review-token", update.reviewToken], options) as any).success).toBe(true);
@@ -110,15 +109,17 @@ test("temporary maintenance binaries clean up only their exact owned snapshot", 
 });
 
 
-test("damaged installation stages only a signed same-version repair source", async () => {
+test("damaged installation stages only a same-version repair source", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-maintenance-source-test-"));
   try {
     const f = fixture(root), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner };
-    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first, "--trusted-public-key", f.key], options);
-    const resolveSource = (payload: string) => resolveMaintenanceWindowSource("unused", "unused", ["--payload", payload, "--trusted-public-key", f.key], options);
+    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first, ], options);
+    const resolveSource = (payload: string) => resolveMaintenanceWindowSource("unused", "unused", ["--payload", payload, ], options);
     expect((await resolveSource(f.first)).ui).toBe(realpathSync(join(f.first, "ui/chatgpt-tela-menu-bar")));
     await expect(resolveSource(f.second)).rejects.toThrow();
-    writeFileSync(join(f.first, "ui/chatgpt-tela-menu-bar"), "tampered");
+    const manifestPath = join(f.first, "chatgpt-tela-package-v1.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")); delete manifest.menuBar;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
     await expect(resolveSource(f.first)).rejects.toThrow();
     expect(readOwnershipManifest(resolveProductPaths(options).installManifest)?.productVersion).toBe("1.0.0");
   } finally { removeFixture(root); }
@@ -128,7 +129,7 @@ test("explicit remove-data plan removes only owned settings and preserves a proj
   const root = mkdtempSync(join(tmpdir(), "tela-maintenance-remove-test-"));
   try {
     const f = fixture(root), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner, executingBinaryPath: join(root, "external-launcher") };
-    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first, "--trusted-public-key", f.key], options);
+    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first, ], options);
     const paths = resolveProductPaths(options), o = readOwnershipManifest(paths.installManifest)!;
     await prepareOwnedDirectory({manifestPath:paths.installManifest,installId:o.installId,productVersion:o.productVersion,
       resource:{kind:"directory",id:"product-config",owner:"product",path:paths.configRoot,dataClass:"config"}});
@@ -147,13 +148,12 @@ for (const supported of [true, false]) test(`maintenance cancellation review bin
   const root = mkdtempSync(join(tmpdir(), "tela-maintenance-cancel-"));
   try {
     const f = fixture(root, supported), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner };
-    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first, "--trusted-public-key", f.key], options);
+    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first, ], options);
     const paths = resolveProductPaths(options), manifest = readFileSync(paths.installManifest);
     f.runner.running.add("chatgpt-tela-chat.service");
     // Model a settled pre-replacement process interruption. Normal upgrades now
     // recover automatically, so a refused shutdown is no longer a journal fixture.
-    const plan = await planSignedPackagedUpgradeFromPayload({ ...options, payloadSourcePath: f.second,
-      trustedKeys: { fixture: readFileSync(f.key) } });
+    const plan = await planPackagedUpgradeFromPayload({ ...options, payloadSourcePath: f.second,});
     const journalPath = packagedUpgradeJournalPath(paths);
     const checkpoint: PackagedUpgradeJournal = {
       version: 1, installId: plan.installId, fromVersion: plan.fromVersion, toVersion: plan.toVersion,
@@ -165,7 +165,7 @@ for (const supported of [true, false]) test(`maintenance cancellation review bin
     const journal = readFileSync(journalPath);
     const status = await runMaintenanceCommand(["maintenance", "status"], options) as any;
     expect(status.pendingTransition).toBe("upgrade");
-    const args = ["--payload", f.first, "--trusted-public-key", f.key];
+    const args = ["--payload", f.first, ];
     if (!supported) {
       await expect(runMaintenanceCommand(["maintenance", "review", "cancel-upgrade", ...args], options)).rejects.toThrow("does not declare");
       expect(readFileSync(journalPath)).toEqual(journal);
@@ -180,7 +180,7 @@ for (const supported of [true, false]) test(`maintenance cancellation review bin
     const source = await resolveMaintenanceWindowSource("unused", "unused", ["--operation", "cancel-upgrade", ...args], options);
     expect(source.launcher).toBe(realpathSync(join(f.first, "chatgpt-tela")));
     expect(source.ui).toBe(realpathSync(join(f.first, "ui/chatgpt-tela-menu-bar")));
-    expect((await resolveMaintenanceWindowSource("unused", "unused", ["--operation", "upgrade", "--payload", f.second, "--trusted-public-key", f.key], options)).launcher)
+    expect((await resolveMaintenanceWindowSource("unused", "unused", ["--operation", "upgrade", "--payload", f.second, ], options)).launcher)
       .toBe(realpathSync(join(f.second, "chatgpt-tela")));
     // Same phase/version/service list, but changed quiescence must invalidate review.
     writeFileSync(journalPath, JSON.stringify({ ...readPackagedUpgradeJournal(journalPath), quiescedServices: [] }));

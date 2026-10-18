@@ -40,14 +40,14 @@ test("failure viewport evidence reads bounded geometry without scrolling or raw 
   expect(result).toMatchObject({turn_viewport_observed:true,turn_scroll_above_px:1300,turn_scroll_below_px:100,turn_viewport_height_px:600});
   expect(result.html).toBeUndefined();
 });
-test("raw DOM/screenshot require opt-in and auth-safe surface; duplicate failure is coalesced",async()=>{
+test.each(["approval_anomaly", "approval_preparation_failed"] as const)("%s DOM/screenshot require opt-in and auth-safe surface; duplicate failure is coalesced",async reason=>{
   const root=mkdtempSync(join(tmpdir(),"tela-browser-diagnostics-"));roots.push(root);process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=join(root,"events.jsonl");
   let evaluations=0, previews=0;const privateFlags:unknown[]=[];let safe=true;
   const surface={taskId:"task",epochId:"epoch",leaseId:"lease",async navigate(){},async reveal(){},async hide(){},capability(cap:unknown){
     if(cap===BROWSER_PAGE_AUTOMATION)return {async evaluate(_source:string,privateCapture:unknown){evaluations++;privateFlags.push(privateCapture);return{element_count:10,capture_safe:safe,html:"<div>private conversation</div>"};}};
     if(cap===BROWSER_READ_ONLY_PREVIEW)return{async captureJpeg(){previews++;return new Uint8Array([1,2]);}};
   }} as BrowserSurfaceLease;
-  const capture=(id:string)=>withDiagnosticContext({operation_fingerprint:diagnosticFingerprint(id)},()=>captureBrowserDiagnosticEvidence(surface,"approval_anomaly"));
+  const capture=(id:string)=>withDiagnosticContext({operation_fingerprint:diagnosticFingerprint(id)},()=>captureBrowserDiagnosticEvidence(surface,reason));
   await capture("off");expect(privateFlags).toEqual([false]);expect(previews).toBe(0);
   setPrivateDiagnosticCapture(join(root,"diagnostics"),1);safe=false;await capture("auth");expect(previews).toBe(0);expect(readdirSync(join(root,"diagnostics","private"))).toHaveLength(0);
   safe=true;await capture("enabled");await capture("enabled");expect(previews).toBe(1);expect(evaluations).toBe(3);expect(readdirSync(join(root,"diagnostics","private"))).toHaveLength(4);

@@ -735,7 +735,7 @@ are added. Existing structured incident/log retention bounds apply.
 
 Approval preparation records `approval_preparation_started`, `approval_preparation_target` and
 `approval_preparation_settled` or `approval_preparation_failed`. These contain duration, consent delay,
-allowlisted outcome/reason and disposable identity fingerprints, never card text or coordinates.
+allowlisted outcome/reason and disposable identity fingerprints, never card text. Geometry is recorded separately by the bounded layout probes below.
 A host-owned deadline bounds preparation to five seconds plus the configured consent delay, including
 renderer evaluations that ignore cancellation. Timeout or owner cancellation cannot dispatch input;
 late preparation completion is discarded. The timer and abort listeners are removed on settlement.
@@ -750,11 +750,37 @@ An obstructed target also emits `approval_target_failed` with a fixed hit kind (
 visibility. A null hit is distinct from a different element; neither proves a particular overlay.
 Only the last reported card revision is retained for deduplication. Repeated preparation of that
 unchanged revision adds no incident; a changed revision may record a new one. Existing bounded
-incident retention applies. No text, DOM identifiers, coordinates, capture or extra polling is added;
+incident retention applies. No text, DOM identifiers or extra polling is added;
 this evidence never changes approval authority or selects another click target.
 
 uncertain dispatch is never automatically retried against the same card. Preparation completion or
 `approval_activated` alone does not prove input receipt, card clearance, tool execution or task success.
+
+### Approval structure and layout diagnosis
+
+`approval_structure_observed` joins the exact card/proof fingerprints with the
+`observation`, `observed`, `options`, `menu` and `target` phases. It reports the
+conversation-choice count, disclosure eligibility, expanded/attempted state,
+menu linkage, viewport and document visibility/focus. `approval_control_observed`
+classifies up to 16 card controls and 16 menu choices using fixed decision categories and accessibility
+attribute presence, without storing labels or DOM identifiers.
+
+`approval_layout_observed` records the card, prepared target, actual hit element
+and at most eight ancestors of each. Integer geometry, scroll/client sizes,
+clipping, positioning, transforms, pointer handling and target-center containment
+distinguish viewport clipping, overlapping UI and changed layout. These local
+structural events contain no conversation text, class names or arbitrary DOM
+attributes. Only changed probes are logged per preparation phase; there is no
+background observation, click, retry or change to approval eligibility. A probe
+failure reports `probe_available=false` and does not change the operation.
+
+A preparation failure also invokes the existing bounded browser evidence collector,
+once per changed card/proof/reason. With private capture disabled this retains
+structural counts only. With explicit private capture enabled it also preserves
+sanitized HTML/JPEG at the failure boundary, including a menu left open after a
+failed preparation. Existing retention, authentication suppression and capture
+limits apply. Input receipt and card clearance remain separate lifecycle events;
+`document_hidden=true` alone does not establish the cause of a missed click.
 
 ### Native response versus task lifetime
 
@@ -987,6 +1013,27 @@ not prove wasted billing or semantic recall. Missing old fields remain unknown. 
 packaged launcher accepts the same `--view summary --limit 1` options as the source CLI.
 All evidence uses existing bounded rotation; no cumulative archive or idle model work.
 
+
+### Inspection and author-rendering correlation
+
+Pointer hit tests now record a per-surface `input_sequence`, a closed classification
+reason, and up to eight target ancestors in `inspection_target_observed`.
+`inspection_input_dispatched` records the input events actually handed to Electron;
+a sent click remains distinct from a DOM change or successful action. Mode changes
+report prior mode, pending input, strict ownership and observation revisions. No
+label, DOM id/class, URL or actual keyboard value is recorded. Existing gesture
+budgets apply; no mouse-move sampling or additional input is introduced.
+
+`web_turn_ownership_observed` includes candidate-match counts and a bounded census
+of the latest user bubble: code, hidden, editable and expanded/collapsed nodes,
+character counts and clipping geometry. This distinguishes a changed request from
+a changed renderer representation without exporting the request body. A failed
+probe supplies no ownership authority. Rejections retain observation-input state,
+anchor and rendered/body comparison states. Checkpoint failure events preserve the
+typed `observation_failure` separately from `failure_class`, owner cancellation and
+document loss, so a request-identity rejection is not reduced to `provider_error`.
+Existing failure captures provide opt-in HTML/JPEG; raw capture is never enabled
+implicitly by these structural probes.
 
 ## Interruption cause boundary
 

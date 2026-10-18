@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { structuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { InspectionInput } from "./inspection-input";
 import { runInNewContext } from "node:vm";
 function fixture(classificationDeadlineMs?: number) {
@@ -10,7 +11,7 @@ function fixture(classificationDeadlineMs?: number) {
   const contents = {
     on(name: string, fn: (...args: any[]) => void) { listeners.set(name, fn); },
     removeListener(name: string) { listeners.delete(name); },
-    async executeJavaScript(): Promise<unknown> { return allowed; },
+    async executeJavaScript(): Promise<unknown> { return { allowed }; },
     sendInputEvent(input: any) {
       let blocked = false;
       listeners.get(input.type.startsWith("mouse") ? "before-mouse-event" : "before-input-event")?.({ preventDefault() { blocked = true; } }, input);
@@ -178,8 +179,8 @@ test("recognized consent preserves large accepted send while an unrelated input 
   let release!: (result: boolean) => void;
   let pendingTarget = false;
   (f.contents as { executeJavaScript: () => Promise<unknown> }).executeJavaScript = async () => pendingTarget
-    ? new Promise<boolean>(resolve => { release = resolve; })
-    : target === "approval" ? "manual-consent" : false;
+    ? new Promise<{allowed:boolean}>(resolve => { release = value => resolve({allowed:value}); })
+    : { allowed: target === "approval" ? "manual-consent" : false };
   const initial = f.gate.current(), observed = f.gate.observationCurrent();
   f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
   expect(f.gate.observationCurrent().pending).toBe(true);
@@ -219,7 +220,7 @@ test("unresponsive renderer expires the intercepted gesture without revoking acc
   release("manual-consent");
   await flush();
   expect(f.sent).toEqual([]); // A stale promise never authorizes a click.
-  f.contents.executeJavaScript = async () => "manual-consent";
+  f.contents.executeJavaScript = async () => ({allowed:"manual-consent"});
   f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
   await flush();
   expect(f.sent).toEqual([down, up]); // A *new* verified human gesture may proceed.
@@ -247,7 +248,7 @@ test("Electron unresponsive event immediately drops pending and new input until 
   await flush();
   expect(f.sent).toEqual([]);
   f.listeners.get("responsive")!();
-  f.contents.executeJavaScript = async () => "manual-consent";
+  f.contents.executeJavaScript = async () => ({allowed:"manual-consent"});
   f.contents.sendInputEvent(down); f.contents.sendInputEvent(up);
   await flush();
   expect(f.sent).toEqual([down, up]);
@@ -299,4 +300,40 @@ test("unproven card controls stay blocked in viewing mode",async()=>{
   const f=fixture();f.gate.setInteractive(false);
   f.contents.sendInputEvent(down);f.contents.sendInputEvent(up);await flush();
   expect(f.sent).toEqual([]);f.gate.dispose();
+});
+
+test("pointer classification, target geometry and delivered input share a content-free sequence", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-inspection-evidence-"));
+  const file = join(root, "events.jsonl"), previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  const f = fixture();
+  try {
+    const node = { tagName: "BUTTON", parentElement: null, textContent: "PRIVATE_LABEL", id: "PRIVATE_ID",
+      scrollTop: 0, scrollHeight: 20, clientHeight: 20,
+      getBoundingClientRect: () => ({ left: 10, top: 10, width: 20, height: 20 }),
+      closest: () => null, matches: (selector: string) => selector.includes("button"),
+      getAttribute: () => null, hasAttribute: () => false,
+    };
+    f.contents.executeJavaScript = async (code?: string) => code?.includes("chatgpt-tela-inspection-settled") ? undefined
+      : runInNewContext(code!, { document: { elementFromPoint: () => node, activeElement: node, visibilityState: "visible" },
+          getComputedStyle: () => ({ userSelect: "text", overflowY: "visible" }) });
+    f.gate.setInteractive(true);
+    expect(f.gate.current().revision).toBe(0);
+    f.contents.sendInputEvent(down); f.contents.sendInputEvent(up); await flush();
+    const rows = readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    for (const row of rows) expect(structuralDiagnosticEvent(row)).toEqual(row);
+    expect(rows.find(row => row.stage === "inspection_input_classified"))
+      .toMatchObject({ input_sequence: 1, reason_class: "interactive_control", probe_available: true });
+    expect(rows.find(row => row.stage === "inspection_target_observed"))
+      .toMatchObject({ input_sequence: 1, kind: "button", width: 20 });
+    expect(rows.find(row => row.stage === "inspection_input_dispatched"))
+      .toMatchObject({ input_sequence: 1, event_count: 2, observation_revision: 1, ownership_revision: 1 });
+    expect(JSON.stringify(rows)).not.toContain("PRIVATE_");
+    expect(f.sent).toEqual([down, up]);
+  } finally {
+    f.gate.dispose();
+    if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

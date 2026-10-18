@@ -123,6 +123,12 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
       author_root_count: current?.userPayloadStructure?.rootCount ?? 0,
       author_outer_characters: current?.userPayloadStructure?.outerLength ?? 0,
       author_inner_characters: current?.userPayloadStructure?.innerLength ?? 0,
+      author_candidate_count: current?.candidateFingerprints?.length ?? 0,
+      author_expected_candidate_count: current?.candidateFingerprints?.filter(value => value === tracked.acceptedUserFingerprint).length ?? 0,
+      author_digest_present: current?.contentFingerprint !== undefined,
+      author_nested_roots: current?.userPayloadStructure?.nestedRoots === true,
+      author_equivalent_roots: current?.userPayloadStructure?.equivalentRoots === true,
+      ...current?.userPayloadProbe,
       witness_count: count,
     });
     else if (count === 65) emitDiagnosticEvent("chatgpt_tela_work", "web_turn_ownership_budget_reached", { witness_count: 64 });
@@ -202,7 +208,11 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
     }
   }
   if (payloadState === "changed") {
-    emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rejected", { reason_class: "accepted_user_changed" });
+    emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rejected", { reason_class: "accepted_user_changed",
+      payload_state: payloadState, rendered_payload_state: renderedState, anchor_state: anchorState,
+      input_unchanged: tracked.inputUnchanged?.() ?? false,
+      observation_input_state: tracked.observationInputState?.() ?? "unknown",
+    });
     throw new WebObservationUnproven("request_changed", "ChatGPT accepted user identity changed during the active Web turn");
   }
   // An input change is not evidence of a send, but it retires the sole

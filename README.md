@@ -362,7 +362,7 @@ than starting before product setup.
 The source tree now also builds a **signed multi-file runtime payload**. `bun run package:build` compiles one
 stable `chatgpt-tela` launcher plus separate Gateway/Chat/Codex executables, bundles the Electron profile
 runtime and its CJS entrypoint, writes the versioned package manifest, applies platform-native signing before
-the package fingerprint is frozen, and finally signs the tree fingerprint with an Ed25519 release key. OS
+the package fingerprint is frozen. OS
 service registrations point only at the stable launcher; the launcher re-proves the install manifest and
 payload receipt, reads the package manifest, and dispatches the exact service child. Codex receives the
 packaged Electron/profile-runtime paths from that manifest rather than a hardcoded install layout.
@@ -382,7 +382,7 @@ The installed local preview contains the local-file path; library selection requ
 
 To include the file publisher in a development package, install a Rust toolchain, run
 `bun run workspace-files:build`, and pass `--workspace-files build/workspace-files-target/release/tela-workspace-files`
-to `bun run package:build` alongside its signing arguments (append `.exe` on Windows). The helper is included
+to `bun run package:build` alongside its platform signing arguments (append `.exe` on Windows). The helper is included
 in the signed payload and removed with owned application binaries; imported files remain user workspace
 content. It runs on demand when opening the import card or saving. Packages without the helper omit the import capabilities. Windows/Linux
 execution awaits CI or device proof. Interrupted staging is recovered on the next import-card open or save,
@@ -390,10 +390,6 @@ using private records and directory identities. Already saved files stay unchang
 staging folders are preserved and further imports in that workspace stop until recovery is resolved. Do not
 delete folders based only on the `.tela-import-*` filename prefix. Uninstall with saved-data removal preserves
 pending recovery records and ownership state until recovery is resolved.
-
-Keep release signing authority outside disposable build and recovery directories. Retain private keys
-in a protected maintainer store and public trust keys independently of package caches; never include
-private keys in a release or Git history. Removing build artifacts must not remove signing authority.
 
 On macOS, the package builder requires an explicit codesign identity. `-` is supported only for local
 ad-hoc development proof; a public release still needs a Developer ID identity and notarization. The payload
@@ -406,14 +402,14 @@ On Windows, those registrations are current-user interactive Scheduled Tasks wit
 `LocalSystem` services. That keeps Gateway/Chat/Codex in the same user profile and Desktop session as Tela's
 config, ChatGPT state, and built-in Desktop adapter while still providing explicit normal start/stop control.
 
-The signed payload is self-describing through `chatgpt-tela-package-v1.json`: it declares the product version,
-stable launcher, exact Gateway/Chat/Codex executables, packaged Electron/profile-runtime entrypoints, and the
-release signing key id. Signed install/upgrade entrypoints verify the Ed25519 signature before planning/apply,
-and apply re-verifies payload bytes independently through the existing ownership receipt.
+The payload is self-describing through `chatgpt-tela-package-v1.json`: it declares the product version,
+stable launcher, exact Gateway/Chat/Codex executables, packaged Electron/profile-runtime entrypoints, and
+lifecycle support. Install/upgrade use the common ownership and payload-fingerprint path; apply verifies
+that the package bytes still match the reviewed plan and installed receipt.
 
 A live macOS packaging proof compiled all four Bun executables, bundled the 1.40 MB profile runtime plus the
 Electron distribution, re-signed the Mach-O/Electron bundle, verified strict/deep codesign, then verified the
-Ed25519 tree signature. The signed payload was installed into a temporary HOME using fixture-only LaunchAgent
+payload fingerprint. The signed payload was installed into a temporary HOME using fixture-only LaunchAgent
 registration, after which the installed compiled `chatgpt-tela service chat` launcher started the installed
 compiled Chat daemon, returned authenticated `ready`, accepted `/v1/shutdown`, exited normally, and removed
 its runtime descriptor. No real user launchd registration, Tailscale route, or ChatGPT profile was modified.
@@ -431,22 +427,22 @@ E2E validation still need to drive/prove this lifecycle for end users.
 Install, update, repair, removal and installed service controls share one mutation owner. Interrupted
 removal blocks new mutations; proven final metadata cleanup can resume without repeating shutdown.
 
-The new signed launcher automatically retains a verified source recovery package before stopping
+The launcher automatically retains a verified source recovery package before stopping
 services. Recoverable failures restore the previous services; uncertain shutdown remains paused with
 its checkpoint. Restoration is reported as an unsuccessful update. See [upgrade recovery](docs/upgrade-recovery.md).
 
 The source launcher also provides `cancel-upgrade` with explicit `--dry-run` or `--apply`,
-`--trusted-public-key`, and `--payload` pointing to the retained signed **source** package. Cancellation
+`--payload` pointing to the retained **source** package. Cancellation
 is allowed only before binary replacement starts and after proving that the source files, installation
 and data format remain compatible. It preserves running services and restores only prior running
 services that stopped. If restoration fails, repeat that cancellation to finish its checkpoint before
 starting another upgrade. This is source-preview functionality; older installed launchers may not
-support it. Cancellation checks the source package’s signed support declaration and refuses before
+support it. Cancellation checks the source package’s lifecycle support declaration and refuses before
 changing its checkpoint when support is absent. Use a verified updater from the new package for
 version transitions; do not remove pending update records to work around an older launcher. Actual
 OS restoration and consumer updater UI acceptance remain open.
 
-Same-version packaged **repair** is a separate signed, interruption-safe transition rather than a reinstall
+Same-version packaged **repair** is a separate interruption-safe transition rather than a reinstall
 shortcut. Normal install still preserves completed payload byte drift. Repair may restore payload bytes only
 when the exact install manifest, binary-directory ownership marker, and original payload receipt still prove
 the same install/version/payload fingerprint. Missing exact service registrations can be recreated; foreign or
@@ -456,41 +452,31 @@ running before the repair. A restart failure leaves the journal for idempotent r
 Repair and upgrade journals are mutually exclusive, and packaged service launch/install, ordinary source
 start, and destructive uninstall apply refuse to cross an incomplete transition.
 
-Signed repair plan/apply entrypoints use the same Ed25519 package trust boundary as signed install/upgrade.
-The packaged launcher now exposes a pre-release lifecycle CLI for exercising that real boundary. It never
-trusts a key stored inside the package being verified: callers must provide a release public key obtained
-out-of-band, and both planning and apply re-verify the target package before mutation.
+Install, repair and upgrade use one lifecycle path. Choose a package from a trusted source; there is no
+separate Tela public-key file to select. Platform code signing remains part of distribution, while payload
+fingerprints bind planning, apply and installed ownership to the exact package bytes.
 
 ```sh
-./chatgpt-tela install --dry-run --trusted-public-key ./chatgpt-tela-release.pem
-./chatgpt-tela install --apply   --trusted-public-key ./chatgpt-tela-release.pem
+./chatgpt-tela install --dry-run
+./chatgpt-tela install --apply
 
-# Run the launcher from a known-good same-version package for repair:
-./chatgpt-tela repair --dry-run --trusted-public-key ./chatgpt-tela-release.pem
-./chatgpt-tela repair --apply   --trusted-public-key ./chatgpt-tela-release.pem
+# Run from a known-good same-version package for repair:
+./chatgpt-tela repair --dry-run
+./chatgpt-tela repair --apply
 
-# Run the launcher from the target package for an upgrade:
-./chatgpt-tela upgrade --dry-run --trusted-public-key ./chatgpt-tela-release.pem
-./chatgpt-tela upgrade --apply   --trusted-public-key ./chatgpt-tela-release.pem
+# Run from the target package for an upgrade:
+./chatgpt-tela upgrade --dry-run
+./chatgpt-tela upgrade --apply
 
-# When retained source/previous rollback slots were signed under other
-# explicitly trusted historical publisher keys, give the exact signed source
-# plus one out-of-band key per retained key ID. Never trust a cached key merely
-# because it is inside the package's recovery directory.
-# ./chatgpt-tela upgrade --dry-run --trusted-public-key ./new-release.pem \
-#   --recovery-payload ./verified-installed-source --recovery-public-key ./source-key.pem \
-#   --retained-recovery-key old-release-id ./old-release.pem
-
-# Run uninstall apply from a separately extracted package copy, not the installed binary root:
+# Run uninstall apply from a separately extracted package:
 ./chatgpt-tela uninstall --dry-run
 ./chatgpt-tela uninstall --apply
 ./chatgpt-tela uninstall --apply --remove-data
 ```
 
-The package directory defaults to the directory containing the launcher; `--payload <directory>` can select
-another package explicitly. `--dry-run` and `--apply` are mutually exclusive. This is deliberately still a
-pre-release operator surface: a public release must pin the trusted release-key set in the signed
-installer/updater instead of asking ordinary users to locate a PEM file themselves.
+The package directory defaults to the directory containing the launcher; `--payload <directory>` selects
+another package. `--dry-run` and `--apply` are mutually exclusive. Upgrade automatically retains an owned
+source snapshot for recovery, without the original download or a separately supplied key.
 
 Packaged uninstall uses the same ownership-aware engine as the source CLI. It re-proves exact resource
 ownership immediately before every destructive step, preserves drifted/dirty/foreign resources, and keeps
@@ -597,9 +583,9 @@ bun run package:smoke
 bun run cli status
 ```
 
-CI runs the same `package:smoke` on macOS, Windows, and Linux. It generates an ephemeral Ed25519 key, compiles
+CI runs the same `package:smoke` on macOS, Windows, and Linux. It compiles
 the stable launcher plus separate Gateway/Chat/Codex executables, stages the real Electron/profile runtime,
-verifies the signed package tree, and executes the packaged launcher's lifecycle/help CLI boundary. macOS additionally uses
+verifies the payload fingerprint, and executes the packaged launcher's lifecycle/help CLI boundary. macOS additionally uses
 ad-hoc codesign for this CI proof; public releases still require Developer ID signing and notarization.
 
 `doctor` is a non-mutating default-profile preflight. It resolves the platform's official ChatGPT/Codex
@@ -1241,9 +1227,8 @@ ChatGPT Tela is an independent, unofficial project and is not affiliated with Op
 ### macOS maintenance preview
 
 Open the control center → Settings → **Maintain Tela…** to update, repair, or remove Tela.
-For an update or repair, select an extracted signed package and a release public key obtained from a
-source you independently trust. Repair needs the installed version. This preview does not yet download
-updates or supply a pinned consumer release key.
+For an update or repair, select an extracted package from a trusted source. Repair needs the installed
+version. This preview does not yet download updates automatically.
 
 Choose **Review changes** to see the version change and the resources to replace, remove, or preserve.
 Reviewing or dismissing the confirmation applies no changes. Applying can close connected ChatGPT profiles; finish active
@@ -1251,7 +1236,7 @@ work first. Removal keeps Tela settings and saved logins by default; removing th
 checkbox. Projects and original ChatGPT data are preserved.
 
 When an update is unfinished, **Cancel unfinished update** offers a separate review. It requires the
-retained signed package for the installed version, an independently trusted key, and a launcher with
+retained package for the installed version and a launcher with
 cancellation support. Cancellation is available only before file replacement starts; it keeps the
 installed files and restores previously running services that stopped. Once replacement has begun,
 resume with the original update package instead. A changed recovery checkpoint requires a new review.

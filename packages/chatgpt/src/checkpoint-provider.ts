@@ -1,6 +1,6 @@
 import { WebCheckpointResponseRejected, type CheckpointResponseRejection as CompletedResponseRejection } from "./checkpoint-settlement";
 import { createHash, randomUUID, randomBytes } from "node:crypto";
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { emitDiagnosticEvent, webObservationFailureReason, diagnosticFailureClass } from "@chatgpt-tela/core";
 import type { BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import {
   requireProven,
@@ -186,6 +186,8 @@ export class ChatGptContextCheckpointProvider implements WebContextCheckpointPro
       }
     } catch (error) {
       emitDiagnosticEvent("chatgpt_tela_work", "checkpoint_operation_failed", {
+      observation_failure: webObservationFailureReason(error) ?? "none",
+      failure_class: diagnosticFailureClass(error),
         phase, submission_accepted: phase !== "submitting", completion_observed: phase === "completed",
         operation_cancelled: signal?.aborted === true,
         reason_class: error instanceof WebCheckpointResponseRejected ? error.receipt.reason

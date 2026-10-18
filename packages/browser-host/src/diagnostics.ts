@@ -66,7 +66,7 @@ export const DIAGNOSTIC_DOM_CAPTURE = String.raw`function(privateCapture) {
   return result;
 }`;
 
-async function captureEvidence(surface: BrowserSurfaceLease, reason: "turn_failure" | "approval_anomaly" | "surface_anomaly" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution"): Promise<void> {
+async function captureEvidence(surface: BrowserSurfaceLease, reason: "turn_failure" | "approval_anomaly" | "surface_anomaly" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
   const root=configuredDiagnosticRoot(); if (!root) return;
   const operation=diagnosticContext().operation_fingerprint ?? diagnosticFingerprint([surface.taskId,surface.epochId].join("\n"));
   const key=operation+reason; const now=Date.now();
@@ -105,11 +105,11 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "turn_failu
 }
 
 /** Diagnostic failure never changes the browser turn result or approval policy. */
-export async function captureBrowserDiagnosticEvidence(surface: BrowserSurfaceLease, reason: "turn_failure" | "approval_anomaly" | "surface_anomaly" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution"): Promise<void> {
+export async function captureBrowserDiagnosticEvidence(surface: BrowserSurfaceLease, reason: "turn_failure" | "approval_anomaly" | "surface_anomaly" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
   try { await captureEvidence(surface, reason); } catch { /* Best effort, including missing capabilities. */ }
 }
 
-export async function captureBrowserDiagnosticCheckpoint(surface: BrowserSurfaceLease, reason: "before_submit" | "turn_accepted" | "surface_anomaly" | "approval_pending" | "approval_resolution"): Promise<void> {
+export async function captureBrowserDiagnosticCheckpoint(surface: BrowserSurfaceLease, reason: "before_submit" | "turn_accepted" | "surface_anomaly" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
   const root=configuredDiagnosticRoot();
   if (root && privateDiagnosticCaptureEnabled(root)) await captureBrowserDiagnosticEvidence(surface,reason);
 }

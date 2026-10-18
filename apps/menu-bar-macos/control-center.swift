@@ -1005,18 +1005,15 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func openMaintenanceFromRepairPackage(_ launcher: String) {
     let package = NSOpenPanel(); package.canChooseFiles = false; package.canChooseDirectories = true
-    package.allowsMultipleSelection = false; package.message = "Select a signed repair package matching the installed Tela version."
+    package.allowsMultipleSelection = false; package.message = "Select a repair package matching the installed Tela version."
     guard package.runModal() == .OK, let source = package.url else { return }
-    let key = NSOpenPanel(); key.canChooseDirectories = false; key.allowsMultipleSelection = false
-    key.message = "Select its independently trusted release public key."
-    guard key.runModal() == .OK, let trustedKey = key.url else { return }
     launchingMaintenance = true; renderCurrentPage()
     Task {
-      let result = await Task.detached { Self.runLauncher(launcher, arguments: ["maintenance-open", "--payload", source.path, "--trusted-public-key", trustedKey.path]) }.value
+      let result = await Task.detached { Self.runLauncher(launcher, arguments: ["maintenance-open", "--payload", source.path]) }.value
       launchingMaintenance = false; renderCurrentPage()
       if result.0 != 0 {
         let alert = NSAlert(); alert.messageText = "Couldn't verify the repair package"
-        alert.informativeText = "Check its version and trusted key. If Tela's launcher is missing too, use a separately extracted trusted installer. No changes were applied."
+        alert.informativeText = "Check its version and source. If Tela's launcher is missing too, use a separately extracted trusted installer. No changes were applied."
         alert.addButton(withTitle: "OK"); alert.runModal()
       }
     }

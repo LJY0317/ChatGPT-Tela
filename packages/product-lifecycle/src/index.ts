@@ -10,7 +10,6 @@ export * from "./packaged-repair";
 export * from "./packaged-build";
 export * from "./packaged-manifest";
 export * from "./packaged-service-controller";
-export * from "./packaged-signature";
 export * from "./packaged-transition";
 export * from "./packaged-upgrade";
 export * from "./service-registration";

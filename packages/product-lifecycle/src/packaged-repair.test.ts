@@ -6,7 +6,6 @@ import { applyPackagedInstallFromPayload, planPackagedInstallFromPayload } from 
 import { PACKAGED_PRODUCT_MANIFEST } from "./packaged-manifest";
 import {
   applyPackagedRepairFromPayload,
-  planSignedPackagedRepairFromPayload,
   planPackagedRepairFromPayload,
   readPackagedRepairJournal,
   type PackagedRepairServiceController,
@@ -255,24 +254,6 @@ describe("same-version packaged repair", () => {
       const v2 = createPayload(root, "2.0.0", "v2\n");
       await expect(planPackagedUpgradeFromPayload({ payloadSourcePath: v2, platform: "linux",
         home: f.home, environment: {}, runner })).rejects.toThrow("other packaged transition");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("signed repair entrypoint refuses an unsigned same-version payload before planning", async () => {
-    const root = mkdtempSync(join(tmpdir(), "tela-repair-signature-"));
-    const runner = new SystemdRepairRunner();
-    try {
-      const f = await installFixture(root, runner);
-      await expect(planSignedPackagedRepairFromPayload({
-        payloadSourcePath: f.payload,
-        trustedKeys: {},
-        platform: "linux",
-        home: f.home,
-        environment: {},
-        runner,
-      })).rejects.toThrow("signed payload integrity");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

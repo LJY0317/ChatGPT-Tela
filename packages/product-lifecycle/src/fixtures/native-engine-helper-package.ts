@@ -1,10 +1,9 @@
+import { packagedPayloadFingerprint } from "../packaged-payload";
 import { strict as assert } from "node:assert";
-import { generateKeyPairSync } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, lstatSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildPackagedPayload } from "../packaged-build";
-import { createEd25519PackagedPayloadSigner, verifyPackagedPayloadSignature } from "../packaged-signature";
 import { nativeEngineFileSha256, nativeEngineHelperName } from "../native-engine";
 
 function fixture(root: string) {
@@ -29,7 +28,7 @@ if (process.platform !== "win32") {
     const engine = join(input, "engine");
     writeFileSync(engine, '#!/bin/sh\nprintf "codex-cli 0.159.0\\n"\n', { mode: 0o755 });
     const helper = join(input, nativeEngineHelperName(process.platform));
-    const keys = generateKeyPairSync("ed25519");
+
     const common = {
       productVersion: "1.2.3", launcherSourcePath: join(input, "launcher"),
       services: {
@@ -42,7 +41,6 @@ if (process.platform !== "win32") {
       nativeEngine: { executableSourcePath: engine, version: "0.159.0", sha256: nativeEngineFileSha256(engine),
         platform: process.platform as "darwin" | "linux", architecture: process.arch as "arm64" | "x64",
         upstreamCommit: "a".repeat(40), patchSha256: "b".repeat(64), capabilities: ["model-local-compaction-v1"] as const },
-      signer: createEd25519PackagedPayloadSigner({ keyId: "helper-fixture", privateKey: keys.privateKey }),
     };
     assert.throws(() => buildPackagedPayload({ ...common, outputPath: join(root, "missing") }), /helper source/);
     writeFileSync(helper, "helper", { mode: 0o755 });
@@ -50,9 +48,9 @@ if (process.platform !== "win32") {
     const installedHelper = join(built.outputPath, "native-engine", nativeEngineHelperName(process.platform));
     assert.equal(readFileSync(installedHelper, "utf8"), "helper");
     assert.notEqual(lstatSync(installedHelper).mode & 0o111, 0);
-    verifyPackagedPayloadSignature({ payloadRoot: built.outputPath, trustedKeys: { "helper-fixture": keys.publicKey } });
+    assert.equal(packagedPayloadFingerprint(built.outputPath), built.payloadFingerprint);
     writeFileSync(installedHelper, "tampered");
-    assert.throws(() => verifyPackagedPayloadSignature({ payloadRoot: built.outputPath, trustedKeys: { "helper-fixture": keys.publicKey } }));
+    assert.notEqual(packagedPayloadFingerprint(built.outputPath), built.payloadFingerprint);
   } finally { rmSync(root, { recursive: true, force: true }); }
-  console.log(JSON.stringify({ pass: true, missingHelperRejected: true, helperSigned: true }));
+  console.log(JSON.stringify({ pass: true, missingHelperRejected: true, helperFingerprinted: true }));
 }

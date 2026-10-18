@@ -1,3 +1,5 @@
+import { authorDiagnosticProbe } from "./author-diagnostics";
+import { approvalDiagnosticProbe, type ApprovalDiagnosticProbe } from "./approval-diagnostics";
 import { prepareApprovalWithinDeadline } from "./approval-preparation";
 import { createHash } from "node:crypto";
 import { setTimeout as waitForDelay } from "node:timers/promises";
@@ -44,6 +46,7 @@ interface RawTurn {
   readonly candidateTexts?: readonly string[];
   readonly userPayloadReason?: string;
   /** Content-free adapter witness, count saturated at 65; never acceptance authority. */
+  readonly userPayloadProbe?: Readonly<Record<string, number | boolean>>;
   readonly userPayloadStructure?: { readonly rootCount: number; readonly nestedRoots?: boolean; readonly equivalentRoots?: boolean; readonly outerLength?: number; readonly innerLength?: number };
   readonly bodyProof?: { readonly version: 1; readonly value?: string; readonly reason?: string };
   readonly plainBodyText?: string;
@@ -59,6 +62,38 @@ interface RawSnapshot {
   readonly composers: readonly RawComposer[];
   readonly sendControls: readonly RawSend[];
   readonly turns: readonly RawTurn[];
+}
+
+interface ApprovalDomObservation {
+  readonly diagnostics?: ApprovalDiagnosticProbe;
+  readonly diagnosticUnavailable?: boolean;
+  readonly inputReceived?: boolean;
+  readonly receipt?: { cardKey: string; proofKey: string } | null;
+  readonly targetState?: "unprepared" | "changed" | "outside_viewport" | "occluded" | "ready";
+  readonly obstruction?: {
+    readonly kind: string;
+    readonly inCard: boolean;
+    readonly pointerEventsNone: boolean;
+    readonly inert: boolean;
+    readonly documentHidden: boolean;
+  };
+  readonly cardCount: number;
+  readonly denyCount: number;
+  readonly allowCount: number;
+  readonly allowOnceCount: number;
+  readonly allowConversationCount?: number;
+  readonly alwaysAllowCount: number;
+  readonly unknownCount: number;
+  readonly allowPoint: { readonly x: number; readonly y: number } | null;
+  readonly allowOncePoint: { readonly x: number; readonly y: number } | null;
+  readonly allowConversationPoint?: { readonly x: number; readonly y: number } | null;
+  readonly optionsDisclosureCount?: number;
+  readonly optionsExpanded?: boolean;
+  readonly optionsPoint?: { readonly x: number; readonly y: number } | null;
+  readonly optionsAnchorStable?: boolean | null;
+  readonly optionsAttempted?: boolean;
+  readonly cardKey: string | null;
+  readonly proofKey: string | null;
 }
 
 const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare) {
@@ -84,6 +119,8 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     return includeWrappers ? candidates : candidates.filter(card => !candidates.some(other => other !== card && card.contains(other)));
   };
   const cards = discover();
+  const diagnose = (${approvalDiagnosticProbe.toString()});
+  let diagnosticTarget = null, diagnosticHit = null, diagnosticHitTested = false;
   const result = {
     cardCount: cards.length,
     denyCount: 0,
@@ -105,6 +142,16 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     targetState: "unprepared",
     inputReceived: false,
     receipt: registry.receipt || null,
+  };
+  const finish = () => {
+    if (prepare?.diagnostics && cards.length) {
+      try {
+        result.diagnostics = diagnose(cards[0], diagnosticTarget, diagnosticHit);
+        result.diagnostics.controls.hit_test_observed = diagnosticHitTested;
+      }
+      catch { result.diagnosticUnavailable = true; }
+    }
+    return result;
   };
   // This provider-owned classifier identifies human consent/navigation input,
   // not authority to approve. Recheck the exact card on every gesture. Approval
@@ -146,7 +193,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     return !!(menuId && disclosure.getAttribute('aria-controls') === menuId
       || disclosureId && menu.getAttribute('aria-labelledby') === disclosureId);
   };
-  if (cards.length !== 1) return result;
+  if (cards.length !== 1) return finish();
   const point = element => {
     const bounds = element.getBoundingClientRect();
     if (!Number.isFinite(bounds.left) || !Number.isFinite(bounds.top)
@@ -261,7 +308,8 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   result.optionsAttempted = prior.menuOpenAttempted === true;
   result.optionsAnchorStable = prior.menuOpenAnchorText === undefined
     ? null : prior.menuOpenAnchorText === text;
-  if (prepare) {
+  diagnosticTarget = allowConversationButton || optionsDisclosure || allowOnceButton || allowButton;
+  if (prepare?.choice) {
     result.allowPoint = null;
     result.allowOncePoint = null;
     result.allowConversationPoint = null;
@@ -273,6 +321,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     const openingOptions = prepare.choice === 'open_options';
     const selected = openingOptions ? optionsDisclosure : conversation ? allowConversationButton
       : prepare.choice === 'allow' ? allowButton : allowOnceButton;
+    diagnosticTarget = selected;
     const eligible = observation => openingOptions
       ? observation.cardCount === 1
         && observation.optionsDisclosureCount === 1 && !observation.optionsExpanded
@@ -281,7 +330,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       || (prior.menuOpenAttempted && prior.menuOpenAnchorText !== text)
       || !eligible(result) || !selected || !visible(selected) || selected.disabled
       || selected.getAttribute("aria-disabled") === "true" || selected.closest('[inert]')
-      || (openingOptions && !selected.getAttribute("aria-controls"))) return result;
+      || (openingOptions && !selected.getAttribute("aria-controls"))) return finish();
     selected.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
     // Instant scroll plus synchronous geometry/hit testing flushes current layout.
     // Frame callbacks may stop in hidden windows and must never gate approval.
@@ -289,12 +338,13 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     const after = await inspectApproval();
     if (after.cardKey !== prepare.cardKey || after.proofKey !== prepare.proofKey
       || !eligible(after) || !selected.isConnected || !visible(selected) || selected.disabled
-      || selected.getAttribute("aria-disabled") === "true" || selected.closest('[inert]')) return result;
+      || selected.getAttribute("aria-disabled") === "true" || selected.closest('[inert]')) return finish();
     const target = point(selected);
     result.targetState = "outside_viewport";
     if (!target || target.x < 0 || target.y < 0
-      || Math.round(target.x) >= innerWidth || Math.round(target.y) >= innerHeight) return result;
+      || Math.round(target.x) >= innerWidth || Math.round(target.y) >= innerHeight) return finish();
     const hit = document.elementFromPoint(Math.round(target.x), Math.round(target.y));
+    diagnosticHit = hit; diagnosticHitTested = true;
     result.targetState = "occluded";
     if (hit !== selected && !selected.contains(hit)) {
       // Content-free witness at the failed hit-test boundary, never authority to click.
@@ -308,7 +358,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
         inert: !!selected.closest('[inert]'),
         documentHidden: document.visibilityState === "hidden",
       };
-      return result;
+      return finish();
     }
     // Passive, card-local receipt of actual browser input. No click, authority or polling here.
     if (!openingOptions && prior.receiptButton !== selected && typeof selected.addEventListener === "function") {
@@ -334,7 +384,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     else if (prepare.choice === "allow") result.allowPoint = target;
     else result.allowOncePoint = target;
   }
-  return result;
+  return finish();
 }`;
 
 /**
@@ -683,6 +733,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
       .some(visible);
   });
   const turns = [];
+  let latestUserBubble, latestUserTurn;
   const groups = [...document.querySelectorAll("[data-turn-key]")];
   // Optimistic renderer keys can disappear during hydration while the public logical
   // turn anchor remains. Bind only an exact, unique anchor inside its keyed group and
@@ -709,7 +760,8 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
     const user = group.querySelector("[data-user-message-bubble]");
     if (user) {
       const payload = requestPayload(user);
-      turns.push({
+      latestUserBubble = user;
+      const turn = {
         key: "user:" + rawKey,
         role: "user",
         ...(lineageAnchor ? { lineageAnchor } : {}),
@@ -717,7 +769,8 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         ...(payload.candidates ? { candidateTexts: payload.candidates } : {}),
         userPayloadReason: payload.reason,
         userPayloadStructure: { rootCount: payload.rootCount, ...(payload.nestedRoots !== undefined ? { nestedRoots: payload.nestedRoots } : {}), ...(payload.equivalentRoots !== undefined ? { equivalentRoots: payload.equivalentRoots } : {}), ...(payload.outerLength !== undefined ? { outerLength: payload.outerLength, innerLength: payload.innerLength } : {}) },
-      });
+      };
+      turns.push(turn); latestUserTurn = turn;
     }
     // The current renderer identifies assistant bodies directly, without the role wrapper.
     // Keep the proof inside the keyed turn; generic markdown or user content is not an answer.
@@ -879,6 +932,10 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
     }
   }
 
+  if (latestUserBubble && latestUserTurn) {
+    try { latestUserTurn.userPayloadProbe = (${authorDiagnosticProbe.toString()})(latestUserBubble); }
+    catch { latestUserTurn.userPayloadProbe = { author_probe_available: false }; }
+  }
   return { url: location.href, composers, sendControls, turns };
 }`;
 
@@ -1903,6 +1960,7 @@ function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
     ...(raw.candidateTexts?.length === 2 ? { candidateFingerprints: Object.freeze(raw.candidateTexts.map(fingerprint)) } : {}),
     ...(raw.userPayloadReason ? { userPayloadReason: raw.userPayloadReason } : {}),
     ...(raw.userPayloadStructure ? { userPayloadStructure: raw.userPayloadStructure } : {}),
+    ...(raw.userPayloadProbe ? { userPayloadProbe: raw.userPayloadProbe } : {}),
     ...(raw.bodyProof ? { bodyProof: raw.bodyProof.value !== undefined
       ? { version: raw.bodyProof.version, digest: fingerprint(raw.bodyProof.value) }
       : { version: raw.bodyProof.version, reason: raw.bodyProof.reason ?? "body_unavailable" } } : {}),
@@ -1930,12 +1988,41 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
   #activatedApprovalCardKey: string | undefined;
   #stopAttemptedTurn: string | undefined;
   #lastObstructionRevision: string | undefined;
+  readonly #approvalProbeStates = new Map<string, string>();
   #progressProbeTurnKey: string | undefined;
   readonly #progressProbeStates = new Set<string>();
   constructor(readonly page: BrowserPageAutomation) {}
 
   #diagnostic(stage: string, fields: Readonly<Record<string, string | number | boolean>> = {}): void {
     emitDiagnosticEvent("chatgpt_tela_connector", stage, fields);
+  }
+
+  #recordApprovalProbe(observed: ApprovalDomObservation, phase: string): void {
+    const probe = observed.diagnostics;
+    const state = fingerprint(JSON.stringify([observed.cardKey, observed.proofKey, observed.targetState, probe,
+      observed.diagnosticUnavailable]));
+    if (this.#approvalProbeStates.get(phase) !== state) {
+      this.#approvalProbeStates.set(phase, state);
+      this.#diagnostic("approval_structure_observed", {
+        phase, state: observed.targetState ?? "unprepared", probe_available: !!probe,
+        ...(observed.cardKey ? { card_fingerprint: diagnosticFingerprint(observed.cardKey) } : {}),
+        ...(observed.proofKey ? { proof_fingerprint: diagnosticFingerprint(observed.proofKey) } : {}),
+        allow_conversation_count: observed.allowConversationCount ?? 0,
+        options_disclosure_count: observed.optionsDisclosureCount ?? 0,
+        options_expanded: observed.optionsExpanded === true, options_ready: !!observed.optionsPoint,
+        options_attempted: observed.optionsAttempted === true,
+        options_anchor_stable: observed.optionsAnchorStable === true,
+        ...probe?.controls,
+      });
+      for (const button of probe?.buttons ?? []) this.#diagnostic("approval_control_observed", {
+        ...(observed.cardKey ? { card_fingerprint: diagnosticFingerprint(observed.cardKey) } : {}),
+        phase, ...button,
+      });
+      for (const node of probe?.nodes ?? []) this.#diagnostic("approval_layout_observed", {
+        ...(observed.cardKey ? { card_fingerprint: diagnosticFingerprint(observed.cardKey) } : {}),
+        mode: phase, ...node,
+      });
+    }
   }
 
   async #settleUi(signal?: AbortSignal): Promise<void> {
@@ -1959,14 +2046,8 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     try {
       const raw = await this.page.evaluate<undefined, RawSnapshot>(OBSERVE_CHATGPT_SURFACE, undefined, signal);
       phase = "approval_read";
-      const card = await this.page.evaluate<undefined, {
-        cardCount: number; denyCount: number; allowCount: number; allowOnceCount: number;
-        allowConversationCount?: number;
-        alwaysAllowCount: number; unknownCount: number;
-        cardKey: string | null; proofKey: string | null;
-        inputReceived?: boolean;
-        receipt?: { cardKey: string; proofKey: string } | null;
-      }>(INSPECT_APPROVAL_CARD, undefined, signal);
+      const card = await this.page.evaluate(INSPECT_APPROVAL_CARD, { diagnostics: true }, signal) as ApprovalDomObservation;
+      if (card.cardCount > 0) this.#recordApprovalProbe(card, "observation");
       phase = "snapshot_projection";
       // Observe only existing reads. Deduplicate bounded structural states, never prose/token
       // changes. Report streaming exclusions too; a settled-only probe misses their cause.
@@ -2146,34 +2227,12 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     delayMs: number,
     expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
   ) {
-    type ApprovalObservation = {
-      readonly targetState?: "unprepared" | "changed" | "outside_viewport" | "occluded" | "ready";
-      readonly obstruction?: {
-        readonly kind: string;
-        readonly inCard: boolean;
-        readonly pointerEventsNone: boolean;
-        readonly inert: boolean;
-        readonly documentHidden: boolean;
-      };
-      readonly cardCount: number;
-      readonly denyCount: number;
-      readonly allowCount: number;
-      readonly allowOnceCount: number;
-      readonly allowConversationCount?: number;
-      readonly alwaysAllowCount: number;
-      readonly unknownCount: number;
-      readonly allowPoint: { readonly x: number; readonly y: number } | null;
-      readonly allowOncePoint: { readonly x: number; readonly y: number } | null;
-      readonly allowConversationPoint?: { readonly x: number; readonly y: number } | null;
-      readonly optionsDisclosureCount?: number;
-      readonly optionsExpanded?: boolean;
-      readonly optionsPoint?: { readonly x: number; readonly y: number } | null;
-      readonly optionsAnchorStable?: boolean | null;
-      readonly optionsAttempted?: boolean;
-      readonly cardKey: string | null;
-      readonly proofKey: string | null;
+    const inspect = async (phase = "observed", preparation?: { cardKey: string; proofKey: string; choice: string }) => {
+      const observed = await this.page.evaluate(INSPECT_APPROVAL_CARD,
+        { ...preparation, diagnostics: true }, signal) as ApprovalDomObservation;
+      this.#recordApprovalProbe(observed, phase);
+      return observed;
     };
-    const inspect = () => this.page.evaluate<undefined, ApprovalObservation>(INSPECT_APPROVAL_CARD, undefined, signal);
     let observed = await inspect();
     if (expected && (!observed.cardKey || diagnosticFingerprint(observed.cardKey) !== expected.cardFingerprint
       || fingerprint(JSON.stringify([observed.cardKey, observed.proofKey])) !== expected.revisionFingerprint)) {
@@ -2193,10 +2252,8 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       && observed.allowConversationCount === 0 && observed.optionsDisclosureCount === 1
       && !observed.optionsExpanded && observed.optionsPoint
       && observed.cardKey && observed.proofKey) {
-      const opening = await this.page.evaluate<{ cardKey: string; proofKey: string; choice: string }, ApprovalObservation>(
-        INSPECT_APPROVAL_CARD, { cardKey: observed.cardKey, proofKey: observed.proofKey,
-          choice: "open_options" }, signal,
-      );
+      const opening = await inspect("options", { cardKey: observed.cardKey, proofKey: observed.proofKey,
+        choice: "open_options" });
       if (opening.cardKey !== observed.cardKey || opening.proofKey !== observed.proofKey
         || opening.targetState !== "ready" || !opening.optionsPoint) {
         this.#diagnostic("approval_options_open_withheld", { reason_class: "target_unverified" });
@@ -2214,7 +2271,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
         throw error;
       }
       signal.throwIfAborted();
-      observed = await inspect();
+      observed = await inspect("menu");
       if (observed.cardKey !== cardKey || observed.optionsAnchorStable !== true
         || observed.optionsExpanded !== true || observed.optionsDisclosureCount !== 1
         || decideChatGptApproval(mode, observed).action !== "approve_conversation") {
@@ -2239,7 +2296,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     if (decision.action === "none") {
       return Object.freeze({ status: "none" as const, reason: decision.reason });
     }
-    const targetPoint = (value: ApprovalObservation) => decision.preferredChoice === "allow_conversation"
+    const targetPoint = (value: ApprovalDomObservation) => decision.preferredChoice === "allow_conversation"
       ? value.allowConversationPoint : decision.preferredChoice === "allow" ? value.allowPoint : value.allowOncePoint;
     if (!observed.cardKey || !observed.proofKey
       || !targetPoint(observed)) {
@@ -2267,10 +2324,8 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       card_fingerprint: diagnosticFingerprint(observed.cardKey!),
       proof_fingerprint: diagnosticFingerprint(observed.proofKey!),
     });
-    const prepared = await this.page.evaluate<{ cardKey: string; proofKey: string; choice: string }, ApprovalObservation>(
-      INSPECT_APPROVAL_CARD, { cardKey: observed.cardKey!, proofKey: observed.proofKey!,
-        choice: decision.preferredChoice }, signal,
-    );
+    const prepared = await inspect("target", { cardKey: observed.cardKey!, proofKey: observed.proofKey!,
+      choice: decision.preferredChoice });
     if (prepared.cardKey !== observed.cardKey || prepared.proofKey !== observed.proofKey
       || (prepared.optionsAttempted && prepared.optionsAnchorStable !== true)
       || (decideChatGptApproval(mode, prepared) as { preferredChoice?: string }).preferredChoice !== decision.preferredChoice) {

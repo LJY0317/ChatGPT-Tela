@@ -1,3 +1,4 @@
+import { WebObservationUnproven, structuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { describe, expect, test } from "bun:test";
 import { BROWSER_INPUT_OWNERSHIP, BROWSER_PAGE_AUTOMATION, ControlledBrowserHost } from "@chatgpt-tela/browser-host";
 import type {
@@ -50,7 +51,8 @@ function provider(overrides: Partial<WebContextCheckpointProvider> = {}): WebCon
 describe("browser context checkpoint runner", () => {
   test.each(["revoked", "unknown", "release-failed"] as const)("input ownership cancellation has an exact local closure boundary: %s", async scenario => {
     const inputOwner = new AbortController(), nativeOwner = new AbortController();
-    const primary = new Error("private provider detail must not enter diagnostics");
+    const primary = scenario === "revoked" ? new WebObservationUnproven("request_changed", "private provider detail")
+      : new Error("private provider detail must not enter diagnostics");
     const scratch = mkdtempSync(join(tmpdir(), "tela-checkpoint-input-"));
     const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
     const file = join(scratch, "events.jsonl");
@@ -83,7 +85,9 @@ describe("browser context checkpoint runner", () => {
       expect(rows.find(row => row.stage === "context_checkpoint_failed")).toMatchObject({
         reason_class: "provider_error",
         input_revoked_observed: scenario !== "unknown",
+        observation_failure: scenario === "revoked" ? "request_changed" : "none",
       });
+      for (const row of rows) expect(structuralDiagnosticEvent(row)).toEqual(row);
       expect(rows.some(row => row.stage === "context_checkpoint_closed")).toBe(scenario !== "release-failed");
       expect(rows.some(row => row.stage === "context_checkpoint_release_failed")).toBe(scenario === "release-failed");
       expect(JSON.stringify(rows)).not.toContain("private provider detail");

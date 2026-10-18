@@ -22,7 +22,7 @@ const SAFE_WEB_CONTEXT_PLANNER_STAGES = new Set<string>(WEB_CONTEXT_PLANNER_STAG
 export function isWebContextPlannerStage(value: unknown): value is WebContextPlannerStage {
   return typeof value === "string" && SAFE_WEB_CONTEXT_PLANNER_STAGES.has(value);
 }
-const STRINGS = new Set(["service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "browser_response", "next_action"]);
+const STRINGS = new Set(["observation_failure", "failure_class", "service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "browser_response", "next_action"]);
 /** Never copies unclassified text, identifiers or payloads from a raw diagnostic file. */
 export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticEvent | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;

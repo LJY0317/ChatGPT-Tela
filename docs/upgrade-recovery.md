@@ -1,48 +1,35 @@
-# Guarded signed upgrade recovery
+# Upgrade recovery
 
-The ordinary signed upgrade now prepares source recovery automatically before
-stopping services. It verifies the exact owned installed source and release key,
-creates a clean signed snapshot in product-owned storage, then uses the same
-recovering transition as an explicit operator request. Dry-run reports the source
-origin without creating files. `--recovery-payload` and `--recovery-public-key`
-remain available for an explicitly verified source/key (for example key rotation).
-When the existing bounded `source` and `previous` recovery slots were signed by
-*other* historical keys, supply each trusted out-of-band pair as
-`--retained-recovery-key <key-id> <public-key.pem>` alongside the explicit
-signed current source. This is not trust-on-first-use: the caller chooses the
-external keys, and the shared recovery verifier validates every retained slot
-and its receipt against that exact key before *dry-run* succeeds. Unmatched,
-damaged, unknown, duplicated, or missing authority blocks both dry-run and apply;
-never delete a recovery slot to make a different signature pass.
-An unsigned source or source lacking the signed cancellation protocol is refused
-before shutdown; the client never silently falls back to an unprotected update.
+Upgrade verifies the exact owned installed source and retains a clean snapshot before stopping services.
+Dry-run reports the source origin without creating files. The installed receipt, source version and
+payload fingerprint identify the recovery bytes; no original download or public-key file is required.
+A source without the cancellation lifecycle protocol is refused before shutdown.
 
 ## Recovery storage
 
 One registered state directory contains fixed `source`, `previous` and `pending`
 slots. A bundle holds clean payload bytes, a receipt bound to the install and
-source fingerprint, and a retained public key. Release authority is still supplied
-externally: the cached key is checked against that authority and is not implicitly
-trusted. No development checkout or agent workspace is needed for restoration.
+source fingerprint. Older snapshots may retain an inert public-key file; recovery uses the
+owned receipt and exact payload bytes. No development checkout or agent workspace is needed for restoration.
 Data-preserving removal retains these receipts; complete removal owns their cleanup.
 
 Snapshot publication uses verified bytes and same-filesystem renames. Interrupted
 copying is discarded/rebuilt only under the owned staging intent, while no upgrade
 journal exists and the source is proven again. Interrupted publication can reuse a
-complete matching slot. Changed signatures, unknown files/ownership or a conflicting
+complete matching slot. Changed bytes, unknown files/ownership or a conflicting
 journal are preserved and block mutation. Storage is bounded to the fixed slots;
 there is no idle retention timer or model/network retry. Process-interruption tests
 are distinct from power-loss guarantees and OS-level installed acceptance.
 
 ## Failure boundary
 
-`applySignedPackagedUpgradeWithRecovery` verifies both target authority and a
+`applyPackagedUpgradeWithRecovery` verifies target bytes and a
 restoration artifact matching the exact installed source version/fingerprint.
-It reuses the existing signed cancellation journal and service controller.
+It reuses the existing cancellation journal and service controller.
 
 - Before replacement: cancel/restore only after stop settlement is proven.
 - Uncertain shutdown: preserve the journal and report `settlement-required`.
-- After replacement: report `signed-resume-required`; never restore old files.
+- After replacement: report `resume-required`; never restore old files.
 - Restoration failure: retain `restoring-source` for reconciliation.
 - Successful restoration: report `source-restored` as an **upgrade failure**,
   not successful target installation. Restore only prior running services.
@@ -51,11 +38,11 @@ It reuses the existing signed cancellation journal and service controller.
 
 No new daemon, model request, forced kill, UI click, journal deletion shortcut
 or authority transfer is introduced. The launcher must run independently of
-services being updated. Initial install, upgrade, repair, signed cancellation, removal
+services being updated. Initial install, upgrade, repair, cancellation, removal
 and installed service controls share a product-owned SQLite writer lock
 across the entire operation, including awaits and restoration. An OS process exit
 releases this lock; no stale-age/PID takeover or heartbeat is used. An existing
-transition journal is still reconciled by the signed recovery boundary, never
+transition journal is still reconciled by the recovery boundary, never
 removed or replayed merely because the lock became available. The coordination
 directory is registered in the install manifest and follows normal data-preserving
 or complete removal policy. This does not serialize external platform commands or
@@ -172,8 +159,8 @@ an original external app are not automatically resolved or cancelled.
 
 ## Verification and rollout gates
 
-Synthetic signed installations use a fake service-registration runner. Cases
-cover restoration, unknown settlement, untrusted source, post-replacement
+Synthetic installations use a fake service-registration runner. Cases
+cover restoration, unknown settlement, mismatched source, post-replacement
 failure and interrupted restoration without a second stop. Benign real child
 process tests prove slow exit and replacement-descriptor preservation. A
 synthetic Objective-C object tests the actual macOS bridge without app actions.

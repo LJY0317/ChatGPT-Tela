@@ -23,24 +23,16 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-private_key="$tmp_root/release-private.pem"
-public_key="$tmp_root/release-public.pem"
 native_metadata="$tmp_root/native-engine-metadata.json"
 payload="$tmp_root/payload"
 
 echo "Building Tela from ${head} (${version})"
 "$(command -v bun)" install --frozen-lockfile
 
-openssl genpkey -algorithm ED25519 -out "$private_key" >/dev/null 2>&1
-openssl pkey -in "$private_key" -pubout -out "$public_key" >/dev/null 2>&1
-chmod 600 "$private_key" "$public_key"
-
 build_args=(
   run apps/package-build/src/main.ts
   --output "$payload"
   --version "$version"
-  --signing-key "$private_key"
-  --key-id "local-ephemeral-${short_head}"
 )
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -65,24 +57,12 @@ fi
 "$(command -v bun)" "${build_args[@]}"
 
 if [[ -x "$installed_launcher" && -f "$bin_root/.chatgpt-tela-payload-v1.json" ]]; then
-  lifecycle_command=("$installed_launcher" upgrade)
-  # Use a clean snapshot of the exact currently installed payload as the signed
-  # recovery source. The installed bookkeeping files are intentionally omitted;
-  # the installed payload itself is never modified.
-  recovery_payload="$tmp_root/installed-recovery-payload"
-  mkdir -p "$recovery_payload"
-  command -v rsync >/dev/null || { echo "rsync is required to preserve installed payload symlinks" >&2; exit 1; }
-  rsync -a --links "$bin_root"/ "$recovery_payload"/
-  rm -f -- "$recovery_payload/.chatgpt-tela-owner.json" "$recovery_payload/.chatgpt-tela-payload-v1.json"
-  recovery_key="$install_root/state/install/recovery/source/trusted-key.pem"
-  if [[ -d "$recovery_payload" && -f "$recovery_key" ]]; then
-    lifecycle_command+=(--recovery-payload "$recovery_payload" --recovery-public-key "$recovery_key")
-  fi
+  lifecycle_command=("$payload/chatgpt-tela" upgrade)
 else
   lifecycle_command=("$payload/chatgpt-tela" install)
 fi
 
-"${lifecycle_command[@]}" --dry-run --payload "$payload" --trusted-public-key "$public_key"
-"${lifecycle_command[@]}" --apply --payload "$payload" --trusted-public-key "$public_key"
+"${lifecycle_command[@]}" --dry-run --payload "$payload"
+"${lifecycle_command[@]}" --apply --payload "$payload"
 
 echo "Installed Tela from ${short_head}. Temporary build material was removed."

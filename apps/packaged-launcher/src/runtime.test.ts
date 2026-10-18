@@ -1,16 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { generateKeyPairSync } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeProductConfig } from "@chatgpt-tela/product-config";
 import {
-  applySignedPackagedInstallFromPayload,
+  applyPackagedInstallFromPayload,
   buildPackagedPayload,
-  createEd25519PackagedPayloadSigner,
   packagedRepairJournalPath,
   packagedUpgradeJournalPath,
-  planSignedPackagedInstallFromPayload,
+  planPackagedInstallFromPayload,
   resolveProductPaths,
   readOwnershipManifest,
   observeInstalledPackagedPayload,
@@ -57,7 +55,7 @@ function buildFixture(root: string, withFilePublisher = false) {
   }
   writeFileSync(join(input, "profile-runtime.cjs"), "module.exports = {};\n");
   writeFileSync(join(input, "electron", "bin", "electron"), "electron\n", { mode: 0o755 });
-  const keys = generateKeyPairSync("ed25519");
+
   buildPackagedPayload({
     outputPath: payload,
     productVersion: "1.2.3",
@@ -73,21 +71,18 @@ function buildFixture(root: string, withFilePublisher = false) {
       electronExecutableRelativePath: "bin/electron",
       entrypointSourcePath: join(input, "profile-runtime.cjs"),
     },
-    signer: createEd25519PackagedPayloadSigner({ keyId: "launcher-fixture", privateKey: keys.privateKey }),
   });
-  return { payload, keys };
+  return { payload };
 }
 
 describe("packaged service launcher", () => {
   test("only the recorded service can start at a proven final update or repair checkpoint", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-launch-restoration-")), home = join(root, "home"); mkdirSync(home);
-    const { payload, keys } = buildFixture(root), runner = new SystemdFixtureRunner();
+    const { payload } = buildFixture(root), runner = new SystemdFixtureRunner();
     const pathOptions = { platform: "linux" as const, home, environment: {} };
     try {
-      const planned = await planSignedPackagedInstallFromPayload({ payloadSourcePath: payload,
-        trustedKeys: { "launcher-fixture": keys.publicKey }, ...pathOptions, runner });
-      await applySignedPackagedInstallFromPayload({ planned, payloadSourcePath: payload,
-        trustedKeys: { "launcher-fixture": keys.publicKey }, ...pathOptions, runner });
+      const planned = await planPackagedInstallFromPayload({ payloadSourcePath: payload, ...pathOptions, runner });
+      await applyPackagedInstallFromPayload({ planned, payloadSourcePath: payload, ...pathOptions, runner });
       const paths = resolveProductPaths(pathOptions), ownership = readOwnershipManifest(paths.installManifest)!;
       const resource = ownership.resources.find(value => value.kind === "directory" && value.id === "product-binaries")!;
       if (resource.kind !== "directory") throw new Error("fixture binary resource missing");
@@ -138,27 +133,25 @@ describe("packaged service launcher", () => {
       expect(() => launch("chat")).toThrow("transition journal");
     } finally { removeFixture(root); }
   });
-  test("signed install registers the stable launcher while the launcher resolves the manifest-defined service binary", async () => {
+  test("install registers the stable launcher while the launcher resolves the manifest-defined service binary", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-packaged-launcher-"));
     const home = join(root, "home");
     mkdirSync(home);
-    const { payload, keys } = buildFixture(root, true);
+    const { payload } = buildFixture(root, true);
     const runner = new SystemdFixtureRunner();
     const pathOptions = { platform: "linux" as const, home, environment: {} };
     try {
-      const planned = await planSignedPackagedInstallFromPayload({
+      const planned = await planPackagedInstallFromPayload({
         payloadSourcePath: payload,
-        trustedKeys: { "launcher-fixture": keys.publicKey },
         ...pathOptions,
         runner,
       });
       expect(planned.blueprint.services.map(service => service.definition)).toEqual(expect.arrayContaining([
         expect.objectContaining({ platform: "linux" }),
       ]));
-      await applySignedPackagedInstallFromPayload({
+      await applyPackagedInstallFromPayload({
         planned,
         payloadSourcePath: payload,
-        trustedKeys: { "launcher-fixture": keys.publicKey },
         ...pathOptions,
         runner,
       });
@@ -224,18 +217,16 @@ describe("packaged service launcher", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-packaged-launcher-identity-"));
     const home = join(root, "home");
     mkdirSync(home);
-    const { payload, keys } = buildFixture(root);
+    const { payload } = buildFixture(root);
     const runner = new SystemdFixtureRunner();
     const pathOptions = { platform: "linux" as const, home, environment: {} };
     try {
-      const planned = await planSignedPackagedInstallFromPayload({
+      const planned = await planPackagedInstallFromPayload({
         payloadSourcePath: payload,
-        trustedKeys: { "launcher-fixture": keys.publicKey },
         ...pathOptions,
         runner,
       });
-      await applySignedPackagedInstallFromPayload({ planned, payloadSourcePath: payload,
-        trustedKeys: { "launcher-fixture": keys.publicKey }, ...pathOptions, runner });
+      await applyPackagedInstallFromPayload({ planned, payloadSourcePath: payload, ...pathOptions, runner });
       const paths = resolveProductPaths(pathOptions);
       writeProductConfig({
         version: 1,
@@ -258,18 +249,16 @@ describe("packaged service launcher", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-packaged-launcher-transition-"));
     const home = join(root, "home");
     mkdirSync(home);
-    const { payload, keys } = buildFixture(root);
+    const { payload } = buildFixture(root);
     const runner = new SystemdFixtureRunner();
     const pathOptions = { platform: "linux" as const, home, environment: {} };
     try {
-      const planned = await planSignedPackagedInstallFromPayload({
+      const planned = await planPackagedInstallFromPayload({
         payloadSourcePath: payload,
-        trustedKeys: { "launcher-fixture": keys.publicKey },
         ...pathOptions,
         runner,
       });
-      await applySignedPackagedInstallFromPayload({ planned, payloadSourcePath: payload,
-        trustedKeys: { "launcher-fixture": keys.publicKey }, ...pathOptions, runner });
+      await applyPackagedInstallFromPayload({ planned, payloadSourcePath: payload, ...pathOptions, runner });
       const paths = resolveProductPaths(pathOptions);
       writeFileSync(packagedRepairJournalPath(paths), "{}\n");
       expect(() => resolvePackagedServiceLaunch({
