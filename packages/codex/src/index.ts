@@ -1,7 +1,6 @@
 export * from "./app-server";
 export * from "./compaction-history";
 export * from "./native-handoff";
-export * from "./automatic-handoff";
 export * from "./local-image-resolver";
 export * from "./restore-native-images";
 export * from "./binding";

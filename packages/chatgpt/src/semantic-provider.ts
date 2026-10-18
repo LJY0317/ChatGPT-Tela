@@ -45,7 +45,6 @@ import { isChatGptTemporaryChatUrl, isChatGptProvisionalConversationUrl } from "
 interface TrackedTurn extends TurnOwnership {
   readonly handle: WebTurnHandle;
   readonly surfaceLeaseId: string;
-  readonly retainedContext: boolean;
   revision: string;
   continuationBoundary?: {
     readonly callId: string;
@@ -603,7 +602,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   readonly #approvalAutomationDelayMs: number;
   readonly #requireTemporaryChat: boolean;
   readonly #temporaryChatSurfaces = new WeakSet<BrowserSurfaceLease>();
-  readonly #retainedBodyPending = new WeakSet<BrowserSurfaceLease>();
   readonly #completedBySurface = new WeakMap<BrowserSurfaceLease, {
     readonly userTurnKey: string;
     readonly assistantKey: string;
@@ -622,7 +620,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       presentationFingerprint: fingerprint(assistant.text ?? ""), answerCharacters: assistant.text?.length ?? 0,
       ...(assistant.privateBodyEvidence ? { privateBodyEvidence: assistant.privateBodyEvidence } : {}),
     });
-    this.#retainedBodyPending.delete(surface);
     // Final delivery and retained-context proof are distinct. Record the latter at
     // completion, not for the first time when the next request tries to reuse it.
     emitDiagnosticEvent("chatgpt_tela_work", "web_retained_answer_committed", {
@@ -631,7 +628,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     });
   }
 
-  #assertRetainedConversation(surface: BrowserSurfaceLease, snapshot: ChatGptSurfaceSnapshot, allowUnavailable = false): boolean {
+  #assertRetainedConversation(surface: BrowserSurfaceLease, snapshot: ChatGptSurfaceSnapshot): void {
     const anchor = this.#completedBySurface.get(surface);
     const assistants = anchor ? assistantFor(snapshot, anchor.userTurnKey) : [];
     const assistant = assistants.length === 1 ? assistants[0] : undefined;
@@ -649,18 +646,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const sameAnswer = !!anchor && !!assistant && assistant.text !== undefined
       && anchor.retention.state === "verified"
       && committedAnswerFingerprint(assistant) === anchor.retention.fingerprint;
-    if (allowUnavailable && anchor?.retention.state === "verified" && assistant && sameKey
-      && assistant.bodyProof?.digest === undefined) {
-      if (!this.#retainedBodyPending.has(surface)) {
-        this.#retainedBodyPending.add(surface);
-        emitDiagnosticEvent("chatgpt_tela_work", "web_retained_body_pending", {
-          reason_class: reason, assistant_key_matches: true,
-          committed_semantic_available: committedSemanticAvailable,
-          observed_semantic_available: observedSemanticAvailable,
-        });
-      }
-      return false;
-    }
     if (!anchor || !assistant || !sameKey || !sameAnswer) {
       emitDiagnosticEvent("chatgpt_tela_work", "web_retained_anchor_rejected", {
         reason_class: reason,
@@ -685,21 +670,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         assistantKeyMatches: sameKey,
       });
       throw new WebRetainedContextUnproven(reason);
-    }
-    if (this.#retainedBodyPending.delete(surface)) {
-      emitDiagnosticEvent("chatgpt_tela_work", "web_retained_body_recovered", { reason_class: "body_proven" });
-    }
-    return true;
-  }
-
-  async #waitForRetainedConversation(surface: BrowserSurfaceLease, snapshot: ChatGptSurfaceSnapshot,
-    tracked: TrackedTurn, signal?: AbortSignal): Promise<ChatGptSurfaceSnapshot> {
-    const driver = driverFor(surface);
-    for (;;) {
-      signal?.throwIfAborted();
-      const lineage = resolveAssistantLineage(snapshot, tracked);
-      if (!lineage.identityPending && this.#assertRetainedConversation(surface, snapshot, true)) return snapshot;
-      snapshot = await driver.waitForChange(snapshot.revision, signal);
     }
   }
 
@@ -1560,7 +1530,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           this.#turns.set(surface, {
             handle,
             surfaceLeaseId: surface.leaseId,
-            retainedContext: request.physicalContext.mode === "retained-delta",
             userTurnKey: userTurn.key,
             acceptedUserFingerprint: acceptedFingerprint,
             ...(inputUnchanged ? { inputUnchanged } : {}),
@@ -1641,10 +1610,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       const assistants = assistantFor(snapshot, tracked.userTurnKey);
       this.#observeApproval(surface, tracked, snapshot, assistants.length === 1 ? assistants[0] : undefined);
     }
-    if (tracked.retainedContext && !tracked.identityPending && !this.#assertRetainedConversation(surface, snapshot, true)) {
-      return { state: "probable", value: { providerTurnId: turn.providerTurnId, phase: "accepted" },
-        evidence: evidence("retained author body is temporarily unavailable") };
-    }
     emitDiagnosticEvent("chatgpt_tela_work", "web_semantic_state_observed", {
       ...turnObservationFields(snapshot, tracked), state: state.state,
       ...(state.state === "proven" ? { phase: state.value.phase } : {}),
@@ -1661,11 +1626,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     if (!callId.trim()) throw new Error("Web tool continuation call id must be non-empty");
     const tracked = this.#tracked(surface, turn);
     signal = AbortSignal.any([...(signal ? [signal] : []), tracked.operationAbort.signal]);
-    let { snapshot, lineage } = await waitOwned(signal, () => waitForLineage(driverFor(surface), tracked, signal));
-    if (tracked.retainedContext) {
-      snapshot = await waitOwned(signal, () => this.#waitForRetainedConversation(surface, snapshot, tracked, signal));
-      lineage = resolveAssistantLineage(snapshot, tracked);
-    }
+    const { snapshot, lineage } = await waitOwned(signal, () => waitForLineage(driverFor(surface), tracked, signal));
     signal?.throwIfAborted();
     this.#tracked(surface, turn);
     const assistants = lineage.assistants;
@@ -1848,8 +1809,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const driver = driverFor(surface);
 
     if (tracked.pendingCompletedAnswer !== undefined) {
-      let { snapshot } = await waitOwned(signal, () => waitForLineage(driver, tracked, signal));
-      snapshot = await waitOwned(signal, () => this.#waitForRetainedConversation(surface, snapshot, tracked, signal));
+      const { snapshot } = await waitOwned(signal, () => waitForLineage(driver, tracked, signal));
       signal.throwIfAborted();
       this.#tracked(surface, turn);
       const ownership = resolveAssistantLineage(snapshot, tracked);
@@ -1895,7 +1855,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       tracked.lastWaitSnapshotAt = Date.now();
       const lineage = resolveAssistantLineage(snapshot, tracked);
       if (lineage.identityPending) continue;
-      if (tracked.retainedContext && !this.#assertRetainedConversation(surface, snapshot, true)) continue;
       const assistants = lineage.assistants;
       if (lineage.ambiguous) {
         return {

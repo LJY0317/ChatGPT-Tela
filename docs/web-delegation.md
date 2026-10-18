@@ -36,6 +36,10 @@ Tool counts describe observed supported Native items, including collaboration ca
 is reported as live events, limited history summary, or unverified for older records. Zero is never
 proof of no execution: summaries can omit tools and child-agent activity has separate ownership.
 History recovery preserves already observed counts rather than replacing them with summary zeroes.
+The final answer is delivered from an explicit final-phase message, or from
+the **only** unphased assistant message in an exactly completed Native turn.
+Commentary and multiple ambiguous messages are not guessed into a final;
+task success remains unassessed either way.
 The separate `toolResultItems` count requires bounded result-bearing completed Native tool
 items, without storing their command, output or arguments. It is evidence of returned tool
 results, not proof of their contents, success of requested effects, or Web semantic use.

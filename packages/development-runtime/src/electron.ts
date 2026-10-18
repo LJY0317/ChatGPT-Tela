@@ -141,8 +141,6 @@ export interface ElectronDevelopmentRuntimeOptions {
   readonly compactionAnchor?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["compactionAnchor"];
   readonly nativeWebHandoff?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["nativeWebHandoff"];
   readonly verifyNativeWebHandoff?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["verifyNativeWebHandoff"];
-  readonly automaticNativeHandoff?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["automaticNativeHandoff"];
-  readonly verifyAutomaticNativeHandoff?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["verifyAutomaticNativeHandoff"];
   readonly chatGptUrl?: string;
   readonly responses?: {
     readonly hostname?: string;
@@ -298,9 +296,6 @@ export async function startElectronDevelopmentRuntime(
       ...(input.compactionAnchor ? { compactionAnchor: input.compactionAnchor } : {}),
       ...(input.nativeWebHandoff ? { nativeWebHandoff: input.nativeWebHandoff } : {}),
       ...(input.verifyNativeWebHandoff ? { verifyNativeWebHandoff: input.verifyNativeWebHandoff } : {}),
-      ...(input.automaticNativeHandoff ? { automaticNativeHandoff: input.automaticNativeHandoff } : {}),
-      ...(input.verifyAutomaticNativeHandoff
-        ? { verifyAutomaticNativeHandoff: input.verifyAutomaticNativeHandoff } : {}),
       ...(checkpointCache ? { checkpointCache } : {}),
       ...(historyCheckpointCache ? { historyCheckpointCache } : {}),
       ...(input.context?.budgetTokens !== undefined ? { budgetTokens: input.context.budgetTokens } : {}),

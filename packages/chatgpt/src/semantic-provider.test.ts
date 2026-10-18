@@ -541,7 +541,22 @@ describe("ChatGPT semantic provider", () => {
           const continuing = provider.submitTurn(lease, retained);
           while (driver.activated.length < 2) await Promise.resolve();
           driver.queued.push({ ...driver.current, revision: "accepted-2", turns: [...driver.current.turns, {key:"user-turn-next",role:"user",contentFingerprint: driver.current.composers[0]!.textFingerprint!}] });
-          expect((await continuing).state).toBe("proven");
+          const next = await continuing;
+          expect(next.state).toBe("proven");
+          if (next.state !== "proven") throw Error("missing retained send ownership");
+          if (mode === "preserved") {
+            // The prior answer was checked BEFORE this send. Its renderer can
+            // reflow after acceptance without invalidating the new owned final.
+            driver.current = { ...driver.current, revision: "prior-body-reflow",
+              turns: driver.current.turns.map(turn => turn.role === "assistant"
+                ? { ...turn, bodyProof: { version: 1 as const, reason: "unsupported_node" as const } }
+                : turn) };
+            driver.queued.push({ ...driver.current, revision: "next-turn-complete",
+              turns: [...driver.current.turns, { key: "next-answer", role: "assistant",
+                parentUserTurnKey: "user-turn-next", phase: "complete", text: "Useful final" }] });
+            expect(await provider.waitForTurnEvent(lease, next.value))
+              .toMatchObject({ state: "proven", value: { kind: "completed", answer: "Useful final" } });
+          }
         } else {
           await expect(provider.submitTurn(lease, retained)).rejects.toMatchObject({
             code: "tela_web_retained_context_unproven", retryable: false,

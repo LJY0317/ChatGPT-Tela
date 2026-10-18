@@ -101,16 +101,26 @@ test("an acknowledged job with lost completion events is recovered from its exac
   } finally { f.cleanup(); }
 });
 
-test("phase-less promises and commentary are never recovered as a final result", async () => {
-  for (const finalPhase of [null, "commentary"]) {
-    const f = await fixture({ finalPhase, answer: "I will investigate." });
+test("one unphased assistant message from a completed turn is delivered, live or recovered", async () => {
+  for (const silent of [false, true]) {
+    const f = await fixture({ finalPhase: null, silent, answer: "Finished." });
     try {
-      await expect(f.run()).rejects.toThrow("proven final answer");
-      expect(f.store.get(f.id)?.answer).toBeUndefined();
-      await expect(f.reconcile()).rejects.toThrow("bounded and proven");
+      if (silent) await expect(f.run()).rejects.toThrow();
+      const result = silent ? await f.reconcile() : await f.run();
+      expect(result).toMatchObject({ state: "completed", answer: "Finished.",
+        finalEvidence: "sole-completed-message", taskOutcome: "unassessed" });
       expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+      expect((await f.reconcile()).answer).toBe("Finished.");
     } finally { f.cleanup(); }
   }
+});
+test("a commentary message does not become a final just because the turn completed", async () => {
+  const f = await fixture({ finalPhase: "commentary", answer: "I will investigate." });
+  try {
+    await expect(f.run()).rejects.toThrow("proven final answer");
+    expect(f.store.get(f.id)?.answer).toBeUndefined();
+    await expect(f.reconcile()).rejects.toThrow("bounded and proven");
+  } finally { f.cleanup(); }
 });
 test("an explicit final blockage report is an execution result with task success unassessed", async () => {
   const f = await fixture({ answer: "Blocked by the permission check; implementation remains incomplete." });

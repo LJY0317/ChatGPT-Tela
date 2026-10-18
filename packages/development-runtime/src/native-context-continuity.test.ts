@@ -93,7 +93,6 @@ test("foreign turn or thread cannot select retained, current or cached Native-to
     compactionHistory: forbidden,
     compactionAnchor: forbidden,
     nativeWebHandoff: forbidden,
-    automaticNativeHandoff: forbidden,
   };
   const cases = [
     input({ currentTurnId: "foreign-turn",
@@ -337,7 +336,6 @@ test("real public-adapter wiring refuses a cold Legacy handoff before any hidden
   try {
     const calls: string[] = [];
     let closed = 0;
-    let modelCalls = 0;
     const connect = async () => ({
       async request(method: string, params: unknown) {
         calls.push(method);
@@ -361,11 +359,6 @@ test("real public-adapter wiring refuses a cold Legacy handoff before any hidden
         compactionHistory: (thread, current) => publicHistory.project(thread, current),
         nativeWebHandoff: (thread, current, signal) =>
           publicHandoff.latest(thread, current, signal),
-        automaticNativeHandoff: async () => {
-          modelCalls++;
-          throw Error("No experimental model-backed fork is allowed");
-        },
-        verifyAutomaticNativeHandoff: async () => false,
       },
     }))).rejects.toMatchObject({
       code: "native_history_bootstrap_required",
@@ -373,7 +366,6 @@ test("real public-adapter wiring refuses a cold Legacy handoff before any hidden
     });
     expect(calls).toEqual(["thread/read"]);
     expect(closed).toBe(1);
-    expect(modelCalls).toBe(0);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 test("an explicitly requested Native handoff needs no legacy transcript projector",async()=>{
@@ -390,154 +382,6 @@ test("an explicitly requested Native handoff needs no legacy transcript projecto
  expect(out.mode).toBe("explicit-handoff");
  expect(out.visibleHistory).toContain(answer.summary);
  expect(out.visibleHistory).toContain(answer.limitations);
-});
-
-const autoContent=JSON.stringify({
-  type:"tela_native_auto_web_handoff_v1",
-  objective:"Resume the prior Native task with current Web user input",
-  constraints:["Native is the only tool authority"], completed:["Baseline verified"],
-  decisions:["Keep the original branch unchanged"],pending:["Test new Web work"],
-  files:["File hints only"],evidence:["Past command receipts need readback"],
-  limitations:["This is a lossy checkpoint; original evidence is not proven"],
-});
-test("synthetic-only fallback reuses a derived checkpoint after restart without another fake model call",async()=>{
- const root=mkdtempSync(join(tmpdir(),"tela-continuity-auto-"));
- try {
-   let sourceCalls=0, autoCalls=0, verified=0;
-   const cache=new FileContextCheckpointCache({directory:root});
-   const options={
-     // This allows only fake-model fixture execution, not real Native authority.
-     unsafePermitModelToolsInIsolatedSyntheticFixture:true as const,
-     historyCheckpointCache:cache,
-     compactionHistory:async()=>{
-       sourceCalls++;
-       throw new NativeHistoryBootstrapRequired();
-     },
-     automaticNativeHandoff:async(threadId:string,currentTurnId:string,fingerprint:string)=>{
-       autoCalls++;
-       expect(fingerprint).toBe(opaque.fingerprint!);
-       return {threadId,currentTurnId,sourceTurnId:"prior-native",
-         content:autoContent,
-         answerDigest:createHash("sha256").update(autoContent).digest("hex")};
-     },
-     verifyAutomaticNativeHandoff:async(threadId:string,currentTurnId:string,sourceTurnId:string)=>{
-       verified++;
-       expect(threadId).toBe("task-1");
-       expect(currentTurnId).toMatch(/^web-/);
-       return sourceTurnId==="prior-native";
-     },
-   };
-   const first=await resolveNativeContextContinuity(input({options}));
-   expect(first.mode).toBe("automatic-handoff");
-   expect(first.visibleHistory).toContain("tela_native_automatic_web_continuation_v1");
-   expect(first.visibleHistory).toContain("original evidence is not proven");
-   expect(autoCalls).toBe(1);
-   expect(sourceCalls).toBe(1);
-   const second=await resolveNativeContextContinuity(input({
-     currentTurnId:"web-second",
-     authority:defineNativeTurnAuthority({
-       threadId:"task-1",turnId:"web-second",cwd:"/readonly/fixture",
-       workspaceRoots:["/readonly/fixture"],
-       sandbox:{kind:"read-only",network:"restricted"},
-     }),
-     options:{
-       ...options,
-       historyCheckpointCache:new FileContextCheckpointCache({directory:root}),
-     },
-   }));
-   expect(second.mode).toBe("cached-automatic-handoff");
-   expect(second.visibleHistory).toBe(first.visibleHistory);
-   expect(autoCalls).toBe(1);
-   expect(sourceCalls).toBe(1);
-   expect(verified).toBe(2);
-   // The same saved automatic summary and the same injected callbacks must
-   // not be used by a product-like caller that omits the synthetic gate.
-   const {unsafePermitModelToolsInIsolatedSyntheticFixture: _fixture, ...normalOptions}=options;
-   await expect(resolveNativeContextContinuity(input({
-     currentTurnId:"web-third",
-     authority:defineNativeTurnAuthority({
-       threadId:"task-1",turnId:"web-third",cwd:"/readonly/fixture",
-       workspaceRoots:["/readonly/fixture"],
-       sandbox:{kind:"read-only",network:"restricted"},
-     }),
-     options:{...normalOptions,
-       historyCheckpointCache:new FileContextCheckpointCache({directory:root}),
-     },
-   }))).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
-   expect(autoCalls).toBe(1);
-   expect(verified).toBe(2);
-   expect(sourceCalls).toBe(2);
- } finally { rmSync(root,{recursive:true,force:true}); }
-});
-test("complete original Native source never starts a second Native model",async()=>{
- const root=mkdtempSync(join(tmpdir(),"tela-auto-not-needed-"));
- try {
-   let called=0;
-   const result=await resolveNativeContextContinuity(input({
-     options:{
-       historyCheckpointCache:new FileContextCheckpointCache({directory:root}),
-       compactionHistory:async()=>boundSource,
-       verifyAutomaticNativeHandoff:async()=>true,
-       automaticNativeHandoff:async()=>{ called++;throw Error("Never needed"); },
-     },
-   }));
-   expect(result.mode).toBe("bounded-source");
-   expect(called).toBe(0);
- } finally { rmSync(root,{recursive:true,force:true}); }
-});
-test("a failed automatic fork never claims an incomplete Native transcript is readable",async()=>{
- const root=mkdtempSync(join(tmpdir(),"tela-auto-fail-closed-"));
- try{
-   let attempts=0;
-   await expect(resolveNativeContextContinuity(input({
-     options:{
-       unsafePermitModelToolsInIsolatedSyntheticFixture:true,
-       historyCheckpointCache:new FileContextCheckpointCache({directory:root}),
-       compactionHistory:async()=>{throw new NativeHistoryBootstrapRequired();},
-       verifyAutomaticNativeHandoff:async()=>true,
-       automaticNativeHandoff:async()=>{attempts++;throw Error("Fork cannot inherit opaque state");},
-     },
-   }))).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
-   expect(attempts).toBe(1);
- } finally {rmSync(root,{recursive:true,force:true});}
-});
-test("injecting a model-backed handoff callback alone never authorizes an extra Native model request",async()=>{
- const root=mkdtempSync(join(tmpdir(),"tela-auto-unwired-product-"));
- const log=join(root,"diagnostics.jsonl");
- const previous=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
- process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=log;
- try {
-   let externalCalls=0;
-   await expect(resolveNativeContextContinuity(input({
-     options:{
-       historyCheckpointCache:new FileContextCheckpointCache({directory:root}),
-       compactionHistory:async()=>{throw new NativeHistoryBootstrapRequired();},
-       automaticNativeHandoff:async()=>{
-         externalCalls++;
-         throw Error("An accidental production fork must never execute");
-       },
-       verifyAutomaticNativeHandoff:async()=>{
-         externalCalls++;
-         return true;
-       },
-     },
-   }))).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
-   expect(externalCalls).toBe(0);
-   const entries=readFileSync(log,"utf8").trim().split("\n").map(line=>JSON.parse(line))
-     .filter(item=>item.stage==="native_auto_handoff_rejected");
-   expect(entries).toHaveLength(1);
-   expect(entries[0]).toMatchObject({
-     phase:"continuity_resolver",reason_class:"production_disabled",
-   });
-   const contents=readFileSync(log,"utf8");
-   expect(contents).not.toContain("task-1");
-   expect(contents).not.toContain("web-current");
-   expect(contents).not.toContain("opaque-native-state");
- } finally {
-   if(previous===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
-   else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;
-   rmSync(root,{recursive:true,force:true});
- }
 });
 
 test("continuity cannot reset an earlier phase's preparation budget",async()=>{

@@ -8,6 +8,19 @@ import { selectDelegationWebModel, type DelegationWebModel } from "./web-delegat
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RESULT_BYTES = 512 * 1024;
+type WebFinalEvidence = "explicit-final-phase" | "sole-completed-message";
+function completedAnswer(messages: readonly { text: string; phase?: string }[]):
+  { answer: string; finalEvidence: WebFinalEvidence } | undefined {
+  const final = messages.filter(message => message.phase === "finalAnswer" || message.phase === "final_answer");
+  const chosen = final.at(-1);
+  if (chosen?.text.trim()) return { answer: chosen.text, finalEvidence: "explicit-final-phase" };
+  // A completed Native turn containing ONE unphased assistant message is also
+  // a useful final. Other phases, or multiple unphased messages, are ambiguous.
+  const only = messages.length === 1 ? messages[0] : undefined;
+  if (final.length === 0 && only?.phase === undefined && only?.text.trim()) {
+    return { answer: only.text, finalEvidence: "sole-completed-message" };
+  }
+}
 // Counts are observations of supported Native item kinds, never proof of all execution.
 const TOOL_ITEM_TYPES = new Set(["commandExecution", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall"]);
 const RESULT_FIELDS = ["aggregatedOutput", "output", "response", "result", "contentItems"];
@@ -66,7 +79,7 @@ export interface WebDelegationRecord {
   readonly turnId?: string;
   /** Model execution completion does not attest requested-task success. */
   readonly taskOutcome?: "unassessed";
-  readonly finalEvidence?: "explicit-final-phase";
+  readonly finalEvidence?: WebFinalEvidence;
   readonly answer?: string;
   readonly toolItems?: number;
   readonly toolItemCoverage?: "live-events" | "history-summary";
@@ -114,7 +127,7 @@ export class WebDelegationStore {
     const fd = openSync(temporary, "wx", 0o600);
     const current = this.get(record.id)!;
     // A late observer timeout must not overwrite a result already reconciled by another command.
-    if (current.state === "completed" && current.finalEvidence === "explicit-final-phase") {
+    if (current.state === "completed" && current.finalEvidence) {
       closeSync(fd); unlinkSync(temporary); return current;
     }
     try { writeFileSync(fd, JSON.stringify(record)); fsyncSync(fd); } finally { closeSync(fd); }
@@ -225,10 +238,9 @@ export async function runReadOnlyWebDelegation(adapters: WebDelegationAdapters, 
       pending.length = 0;
       await done;
       await prove();
-      const final = [...messages.values()].filter(message => message.phase === "finalAnswer" || message.phase === "final_answer");
-      const answer = final.at(-1)?.text;
-      if (!answer?.trim()) throw Error("Web job completed without a proven final answer");
-      update({ state: "completed", taskOutcome: "unassessed", finalEvidence: "explicit-final-phase", answer,
+      const completed = completedAnswer([...messages.values()]);
+      if (!completed) throw Error("Web job completed without a proven final answer");
+      update({ state: "completed", taskOutcome: "unassessed", ...completed,
         toolItems, toolItemCoverage: "live-events", toolResultItems: resultItems.size, toolResultCoverage: "live-events" });
       return record;
     } finally { input.signal.removeEventListener("abort", abort); }
@@ -247,7 +259,7 @@ export async function runReadOnlyWebDelegation(adapters: WebDelegationAdapters, 
 export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id: string, signal: AbortSignal): Promise<WebDelegationRecord> {
   const record = adapters.store.get(id);
   if (!record) throw Error("Web job was not found");
-  if (record.state === "completed" && record.finalEvidence === "explicit-final-phase") return record;
+  if (record.state === "completed" && record.finalEvidence) return record;
   if (!record.threadId || !record.turnId) throw Error("No acknowledged Web turn; do not retry an uncertain submission");
   if (!sameOwner(record, await adapters.owner(record.slot))) throw Error("Web job owner changed");
   const rpc = await adapters.connect(record.session.terminalEndpoint);
@@ -266,10 +278,12 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
     if (turn.status !== "completed" || !Array.isArray(turn.items) || turn.items.length > 120) throw Error("Web job completion is not proven");
     const items = turn.items.map(object);
     const messages = items.filter(item => item?.type === "agentMessage" && typeof item.text === "string");
-    const final = messages.filter(item => item?.phase === "finalAnswer" || item?.phase === "final_answer");
-    const answer = final.at(-1)?.text;
-    if (typeof answer !== "string" || !answer.trim() || Buffer.byteLength(answer) > MAX_RESULT_BYTES) throw Error("Web final answer is not bounded and proven");
-    return adapters.store.save({ ...record, state: "completed", taskOutcome: "unassessed", finalEvidence: "explicit-final-phase", answer,
+    const completed = completedAnswer(messages.filter((item): item is Record<string, unknown> =>
+      item !== undefined).map(item => ({
+      text: item.text as string, ...(typeof item.phase === "string" ? { phase: item.phase } : {}),
+    })));
+    if (!completed || Buffer.byteLength(completed.answer) > MAX_RESULT_BYTES) throw Error("Web final answer is not bounded and proven");
+    return adapters.store.save({ ...record, state: "completed", taskOutcome: "unassessed", ...completed,
       toolItems: Math.max(record.toolItems ?? 0, items.filter(item => typeof item?.type === "string" && TOOL_ITEM_TYPES.has(item.type)).length),
       toolItemCoverage: record.toolItemCoverage ?? "history-summary",
       toolResultItems: Math.max(record.toolResultItems ?? 0, items.filter(item => hasNativeToolResult(item, false)).length),

@@ -64,9 +64,6 @@ test("Legacy with a fresh engine ACK continues from complete current Native requ
   let forbiddenCalls = 0;
   const planner = createNativeRequestDevelopmentWebTurnPlanner({
     compactionHistory: async () => { forbiddenCalls++; throw Error("Legacy history may not be read"); },
-    automaticNativeHandoff: async () => {
-      forbiddenCalls++; throw Error("Additional Native model may not start");
-    },
   });
   const plan = await planner(registered, readable);
   expect(plan.diagnostics?.continuity_source).toBe("current-input");

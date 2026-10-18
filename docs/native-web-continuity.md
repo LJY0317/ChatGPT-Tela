@@ -54,34 +54,11 @@ transfer or be presented as current work. This requires a real readable
 summary: it does **not** decrypt opaque Legacy compactions, recover unindexed
 historical model state, or claim prior tool evidence was newly verified.
 
-**Experimental cold automatic fallback (not enabled in production):** When no readable checkpoint
-or complete Web-sized historical source can be supplied, Tela's isolated fixture tests an
-single extra Native model call through the **public app-server** without a
-separate copy/paste prompt or user-confirmation dialog. The user-selected Web
-turn stays on its original Native thread. An ephemeral Native fork is created
-from its immediately previous completed turn, never from the active Web turn.
-Only an unambiguous currently advertised Native model may summarize it. The
-fork defers and clears any inherited automatic Goal continuation before
-running a read-only, no-approval structured-output prompt. Unexpected tool
-items reject the fork and trigger interruption of its **own** turn only.
-No original Native task, tool or approval state is modified. The extra Native
-model request is explicitly recorded in payload-free routine diagnostics.
-
-**Production does not install the experimental automatic-handoff callbacks
-at all; its standalone adapter also rejects before RPC connect.**
-The public Codex engine does not yet prove historical executed model/provider
-provenance or a pre-execution tool-free fork policy. Tests of fixture behavior
-must not be mistaken for a released feature.
-
-The experimental resulting JSON records objective, constraints, completed and pending
-work, decisions, file/evidence hints and evidence limitations. It is
-**lossy context, not original source evidence**. Its exact source turn,
-content digest and opaque Native compaction fingerprint bind an account-scoped
-cache. After restart, public recent-turn ancestry must be re-proven; on a
-live retained Web page only the new logical delta is transferred.
-The product has no extra Native summary attempt counter while this
-research-only feature is unshipped. No secondary model inference is
-started merely because a user selects a Web model.
+The never-shipped model-backed Native automatic-fork experiment and its
+fixture-only cache were removed. Selecting Web does not start a second Native
+model turn. Old opaque Legacy history still needs an upstream bounded,
+engine-owned readable context export; unsafe model-backed reconstruction is
+not an alternative.
 
 ## Old long conversation, no readable checkpoint
 
@@ -153,10 +130,9 @@ An older unindexed engine may therefore reject a Web transition that the
 previous unsafe compatibility reader attempted. Continuing in Native
 preserves the original task until a genuine bounded public API is available.
 
-The automatic fork and structured handoff remain **disabled in production**.
-Isolated synthetic RPC/model-provider regressions passed, but the actual
-historical executed Native model/provider and true pre-execution tool-free
-fork contract are still unavailable from the installed public engine.
+Automatic model-backed fork code is absent from the product. Historical
+executed model/provider and pre-execution tool-free fork authority remain
+unavailable through the last-inspected public engine contract.
 Do not claim the original 73 MiB conversation automatically recovers until
 a supported engine contract, signed package, owner-bound installed proof,
 actual Native summary and Web continuation are verified. An older engine

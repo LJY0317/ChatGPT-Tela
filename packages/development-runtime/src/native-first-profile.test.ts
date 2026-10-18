@@ -22,7 +22,7 @@ const family = { key: chatGptWebFamilyKey("Fixture Web"), label: "Fixture Web", 
 const model = chatGptWebModelId(family.key);
 const metadata = { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "thread-1", turn_id: "turn-1" } };
 
-async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean; holdCreation?: boolean; fail?: "login" | "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly context?: import("./electron").ElectronDevelopmentRuntimeOptions["context"]; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown }) => void } = {}) {
+async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean; holdCreation?: boolean; fail?: "login" | "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly context?: import("./electron").ElectronDevelopmentRuntimeOptions["context"] }) => void } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-native-first-"));
   const config = loadProductProfileRuntimeConfig({
     CHATGPT_TELA_PROFILE_ROOT: root, CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "1", CHATGPT_TELA_PRODUCT_ROUTE_ID: "fixture123",
@@ -205,7 +205,7 @@ async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean
 }
 
 test("ordinary product tasks have no implicit Native fork, no elapsed-time deadline and require lifecycle authority", async () => {
-  let contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly context?: import("./electron").ElectronDevelopmentRuntimeOptions["context"]; readonly automaticNativeHandoff?: unknown; readonly verifyAutomaticNativeHandoff?: unknown } | undefined;
+  let contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly context?: import("./electron").ElectronDevelopmentRuntimeOptions["context"] } | undefined;
   const f = await fixture({ noLifecycle: true, onExecutionContract: value => { contract = value; } });
   try {
     await f.runtime.prepareWeb();
@@ -213,8 +213,6 @@ test("ordinary product tasks have no implicit Native fork, no elapsed-time deadl
     expect(contract?.chatGptUrl).toBe(CHATGPT_TEMPORARY_CHAT_URL);
     // A future experimental adapter could change its internal default.
     // The real product must still omit both optional model-backed hooks.
-    expect(contract).not.toHaveProperty("automaticNativeHandoff");
-    expect(contract).not.toHaveProperty("verifyAutomaticNativeHandoff");
     expect(contract?.context?.visiblePrefix?.accountNamespace).toBe("a".repeat(64));
     expect(contract?.context?.visiblePrefix?.journal).toBeDefined();
     expect(contract?.context?.visiblePrefix?.read).toBeTypeOf("function");

@@ -924,8 +924,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // Only a dedicated producer can reduce a fresh canonical prefix. Reuse the calibrated Web
     // transport budget; Native context limits and canonical history remain untouched.
     const hotCandidate = opaqueFingerprint && visibleHistory
-      && (historyCheckpointReused || historyCheckpointProduced || historyManualHandoff
-        || continuity.mode === "automatic-handoff")
+      && (historyCheckpointReused || historyCheckpointProduced || historyManualHandoff)
       ? Object.freeze({ opaqueFingerprint, visibleHistory }) : undefined;
     const currentAnchor = workingCheckpointAnchor(projection);
     const currentAnchorIndex = currentAnchor ? projection.revisions.indexOf(currentAnchor) : -1;

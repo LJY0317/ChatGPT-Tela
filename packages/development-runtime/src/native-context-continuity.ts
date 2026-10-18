@@ -4,8 +4,6 @@ import { createHash } from "node:crypto";
 import {
   NativeHistoryBootstrapRequired,
   restoreNativeHistoricalImages,
-  automaticNativeHandoffText,
-  type AutomaticNativeHandoff,
   type NativeCompactionHistoryProjection,
   type NativeHistoricalImageCandidate,
   type NativeReadableHistoryAnchor,
@@ -22,7 +20,6 @@ import { chatGptWebCheckpointSourceTokenLimit, type ChatGptWebEffort } from "@ch
 import type { ContextCheckpointCache } from "./context-cache";
 import { readNativeHistoryCheckpoint, maybeProduceNativeHistoryCheckpoint } from "./native-history-checkpoint";
 import { manualHandoffText, recentManualHandoff, storeManualHandoff } from "./native-manual-handoff-cache";
-import { recentAutomaticNativeHandoff, storeAutomaticNativeHandoff } from "./native-automatic-handoff-cache";
 import type { NativeRequestCheckpointProducer } from "./native-request-planner";
 import { produceNativePrefixCheckpoint, type NativeVisiblePrefixStageJournal } from "./native-visible-prefix-checkpoint";
 
@@ -52,22 +49,6 @@ export interface NativeContinuitySources {
     threadId: string, currentTurnId: string, handoffTurnId: string,
     answerDigest: string, signal?: AbortSignal,
   ) => Promise<NativeWebHandoff | undefined>;
-  /** Research-only injection seam, NOT wired by the product. A Web selection
-   * alone does NOT authorize a Native fork or extra model call. The installed
-   * public engine lacks effective historical model/provider attestation and
-   * true pre-execution tool-free fork enforcement. No production caller may
-   * supply this until both are proven by the canonical Native owner. */
-  readonly automaticNativeHandoff?: (
-    threadId: string, currentTurnId: string, opaqueFingerprint: string, signal?: AbortSignal,
-  ) => Promise<AutomaticNativeHandoff>;
-  readonly verifyAutomaticNativeHandoff?: (
-    threadId: string, currentTurnId: string, sourceTurnId: string, signal?: AbortSignal,
-  ) => Promise<boolean>;
-  /** TEST FIXTURES ONLY: allow a fake Native fork to exercise this otherwise
-   * dormant research path. Production must not set this. Without this flag
-   * neither injected auto callbacks nor cached auto summaries are consulted.
-   * This flag does not attest real Native provenance or enforce no-tools. */
-  readonly unsafePermitModelToolsInIsolatedSyntheticFixture?: true;
   readonly historyCheckpointCache?: ContextCheckpointCache;
   readonly checkpointProducer?: NativeRequestCheckpointProducer;
 }
@@ -76,7 +57,7 @@ export interface NativeContinuitySources {
 export type NativeContinuityMode =
   | "current-input" | "retained" | "readable-checkpoint" | "cached-handoff"
   | "explicit-handoff" | "bounded-source" | "produced-checkpoint"
-  | "automatic-handoff" | "cached-automatic-handoff" | "visible-prefix-checkpoint";
+  | "visible-prefix-checkpoint";
 
 export interface NativeContinuityDecision {
   readonly mode: NativeContinuityMode;
@@ -120,7 +101,7 @@ function resolved(mode: NativeContinuityMode, visibleHistory?: string,
     inlineHistoryAssets,
     ...(historyReferences !== undefined ? { historyReferences } : {}),
     checkpointReused: mode === "retained" || mode === "readable-checkpoint"
-      || mode === "cached-handoff" || mode === "cached-automatic-handoff",
+      || mode === "cached-handoff",
     checkpointProduced: mode === "produced-checkpoint" || mode === "visible-prefix-checkpoint",
     manualHandoff: mode === "explicit-handoff",
   });
@@ -190,48 +171,6 @@ export async function resolveNativeContextContinuity(input: {
 
   const cache = options.historyCheckpointCache;
   const fingerprint = opaque.fingerprint;
-  let automaticDisabledRecorded = false;
-  const automatic = async (mayProduce: boolean): Promise<NativeContinuityDecision | undefined> => {
-    // An accidental future callback wiring must never silently activate a
-    // secondary Native model or trust a previously derived auto summary.
-    // The product neither supplies this fixture flag nor installs the
-    // experimental callbacks, regardless of source/cached checkpoint state.
-    if (options.unsafePermitModelToolsInIsolatedSyntheticFixture !== true) {
-      if (!automaticDisabledRecorded
-        && (options.automaticNativeHandoff || options.verifyAutomaticNativeHandoff)) {
-        automaticDisabledRecorded = true;
-        emitDiagnosticEvent("chatgpt_tela_codex", "native_auto_handoff_rejected", {
-          phase: "continuity_resolver", reason_class: "production_disabled",
-        });
-      }
-      return undefined;
-    }
-    if (!cache || !fingerprint || !options.verifyAutomaticNativeHandoff) return undefined;
-    const cached = await recentAutomaticNativeHandoff(cache, threadId, fingerprint);
-    if (cached && await options.verifyAutomaticNativeHandoff(
-      threadId, currentTurnId, cached.sourceTurnId, signal,
-    )) {
-      signal?.throwIfAborted();
-      return resolved("cached-automatic-handoff", automaticNativeHandoffText({
-        ...cached, currentTurnId,
-      }));
-    }
-    if (!mayProduce || !options.automaticNativeHandoff) return undefined;
-    const result = await options.automaticNativeHandoff(
-      threadId, currentTurnId, fingerprint, signal,
-    );
-    signal?.throwIfAborted();
-    if (result.threadId !== threadId || result.currentTurnId !== currentTurnId
-      || !result.sourceTurnId || !await options.verifyAutomaticNativeHandoff(
-        threadId, currentTurnId, result.sourceTurnId, signal,
-      )) {
-      throw new NativeHistoryBootstrapRequired();
-    }
-    const text = automaticNativeHandoffText(result);
-    await storeAutomaticNativeHandoff(cache, result, fingerprint);
-    signal?.throwIfAborted();
-    return resolved("automatic-handoff", text);
-  };
   let manualAttempted = false;
   const manual = async (): Promise<NativeContinuityDecision | undefined> => {
     if (manualAttempted) return undefined;
@@ -300,12 +239,6 @@ export async function resolveNativeContextContinuity(input: {
       if (early) return early;
     }
   }
-  // Automatic summaries created from prior Web selections are source-bound
-  // cached context, never new Native tool authority. Reuse before probing
-  // old giant Legacy pages; a new Native model call is NOT done here.
-  const cachedAutomatic = await automatic(false);
-  if (cachedAutomatic) return cachedAutomatic;
-
   // The installed path uses this explicit source contract. A UI compaction
   // marker is not guaranteed to exist, so it cannot be the bootstrap authority.
   if (options.visiblePrefix) {
@@ -351,20 +284,10 @@ export async function resolveNativeContextContinuity(input: {
   }
   const handoff = await manual();
   if (handoff) return handoff;
-  if (anchorLimit) {
-    try {
-      const generated = await automatic(true);
-      if (generated) return generated;
-    } catch { /* Keep the original source-unavailable error contract. */ }
-    throw anchorLimit;
-  }
+  if (anchorLimit) throw anchorLimit;
   if (!options.compactionHistory) {
     // A verified readable handoff or checkpoint needs no replay provider.
     // Without either, opaque Native state is not model-visible text.
-    try {
-      const generated = await automatic(true);
-      if (generated) return generated;
-    } catch { /* A failed opaque bootstrap remains a typed user recovery error. */ }
     throw new NativeHistoryBootstrapRequired();
   }
 
@@ -372,10 +295,6 @@ export async function resolveNativeContextContinuity(input: {
   try { history = await probe("history", () => options.compactionHistory!(threadId, currentTurnId)); }
   catch (error) {
     if (!(error instanceof NativeHistoryBootstrapRequired)) throw error;
-    try {
-      const generated = await automatic(true);
-      if (generated) return generated;
-    } catch { /* Unavailable fork never authorizes partial original evidence. */ }
     throw error;
   }
   signal?.throwIfAborted();
@@ -411,8 +330,7 @@ export async function resolveNativeContextContinuity(input: {
   }
   // A fully readable Native source can still be too large to enter the Web
   // physical window. Do not lose the exact suffix/limitations through
-  // provider-side trimming: first attempt the isolated Native handoff and
-  // otherwise return the ordinary typed recovery requirement.
+  // provider-side trimming; return the ordinary typed recovery requirement.
   if (input.effort
     && Math.ceil(Buffer.byteLength(history.content, "utf8") / 4)
       > chatGptWebCheckpointSourceTokenLimit(input.effort)) {
@@ -421,10 +339,6 @@ export async function resolveNativeContextContinuity(input: {
       source_estimate: Math.ceil(Buffer.byteLength(history.content, "utf8") / 4),
       input_budget: chatGptWebCheckpointSourceTokenLimit(input.effort),
     });
-    try {
-      const generated = await automatic(true);
-      if (generated) return generated;
-    } catch { /* Native model or its public isolation was unavailable. */ }
     throw new NativeHistoryBootstrapRequired();
   }
   return resolved("bounded-source", history.content,
