@@ -417,7 +417,8 @@ Cross-version packaged upgrade also has an interruption-safe state machine. It r
 registration identities, durably records which services were running, quiesces all three before binary
 replacement, commits the target product version only after exact payload verification, and restores only the
 services that were previously running. A failed restart leaves the journal at the committed target version so
-a retry resumes only the outstanding restart. Ordinary `start` and destructive uninstall apply refuse to run
+a retry resumes only the outstanding restart. Restart completion requires authenticated runtime readiness
+after normal OS start, including services whose OS registration is already running. Ordinary `start` and destructive uninstall apply refuse to run
 while that journal exists. The source service controller uses authenticated owned-service shutdown and normal status/start for
 launchd, systemd user units, and Windows per-user Scheduled Tasks; a signed updater UI and real-OS packaged
 E2E validation still need to drive/prove this lifecycle for end users.

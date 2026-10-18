@@ -18,6 +18,8 @@ import {
 } from "@chatgpt-tela/service-protocol";
 import {
   LocalServiceClient,
+  ServiceHttpError,
+  ServiceStatusValidationError,
   descriptorForService,
 } from "@chatgpt-tela/service-protocol/client";
 
@@ -85,6 +87,8 @@ export interface EnsureServiceInput<S extends TelaServiceId> {
   readonly startTimeoutMs?: number;
 }
 
+class ServiceEndpointUnavailableError extends Error {}
+
 export class LocalServiceSupervisor {
   readonly #installId: string;
 
@@ -117,13 +121,17 @@ export class LocalServiceSupervisor {
       });
       return Object.freeze({ descriptor: exact, status: status as ServiceStatus & { readonly service: S } });
     } catch (error) {
+      if (error instanceof ServiceHttpError || error instanceof ServiceStatusValidationError) throw error;
       if (pidAlive(exact.pid)) {
         emitDiagnosticEvent("chatgpt_tela_service", "status_endpoint_failed", {
           service: input.service,
           duration_ms: diagnosticDurationMs(startedAt),
         });
-        throw new Error(`${input.service} process is alive but its private service endpoint is unavailable`, { cause: error });
+        throw new ServiceEndpointUnavailableError(`${input.service} process is alive but its private service endpoint is unavailable`, { cause: error });
       }
+      const successor = readServiceRuntimeDescriptor(input.descriptorPath);
+      if (successor?.installId !== exact.installId || successor.service !== exact.service
+        || successor.instanceId !== exact.instanceId || successor.pid !== exact.pid) return undefined;
       removeServiceRuntimeDescriptor(input.descriptorPath);
       emitDiagnosticEvent("chatgpt_tela_service", "stale_descriptor_removed", {
         service: input.service,
@@ -133,6 +141,33 @@ export class LocalServiceSupervisor {
     } finally {
       deadline.close();
     }
+  }
+
+  /** Observe an OS-started service without spawning or taking shutdown authority. */
+  async waitUntilReady<S extends TelaServiceId>(input: {
+    readonly service: S;
+    readonly descriptorPath: string;
+    readonly timeoutMs: number;
+  }): Promise<RunningService<S>> {
+    if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0 || input.timeoutMs > 60_000) {
+      throw new Error("service readiness budget is invalid");
+    }
+    const deadline = Date.now() + input.timeoutMs;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      try {
+        const current = await this.current({ ...input, requestTimeoutMs: Math.min(500, deadline - Date.now()) });
+        if (current?.status.state === "ready" && Date.now() < deadline) return current;
+      } catch (error) {
+        // A process can publish its descriptor before it accepts requests.
+        // Identity/schema failures are terminal, not readiness transitions.
+        if (!(error instanceof ServiceEndpointUnavailableError)) throw error;
+        lastError = error;
+      }
+      const remaining = deadline - Date.now();
+      if (remaining > 0) await sleep(Math.min(100, remaining));
+    }
+    throw new Error(`${input.service} runtime did not become ready`, lastError ? { cause: lastError } : undefined);
   }
 
   async ensure<S extends TelaServiceId>(input: EnsureServiceInput<S>): Promise<RunningService<S>> {

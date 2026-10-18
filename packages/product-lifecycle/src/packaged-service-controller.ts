@@ -73,6 +73,7 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
   readonly #runner: ServiceRegistrationCommandRunner;
   readonly #shutdownService: (service: TelaServiceId) => Promise<void>;
   readonly #prepareShutdownService: ((service: TelaServiceId) => Promise<void>) | undefined;
+  readonly #waitUntilReady: ((service: TelaServiceId, timeoutMs: number) => Promise<void>) | undefined;
   readonly #transitionTimeoutMs: number;
   readonly #userId: number | undefined;
   readonly #stopDeadlines = new Map<TelaServiceId, number>();
@@ -81,6 +82,7 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
     readonly blueprint: PackagedServiceControlIdentity;
     readonly shutdownService: (service: TelaServiceId) => Promise<void>;
     readonly prepareShutdownService?: ((service: TelaServiceId) => Promise<void>) | undefined;
+    readonly waitUntilReady?: ((service: TelaServiceId, timeoutMs: number) => Promise<void>) | undefined;
     readonly runner?: ServiceRegistrationCommandRunner;
     readonly transitionTimeoutMs?: number;
     readonly userId?: number;
@@ -88,6 +90,7 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
     this.#blueprint = input.blueprint;
     this.#shutdownService = input.shutdownService;
     this.#prepareShutdownService = input.prepareShutdownService;
+    this.#waitUntilReady = input.waitUntilReady;
     this.#runner = input.runner ?? new SystemServiceRegistrationCommandRunner();
     this.#transitionTimeoutMs = input.transitionTimeoutMs ?? DEFAULT_TRANSITION_TIMEOUT_MS;
     if (!Number.isSafeInteger(this.#transitionTimeoutMs) || this.#transitionTimeoutMs < 100 || this.#transitionTimeoutMs > 60_000) {
@@ -160,8 +163,18 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
     return true;
   }
 
+  async #ready(service: TelaServiceId, deadline: number): Promise<void> {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error(`packaged ${service} service readiness deadline expired`);
+    await this.#waitUntilReady?.(service, remaining);
+  }
+
   async resume(service: TelaServiceId): Promise<void> {
-    if (await this.inspect(service) === "running") return;
+    const deadline = Date.now() + this.#transitionTimeoutMs;
+    if (await this.inspect(service) === "running") {
+      await this.#ready(service, deadline);
+      return;
+    }
     const registrationId = exactRegistrationId(this.#blueprint, service);
     let result: ServiceRegistrationCommandResult;
     if (this.#blueprint.platform === "linux") {
@@ -174,13 +187,15 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
       result = await this.#runner.run("/bin/launchctl", ["kickstart", `gui/${this.#userId}/${registrationId}`]);
     }
     if (result.exitCode !== 0) throw commandFailure(`normal start for ${service}`, result);
-    await this.#waitFor(service, "running");
+    await this.#waitFor(service, "running", deadline);
+    await this.#ready(service, deadline);
   }
 }
 
 export async function applyPackagedUpgradeWithPlatformServices(input: {
   readonly plan: PackagedUpgradePlan;
   readonly shutdownService: (service: TelaServiceId) => Promise<void>;
+  readonly waitUntilReady?: ((service: TelaServiceId, timeoutMs: number) => Promise<void>) | undefined;
   readonly payloadSourcePath: string;
   readonly platform?: NodeJS.Platform;
   readonly home?: string;
@@ -191,6 +206,7 @@ export async function applyPackagedUpgradeWithPlatformServices(input: {
   const controller = new PackagedPlatformServiceController({
     blueprint: input.plan.targetBlueprint,
     shutdownService: input.shutdownService,
+    waitUntilReady: input.waitUntilReady,
     ...(input.runner ? { runner: input.runner } : {}),
     ...(input.userId === undefined ? {} : { userId: input.userId }),
   });
@@ -208,6 +224,7 @@ export async function applyPackagedUpgradeWithPlatformServices(input: {
 export async function applyPackagedRepairWithPlatformServices(input: {
   readonly plan: PackagedRepairPlan;
   readonly shutdownService: (service: TelaServiceId) => Promise<void>;
+  readonly waitUntilReady?: ((service: TelaServiceId, timeoutMs: number) => Promise<void>) | undefined;
   readonly payloadSourcePath: string;
   readonly platform?: NodeJS.Platform;
   readonly home?: string;
@@ -218,6 +235,7 @@ export async function applyPackagedRepairWithPlatformServices(input: {
   const controller = new PackagedPlatformServiceController({
     blueprint: input.plan.blueprint,
     shutdownService: input.shutdownService,
+    waitUntilReady: input.waitUntilReady,
     ...(input.runner ? { runner: input.runner } : {}),
     ...(input.userId === undefined ? {} : { userId: input.userId }),
   });

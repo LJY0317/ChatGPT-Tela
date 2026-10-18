@@ -53,6 +53,9 @@ export class ServiceShutdownNotStartedError extends ServiceHttpError {
   constructor() { super(409, "The service acknowledged that shutdown was not started"); this.name = "ServiceShutdownNotStartedError"; }
 }
 
+/** A responding endpoint must prove the expected status contract and exact instance. */
+export class ServiceStatusValidationError extends Error {}
+
 export class LocalServiceClient {
   readonly descriptor: ServiceRuntimeDescriptor;
 
@@ -109,9 +112,12 @@ export class LocalServiceClient {
 
   async status(signal?: AbortSignal, options?: { readonly shutdownReadiness?: boolean }): Promise<ServiceStatus> {
     const path = options?.shutdownReadiness ? "v1/status?shutdown-readiness=1" : "v1/status";
-    const status = parseServiceStatus(await this.request(path, "GET", undefined, signal));
+    const value = await this.request(path, "GET", undefined, signal);
+    let status: ServiceStatus;
+    try { status = parseServiceStatus(value); }
+    catch (error) { throw new ServiceStatusValidationError("service status contract is invalid", { cause: error }); }
     if (status.service !== this.descriptor.service || status.instanceId !== this.descriptor.instanceId) {
-      throw new Error("service status identity does not match its runtime descriptor");
+      throw new ServiceStatusValidationError("service status identity does not match its runtime descriptor");
     }
     return status;
   }

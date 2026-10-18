@@ -11,6 +11,7 @@ async function runPackagedServicesOwned(args: readonly string[], input: {
   readonly launcherExecutablePath?: string;
   readonly pathOptions?: ProductPathOptions;
   readonly runner?: ServiceRegistrationCommandRunner;
+  readonly waitUntilReady?: (service: TelaServiceId, timeoutMs: number) => Promise<void>;
   readonly shutdownService?: (service: TelaServiceId) => Promise<void>;
 }) {
   const action = args[1];
@@ -47,6 +48,7 @@ async function runPackagedServicesOwned(args: readonly string[], input: {
   const controller = new PackagedPlatformServiceController({
     blueprint, shutdownService: input.shutdownService ?? shutdown,
     prepareShutdownService: input.shutdownService ? undefined : shutdown.prepare,
+    waitUntilReady: input.waitUntilReady ?? (input.shutdownService ? undefined : shutdown.ready),
     ...(input.runner ? { runner: input.runner } : {}),
   });
   const services: Array<{ service: "gateway" | "chat" | "codex"; state: "running" | "stopped" | "failed" }> = [];

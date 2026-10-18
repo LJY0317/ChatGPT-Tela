@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { resolve } from "node:path";
 import {
+  resolveProductPaths,
   cancelSignedPackagedUpgrade,
   planSignedPackagedUpgradeCancellation,
   applySignedPackagedInstallFromPayload,
@@ -47,6 +48,7 @@ export interface PackagedLifecycleOptions {
   readonly runner?: ServiceRegistrationCommandRunner;
   readonly userId?: number;
   readonly shutdownService?: (service: TelaServiceId) => Promise<void>;
+  readonly waitUntilReady?: (service: TelaServiceId, timeoutMs: number) => Promise<void>;
   readonly prepareShutdownService?: (service: TelaServiceId) => Promise<void>;
 }
 
@@ -179,6 +181,7 @@ export async function runPackagedLifecycleCommand(
       services: reviewed.journal.resumeServices, checkpoint: reviewed.journal, payload: { action: "preserve" } });
     const services = new PackagedPlatformServiceController({ blueprint: reviewed.blueprint,
       shutdownService: async () => { throw new Error("upgrade cancellation must not shut down a service"); },
+      waitUntilReady: options.waitUntilReady ?? (options.runner ? undefined : ownedServiceShutdown(reviewed.journal.installId, resolveProductPaths(environment)).ready),
       ...(options.runner ? { runner: options.runner } : {}),
       ...(options.userId === undefined ? {} : { userId: options.userId }) });
     const result = await cancelSignedPackagedUpgrade({ ...input, services });
@@ -237,6 +240,7 @@ export async function runPackagedLifecycleCommand(
       blueprint: plan.blueprint,
       shutdownService: options.shutdownService ?? shutdown,
       prepareShutdownService: options.prepareShutdownService ?? (options.shutdownService ? undefined : shutdown.prepare),
+      waitUntilReady: options.waitUntilReady ?? (options.shutdownService ? undefined : shutdown.ready),
       ...(options.runner ? { runner: options.runner } : {}),
       ...(options.userId === undefined ? {} : { userId: options.userId }),
     });
@@ -296,6 +300,7 @@ export async function runPackagedLifecycleCommand(
     blueprint: plan.targetBlueprint,
     shutdownService: options.shutdownService ?? shutdown,
     prepareShutdownService: options.prepareShutdownService ?? (options.shutdownService ? undefined : shutdown.prepare),
+    waitUntilReady: options.waitUntilReady ?? (options.shutdownService ? undefined : shutdown.ready),
     ...(options.runner ? { runner: options.runner } : {}),
     ...(options.userId === undefined ? {} : { userId: options.userId }),
   });

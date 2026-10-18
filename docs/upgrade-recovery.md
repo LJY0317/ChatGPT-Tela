@@ -85,6 +85,18 @@ successful update and complete removal while preserving external synthetic data.
 On macOS the compiled fixture uses the same normal ad-hoc signing/verification
 procedure as package smoke; no security setting or existing app is changed.
 
+## Start completion
+
+Update, repair, cancellation and installed service start share one completion boundary:
+normal OS start followed by authenticated `ready` status from the expected install,
+service and instance. An already running registration still requires this status proof.
+Descriptor publication and endpoint startup may lag OS process creation; one bounded
+observation budget covers both stages without issuing another start. Invalid ownership,
+status identity or authentication fails immediately. A timeout keeps the existing
+transition checkpoint outstanding; it does not report a completed restoration.
+This observer runs only during an explicit lifecycle operation and adds no idle polling.
+Service readiness does not prove that every profile's Web model has completed a request.
+
 ## Stop evidence
 
 The default Desktop target settles canonically proven active Native turns through the public

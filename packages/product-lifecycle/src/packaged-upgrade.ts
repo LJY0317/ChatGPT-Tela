@@ -520,8 +520,8 @@ async function cancelSignedPackagedUpgradeOwned(input: Parameters<typeof planSig
   for (const service of RESUME_ORDER) {
     if (!journal.resumeServices.includes(service) || restored.includes(service)) continue;
     await proveSource();
-    // A failed shutdown may have left this service alive. Never duplicate it.
-    if (await input.services.inspect(service) === "stopped") await input.services.resume(service);
+    // Resume is idempotent: a live OS registration still needs runtime readiness.
+    await input.services.resume(service);
     restored.push(service);
     journal = updateJournal(journalPath, journal, { resumedServices: Object.freeze([...restored]) });
   }

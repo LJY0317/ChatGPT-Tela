@@ -18,6 +18,10 @@ export function ownedServiceShutdown(installId: string, paths: ProductPaths) {
     }
   };
   return Object.assign(shutdown, {
+    async ready(service: TelaServiceId, timeoutMs: number): Promise<void> {
+      await supervisor.waitUntilReady({ service, timeoutMs,
+        descriptorPath: join(paths.serviceRuntime(service), "descriptor.json") });
+    },
     async prepare(service: TelaServiceId): Promise<void> {
       const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json") });
       if (!current || current.status.state !== "ready") throw new Error(`${service} runtime is not ready for maintenance`);
