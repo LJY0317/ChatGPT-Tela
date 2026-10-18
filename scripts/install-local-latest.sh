@@ -66,10 +66,13 @@ fi
 
 if [[ -x "$installed_launcher" && -f "$bin_root/.chatgpt-tela-payload-v1.json" ]]; then
   lifecycle_command=("$installed_launcher" upgrade)
-  # Use the exact currently installed payload as the signed recovery source.
-  # Older retained slots may belong to a different completed installation and
-  # must remain preserved rather than being treated as the current source.
-  recovery_payload="$bin_root"
+  # Use a clean snapshot of the exact currently installed payload as the signed
+  # recovery source. The installed bookkeeping files are intentionally omitted;
+  # the installed payload itself is never modified.
+  recovery_payload="$tmp_root/installed-recovery-payload"
+  mkdir -p "$recovery_payload"
+  cp -R "$bin_root"/. "$recovery_payload"/
+  rm -f -- "$recovery_payload/.chatgpt-tela-owner.json" "$recovery_payload/.chatgpt-tela-payload-v1.json"
   recovery_key="$install_root/state/install/recovery/source/trusted-key.pem"
   if [[ -d "$recovery_payload" && -f "$recovery_key" ]]; then
     lifecycle_command+=(--recovery-payload "$recovery_payload" --recovery-public-key "$recovery_key")
