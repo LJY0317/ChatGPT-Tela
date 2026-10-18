@@ -139,6 +139,14 @@ export interface CodexService {
   readonly activeProfileCount: number;
 }
 
+/** Emitted only before any owned profile cleanup or Native interrupt begins. */
+export class CodexShutdownNotStartedError extends Error {
+  constructor() {
+    super("Tela Codex has in-flight Native tool work; normal shutdown was not started");
+    this.name = "CodexShutdownNotStartedError";
+  }
+}
+
 function routeId(): string {
   return randomBytes(10).toString("hex");
 }
@@ -910,6 +918,13 @@ export async function startCodexService(input: {
       stopping = true;
       routedBridge.closeAdmission();
       closing = (async () => {
+        // A tool accepted AFTER the preceding read-only readiness snapshot
+        // must not be interrupted by the service shutdown. Closing admission
+        // and checking the in-flight count are synchronous in this process;
+        // refusal restores admission without touching an owned child.
+        if (routedBridge.activeOperationCount !== 0) {
+          throw new CodexShutdownNotStartedError();
+        }
         // Admission is closed before taking this snapshot. An already-admitted
         // start may publish its child late; drain it before enumerating owners.
         await Promise.all([...starting.values()]);

@@ -1,6 +1,6 @@
 import { ProfileConnectionError } from "./profile-operation";
 import { describe, expect, test } from "bun:test";
-import type { CodexService } from "./controller";
+import { CodexShutdownNotStartedError, type CodexService } from "./controller";
 import { startCodexServiceHttpServer } from "./http-server";
 import { CodexServiceClient } from "@chatgpt-tela/service-protocol/client";
 import { ServiceShutdownNotStartedError } from "@chatgpt-tela/service-protocol/client";
@@ -59,6 +59,27 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("readiness-to-shutdown tool race sends an exact not-started receipt, not an uncertain HTTP failure", async () => {
+    const service = fixtureService();
+    let attempted = 0;
+    service.close = async () => { attempted++; throw new CodexShutdownNotStartedError(); };
+    const token = "r".repeat(48);
+    const server = await startCodexServiceHttpServer({ service, bearerToken: token });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+      bearerToken: token, startedAt: new Date().toISOString() });
+    let signaled = false;
+    void server.shutdownRequested.then(() => { signaled = true; });
+    try {
+      expect(await client.status(undefined, { shutdownReadiness: true }))
+        .toMatchObject({ shutdownReadiness: "ready" });
+      await expect(client.shutdown()).rejects.toBeInstanceOf(ServiceShutdownNotStartedError);
+      expect(attempted).toBe(1);
+      expect(signaled).toBe(false);
+      expect((await client.status()).state).toBe("ready");
+    } finally { await server.close(); }
+  });
+
   test("maintenance status and shutdown reject unproven Native activity without stopping a profile", async () => {
     const service = fixtureService();
     let canStop: "ready" | "blocked" = "blocked", closeCalls = 0;
@@ -113,7 +134,10 @@ describe("Tela Codex private HTTP server", () => {
     void server.shutdownRequested.then(() => { signaled = true; });
     const headers = { authorization: `Bearer ${token}` };
     try {
-      expect((await fetch(new URL("v1/shutdown", server.endpoint), { method: "POST", headers })).status).toBe(409);
+      const uncertain = await fetch(new URL("v1/shutdown", server.endpoint), { method: "POST", headers });
+      expect(uncertain.status).toBe(409);
+      // A later child-cleanup failure is not a pre-stop proof.
+      expect((await uncertain.json()).shutdown).toBeUndefined();
       expect(calls).toBe(1); expect(signaled).toBe(false);
       expect((await fetch(new URL("v1/status", server.endpoint), { headers })).status).toBe(200);
       refuse = false;

@@ -11,7 +11,7 @@ import {
   parseCodexSyntheticRecoveryContract,
 } from "@chatgpt-tela/service-protocol";
 import { ProfileConnectionError } from "./profile-operation";
-import type { CodexService } from "./controller";
+import { CodexShutdownNotStartedError, type CodexService } from "./controller";
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
@@ -37,6 +37,14 @@ function bearer(request: Request): string | undefined {
 
 function error(status: number, message: string): Response {
   return Response.json({ error: { type: "tela_codex_service_error", message } }, { status });
+}
+
+function shutdownNotStarted(instanceId: string): Response {
+  return Response.json({ contractVersion: 1, service: "codex",
+    instanceId, shutdown: "not-started",
+    error: { type: "tela_codex_shutdown_blocked",
+      message: "Other Native or Web work is active or cannot be proved idle" } },
+  { status: 409, headers: { "cache-control": "no-store" } });
 }
 
 function slot(pathname: string, action: "start" | "stop" | "web-reconnect"): number | undefined {
@@ -332,16 +340,20 @@ export async function startCodexServiceHttpServer(input: {
           // Acknowledgement authorizes payload replacement. A refused child
           // cleanup must return failure while service/control ownership survives.
           if (await input.service.shutdownReadiness?.().catch(() => "blocked" as const) !== "ready") {
-            // This request has NOT started any quit. The exact receipt allows
-            // signed rollback to distinguish a safe refusal from an uncertain
-            // partially completed shutdown.
-            return Response.json({ contractVersion: 1, service: "codex",
-              instanceId: input.service.instanceId, shutdown: "not-started",
-              error: { type: "tela_codex_shutdown_blocked",
-                message: "Other Native or Web work is active or cannot be proved idle" } },
-            { status: 409, headers: { "cache-control": "no-store" } });
+            return shutdownNotStarted(input.service.instanceId);
           }
-          await input.service.close();
+          try {
+            await input.service.close();
+          } catch (cause) {
+            // A newly admitted tool may appear after readiness but before
+            // close's synchronous admission fence. Only this typed, no-quit
+            // refusal is safe to classify as 'not-started'. Other failures
+            // may have already changed an owner; preserve uncertainty.
+            if (cause instanceof CodexShutdownNotStartedError) {
+              return shutdownNotStarted(input.service.instanceId);
+            }
+            throw cause;
+          }
           lifecycle.afterResponse(resolveShutdown);
           return Response.json({ status: "shutting-down" });
         }

@@ -119,6 +119,11 @@ separate contract. This is a source-level, conservative **idle admission** gate:
 it cannot authorize pausing the one currently requesting maintenance turn.
 That requires an authenticated exact-turn origin, host-supported durable
 continuation, and a separately verified independent installer/restart path.
+After the readiness snapshot, the service closes routed-tool admission and
+rechecks its in-flight count before any profile stop. A tool accepted in the
+intervening interval returns an exact typed `shutdown:not-started` receipt,
+and normal admission is restored. Later child-cleanup errors are uncertain
+and never borrow that receipt.
 Do not claim this source addition is installed merely from local tests.
 As the external Native engine remains free to start turns while being inspected,
 an on-demand readiness snapshot is not an engine-enforced atomic no-new-turn
