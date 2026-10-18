@@ -36,6 +36,9 @@ Tool counts describe observed supported Native items, including collaboration ca
 is reported as live events, limited history summary, or unverified for older records. Zero is never
 proof of no execution: summaries can omit tools and child-agent activity has separate ownership.
 History recovery preserves already observed counts rather than replacing them with summary zeroes.
+The separate `toolResultItems` count requires bounded result-bearing completed Native tool
+items, without storing their command, output or arguments. It is evidence of returned tool
+results, not proof of their contents, success of requested effects, or Web semantic use.
 
 The selected model comes from the current complete Web catalog. The isolated release-label policy
 selects the highest unambiguous numeric release, prefers Extra high, and permits High only on that
@@ -70,3 +73,25 @@ permission. Do not treat prompt instructions as a filesystem or MCP security bou
 
 The source CLI and a useful real read-only Web task have been exercised. These facts do not establish
 that the entire product workflow, restart durability or write-task support is finished.
+
+## Test-only live round-trip receipt (2026-10-18)
+
+`packages/codex-service/src/web-native-roundtrip.integration.ts` has an opt-in
+`--preflight` that creates and officially deletes an exact new empty Native
+thread, proving absence before any model call. The separate `--acceptance`
+attempts only one read-only Web turn in a new disposable Git repository and
+checks a random local marker in the Web final and in a same-turn Native tool
+result. Every acknowledged test thread receives at most one official Delete
+request; uncertain cleanup retains its local journal for inspection.
+
+On the installed Profile 1, preflight passed (zero model requests, one exact
+Delete/absence). One real Extra High Web request produced an exact-marker
+final answer and one Native tool item. Its public Native summary did **not**
+independently prove the result payload, so strict same-turn result acceptance
+**failed**; the acknowledged synthetic thread was officially deleted and
+its absence verified. A subsequent fresh attempt refused before a model
+request because one Web surface remained active. That surface's ownership
+was not established, so it was not closed. Live events with content-free
+result witnesses are now included in the fixture for a later independently
+authorized acceptance; no uncertain or retired turn was replayed. This is
+not evidence of opaque Legacy-context continuity or an installed new release.

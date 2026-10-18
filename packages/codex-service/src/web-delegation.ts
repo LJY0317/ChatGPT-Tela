@@ -10,6 +10,47 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const MAX_RESULT_BYTES = 512 * 1024;
 // Counts are observations of supported Native item kinds, never proof of all execution.
 const TOOL_ITEM_TYPES = new Set(["commandExecution", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall"]);
+const RESULT_FIELDS = ["aggregatedOutput", "output", "response", "result", "contentItems"];
+
+function boundedResultPresent(value: unknown): boolean {
+  const seen = new Set<object>();
+  let nodes = 0, bytes = 0, nonempty = false;
+  const visit = (part: unknown, depth: number): boolean => {
+    if (++nodes > 256 || depth > 8) return false;
+    if (typeof part === "string") {
+      if (part.length > 128 * 1024) return false;
+      bytes += Buffer.byteLength(part, "utf8");
+      if (part.length > 0) nonempty = true;
+      return bytes <= 128 * 1024;
+    }
+    if (typeof part === "boolean" || typeof part === "number" && Number.isFinite(part)) {
+      nonempty = true; bytes += 16; return bytes <= 128 * 1024;
+    }
+    if (part === null || part === undefined) return true;
+    if (!part || typeof part !== "object" || seen.has(part)) return false;
+    seen.add(part);
+    if (Array.isArray(part)) {
+      return part.length <= 128 && part.every(child => visit(child, depth + 1));
+    }
+    const entries = Object.entries(part);
+    if (entries.length > 128) return false;
+    for (const [key, child] of entries) {
+      bytes += Buffer.byteLength(key, "utf8");
+      if (bytes > 128 * 1024 || !visit(child, depth + 1)) return false;
+    }
+    return true;
+  };
+  return visit(value, 0) && nonempty;
+}
+
+/** Content-free evidence of a Native tool result, not proof of task success or
+ * external side effects. Failed items and unbounded/opaque output do not count. */
+function hasNativeToolResult(item: Record<string, unknown> | undefined, completedEvent: boolean): boolean {
+  if (!item || !TOOL_ITEM_TYPES.has(String(item.type))
+    || (!completedEvent && !["completed", "success", "succeeded"].includes(String(item.status)))
+    || ["failed", "error", "interrupted"].includes(String(item.status))) return false;
+  return RESULT_FIELDS.some(key => Object.hasOwn(item, key) && boundedResultPresent(item[key]));
+}
 export type WebDelegationState = "reserved" | "creating" | "created" | "submitting" | "running" | "completed" | "failed" | "uncertain";
 export interface WebDelegationRecord {
   readonly id: string;
@@ -29,6 +70,10 @@ export interface WebDelegationRecord {
   readonly answer?: string;
   readonly toolItems?: number;
   readonly toolItemCoverage?: "live-events" | "history-summary";
+  /** Count of result-bearing completed Native tool items; zero is not evidence
+   * that no result was delivered, and content never enters this journal. */
+  readonly toolResultItems?: number;
+  readonly toolResultCoverage?: "live-events" | "history-summary";
   readonly failure?: "owner_changed" | "transport_or_ack" | "turn_failed" | "result_unavailable";
 }
 
@@ -132,6 +177,7 @@ export async function runReadOnlyWebDelegation(adapters: WebDelegationAdapters, 
     const messages = new Map<string, { text: string; phase?: string }>();
     const pending: Array<[string, Record<string, unknown>]> = [];
     let toolItems = 0, turnId: string | undefined, eventCount = 0;
+    const resultItems = new Set<string>();
     const accept = (method: string, event: Record<string, unknown>) => {
       if (event.threadId !== record!.threadId) return;
       if (++eventCount > 10_000) { rejectDone(Error("Web job event bound exceeded")); return; }
@@ -147,7 +193,10 @@ export async function runReadOnlyWebDelegation(adapters: WebDelegationAdapters, 
           const totalBytes = [...messages].filter(([id]) => id !== item.id).reduce((sum, [, message]) => sum + Buffer.byteLength(message.text), Buffer.byteLength(item.text));
           if (totalBytes > MAX_RESULT_BYTES) { rejectDone(Error("Web job answer bound exceeded")); return; }
           messages.set(item.id, { text: item.text, ...(typeof item.phase === "string" ? { phase: item.phase } : {}) });
-        } else if (typeof item?.type === "string" && TOOL_ITEM_TYPES.has(item.type)) toolItems++;
+        } else if (typeof item?.type === "string" && TOOL_ITEM_TYPES.has(item.type)) {
+          toolItems++;
+          if (typeof item.id === "string" && hasNativeToolResult(item, true)) resultItems.add(item.id);
+        }
       }
       if (method === "turn/completed") {
         const turn = object(event.turn);
@@ -179,7 +228,8 @@ export async function runReadOnlyWebDelegation(adapters: WebDelegationAdapters, 
       const final = [...messages.values()].filter(message => message.phase === "finalAnswer" || message.phase === "final_answer");
       const answer = final.at(-1)?.text;
       if (!answer?.trim()) throw Error("Web job completed without a proven final answer");
-      update({ state: "completed", taskOutcome: "unassessed", finalEvidence: "explicit-final-phase", answer, toolItems, toolItemCoverage: "live-events" });
+      update({ state: "completed", taskOutcome: "unassessed", finalEvidence: "explicit-final-phase", answer,
+        toolItems, toolItemCoverage: "live-events", toolResultItems: resultItems.size, toolResultCoverage: "live-events" });
       return record;
     } finally { input.signal.removeEventListener("abort", abort); }
   } catch (error) {
@@ -222,6 +272,8 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
     return adapters.store.save({ ...record, state: "completed", taskOutcome: "unassessed", finalEvidence: "explicit-final-phase", answer,
       toolItems: Math.max(record.toolItems ?? 0, items.filter(item => typeof item?.type === "string" && TOOL_ITEM_TYPES.has(item.type)).length),
       toolItemCoverage: record.toolItemCoverage ?? "history-summary",
+      toolResultItems: Math.max(record.toolResultItems ?? 0, items.filter(item => hasNativeToolResult(item, false)).length),
+      toolResultCoverage: record.toolResultCoverage ?? "history-summary",
     });
   } finally { await rpc.close(); }
 }

@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { runReadOnlyWebDelegation, WebDelegationStore, reconcileWebDelegation } from "./web-delegation";
 
-async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean } = {}) {
+async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
   const calls: Array<{ method: string; params: unknown }> = [];
@@ -24,13 +24,17 @@ async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; f
         if (options.silent) return { turn: { id: turnId } };
         // Synchronously complete BEFORE turn/start's ACK, exercising the real notification race.
         notify("item/completed", { threadId: options.foreignFinal ? randomUUID() : threadId, turnId, item: { id: "final", type: "agentMessage", ...(options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified design" } });
-        notify("item/completed", { threadId, turnId, item: { id: "read", type: "commandExecution" } });
+        notify("item/completed", { threadId, turnId, item: { id: "read", type: "commandExecution",
+          status: options.failedTool ? "failed" : "completed",
+          aggregatedOutput: options.enormousOutput ? "x".repeat(140 * 1024) : "fixture-result-not-in-journal" } });
         if (options.collaboration) notify("item/completed", { threadId, turnId, item: { id: "collab", type: "collabAgentToolCall" } });
         notify("turn/completed", { threadId, turn: { id: turnId, status: "completed" } });
         return { turn: { id: turnId } };
       }
       if (method === "thread/turns/list") return { data: [{ id: turnId, status: "completed", items: [
         { id: "final", type: "agentMessage", ...(options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified recovered design" },
+        ...(options.summaryToolResult ? [{ id: "read", type: "commandExecution",
+          status: "completed", aggregatedOutput: "fixture-summary-result" }] : []),
       ] }] };
       throw Error("Unexpected operation");
     },
@@ -52,13 +56,15 @@ test("new read-only durable Web job buffers ACK race, returns exact final and ne
   const f = await fixture();
   try {
     const result = await f.run();
-    expect(result).toMatchObject({ state: "completed", answer: "verified design", toolItems: 1 });
+    expect(result).toMatchObject({ state: "completed", answer: "verified design",
+      toolItems: 1, toolResultItems: 1, toolResultCoverage: "live-events" });
     expect(f.calls.find(call => call.method === "thread/start")?.params).toMatchObject({ ephemeral: false, historyMode: "paginated", sandbox: "read-only", approvalPolicy: "never" });
     expect(f.calls.find(call => call.method === "turn/start")?.params).toMatchObject({ effort: "xhigh", sandboxPolicy: { type: "readOnly" }, approvalPolicy: "never" });
     expect(f.calls.map(call => call.method)).toEqual(["model/list", "thread/start", "turn/start"]);
     await expect(f.run()).rejects.toThrow();
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
     expect(new WebDelegationStore(f.root).get(f.id)?.answer).toBe("verified design");
+    expect(JSON.stringify(new WebDelegationStore(f.root).get(f.id))).not.toContain("fixture-result-not-in-journal");
   } finally { f.cleanup(); }
 });
 test("uncertain send is journaled and never replayed", async () => {
@@ -127,4 +133,26 @@ test("summary recovery preserves earlier observations and marks its limited cove
     expect(await f.reconcile()).toMatchObject({ toolItems: 3, toolItemCoverage: "history-summary" });
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
   } finally { f.cleanup(); }
+});
+
+test("bounded Native tool-result evidence is content-free and absent results are never manufactured", async () => {
+  const f = await fixture({ silent: true, summaryToolResult: true });
+  try {
+    await expect(f.run()).rejects.toThrow();
+    const recovered = await f.reconcile();
+    expect(recovered).toMatchObject({ toolItems: 1, toolResultItems: 1,
+      toolResultCoverage: "history-summary" });
+    expect(JSON.stringify(recovered)).not.toContain("fixture-summary-result");
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
+test("failed and oversized Native tool items never become completed-result evidence", async () => {
+  for (const options of [{ failedTool: true }, { enormousOutput: true }]) {
+    const f = await fixture(options);
+    try {
+      expect(await f.run()).toMatchObject({ state: "completed", toolItems: 1,
+        toolResultItems: 0, toolResultCoverage: "live-events" });
+    } finally { f.cleanup(); }
+  }
 });
