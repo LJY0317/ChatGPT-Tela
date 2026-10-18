@@ -1,5 +1,17 @@
 # Diagnostic evidence
 
+## Tela Chat ingress boundary
+
+`chat_capability_dispatch_received` is emitted only after a supported effectful
+Chat capability (`exec_command`, `apply_patch`, `write_stdin`) enters its service
+dispatcher. The event contains a fixed capability name and, when safely
+available, a workspace fingerprint; never the command, patch, input or path.
+It is **not** evidence that the operation was accepted, executed or committed.
+Use existing process operation/status and workspace diff evidence for those
+claims. A host/platform refusal before ingress cannot emit this event; its
+absence alone proves nothing when diagnostic transport or retention is unknown.
+Do not replay an upstream-refused action through another execution route.
+
 ## Native-to-Web preparation triage
 
 Start with `chatgpt-tela diagnostics context --at <ISO-time> --minutes 15 --view summary`.

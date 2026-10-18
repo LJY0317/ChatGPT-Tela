@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { inspectNativeThreadHistoricalEvidence } from "@chatgpt-tela/core";
+import { inspectNativeThreadHistoricalEvidence, emitDiagnosticEvent, diagnosticFingerprint } from "@chatgpt-tela/core";
 import { CHAT_PROCESS_STORE_FILENAME } from "@chatgpt-tela/product-lifecycle/chat-process-storage";
 import { ChatAgentManager, type ChatAgentDriver, type ChatAgentWriteMode } from "./agents";
 import { ChatChangeReviewer } from "./changes";
@@ -275,6 +275,18 @@ export function createChatToolRuntime(input: {
     async call(name: TelaChatCapability, inputValue: unknown) {
       const selected = capability(name, capabilities());
       const args = object(inputValue, `${selected} arguments`);
+      // A fixed-name, payload-free witness for mutations/executions that actually
+      // reached Tela Chat. An upstream host/platform refusal never enters here.
+      // Its absence alone is not proof of a refusal (logs may be unavailable).
+      if (selected === "exec_command" || selected === "apply_patch" || selected === "write_stdin") {
+        const workspaceId = args.workspace_id;
+        emitDiagnosticEvent("chatgpt_tela_chat", "chat_capability_dispatch_received", {
+          capability: selected,
+          ...(typeof workspaceId === "string" && workspaceId.length > 0
+            && workspaceId.length <= 16_384 && !workspaceId.includes("\0")
+            ? { scope_fingerprint: diagnosticFingerprint(workspaceId) } : {}),
+        });
+      }
       try {
         switch (selected) {
         case "open_workspace": {

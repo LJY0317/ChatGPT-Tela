@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 import { createChatToolRuntime } from "./tools";
 
 function git(cwd: string, args: string[]): string {
@@ -25,6 +26,43 @@ function fixture() {
 }
 
 describe("Tela Chat first vertical slice", () => {
+  test("effectful ingress records a content-free dispatch boundary, not a guessed host refusal", async () => {
+    const f = fixture();
+    const observed: unknown[] = [];
+    const stop = observeDiagnosticEvents(event => {
+      if (event.event === "chatgpt_tela_chat" && event.stage === "chat_capability_dispatch_received") {
+        observed.push(event);
+      }
+    });
+    try {
+      expect(stop).toBeDefined();
+      const workspace = await f.runtime.call("open_workspace", { path: f.root }) as { id: string };
+      await f.runtime.call("read", { workspace_id: workspace.id, path: "README.md" });
+      expect(observed).toHaveLength(0);
+      const privatePayload = "ONLY_IN_TEST_FILE_NOT_DIAGNOSTICS";
+      await f.runtime.call("apply_patch", {
+        workspace_id: workspace.id,
+        patch: `*** Begin Patch\n*** Add File: payload.txt\n+${privatePayload}\n*** End Patch`,
+      });
+      expect(readFileSync(join(f.root, "payload.txt"), "utf8")).toContain(privatePayload);
+      // Invalid input reached service dispatch but never acquired a workspace.
+      await expect(f.runtime.call("apply_patch", {
+        workspace_id: "x".repeat(17_000), patch: "not a patch",
+      })).rejects.toThrow();
+      expect(observed).toHaveLength(2);
+      const log = JSON.stringify(observed);
+      expect(log).toContain("chat_capability_dispatch_received");
+      expect(log).toContain("apply_patch");
+      expect(log).not.toContain(privatePayload);
+      expect(log).not.toContain(f.root);
+      expect(log).not.toContain(workspace.id);
+    } finally {
+      stop?.();
+      await f.runtime.close();
+      rmSync(f.base, { recursive: true, force: true });
+    }
+  });
+
   test("open -> read -> patch -> exec/status -> show changes stays inside one approved workspace", async () => {
     const f = fixture();
     try {
