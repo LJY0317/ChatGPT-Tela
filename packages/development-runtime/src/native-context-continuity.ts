@@ -1,3 +1,4 @@
+import { classifyWebPreparationFailure } from "./web-preparation-diagnostics";
 import { CheckpointPreparationBudget, type CheckpointPreparationPolicy } from "./checkpoint-preparation-budget";
 import { createHash } from "node:crypto";
 import {
@@ -162,6 +163,12 @@ export async function resolveNativeContextContinuity(input: {
         emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_rejected", {
           phase, reason_class: error.recoveryReason === "unindexed_history"
             ? "history_mode_unindexed" : "history_bootstrap_required",
+        });
+      } else {
+        // A source probe can be optional; preserve its failed boundary without
+        // turning it into a terminal task failure or retaining exception prose.
+        emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_probe_failed", {
+          phase, reason_class: classifyWebPreparationFailure(error),
         });
       }
       throw error;

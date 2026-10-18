@@ -558,3 +558,32 @@ test("continuity cannot reset an earlier phase's preparation budget",async()=>{
   expect(sends).toBe(0);expect(await journal.pendingOperations()).toHaveLength(0);
  }finally{rmSync(directory,{recursive:true,force:true});}
 });
+
+
+test("unexpected source probe failure retains phase but never private exception content", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-source-probe-failure-"));
+  const log = join(root, "events.jsonl"), previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = log;
+  const failure = new Error("private source path /secret/task-content");
+  let calls = 0;
+  try {
+    await expect(resolveNativeContextContinuity(input({ effort: "medium", options: {
+      visiblePrefix: { accountNamespace: "fixture-account", journal: new FileNativeVisiblePrefixStageJournal({ directory: join(root, "journal"), initializationPath: join(root, "journal-init.json") }),
+        async read() { throw failure; } },
+      async checkpointProducer() { calls++; throw Error("must not call model"); },
+    } }))).rejects.toBe(failure);
+    const contents = readFileSync(log, "utf8");
+    const rows = contents.trim().split("\n").map(line => JSON.parse(line));
+    expect(rows.find(row => row.stage === "native_context_source_probe_failed")).toMatchObject({
+      phase: "visible_prefix", reason_class: "unclassified",
+    });
+    expect(rows.some(row => row.stage === "native_context_source_rejected")).toBe(false);
+    expect(calls).toBe(0);
+    expect(contents).not.toContain("private source");
+    expect(contents).not.toContain("/secret/");
+  } finally {
+    if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
