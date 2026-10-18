@@ -1085,3 +1085,15 @@ JSON remain sensitive, local-only artifacts outside source/build inputs. Never u
 return them through model tools, or include them in a commit/release. Public diagnostics contain
 structural events only; private artifact references carry no bodies. Existing limits remain
 7 days, 64 MiB and 24 private files, with no background sampler.
+
+
+### Funnel reachability boundary
+
+CLI ingress status probes originate on the same machine. MagicDNS may resolve a public
+Funnel hostname to its tailnet address, bypassing public ingress. `observationScope` and
+`externalClientReachability` now make that coverage explicit; successful schema discovery
+from this machine does not prove a cloud connector can connect. This changes diagnostic
+reporting only, with no additional health polling, network dependency or admission gate.
+If both connectors fail before any MCP ingress, compare the local/tailnet path with the
+public-DNS relay path and an actual connector call. Preserve configuration during normal
+Tailscale reconnection; do not reset routes, credentials or user settings to probe a failure.

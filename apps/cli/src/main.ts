@@ -357,9 +357,15 @@ async function diagnoseConfiguredIngress(
   const probe = config.publicMcpAbi === "stable" ? probePublicMcp : probeUnifiedDevelopmentMcp;
   const probeEndpoint = async (url: URL): Promise<Record<string, unknown>> => {
     const health = await probe(url, AbortSignal.timeout(4_000));
-    return health.ready
-      ? { state: "ready" }
-      : { state: "unavailable", cause: "public-mcp-unreachable", detail: health.detail ?? "public MCP probe failed" };
+    // This process may resolve a public Funnel hostname through MagicDNS to
+    // its tailnet address. A successful schema probe cannot attest cloud access.
+    return {
+      observationScope: "this-machine",
+      externalClientReachability: "not-observed",
+      ...(health.ready
+        ? { state: "ready" }
+        : { state: "unavailable", cause: "public-mcp-unreachable", detail: health.detail ?? "MCP probe from this machine failed" }),
+    };
   };
   const localMcp = await probeEndpoint(new URL(`http://127.0.0.1:${config.exposure.localPort}/mcp`));
   const normalizedLocalMcp = localMcp.state === "ready"
@@ -427,8 +433,8 @@ async function diagnoseConfiguredIngress(
     state: publicMcp.state,
     cause: publicMcp.state === "ready" ? "ready" : "public-mcp-unreachable",
     detail: publicMcp.state === "ready"
-      ? "Tailscale is online, the exact Funnel route is present, and the public ChatGPT Tela MCP probe succeeded"
-      : "Tailscale and the Funnel route are ready, but the public ChatGPT Tela MCP endpoint is not reachable",
+      ? "Tailscale is online and the configured MCP URL responds from this machine; external client reachability is not independently verified"
+      : "Tailscale and the Funnel route are configured, but this machine cannot reach the configured MCP URL",
     localMcp: normalizedLocalMcp,
     tailscale,
     publicMcp,
