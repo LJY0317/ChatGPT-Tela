@@ -3,7 +3,7 @@ import { CHATGPT_FILE_CONNECT_ORIGINS } from "./chatgpt-file-source";
 import { CHATGPT_TELA_IMPORT_RESOURCE_URI, CHATGPT_TELA_IMPORT_WIDGET_HTML } from "./import-widget";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { traceDiagnosticToolCall } from "@chatgpt-tela/core";
+import { emitDiagnosticEvent, traceDiagnosticToolCall } from "@chatgpt-tela/core";
 import {
   CHATGPT_TELA_CHAT_CAPABILITY_CALL,
   CHATGPT_TELA_CHAT_CAPABILITY_INVENTORY,
@@ -103,7 +103,9 @@ export function createPublicMcpServer(input: {
     }),
   }, async arguments_ => {
     const query = typeof arguments_.query === "string" ? arguments_.query : "";
-    return { content: [{ type: "text", text: JSON.stringify(await input.chat.inventory(query)) }] };
+    const capabilities = await input.chat.inventory(query);
+    emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_chat_inventory_returned", { query_empty: query.length === 0, count: capabilities.length });
+    return { content: [{ type: "text", text: JSON.stringify(capabilities) }] };
   });
 
   registerTool(CHATGPT_TELA_CHAT_CAPABILITY_CALL, {

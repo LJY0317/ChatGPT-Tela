@@ -1302,6 +1302,14 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       await captureBrowserDiagnosticCheckpoint(surface, "before_submit");
       signal?.throwIfAborted();
       assertCausalInputUnchanged?.();
+      const bridgeComposer = filled.composers.find(item => item.key === composer.key);
+      emitDiagnosticEvent("chatgpt_tela_work", "web_tool_bridge_prepared", {
+        bridge_attached: !!request.toolBridge,
+        connector_count: bridgeComposer?.connectorFingerprints.length ?? 0,
+        expected_connector_present: !!expectedConnectorFingerprint && bridgeComposer?.connectorFingerprints.includes(expectedConnectorFingerprint) === true,
+        context_header_attached: !!request.toolBridge,
+        remote_tool_visibility_observed: false,
+      });
       sendActivationAttempted = true;
       emitDiagnosticEvent("chatgpt_tela_work", "web_send_activation_started", { phase: "turn", composer_wire_bytes:formatted.composerBytes,
         context_wire_bytes:formatted.contextBytes,protocol_wire_bytes:formatted.protocolBytes });
@@ -1786,6 +1794,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       signal?.throwIfAborted();
       if (publicProgress && publicProgress.length <= 16384 && tracked.publicProgress !== publicProgress) {
         tracked.publicProgress = publicProgress;
+        emitDiagnosticEvent("chatgpt_tela_work", "web_public_progress_ready", {
+          progress_characters: publicProgress.length, public_progress_part_count: assistant?.publicProgress?.length ?? 0,
+          assistant_phase: assistant?.phase ?? "unknown",
+        });
         tracked.observeAgain = true;
         return { state: "proven", value: { kind: "progress", providerTurnId: tracked.handle.providerTurnId,
           summary: publicProgress }, evidence: evidence("public progress from the proven assistant lineage") };

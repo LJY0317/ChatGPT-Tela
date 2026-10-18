@@ -1,3 +1,5 @@
+import { diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { observeMcpEnvelope } from "./transport-diagnostics";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -33,6 +35,7 @@ export interface McpHttpServer {
 
 interface SessionEntry {
   readonly transport: WebStandardStreamableHTTPServerTransport;
+  readonly connectionFingerprint: string;
   readonly server: McpServer;
   closed: boolean;
   inFlightRequests: number;
@@ -158,6 +161,7 @@ async function startMcpHttpServer(input: {
     entry.inFlightRequests += 1;
     entry.lastUsedAtMs = Date.now();
     try {
+      if (request.method === "POST") observeMcpEnvelope(parsedBody, entry.connectionFingerprint, "received");
       return await entry.transport.handleRequest(
         request,
         request.method === "POST" ? { parsedBody } : undefined,
@@ -191,7 +195,18 @@ async function startMcpHttpServer(input: {
         sessions.set(sessionId, entry);
       },
     });
+    const connectionFingerprint = diagnosticFingerprint(randomUUID());
+    const send = transport.send.bind(transport);
+    transport.send = async (...args) => {
+      try { await send(...args); }
+      catch (error) {
+        emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_transport_send_failed", { connection_fingerprint: connectionFingerprint, ...diagnosticFailureFields(error) });
+        throw error;
+      }
+      observeMcpEnvelope(args[0], connectionFingerprint, "emitted");
+    };
     entry = {
+      connectionFingerprint,
       transport,
       server,
       closed: false,
@@ -229,8 +244,12 @@ async function startMcpHttpServer(input: {
       if (stopped) return errorResponse(503, `ChatGPT Tela ${input.label} MCP server is stopping`);
       const url = new URL(request.url);
       if (url.pathname !== path) return new Response(null, { status: 404 });
-      if (request.headers.has("origin")) return errorResponse(403, "Browser-origin MCP requests are not accepted");
+      if (request.headers.has("origin")) {
+        emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_http_rejected", { reason_class: "browser_origin", http_status: 403 });
+        return errorResponse(403, "Browser-origin MCP requests are not accepted");
+      }
       if (bearerToken !== undefined && !sameSecret(bearer(request), bearerToken)) {
+        emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_http_rejected", { reason_class: "authentication_rejected", http_status: 401 });
         return Response.json({
           jsonrpc: "2.0",
           error: { code: -32001, message: "Invalid ChatGPT Tela MCP authorization" },
@@ -250,7 +269,10 @@ async function startMcpHttpServer(input: {
 
       if (sessionId) {
         const entry = sessions.get(sessionId);
-        if (!entry || entry.closed) return errorResponse(404, "Unknown or closed MCP session");
+        if (!entry || entry.closed) {
+          emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_http_rejected", { reason_class: "unknown_connection", http_status: 404 });
+          return errorResponse(404, "Unknown or closed MCP session");
+        }
         return handleOwnedSessionRequest(sessionId, entry, request, parsedBody);
       }
 
@@ -272,6 +294,7 @@ async function startMcpHttpServer(input: {
         entry = await createSession();
         entry.inFlightRequests += 1;
         entry.lastUsedAtMs = Date.now();
+        observeMcpEnvelope(parsedBody, entry.connectionFingerprint, "received");
         const response = await entry.transport.handleRequest(request, { parsedBody });
         if (!entry.transport.sessionId) {
           entry.closed = true;

@@ -130,6 +130,11 @@ export class RuntimeTurnChannel {
     if (this.#settled || !summary.trim()) return;
     if (summary.length > 16384 || this.#progressChars + summary.length > 65536) {
       this.#progressBudgetRejected += 1;
+      if (this.#progressBudgetRejected === 1) emitDiagnosticEvent("chatgpt_tela_work", "public_progress_rejected", {
+        scope_fingerprint: diagnosticFingerprint(this.#binding.authority.threadId),
+        turn_fingerprint: diagnosticFingerprint(this.#binding.authority.turnId),
+        reason_class: "character_budget", progress_characters: summary.length, journal_characters: this.#progressChars,
+      });
       return;
     }
     if (this.#progressJournal.at(-1)?.summary === summary) return;
@@ -139,9 +144,17 @@ export class RuntimeTurnChannel {
     const entry = { sequence: this.#progressPublished, summary };
     this.#progressJournal.push(entry);
     if (!this.#progressListeners.size) this.#progressWithoutViewer += 1;
+    let listenerCount = 0, listenerFailures = 0;
     for (const listener of this.#progressListeners) {
-      try { listener(summary, entry.sequence); } catch { this.#progressListeners.delete(listener); }
+      try { listener(summary, entry.sequence); listenerCount++; }
+      catch { listenerFailures++; this.#progressListeners.delete(listener); }
     }
+    emitDiagnosticEvent("chatgpt_tela_work", "public_progress_published", {
+      scope_fingerprint: diagnosticFingerprint(this.#binding.authority.threadId),
+      turn_fingerprint: diagnosticFingerprint(this.#binding.authority.turnId),
+      progress_sequence: entry.sequence, progress_characters: summary.length, journal_characters: this.#progressChars,
+      listener_count: listenerCount, listener_failure_count: listenerFailures, delivery: "subscriber_callback_returned",
+    });
   }
 
   /** In-memory, turn-owned replay. Cursor acknowledges the local transport boundary, not Desktop display. */

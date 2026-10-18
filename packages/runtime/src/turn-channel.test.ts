@@ -74,7 +74,10 @@ describe("runtime turn channel", () => {
       channel.complete("PRIVATE_FINAL");
       expect(await channel.waitForFinal()).toBe("PRIVATE_FINAL");
       const log = readFileSync(file, "utf8");
-      const last = log.trim().split("\n").map(line => JSON.parse(line)).at(-1);
+      const rows = log.trim().split("\n").map(line => JSON.parse(line));
+      expect(rows.filter(row => row.stage === "public_progress_published").map(row => [row.progress_sequence, row.listener_count])).toEqual([[1, 0], [2, 1]]);
+      expect(rows.find(row => row.stage === "public_progress_rejected")).toMatchObject({ reason_class: "character_budget", progress_characters: 16385 });
+      const last = rows.at(-1);
       expect(last).toMatchObject({ turn_phase: "completed", public_progress_published_count: 2,
         public_progress_without_viewer_count: 1, public_progress_budget_rejected_count: 1 });
       expect(log).not.toMatch(/PRIVATE_PROGRESS|PRIVATE_FINAL/);

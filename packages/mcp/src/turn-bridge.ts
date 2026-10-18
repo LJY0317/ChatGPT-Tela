@@ -1,3 +1,4 @@
+import { diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import type {
   NativeToolCatalogEntry,
   NativeToolInvocation,
@@ -22,7 +23,14 @@ export class McpTurnBridge implements TurnBridgeBackend {
   constructor(readonly turns: TurnCapabilityResolver) {}
 
   inventory(capability: string, query = ""): readonly NativeToolCatalogEntry[] {
-    return this.turns.resolve(capability).binding.tools.search(query);
+    const channel = this.turns.resolve(capability);
+    const tools = channel.binding.tools.search(query);
+    emitDiagnosticEvent("chatgpt_tela_work", "native_tool_inventory_queried", {
+      scope_fingerprint: diagnosticFingerprint(channel.binding.authority.threadId),
+      turn_fingerprint: diagnosticFingerprint(channel.binding.authority.turnId),
+      query_empty: query.length === 0, count: tools.length,
+    });
+    return tools;
   }
 
   invoke(capability: string, invocation: NativeToolInvocation): Promise<NativeToolResult> {

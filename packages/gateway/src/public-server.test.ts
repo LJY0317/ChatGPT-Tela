@@ -1,3 +1,7 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { structuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { CHATGPT_TELA_EXPORT_RESOURCE_URI } from "./export-widget";
 import { CHATGPT_FILE_CONNECT_ORIGINS } from "./chatgpt-file-source";
 import { CHATGPT_TELA_IMPORT_RESOURCE_URI } from "./import-widget";
@@ -180,4 +184,40 @@ describe("ChatGPT Tela frozen ABI", () => {
       await server.stop();
     }
   });
+});
+
+
+test("MCP discovery evidence distinguishes listed tools, empty queries and pre-handler refusal without private data", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-discovery-proof-")), file = join(root, "events.jsonl");
+  const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  const server = await startCustomMcpHttpServer({ label: "discovery-proof", createServer: () => createPublicMcpServer({
+    chat: { inventory: () => [], call: async () => ({ ok: true }) },
+    codex: { inventory: () => { throw new Error("PRIVATE_FAILURE"); }, invoke: async () => { throw Error("unused"); } },
+  }) });
+  const client = new Client({ name: "fixture", version: "1" }, { capabilities: {} });
+  const transport = new StreamableHTTPClientTransport(server.endpointUrl, { requestInit: { headers: { authorization: `Bearer ${server.bearerToken}` } } });
+  try {
+    const rejected = await fetch(server.endpointUrl, { method: "POST", headers: { authorization: "Bearer PRIVATE_BAD_AUTH" }, body: "PRIVATE_BODY" });
+    expect(rejected.status).toBe(401);
+    await client.connect(transport as unknown as Transport);
+    expect((await client.listTools()).tools).toHaveLength(4);
+    await client.callTool({ name: CHATGPT_TELA_CHAT_CAPABILITY_INVENTORY, arguments: { query: "PRIVATE_QUERY" } });
+    expect((await client.callTool({ name: "PRIVATE_UNREGISTERED", arguments: { secret: "PRIVATE_ARGUMENT" } })).isError).toBe(true);
+    await expect(client.callTool({ name: CHATGPT_TELA_CODEX_TOOL_INVENTORY, arguments: { turn_capability: "PRIVATE_CAPABILITY_0123456789" } })).resolves.toMatchObject({ isError: true });
+    const raw = readFileSync(file, "utf8"), rows = raw.trim().split("\n").map(line => JSON.parse(line));
+    const list = rows.find(row => row.stage === "mcp_rpc_emitted" && row.phase === "tools_list");
+    expect(list).toMatchObject({ count: 4, chat_inventory_present: true, chat_call_present: true, codex_inventory_present: true, codex_call_present: true, delivery: "transport_send_returned" });
+    expect(rows.find(row => row.stage === "mcp_rpc_received" && row.rpc_fingerprint === list.rpc_fingerprint)).toMatchObject({ method_class: "tools_list", connection_fingerprint: list.connection_fingerprint });
+    expect(rows.find(row => row.stage === "mcp_chat_inventory_returned")).toMatchObject({ count: 0, query_empty: false });
+    expect(rows.some(row => row.stage === "mcp_rpc_received" && row.kind === "other")).toBe(true);
+    expect(rows.some(row => row.stage === "mcp_rpc_emitted" && row.error_result === true)).toBe(true);
+    expect(rows.some(row => row.stage === "mcp_http_rejected" && row.http_status === 401)).toBe(true);
+    for (const row of rows) expect(structuralDiagnosticEvent(row)).toEqual(row);
+    expect(raw).not.toContain("PRIVATE_");
+  } finally {
+    await client.close(); await server.stop();
+    if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE; else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

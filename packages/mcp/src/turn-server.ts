@@ -22,6 +22,8 @@ function jsonText(value: unknown): string {
 
 async function inventoryPayload(bridge: TurnBridgeBackend, capability: string, query: string): Promise<string> {
   const tools = await bridge.inventory(capability, query);
+  emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_native_inventory_returned", { query_empty: query.length === 0, count: tools.length,
+    discovery_count: tools.filter(tool => tool.kind === "discovery").length, gateway_count: tools.filter(tool => tool.kind === "gateway").length });
   return JSON.stringify(tools.map(tool => ({
     wireName: tool.wireName,
     name: tool.name,

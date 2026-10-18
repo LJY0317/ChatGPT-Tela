@@ -1049,3 +1049,39 @@ The existing `native_watch_terminated` receipt is also included. An exact
 `native_interrupted` observation establishes an interrupted Native turn,
 with the human actor still unknown; a later HTTP disconnect cannot erase
 that first observed boundary.
+
+
+## Tool discovery and progress delivery evidence
+
+`web_tool_bridge_prepared` records the selected composer connector and whether a turn bridge
+was attached. It explicitly leaves remote model tool visibility unobserved. Native inventory
+counts include discovery/gateway/schema counts; they describe registered Native contracts,
+not the Web model's ability to see or invoke them.
+
+MCP HTTP records `mcp_rpc_received` and `mcp_rpc_emitted`, correlated by connection and RPC
+fingerprints. Method/tool families use fixed vocabulary; no query, capability credential,
+argument, arbitrary tool name or result prose is retained. A tools-list response records the
+four public bridge controls individually. Emission means the SDK transport send returned,
+not that ChatGPT ingested the schema. Authentication/origin/connection refusal and transport
+send failure have separate observations. Chat/Native inventory results record empty-query
+status and returned counts, distinguishing a filtered miss from full inventory discovery.
+`native_tool_inventory_queried` binds successful discovery to the exact Native thread/turn
+fingerprints without retaining the routing credential.
+
+Progress evidence follows `web_public_progress_extraction` → `web_public_progress_ready` →
+`public_progress_published` → `public_progress_transport_commit`. Publication records sequence,
+size and subscriber results; budget rejection is separate. A local transport commit is not
+proof that the Desktop UI rendered it. Existing turn summaries retain these stages.
+
+Missing public progress uses the existing opt-in anomaly capture. Its structural census now
+includes up to eight latest keyed-turn shell ancestors (geometry, clipping, control/status
+and disclosure counts). It does not open reasoning panels or collect hidden reasoning for
+user-facing progress. Private capture also saves a separately sanitized latest renderer-shell
+HTML tail so a large prompt cannot consume the entire document-prefix budget.
+
+Use `chatgpt-tela diagnostics capture --mode until-disabled` for a local diagnostic session,
+then `chatgpt-tela diagnostics capture --minutes 0` to stop. Raw HTML, screenshots and private
+JSON remain sensitive, local-only artifacts outside source/build inputs. Never upload them,
+return them through model tools, or include them in a commit/release. Public diagnostics contain
+structural events only; private artifact references carry no bodies. Existing limits remain
+7 days, 64 MiB and 24 private files, with no background sampler.

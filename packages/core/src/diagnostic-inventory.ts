@@ -15,6 +15,9 @@ export function observeDiagnosticInventory(scope: string, tools: readonly Native
     if (previous?.fingerprint===fingerprint) return;
     emitDiagnosticEvent("chatgpt_tela_work","native_inventory_observed",{ inventory_fingerprint:fingerprint, count:tools.length,
       changed:previous!==undefined, count_delta:tools.length-(previous?.count??0),
+      discovery_count:tools.filter(tool=>tool.kind==="discovery").length,
+      gateway_count:tools.filter(tool=>tool.kind==="gateway").length,
+      schema_count:tools.filter(tool=>tool.inputSchema!==undefined).length,
       freeform_count:tools.filter(tool=>tool.kind==="freeform").length,
       namespace_count:new Set(tools.map(tool=>tool.namespace).filter(Boolean)).size,
     });

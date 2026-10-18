@@ -4,7 +4,7 @@ import { structuralDiagnosticEvent, type StructuralDiagnosticEvent } from './dia
 
 const fp = (x: unknown): x is string => typeof x === 'string' && /^[a-f0-9]{24}$/.test(x);
 const number = (x: unknown): x is number => Number.isSafeInteger(x) && Number(x) >= 0;
-const relevant = (stage: string) => /^(native_|web_turn_|web_context_|web_send_|web_preparation_failed|browser_message_prepared|context_checkpoint_|http_transport_|inspection_ownership_revoked|tool_started|tool_settled|tool_failed|tool_error|web_media_upload_started|mcp_native_result_projected|approval_turn_resolution)/.test(stage);
+const relevant = (stage: string) => /^(native_|web_turn_|web_context_|web_send_|web_tool_bridge_|web_public_progress_|public_progress_|mcp_rpc_|mcp_native_inventory_|mcp_chat_inventory_|web_preparation_failed|browser_message_prepared|context_checkpoint_|http_transport_|inspection_ownership_revoked|tool_started|tool_settled|tool_failed|tool_error|web_media_upload_started|mcp_native_result_projected|approval_turn_resolution)/.test(stage);
 
 /** A Native interrupted status proves the turn ended, but never who pressed Stop.
  * Transport closure proves even less. Later cleanup cannot replace the first

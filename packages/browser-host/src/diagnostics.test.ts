@@ -76,3 +76,19 @@ test("approval checkpoints stay opt-in and pending/resolution each capture at mo
   });
   expect(evaluations).toBe(2);
 });
+
+
+test("private DOM evidence keeps the latest renderer shell beyond a large document prefix", () => {
+  const clone = (html: string) => ({ attributes: [], tagName: "DIV", outerHTML: html, querySelectorAll: () => [] });
+  const latest = { matches: () => false, parentElement: { parentElement: null, cloneNode: () => clone("LATEST_PRIVATE_RENDERER") } };
+  const result = runInNewContext(`(${DIAGNOSTIC_DOM_CAPTURE})(true)`, {
+    document: { forms: [], querySelectorAll: (selector: string) => selector === "[data-turn-key]" ? [latest] : [],
+      documentElement: { cloneNode: () => clone("x".repeat(1000001)) } },
+    location: { pathname: "/c/fixture" }, performance: { getEntriesByType: () => [] },
+    getComputedStyle: () => ({ overflowY: "visible" }),
+  });
+  expect(result.html).toHaveLength(1000000);
+  expect(result.html_truncated).toBe(true);
+  expect(result.focus_html).toBe("LATEST_PRIVATE_RENDERER");
+  expect(result.focus_html_truncated).toBe(false);
+});

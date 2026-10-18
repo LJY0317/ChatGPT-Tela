@@ -43,6 +43,25 @@ export const DIAGNOSTIC_DOM_CAPTURE = String.raw`function(privateCapture) {
     result.turn_scroll_below_px = Math.max(0, Math.floor(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop));
     result.turn_viewport_height_px = Math.max(0, Math.floor(viewport.clientHeight));
   }
+  const shell = [];
+  try {
+    const tags = ['div','article','section','main','button','span','body','html'];
+    for (let node = groups.at(-1), depth = 0; node && depth < 8; node = node.parentElement, depth++) {
+      const rect = node.getBoundingClientRect(), style = getComputedStyle(node), tag = node.tagName.toLowerCase();
+      shell.push({ depth, kind: tags.includes(tag) ? tag : 'other',
+        x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height),
+        scroll_height: node.scrollHeight, client_height: node.clientHeight,
+        hidden: style.display === 'none' || style.visibility === 'hidden',
+        overflow_clips: /^(hidden|clip|auto|scroll)$/.test(style.overflowY),
+        button_count: node.querySelectorAll('button,[role="button"]').length,
+        status_count: node.querySelectorAll('[role="status"],[aria-live]').length,
+        expanded_count: node.querySelectorAll('[aria-expanded="true"]').length,
+        collapsed_count: node.querySelectorAll('[aria-expanded="false"]').length,
+      });
+    }
+    result.shell_probe_available = true;
+  } catch { result.shell_probe_available = false; }
+  result.shell_nodes = shell;
   const resources = performance.getEntriesByType('resource').slice(-64);
   result.resource_count = resources.length;
   result.resource_status_observed_count = resources.filter(row => Number(row.responseStatus) > 0).length;
@@ -50,18 +69,30 @@ export const DIAGNOSTIC_DOM_CAPTURE = String.raw`function(privateCapture) {
   result.resource_slow_count = resources.filter(row => row.duration >= 10000).length;
   result.resource_inflight_count = resources.filter(row => row.responseEnd === 0).length;
   if (privateCapture && safe) {
-    const clone = document.documentElement.cloneNode(true);
-    for (const element of clone.querySelectorAll('script,noscript,iframe,object,embed')) element.remove();
-    for (const element of clone.querySelectorAll('*')) {
-      for (const attribute of [...element.attributes]) {
-        if (/^(?:value|href|src|srcset|action|formaction|nonce|on.*)$/i.test(attribute.name)
-          || /token|secret|password|authorization|cookie|csrf/i.test(attribute.name)) element.removeAttribute(attribute.name);
+    const serialize = source => {
+      const clone = source.cloneNode(true);
+      for (const element of clone.querySelectorAll('script,noscript,iframe,object,embed')) element.remove();
+      for (const element of [clone, ...clone.querySelectorAll('*')]) {
+        for (const attribute of [...element.attributes]) {
+          if (/^(?:value|href|src|srcset|action|formaction|nonce|on.*)$/i.test(attribute.name)
+            || /token|secret|password|authorization|cookie|csrf/i.test(attribute.name)) element.removeAttribute(attribute.name);
+        }
+        if (element.tagName === 'TEXTAREA') element.textContent = '';
       }
-      if (element.tagName === 'TEXTAREA') element.textContent = '';
-    }
-    const html=clone.outerHTML;
+      return clone.outerHTML.replace(/Bearer\s+[A-Za-z0-9._~+\/-]+/gi,'Bearer [REDACTED]').replace(/\bsk-[A-Za-z0-9_-]{16,}/g,'[REDACTED]');
+    };
+    const html = serialize(document.documentElement);
     result.html_truncated = html.length > 1000000;
-    result.html = html.slice(0,1000000).replace(/Bearer\s+[A-Za-z0-9._~+\/-]+/gi,'Bearer [REDACTED]').replace(/\bsk-[A-Za-z0-9_-]{16,}/g,'[REDACTED]');
+    result.html = html.slice(0,1000000);
+    // The latest turn can fall beyond a large prompt's document-prefix budget.
+    // Capture its local renderer shell separately, without expanding or clicking it.
+    const latest = groups.at(-1);
+    const focused = latest?.parentElement ?? latest;
+    if (focused) {
+      const html = serialize(focused);
+      result.focus_html_truncated = html.length > 1000000;
+      result.focus_html = html.slice(-1000000);
+    }
   }
   return result;
 }`;
@@ -87,9 +118,23 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "turn_failu
     }
     fields.private_capture=enabled; fields.capture_safe=snapshot.capture_safe===true;
     fields.turn_viewport_observed=snapshot.turn_viewport_observed===true;
+    fields.html_truncated=snapshot.html_truncated===true;
+    fields.focus_html_truncated=snapshot.focus_html_truncated===true;
+    fields.focus_capture_present=typeof snapshot.focus_html==="string";
+    fields.shell_probe_available=snapshot.shell_probe_available===true;
     emitDiagnosticEvent("chatgpt_tela_browser","browser_snapshot_observed",fields);
+    if (Array.isArray(snapshot.shell_nodes)) for (const node of snapshot.shell_nodes.slice(0,8)) {
+      if (!node || typeof node !== "object") continue;
+      const evidence: Record<string, string|number|boolean> = { reason_class: reason };
+      for (const [name, value] of Object.entries(node)) {
+        if (typeof value==="boolean" || typeof value==="number" && Number.isSafeInteger(value)) evidence[name]=value;
+        else if (name==="kind" && typeof value==="string" && ["div","article","section","main","button","span","body","html","other"].includes(value)) evidence.kind=value;
+      }
+      emitDiagnosticEvent("chatgpt_tela_browser","browser_shell_observed",evidence);
+    }
     if (!enabled || snapshot.capture_safe!==true) return;
-    if (typeof snapshot.html==="string") writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.html),operationFingerprint:operation });
+    if (typeof snapshot.html==="string") writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.html),operationFingerprint:operation,captureScope:"document" });
+    if (typeof snapshot.focus_html==="string") writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.focus_html),operationFingerprint:operation,captureScope:"latest_turn_shell" });
     const preview=surface.capability(BROWSER_READ_ONLY_PREVIEW);
     if (preview) {
       const bytes=await preview.captureJpeg();

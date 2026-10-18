@@ -314,12 +314,12 @@ export function privateDiagnosticCaptureEnabled(root: string): boolean {
     if (record.mode !== undefined && record.mode !== "timed") return false;
     return Number.isFinite(record.enabledUntil) && record.enabledUntil>Date.now() && record.enabledUntil<=Date.now()+60*60000; } catch { return false; }
 }
-export function writePrivateDiagnosticArtifact(root: string, input: { kind: "html" | "jpg" | "json"; bytes: Uint8Array; operationFingerprint: string }) {
+export function writePrivateDiagnosticArtifact(root: string, input: { kind: "html" | "jpg" | "json"; bytes: Uint8Array; operationFingerprint: string; captureScope?: "document" | "latest_turn_shell" }) {
   if (!privateDiagnosticCaptureEnabled(root) || !FINGERPRINT.test(input.operationFingerprint)) return;
   if (!["html","jpg","json"].includes(input.kind)) throw new Error("invalid artifact kind");
   if (input.bytes.byteLength > DIAGNOSTIC_LIMITS.privateFileBytes) throw new Error("private artifact exceeds budget");
   ownedRoot(root); const ref=`artifact_${randomUUID()}`;
   writeFileSync(join(root,"private",`${ref}.${input.kind}`),input.bytes,{flag:"wx",mode:0o600});
-  atomic(join(root,"private",`${ref}.meta.json`), { owner:OWNER, privacy:"private", operationFingerprint:input.operationFingerprint, kind:input.kind, bytes:input.bytes.byteLength });
+  atomic(join(root,"private",`${ref}.meta.json`), { owner:OWNER, privacy:"private", operationFingerprint:input.operationFingerprint, kind:input.kind, bytes:input.bytes.byteLength, ...(input.captureScope ? { captureScope: input.captureScope } : {}) });
   prune(root,"private"); return ref;
 }
