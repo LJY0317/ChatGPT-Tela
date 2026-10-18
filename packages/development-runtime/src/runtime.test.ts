@@ -200,15 +200,9 @@ class ExternalContractProvider implements WebConversationProvider {
 
 class RetainedFinalProvider implements WebConversationProvider {
   readonly surfaceLeaseIds: string[] = [];
-  capabilityProofs = 0;
 
-  async observeCapabilities() {
-    this.capabilityProofs += 1;
-    return {
-      state: "proven" as const,
-      value: { observed: new Set(["composer", "send"]) },
-      evidence: ["fixture"],
-    };
+  async observeCapabilities(): ReturnType<WebConversationProvider["observeCapabilities"]> {
+    throw new Error("runtime must not perform redundant readiness probing");
   }
 
   async submitTurn(surface: { leaseId: string }, request: WebTurnRequest) {
@@ -382,7 +376,6 @@ describe("development runtime composition", () => {
         expect(epochs[1]).toBe(epochs[0]);
         expect(provider.surfaceLeaseIds).toHaveLength(2);
         expect(new Set(provider.surfaceLeaseIds).size).toBe(2);
-        expect(provider.capabilityProofs).toBe(2);
         expect(created).toBe(2);
         expect(closed).toBe(1);
       } finally {
@@ -471,7 +464,6 @@ describe("development runtime composition", () => {
       expect(await second.text()).toContain("done:turn-2");
 
       expect(browserCreations).toBe(1);
-      expect(provider.capabilityProofs).toBe(1);
       expect(provider.surfaceLeaseIds).toHaveLength(2);
       expect(new Set(provider.surfaceLeaseIds).size).toBe(1);
       expect(browserEvents).toEqual([]);
@@ -538,8 +530,14 @@ describe("development runtime composition", () => {
       capability(capability) { return capability === BROWSER_DOCUMENT_LIFETIME ? { current: () => ({ generation: 1, signal: documentController.signal }) } as never : undefined; },
     }));
     const provider = new RetainedFinalProvider();
-    const observe = provider.observeCapabilities.bind(provider);
-    provider.observeCapabilities = async () => { if (phase === "before-submit") documentController.abort(new Error("fixture document lost")); return observe(); };
+    const submit = provider.submitTurn.bind(provider);
+    provider.submitTurn = async (surface, request) => {
+      if (phase === "before-submit") {
+        documentController.abort(new Error("fixture document lost"));
+        documentController.signal.throwIfAborted();
+      }
+      return submit(surface, request);
+    };
     const event = provider.waitForTurnEvent.bind(provider);
     provider.waitForTurnEvent = async (surface, turn) => { documentController.abort(new Error("fixture document lost")); return event(surface, turn); };
     const runtime = await startDevelopmentRuntime({

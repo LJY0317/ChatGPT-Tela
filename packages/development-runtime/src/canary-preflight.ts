@@ -170,7 +170,7 @@ export async function preflightDevelopmentCanary(
       push(
         "chatgpt-readiness",
         "pass",
-        `${config.chatGptTelaProfileId} proves one composer/send surface and its verified account binding without submitting a turn`,
+        `${config.chatGptTelaProfileId} proves one empty composer and its verified account binding without submitting a turn`,
       );
     } finally {
       await setupSurface.close();

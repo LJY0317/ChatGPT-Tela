@@ -324,7 +324,6 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             ...(plan.media ? { media: plan.media } : {}),
             ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
             toolBridge,
-            proveCapabilities: !acquired.reused,
             ...(plan.browserModel ? {
               prepareForSubmit: (surface, signal) => selectChatGptWebModel(
                 surface,

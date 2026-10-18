@@ -588,7 +588,7 @@ describe("ChatGPT semantic provider", () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.autoContextPreload = true;
     const { host, lease } = await leaseFor(driver);
-    const provider = new ChatGptSemanticProvider({ connectorDraftPersistenceSettleMs: 0 });
+    const provider = new ChatGptSemanticProvider();
     const attachment = createChatGptContextAttachment({
       headRevisionId: "r1",
       activeRequestRevisionId: "r1",
@@ -629,7 +629,7 @@ describe("ChatGPT semantic provider", () => {
       if (kind === "missing-plain-body") driver.omitContextPlainFingerprint = true;
       const { host, lease } = await leaseFor(driver);
       try {
-        const provider = new ChatGptSemanticProvider({ connectorDraftPersistenceSettleMs: 0 });
+        const provider = new ChatGptSemanticProvider();
         const result = await provider.preloadContextAttachment(lease, {
           nativeTaskId: "task-1", webEpochId: "epoch-1",
           attachment: createChatGptContextAttachment(request().physicalContext),
@@ -652,7 +652,7 @@ describe("ChatGPT semantic provider", () => {
     driver.attachFiles = async () => { throw original; };
     const { host, lease } = await leaseFor(driver);
     try {
-      const provider = new ChatGptSemanticProvider({ connectorDraftPersistenceSettleMs: 0 });
+      const provider = new ChatGptSemanticProvider();
       await expect(provider.preloadContextAttachment(lease, { nativeTaskId: "task-1", webEpochId: "epoch-1",
         attachment: createChatGptContextAttachment(request().physicalContext) })).rejects.toBe(original);
       expect(driver.activated).toHaveLength(0);
@@ -684,7 +684,7 @@ describe("ChatGPT semantic provider", () => {
     driver.contextReplyOverride = "fixture-private-mismatching-answer";
     const { host, lease } = await leaseFor(driver);
     try {
-      const provider = new ChatGptSemanticProvider({ connectorDraftPersistenceSettleMs: 0 });
+      const provider = new ChatGptSemanticProvider();
       const attachment = createChatGptContextAttachment(request().physicalContext);
       const result = await provider.preloadContextAttachment(lease, {
         nativeTaskId: "task-1", webEpochId: "epoch-1", attachment,
@@ -719,7 +719,7 @@ describe("ChatGPT semantic provider", () => {
     driver.autoContextPreload = true;
     driver.normalizeAttachmentLabelAfterAttach = true;
     const { host, lease } = await leaseFor(driver);
-    const provider = new ChatGptSemanticProvider({ connectorDraftPersistenceSettleMs: 0 });
+    const provider = new ChatGptSemanticProvider();
     const attachment = createChatGptContextAttachment({
       headRevisionId: "r1",
       activeRequestRevisionId: "r1",
@@ -759,7 +759,7 @@ describe("ChatGPT semantic provider", () => {
     driver.recoverContextPreload = true;
     driver.autoContextPreload = true;
     const { host, lease } = await leaseFor(driver);
-    const provider = new ChatGptSemanticProvider({ connectorDraftPersistenceSettleMs: 0 });
+    const provider = new ChatGptSemanticProvider();
     const attachment = createChatGptContextAttachment({
       headRevisionId: "r1",
       activeRequestRevisionId: "r1",
@@ -806,7 +806,7 @@ describe("ChatGPT semantic provider", () => {
     }
   });
 
-  test("proves an empty ChatGPT composer whose send control appears only after inert text, then restores it", async () => {
+  test("readiness never types a probe when send appears only after the real payload", async () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.current = {
       ...driver.current,
@@ -817,17 +817,21 @@ describe("ChatGPT semantic provider", () => {
       sendControls: [],
     };
     driver.sendAppearsWhenComposerNonEmpty = true;
+    let composerWrites = 0;
+    const fill = driver.replaceComposerText.bind(driver);
+    driver.replaceComposerText = async (...args) => { composerWrites++; return fill(...args); };
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider();
     try {
       const observed = await provider.observeCapabilities(surface.lease);
       expect(observed.state).toBe("proven");
       if (observed.state === "proven") {
-        expect([...observed.value.observed]).toEqual(["composer", "send"]);
+        expect([...observed.value.observed]).toEqual(["composer"]);
       }
       expect(driver.current.composers[0]?.textLength).toBe(0);
       expect(driver.current.sendControls).toEqual([]);
       expect(driver.activated).toEqual([]);
+      expect(composerWrites).toBe(0);
     } finally {
       await surface.host.close();
     }
@@ -1027,7 +1031,6 @@ describe("ChatGPT semantic provider", () => {
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({
       connectorName: "ChatGPT Tela",
-      connectorDraftPersistenceSettleMs: 0,
     });
     try {
       const observed = await provider.probeConnector(surface.lease);
@@ -1052,8 +1055,7 @@ describe("ChatGPT semantic provider", () => {
     try {
       await expect(new ChatGptSemanticProvider({
         connectorName: "ChatGPT Tela",
-        connectorDraftPersistenceSettleMs: 0,
-      })
+        })
         .probeConnector(surface.lease))
         .rejects.toThrow("fixture connector selection failed");
       expect(driver.activated).toEqual([]);
@@ -1079,7 +1081,6 @@ describe("ChatGPT semantic provider", () => {
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({
       connectorName: "ChatGPT Tela",
-      connectorDraftPersistenceSettleMs: 0,
     });
     try {
       expect(await provider.recoverConnectorProbeArtifact(surface.lease)).toBe(true);
@@ -1106,7 +1107,6 @@ describe("ChatGPT semantic provider", () => {
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({
       connectorName: "ChatGPT Tela",
-      connectorDraftPersistenceSettleMs: 0,
     });
     try {
       expect(await provider.recoverConnectorProbeArtifact(surface.lease)).toBe(true);
@@ -1130,7 +1130,6 @@ describe("ChatGPT semantic provider", () => {
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({
       connectorName: "ChatGPT Tela",
-      connectorDraftPersistenceSettleMs: 0,
     });
     try {
       expect(await provider.recoverConnectorProbeArtifact(surface.lease)).toBe(true);
@@ -1172,7 +1171,6 @@ describe("ChatGPT semantic provider", () => {
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({
       connectorName: "ChatGPT Tela",
-      connectorDraftPersistenceSettleMs: 0,
     });
     try {
       expect(await provider.recoverConnectorProbeArtifact(surface.lease)).toBe(true);
@@ -1199,7 +1197,6 @@ describe("ChatGPT semantic provider", () => {
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({
       connectorName: "ChatGPT Tela",
-      connectorDraftPersistenceSettleMs: 0,
     });
     try {
       expect(await provider.recoverConnectorProbeArtifact(surface.lease)).toBe(false);
@@ -1226,7 +1223,6 @@ describe("ChatGPT semantic provider", () => {
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({
       connectorName: "ChatGPT Tela",
-      connectorDraftPersistenceSettleMs: 0,
     });
     try {
       expect(await provider.recoverConnectorProbeArtifact(surface.lease)).toBe(false);
@@ -1256,7 +1252,6 @@ describe("ChatGPT semantic provider", () => {
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({
       connectorName: "ChatGPT Tela",
-      connectorDraftPersistenceSettleMs: 0,
     });
     try {
       await expect(provider.probeConnector(surface.lease)).rejects.toThrow(
@@ -1291,7 +1286,6 @@ describe("ChatGPT semantic provider", () => {
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({
       connectorName: "ChatGPT Tela",
-      connectorDraftPersistenceSettleMs: 0,
     });
     try {
       await expect(provider.probeConnector(surface.lease))

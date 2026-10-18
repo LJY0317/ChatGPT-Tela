@@ -38,8 +38,6 @@ export interface BrowserTurnRunInput {
 
 export interface BrowserTurnSurfaceRunInput extends Omit<BrowserTurnRunInput, "browserHost"> {
   readonly surface: BrowserSurfaceLease;
-  /** Fresh surfaces require a non-consequential readiness proof; retained surfaces prove state in submitTurn. */
-  readonly proveCapabilities?: boolean;
 }
 
 /** Exact composer-size admission belongs before browser creation and any context
@@ -151,15 +149,15 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
   let acceptedHandle: WebTurnHandle | undefined;
   let boundary = "preparation";
   try {
-    assertWebMessageFitsComposer(input);
-    if (input.proveCapabilities !== false) {
-      requireProven(await input.provider.observeCapabilities(surface, input.signal));
-    }
+    // Both callers preflight the immutable message before acquiring a page.
+    // The runner must not format and recheck the same large context twice.
+    // submitTurn already proves the owned composer and the send control
+    // after filling the real payload. No extra readiness probe is needed.
     const attachmentReference = input.contextAttachment
       ? contextAttachmentReference(input.contextAttachment)
       : undefined;
     if (input.contextAttachment) {
-      if (input.proveCapabilities === false) {
+      if (input.physicalContext.mode === "retained-delta") {
         throw new Error("fresh ChatGPT context attachment cannot preload on a retained Web surface");
       }
       const preload = input.provider.preloadContextAttachment;
@@ -273,45 +271,23 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       eventAbort.abort();
     }
   } catch (error) {
-    // Preserve the primary boundary before diagnostic observation or surface retirement can race.
+    // Record the original failing boundary before surface retirement.
     emitDiagnosticEvent("chatgpt_tela_work", "web_execution_exception", {
       ...webExecutionFailureFields(error, input.signal), turn_phase: input.channel.phase,
       tool_round_count: input.channel.toolRoundCount, accepted: acceptedHandle !== undefined,
       boundary,
     });
-    // Sensitive exception text stays in explicit opt-in local capture, before secondary reads.
+    // Sensitive exception text stays in explicit opt-in local capture.
     capturePrivateDiagnosticValue("web_execution_failure", { boundary,
       error: error instanceof Error ? { name: error.name, message: error.message } : { name: "non_error" },
       ownerAborted: input.signal?.aborted === true,
       abortReason: input.signal?.aborted && input.signal.reason instanceof Error
         ? { name: input.signal.reason.name, message: input.signal.reason.message } : undefined,
     });
-    // Retire delivery authority before any asynchronous diagnostic or stop action.
+    // Retire delivery authority before any stop action.
     // A late Web event cannot settle this failed Native run while cleanup waits.
     if (acceptedPhase(input.channel.phase)) {
       try { input.channel.markIndeterminate(error); } catch { /* Preserve the first failure. */ }
-    }
-    if (acceptedHandle) {
-      // One read before surface retirement, including after a deadline abort. Never submit, retry
-      // or wait indefinitely for a faulty provider; this evidence cannot change the original error.
-      const controller = new AbortController();
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const deadline = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => { controller.abort(); reject(new Error("diagnostic observation deadline")); }, 1500);
-        });
-        const observation = await Promise.race([
-          input.provider.observeTurn(surface, acceptedHandle, controller.signal), deadline,
-        ]);
-        emitDiagnosticEvent("chatgpt_tela_work", "web_failure_state_observed", {
-          state: observation.state, ...(observation.state === "proven" ? { phase: observation.value.phase } : {}),
-        });
-      } catch {
-        emitDiagnosticEvent("chatgpt_tela_work", "web_failure_state_unavailable", { reason_class: "observation_unavailable" });
-      } finally {
-        if (timer) clearTimeout(timer);
-        controller.abort();
-      }
     }
     if (acceptedHandle && input.provider.cancelTurn) {
       let timer: ReturnType<typeof setTimeout> | undefined;

@@ -66,11 +66,6 @@ interface TrackedTurn extends TurnOwnership {
 export interface ChatGptSemanticProviderOptions {
   /** Exact ChatGPT connector display identity to attach only when a Web turn owns a tool bridge. */
   readonly connectorName?: string;
-  /**
-   * Bounded post-cleanup window for ChatGPT to persist removal of a connector mention draft.
-   * Production defaults to 5s; tests may set 0 because fixture state is synchronous.
-   */
-  readonly connectorDraftPersistenceSettleMs?: number;
   /** Optional local approval policy. Disabled by default. */
   readonly approvalAutomationMode?: ChatGptApprovalAutomationMode;
   /** Optional bounded delay before inspecting the current one-shot approval card. */
@@ -213,28 +208,8 @@ function visibleSends(snapshot: ChatGptSurfaceSnapshot, composerKey: string) {
   ));
 }
 
-const READINESS_PROBE_TEXT = "ChatGPT Tela readiness probe";
 const CHATGPT_READINESS_TIMEOUT_MS = 30_000;
 const CHATGPT_COMPOSER_SETTLE_TIMEOUT_MS = 5_000;
-const CHATGPT_CONNECTOR_DRAFT_PERSISTENCE_SETTLE_MS = 5_000;
-
-async function waitForDuration(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms === 0) return;
-  if (signal?.aborted) throw signal.reason ?? new DOMException("operation aborted", "AbortError");
-  await new Promise<void>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (complete: () => void) => {
-      if (timer) clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
-      complete();
-    };
-    const abort = () => finish(() => reject(signal?.reason ?? new DOMException("operation aborted", "AbortError")));
-    timer = setTimeout(() => finish(resolve), ms);
-    signal?.addEventListener("abort", abort, { once: true });
-    if (signal?.aborted) abort();
-  });
-}
-
 function timeoutSignal(caller: AbortSignal | undefined, timeoutMs: number): {
   readonly combined: AbortSignal;
   readonly timeout: AbortSignal;
@@ -321,7 +296,7 @@ async function restoreEmptyComposer(
       );
     }
     if (composers.length > 1) {
-      throw new Error("ChatGPT readiness probe cleanup found multiple active composers");
+      throw new Error("ChatGPT composer cleanup found multiple active composers");
     }
     try {
       snapshot = await driver.waitForChange(snapshot.revision, deadline.combined);
@@ -334,7 +309,7 @@ async function restoreEmptyComposer(
           connector_count: current?.connectorFingerprints.length ?? -1,
           attachment_count: current ? composerAttachmentNames(current).length : -1,
         });
-        throw new Error("ChatGPT readiness probe could not restore the empty composer", { cause: error });
+        throw new Error("ChatGPT composer cleanup could not restore the empty composer", { cause: error });
       }
       throw error;
     }
@@ -582,7 +557,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   // observation state, without treating a child event-wait cancellation as turn retirement.
   readonly #turns = new WeakMap<BrowserSurfaceLease, TrackedTurn>();
   readonly #connectorName: string | undefined;
-  readonly #connectorDraftPersistenceSettleMs: number;
   readonly #approvalAutomationMode: ChatGptApprovalAutomationMode;
   readonly #approvalAutomationDelayMs: number;
   readonly #requireTemporaryChat: boolean;
@@ -664,13 +638,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       && (!connectorName || connectorName.length > 128 || /[\u0000\r\n]/.test(connectorName))) {
       throw new Error("ChatGPT connector identity must be 1-128 visible single-line characters");
     }
-    const settleMs = options.connectorDraftPersistenceSettleMs
-      ?? CHATGPT_CONNECTOR_DRAFT_PERSISTENCE_SETTLE_MS;
-    if (!Number.isSafeInteger(settleMs) || settleMs < 0 || settleMs > 30_000) {
-      throw new Error("ChatGPT connector draft persistence settle must be 0-30000ms");
-    }
     this.#connectorName = connectorName;
-    this.#connectorDraftPersistenceSettleMs = settleMs;
     this.#approvalAutomationMode = options.approvalAutomationMode ?? "off";
     const approvalDelayMs = options.approvalAutomationDelayMs ?? 0;
     if (!Number.isSafeInteger(approvalDelayMs) || approvalDelayMs < 0 || approvalDelayMs > 15_000) {
@@ -689,18 +657,17 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     throw new Error("ChatGPT Work send requires a verified Temporary Chat surface");
   }
 
-  async #settleConnectorDraftPersistence(
+  async #verifyConnectorCleanup(
     driver: ChatGptSurfaceDriver,
     composerKey: string,
     signal?: AbortSignal,
   ): Promise<void> {
-    await waitForDuration(this.#connectorDraftPersistenceSettleMs, signal);
     const snapshot = await driver.observe(signal);
     const composer = exactComposer(snapshot);
     if (composer.key !== composerKey
       || composer.textLength !== 0
       || composer.connectorFingerprints.length !== 0) {
-      throw new Error("ChatGPT connector cleanup did not remain empty through the draft persistence window");
+      throw new Error("ChatGPT connector cleanup did not leave an empty composer");
     }
   }
 
@@ -762,83 +729,12 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       };
     }
     const sends = visibleSends(snapshot, composer.key);
-    if (sends.length !== 1) {
-      if (sends.length > 1) {
-        return {
-            state: "ambiguous",
-            candidates: Object.freeze(sends.map(send => ({ observed: new Set(["composer", `send:${send.key}`]) }))),
-            evidence: evidence("multiple send controls belong to the same composer"),
-          };
-      }
-      let probeStarted = false;
-      try {
-        probeStarted = true;
-        await driver.replaceComposerText(composer.key, READINESS_PROBE_TEXT, signal);
-        const deadline = timeoutSignal(signal, CHATGPT_COMPOSER_SETTLE_TIMEOUT_MS);
-        let filled = await driver.observe(deadline.combined);
-        for (;;) {
-          const filledComposers = readyComposers(filled);
-          if (filledComposers.length > 1) {
-            return {
-              state: "ambiguous",
-              candidates: Object.freeze(filledComposers.map(candidate => ({
-                observed: new Set([`composer:${candidate.key}`]),
-              }))),
-              evidence: evidence("readiness probe made the active composer ambiguous"),
-            };
-          }
-          const filledComposer = filledComposers.length === 1 ? filledComposers[0]! : undefined;
-          const exactReadback = filledComposer?.key === composer.key
-            && filledComposer.textLength === READINESS_PROBE_TEXT.length
-            && filledComposer.textFingerprint === fingerprint(READINESS_PROBE_TEXT);
-          const probedSends = exactReadback ? visibleSends(filled, composer.key) : [];
-          if (probedSends.length > 1) {
-            return {
-              state: "ambiguous",
-              candidates: Object.freeze(probedSends.map(send => ({
-                observed: new Set(["composer", `send:${send.key}`]),
-              }))),
-              evidence: evidence("multiple send controls appeared during inert readiness probe"),
-            };
-          }
-          if (exactReadback && probedSends.length === 1) {
-            return {
-              state: "proven",
-              value: { observed: new Set(["composer", "send"]) },
-              evidence: evidence(
-                "one ChatGPT-owned composer",
-                "one matching visible send control after exact inert non-submitting probe",
-              ),
-            };
-          }
-          try {
-            filled = await driver.waitForChange(filled.revision, deadline.combined);
-          } catch (error) {
-            if (signal?.aborted) throw error;
-            if (deadline.timeout.aborted) {
-              return {
-                state: "probable",
-                value: { observed: new Set(["composer"]) },
-                evidence: evidence(
-                  exactReadback
-                    ? "send control did not appear after exact inert composer readback before readiness deadline"
-                    : "readiness probe composer readback did not settle before readiness deadline",
-                ),
-              };
-            }
-            throw error;
-          }
-        }
-      } finally {
-        if (probeStarted) {
-          await restoreEmptyComposer(driver, composer.key);
-        }
-      }
-    }
+    // The empty-composer send button can appear only after typing. Readiness
+    // must not mutate the user's draft; submitTurn checks actual send admission.
     return {
       state: "proven",
-      value: { observed: new Set(["composer", "send"]) },
-      evidence: evidence("one ChatGPT-owned composer", "one matching visible send control"),
+      value: { observed: new Set(sends.length === 1 ? ["composer", "send"] : ["composer"]) },
+      evidence: evidence("one empty ChatGPT-owned composer; send is checked after payload fill"),
     };
   }
 
@@ -886,7 +782,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     } finally {
       if (cleanupNeeded) {
         await restoreEmptyComposer(driver, composer.key);
-        await this.#settleConnectorDraftPersistence(driver, composer.key, signal);
       }
     }
   }
@@ -908,7 +803,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     if (composer.connectorFingerprints.length === 0
       && driver.recoverContextPreloadArtifact
       && await driver.recoverContextPreloadArtifact(composer.key, signal)) {
-      await this.#settleConnectorDraftPersistence(driver, composer.key, signal);
+      await this.#verifyConnectorCleanup(driver, composer.key, signal);
       return true;
     }
     // A matching Tela mention or connector pill does not establish ownership of an attachment
@@ -930,18 +825,16 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       && composer.connectorFingerprints[0] === expectedConnectorFingerprint;
     if (isPlainTextArtifact || isSelectedConnectorArtifact) {
       await restoreEmptyComposer(driver, composer.key);
-      await this.#settleConnectorDraftPersistence(driver, composer.key, signal);
       return true;
     }
     if (options.allowUnknownSelectedConnector === true
       && composer.textLength === 0
       && composer.connectorFingerprints.length === 1) {
       await restoreEmptyComposer(driver, composer.key);
-      await this.#settleConnectorDraftPersistence(driver, composer.key, signal);
       return true;
     }
     if (!await driver.recoverConnectorArtifact(composer.key, connectorName, signal)) return false;
-    await this.#settleConnectorDraftPersistence(driver, composer.key, signal);
+    await this.#verifyConnectorCleanup(driver, composer.key, signal);
     return true;
   }
 
@@ -972,7 +865,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       && composerAttachmentNames(composer).length === 0
       && driver.recoverContextPreloadArtifact
       && await driver.recoverContextPreloadArtifact(composer.key, deadline.combined)) {
-      await this.#settleConnectorDraftPersistence(driver, composer.key, deadline.combined);
       baseline = await driver.observe(deadline.combined);
       composer = exactComposer(baseline);
       emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_stale_draft_cleared");

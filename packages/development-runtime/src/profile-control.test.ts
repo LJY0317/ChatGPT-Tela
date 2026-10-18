@@ -36,7 +36,7 @@ function fixture(options: {failReadiness?: boolean; failCleanup?: boolean; retry
     async observeCapabilities(surface) {
       expect(surface.leaseId).toBe(connectorLease);order.push('readiness');
       if(options.failReadiness)return {state:'probable' as const,value:{observed:new Set<string>()},evidence:['unproven']};
-      return {state:'proven' as const,value:{observed:new Set(['composer','send'])},evidence:['fixture']};
+      return {state:'proven' as const,value:{observed:new Set(['composer'])},evidence:['fixture']};
     },
   }});
   return {control,controller,order,get created(){return created;},get closed(){return closed;}};
@@ -44,7 +44,7 @@ function fixture(options: {failReadiness?: boolean; failCleanup?: boolean; retry
 
 test('connection proof checks readiness after connector cleanup on one hidden surface and releases it',async()=>{
   const f=fixture();const r=await f.control.probeChatGptConnection(f.controller.signal,()=>f.order.push('connector-proven'));
-  expect(r.capabilities.observed.has('send')).toBe(true);
+  expect(r.capabilities.observed.has('send')).toBe(false);
   expect(f.order).toEqual(['connector','cleanup-complete','connector-proven','readiness','close']);
   expect(f.created).toBe(1);expect(f.closed).toBe(1);await f.control.close();expect(f.closed).toBe(1);
 });

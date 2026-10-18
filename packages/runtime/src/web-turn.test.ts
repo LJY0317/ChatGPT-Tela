@@ -176,7 +176,7 @@ function provider(events: EventQueue, submitState: "proven" | "probable" = "prov
 }
 
 describe("browser turn runner", () => {
-  test("primary exception is recorded before secondary observation without exposing its prose", async () => {
+  test("accepted failure preserves original error and releases without a second observation", async () => {
     const directory = mkdtempSync(join(tmpdir(), "tela-primary-exception-"));
     const file = join(directory, "events.jsonl");
     const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
@@ -184,49 +184,44 @@ describe("browser turn runner", () => {
     const failure = new Error("private exception /private/file@example.invalid");
     try {
       const fixture = provider(new EventQueue()); const channel = new RuntimeTurnChannel(binding());
+      const released: string[] = [];
+      let secondaryObservations = 0;
       const wrapped: WebConversationProvider = { ...fixture,
         async waitForTurnEvent() { throw failure; },
-        async observeTurn() { throw new Error("secondary observation failure"); },
+        async observeTurn() { secondaryObservations++; throw new Error("redundant observation"); },
       };
-      await expect(runBrowserTurn({ browserHost: browserHost([]), provider: wrapped, channel,
+      await expect(runBrowserTurn({ browserHost: browserHost(released), provider: wrapped, channel,
         nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext })).rejects.toBe(failure);
       const text = readFileSync(file, "utf8");
       const events = text.trim().split("\n").map(line => JSON.parse(line));
       const primary = events.findIndex(event => event.stage === "web_execution_exception");
-      const secondary = events.findIndex(event => event.stage === "web_failure_state_unavailable");
-      expect(primary).toBeGreaterThanOrEqual(0); expect(secondary).toBeGreaterThan(primary);
+      expect(primary).toBeGreaterThanOrEqual(0);
       expect(events[primary]).toMatchObject({ boundary: "event_wait", accepted: true,
         reason_class: "unclassified", owner_aborted: false, tool_round_count: 0 });
       expect(text).not.toContain(failure.message);
-      await Bun.sleep(0);
+      expect(secondaryObservations).toBe(0);
+      expect(released).toEqual(["surface-1"]);
+      expect(String(channel.phase)).toBe("indeterminate-after-acceptance");
     } finally {
       if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
       else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
       rmSync(directory, { recursive: true, force: true });
     }
   });
-  test.each(["success", "throws", "ignores-abort"] as const)("failure observation %s preserves original error and releases the surface", async mode => {
-    const fixture = provider(new EventQueue()); const released: string[] = [];
-    const failure = new Error("synthetic original provider failure"); let observations = 0, submissions = 0;
-    const channel = new RuntimeTurnChannel(binding());
-    const wrapped: WebConversationProvider = { ...fixture,
-      async submitTurn(...args) { submissions++; return fixture.submitTurn(...args); },
-      async waitForTurnEvent() { throw failure; },
-      async observeTurn(...args) {
-        observations++;
-        expect(released).toHaveLength(0);
-        expect(args[2]?.aborted).toBe(false);
-        if (mode === "throws") throw Error("synthetic diagnostic failure");
-        if (mode === "ignores-abort") return new Promise(() => {});
-        return fixture.observeTurn(...args);
-      },
+  test("a real submission needs no separate preflight readiness mutation", async () => {
+    const events = new EventQueue();
+    events.push({ kind: "completed", providerTurnId: "web-turn-1", answer: "done" });
+    const normal = provider(events);
+    const withoutProbe: WebConversationProvider = {
+      ...normal,
+      async observeCapabilities() { throw new Error("redundant composer probe"); },
     };
-    const run = runBrowserTurn({ browserHost: browserHost(released), provider: wrapped, channel,
-      nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext });
-    await expect(run).rejects.toBe(failure);
-    expect(observations).toBe(1); expect(submissions).toBe(1);
-    expect(released).toEqual(["surface-1"]);
-    expect(String(channel.phase)).toBe("indeterminate-after-acceptance");
+    const result = await runBrowserTurn({
+      browserHost: browserHost([]), provider: withoutProbe,
+      channel: new RuntimeTurnChannel(binding()),
+      nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext,
+    });
+    expect(result).toBe("done");
   });
   test("receipt-proven context preload completes before the real Native execution submit", async () => {
     const events = new EventQueue();
@@ -492,10 +487,6 @@ describe("browser turn runner", () => {
     const failure = new Error("Native owner stopped");
     const wrapped: WebConversationProvider = { ...fixture,
       async submitTurn(...args) { submissions++; return fixture.submitTurn(...args); },
-      async observeTurn(...args) {
-        expect(String(channel.phase)).toBe("indeterminate-after-acceptance");
-        return fixture.observeTurn(...args);
-      },
       async cancelTurn(surface, handle) {
         stopped++;
         expect(surface.leaseId).toBe("surface-1");

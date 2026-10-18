@@ -53,8 +53,8 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
   probeChatGptAccountDisplay: ChatGptProfileControl["probeChatGptAccountDisplay"];
   prepareChatGptWebSession: ChatGptProfileControl["prepareChatGptWebSession"];
   /**
-   * Prove that the persistent ChatGPT profile currently exposes one usable composer/send surface.
-   * The probe owns no Native turn and submits nothing.
+   * Read-only observation of a usable empty ChatGPT composer.
+   * The actual send control is verified only after the real request is filled.
    */
   probeChatGptReadiness(signal?: AbortSignal): Promise<ChatGptCapabilities>;
   probeChatGptProfile(signal?: AbortSignal): Promise<{

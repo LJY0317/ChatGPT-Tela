@@ -154,8 +154,8 @@ export async function startElectronProfileSetupRuntime(
           await provider.recoverConnectorProbeArtifact(surface, signal);
         }
         const capabilities = requireProven(await provider.observeCapabilities(surface, signal));
-        if (!capabilities.observed.has("composer") || !capabilities.observed.has("send")) {
-          throw new Error("setup-only context attachment canary is missing composer/send capability");
+        if (!capabilities.observed.has("composer")) {
+          throw new Error("setup-only context attachment canary is missing a composer");
         }
         const account = await accountIdentityObserver(surface, signal);
         const attachment = createChatGptContextAttachment(Object.freeze({

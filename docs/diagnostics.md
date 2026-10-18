@@ -720,9 +720,10 @@ At an exact tool-result handoff the semantic provider records assistant counts, 
 lineage counts, accepted-user presence, pending continuation and approval-card counts. Additional handoff
 events are capped at 16 per tracked turn. Existing change-only turn-state events include these counts;
 the wait loop retains only an observation count and last-observation timestamp, without an added poller.
-After an accepted turn fails, the runner performs one read-only semantic observation before retiring its
-surface. A 1.5-second deadline bounds even a provider that ignores cancellation; observation failure
-does not replace the original error, release ownership early, submit another turn or relax replay guards.
+After an accepted turn fails, the runner records its existing boundary and
+retains the original error; it does not perform a redundant 1.5-second
+observation before cancellation/retirement. No observation result can reauthorize
+delivery or retry.
 No routine evidence contains text, URLs or renderer identities. Private HTML/screenshots remain under
 the existing expiring capture policy. Counts distinguish missing assistants from unmatched or completed
 assistants; they do not alone prove a server generation failure or that ChatGPT consumed an MCP result.

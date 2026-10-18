@@ -848,11 +848,11 @@ ChatGPT user/account ids; the raw ids never leave the page. The fingerprint is b
 and only explicit verified setup replaces that slot's binding. Other slots may use the same account;
 their browser partitions, bindings and Native turn authorities remain independent. Canary readiness verifies
 the live session against that binding before any routed Native work begins.
-The same composition can also run a non-consequential readiness probe on a temporary hidden surface:
-one ChatGPT-owned composer plus its unique visible send control must be structurally proven. Every live
-canary performs that proof and verifies the slot's account binding before either a stock smoke process is
-started or a managed target is launched; failure therefore cannot strand Native Codex on an unusable
-or wrong-account Web profile.
+The same composition can inspect readiness without editing the draft: one
+empty ChatGPT-owned composer and the profile's account binding are sufficient
+for a preflight. The send control may render only after the actual payload is
+filled; its uniqueness and enabled state are checked exactly once at real
+submission. No inert typing/clearing test precedes a Web task.
 
 The first canary entrypoint is environment-only and refuses to guess a Codex home/profile. It requires
 an explicit canonical Codex home and ChatGPT Tela profile slot (which derives browser identity/state),
@@ -1054,8 +1054,10 @@ Keep three independent boundaries:
 Prefer documented public contracts when available. Otherwise detect supported structural capabilities
 locally inside the existing adapter; selectors and renderer conventions remain replaceable implementation
 details. Do not create per-version, per-profile or per-error fallback chains. Readiness reports the
-capabilities actually observed, separately from login and model availability. An idle/readiness probe
-must not send a model message or claim that a task response has succeeded.
+capabilities actually observed, separately from login and model availability.
+An idle/readiness check must neither type a test message nor claim that a task
+response succeeded. Runtime submission already performs its own exact composer
+and send checks; there is no independent pre-submit readiness pass.
 
 The operation receipt retains pre-send composer proof, baseline logical anchors, one activation
 boundary and subsequent identity observations. Logical identity and body extraction are separate

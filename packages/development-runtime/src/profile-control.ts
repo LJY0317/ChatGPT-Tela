@@ -112,8 +112,8 @@ async function proveReadiness(
       `ChatGPT profile readiness is not proven: ${observation.state}; ${observation.evidence.join("; ")}`,
     );
   }
-  if (!observation.value.observed.has("composer") || !observation.value.observed.has("send")) {
-    throw new Error("ChatGPT profile readiness is missing composer/send capability");
+  if (!observation.value.observed.has("composer")) {
+    throw new Error("ChatGPT profile readiness is missing a composer");
   }
   return observation.value;
 }
