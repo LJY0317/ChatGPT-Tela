@@ -390,6 +390,10 @@ staging folders are preserved and further imports in that workspace stop until r
 delete folders based only on the `.tela-import-*` filename prefix. Uninstall with saved-data removal preserves
 pending recovery records and ownership state until recovery is resolved.
 
+Keep release signing authority outside disposable build and recovery directories. Retain private keys
+in a protected maintainer store and public trust keys independently of package caches; never include
+private keys in a release or Git history. Removing build artifacts must not remove signing authority.
+
 On macOS, the package builder requires an explicit codesign identity. `-` is supported only for local
 ad-hoc development proof; a public release still needs a Developer ID identity and notarization. The payload
 retains only **relative internal symlinks whose lexical and resolved targets remain inside the payload root**,

@@ -28,11 +28,13 @@ import { resolveProductPaths } from "./layout";
 import { PackagedServiceShutdownNotStartedError } from "./service-shutdown";
 
 class SystemdUpgradeRunner implements ServiceRegistrationCommandRunner {
+  readonly calls: string[] = [];
   readonly loaded = new Set<string>();
   readonly enabled = new Set<string>();
   readonly running = new Set<string>();
 
   async run(command: string, arguments_: readonly string[]): Promise<ServiceRegistrationCommandResult> {
+    this.calls.push(`${command} ${arguments_.join(" ")}`);
     if (command !== "systemctl") throw new Error(`unexpected command ${command}`);
     const unit = arguments_.at(-1) ?? "";
     if (arguments_.includes("show")) {
@@ -609,3 +611,32 @@ for(const boundary of ['restore','uncertain','untrusted-source','post-replacemen
   }finally{rmSync(root,{recursive:true,force:true});}
  });
 }
+
+test("runtime readiness failure retains target journal and retry observes without another OS start", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-upgrade-runtime-ready-")), home = join(root, "home");
+  mkdirSync(home);
+  const runner = new SystemdUpgradeRunner();
+  try {
+    await installV1(root, home, runner);
+    const target = createPayload(root, "2.0.0", "runtime-ready");
+    const options = { platform: "linux" as const, home, environment: {}, runner };
+    const plan = await planPackagedUpgradeFromPayload({ payloadSourcePath: target, ...options });
+    const id = plan.targetBlueprint.services.find(entry => entry.service === "chat")!.resource.registrationId;
+    runner.running.add(id);
+    let ready = false, checks = 0;
+    const apply = () => applyPackagedUpgradeWithPlatformServices({ plan, payloadSourcePath: target, ...options,
+      async shutdownService() { runner.running.delete(id); },
+      async waitUntilReady(service) { expect(service).toBe("chat"); checks++; if (!ready) throw Error("runtime deadline"); },
+    });
+    await expect(apply()).rejects.toThrow("runtime deadline");
+    const journal = readPackagedUpgradeJournal(packagedUpgradeJournalPath(plan.targetBlueprint.paths));
+    expect(journal?.phase).toBe("manifest-updated");
+    expect(journal?.resumedServices).toEqual([]);
+    expect(readOwnershipManifest(plan.targetBlueprint.paths.installManifest)?.productVersion).toBe("2.0.0");
+    ready = true;
+    expect((await apply()).resumedServices).toEqual(["chat"]);
+    expect(checks).toBe(2);
+    expect(runner.calls.filter(call => call.includes(`systemctl --user start ${id}`))).toHaveLength(1);
+    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(plan.targetBlueprint.paths))).toBeUndefined();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

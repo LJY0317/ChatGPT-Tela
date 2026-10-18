@@ -264,3 +264,47 @@ test('unknown previous stops and deadline-expired live services cannot authorize
   expect(runner.calls.some(x=>x.includes(' start ')||x.includes(' stop '))).toBe(false);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+for (const platform of ["darwin", "linux", "win32"] as const) {
+  test(`${platform}: running OS registration still waits for runtime readiness without duplicate start`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-resume-ready-"));
+    try {
+      const built = blueprint(root, platform);
+      const runner = platform === "darwin" ? new DarwinRunner(built) : platform === "linux" ? new LinuxRunner() : new WindowsRunner();
+      let ready = false, checks = 0;
+      const controller = new PackagedPlatformServiceController({ blueprint: built, runner, userId: 501,
+        shutdownService: fixtureShutdown(built, runner), transitionTimeoutMs: 500,
+        async waitUntilReady(service, remaining) {
+          expect(service).toBe("chat"); expect(remaining).toBeGreaterThan(0); expect(remaining).toBeLessThanOrEqual(500);
+          checks++; if (!ready) throw Error("runtime is not ready");
+        },
+      });
+      await expect(controller.resume("chat")).rejects.toThrow("runtime is not ready");
+      ready = true;
+      await controller.resume("chat");
+      expect(checks).toBe(2);
+      const starts = runner.calls.filter(call => call.includes("kickstart") || call.includes("--user start") || call.includes("Start-ScheduledTask"));
+      expect(starts).toHaveLength(1);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test("OS inspection and runtime readiness share one deadline", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-resume-deadline-"));
+  try {
+    const built = blueprint(root, "linux"), os = new LinuxRunner();
+    os.state.set(registration(built, "chat"), "running");
+    let readinessCalls = 0;
+    const runner: ServiceRegistrationCommandRunner = { async run(command, args) {
+      await new Promise(resolve => setTimeout(resolve, 120));
+      return os.run(command, args);
+    } };
+    const controller = new PackagedPlatformServiceController({ blueprint: built, runner,
+      shutdownService: async () => { throw Error("not expected"); }, transitionTimeoutMs: 100,
+      async waitUntilReady() { readinessCalls++; },
+    });
+    await expect(controller.resume("chat")).rejects.toThrow("readiness deadline expired");
+    expect(readinessCalls).toBe(0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

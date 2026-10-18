@@ -129,11 +129,9 @@ export class LocalServiceSupervisor {
         });
         throw new ServiceEndpointUnavailableError(`${input.service} process is alive but its private service endpoint is unavailable`, { cause: error });
       }
-      const successor = readServiceRuntimeDescriptor(input.descriptorPath);
-      if (successor?.installId !== exact.installId || successor.service !== exact.service
-        || successor.instanceId !== exact.instanceId || successor.pid !== exact.pid) return undefined;
-      removeServiceRuntimeDescriptor(input.descriptorPath);
-      emitDiagnosticEvent("chatgpt_tela_service", "stale_descriptor_removed", {
+      // Observation never unlinks a shared pathname: a successor may publish
+      // at any time. The runtime owner cleans up; a new owner publishes atomically.
+      emitDiagnosticEvent("chatgpt_tela_service", "stale_descriptor_observed", {
         service: input.service,
         duration_ms: diagnosticDurationMs(startedAt),
       });

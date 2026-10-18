@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
-import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
+import { readServiceRuntimeDescriptor, writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 import { LocalServiceSupervisor } from "./index";
 
 const repoRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
@@ -182,4 +182,85 @@ describe("local service supervisor", () => {
       rmSync(home, { recursive: true, force: true });
     }
   }, 30_000);
+});
+
+
+describe("OS-started runtime readiness", () => {
+  async function fixture(run: (f: {
+    descriptorPath: string; publish: (installId?: string, service?: "chat" | "codex") => void;
+    supervisor: LocalServiceSupervisor; setState: (state: string) => void;
+    setInstance: (id: string) => void; setHttpStatus: (status: number) => void;
+    requestCount: () => number;
+  }) => Promise<void>) {
+    const root = mkdtempSync(join(tmpdir(), "tela-runtime-ready-"));
+    const descriptorPath = join(root, "descriptor.json");
+    let state = "degraded", instanceId = "ready-instance", httpStatus = 200, requests = 0;
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      requests++;
+      expect(request.headers.get("authorization")).toBe(`Bearer ${"r".repeat(48)}`);
+      return Response.json({ contractVersion: 1, service: "chat", instanceId, state }, { status: httpStatus });
+    } });
+    const publish = (installId = "ready-install", service: "chat" | "codex" = "chat") =>
+      writeServiceRuntimeDescriptor(descriptorPath, { version: 1, service, installId,
+        instanceId: "ready-instance", pid: process.pid, endpoint: server.url.href,
+        bearerToken: "r".repeat(48), startedAt: new Date().toISOString() });
+    try { await run({ descriptorPath, publish, supervisor: new LocalServiceSupervisor({ installId: "ready-install" }),
+      setState: value => { state = value; }, setInstance: value => { instanceId = value; },
+      setHttpStatus: value => { httpStatus = value; }, requestCount: () => requests }); }
+    finally { await server.stop(true); rmSync(root, { recursive: true, force: true }); }
+  }
+
+  test("waits for delayed descriptor publication and authenticated ready after degraded", async () => {
+    await fixture(async f => {
+      const waiting = f.supervisor.waitUntilReady({ service: "chat", descriptorPath: f.descriptorPath, timeoutMs: 1_500 });
+      f.publish();
+      await Bun.sleep(120);
+      f.setState("ready");
+      expect((await waiting).status.state).toBe("ready");
+    });
+  });
+
+  test("missing and nonready runtimes exhaust one finite observation budget", async () => {
+    await fixture(async f => {
+      await expect(f.supervisor.waitUntilReady({ service: "chat", descriptorPath: f.descriptorPath, timeoutMs: 100 })).rejects.toThrow("did not become ready");
+      f.publish();
+      await expect(f.supervisor.waitUntilReady({ service: "chat", descriptorPath: f.descriptorPath, timeoutMs: 100 })).rejects.toThrow("did not become ready");
+      expect(readServiceRuntimeDescriptor(f.descriptorPath)?.installId).toBe("ready-install");
+    });
+  });
+
+  for (const mismatch of ["install", "service", "instance", "authentication"] as const) {
+    test(`rejects ${mismatch} mismatch without treating it as startup delay`, async () => {
+      await fixture(async f => {
+        f.publish(mismatch === "install" ? "foreign" : "ready-install", mismatch === "service" ? "codex" : "chat");
+        if (mismatch === "instance") f.setInstance("foreign-instance");
+        if (mismatch === "authentication") f.setHttpStatus(401);
+        f.setState("ready");
+        await expect(f.supervisor.waitUntilReady({ service: "chat", descriptorPath: f.descriptorPath, timeoutMs: 1_000 })).rejects.toThrow();
+        expect(readServiceRuntimeDescriptor(f.descriptorPath)).toBeDefined();
+        expect(f.requestCount()).toBe(mismatch === "install" || mismatch === "service" ? 0 : 1);
+      });
+    });
+  }
+});
+
+test("failed old endpoint observation cannot delete a successor descriptor", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-readiness-successor-"));
+  const descriptorPath = join(root, "descriptor.json");
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch() {
+    writeServiceRuntimeDescriptor(descriptorPath, { ...original, instanceId: "successor", pid: process.pid });
+    await gate;
+    return Response.json({ contractVersion: 1, service: "chat", instanceId: "old", state: "ready" });
+  } });
+  const original = { version: 1 as const, service: "chat" as const, installId: "successor-install",
+    instanceId: "old", pid: 2_147_483_647, endpoint: server.url.href,
+    bearerToken: "s".repeat(48), startedAt: new Date().toISOString() };
+  writeServiceRuntimeDescriptor(descriptorPath, original);
+  try {
+    const supervisor = new LocalServiceSupervisor({ installId: original.installId });
+    expect(await supervisor.current({ service: "chat", descriptorPath, requestTimeoutMs: 100 })).toBeUndefined();
+    expect(readServiceRuntimeDescriptor(descriptorPath)?.instanceId).toBe("successor");
+  } finally { release(); await server.stop(true); rmSync(root, { recursive: true, force: true }); }
 });
