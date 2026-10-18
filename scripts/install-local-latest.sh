@@ -71,7 +71,8 @@ if [[ -x "$installed_launcher" && -f "$bin_root/.chatgpt-tela-payload-v1.json" ]
   # the installed payload itself is never modified.
   recovery_payload="$tmp_root/installed-recovery-payload"
   mkdir -p "$recovery_payload"
-  cp -R "$bin_root"/. "$recovery_payload"/
+  command -v rsync >/dev/null || { echo "rsync is required to preserve installed payload symlinks" >&2; exit 1; }
+  rsync -a --links "$bin_root"/ "$recovery_payload"/
   rm -f -- "$recovery_payload/.chatgpt-tela-owner.json" "$recovery_payload/.chatgpt-tela-payload-v1.json"
   recovery_key="$install_root/state/install/recovery/source/trusted-key.pem"
   if [[ -d "$recovery_payload" && -f "$recovery_key" ]]; then
