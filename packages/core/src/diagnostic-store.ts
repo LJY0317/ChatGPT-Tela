@@ -195,6 +195,7 @@ export function analyzeDiagnosticEvents(input: { events: readonly StructuralDiag
         nativeResults: before.filter(row => ["native_tool_result_received", "native_tool_result_error"].includes(row.stage)).length,
         reportedErrors: before.filter(row => ["native_tool_result_error", "tool_error", "tool_failed"].includes(row.stage)).length,
         incompleteInspections: before.filter(row => row.inspection_complete === false).length,
+        preDispatchCoverage: "external-host-unobservable",
         originProven: false, executionProven: false,
       },
       activeToolsAtReport: activeTools.size, activeProcessesAtReport: activeProcesses.size,

@@ -91,6 +91,7 @@ test("approval and admitted tool receipts do not prove a later host review or ex
   expect(report.hostReported).toMatchObject({symptom:"tool-review-blocked",origin:"worker-report",originProven:false});
   expect(report.boundaries.toolEvidence).toEqual({correlationSelected:true,approvalDispatches:1,approvalInputReceipts:1,approvalCardsCleared:1,
     nativeQueued:1,nativeDelivered:1,nativeResults:1,reportedErrors:0,incompleteInspections:0,
+    preDispatchCoverage:"external-host-unobservable",
     originProven:false,executionProven:false});
   expect(report.gaps.join()).toContain("before Tela ingress");
 });
