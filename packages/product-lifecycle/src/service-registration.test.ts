@@ -112,6 +112,11 @@ class LinuxInstallFixtureRunner implements ServiceRegistrationCommandRunner {
 
 describe("service registration ownership", () => {
   test("macOS refuses a same-label loaded job from another install root and accepts physical aliases", async () => {
+    // This is a synthetic launchd runner. Windows has no process.getuid();
+    // provide a fixture-only uid so the cross-platform test reaches the
+    // launchd identity check rather than failing closed before its mock call.
+    const needsFixtureUid = typeof process.getuid !== "function";
+    if (needsFixtureUid) Object.defineProperty(process, "getuid", { value: () => 501, configurable: true });
     const root = mkdtempSync(join(tmpdir(), "tela-launchd-root-proof-"));
     const manifestPath = join(root, "ownership.json");
     const definitionPath = join(root, "expected.plist");
@@ -153,7 +158,10 @@ describe("service registration ownership", () => {
       loadedPath = aliasPath;
       expect(await manager.observe(resource, current)).toBe("owned");
       expect(await installer.observeReady(resource, current)).toBe("owned");
-    } finally { rmSync(root, { recursive: true, force: true }); }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      if (needsFixtureUid) Reflect.deleteProperty(process, "getuid");
+    }
   });
 
   test("packaged Linux install reserves ownership before writing and enables without starting", async () => {
