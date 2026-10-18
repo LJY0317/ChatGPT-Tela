@@ -240,17 +240,31 @@ export class WebDelegationStore {
     // reservation stays fenced rather than allowing an extra model send.
     const claimed: string[] = [];
     try {
-      const paths = this.#permits(record.slot, mode);
-      const chosen = paths.find(p => this.#leaseOwner(p) === "free");
-      if (!chosen) throw Object.assign(new Error("profile capacity changed"), { code: "EEXIST" });
-      const claims = mode === "write" ? [this.#checkoutPermit(record.cwd), chosen] : [chosen];
-      for (const lease of claims) {
-        const leaseFd = openSync(lease, "wx", 0o600);
-        claimed.push(lease);
-        try { writeFileSync(leaseFd, record.id); fsyncSync(leaseFd); } finally { closeSync(leaseFd); }
+      if (mode === "write") {
+        const checkout = this.#checkoutPermit(record.cwd);
+        const fd = openSync(checkout, "wx", 0o600);
+        claimed.push(checkout);
+        try { writeFileSync(fd, record.id); fsyncSync(fd); } finally { closeSync(fd); }
       }
+      // Readers competing for the same free lease try the remaining lease
+      // before reporting capacity exhaustion. Every lease is claimed with wx.
+      let admitted = false;
+      for (const lease of this.#permits(record.slot, mode)) {
+        try {
+          const fd = openSync(lease, "wx", 0o600);
+          claimed.push(lease);
+          try { writeFileSync(fd, record.id); fsyncSync(fd); } finally { closeSync(fd); }
+          admitted = true;
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        }
+      }
+      if (!admitted) throw Object.assign(new Error("profile capacity changed"), { code: "EEXIST" });
     } catch (error) {
-      if (claimed.length === 0) unlinkSync(path);
+      // Admission failed before any provider request: release only our own claims.
+      for (const lease of claimed) if (this.#leaseOwner(lease) === record.id) unlinkSync(lease);
+      unlinkSync(path);
       const capacity = this.capacity(record.slot, mode, record.cwd);
       if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new WebDelegationCapacityError({
         ...capacity, available: false,
@@ -403,7 +417,6 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       for (const [method, event] of pending) accept(method, event);
       pending.length = 0;
       await done;
-      await prove();
       const completed = completedAnswer([...messages.values()]);
       if (!completed) throw Error("Web job completed without a proven final answer");
       update({ state: "completed", taskOutcome: "unassessed", ...completed,
@@ -418,7 +431,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       record = adapters.store.save(record); adapters.changed?.(record);
     }
     throw error;
-  } finally { unsubscribe?.(); await rpc?.close(); }
+  } finally { unsubscribe?.(); try { await rpc?.close(); } catch { /* A finished result survives connection cleanup errors. */ } }
 }
 
 /** Explicit, bounded recovery of this job only. Never resumes/replays a turn or reads personal history. */
