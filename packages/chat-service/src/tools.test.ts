@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 import { createChatToolRuntime } from "./tools";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -59,7 +62,7 @@ describe("Tela Chat first vertical slice", () => {
     } finally {
       stop?.();
       await f.runtime.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -115,7 +118,7 @@ describe("Tela Chat first vertical slice", () => {
       expect(changes.untracked).toContain("notes.txt");
     } finally {
       await f.runtime.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -126,8 +129,8 @@ describe("Tela Chat first vertical slice", () => {
       await expect(f.runtime.call("open_workspace", { path: outside })).rejects.toThrow("outside locally approved roots");
     } finally {
       await f.runtime.close();
-      rmSync(f.base, { recursive: true, force: true });
-      rmSync(outside, { recursive: true, force: true });
+      removeFixture(f.base);
+      removeFixture(outside);
     }
   });
 
@@ -158,7 +161,7 @@ describe("Tela Chat first vertical slice", () => {
       expect(opened.instructionScanComplete).toBe(true);
     } finally {
       await f.runtime.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -196,7 +199,7 @@ describe("Tela Chat first vertical slice", () => {
       expect(searched.scanComplete).toBe(true);
     } finally {
       await f.runtime.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -229,7 +232,7 @@ describe("Tela Chat first vertical slice", () => {
       })).rejects.toThrow();
     }finally{
       await f.runtime.close();
-      rmSync(f.base,{recursive:true,force:true});
+      removeFixture(f.base);
     }
   });
 
@@ -257,7 +260,7 @@ describe("Tela Chat first vertical slice", () => {
       expect(results[5]?.error?.code).toBe("batch_budget_exhausted");
     }finally{
       await f.runtime.close();
-      rmSync(f.base,{recursive:true,force:true});
+      removeFixture(f.base);
     }
   });
 
@@ -282,7 +285,7 @@ describe("Tela Chat first vertical slice", () => {
       expect(shown).toEqual(incidents[0]);
     } finally {
       await f.runtime.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -303,7 +306,7 @@ describe("Tela Chat first vertical slice", () => {
         .rejects.toThrow("outside the approved workspace root");
     } finally {
       await runtime.close();
-      rmSync(base, { recursive: true, force: true });
+      removeFixture(base);
     }
   });
 
@@ -344,7 +347,7 @@ describe("Tela Chat first vertical slice", () => {
       expect(existsSync(created.worktree.path)).toBe(true);
     } finally {
       await runtime.close();
-      rmSync(base, { recursive: true, force: true });
+      removeFixture(base);
     }
   });
 });

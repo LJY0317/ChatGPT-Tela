@@ -25,6 +25,31 @@ jobs:
       - run: bun run workspace-files:test
       - run: bun run workspace-files:build
       - run: bun run verify
+      - name: Remove Windows test SQLite fixtures after Bun exits
+        if: ${{ always() && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $manifest = Join-Path $env:RUNNER_TEMP 'tela-test-fixtures.jsonl'
+          if (Test-Path -LiteralPath $manifest) {
+            $removed = 0
+            foreach ($line in (Get-Content -LiteralPath $manifest)) {
+              $entry = $line | ConvertFrom-Json
+              $tempRoot = [IO.Path]::GetFullPath([string]$entry.tempRoot).TrimEnd('\')
+              $directory = [IO.Path]::GetFullPath([string]$entry.directory)
+              $parent = [IO.Path]::GetDirectoryName($directory).TrimEnd('\')
+              $leaf = [IO.Path]::GetFileName($directory)
+              if (-not $parent.Equals($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+                  -not ($leaf.StartsWith('tela-') -or $leaf.StartsWith('chatgpt-tela-maintenance-')) -or
+                  -not $tempRoot.Equals([IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\'),
+                  [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Test fixture cleanup scope mismatch'
+              }
+              Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction Stop
+              $removed++
+            }
+            Remove-Item -LiteralPath $manifest -Force -ErrorAction Stop
+            Write-Host "Verified Windows post-Bun fixture removals: $removed"
+          }
       - run: bun run codex:cleanup-test
       - run: bun run package:native-helper-test
       - run: bun run menu-bar:test

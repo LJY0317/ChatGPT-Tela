@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import { ensureOwnershipManifest } from "./ownership-store";
 import { readOwnershipManifest } from "./ownership";
 import { resolveProductPaths } from "./layout";
@@ -75,4 +76,18 @@ test("an unowned database is preserved and never treated as an expired owner", a
   await expect(withPackagedTransitionOwner(input, async () => { entered = true; })).rejects.toThrow();
   expect(entered).toBe(false);
   expect(readFileSync(database, "utf8")).toBe("foreign evidence");
+});
+
+test("well-formed coordinator database with a foreign owner cannot enter a transition", async () => {
+  const input = await fixture();
+  await withPackagedTransitionOwner(input, async () => {});
+  const path = join(input.paths.stateRoot, "install", "coordinator", "writer.sqlite");
+  const database = new DatabaseSync(path);
+  try { database.exec("UPDATE authority SET install_id='forged-owner'"); }
+  finally { database.close(); }
+  let entered = false;
+  await expect(withPackagedTransitionOwner(input, async () => { entered = true; }))
+    .rejects.toThrow("database ownership is invalid");
+  expect(entered).toBe(false);
+  expect(readFileSync(path).byteLength).toBeGreaterThan(0);
 });

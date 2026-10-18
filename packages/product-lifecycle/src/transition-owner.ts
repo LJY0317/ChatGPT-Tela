@@ -20,6 +20,7 @@ export async function withPackagedTransitionOwner<T>(input: {
   assertNoPackagedUninstall(input.paths);
   const manifest = readOwnershipManifest(input.paths.installManifest);
   if (!manifest || manifest.installId !== input.installId) throw new Error("transition coordinator install ownership changed");
+  const installIdHex = Buffer.from(input.installId, "utf8").toString("hex");
   const directory = join(input.paths.stateRoot, "install", "coordinator");
   const prepared = await prepareOwnedDirectory({ manifestPath: input.paths.installManifest,
     installId: manifest.installId, productVersion: manifest.productVersion,
@@ -34,7 +35,6 @@ export async function withPackagedTransitionOwner<T>(input: {
       // Bun 1.4 can keep a prepared statement's SQLite handle open after
       // close() on Windows, preventing removal of the unpublished hardlink.
       // Encode the manifest-owned ID as a SQLite hex literal (never SQL text).
-      const installIdHex = Buffer.from(input.installId, "utf8").toString("hex");
       created.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=1;
         CREATE TABLE authority (install_id TEXT PRIMARY KEY);
         INSERT INTO authority VALUES (CAST(X'${installIdHex}' AS TEXT));`);
@@ -50,10 +50,23 @@ export async function withPackagedTransitionOwner<T>(input: {
   const database = new DatabaseSync(path);
   let locked = false;
   try {
-    database.exec("PRAGMA busy_timeout=0;");
-    if ((database.prepare("PRAGMA application_id").get() as { application_id: number }).application_id !== APPLICATION_ID
-      || (database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version !== 1
-      || (database.prepare("SELECT install_id FROM authority").get() as { install_id?: string } | undefined)?.install_id !== input.installId) {
+    // Verify the on-disk owner and both file-format guards without a
+    // JavaScript-owned prepared statement. Bun 1.4 on Windows can retain
+    // those statements' file handles after DatabaseSync.close(), which
+    // prevents a later signed uninstall from deleting this owned directory.
+    // An unsatisfied CHECK fails closed; all inputs in the SQL are hex or
+    // fixed constants, never interpolated manifest text.
+    try {
+      database.exec(`PRAGMA busy_timeout=0;
+        CREATE TEMP TABLE owner_proof(v INTEGER NOT NULL CHECK(v=1));
+        INSERT INTO temp.owner_proof VALUES (
+          (SELECT application_id FROM pragma_application_id) = ${APPLICATION_ID}
+          AND (SELECT user_version FROM pragma_user_version) = 1
+          AND (SELECT install_id FROM authority LIMIT 1) = CAST(X'${installIdHex}' AS TEXT)
+          AND (SELECT count(*) FROM authority) = 1
+        );
+        DROP TABLE temp.owner_proof;`);
+    } catch {
       throw new Error("transition coordinator database ownership is invalid");
     }
     try { database.exec("BEGIN IMMEDIATE"); locked = true; }

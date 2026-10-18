@@ -1,7 +1,7 @@
 import { afterAll } from "bun:test";
-import { existsSync, lstatSync, realpathSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 /** Windows Bun 1.4 node:sqlite may retain a DB file handle until GC. */
 export function registerTemporaryFixtureCleanup() {
@@ -26,9 +26,24 @@ export function registerTemporaryFixtureCleanup() {
   afterAll(() => {
     if (process.platform !== "win32") return;
     Bun.gc(true);
+    let deferredToRunner = 0;
     for (const directory of deferred) {
-      rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      try {
+        rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EBUSY" || process.env.GITHUB_ACTIONS !== "true" || !process.env.RUNNER_TEMP) {
+          throw error;
+        }
+        // Bun 1.4 node:sqlite can retain prepared-statement file handles until
+        // its own process exits. An independent CI step must remove the exact
+        // test-owned fixture and fail the workflow if it cannot.
+        appendFileSync(join(process.env.RUNNER_TEMP, "tela-test-fixtures.jsonl"),
+          JSON.stringify({ tempRoot: temporaryRoot, directory }) + "\n");
+        deferredToRunner++;
+      }
     }
+    if (deferredToRunner) console.warn("Windows SQLite fixture cleanup deferred until Bun exits:", deferredToRunner);
     deferred.clear();
   });
   return removeFixture;
