@@ -84,7 +84,8 @@ export async function runBrowserContextCheckpoint(
     const operationSignal = documentBoundary ? input.signal
       ? AbortSignal.any([input.signal, documentBoundary.signal]) : documentBoundary.signal : input.signal;
     operationSignal?.throwIfAborted();
-    requireProven(await input.provider.observeCapabilities(surface, operationSignal));
+    // Checkpoint submission verifies the actual composer and send control.
+    // An independent readiness probe has no additional authority.
     await input.prepareForSubmit?.(surface, operationSignal);
     operationSignal?.throwIfAborted();
     inputBoundary = surface.capability(BROWSER_INPUT_OWNERSHIP)?.current();
@@ -111,8 +112,8 @@ export async function runBrowserContextCheckpoint(
       provider_invoked: invoked,
       input_revoked_observed: inputBoundary?.available === true && inputBoundary.signal.aborted,
     });
-    // Use an independent bounded diagnostic read while this surface is still owned.
-    // The cancelled operation signal must not prevent failure evidence collection.
+    // Keep the opt-in diagnostic snapshot for this isolated failed operation.
+    // It cannot change the original failure or authorize a new submission.
     if (surface) await captureBrowserDiagnosticEvidence(surface, "turn_failure");
   } finally {
     // A failed close must override cancellation: no receipt may authorize a new

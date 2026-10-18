@@ -33,7 +33,6 @@ test.each([false, true])("observation failure follows physical release through t
         webEpochId: `isolated-${currentTurnId}`, physicalContext: r.physicalContext},
       ...(r.persistResult ? {persistResult: r.persistResult} : {}),
       provider: {
-        async observeCapabilities() { return {state: "proven", value: {observed: new Set(["composer"])}, evidence: []}; },
         async createContextCheckpoint(_surface, request) {
           sends++;
           if (sends === 1) throw Error("accepted operation observation failed");

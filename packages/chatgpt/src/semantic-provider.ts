@@ -5,12 +5,13 @@ import {
   BROWSER_PAGE_AUTOMATION,
   BROWSER_INPUT_OWNERSHIP,
   captureBrowserDiagnosticEvidence,
+  captureBrowserDiagnosticCheckpoint,
   type BrowserSurfaceLease,
 } from "@chatgpt-tela/browser-host";
 import { WebRetainedContextUnproven, capturePrivateDiagnosticValue, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, type WebRetainedContextReason } from "@chatgpt-tela/core";
 import { ChatGptDomSurfaceDriver } from "./dom-driver";
 import { decideChatGptApproval, type ChatGptApprovalAutomationMode } from "./approval-policy";
-import { ChatGptApprovalObservation, approvalPreparationFailureSummary, approvalObservationSummary } from "./approval-observation";
+import { ChatGptApprovalObservation, approvalPreparationFailureSummary, approvalObservationSummary, type ApprovalObservationTransition } from "./approval-observation";
 import {
   contextAttachmentReference,
   formatChatGptContextAttachmentStage,
@@ -56,11 +57,21 @@ interface TrackedTurn extends TurnOwnership {
   lastWaitSnapshotAt?: number;
   diagnosticBoundaryCount?: number;
   publicProgress?: string;
+  missingPublicProgressCaptured?: boolean;
   approvalProgress?: string;
+  approvalPendingCaptured?: boolean;
   readonly approvalObservation: ChatGptApprovalObservation;
   observeAgain?: boolean;
   readonly operationAbort: AbortController;
   retirement?: Promise<void>;
+}
+
+function logApprovalTransition(transition: ApprovalObservationTransition | undefined): void {
+  if (!transition) return;
+  emitDiagnosticEvent("chatgpt_tela_work", "approval_wait_transition", {
+    phase: transition.phase, elapsed_ms: transition.elapsedMs,
+    ...(transition.cardFingerprint ? { card_fingerprint: transition.cardFingerprint } : {}),
+  });
 }
 
 export interface ChatGptSemanticProviderOptions {
@@ -1287,6 +1298,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       signal?.throwIfAborted();
       this.#assertTemporaryChatSurface(surface, filled);
       if (request.physicalContext.mode === "retained-delta") this.#assertRetainedConversation(surface, filled);
+      await captureBrowserDiagnosticCheckpoint(surface, "before_submit");
       signal?.throwIfAborted();
       assertCausalInputUnchanged?.();
       sendActivationAttempted = true;
@@ -1401,6 +1413,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             providerTurnId: userTurn.key,
           });
           acceptance.combined.throwIfAborted();
+          await captureBrowserDiagnosticCheckpoint(surface, "turn_accepted");
           if (causalReceipt) assertCausalInputUnchanged!();
           this.#turns.set(surface, {
             handle,
@@ -1578,12 +1591,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
 
   #observeApproval(surface: BrowserSurfaceLease, tracked: TrackedTurn, snapshot: ChatGptSurfaceSnapshot,
     assistant: ChatGptTurnObservation | undefined): void {
-    tracked.approvalObservation.recordInputReceipt(snapshot.approvalInputReceipt, Date.now());
+    logApprovalTransition(tracked.approvalObservation.recordInputReceipt(snapshot.approvalInputReceipt, Date.now()));
     const transition = tracked.approvalObservation.observe(snapshot.approval, approvalAssistantVersion(assistant),
       assistant !== undefined && assistant.phase !== "failed", Date.now());
-    if (transition) emitDiagnosticEvent("chatgpt_tela_work", "approval_wait_transition", {
-      phase: transition.phase, elapsed_ms: transition.elapsedMs,
-    });
+    logApprovalTransition(transition);
   }
 
   async cancelTurn(surface: BrowserSurfaceLease, turn: WebTurnHandle): Promise<void> {
@@ -1703,6 +1714,14 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       const assistant = assistants[0];
       const waitState = JSON.stringify([assistant?.phase ?? "absent", snapshot.approval ?? null]);
       this.#observeApproval(surface, tracked, snapshot, assistant);
+      const observedApproval = snapshot.approval;
+      const approvalChoice = observedApproval
+        ? decideChatGptApproval(this.#approvalAutomationMode, observedApproval) : undefined;
+      if (observedApproval?.cardCount && !tracked.approvalPendingCaptured) {
+        tracked.approvalPendingCaptured = true;
+        await waitOwned(signal, () => captureBrowserDiagnosticCheckpoint(surface, "approval_pending"));
+        signal?.throwIfAborted();
+      }
       if (tracked.waitState !== waitState) {
         tracked.waitState = waitState;
         emitDiagnosticEvent("chatgpt_tela_work", "web_turn_observed", {
@@ -1714,10 +1733,14 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             allow_once_count: snapshot.approval.allowOnceCount, always_allow_count: snapshot.approval.alwaysAllowCount,
             unknown_count: snapshot.approval.unknownCount } : {}),
         });
+        if (observedApproval?.cardCount && this.#approvalAutomationMode !== "off"
+          && approvalChoice?.action === "none") {
+          emitDiagnosticEvent("chatgpt_tela_work", "approval_card_anomaly", {
+            reason_class: approvalChoice.reason, approval_card_count: observedApproval.cardCount,
+          });
+          await waitOwned(signal, () => captureBrowserDiagnosticEvidence(surface, "approval_anomaly"));
+        }
       }
-      const observedApproval = snapshot.approval;
-      const approvalChoice = observedApproval
-        ? decideChatGptApproval(this.#approvalAutomationMode, observedApproval) : undefined;
       let preparationFailure: string | undefined;
       if (observedApproval?.cardCount === 1 && observedApproval.cardFingerprint
         && !tracked.approvalObservation.wasDispatched(observedApproval.cardFingerprint)
@@ -1732,8 +1755,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         this.#tracked(surface, turn);
         if (action.status === "dispatched" || action.reason === "already_activated") {
           const card = action.status === "dispatched" ? action.cardFingerprint : observedApproval.cardFingerprint;
-          tracked.approvalObservation.dispatched(card, Date.now(),
-            action.status === "dispatched" ? action.revisionFingerprint : undefined);
+          logApprovalTransition(tracked.approvalObservation.dispatched(card, Date.now(),
+            action.status === "dispatched" ? action.revisionFingerprint : undefined));
         } else {
           preparationFailure = approvalPreparationFailureSummary(action.reason);
         }
@@ -1752,6 +1775,13 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           summary: approvalProgress }, evidence: evidence("owned Web approval state observed") };
       }
       const publicProgress = assistant?.publicProgress?.join("\n\n");
+      if (!publicProgress && assistant?.phase === "streaming" && !tracked.missingPublicProgressCaptured) {
+        tracked.missingPublicProgressCaptured = true;
+        emitDiagnosticEvent("chatgpt_tela_work", "web_public_progress_missing", {
+          assistant_phase: assistant.phase, matched_assistant_count: lineage.assistants.length,
+        });
+        await waitOwned(signal, () => captureBrowserDiagnosticCheckpoint(surface, "surface_anomaly"));
+      }
       signal?.throwIfAborted();
       if (publicProgress && publicProgress.length <= 16384 && tracked.publicProgress !== publicProgress) {
         tracked.publicProgress = publicProgress;

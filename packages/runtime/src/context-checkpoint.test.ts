@@ -30,13 +30,6 @@ function request(): WebContextCheckpointRequest {
 
 function provider(overrides: Partial<WebContextCheckpointProvider> = {}): WebContextCheckpointProvider {
   return {
-    async observeCapabilities() {
-      return {
-        state: "proven" as const,
-        value: { observed: new Set(["composer", "send"]) },
-        evidence: ["fixture"],
-      };
-    },
     async createContextCheckpoint(_surface, input) {
       return {
         state: "proven" as const,
@@ -109,8 +102,8 @@ describe("browser context checkpoint runner", () => {
       }));
       let caught: unknown;
       try { await runBrowserContextCheckpoint({ browserHost: host, request: request(), signal: abort.signal,
-        provider: provider({ async observeCapabilities() { abort.abort(); throw Error("stopped before provider invocation"); },
-          async createContextCheckpoint() { invoked++; throw Error("unreachable"); } }),
+        async prepareForSubmit() { abort.abort(); throw Error("stopped before provider invocation"); },
+        provider: provider({ async createContextCheckpoint() { invoked++; throw Error("unreachable"); } }),
       }); } catch (error) { caught = error; }
       expect(invoked).toBe(0);
       if (failClose) { expect(caught).not.toBeInstanceOf(WebCheckpointOperationClosed); expect(String(caught)).toContain("physical close failed"); }

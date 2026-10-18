@@ -39,11 +39,13 @@ for (const replacement of ["new message", "edited original message"]) {
             const result = await runBrowserContextCheckpoint({ browserHost: host, signal,
               ...(request.persistResult ? { persistResult: request.persistResult } : {}),
               request: { ...request, webEpochId: "isolated-checkpoint" },
+              async prepareForSubmit() {
+                if (phase === "preparation" && current === "first") {
+                  entered.resolve();
+                  await new Promise<void>((_, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }));
+                }
+              },
               provider: {
-                async observeCapabilities() {
-                  if (phase === "preparation" && current === "first") { entered.resolve(); await new Promise<void>((_, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true })); }
-                  return { state: "proven", value: { observed: new Set(["composer", "send"]) }, evidence: ["fixture"] };
-                },
                 async createContextCheckpoint(_surface, r) {
                   calls++;
                   if (current === "first") {

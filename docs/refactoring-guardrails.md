@@ -22,6 +22,8 @@ Before/after review must report: (a) reproducible behavior and affected workflow
 
 Favor **deletion-first, destructive refactoring** over additive hardening. Before adding any guard, fallback, state, adapter or test, remove superseded ones; retain a test only when it exercises a distinct, reachable behavior or regression not already covered. Keep owner/permission fences, actual effect verification and replay/recovery invariants, but do not treat presentation-format differences or optional diagnostic failures as task failures. Do not impose an arbitrary line ceiling: necessary fixes can grow code, while unexplained growth needs concrete justification. Passing tests alone does not establish Web-model task success or cost parity.
 
+**Preserve actionable logs and diagnostics while simplifying execution.** Do not delete structural failure/approval events or optional local evidence capture solely to reduce code or latency. Remove a diagnostic path only when its producer is unreachable, its evidence is obsolete, or another retained signal proves the same fact; record the reason. Diagnostics must not override the original task outcome, grant approval, retry a send or interfere with another owner.
+
 ## Completion
 
 Integrate only verified minimal changes to clean `main`; record deferred work and remaining uncertainty in the local `STATE.md`. Do not delete worktrees, branches, Agent Workspace data, conversations, checkpoints or signed rollback assets until exact ownership and safe retirement are proved. Once consolidation is complete, verify `main` and use the official signed installation and restore procedure. Distinguish source tests, installed readiness and actual model acceptance.

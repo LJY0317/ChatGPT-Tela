@@ -161,11 +161,6 @@ export interface WebContextCheckpointResult {
 
 /** Dedicated semantic surface for checkpoint production; ordinary turn replies are not accepted. */
 export interface WebContextCheckpointProvider {
-  observeCapabilities(
-    surface: BrowserSurfaceLease,
-    signal?: AbortSignal,
-  ): Promise<SemanticObservation<ChatGptCapabilities>>;
-
   createContextCheckpoint(
     surface: BrowserSurfaceLease,
     request: WebContextCheckpointRequest,

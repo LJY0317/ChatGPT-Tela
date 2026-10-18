@@ -166,14 +166,6 @@ function compactableNativeRequest(): Record<string, unknown> {
 class FixtureCheckpointProvider implements WebContextCheckpointProvider {
   readonly requests: WebContextCheckpointRequest[] = [];
 
-  async observeCapabilities() {
-    return {
-      state: "proven" as const,
-      value: { observed: new Set(["composer", "send"]) },
-      evidence: ["fixture-checkpoint-capabilities"],
-    };
-  }
-
   async createContextCheckpoint(_surface: unknown, request: WebContextCheckpointRequest) {
     this.requests.push(request);
     return {
