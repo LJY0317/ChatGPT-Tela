@@ -225,7 +225,8 @@ without rerunning commands or consuming output. It returns at most 50 records pe
 also lists terminal command records. This is a registry observation, not proof of live processes or
 complete descendant termination. Use `process_status` for a current authenticated owner observation.
 An uncertain direct execution cannot yet be restored from a saved PID; keep its evidence and do not
-clear it or rerun the command as recovery. This capability is source-only until a verified package update.
+clear it or rerun the command as recovery. The process registry and authenticated completion
+archive were also observed in the signed local macOS installation on 2026-10-18.
 
 In the macOS control center, open **Settings → Chat · Local folders → Choose folder…**.
 Select the folder you want ChatGPT to read and edit, then choose **Apply Chat settings…**. This restarts only
@@ -266,8 +267,9 @@ than the model transcript; no public download server or persistent export cache 
 **Download file** to save the captured bytes through the host's browser download mechanism. Later edits to
 the source file do not alter an already prepared download. Request a new export for updated contents.
 
-This is source-tested and compiled, not installed or live-host verified. Some hosts may block downloads
-from embedded cards; Windows/Linux export behavior and actual ChatGPT download acceptance remain unverified.
+The export helper is included in the signed local macOS preview and the capability is discoverable,
+but an end-to-end ChatGPT-host download-card acceptance has not been verified. Some hosts may block downloads
+from embedded cards; Windows/Linux export behavior remains unverified.
 The feature currently belongs to Tela Chat, not the Native Work/Codex tool inventory.
 
 ### Reusable skills in Tela Chat
@@ -922,6 +924,10 @@ and one unambiguous eligible card-local target are required. If the conversation
 **Approval options** menu, Tela opens that menu once and verifies the same card and linked choice before clicking.
 The existing owner, cancellation, target visibility, trusted input and card-clearance checks still govern dispatch
 and its outcome. ChatGPT host approvals before Tela receives a tool call remain outside this browser feature.
+An independently observed, newly owned second card can be activated without waiting for the previous card's
+assistant-progress receipt. The same card remains single-dispatch. This fix is in the signed local macOS
+preview, but a real multi-card Web turn has not yet been reproduced; see
+[approval boundaries](docs/approval-review-boundaries.md).
 
 ```sh
 bun run cli approval status

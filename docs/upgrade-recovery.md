@@ -85,6 +85,37 @@ successful update and complete removal while preserving external synthetic data.
 On macOS the compiled fixture uses the same normal ad-hoc signing/verification
 procedure as package smoke; no security setting or existing app is changed.
 
+## Real macOS upgrade recovery observation (2026-10-18)
+
+On an owner-verified signed local upgrade, the first official apply
+stopped Gateway and Codex, then received an authenticated Chat
+`shutdown: not-started` (HTTP 409). The Chat daemon logged
+`reason_class=unresolved_work` with `active_calls=0`. An
+independent authenticated archive later proved a previously accepted
+Chat command had remained unfinished at that moment. The lifecycle
+returned `source-restored` as a **failed** target upgrade and
+restarted the originally running services; the old signed installed
+version remained intact, with no lingering transition journal.
+
+After that command completed, a second ordinary `upgrade --apply`
+quiesced all three services, installed the verified signed target,
+restarted all three and exited successfully. Independent signature,
+owner, version, service, profile, retained-feature and journal checks
+confirmed the target installation. The source rollback was retained
+in the official product-owned recovery slot; the temporary duplicate
+build and clean-source copies were later removed.
+
+This observation validates **one real macOS refusal, restoration
+and subsequent successful upgrade**. A read-only shutdown-readiness
+snapshot is advisory, not an admission lease: work can start before
+the actual authenticated shutdown RPC. A Chat capability used to
+inspect its own shutdown readiness can itself count as active work.
+The safe approach is an independent maintenance runner, exact
+process-reservation settlement and the real owner-authenticated
+shutdown; do not loosen `assertCanClose`, stop by signal, drop
+reservations or retry an uncertain quit. It is not an across-OS,
+power-loss or arbitrary concurrent-work acceptance claim.
+
 ## Start completion
 
 Update, repair, cancellation and installed service start share one completion boundary:

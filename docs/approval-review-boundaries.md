@@ -44,3 +44,23 @@ bounded event stages. A profile-level `approvalState` and a current optional
 record structural transitions only, without prompts, card text or credentials.
 If an accepted send is indeterminate, inspect the **same** operation; never
 replay it because a card disappeared or because its status is unavailable.
+
+## Signed local deployment and remaining acceptance (2026-10-18)
+
+The cross-card cumulative verification gate was removed in source commit
+`92ecb41` and included in the owner-verified signed macOS installation
+`0.0.0-approval-sequential-20261018.5aca459.1`. The 273 focused
+approval/provider/DOM tests passed on source `5aca459`. The installed
+Gateway, Chat and Codex services were authenticated `ready`; both
+owned profiles were Web/Native `ready`.
+
+Two separate, **single-tool** live Web-to-Native-to-Web tests completed,
+one per profile, with actual result witnesses and same-turn final answers.
+Both synthetic Native threads were officially deleted and proved absent.
+Their structural diagnostics recorded **zero approval cards**. These
+tests establish installed tool-result/final-answer acceptance, **not**
+acceptance of consecutive distinct `Allow once` cards. Continue
+ordinary use and capture the next naturally occurring owner-bound
+multi-card example before claiming that last approval path live-proven.
+Do not create additional writes, bypass a card or replay an uncertain
+submission merely to force a test.

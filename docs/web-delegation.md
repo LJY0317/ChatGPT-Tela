@@ -71,7 +71,7 @@ permission. Do not treat prompt instructions as a filesystem or MCP security bou
 - Exact cancellation, unknown-ACK reconciliation and owned removal of job/engine resources.
 - A structured task specification, bounded file evidence and stale-result detection.
 - Exact job-to-browser association and reliable one-shot approvals.
-- Consumer UI, installed package acceptance and platform verification.
+- Consumer UI, installed Windows/Linux acceptance and broader platform verification.
 - Write tasks confined to a separately owned worktree, with explicit scoped permissions, change review,
   validation and cleanup. Existing user checkouts and other agents' work must remain protected.
 
@@ -88,7 +88,7 @@ checks a random local marker in the Web final and in a same-turn Native tool
 result. Every acknowledged test thread receives at most one official Delete
 request; uncertain cleanup retains its local journal for inspection.
 
-On the installed Profile 1, preflight passed (zero model requests, one exact
+In an earlier installed Profile 1 attempt, preflight passed (zero model requests, one exact
 Delete/absence). One real Extra High Web request produced an exact-marker
 final answer and one Native tool item. Its public Native summary did **not**
 independently prove the result payload, so strict same-turn result acceptance
@@ -105,3 +105,28 @@ the completed Native command result and same-turn Web final matched a random
 disposable-file marker. All synthetic threads were officially deleted and
 proven absent; no personal conversations were read. The test-only script's
 `--slot 1|2` option does not change normal production behavior.
+
+### Post-upgrade acceptance, same date
+
+After deploying the signed local macOS version
+`0.0.0-approval-sequential-20261018.5aca459.1`, both profiles passed
+independent preflights: each created one empty synthetic Native thread,
+officially deleted it, and proved exact absence without a model call.
+
+Both profiles then passed **separate** one-model-request, read-only
+`web-native-roundtrip.integration.ts --acceptance --slot N` runs. Each
+recorded one completed Native `commandExecution` item with a live
+result carrier containing the test-only random marker, an explicit
+Web final answer containing that marker, and proof that both belonged
+to the **same Native turn**. The tests read no personal threads and
+officially deleted all acknowledged synthetic threads, verifying absence.
+These later successes supersede the *earlier* Profile 1 failure for
+this **one-tool round-trip acceptance** only; they do not establish
+opaque Legacy-context continuity or arbitrary write tasks.
+
+Both tests used a Native read-only sandbox with approval policy
+`never`. The separate structural diagnostic windows contained
+**zero approval cards**; therefore the installed fix for consecutive,
+distinct Web approval cards remains **source-tested and deployed, but
+not live multi-card accepted**. Do not report it as proven from these
+round-trip results.

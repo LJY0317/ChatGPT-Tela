@@ -44,22 +44,59 @@ must finish before another upgrade. The packaged source CLI exposes explicit `ca
 source package and external trusted key. A real blocked-input Chat/Native owner survives cancellation
 with its original descriptor/registry and completes exactly once; the stopped synthetic Gateway
 resumes through the actual resolver (`build/upgrade-source-cancel-live`). OS registrations/service
-payloads and Gateway shutdown are synthetic. UI, actual OS restoration and old installed-launcher
-support remain unaccepted; this source change is not installed.
+payloads and Gateway shutdown are synthetic. These fixtures alone do not
+establish OS restoration or old installed-launcher support. A later local
+macOS signed rollout proved one real source restoration separately below;
+broader OS and legacy-launcher acceptance remain open.
 
 Source cancellation requires a signed lifecycle protocol declaration (`transitionLaunch: 1`,
 `sourceCancellation: 1`) from the exact installed source package. Missing metadata grants no support;
 unsupported versions refuse before the restoration journal changes. The production builder declares
 this protocol for the new launcher, and signature tests bind it to package bytes. Old-source refusal
 and new-source restoration both preserve a real active Native owner (`build/upgrade-launcher-contract`).
-The current installed preview has no such declaration; it was inspected read-only. This does not
-retrofit old launchers. An old installation must finish its verified target upgrade rather than erase
+Both the prior signed local `44ec214.1` installation and its successor
+`0.0.0-approval-sequential-20261018.5aca459.1` were verified to
+declare both lifecycle protocols. This does not retrofit older launchers.
+An old installation must finish its verified target upgrade rather than erase
 its checkpoint to start services. A full production-built signed package and compiled fixture coordinator now restore the real compiled
 Chat service while `restoring-source` exists, then complete authenticated shutdown and isolated removal
 (`build/compiled-transition-boundary`). OS registration is fake; initial refusal and the abandoned
 target are synthetic. Native engine was reused; owner activation remains off. The test package and
 fixture binary were removed after recording hashes/metadata. Actual platform registration and production
 CLI cancellation apply remain unproven; this fixture does not establish consumer release acceptance.
+
+### Local signed macOS upgrade receipt (2026-10-18)
+
+The source revision `5aca459` was compiled into a signed,
+ad-hoc macOS preview `0.0.0-approval-sequential-20261018.5aca459.1`,
+including the previously installed Native Codex engine and file
+publisher. The existing installed source, target and historical
+recovery-slot signatures were checked against **independent**
+maintainer trust keys. The target `upgrade --dry-run` succeeded with
+an exact clean, signed source recovery snapshot and explicit historical
+trust, without deleting or trusting a cached key.
+
+The **first** real `upgrade --apply` encountered an authenticated Chat
+`shutdown: not-started` refusal (`shutdown_rejected`:
+`reason_class=unresolved_work`, `active_calls=0`). The launcher
+returned `source-restored`, **not** target-install success, and
+restored the stopped Gateway/Codex services. A protected Chat command
+that had started at 09:35:21 UTC remained live at the 09:36:55 UTC
+shutdown attempt; its terminal archive receipt proves exit at
+09:38:25 UTC. A previous readiness snapshot therefore did not grant
+subsequent shutdown authority. No forced quit, stale-process
+reclassification or journal deletion was used.
+
+After completion was established, the **second** official
+`upgrade --apply` exited successfully. The independently verified
+installed manifest/signature reports the new version, all three
+authenticated services `ready`, profiles 1 and 2 Web/Native
+`ready`, retained Native engine and file publisher, and **no**
+outstanding upgrade/repair journal. The owner-bound, one-tool
+Web/Native/final-answer test passed on **both** profiles with exact
+synthetic-thread deletion; see [Web delegation](web-delegation.md).
+Real consecutive approval cards, Windows/Linux installed rollout and
+full cross-product lifecycle/removal acceptance remain open.
 
 ## Independence from original apps and optional providers
 

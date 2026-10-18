@@ -419,7 +419,7 @@ retry, original exceptions or Native execution:
 | Chat durable persistence | `process_state_storage_failed` | Store write or the independent 1 MiB serialization budget failed; structural byte/count fields only. |
 | Chat recovery and retirement | `process_recovery_failed`, `process_retirement_failed` | Failed read/retire/write phase and a safe reason class; uncertain owners remain protected. |
 | Chat process output | `process_result_retention_failed` | Output retention failed; unknown state is preserved instead of trusting a successful execution. |
-| Chat shutdown | `shutdown_rejected` | Active request count or unresolved-work safety gate refused shutdown. |
+| Chat shutdown | `shutdown_rejected` | Active request count or unresolved-work safety gate refused shutdown. `active_calls=0` does **not** prove the process reservation registry is empty: an accepted command can continue after its original capability request completes. |
 | Chat local incidents | `reasonClass` on `list_incidents`/`show_incident` | A persisted, bounded error classification in addition to existing capability and failed/aborted status. Old records without this optional field remain readable. |
 | Codex paginated owner proof | `native_current_turn_rejected` | Missing/Legacy indexing, unavailable/invalid page, changed active status, owner or environment **before Web authority is granted**. |
 | Codex original live Legacy receipt | `native_live_turn_proven`, `desktop_native_live_turn_rejected` | Only an original same-socket `turn/start` ACK plus unchanged metadata-only owner checks may prove a current Legacy turn without paging. A successful proof records fixed `history_mode=legacy` / `route_kind=public_live_ack_metadata`. Ambiguous, late or saturated receipts emit fixed rejection reason classes; never raw thread/turn ids, RPC payload, prompts or tools. A live receipt is not historical context provenance. |
@@ -466,8 +466,9 @@ the hot receipt instead of guessing success. Existing minimum 24-hour
 terminal retention and authenticated expiration remain in force.
 Thus healthy recent completions normally increase `archivedTerminalCount`,
 not `registryCount`; an archive at its own limit can still cause future
-admission pressure. This remains source-only until a verified signed
-installation and authenticated live-service acceptance.
+admission pressure. The completion archive and zero-registry observations
+were also seen on the signed local macOS installation after the
+2026-10-18 upgrade; Windows/Linux installed acceptance remains open.
 These are **service-wide aggregates only**; the process rows remain limited
 to the caller's approved workspace. A full registry can therefore be
 diagnosed through `list_processes` even when `exec_command` cannot start
