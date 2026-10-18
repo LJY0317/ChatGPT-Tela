@@ -57,6 +57,8 @@ export interface ChatGptTurnObservation {
   readonly failureDetail?: string;
   /** Publicly rendered progress only; hidden/expanded internal reasoning is never read. */
   readonly publicProgress?: readonly string[];
+  /** Content-free presentation diagnosis; never turn identity or completion authority. */
+  readonly progressProbe?: { readonly titleCount: number; readonly descriptionCount: number; readonly unmappedVisibleProsePresent?: boolean };
 }
 
 export interface ChatGptSurfaceSnapshot {

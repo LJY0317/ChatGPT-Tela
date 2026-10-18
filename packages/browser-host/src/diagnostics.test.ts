@@ -40,7 +40,7 @@ test("failure viewport evidence reads bounded geometry without scrolling or raw 
   expect(result).toMatchObject({turn_viewport_observed:true,turn_scroll_above_px:1300,turn_scroll_below_px:100,turn_viewport_height_px:600});
   expect(result.html).toBeUndefined();
 });
-test.each(["approval_anomaly", "approval_preparation_failed"] as const)("%s DOM/screenshot require opt-in and auth-safe surface; duplicate failure is coalesced",async reason=>{
+test.each(["approval_anomaly", "approval_preparation_failed", "progress_description_missing", "progress_prose_unmapped"] as const)("%s DOM/screenshot require opt-in and auth-safe surface; duplicate failure is coalesced",async reason=>{
   const root=mkdtempSync(join(tmpdir(),"tela-browser-diagnostics-"));roots.push(root);process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=join(root,"events.jsonl");
   let evaluations=0, previews=0;const privateFlags:unknown[]=[];let safe=true;
   const surface={taskId:"task",epochId:"epoch",leaseId:"lease",async navigate(){},async reveal(){},async hide(){},capability(cap:unknown){
@@ -91,4 +91,26 @@ test("private DOM evidence keeps the latest renderer shell beyond a large docume
   expect(result.html_truncated).toBe(true);
   expect(result.focus_html).toBe("LATEST_PRIVATE_RENDERER");
   expect(result.focus_html_truncated).toBe(false);
+});
+
+
+test("progress branch census locates visible sibling paragraphs without reading prose", () => {
+  const style={overflowY:"visible",display:"block",visibility:"visible",opacity:"1"};
+  const paragraph={getClientRects:()=>[{}],get textContent():never{throw Error("Prose is private");}};
+  const node=(paragraphs:unknown[]=[])=>({children:[] as unknown[],parentElement:null as unknown,
+    matches:()=>false,querySelectorAll:(selector:string)=>selector==="p"?paragraphs:[],querySelector:()=>null,
+    contains:()=>false,getClientRects:()=>[{}],getAttribute:()=>null,hidden:false,
+    get textContent():never{throw Error("Prose is private");}});
+  const marker=node(), title=node(), prose=node([paragraph]);
+  const parent=node();parent.children=[marker,title,prose];marker.parentElement=parent;
+  const latest=node();latest.querySelectorAll=(selector:string)=>selector==="[data-chatgpt-agent-turn-start]"?[marker]:[];
+  latest.contains=()=>true;
+  const result=runInNewContext(`(${DIAGNOSTIC_DOM_CAPTURE})(false)`,{
+    document:{forms:[],querySelectorAll:(selector:string)=>selector==="[data-turn-key]"?[latest]:[]},
+    location:{pathname:"/c/fixture"},performance:{getEntriesByType:()=>[]},getComputedStyle:()=>style,
+  });
+  expect(result.progress_branch_probe_available).toBe(true);
+  expect(result.progress_branches).toHaveLength(3);
+  expect(result.progress_branches[2]).toMatchObject({depth:0,child_index:2,paragraph_count:1,rendered_paragraph_count:1,contains_start:false});
+  expect(result.html).toBeUndefined();
 });

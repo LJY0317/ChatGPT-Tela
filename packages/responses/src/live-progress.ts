@@ -3,7 +3,7 @@ import { nativeHandoffRecovery } from "./native-handoff-recovery";
 import { randomBytes } from "node:crypto";
 import type { NativeGatewayOutcome, NativeResponsesGateway } from "@chatgpt-tela/runtime";
 import { encodeNativeResponsesOutcome, nativeResponsesSsePlan } from "./protocol";
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticContext, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import { nativeHistoryRecovery } from "./native-history-recovery";
 import { webContinuityRecovery } from "./web-continuity-recovery";
 import { nativeProjectionRecovery } from "./native-projection-recovery";
@@ -15,7 +15,9 @@ export class NativeProgressStream {
   readonly #ready: () => void;
   readonly #responseId = `resp_tela_${randomBytes(18).toString("base64url")}`;
   readonly #itemId = `rs_tela_${randomBytes(18).toString("base64url")}`;
-  readonly #frames: Array<{ text: string; commit?: () => void }> = [];
+  readonly #frames: Array<{ text: string; commit?: () => void; progress?: {
+    index: number; characters: number; context: ReturnType<typeof diagnosticContext>;
+  } }> = [];
   readonly #summaries: string[] = [];
   #chars = 0;
   #sequence = 0;
@@ -57,8 +59,12 @@ export class NativeProgressStream {
     const identity = { item_id: this.#itemId, output_index: 0, summary_index: index };
     this.#event("response.reasoning_summary_part.added", { ...identity, part: { type: "summary_text", text: "" } });
     this.#event("response.reasoning_summary_text.delta", { ...identity, delta: summary });
+    this.#frames.at(-1)!.progress = { index, characters: summary.length, context: diagnosticContext() };
     this.#event("response.reasoning_summary_text.done", { ...identity, text: summary });
     this.#event("response.reasoning_summary_part.done", { ...identity, part: { type: "summary_text", text: summary } });
+    emitDiagnosticEvent("chatgpt_tela_work", "public_progress_sse_queued", {
+      summary_index: index, progress_characters: summary.length, queued_frame_count: this.#frames.length,
+    });
     this.#ready();
     return true;
   };
@@ -129,7 +135,15 @@ export class NativeProgressStream {
         }
         if (this.signal.signal.aborted) return;
         const frame = this.#frames.shift();
-        if (frame) { controller.enqueue(encoder.encode(frame.text)); frame.commit?.(); }
+        if (frame) {
+          controller.enqueue(encoder.encode(frame.text));
+          if (frame.progress) withDiagnosticContext(frame.progress.context, () =>
+            emitDiagnosticEvent("chatgpt_tela_work", "public_progress_sse_pulled", {
+              summary_index: frame.progress!.index, progress_characters: frame.progress!.characters,
+              queued_frame_count: this.#frames.length, delivery: "http_body_consumer",
+            }));
+          frame.commit?.();
+        }
         if (this.#ended && !this.#frames.length) controller.close();
       },
       cancel: () => { this.signal.abort(); this.#frames.length = 0; this.#wake?.(); },

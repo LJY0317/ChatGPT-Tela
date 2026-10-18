@@ -58,6 +58,8 @@ interface TrackedTurn extends TurnOwnership {
   diagnosticBoundaryCount?: number;
   publicProgress?: string;
   missingPublicProgressCaptured?: boolean;
+  titleOnlyPublicProgressCaptured?: boolean;
+  unmappedPublicProgressCaptured?: boolean;
   approvalProgress?: string;
   approvalPendingCaptured?: boolean;
   approvalFailureCaptured?: string;
@@ -444,7 +446,7 @@ export function formatWebPhysicalContext(context: WebPhysicalContext, toolBridge
 
 function assistantFingerprint(assistant: ChatGptTurnObservation | undefined): string {
   if (!assistant) return fingerprint("null");
-  const { publicProgress: _presentation, ...state } = assistant;
+  const { publicProgress: _presentation, progressProbe: _diagnostic, ...state } = assistant;
   return fingerprint(JSON.stringify(state));
 }
 
@@ -1784,6 +1786,23 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           summary: approvalProgress }, evidence: evidence("owned Web approval state observed") };
       }
       const publicProgress = assistant?.publicProgress?.join("\n\n");
+      if (assistant?.phase === "streaming" && assistant.progressProbe?.titleCount
+        && assistant.progressProbe.descriptionCount === 0 && !tracked.titleOnlyPublicProgressCaptured) {
+        tracked.titleOnlyPublicProgressCaptured = true;
+        emitDiagnosticEvent("chatgpt_tela_work", "web_public_progress_title_only", {
+          assistant_phase: assistant.phase, title_count: assistant.progressProbe.titleCount,
+          description_count: 0,
+        });
+        await waitOwned(signal, () => captureBrowserDiagnosticCheckpoint(surface, "progress_description_missing"));
+      }
+      if (assistant?.phase === "streaming" && assistant.progressProbe?.descriptionCount === 0
+        && assistant.progressProbe.unmappedVisibleProsePresent && !tracked.unmappedPublicProgressCaptured) {
+        tracked.unmappedPublicProgressCaptured = true;
+        emitDiagnosticEvent("chatgpt_tela_work", "web_public_progress_unmapped_prose", {
+          assistant_phase: assistant.phase, description_count: 0, visible_prose_observed: true,
+        });
+        await waitOwned(signal, () => captureBrowserDiagnosticCheckpoint(surface, "progress_prose_unmapped"));
+      }
       if (!publicProgress && assistant?.phase === "streaming" && !tracked.missingPublicProgressCaptured) {
         tracked.missingPublicProgressCaptured = true;
         emitDiagnosticEvent("chatgpt_tela_work", "web_public_progress_missing", {

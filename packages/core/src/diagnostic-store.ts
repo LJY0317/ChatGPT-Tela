@@ -246,6 +246,7 @@ function files(root: string, type: "incidents" | "private") {
 }
 function prune(root: string, type: "incidents" | "private", now = Date.now()) {
   let bytes = 0; let count = 0;
+  const kept = new Set<string>();
   const maxCount = type === "incidents" ? DIAGNOSTIC_LIMITS.incidents : DIAGNOSTIC_LIMITS.privateFiles;
   const maxBytes = type === "incidents" ? DIAGNOSTIC_LIMITS.incidentBytes : DIAGNOSTIC_LIMITS.privateBytes;
   const age = type === "incidents" ? DIAGNOSTIC_LIMITS.incidentAgeMs : DIAGNOSTIC_LIMITS.privateAgeMs;
@@ -254,12 +255,19 @@ function prune(root: string, type: "incidents" | "private", now = Date.now()) {
     const key = type === "private" ? item.name.slice(0,45) : item.name;
     const group = groups.get(key) ?? []; group.push(item); groups.set(key,group);
   }
-  for (const group of groups.values()) {
+  // Tool request/result JSON can churn many times during one browser turn. Keep
+  // scarce renderer evidence ahead of that traffic, within the same age/size cap.
+  const retained = [...groups.values()].sort((a, b) => {
+    const browser = (group: typeof a) => group.some(item => /\.(?:html|jpg)$/.test(item.name)) ? 1 : 0;
+    return browser(b) - browser(a);
+  });
+  for (const group of retained) {
     const groupBytes = group.reduce((sum,item) => sum+item.bytes,0);
     if (now-Math.max(...group.map(item=>item.time)) > age || count+group.length > maxCount || bytes+groupBytes > maxBytes) {
       for (const item of group) rmSync(join(root,type,item.name), { force: true });
-    } else { bytes += groupBytes; count+=group.length; }
+    } else { bytes += groupBytes; count+=group.length; for (const item of group) kept.add(item.name); }
   }
+  return kept;
 }
 export function listDiagnosticIncidents(root: string) {
   ownedRoot(resolve(root));
@@ -321,5 +329,5 @@ export function writePrivateDiagnosticArtifact(root: string, input: { kind: "htm
   ownedRoot(root); const ref=`artifact_${randomUUID()}`;
   writeFileSync(join(root,"private",`${ref}.${input.kind}`),input.bytes,{flag:"wx",mode:0o600});
   atomic(join(root,"private",`${ref}.meta.json`), { owner:OWNER, privacy:"private", operationFingerprint:input.operationFingerprint, kind:input.kind, bytes:input.bytes.byteLength, ...(input.captureScope ? { captureScope: input.captureScope } : {}) });
-  prune(root,"private"); return ref;
+  return prune(root,"private").has(`${ref}.${input.kind}`) ? ref : undefined;
 }

@@ -130,3 +130,9 @@ test('exact Native interrupted status has unknown human actor even after transpo
   cause:'not_interrupted',userStopConfirmed:false,nextAction:'none',
  });
 });
+
+test('progress summary distinguishes local body delivery from host rendering',()=>{
+ const result=summarizeTurnDiagnostics([e('web_public_progress_title_only'),e('web_public_progress_ready'),e('public_progress_published'),e('public_progress_sse_queued'),e('public_progress_sse_pulled'),e('public_progress_transport_observed',{accepted:false})]);
+ expect(result.progress).toEqual({titleOnlyObservations:1,ready:1,published:1,queued:1,pulled:1,transportRefusals:1,hostDisplay:'not_observed'});
+ expect(result.state).toBe('in_progress');
+});

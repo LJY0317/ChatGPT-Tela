@@ -1906,6 +1906,36 @@ describe("ChatGPT semantic provider", () => {
     } finally { await surface.host.close(); }
   });
 
+  test("title-only progress is diagnosed once without changing final delivery", async () => {
+    const scratch=mkdtempSync(join(tmpdir(),"tela-title-only-"));
+    const prior=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    const file=join(scratch,"events.jsonl"); process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+    const driver=new FixtureDriver(fixture("ready-new-chat"));
+    const surface=await leaseFor(driver); const provider=new ChatGptSemanticProvider();
+    try {
+      const submitting=provider.submitTurn(surface.lease,request());
+      while(driver.current.revision==="r1")await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted=await submitting; if(submitted.state!=="proven")throw Error("fixture");
+      const users=driver.current.turns.filter(row=>row.role==="user");
+      const assistant={key:"assistant",role:"assistant" as const,parentUserTurnKey:"user-turn-1",phase:"streaming" as const,
+        publicProgress:["Thinking"],progressProbe:{titleCount:1,descriptionCount:0}};
+      driver.queued.push({...driver.current,revision:"title-only",turns:[...users,assistant]});
+      expect(await provider.waitForTurnEvent(surface.lease,submitted.value)).toMatchObject({state:"proven",value:{kind:"progress",summary:"Thinking"}});
+      driver.queued.push({...driver.current,revision:"new-title",turns:[...users,{...assistant,publicProgress:["Working"],progressProbe:{titleCount:1,descriptionCount:0,unmappedVisibleProsePresent:true}}]});
+      expect(await provider.waitForTurnEvent(surface.lease,submitted.value)).toMatchObject({state:"proven",value:{kind:"progress",summary:"Working"}});
+      driver.queued.push({...driver.current,revision:"finished",turns:[...users,{...assistant,phase:"complete",text:"done",publicProgress:["Working"],progressProbe:{titleCount:1,descriptionCount:0,unmappedVisibleProsePresent:true}}]});
+      expect(await provider.waitForTurnEvent(surface.lease,submitted.value)).toMatchObject({state:"proven",value:{kind:"completed",answer:"done"}});
+      const rows=readFileSync(file,"utf8").trim().split("\n").map(line=>JSON.parse(line));
+      expect(rows.filter(row=>row.stage==="web_public_progress_title_only")).toHaveLength(1);
+      expect(rows.filter(row=>row.stage==="web_public_progress_unmapped_prose")).toHaveLength(1);
+    } finally {
+      await surface.host.close();
+      if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;
+      rmSync(scratch,{recursive:true,force:true});
+    }
+  });
+
   test("public progress mutation alone does not prove post-tool continuation", async () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     const surface = await leaseFor(driver); const provider = new ChatGptSemanticProvider();

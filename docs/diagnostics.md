@@ -1069,15 +1069,30 @@ status and returned counts, distinguishing a filtered miss from full inventory d
 fingerprints without retaining the routing credential.
 
 Progress evidence follows `web_public_progress_extraction` → `web_public_progress_ready` →
-`public_progress_published` → `public_progress_transport_commit`. Publication records sequence,
+`public_progress_published` → `public_progress_sse_queued` → `public_progress_sse_pulled`
+→ `public_progress_transport_commit`. Publication records sequence,
 size and subscriber results; budget rejection is separate. A local transport commit is not
 proof that the Desktop UI rendered it. Existing turn summaries retain these stages.
+`public_progress_transport_observed` records each local callback's acceptance.
+Queued and pulled events retain the turn correlation and summary index without prose;
+pulled means the HTTP body consumer requested that text frame, not a Desktop rendering receipt.
+Turn summaries project these counts under `progress` and keep host display unobserved.
 
 Missing public progress uses the existing opt-in anomaly capture. Its structural census now
 includes up to eight latest keyed-turn shell ancestors (geometry, clipping, control/status
 and disclosure counts). It does not open reasoning panels or collect hidden reasoning for
 user-facing progress. Private capture also saves a separately sanitized latest renderer-shell
 HTML tail so a large prompt cannot consume the entire document-prefix budget.
+Title-only extraction additionally records `web_public_progress_title_only` and captures the
+renderer once per turn when private capture is enabled. A bounded branch census records the
+start marker's nearby siblings, paragraph counts, layout and hidden-state flags without
+text, class names or element IDs. A separate `web_public_progress_unmapped_prose` checkpoint
+records the later appearance of a nonempty rendered paragraph outside the selected progress
+shell and recognized user/answer bodies; this avoids relying only on an initial empty Thinking
+screen. It does not broaden progress extraction or turn authority.
+Boxless `display:contents` containers are reported using the same child visibility rule as
+extraction. Renderer HTML/JPEG pairs take retention priority over high-volume tool JSON;
+the existing total count, byte and age limits still apply.
 
 Use `chatgpt-tela diagnostics capture --mode until-disabled` for a local diagnostic session,
 then `chatgpt-tela diagnostics capture --minutes 0` to stop. Raw HTML, screenshots and private
@@ -1097,3 +1112,6 @@ reporting only, with no additional health polling, network dependency or admissi
 If both connectors fail before any MCP ingress, compare the local/tailnet path with the
 public-DNS relay path and an actual connector call. Preserve configuration during normal
 Tailscale reconnection; do not reset routes, credentials or user settings to probe a failure.
+Existing Tailscale status reads also record self-online observation, health-warning counts,
+peer/active-peer counts and exit-node selection. No peer identities, warning text, addresses
+or extra polling are retained. These local facts alone cannot prove public relay health.

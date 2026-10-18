@@ -157,7 +157,15 @@ export class NativeResponsesGateway {
     let progressCursor = registered.channel.progressTransportCursor;
     const unsubscribe = presentation?.onProgress && !signal.aborted
       ? registered.channel.subscribeProgress((summary, sequence) => {
-        if (presentation.onProgress!(summary) === false) throw new Error("progress transport did not accept event");
+        withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(authority.threadId),
+          turn_fingerprint: diagnosticFingerprint(authority.turnId) }, () => {
+          const accepted = presentation.onProgress!(summary) !== false;
+          emitDiagnosticEvent("chatgpt_tela_work", "public_progress_transport_observed", {
+            progress_sequence: sequence, progress_characters: summary.length, accepted,
+            delivery: "local_stream_callback_returned",
+          });
+          if (!accepted) throw new Error("progress transport did not accept event");
+        });
         progressCursor = sequence;
       }) : () => {};
     signal.addEventListener("abort", unsubscribe, { once: true });

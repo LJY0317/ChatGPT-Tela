@@ -385,12 +385,25 @@ export class TailscaleFunnelLeaseManager {
   async backendHealth(signal?: AbortSignal): Promise<TailscaleBackendHealth> {
     const startedAt = Date.now();
     let health: TailscaleBackendHealth;
+    let snapshot: Record<string, number | boolean> = {};
     try {
       const result = await this.#runner.run(["status", "--json"], signal);
       let parsed: unknown;
       try { parsed = JSON.parse(result.stdout) as unknown; }
       catch { parsed = undefined; }
       health = inspectTailscaleBackendHealth(parsed);
+      if (parsed && typeof parsed === "object") {
+        const value = parsed as Record<string, unknown>;
+        const self = value.Self && typeof value.Self === "object" ? value.Self as Record<string, unknown> : undefined;
+        const peers = value.Peer && typeof value.Peer === "object" ? Object.values(value.Peer) : undefined;
+        snapshot = {
+          status_parsed: true, self_online_observed: typeof self?.Online === "boolean", self_online: self?.Online === true,
+          health_observed: Array.isArray(value.Health), health_warning_count: Array.isArray(value.Health) ? value.Health.length : 0,
+          peers_observed: !!peers, peer_count: peers?.length ?? 0,
+          active_peer_count: peers?.filter(peer => peer && typeof peer === "object" && peer.Active === true).length ?? 0,
+          exit_node_selected: !!value.ExitNodeStatus,
+        };
+      }
     } catch (error) {
       const code = commandFailureCode(error);
       health = Object.freeze({ state: code } as TailscaleBackendHealth);
@@ -398,6 +411,7 @@ export class TailscaleFunnelLeaseManager {
     emitDiagnosticEvent("chatgpt_tela_ingress", "tailscale_backend_check", {
       state: health.state,
       duration_ms: diagnosticDurationMs(startedAt),
+      ...snapshot,
     });
     return health;
   }

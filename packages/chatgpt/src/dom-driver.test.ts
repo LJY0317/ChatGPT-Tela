@@ -308,20 +308,23 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(turns.find(t=>t.role==='assistant')?.publicProgress??[]).toEqual(ambiguous?[]:['Reviewing changes\n\nChecking the current patch.']);
     expect(JSON.stringify(turns.find(t=>t.role==='assistant')?.publicProgress??[])).not.toContain('FINAL_EXCLUDED');
   });
-  test.each(['visible','hidden','duplicate','answer'])("public status only follows a unique visible linked region inside its owned turn: %s", async mode => {
+  test.each(['visible','hidden','duplicate','answer','unlinked'])("public status only follows a unique visible linked region inside its owned turn: %s", async mode => {
     const label=new FixtureElement({id:'label'});label.innerText='Thinking';
-    const button=new FixtureElement({'aria-expanded':'true','aria-labelledby':'label','aria-controls':'details'});
+    const button=new FixtureElement({'aria-expanded':'true','aria-labelledby':'label',...(mode==='unlinked'?{}:{'aria-controls':'details'})});
     const shell=new FixtureElement({}, {'button[aria-expanded][aria-labelledby]':[button],'[id]':[label]});
     shell.childNodes=[button,label];
     const marker=Object.assign(new FixtureElement(),{parentElement:shell});
     const region=new FixtureElement({id:'details',...(mode==='hidden'?{hidden:''}:{}),...(mode==='answer'?{'data-markdown-text-style':'assistant-message'}:{})});
     region.childNodes=[{nodeType:3,textContent:'Visible public status.'}];
-    const group=new FixtureElement({'data-turn-key':'owned'}, {'[data-chatgpt-agent-turn-start]':[marker],'[id]':mode==='duplicate'?[region,new FixtureElement({id:'details'})]:[region],
+    const group=new FixtureElement({'data-turn-key':'owned'}, {'p':[region],'[data-chatgpt-agent-turn-start]':[marker],'[id]':mode==='duplicate'?[region,new FixtureElement({id:'details'})]:[region],
       ...(mode==='answer'?{'[data-markdown-text-style="assistant-message"]':[region]}:{})});
     group.contains=node=>[group,shell,region].includes(node as FixtureElement);
     const driver=new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, {'[data-turn-key]':[group]})));
-    const parts=(await driver.observe()).turns.find(t=>t.role==='assistant')?.publicProgress??[];
+    const assistant=(await driver.observe()).turns.find(t=>t.role==='assistant');
+    const parts=assistant?.publicProgress??[];
     expect(parts).toEqual(mode==='visible'?['Thinking\n\nVisible public status.']:['Thinking']);
+    expect(assistant?.progressProbe).toMatchObject({titleCount:1,descriptionCount:mode==='visible'?1:0});
+    if(mode==='unlinked')expect(assistant?.progressProbe?.unmappedVisibleProsePresent).toBe(true);
   });
   test("manual consent classifier releases only a current observed card, including warnings, without auto activation", async () => {
     const allow=new FixtureElement({'data-fixture-tag':'BUTTON'});allow.textContent='Allow once';
@@ -671,7 +674,7 @@ describe("current ChatGPT DOM surface driver", () => {
       const log = readFileSync(file, "utf8");
       const rows = log.trim().split("\n").map(line => JSON.parse(line)).filter(row => row.stage === "web_public_progress_extraction");
       expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ progress_container_visible: false, progress_container_has_rects: false,
+      expect(rows[0]).toMatchObject({ progress_container_visible: mode === "contents", progress_container_has_rects: false,
         progress_container_display: mode === "contents" || mode === "none" ? mode : "other",
         progress_container_opacity_zero: mode === "opacity-zero", progress_owned_control_count: 1,
         progress_owned_visible_control_count: 1, progress_owned_local_label_count: 1, progress_owned_visible_label_count: 1 });

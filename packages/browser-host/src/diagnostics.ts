@@ -62,6 +62,37 @@ export const DIAGNOSTIC_DOM_CAPTURE = String.raw`function(privateCapture) {
     result.shell_probe_available = true;
   } catch { result.shell_probe_available = false; }
   result.shell_nodes = shell;
+  // A public prose region can be a sibling of the disclosure/title shell. Record
+  // relationships and visibility only; no prose, IDs, class names or attributes.
+  const progressBranches = [];
+  try {
+    const latest = groups.at(-1);
+    const starts = latest ? [...latest.querySelectorAll('[data-chatgpt-agent-turn-start]')] : [];
+    let parent = starts.length === 1 ? starts[0].parentElement : undefined;
+    for (let depth = 0; parent && latest.contains(parent) && depth < 4; depth++, parent = parent.parentElement) {
+      for (const [index, node] of [...parent.children].slice(0,64).entries()) {
+        if (progressBranches.length >= 64) break;
+        const style = getComputedStyle(node);
+        const paragraphs = [...node.querySelectorAll('p')];
+        progressBranches.push({ depth, child_index: index, child_count: node.children.length,
+          contains_start: node === starts[0] || node.contains(starts[0]),
+          disclosure_count: node.querySelectorAll('button[aria-expanded][aria-labelledby]').length,
+          paragraph_count: paragraphs.length,
+          rendered_paragraph_count: paragraphs.filter(p => p.getClientRects().length > 0
+            && getComputedStyle(p).visibility !== 'hidden' && getComputedStyle(p).display !== 'none').length,
+          contains_user: node.matches('[data-user-message-bubble]') || !!node.querySelector('[data-user-message-bubble]'),
+          contains_answer: node.matches('[data-markdown-text-style="assistant-message"]') || !!node.querySelector('[data-markdown-text-style="assistant-message"]'),
+          nested_turn_count: node.querySelectorAll('[data-turn-key]').length,
+          has_rects: node.getClientRects().length > 0, display_contents: style.display === 'contents',
+          hidden: node.hidden || node.getAttribute('aria-hidden') === 'true' || style.display === 'none'
+            || style.visibility === 'hidden' || style.visibility === 'collapse' || style.opacity === '0',
+        });
+      }
+      if (progressBranches.length >= 64) break;
+    }
+    result.progress_branch_probe_available = true;
+  } catch { result.progress_branch_probe_available = false; }
+  result.progress_branches = progressBranches;
   const resources = performance.getEntriesByType('resource').slice(-64);
   result.resource_count = resources.length;
   result.resource_status_observed_count = resources.filter(row => Number(row.responseStatus) > 0).length;
@@ -97,7 +128,7 @@ export const DIAGNOSTIC_DOM_CAPTURE = String.raw`function(privateCapture) {
   return result;
 }`;
 
-async function captureEvidence(surface: BrowserSurfaceLease, reason: "turn_failure" | "approval_anomaly" | "surface_anomaly" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
+async function captureEvidence(surface: BrowserSurfaceLease, reason: "turn_failure" | "approval_anomaly" | "surface_anomaly" | "progress_description_missing" | "progress_prose_unmapped" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
   const root=configuredDiagnosticRoot(); if (!root) return;
   const operation=diagnosticContext().operation_fingerprint ?? diagnosticFingerprint([surface.taskId,surface.epochId].join("\n"));
   const key=operation+reason; const now=Date.now();
@@ -122,6 +153,7 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "turn_failu
     fields.focus_html_truncated=snapshot.focus_html_truncated===true;
     fields.focus_capture_present=typeof snapshot.focus_html==="string";
     fields.shell_probe_available=snapshot.shell_probe_available===true;
+    fields.progress_branch_probe_available=snapshot.progress_branch_probe_available===true;
     emitDiagnosticEvent("chatgpt_tela_browser","browser_snapshot_observed",fields);
     if (Array.isArray(snapshot.shell_nodes)) for (const node of snapshot.shell_nodes.slice(0,8)) {
       if (!node || typeof node !== "object") continue;
@@ -131,6 +163,14 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "turn_failu
         else if (name==="kind" && typeof value==="string" && ["div","article","section","main","button","span","body","html","other"].includes(value)) evidence.kind=value;
       }
       emitDiagnosticEvent("chatgpt_tela_browser","browser_shell_observed",evidence);
+    }
+    if (Array.isArray(snapshot.progress_branches)) for (const node of snapshot.progress_branches.slice(0,64)) {
+      if (!node || typeof node !== "object") continue;
+      const evidence: Record<string, string|number|boolean> = { reason_class: reason };
+      for (const [name,value] of Object.entries(node)) {
+        if (typeof value === "boolean" || typeof value === "number" && Number.isSafeInteger(value) && value >= 0) evidence[name] = value;
+      }
+      emitDiagnosticEvent("chatgpt_tela_browser","browser_progress_branch_observed",evidence);
     }
     if (!enabled || snapshot.capture_safe!==true) return;
     if (typeof snapshot.html==="string") writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.html),operationFingerprint:operation,captureScope:"document" });
@@ -150,11 +190,11 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "turn_failu
 }
 
 /** Diagnostic failure never changes the browser turn result or approval policy. */
-export async function captureBrowserDiagnosticEvidence(surface: BrowserSurfaceLease, reason: "turn_failure" | "approval_anomaly" | "surface_anomaly" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
+export async function captureBrowserDiagnosticEvidence(surface: BrowserSurfaceLease, reason: "turn_failure" | "approval_anomaly" | "surface_anomaly" | "progress_description_missing" | "progress_prose_unmapped" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
   try { await captureEvidence(surface, reason); } catch { /* Best effort, including missing capabilities. */ }
 }
 
-export async function captureBrowserDiagnosticCheckpoint(surface: BrowserSurfaceLease, reason: "before_submit" | "turn_accepted" | "surface_anomaly" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
+export async function captureBrowserDiagnosticCheckpoint(surface: BrowserSurfaceLease, reason: "before_submit" | "turn_accepted" | "surface_anomaly" | "progress_description_missing" | "progress_prose_unmapped" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
   const root=configuredDiagnosticRoot();
   if (root && privateDiagnosticCaptureEnabled(root)) await captureBrowserDiagnosticEvidence(surface,reason);
 }

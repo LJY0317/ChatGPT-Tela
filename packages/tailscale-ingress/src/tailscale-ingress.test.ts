@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 import { readOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import {
   createTailscaleFunnelLease,
@@ -93,6 +94,20 @@ describe("Tailscale Funnel ownership lease", () => {
       BackendState: "Stopped",
       Self: { Online: false },
     })).toEqual({ state: "stopped", backendState: "Stopped" });
+  });
+
+  test("backend diagnostics reuse status and retain only transport structure", async () => {
+    const root=mkdtempSync(join(tmpdir(),"tela-backend-diagnostic-"));
+    const rows: unknown[]=[];let calls=0;
+    const stop=observeDiagnosticEvents(row=>{if(row.stage==="tailscale_backend_check")rows.push(row);});
+    try {
+      const manager=new TailscaleFunnelLeaseManager({manifestPath:join(root,"ownership.json"),installId:"fixture",productVersion:"test",runner:{async run(){calls++;return {stdout:JSON.stringify({BackendState:"Running",Self:{Online:true,DNSName:"PRIVATE_HOST"},Health:["PRIVATE_WARNING"],Peer:{PRIVATE_PEER:{Active:true},OTHER:{Active:false}},ExitNodeStatus:{ID:"PRIVATE_EXIT"}}),stderr:""};}}});
+      expect(await manager.backendHealth()).toEqual({state:"ready",backendState:"Running"});
+      expect(calls).toBe(1);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({self_online:true,health_warning_count:1,peer_count:2,active_peer_count:1,exit_node_selected:true});
+      expect(JSON.stringify(rows)).not.toContain("PRIVATE");
+    } finally {stop?.();rmSync(root,{recursive:true,force:true});}
   });
 
   test("diagnosis reports Tailscale-off as the root cause before inspecting Funnel state", async () => {
