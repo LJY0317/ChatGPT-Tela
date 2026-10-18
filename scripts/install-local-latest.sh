@@ -66,6 +66,11 @@ fi
 
 if [[ -x "$installed_launcher" && -f "$bin_root/.chatgpt-tela-payload-v1.json" ]]; then
   lifecycle_command=("$installed_launcher" upgrade)
+  recovery_payload="$install_root/state/install/recovery/source/payload"
+  recovery_key="$install_root/state/install/recovery/source/trusted-key.pem"
+  if [[ -d "$recovery_payload" && -f "$recovery_key" ]]; then
+    lifecycle_command+=(--recovery-payload "$recovery_payload" --recovery-public-key "$recovery_key")
+  fi
 else
   lifecycle_command=("$payload/chatgpt-tela" install)
 fi
