@@ -16,6 +16,7 @@ import { ProcessExecutionJournal } from "./process-execution-journal";
 import { ProcessRetirement, type RetirementArtifactProof } from "./process-retirement";
 import { ProcessCompletionArchive } from "./process-completion-archive";
 import { callProcessOwner, type ProcessOwnerRequest } from "./process-owner";
+import { windowsCommandLine } from "./windows-command";
 
 const MAX_YIELD_MS = 12_000;
 const DEFAULT_YIELD_MS = 10_000;
@@ -245,7 +246,7 @@ function parseStore(value: unknown): OperationStore {
 
 function shell(command: string): { readonly executable: string; readonly args: readonly string[] } {
   if (process.platform === "win32") {
-    return { executable: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", command] };
+    return { executable: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", windowsCommandLine(command)] };
   }
   return { executable: "/bin/sh", args: ["-lc", command] };
 }

@@ -31,8 +31,13 @@ export async function withPackagedTransitionOwner<T>(input: {
     let created: DatabaseSync | undefined;
     try {
       created = new DatabaseSync(temporary);
-      created.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=1; CREATE TABLE authority (install_id TEXT PRIMARY KEY);`);
-      created.prepare("INSERT INTO authority VALUES (?)").run(input.installId);
+      // Bun 1.4 can keep a prepared statement's SQLite handle open after
+      // close() on Windows, preventing removal of the unpublished hardlink.
+      // Encode the manifest-owned ID as a SQLite hex literal (never SQL text).
+      const installIdHex = Buffer.from(input.installId, "utf8").toString("hex");
+      created.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=1;
+        CREATE TABLE authority (install_id TEXT PRIMARY KEY);
+        INSERT INTO authority VALUES (CAST(X'${installIdHex}' AS TEXT));`);
       created.close(); created = undefined;
       chmodSync(temporary, 0o600);
       // Publish without replacing an inode another coordinator may have locked.

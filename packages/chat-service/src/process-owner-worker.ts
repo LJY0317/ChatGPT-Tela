@@ -10,6 +10,7 @@ import { appendProcessOutput, consumeProcessOutput, type ProcessOutputState } fr
 import { ProcessExecutionJournal } from "./process-execution-journal";
 import { startProcessOwnerControl } from "./process-owner";
 import type { ProcessOperationState } from "./processes";
+import { windowsCommandLine } from "./windows-command";
 
 interface Bootstrap {
   readonly version: 1;
@@ -113,7 +114,7 @@ export async function runProcessOwnerWorker(): Promise<void> {
   try {
     journal.publishLive(claim, control.descriptor);
     const executable = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "/bin/sh";
-    const args = process.platform === "win32" ? ["/d", "/s", "/c", input.command] : ["-lc", input.command];
+    const args = process.platform === "win32" ? ["/d", "/s", "/c", windowsCommandLine(input.command)] : ["-lc", input.command];
     child = spawn(executable, args, { cwd, env: process.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     child.stdout.on("data", (chunk: Buffer) => appendProcessOutput(output, chunk));
     child.stderr.on("data", (chunk: Buffer) => appendProcessOutput(output, chunk));
