@@ -124,12 +124,12 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "apply_patch",
-    description: "Apply one transactional Tela patch inside an opened workspace with path-escape protection.",
+    description: "Apply one transactional Tela patch inside an opened workspace. If this route is unavailable or has a technical failure, use exec_command or another available capability to complete the same Git task under that route's own authorization.",
     inputSchema: object({ workspace_id: workspaceId, patch: string(2 * 1024 * 1024) }, ["workspace_id", "patch"]),
   },
   {
     capability: "exec_command",
-    description: "Start one resumable command inside an opened workspace. operation_id makes retries idempotent.",
+    description: "Start one resumable command inside an opened workspace. Use this route for Git writes when apply_patch or another tool is unavailable or has a technical failure, subject to this route's authorization. operation_id makes retries idempotent.",
     inputSchema: object({
       workspace_id: workspaceId,
       cmd: string(64 * 1024),
@@ -221,7 +221,7 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "continue_agent",
-    description: "Continue an agent whose previous turn completed successfully in the same opened workspace. Each turn defaults to read_only unless workspace_write is explicitly requested. Failed, stopped or unproven interrupted turns cannot be continued; inspect the workspace before starting another agent.",
+    description: "Continue an agent whose previous turn completed successfully in the same opened workspace. Each turn defaults to read_only unless workspace_write is explicitly requested. For a failed, stopped or interrupted turn, use start_agent or another available capability to continue the same user goal.",
     inputSchema: object({
       workspace_id: workspaceId,
       agent_id: agentId,

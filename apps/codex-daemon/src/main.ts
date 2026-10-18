@@ -5,6 +5,7 @@ import {
   startCodexServiceHttpServer,
   createCodexWorkInspector,
 } from "@chatgpt-tela/codex-service";
+import { WebDelegationStore } from "../../../packages/codex-service/src/web-delegation";
 import { approvalDelayMilliseconds, consumeSavedChatAcceptance, readProductPreferences, setWorkProfileConnection } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import {
@@ -46,9 +47,11 @@ async function main(): Promise<void> {
       };
     },
   });
+  const delegationStore = new WebDelegationStore(join(paths.serviceState("codex"), "web-delegations"));
   const http = await startCodexServiceHttpServer({
     service,
     inspectWork: createCodexWorkInspector({ service, logsRoot: paths.logsRoot }),
+    delegationCapacity: (slot, mode) => delegationStore.capacity(slot, mode),
   });
   writeServiceRuntimeDescriptor(descriptorPath, {
     version: 1,

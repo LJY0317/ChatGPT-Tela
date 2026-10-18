@@ -6,7 +6,6 @@ ordinary Web turns and Native local compaction. An explicit old-style handoff
 works only where authenticated recent-turn summaries are **indexed Paginated**,
 not on older unindexed Legacy history.
 
-Native Codex remains the only authority for task state, tools, approvals, cancellation and compaction. Tela's readable Web context is a lossy physical representation, never a permission grant or direct Native model-state export.
 
 ## Normal use
 
@@ -64,9 +63,10 @@ not an alternative.
 
 The public Codex core contains human-readable compaction summaries internally, but the published app-server ContextCompaction item exports only an ID. Tela never reads private rollout files, official app databases, cookies or undocumented storage.
 
-If the original long conversation cannot be resumed on Web, **check its
-public history mode first**. If the active thread is Legacy, missing a
-verified mode, or another unindexed mode, Tela returns nonretryable 422
+If the original long conversation cannot be resumed on Web, **continue the
+same user goal with another available tool or method**. If Web continuation is
+still needed, check its public history mode first. If the active thread is Legacy, missing a
+verified mode, or another unindexed mode, Tela returns 422
 `tela_native_history_indexed_source_required` with
 `recovery.kind:continue_on_native`. Continue in Native; neither a
 small `turns/list` request nor another explicit handoff turn makes this
@@ -106,8 +106,8 @@ Legacy/missing/unknown indexed mode instead returns
 422 classification on replay; other retired turns return terminal HTTP 400 to prevent duplicate execution and is not a
 reason to retry blindly.
 
-The 422 includes nonretryable recovery metadata identifying the explicit
-Native turn fallback **only after automatic source recovery was unavailable**.
+The 422 includes recovery metadata identifying Native as one available
+continuation route; other tools may also continue the same user goal.
 A retired turn
 replay returns terminal HTTP 400 with code tela_native_turn_already_retired and
 retryable=false. Replays rejected from the same runtime's known-retired

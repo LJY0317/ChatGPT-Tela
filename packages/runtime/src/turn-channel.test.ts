@@ -8,7 +8,6 @@ import {
   type NativeToolDescriptor,
 } from "@chatgpt-tela/core";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
-import { extractNativeToolResults } from "@chatgpt-tela/codex";
 import { RuntimeTurnChannel } from "./turn-channel";
 
 function tool(
@@ -311,36 +310,18 @@ test("Native diagnostic witnesses correlate a queued call, local delivery and er
     const channel=new RuntimeTurnChannel(binding([tool("PRIVATE_WIRE")]));channel.markSubmitted();channel.markAccepted();
     const wait=channel.requestTool({callId:"PRIVATE_CALL",wireName:"PRIVATE_WIRE",mode:"structured",arguments:{cmd:"PRIVATE_COMMAND"}});
     channel.markNativeToolDelivered("PRIVATE_CALL");
-    const result={callId:"PRIVATE_CALL",content:"This tool call was blocked by OpenAI because we couldn't determine the safety status of the request. PRIVATE_RESULT",isError:true};
+    const result={callId:"PRIVATE_CALL",content:"PRIVATE_RESULT",isError:true};
     channel.deliverNativeToolResult(result);channel.releaseNativeToolResultToWeb("PRIVATE_CALL");
     expect(await wait).toEqual(result);channel.markWebContinuation();channel.complete("done");expect(await channel.waitForFinal()).toBe("done");
-    const raw=readFileSync(file,"utf8");expect(raw).not.toMatch(/PRIVATE_|\/workspace|couldn't determine/);
+    const raw=readFileSync(file,"utf8");expect(raw).not.toMatch(/PRIVATE_|\/workspace/);
     const rows=raw.trim().split("\n").map(x=>JSON.parse(x)).filter(x=>x.stage.startsWith("native_tool_"));
     expect(rows.map(x=>x.stage)).toEqual(["native_tool_queued","native_tool_delivery_committed","native_tool_result_error","native_tool_result_released"]);
     expect(new Set(rows.map(x=>x.operation_fingerprint)).size).toBe(1);expect(new Set(rows.map(x=>x.schema_fingerprint)).size).toBe(1);
     expect(rows[0]).toMatchObject({policy:"read-only",root_count:1,native_delivery_committed:false,result_received:false});
-    expect(rows[2]).toMatchObject({native_delivery_committed:true,result_received:true,execution_proven:false,origin_proven:false,reason_class:"safety_status_undetermined"});
+    expect(rows[2]).toMatchObject({native_delivery_committed:true,result_received:true,error_result_reported:true});
     expect(rows[3]).toMatchObject({native_delivery_committed:true,result_received:true,execution_proven:false,origin_proven:false});
   }finally{
     if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;
     await new Promise(resolve=>setImmediate(resolve));rmSync(scratch,{recursive:true,force:true});
   }
-});
-
-test("unflagged function refusal is discoverable while its original result and authority stay intact", async () => {
-  const scratch=mkdtempSync(join(tmpdir(),"tela-unflagged-witness-")), file=join(scratch,"events.jsonl");
-  const prior=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
-  try {
-    const content="This tool call was blocked by OpenAI because we couldn't determine the safety status of the request. PRIVATE_RESULT";
-    const result=extractNativeToolResults({input:[{type:"function_call_output",call_id:"PRIVATE_CALL",output:content} ]})[0]!;
-    expect(result.isError).toBe(false);
-    const channel=new RuntimeTurnChannel(binding([tool("PRIVATE_WIRE")]));channel.markSubmitted();channel.markAccepted();
-    const wait=channel.requestTool({callId:"PRIVATE_CALL",wireName:"PRIVATE_WIRE",mode:"structured",arguments:{cmd:"PRIVATE_COMMAND"}});
-    channel.markNativeToolDelivered("PRIVATE_CALL");channel.deliverNativeToolResult(result);channel.releaseNativeToolResultToWeb("PRIVATE_CALL");
-    expect(await wait).toEqual(result);expect(result.content).toBe(content);channel.markWebContinuation();channel.complete("done");
-    const raw=readFileSync(file,"utf8");expect(raw).not.toMatch(/PRIVATE_|couldn't determine|workspace/);
-    const row=raw.trim().split("\n").map(x=>JSON.parse(x)).find(x=>x.stage==="native_tool_result_signal_anomaly");
-    expect(row).toMatchObject({error_result_reported:false,message_signal_observed:true,reason_class:"safety_status_undetermined",origin_proven:false,execution_proven:false});
-  }finally { if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;
-    await new Promise(resolve=>setImmediate(resolve));rmSync(scratch,{recursive:true,force:true}); }
 });

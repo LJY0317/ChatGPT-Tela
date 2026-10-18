@@ -110,3 +110,23 @@ test('optional checkpoint refusal is not the cause of a later admitted task fail
  expect(failed.diagnosis.firstFailure).toMatchObject({stage:'native_execution_failed',reason:'unknown'});
  expect(failed.diagnosis.certainty).toBe('insufficient_evidence');
 });
+
+test('exact Native interrupted status has unknown human actor even after transport cleanup',()=>{
+ const interrupted=summarizeTurnDiagnostics([
+  e('native_watch_terminated',{reason_class:'native_interrupted'}),
+  e('http_transport_closed',{close_source:'response_closed'}),
+  e('native_turn_retired',{reason_class:'owner_signal'}),
+ ]);
+ expect(interrupted.state).toBe('interrupted');
+ expect(interrupted.diagnosis.termination).toMatchObject({
+  cause:'native_interrupted_observed',confidence:'confirmed_boundary',actor:'unknown',
+  userStopConfirmed:false,firstObservedStage:'native_watch_terminated',nextAction:'inspect_host_stop_receipt',
+ });
+ const completed=summarizeTurnDiagnostics([
+  e('native_outcome_committed',{outcome:'final'}),
+  e('native_response_observer_ended',{reason_class:'gateway_shutdown'}),
+ ]);
+ expect(completed.diagnosis.termination).toMatchObject({
+  cause:'not_interrupted',userStopConfirmed:false,nextAction:'none',
+ });
+});

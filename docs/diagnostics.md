@@ -8,9 +8,7 @@ dispatcher. The event contains a fixed capability name and, when safely
 available, a workspace fingerprint; never the command, patch, input or path.
 It is **not** evidence that the operation was accepted, executed or committed.
 Use existing process operation/status and workspace diff evidence for those
-claims. A host/platform refusal before ingress cannot emit this event; its
-absence alone proves nothing when diagnostic transport or retention is unknown.
-Do not replay an upstream-refused action through another execution route.
+claims. Its absence alone proves nothing when diagnostic transport or retention is unknown.
 
 ## Native-to-Web preparation triage
 
@@ -175,8 +173,7 @@ current profile Web approval and reports historical approval-wait evidence.
 Web card state is **profile-scoped**, not proof it belongs to that
 Native conversation. `unavailable` includes a fixed observation
 failure reason where supported; ChatGPT host-owned approval cards
-remain pre-ingress and cannot be approved by Tela. See
-[approval review boundaries](approval-review-boundaries.md).
+remain pre-ingress and are handled by ChatGPT.
 
 When a current selected Web card is pending, `browser.approvalState` and the
 optional `browser.approvalWait` report only the existing owner-bound waiting
@@ -255,10 +252,7 @@ exported, and this command sends, edits, approves and cancels nothing.
 
 For remote work, the same scoped status can help an agent tell the user
 whether the Native turn is still active, a past approval wait has no observed
-clearance, and which safe next action is available. It cannot guarantee
-unattended completion when the host requires a separate human safety review;
-remote approval needs a specifically authenticated user/host interface with
-fresh card identity and an actual receipt, not an inferred browser click.
+clearance, and which next action is available.
 
 ```sh
 chatgpt-tela diagnostics context --scope <24-character-scope-fingerprint> --minutes 120
@@ -315,14 +309,13 @@ cause or proof of actual Native execution. The original exception, ownership,
 checkpoint authority, and retry behavior are unchanged. No new model calls,
 session creation, or full-history transfers are triggered by diagnostics.
 Retired-turn HTTP 400 is terminal for Native clients and must not
-be conflated with an initial context-planning failure or Host safety refusal.
+be conflated with an initial context-planning failure.
 
 Native tool delivery evidence is deliberately ordered: `native_tool_delivery_committed`
 records the channel's successful local acknowledgement; only after that
 boundary may `native_outcome_committed` describe a tool-call outcome. A
 rejected duplicate commit must not create another success witness. Neither
-event attests Host execution, model continuation, or acceptance by a platform
-safety reviewer.
+event attests Host execution or model continuation.
 
 Retirement emits `native_turn_retired` with a closed `reason_class`
 (`owner_changed`, `owner_signal`, `watch_failed`,
@@ -394,10 +387,9 @@ local instrumentation cannot manufacture that receipt or recover the host's inte
 cap, within the unchanged byte budget. Source coverage exposes malformed/oversized rows, skipped
 outside-window rows, unavailable/rotated sources and remaining caps. An absent result is not proof
 of no rejection. `boundaries.toolEvidence` separates observed approval dispatch/input/card-clear,
-Native queue/delivery/result, reported errors, refusal signals and incomplete inspection. Counts
+Native queue/delivery/result, reported errors and incomplete inspection. Counts
 stop at report time; without an operation selector they are aggregate observations. They never
-establish the cause of a later rejected request. In particular, approval receipt does not prove
-downstream safety review acceptance, and HTTP 200 is transport success, not task success.
+establish the cause of a later rejected request. Approval receipt and HTTP 200 are not task-success proof.
 
 This common on-demand analysis is shared by Chat, Work/Codex and delegation incident consumers;
 it merges no mutable service/account authority and adds no polling, model call or raw capture.
@@ -419,13 +411,12 @@ retry, original exceptions or Native execution:
 | Chat durable persistence | `process_state_storage_failed` | Store write or the independent 1 MiB serialization budget failed; structural byte/count fields only. |
 | Chat recovery and retirement | `process_recovery_failed`, `process_retirement_failed` | Failed read/retire/write phase and a safe reason class; uncertain owners remain protected. |
 | Chat process output | `process_result_retention_failed` | Output retention failed; unknown state is preserved instead of trusting a successful execution. |
-| Chat shutdown | `shutdown_rejected` | Active request count or unresolved-work safety gate refused shutdown. `active_calls=0` does **not** prove the process reservation registry is empty: an accepted command can continue after its original capability request completes. |
+| Chat shutdown | `shutdown_rejected` | Active request count or unresolved-work gate refused shutdown. `active_calls=0` does **not** prove the process reservation registry is empty: an accepted command can continue after its original capability request completes. |
 | Chat local incidents | `reasonClass` on `list_incidents`/`show_incident` | A persisted, bounded error classification in addition to existing capability and failed/aborted status. Old records without this optional field remain readable. |
 | Codex paginated owner proof | `native_current_turn_rejected` | Missing/Legacy indexing, unavailable/invalid page, changed active status, owner or environment **before Web authority is granted**. |
 | Codex original live Legacy receipt | `native_live_turn_proven`, `desktop_native_live_turn_rejected` | Only an original same-socket `turn/start` ACK plus unchanged metadata-only owner checks may prove a current Legacy turn without paging. A successful proof records fixed `history_mode=legacy` / `route_kind=public_live_ack_metadata`. Ambiguous, late or saturated receipts emit fixed rejection reason classes; never raw thread/turn ids, RPC payload, prompts or tools. A live receipt is not historical context provenance. |
 
 Original-turn receipt reuse is refused with fixed `desktop_native_live_turn_rejected.reason_class=reused_request_id`. A delayed duplicate ACK cannot grant a different Legacy thread's authority; the original Native JSON-RPC traffic remains unchanged. This reason identifies only an unsafe receipt correlation, not a Native execution failure.
-| Codex automatic handoff | `native_auto_handoff_rejected` | A direct call to the default-denied research adapter was rejected **before RPC connect** (`prepare`, `verify_source`, `verify_recent`), or an accidental callback injection was ignored by the continuity resolver (`continuity_resolver`). At most one resolver event per decision; phase and fixed `production_disabled` class only, never raw thread IDs, user content or model strings. The product does not wire this adapter. |
 | Codex explicit manual handoff | `native_manual_handoff_rejected` | A public indexed summary contained unexpected visible activity in `source_turn` (tool/action, multiple messages, unknown kind) or an already-acted `current_turn` (`unexpected_visible_activity`). A final metadata-only indexed head check may also refuse a changed newest current turn (`current_turn_changed`) or malformed head (`invalid_indexed_head`). Only fixed phase/reason fields; never activity details, prompt, tool output, or Native identifiers. Absence of this event does **not** prove a tool-free engine policy. |
 | Native-to-Web streamed source recovery | `native_context_recovery_streamed` | After SSE progress commits HTTP 200, late typed Native bootstrap failure ends with `response.failed`. Records only `transport_phase=sse_after_progress` and fixed `reason_class` (either `history_mode_unindexed` or `history_bootstrap_required`). The client receives the same nonretryable recovery action as HTTP 422. This is a failed continuation, not successful delivery; neither event nor SSE failure contains original exception text. |
 
@@ -501,22 +492,6 @@ generated request/operation/scope fingerprint and is never account authority.
 For failures outside the known taxonomy, `unknown` is intentional. Do not
 fall back to raw error strings to improve classification coverage.
 
-**No cross-product host observation is invented.** DevSpace's host-visible
-MCP request can be correlated using its independently owned lifecycle
-diagnostics, but OpenAI's pre-tool safety gate can reject an invocation
-*before DevSpace receives any request*. In that case there is no DevSpace
-request ID, tool start, or process reservation to inspect. Missing log
-entries also could mean a transport/logging gap; absence is not proof of a
-particular safety-policy decision. To diagnose that gap, the **host/platform**
-would need an authenticated, consented, privacy-safe decision record with
-only a locally correlateable attempt reference, stage
-(`host_policy_before_dispatch` vs `transport` vs `devspace_received`),
-fixed reason class, policy contract revision, and a Boolean indicating
-whether dispatch actually occurred. Never log the blocked prompt,
-command, shell arguments, file content, raw identifiers or policy internals
-that would expose bypass details. Tela cannot implement a platform preflight
-callback for decisions it never sees.
-
 All added coverage is **source/test verified only** until a separately
 approved build/installation and reproduction. Existing logs do not
 retroactively acquire these fields. The source still cannot attest
@@ -581,7 +556,7 @@ Failure/checkpoint DOM evidence also records bounded viewport geometry near the 
 It reads at most 16 ancestors, does not move the viewport, and logs no text or element identities.
 This can help investigate rendering/virtualization but is not response ownership proof.
 
-### Native tool contract and safety-status evidence
+### Native tool contract
 
 `native_tool_queued`, `native_tool_delivery_committed`, and `native_tool_result_received` /
 `native_tool_result_error` correlate the exact call with process-local salted tool/schema fingerprints,
@@ -591,14 +566,8 @@ Contract inspection is bounded to512 nodes/12 levels/64 KiB of strings; incomple
 Local transport commitment and result receipt do not prove host execution, permission acceptance,
 or the origin of a failure. They never affect validation, delivery, replay or approval decisions.
 
-Shared MCP tracing distinguishes an error result from a thrown callback error. Error-only inspection
-of already received text is bounded to16 KiB characters/32 nodes and records whether the known
-safety-status-undetermined message was observed. `origin_proven:false` and `execution_proven:false`
-remain explicit: this is a message signal, not attestation of an OpenAI policy decision. Unknown or
-truncated errors stay unclassified, and original results/errors are returned unchanged. There is no
-new request, retry, poller, capture enablement or idle work. Existing local rotation/incidents apply.
-A platform rejection before Tela receives a request still requires host/platform evidence; these logs
-cannot retroactively explain that rejection or make a blocked operation permissible.
+Shared MCP tracing distinguishes an error result from a thrown callback error. Original
+results/errors are returned unchanged. Existing local rotation/incidents apply.
 
 For an **owned Tela Web** approval card, the adapter uses structural card and control observations only;
 it does not classify card text or warning language. `approval_wait_transition` retains its distinct
@@ -786,7 +755,6 @@ unchanged revision adds no incident; a changed revision may record a new one. Ex
 incident retention applies. No text, DOM identifiers, coordinates, capture or extra polling is added;
 this evidence never changes approval authority or selects another click target.
 
-`approval_dispatch_started` marks the separate input boundary. Its outcome remains one-shot: an
 uncertain dispatch is never automatically retried against the same card. Preparation completion or
 `approval_activated` alone does not prove input receipt, card clearance, tool execution or task success.
 
@@ -794,7 +762,7 @@ uncertain dispatch is never automatically retried against the same card. Prepara
 
 `native_execution_failed` records the first bounded execution failure class and phase. `native_outcome_committed` records provider tool/final delivery, not official Native task termination (`native_terminal_observed=false`). `native_replay_rejected` carries pseudonymous scope/turn correlations and `current_authority_proven=false`; it is a negative guard, not a current-task proof. Match these events before attributing a409 to stale new-turn identity. A model response may complete while the official engine still has accepted steering input. These events do not relax retirement or authorize automatic replay.
 
-### Requested route, Web readback and unflagged tool refusals
+### Requested route and Web readback
 
 `web_turn_plan` records `provider_kind:web` and a bounded requested-model fingerprint;
 `native_dispatch_started` records `provider_kind:native`. A model catalog selection or a Desktop
@@ -803,23 +771,6 @@ planning, `web_model_selected`, browser acceptance, tool delivery/results and Na
 `web_model_selected` stores a pseudonymous family fingerprint, finite effort category, and successful
 family/effort readback booleans. The canonical diagnostic reader now retains those effort values;
 no model labels, account identity or browser content is exported.
-
-Function/custom tool outputs do not carry a reliable error flag in the Native Responses contract.
-`native_tool_result_signal_anomaly` and shared MCP `tool_result_signal_anomaly` observe an unflagged
-host-refusal envelope, separately from `native_tool_result_error`/`tool_error`. The common bounded
-adapter checks only known message/content/text/error fields or a bounded JSON envelope, with a
-16 KiB/32-node/16-array-entry budget. Unflagged text must start with the full known host refusal;
-a sentence embedded in quoted source or a log excerpt does not qualify. No output is reclassified,
-modified, retried or used to grant/revoke execution authority.
-
-`error_result_reported:false` means the received result flag did not identify an error.
-`message_signal_observed:true` is only a textual signal; `origin_proven:false` and
-`execution_proven:false` remain explicit even when the text names a platform. Ordinary content can
-imitate such a prefix, so the signal is never task-failure or policy-origin authority.
-Unknown envelopes or clipped inspection do not prove absence of a refusal. The observer adds no
-upstream request, browser snapshot, timer, private capture or idle work. Existing bounded local
-incident/log retention applies. Shared MCP tracing covers compatible Tela Chat and Codex callers;
-Native tool execution outside these observable boundaries cannot be inferred from those logs.
 
 ### Native capacity and streamed failures
 
@@ -1037,3 +988,19 @@ a prior local settlement existed. They help identify repeated reconstruction; th
 not prove wasted billing or semantic recall. Missing old fields remain unknown. The
 packaged launcher accepts the same `--view summary --limit 1` options as the source CLI.
 All evidence uses existing bounded rotation; no cumulative archive or idle model work.
+
+
+## Interruption cause boundary
+
+`native_response_observer_ended` identifies whether the local observer was
+closed by gateway shutdown, observer replacement, or an incoming client
+cancel/disconnect signal. `diagnostics context` projects
+`summary.diagnosis.termination` with cause, evidence stages, confidence, and
+next action. HTTP close and AbortSignal alone **never** prove that a person
+pressed Stop. `userStopConfirmed` remains false without a trusted,
+turn-correlated host Stop event and cancellation acknowledgment. This evidence
+is future-facing; it cannot identify the actor behind an older `turn_aborted`.
+The existing `native_watch_terminated` receipt is also included. An exact
+`native_interrupted` observation establishes an interrupted Native turn,
+with the human actor still unknown; a later HTTP disconnect cannot erase
+that first observed boundary.

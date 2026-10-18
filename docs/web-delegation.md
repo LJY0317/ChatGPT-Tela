@@ -12,7 +12,8 @@ profile. They do not start, update or restart services. The default profile is u
 
 ```sh
 bun run cli web-delegate catalog
-bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt
+bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt [--mode read|write]
+bun run cli web-delegate capacity [--slot N] [--mode read|write]
 bun run cli web-delegate status --job UUID
 bun run cli web-delegate reconcile --job UUID
 bun run cli web-delegate result --job UUID
@@ -25,8 +26,7 @@ doing its task; preparing and reviewing a task also consumes the calling model's
 
 `status` reports persisted observations, not proof that an engine is still running. `reconcile` reads
 only the acknowledged job's newest turn using bounded public paging, rechecks its owner and stores
-a proven final result. Both live collection and reconciliation require an explicit final-answer phase;
-phase-less promises and commentary are not results. A completed execution is reported separately from
+a proven final result. A completed execution is reported separately from
 requested-task success (`taskOutcome: unassessed` until an explicit outcome contract exists). An explicit
 final failure/partial/blockage report must not be counted as task success. Older records without final
 evidence cannot be returned as verified results. It never sends the prompt again. Lost creation/submission acknowledgements
@@ -48,6 +48,43 @@ The selected model comes from the current complete Web catalog. The isolated rel
 selects the highest unambiguous numeric release, prefers Extra high, and permits High only on that
 same model. Unknown naming, tied releases, missing efforts or incomplete catalogs fail before Send.
 Actual browser selection and readback reuse the normal Web model routing implementation.
+
+## Admission and capacity
+
+The source CLI now supports `web-delegate capacity [--slot N]`, which reads the
+owned local delegation journal without invoking a model or opening a browser.
+`start` acquires a cross-process reader permit before connecting to the
+provider. The temporary local policy is **one write slot, two read slots,
+three total slots per profile**, with an additional single-writer reservation
+per physical checkout. These are configured Tela limits, not measured Web
+provider quotas. `start` defaults to read-only; explicit `--mode write` asks
+the Native engine for workspace-write sandbox authority limited to the exact
+checkout and verifies the returned authority before sending the task. The
+signed runtime and real Web-provider support for write mode are **not yet
+verified**. There is no queue.
+Use `web-delegate capacity [--slot N] [--mode read|write]` to inspect either
+admission mode.
+The authenticated Codex service exposes the same managed-job capacity snapshot
+at `GET /v1/codex/profiles/:slot/web-delegation-capacity`; the macOS Control
+Center Work page shows this status on demand. This reports **local CLI-managed
+delegations only**, not the availability of an arbitrary ChatGPT Web turn.
+
+An admission refusal emits a machine-readable JSON object with
+`status=admission_refused`, `code`, verified local `capacity`, and a
+`nextAction`. `CAPACITY_READER_PROFILE` means a verified managed reader
+permit is occupied; `UNCERTAIN_RESERVATION` means ownership is unresolved;
+`CAPACITY_STORAGE_RECORDS` means the separate 64-record retention ceiling
+has been reached. These are distinct from account quotas or other profiles'
+unmanaged activity. No time-based release, stale-process inference or blind
+resend is allowed. An exact terminal journal completion frees its permit;
+lost ACKs retain it until the exact job is reconciled. The capacity snapshot
+covers only jobs known to this managed source CLI, not all Web tabs or chats.
+
+A completed Native turn with exactly one unphased assistant message can be a
+verified final answer. `start` emits a final result event, `reconcile` returns
+the saved answer when proven, and `result` prints it without rerunning a model.
+Immutable terminal receipts protect completed answers against late observer
+timeouts or stale in-flight snapshots.
 
 Job records and results are private product data under the Codex service state directory, with
 restricted filesystem permissions. A hard capacity of 64 records bounds storage; it does not

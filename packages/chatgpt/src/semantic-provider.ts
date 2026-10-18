@@ -354,7 +354,7 @@ function formatWebPhysicalContextParts(
       : retained
       ? "Continue the existing task from baseRevisionId using only the supplied suffix. Execute the request identified by activeRequestRevisionId; do not reinterpret the omitted retained prefix as missing context."
       : "Only the active lineage is supplied. Execute the request identified by activeRequestRevisionId in the context header; older settled entries are context rather than separate pending tasks.",
-    "Use actual tool results as evidence for local observations and effects. Do not claim a local action, permission failure, or safety block without a corresponding tool result or platform error.",
+    "Use actual tool results as evidence for local observations and effects.",
     ...(hasEvidenceReferences ? [
       "Native evidence references with transfer=not_transferred are NOT the contents of images, documents, audio or files. Unless the matching file is actually available as an attachment on this Web turn, state the missing evidence and never claim you examined it; do not perform consequential actions that depend on missing evidence.",
     ] : []),

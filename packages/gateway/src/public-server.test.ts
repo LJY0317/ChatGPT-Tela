@@ -41,9 +41,8 @@ describe("ChatGPT Tela frozen ABI", () => {
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("Do not paste a user's full request, conversation titles");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("Inventory is read-only");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("process_status before starting the command again");
-    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("authentication and routing");
-    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("not a command, a permission grant");
-    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("Native sandbox and approval checks still apply");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("identifying that exact local task for routing");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("continue the same user goal with another relevant available tool or method");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("actual tool results and platform errors as evidence");
   });
 

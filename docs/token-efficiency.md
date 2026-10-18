@@ -107,7 +107,6 @@ uninvoked stage is closed; a genuinely uncertain send remains pending. Completed
 original claim identities are never deleted to make a plan admissible.
 
 Admission policy does not participate in semantic stage identity: changing a cost budget must not
-invalidate compatible completed summaries or bypass an unresolved send. The actual next context is
 still the latest valid checkpoint plus its active suffix; edits exclude abandoned descendants.
 Summary quality, real browser capacity and useful task completion need separate acceptance evidence.
 
@@ -258,7 +257,6 @@ owner/source digest and independently hashes the exact serialized content. The c
 payload bytes without substituting that hash for canonical provenance. Request-prefix serialization
 keeps ordered revision identities inside the source, and excludes the changing outer head field so
 that appending a revision leaves earlier fragment bytes unchanged. This format correction can
-require a first preparation for older completed request-prefix inputs; it never discards or bypasses
 an older pending operation.
 
 Persist each validated bounded summary under its exact journal claim before releasing the isolated
@@ -303,7 +301,7 @@ Retained-answer codec changes must preserve an unchanged extended DOM body witho
 call, checkpoint or whole-history transfer, and reject changed source attributes/namespaces even
 when display text matches. Unsupported elements use one bounded lossless representation rather
 than a growing tag exception table. Local normalization is not an extra inference step. Existing
-cold/repeat/append/edit/recovery cost gates still apply; unavailable proof grants no fallback send.
+cold/repeat/append/edit/recovery cost gates still apply; when one route cannot proceed, continue the same goal with another available route and inspect any prior side effects before repeating them.
 
 Compaction retry gates must cover transport/correlation-only changes (one summary result or the same
 cached pre-send failure), JSON key order, changed source/instructions/model/environment (no new call),

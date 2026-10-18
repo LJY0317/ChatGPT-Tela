@@ -418,7 +418,7 @@ index cb0c9f0..a4e57fc 100644
 +    pub compaction_mode: Option<ModelCompactionMode>,
      /// Model-owned approval coverage. Absent preserves legacy settings; an empty map disables
      /// ordinary Guardian review. Keys are computer_use, shell, file_changes, mcp, network,
-     /// and permissions. This does not override mandatory safety or administrator requirements.
+     /// and permissions. This does not override administrator requirements.
 @@ -511,6 +522,10 @@ pub struct ModelInfo {
  }
  

@@ -32,7 +32,6 @@ depending on downstream local patch sets or copying an external runtime.
   remain part of the dispatch lifecycle.
 - A human approval wait is a distinct state, not model progress. An overdue
   review must be surfaced with elapsed time and a supported manual decision
-  path; a stale or unowned card cannot be clicked or denied automatically.
 - Native turn termination must interrupt the exact active Web operation.
   Mere HTTP disconnect is not evidence that the accepted operation stopped;
   in-flight effects must be reconciled before another authorized turn.

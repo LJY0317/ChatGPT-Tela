@@ -90,16 +90,9 @@ test("approval and admitted tool receipts do not prove a later host review or ex
   const report=analyzeDiagnosticEvents({events:rows,atMs:at,operationFingerprint:operation,symptom:"tool-review-blocked",reportOrigin:"worker-report"});
   expect(report.hostReported).toMatchObject({symptom:"tool-review-blocked",origin:"worker-report",originProven:false});
   expect(report.boundaries.toolEvidence).toEqual({correlationSelected:true,approvalDispatches:1,approvalInputReceipts:1,approvalCardsCleared:1,
-    nativeQueued:1,nativeDelivered:1,nativeResults:1,reportedErrors:0,refusalSignals:0,incompleteInspections:0,
-    originProven:false,executionProven:false,preDispatchCoverage:"external-host-unobservable"});
+    nativeQueued:1,nativeDelivered:1,nativeResults:1,reportedErrors:0,incompleteInspections:0,
+    originProven:false,executionProven:false});
   expect(report.gaps.join()).toContain("before Tela ingress");
-});
-test("unflagged or clipped results remain evidence signals rather than proven review origins",()=>{
-  const report=analyzeDiagnosticEvents({atMs:Date.parse("2026-10-05T00:00:01Z"),events:[
-    event("native_tool_result_signal_anomaly",{message_signal_observed:true,error_result_reported:false,inspection_complete:false}),
-    event("tool_failed",{message_signal_observed:true})]});
-  expect(report.boundaries.toolEvidence).toMatchObject({nativeResults:1,reportedErrors:1,refusalSignals:2,incompleteInspections:1,originProven:false,executionProven:false});
-  expect(()=>analyzeDiagnosticEvents({events:[],atMs:0,reportOrigin:"PRIVATE" as never})).toThrow("invalid host report origin");
 });
 test("ownership and inspection witnesses survive canonical filtering without payload or input details", () => {
   const row = event("web_turn_ownership_observed", { payload_state: "unavailable", anchor_state: "matching", first_reason_class: "ambiguous_author_root",

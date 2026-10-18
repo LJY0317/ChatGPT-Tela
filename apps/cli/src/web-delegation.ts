@@ -6,7 +6,7 @@ import { readOwnershipManifest, type resolveProductPaths } from "@chatgpt-tela/p
 import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
 import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
 import { createLocalNativeAccountProof, type TrustedNativeProfileSession } from "../../../packages/codex-service/src/cross-profile-account-proof";
-import { WebDelegationStore, runReadOnlyWebDelegation, reconcileWebDelegation } from "../../../packages/codex-service/src/web-delegation";
+import { WebDelegationStore, WebDelegationCapacityError, verifiedWebDelegationAnswer, runWebDelegation, reconcileWebDelegation } from "../../../packages/codex-service/src/web-delegation";
 import { selectDelegationWebModel } from "../../../packages/codex-service/src/web-delegation-model";
 import { profileSlotFromArguments } from "./profile-selection";
 
@@ -19,16 +19,23 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     return args[indexes[0]! + 1]!;
   };
   const store = new WebDelegationStore(join(paths.serviceState("codex"), "web-delegations"));
+  if (subcommand === "capacity") {
+    const mode = args.includes("--mode") ? option("--mode") : "read";
+    if (mode !== "read" && mode !== "write") throw Error("--mode must be read or write");
+    console.log(JSON.stringify(store.capacity(profileSlotFromArguments(args), mode), null, 2));
+    return;
+  }
   if (subcommand === "status" || subcommand === "result") {
     const record = store.get(option("--job"));
     if (!record) throw Error("Web job was not found");
     if (subcommand === "result") {
-      if (record.state !== "completed" || record.finalEvidence !== "explicit-final-phase" || !record.answer) throw Error("No verified final result; inspect job status");
-      console.log(record.answer);
+      const answer = verifiedWebDelegationAnswer(record);
+      if (!answer) throw Error("No verified final result; inspect job status");
+      console.log(answer);
     } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure }, null, 2));
     return;
   }
-  if (subcommand !== "start" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|start|status|result|reconcile>");
+  if (subcommand !== "start" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|capacity|start|status|result|reconcile>");
   const selectedJob = subcommand === "reconcile" ? store.get(option("--job")) : undefined;
   if (subcommand === "reconcile" && !selectedJob) throw Error("Web job was not found");
   const slot = selectedJob?.slot ?? profileSlotFromArguments(args);
@@ -56,7 +63,9 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     const record = await reconcileWebDelegation({ store, owner,
       connect: endpoint => connectCodexAppServerWebSocket(endpoint, { signal: AbortSignal.timeout(10_000) }),
     }, selectedJob!.id, AbortSignal.timeout(30_000));
-    console.log(JSON.stringify({ jobId: record.id, state: record.state, toolItems: record.toolItems ?? 0, resultAvailable: Boolean(record.answer && record.finalEvidence === "explicit-final-phase") }));
+    const answer = verifiedWebDelegationAnswer(record);
+    console.log(JSON.stringify({ jobId: record.id, state: record.state, toolItems: record.toolItems ?? 0,
+      resultAvailable: Boolean(answer), ...(answer ? { finalEvidence: record.finalEvidence, answer } : {}) }));
     return;
   }
   const profile = (await client.profiles()).find(row => row.slot === slot);
@@ -76,10 +85,23 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 24 * 1024) throw Error("Web job prompt must be a bounded regular file");
   const prompt = readFileSync(promptPath, "utf8");
   const id = args.includes("--job") ? option("--job") : randomUUID();
-  console.log(JSON.stringify({ jobId: id, state: "preparing", readOnly: true }));
-  await runReadOnlyWebDelegation({
-    store, owner,
-    connect: endpoint => connectCodexAppServerWebSocket(endpoint, { signal: AbortSignal.timeout(10_000) }),
-    changed: record => console.log(JSON.stringify({ jobId: record.id, state: record.state, selection: record.selection, toolItems: record.toolItems ?? 0 })),
-  }, { id, slot, cwd, prompt, signal: AbortSignal.timeout(20 * 60 * 1000) });
+  const mode = args.includes("--mode") ? option("--mode") : "read";
+  if (mode !== "read" && mode !== "write") throw Error("--mode must be read or write");
+  try {
+    const result = await runWebDelegation({
+      store, owner,
+      connect: endpoint => connectCodexAppServerWebSocket(endpoint, { signal: AbortSignal.timeout(10_000) }),
+      changed: record => console.log(JSON.stringify({ jobId: record.id, state: record.state, selection: record.selection, toolItems: record.toolItems ?? 0 })),
+    }, { id, slot, cwd, prompt, mode, signal: AbortSignal.timeout(20 * 60 * 1000) });
+    const answer = verifiedWebDelegationAnswer(result);
+    if (answer) console.log(JSON.stringify({ event: "result", jobId: result.id, state: result.state,
+      finalEvidence: result.finalEvidence, taskOutcome: result.taskOutcome, answer }));
+  } catch (error) {
+    if (error instanceof WebDelegationCapacityError) {
+      console.error(JSON.stringify({ status: "admission_refused", code: error.code, capacity: error.capacity }));
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
 }

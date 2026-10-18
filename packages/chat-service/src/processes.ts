@@ -487,7 +487,7 @@ export class ChatProcessManager {
       if (!expired) break;
       retire(expired);
     }
-    // Safety fallback for terminal hot receipts left behind by failed archive
+    // Fallback for terminal hot receipts left behind by failed archive
     // publication: never evict active/uncertain work just to admit a command.
     if (allowArchival && this.#operations.size >= MAX_OPERATIONS) {
       const completed = [...this.#operations.values()].find(operation =>

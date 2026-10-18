@@ -57,6 +57,36 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("managed Web delegation capacity is an authenticated, content-free read", async () => {
+    const service = fixtureService(), token = "c".repeat(48);
+    let reads = 0;
+    const server = await startCodexServiceHttpServer({
+      service, bearerToken: token,
+      delegationCapacity: slot => {
+        reads++;
+        return { contractVersion: 1, profileSlot: slot, source: "managed_delegation_journal",
+          observedAt: new Date().toISOString(), coverage: "managed_jobs_only",
+          policy: "temporary_1_writer_2_readers_v1", requestedMode: "read",
+          readers: { used: 2, limit: 2, uncertain: 0 }, writers: { used: 1, limit: 1, uncertain: 0 },
+          total: { used: 3, limit: 3 }, records: { retained: 3, limit: 64 },
+          available: false, blockCode: "CAPACITY_READER_PROFILE",
+          messageKo: "읽기 위임 한도 도달", messageEn: "Read delegation limit reached",
+          nextAction: "wait_for_active_job" };
+      },
+    });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+      bearerToken: token, startedAt: new Date().toISOString() });
+    try {
+      const url = new URL("v1/codex/profiles/2/web-delegation-capacity", server.endpoint);
+      expect((await fetch(url)).status).toBe(401);
+      expect((await fetch(url, { headers: { authorization: `Bearer ${token}`,
+        origin: "https://chatgpt.com" } })).status).toBe(403);
+      expect((await client.webDelegationCapacity(2)).blockCode).toBe("CAPACITY_READER_PROFILE");
+      expect(reads).toBe(1);
+      await expect(client.webDelegationCapacity(0)).rejects.toThrow("invalid profile slot");
+    } finally { await client.close(); await server.close(); }
+  });
   test("shutdown does not acknowledge or stop the service when child cleanup is refused", async () => {
     const service = fixtureService(); let refuse = true, calls = 0, signaled = false;
     service.close = async () => { calls++; if (refuse) throw Error("normal owned quit refused"); };

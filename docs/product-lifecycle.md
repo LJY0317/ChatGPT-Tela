@@ -437,36 +437,6 @@ per-user Scheduled Task so Tela remains in the same user/config/Desktop session 
 enabled state are fingerprinted and re-proven before normal stop/unregister. If the definition or registration
 identity changes, uninstall preserves it instead of assuming a matching name is still Tela-owned.
 
-### Data safety
-
-- User workspaces/repositories are never deleted.
-- A managed worktree is removed only when its source-repository identity, Git registration, ownership marker,
-  install-manifest entry, clean status, and creation-base `HEAD` all still match. Dirty worktrees, detached
-  commits, replaced/symlinked paths, missing source repositories, marker drift, or otherwise ambiguous
-  worktrees are preserved and reported. If the worktree directory itself was externally deleted, Tela may
-  remove the **exact stale Git registration only** when the source repository identity, install manifest, and
-  Git-admin Tela marker still prove the same worktree; otherwise the registration is preserved for recovery.
-- Browser profiles, local service databases, logs, and cached artifacts are product-owned but potentially
-  valuable user state. The final UX offers a clear `remove all Tela data` vs `keep local data` choice; the
-  action plan makes that choice explicit before deletion.
-- Historical review artifacts can contain source patches and snapshots of untracked file content. They are
-  private, bounded product state with retention limits. Keeping local Tela data keeps these reviews; removing
-  all Tela data removes the review state. Review capture never transfers ownership of the source repository.
-- Privacy-safe Chat incident records are also bounded product state. They contain only fixed failure metadata
-  plus an opaque workspace fingerprint, never raw commands/paths/prompts/output/error messages, and follow the
-  same keep-data vs remove-data lifecycle as the rest of Tela Chat state.
-- Durable Chat subagent state is private product data. The core store omits prompts but may contain bounded
-  final responses and opaque provider continuation ids. Restart converts unproven running turns to `unknown`
-  rather than reconnecting. Keeping Tela data keeps this state; removing all Tela data removes it only through
-  the normal marker-owned Chat state lifecycle.
-- Provider secrets are not persisted in Tela config or the ownership manifest. The manifest records only
-  the platform-store kind, logical credential id, and a random Tela-only physical store key so runtime and
-  uninstall can distinguish Tela-owned entries from unrelated/pre-existing secrets without a secret hash.
-  macOS uses Keychain, Windows uses CurrentUser DPAPI, and Linux uses Secret
-  Service. A normal uninstall preserves provider credentials; `--remove-data` may remove only an exact
-  currently-owned credential. Ephemeral runtime credentials still disappear with their owning
-  process/runtime directory.
-
 ## Tailscale ownership
 
 The intended product ingress is one Tailscale Funnel path terminating at Tela Gateway. Tela does not own the

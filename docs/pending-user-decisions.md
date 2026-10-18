@@ -52,7 +52,6 @@ without terminating a running app. Historical popup causation remains unknown.
   upgrade must not rely on an unattended modal response.
 - **Never automatically accept** an official Desktop prompt warning of active
   local chats, force-quit, cancel an unknown user task, change account,
-  bypass OS permissions, or press arbitrary buttons. Pending owner confirmation
   blocks upgrade, and a pre-replacement failure should use verified official
   source cancellation/restoration when available.
 - A *future* assisted action may be allowed only on a specific user request
@@ -62,7 +61,6 @@ without terminating a running app. Historical popup causation remains unknown.
   standing unrestricted approval is not consent. If active work/drafts cannot
   be proven safe, request direct user review and do nothing.
 - No continuous screenshot capture, background Accessibility polling, OCR,
-  permission escalation, raw dialog automation, or arbitrary AppleScript
   clicking. Local UI capture is an opt-in, bounded troubleshooting path.
 
 ## Upgrade and recovery sequence

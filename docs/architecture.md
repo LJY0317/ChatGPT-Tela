@@ -4,7 +4,7 @@
 
 Material refactors and branch integrations must follow the [selective integration and nonregression review contract](refactoring-guardrails.md). Treat current `main` as the semantic baseline; do not reintroduce obsolete whole-branch trees or parallel ownership/retry paths. Report code growth, tests, lifecycle and context-cost deltas before acceptance.
 
-For ordinary Tela repository development, use Tela Chat from the outset instead of requiring a failed Native-tool attempt; DevSpace is an independently authorized technical fallback. Exact-turn Native tools remain required for Native-authority tasks, and reliable Web-model Native-tool execution remains a long-term product goal. This changes local operator workflow, not the consumer Work/Codex default or backend authority. Platform safety/permission refusals are not retried through another model, service or command shape. Separate a refusal from a technical tool failure and a post-acceptance observation failure.
+For ordinary Tela repository development, use Tela Chat from the outset; DevSpace is also available. Exact-turn Native tools remain available for Native-authority tasks, and reliable Web-model Native-tool execution remains a long-term product goal. This changes local operator workflow, not the consumer Work/Codex default or backend authority. Separate technical tool failures from post-acceptance observation failures.
 
 The target is measured Chat work quality at least comparable to Work/Codex, not equality of tool names. See [the semantic capability and parity contract](chat-work-capability-parity.md): durable logical work record, independently proven physical session/workspace/turn bindings, runtime-discovered semantic capability descriptors with effect/authority/proof/replay semantics, bounded typed result artifacts, event-driven orchestration and matched outcome/resource benchmarks. This is an unimplemented design/acceptance roadmap unless subsequent source/test/installed evidence proves a specific gate. Keep Tela Chat and Tela Codex peer failure/authority domains and the frozen public Gateway schema.
 
@@ -115,7 +115,6 @@ removal from the visible list is not proof of immediate server erasure.
 Acceptance separates window appearance, Native availability, actual picker visibility, Web request
 admission and first useful Web execution. Catalog API rows or a ready badge alone do not prove picker or
 submission success. Verify first tool use through the normal mounted service/public connector boundary.
-Preserve existing model-switch, canonical compaction, tools and permission guarantees; repeat only tests
 whose ownership boundaries changed. First-time login/consent and ordinary cold/warm startup are distinct.
 
 Compare matched source-bound candidates and successful workloads, with controlled order and cold/warm
@@ -134,7 +133,6 @@ never resolves to another surface or a replacement generation. Snapshots are rea
 on user request or explicit selection. There is no screenshot timer or idle inventory poller.
 
 An explicit **Open browser** action reveals that same existing page; it does not create a second session,
-change the execution model, or bypass Native tool permissions. This view permits browser interaction.
 Closing its window hides the view; Native-owned retirement remains the only page-destruction authority.
 Showing a browser can increase visible rendering cost, so it is optional and carries no energy-saving claim.
 Titles and images remain local, excluded from routine diagnostics and release artifacts.
@@ -172,8 +170,6 @@ Prioritize these evidenced usability/correctness blockers before claiming replac
    scrolling, text selection and copy useful; retain response-identity enforcement even in interaction mode.
    Changes to viewer input must not disable trusted automation or require continuous capture.
 6. Explain routing/authentication fields and actual command purpose/targets/effects accurately in tool
-   presentation. Preserve Native permissions and approval checks; no obfuscation, misleading low-risk
-   claims or promise of platform approval. Review versioned public MCP ABI before changing descriptions.
 7. Correlate tool call/result, approval receipt, continuation and finalization by exact owned identifiers.
    Distinguish explicit tool failure from transport failure and model interpretation. Add missing structural
    evidence only where an incident lacks it; private payload capture remains explicit, expiring and bounded.
@@ -911,8 +907,7 @@ before dispatch. A conversation choice in **Approval options** is opened once
 and linked back to the same card before selection. Trusted input, clearance,
 owned progress and Native result remain separate evidence. One unresolved
 dispatch blocks reactivation of **the same approval card**, not a distinct
-new card with its own verified owner, visible target and one-shot input proof. See
-[approval lifecycle and review boundaries](approval-review-boundaries.md).
+new card with its own verified owner, visible target and one-shot input proof.
 
 An unresolved approval card is a waiting human decision, not a timed failure.
 Tela no longer wakes the browser just to revalidate at arbitrary milestones or
@@ -1304,8 +1299,7 @@ Product lifecycle is an ownership protocol. See [product-lifecycle.md](product-l
 rules. Install and uninstall are symmetric `inspect -> plan -> apply -> verify` operations backed by a
 versioned install ownership manifest.
 
-User repositories/workspaces are never Tela-owned. Managed worktrees are removable only when ownership and
-safety are proven. Browser profiles, service data, logs, and caches live under explicit product roots and can
+User repositories/workspaces are not Tela-owned. Managed worktrees have explicit ownership. Browser profiles, service data, logs, and caches live under explicit product roots and can
 be removed by the supported uninstaller or preserved by user choice. Tailscale cleanup removes only the
 exact route fragment still owned by Tela rather than resetting unrelated Serve/Funnel configuration.
 
@@ -1327,10 +1321,6 @@ plan. Verify proves the resulting runtime state. There is no second launcher-onl
 Migration code does not live in the runtime core. If a future public release needs a migration, prefer
 an explicit bounded migration tool over teaching current runtime code every retired state shape.
 
-## Platforms
-
-macOS, Windows, and Linux are default targets. Core semantics are platform-independent. Filesystem,
-IPC, process, browser packaging, and service differences belong behind explicit platform boundaries.
 
 CI begins with all three operating systems. Real-device-only behavior remains explicitly unverified
 until exercised on that device class. Each CI OS also builds the real multi-file package payload with an
@@ -1499,7 +1489,7 @@ folder approval, claims before spawning, retains bounded signed output and exits
 identity remains opaque rather than being mistaken for an operation UUID. Terminal observations drain before
 the owner's transport closes. This role is not launched for normal new execution or installed; recovery is
 verified with an isolated copied executable and reopened manager, not installed service lifecycle. It does not establish
-service-update/removal safety, owned-tree cancellation or CPU/battery equivalence.
+service-update/removal behavior, owned-tree cancellation or CPU/battery equivalence.
 Resource admission for the per-operation Bun role is withheld. An isolated closed-cohort comparison
 measured 0.11–0.14 CPU seconds and about 68 MiB peak RSS for a fixed short command; a 24-module
 minimal entry retained the same recovery contract but still measured 0.09–0.13 CPU seconds/about
@@ -1594,7 +1584,7 @@ idle timers. A real manager/native completion fixture with an isolated filesyste
 registry commit and before unlink; reopening finished four-artifact cleanup and preserved 255 unknown
 reservations plus the next session identity. Partial deletion and authenticated-byte replacement tests
 also passed. This is process-interruption recovery, not power-loss/fsync durability, concurrent namespace
-replacement safety, old-version rollback compatibility or installed update/removal admission.
+replacement behavior, old-version rollback compatibility or installed update/removal admission.
 
 The first same-contract native/Bun resource gate now passed its scoped comparison: eight synthetic ABBA
 live-input/terminal-result runs measured native owner+waited-shell CPU 0–0.01 seconds/about 3 MiB max RSS,

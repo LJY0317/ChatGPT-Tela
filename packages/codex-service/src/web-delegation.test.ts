@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
-import { runReadOnlyWebDelegation, WebDelegationStore, reconcileWebDelegation } from "./web-delegation";
+import { runWebDelegation, WebDelegationStore, reconcileWebDelegation } from "./web-delegation";
 
-async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean } = {}) {
+async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write" } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
   const calls: Array<{ method: string; params: unknown }> = [];
@@ -18,7 +18,7 @@ async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; f
     async request(method, params) {
       calls.push({ method, params });
       if (method === "model/list") return { data: [{ model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", displayName: "6 (Web)", supportedReasoningEfforts: [{ reasoningEffort: "xhigh" }] }] };
-      if (method === "thread/start") return { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", approvalPolicy: "never", sandbox: { type: "readOnly" }, thread: { id: threadId, cwd: root, historyMode: "paginated", ephemeral: false } };
+      if (method === "thread/start") return { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", approvalPolicy: "never", sandbox: { type: options.mode === "write" ? "workspaceWrite" : "readOnly" }, thread: { id: threadId, cwd: root, historyMode: "paginated", ephemeral: false } };
       if (method === "turn/start") {
         if (options.uncertain) throw Error("lost acknowledgement");
         if (options.silent) return { turn: { id: turnId } };
@@ -49,7 +49,7 @@ async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; f
       };
     },
   };
-  return { root, store, calls, id, run: () => runReadOnlyWebDelegation(adapters, { id, slot: 1, cwd: root, prompt: "Read this fixture and design only", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, store, calls, id, run: () => runWebDelegation(adapters, { id, slot: 1, cwd: root, prompt: "Read this fixture and design only", mode: options.mode ?? "read", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 test("new read-only durable Web job buffers ACK race, returns exact final and never loads a source conversation", async () => {
@@ -65,6 +65,22 @@ test("new read-only durable Web job buffers ACK race, returns exact final and ne
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
     expect(new WebDelegationStore(f.root).get(f.id)?.answer).toBe("verified design");
     expect(JSON.stringify(new WebDelegationStore(f.root).get(f.id))).not.toContain("fixture-result-not-in-journal");
+  } finally { f.cleanup(); }
+});
+test("a write Web delegation requests and proves workspace-only Native sandbox", async () => {
+  const f = await fixture({ mode: "write" });
+  try {
+    const result = await f.run();
+    expect(result).toMatchObject({ state: "completed", mode: "write" });
+    expect(f.calls.find(call => call.method === "thread/start")?.params).toMatchObject({
+      sandbox: "workspace-write", approvalPolicy: "never",
+    });
+    expect(f.calls.find(call => call.method === "turn/start")?.params).toMatchObject({
+      sandboxPolicy: { type: "workspaceWrite", writableRoots: [f.root], networkAccess: false },
+      approvalPolicy: "never",
+    });
+    expect(f.store.capacity(1, "write", f.root)).toMatchObject({ available: true,
+      writers: { used: 0, limit: 1 } });
   } finally { f.cleanup(); }
 });
 test("uncertain send is journaled and never replayed", async () => {
@@ -100,7 +116,6 @@ test("an acknowledged job with lost completion events is recovered from its exac
     expect(f.store.get(f.id)?.answer).toBe("verified recovered design");
   } finally { f.cleanup(); }
 });
-
 test("one unphased assistant message from a completed turn is delivered, live or recovered", async () => {
   for (const silent of [false, true]) {
     const f = await fixture({ finalPhase: null, silent, answer: "Finished." });
@@ -165,4 +180,67 @@ test("failed and oversized Native tool items never become completed-result evide
         toolResultItems: 0, toolResultCoverage: "live-events" });
     } finally { f.cleanup(); }
   }
+});
+
+test("profile reader capacity refuses a concurrent job before any model request and releases on terminal final", async () => {
+  const f = await fixture({ silent: true });
+  try {
+    const initial = f.store.capacity(1);
+    expect(initial.readers).toMatchObject({ used: 0, limit: 2 });
+    const active = f.run();
+    // Fixture responds synchronously to turn/start. Wait for its acknowledged journal state.
+    for (let i = 0; i < 100 && f.store.get(f.id)?.state !== "running"; i++) await Bun.sleep(1);
+    const secondId = randomUUID();
+    const first = f.store.get(f.id)!;
+    const another = { ...first, id: secondId, state: "reserved" as const };
+    f.store.reserve(another);
+    expect(f.store.capacity(1)).toMatchObject({
+      readers: { used: 2, limit: 2 }, available: false, blockCode: "CAPACITY_READER_PROFILE",
+    });
+    expect(() => f.store.reserve({ ...another, id: randomUUID() })).toThrow("읽기");
+    await expect(active).rejects.toThrow();
+    expect(f.store.capacity(1).available).toBe(false);
+    expect(await f.reconcile()).toMatchObject({ state: "completed" });
+    expect(f.store.capacity(1)).toMatchObject({ readers: { used: 1, limit: 2, uncertain: 0 } });
+  } finally { f.cleanup(); }
+});
+
+test("a durable final receipt survives a late stale snapshot and keeps its answer available", async () => {
+  const f = await fixture();
+  try {
+    const final = await f.run();
+    expect(final.answer).toBe("verified design");
+    writeFileSync(join(f.root, `${f.id}.json`), JSON.stringify({ ...final,
+      state: "uncertain", answer: undefined, finalEvidence: undefined }));
+    const saved = new WebDelegationStore(f.root).get(f.id)!;
+    expect(saved).toMatchObject({ state: "completed", answer: "verified design" });
+    const { answer: _answer, ...noAnswer } = saved;
+    expect(f.store.save({ ...noAnswer, state: "uncertain" })).toMatchObject({
+      state: "completed", answer: "verified design",
+    });
+    expect(f.store.capacity(1).available).toBe(true);
+  } finally { f.cleanup(); }
+});
+
+test("temporary per-profile policy reserves one writer and two readers with checkout exclusivity", async () => {
+  const f = await fixture();
+  try {
+    const template = { id: f.id, slot: 1, mode: "read" as const, cwd: f.root, createdAt: Date.now(),
+      promptHash: "a".repeat(64), owner: (await f.run()).owner, session: (await f.reconcile()).session,
+      state: "reserved" as const };
+    const read1 = { ...template, id: randomUUID() };
+    const read2 = { ...template, id: randomUUID() };
+    f.store.reserve(read1);
+    f.store.reserve(read2);
+    const writer = { ...template, id: randomUUID(), mode: "write" as const };
+    f.store.reserve(writer);
+    expect(f.store.capacity(1, "read")).toMatchObject({
+      readers: { used: 2, limit: 2 }, writers: { used: 1, limit: 1 },
+      total: { used: 3, limit: 3 }, available: false, blockCode: "CAPACITY_TOTAL_PROFILE",
+    });
+    expect(() => f.store.reserve({ ...writer, id: randomUUID() })).toThrow();
+    expect(f.store.capacity(2, "write", f.root)).toMatchObject({
+      available: false, blockCode: "CAPACITY_WRITER_CHECKOUT",
+    });
+  } finally { f.cleanup(); }
 });

@@ -22,7 +22,7 @@ import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-
 import { connectCodexAppServerWebSocket, type CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { createLocalNativeAccountProof, type TrustedNativeProfileSession } from "./cross-profile-account-proof";
 import { isExactDeletedNativeThreadAbsent } from "./one-chat-native-destination";
-import { runReadOnlyWebDelegation, WebDelegationStore } from "./web-delegation";
+import { runWebDelegation, WebDelegationStore } from "./web-delegation";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const mode = process.argv[2];
@@ -214,7 +214,7 @@ async function main() {
       + "or access other paths or network resources. After the actual tool RESULT is returned, "
       + "provide a final answer containing the exact 24-character hex marker you observed. "
       + "If a tool is unavailable, say so instead of fabricating a marker.";
-    const job = runReadOnlyWebDelegation(resultAdapters, {
+    const job = runWebDelegation(resultAdapters, {
       id: jobId, slot, cwd, prompt, signal: AbortSignal.timeout(180_000),
     });
     const result = await job;

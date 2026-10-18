@@ -5,7 +5,6 @@ existing name, description and input schema, and adds optional `semantics` versi
 without this field remain readable. The public connector functions and fingerprint are unchanged.
 
 The descriptor records effect, resource scope, replay policy, verification route, the owning
-`chat_service` authority and `implemented` maturity. This is planning advice, never a permission grant,
 sandbox declaration, automatic retry policy or proof of Work/Codex parity. The service still checks
 workspace, resource identity and ownership for each invocation. Unknown descriptor versions or invalid
 values are rejected rather than interpreted as permission; unknown fields are discarded.

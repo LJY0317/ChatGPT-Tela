@@ -25,6 +25,9 @@ jobs:
       - run: bun run workspace-files:test
       - run: bun run workspace-files:build
       - run: bun run verify
+        if: runner.os != 'Windows'
+      - run: bun run typecheck && bun tests/windows-ci.ts
+        if: runner.os == 'Windows'
       - name: Remove Windows test SQLite fixtures after Bun exits
         if: ${{ always() && runner.os == 'Windows' }}
         shell: pwsh

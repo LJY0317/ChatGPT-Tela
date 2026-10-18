@@ -136,6 +136,16 @@ export class NativeResponsesGateway {
       }));
     const signal = AbortSignal.any([observer.signal, this.#controller.signal,
       ...(presentation?.signal ? [presentation.signal] : [])]);
+    const observerStopped = () => withDiagnosticContext({
+      scope_fingerprint: diagnosticFingerprint(authority.threadId),
+      turn_fingerprint: diagnosticFingerprint(authority.turnId),
+    }, () => emitDiagnosticEvent("chatgpt_tela_work", "native_response_observer_ended", {
+      reason_class: this.#controller.signal.aborted ? "gateway_shutdown"
+        : observer.signal.aborted ? "observer_replaced_or_closed"
+          : presentation?.signal?.aborted ? "client_cancel_or_disconnect" : "unknown",
+      execution_restarted: false,
+    }));
+    signal.addEventListener("abort", observerStopped, { once: true });
     if (previous) {
       const authority = registered.channel.binding.authority;
       withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(authority.threadId),
@@ -162,6 +172,7 @@ export class NativeResponsesGateway {
     finally {
       unsubscribe();
       signal.removeEventListener("abort", unsubscribe);
+      signal.removeEventListener("abort", observerStopped);
       observer.abort();
       if (this.#responseObservers.get(registered.capability) === observer) this.#responseObservers.delete(registered.capability);
     }

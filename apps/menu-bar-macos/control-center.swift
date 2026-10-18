@@ -34,6 +34,20 @@ private struct ControlCenterProfilesEnvelope: Decodable {
   let profiles: [ControlCenterProfileStatus]
 }
 
+private struct ControlCenterDelegationCapacity: Decodable {
+  struct Readers: Decodable { let used: Int; let limit: Int; let uncertain: Int }
+  let contractVersion: Int
+  let profileSlot: Int
+  let coverage: String
+  let available: Bool
+  let blockCode: String?
+  let readers: Readers
+  let writers: Readers
+  let total: ReadersTotal
+  let messageEn: String
+  struct ReadersTotal: Decodable { let used: Int; let limit: Int }
+}
+
 private struct ControlCenterBridgeSurface: Decodable { let id: String; let label: String }
 private struct ControlCenterApprovalWait: Decodable {
   let phase: String
@@ -207,6 +221,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var runningProfileApps: [Int: NSRunningApplication] = [:]
   private var profiles: [ControlCenterProfileStatus] { workInventory.profiles }
   private var profileAccounts: [Int: TelaAccountDisplay] = [:]
+  private var delegationCapacity: [Int: ControlCenterDelegationCapacity] = [:]
   private var accountInventory: [TelaWorkProfile] = []
   private var accountRevision = 0
   private var accountTask: Task<Void, Never>?
@@ -713,6 +728,17 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         controls.addArrangedSubview(toggle)
         let subtitle = presentation.label
         row(profile.targetDisplayName, subtitle: subtitle, control: controls, in: profileCard)
+        if let capacity = delegationCapacity[profile.slot] {
+          let state = capacity.available
+            ? "Managed Web delegation: write \(capacity.writers.used)/\(capacity.writers.limit), read \(capacity.readers.used)/\(capacity.readers.limit), total \(capacity.total.used)/\(capacity.total.limit)"
+            : "Managed Web delegation unavailable: \(capacity.blockCode ?? "unknown")"
+          let detail = secondary(state)
+          detail.toolTip = capacity.messageEn
+          if !capacity.available { detail.textColor = .systemOrange }
+          append(detail, to: profileCard)
+        } else if profile.connected {
+          append(secondary("Managed Web delegation capacity: unavailable"), to: profileCard)
+        }
         if let account = profileAccounts[profile.slot] {
           let native = secondary("ChatGPT Work: \(account.native.label)")
           native.isSelectable = true
@@ -1674,6 +1700,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private func clearAccountDisplay() {
     accountRevision += 1
     profileAccounts.removeAll()
+    delegationCapacity.removeAll()
     accountRefreshPending = false
     accountTask?.cancel()
   }
@@ -1692,6 +1719,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       }
       let descriptor = try? readDescriptor("codex")
       var result: [Int: TelaAccountDisplay] = [:]
+      var capacity: [Int: ControlCenterDelegationCapacity] = [:]
       for profile in current {
         guard !Task.isCancelled else { return }
         do {
@@ -1704,9 +1732,16 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           result[profile.slot] = TelaAccountDisplay(contractVersion: 1, slot: profile.slot,
             native: .init(state: "unavailable", email: nil), web: .init(state: "unavailable", email: nil), comparison: "unavailable")
         }
+        if let descriptor,
+          let data = try? await request(descriptor, path: "v1/codex/profiles/\(profile.slot)/web-delegation-capacity"),
+          let value = try? JSONDecoder().decode(ControlCenterDelegationCapacity.self, from: data),
+          value.contractVersion == 1, value.profileSlot == profile.slot, value.coverage == "managed_jobs_only" {
+          capacity[profile.slot] = value
+        }
       }
       guard !Task.isCancelled, revision == accountRevision, selectedPage == .work, window?.isVisible == true else { return }
       profileAccounts = result
+      delegationCapacity = capacity
       renderCurrentPage()
     }
   }

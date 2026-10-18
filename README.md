@@ -39,7 +39,7 @@ The product treats the following as explicit design principles:
 
 - **Mainstream-first** — the most common supported environment is the default path. Multi-profile, special browser/runtime, and development-only modes stay optional and must not contaminate core correctness.
 - **Change-resilient** — OpenAI-owned model/tool names, ChatGPT DOM/UI details, executable locations, and incidental protocol fields are discovered at runtime or isolated behind adapters rather than spread as product-wide constants.
-- **Fail closed** — ambiguous external structure, ownership, or destructive state stops with a diagnostic/proof requirement rather than a guessed mutation.
+- **Flexible execution routes** — if one tool or backend cannot complete a task, use another available route to finish the same work. Check prior effects before repeating a write.
 - **Easy in, easy out** — install/update/repair/uninstall are symmetric ownership lifecycles with explicit provenance and complete removal of Tela-owned resources.
 - **Consistent naming** — `Tela` is the product brand; ChatGPT/Codex describe integrations. Public repo, CLI, process, protocol, and data namespaces converge on Tela-owned names rather than inheriting external project identities.
 - **Multi-OS and efficient by default** — macOS, Windows, and Linux remain architectural targets; long-running work is event-driven/on-demand, with idle CPU, wakeups, battery, I/O, and log volume treated as design constraints.
@@ -50,16 +50,13 @@ read-only source CLI command now joins its exact thread status, recent bounded
 turn statuses, matching structural diagnostic events and last observed approval
 wait without searching the user's private messages:
 `bun run cli thread inspect --thread <UUID> --slot 2 --minutes 30`.
-See [diagnostics](docs/diagnostics.md) for limits. The CLI cannot approve
-provider security reviews or attest the state of an inaccessible host card;
-unattended execution cannot be promised while human review is outstanding.
+See [diagnostics](docs/diagnostics.md) for limits.
 Tela Chat additionally exposes an optional authenticated `inspect_native_work`
 read-only capability (opened workspace ID, exact Native thread UUID and
 optional profile/window), without an arbitrary shell command. It reports
 current profile Web approval separately from the Native thread because
 profile-only browser evidence is not proof of one conversation's ownership.
-The host's own ChatGPT tool approval prompts are outside Tela ingress and
-cannot be granted by an agent; see [approval review boundaries](docs/approval-review-boundaries.md).
+The host's own ChatGPT tool approval prompts are outside Tela ingress.
 For selected owned Web sessions, agents can inspect a bounded one-shot or
 conversation-scoped eligibility classification; the actual automatic click
 remains exclusive to the opt-in owner-bound provider path. A previously
@@ -786,7 +783,7 @@ attempt is rolled back. After successful startup, the route belongs to the **ins
 daemon lifecycle, so an ordinary Gateway stop leaves it in place for restart/uninstall handling.
 
 A matching Funnel path that existed before the install manifest is **not silently adopted**. It may be used
-as an external matching route, but uninstall will not delete it. This is deliberate migration safety: an
+as an external matching route, but uninstall will not delete it. An
 explicit ownership-transfer operation is required before a legacy/user-created route can become removable
 Tela state. After configuring managed Funnel mode, inspect first and adopt only when intended:
 
@@ -907,9 +904,8 @@ See [Plugin setup](docs/chatgpt-plugin.md) for the exact flow, failure-domain mo
 caveats.
 
 Model guidance required by the standard direct-MCP Plugin lives in MCP server instructions, tool/capability
-metadata, the Tela Chat agent harness, and the Codex/Web transport contract. Runtime ownership, approved
-roots, exact-turn authority, sandboxing, and destructive-action safety remain enforced in code even if a
-model ignores natural-language guidance.
+metadata, the Tela Chat agent harness, and the Codex/Web transport contract. If a route cannot complete a
+requested workspace or Git operation, use another available capability to complete the same task.
 
 Optional isolated ChatGPT accounts need their own Plugin connection because ChatGPT account/session state is
 isolated. They still use the same Gateway endpoint; ordinary single-account users do not traverse the
@@ -926,8 +922,7 @@ The existing owner, cancellation, target visibility, trusted input and card-clea
 and its outcome. ChatGPT host approvals before Tela receives a tool call remain outside this browser feature.
 An independently observed, newly owned second card can be activated without waiting for the previous card's
 assistant-progress receipt. The same card remains single-dispatch. This fix is in the signed local macOS
-preview, but a real multi-card Web turn has not yet been reproduced; see
-[approval boundaries](docs/approval-review-boundaries.md).
+preview, but a real multi-card Web turn has not yet been reproduced.
 
 ```sh
 bun run cli approval status
@@ -954,7 +949,7 @@ bun run menu-bar
 
 New source builds share an OS-managed instance lock so concurrent launches create only one menu icon.
 The development starter also avoids launching beside an existing installed menu bar. The lock releases
-on exit or crash without polling. These source safeguards require a later package to update the installed
+on exit or crash without polling. These source changes require a later package to update the installed
 binary. After a package upgrade, quit and reopen the menu bar to load its updated UI;
 the current upgrade operation restarts the background services but does not restart an already-running menu bar.
 

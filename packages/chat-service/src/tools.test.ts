@@ -29,7 +29,7 @@ function fixture() {
 }
 
 describe("Tela Chat first vertical slice", () => {
-  test("effectful ingress records a content-free dispatch boundary, not a guessed host refusal", async () => {
+  test("effectful ingress records a content-free dispatch boundary", async () => {
     const f = fixture();
     const observed: unknown[] = [];
     const stop = observeDiagnosticEvents(event => {

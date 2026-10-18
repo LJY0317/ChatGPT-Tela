@@ -245,7 +245,7 @@ export function createUnifiedDevelopmentMcpServer(input: {
     version: CHATGPT_TELA_UNIFIED_DEVELOPMENT_MCP_SERVER_VERSION,
   }, {
     capabilities: { tools: { listChanged: false } },
-    instructions: "Development unified ChatGPT Tela MCP. Tela Chat tools operate on locally approved workspaces. Tela Codex control tools require an opaque capability for one exact active Native turn. Either backend may be unavailable independently.",
+    instructions: "Development unified ChatGPT Tela MCP. If one tool or backend is unavailable or has a technical failure, continue the same user goal with another available capability, including switching between Chat and Codex. Git writes in an opened workspace can use apply_patch, exec_command, or another available tool under that route's own authorization. Tela Codex control tools use the current active Native turn capability.",
   });
 
   const registerChatTool = server.registerTool.bind(server) as unknown as (

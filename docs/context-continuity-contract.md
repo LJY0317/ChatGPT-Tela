@@ -216,7 +216,6 @@ source turn, bounded indexed evidence, expected sole final answer and unacted cu
 visible tools/plans/file changes or ambiguous source refuse it. Public summary evidence cannot attest
 that every hidden tool was prohibited. Automatic Native inference forks remain unshipped/denied
 without the separate [execution-provenance contract](native-execution-provenance-gate.md). Do not
-silently switch models or add inference to bypass these limits.
 
 Cache loss affects reuse, never authority. Reuse compatible durable completed receipts first. Loss of
 all usable source/checkpoints remains recovery, not guaranteed constant-cost successful cold start.
@@ -273,8 +272,10 @@ immediately following turn. See `docs/native-web-continuity.md`. That is one
 user-authorized Native handoff call and one new Web task seed; it is not a
 background Web summary or an automatic fork. Web account charges/semantics
 remain unmeasured. For Legacy/unindexed or missing evidence, this procedure is
-not safe: continue Native or provide a newly supported verified source; no
-amount of automatic retry, paging or enlarged budget substitutes for proof.
+not supported on the Web route: continue the same user goal in Native or
+another available tool. If Web continuation is still needed, provide a newly
+supported verified source; retrying the same unsupported Web preparation does
+not change its source requirements.
 
 A model-call budget refusal for **optional maintained checkpoint work** now
 defers that work when a physically owned retained Web page already admits its

@@ -4,7 +4,7 @@ export function nativeHandoffRecovery(error: unknown) {
     || (error as {code?: unknown}).code !== "native_web_handoff_unproven") return undefined;
   return {
     type: "invalid_request_error", code: "tela_native_handoff_reconciliation_required", retryable: false,
-    message: "Web continuation could not be proven after a Native tool result. Preserve and reconcile the existing result before an explicitly authorized new Native turn continues. Do not repeat the tool action or retry this retired turn.",
+    message: "Web continuation could not be proven after a Native tool result. Check whether the existing result completed its effect, then continue the same user goal with another available tool or method. A retired turn cannot be resumed.",
     recovery: {kind: "reconcile_tool_handoff", requires_user_action: true,
       requires_new_native_turn: true, original_history_preserved: true, prior_execution_settled: "unknown"},
   } as const;

@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, posix, resolve, sep } from "node:path";
 import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -457,10 +457,12 @@ export function createDefaultDesktopLaunch(
   if (installation.platform !== "darwin") return Object.freeze({
     command: installation.chatGptExecutable, arguments: Object.freeze(arguments_), environment,
   });
-  const executableDirectory = dirname(installation.chatGptExecutable);
-  const contents = dirname(executableDirectory);
-  const bundle = dirname(contents);
-  if (!bundle.endsWith(".app") || executableDirectory !== join(contents, "MacOS") || contents !== join(bundle, "Contents")) {
+  // Interpret the requested macOS bundle using macOS path rules, even when
+  // validating a synthetic macOS installation on Windows CI.
+  const executableDirectory = posix.dirname(installation.chatGptExecutable);
+  const contents = posix.dirname(executableDirectory);
+  const bundle = posix.dirname(contents);
+  if (!bundle.endsWith(".app") || executableDirectory !== posix.join(contents, "MacOS") || contents !== posix.join(bundle, "Contents")) {
     throw new Error("official macOS Desktop executable is outside an application bundle");
   }
   // LaunchServices does not inherit open's environment. Its standard API receives

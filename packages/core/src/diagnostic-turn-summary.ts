@@ -6,6 +6,55 @@ const fp = (x: unknown): x is string => typeof x === 'string' && /^[a-f0-9]{24}$
 const number = (x: unknown): x is number => Number.isSafeInteger(x) && Number(x) >= 0;
 const relevant = (stage: string) => /^(native_|web_turn_|web_context_|web_send_|web_preparation_failed|browser_message_prepared|context_checkpoint_|http_transport_|inspection_ownership_revoked|tool_started|tool_settled|tool_failed|tool_error|web_media_upload_started|mcp_native_result_projected|approval_turn_resolution)/.test(stage);
 
+/** A Native interrupted status proves the turn ended, but never who pressed Stop.
+ * Transport closure proves even less. Later cleanup cannot replace the first
+ * observed boundary or turn an earlier completed final into an interruption. */
+function diagnoseTermination(rows: readonly StructuralDiagnosticEvent[], finalCommitted: boolean, clipped: boolean) {
+  const observed = rows.filter(e =>
+    e.stage === 'native_watch_terminated'
+    || e.stage === 'native_response_observer_ended'
+    || e.stage === 'native_turn_retired'
+    || e.stage === 'native_execution_failed'
+    || e.stage === 'web_preparation_failed'
+    || e.stage === 'http_transport_closed'
+    || e.stage === 'http_transport_error');
+  const watcher = observed.find(e => e.stage === 'native_watch_terminated' &&
+    ['native_interrupted', 'native_failed', 'native_completed', 'observer_disconnected'].includes(String(e.reason_class)));
+  const failure = observed.find(e => e.stage === 'native_execution_failed' || e.stage === 'web_preparation_failed');
+  const shutdown = observed.find(e => e.stage === 'native_response_observer_ended' && e.reason_class === 'gateway_shutdown'
+    || e.stage === 'native_turn_retired' && e.reason_class === 'gateway_closed');
+  const transportError = observed.find(e => e.stage === 'http_transport_error');
+  const disconnect = observed.find(e => e.stage === 'http_transport_closed'
+    || e.stage === 'native_response_observer_ended' && e.reason_class === 'client_cancel_or_disconnect');
+  const ownerChange = observed.find(e => e.stage === 'native_turn_retired' && e.reason_class === 'owner_changed');
+  const cause = finalCommitted ? 'not_interrupted'
+    : watcher?.reason_class === 'native_interrupted' ? 'native_interrupted_observed'
+      : watcher?.reason_class === 'native_failed' ? 'native_failure_observed'
+        : watcher?.reason_class === 'native_completed' ? 'native_completed_result_unobserved'
+          : failure ? 'execution_failure_observed'
+            : shutdown ? 'owner_shutdown_confirmed'
+              : ownerChange ? 'native_owner_changed'
+                : watcher?.reason_class === 'observer_disconnected' ? 'native_lifecycle_observer_lost'
+                  : transportError ? 'network_error_observed'
+                    : disconnect ? 'transport_disconnect_observed' : 'unknown';
+  const confidence = cause === 'not_interrupted' || cause === 'native_interrupted_observed'
+    || cause === 'native_failure_observed' || cause === 'native_completed_result_unobserved'
+    || cause === 'owner_shutdown_confirmed' ? 'confirmed_boundary'
+    : cause === 'unknown' ? 'unknown' : 'partial';
+  const nextAction = cause === 'native_interrupted_observed' ? 'inspect_host_stop_receipt'
+    : cause === 'native_completed_result_unobserved' ? 'reconcile_exact_native_turn'
+      : cause === 'owner_shutdown_confirmed' ? 'inspect_service_lifecycle'
+        : cause === 'execution_failure_observed' || cause === 'native_failure_observed' ? 'inspect_first_failure'
+          : cause === 'not_interrupted' ? 'none'
+            : cause === 'unknown' ? 'inspect_host_or_missing_evidence' : 'inspect_client_or_owner_evidence';
+  return { cause, confidence, actor: 'unknown', userStopConfirmed: false,
+    firstObservedAt: observed[0]?.ts, lastObservedAt: observed.at(-1)?.ts,
+    firstObservedStage: observed[0]?.stage, evidenceStages: observed.slice(0, 16).map(e => e.stage),
+    coverage: clipped ? 'local_events_clipped' : 'local_events_only',
+    uncertainties: cause === 'not_interrupted' ? [] : ['host_stop_button_not_observed'],
+    nextAction };
+}
+
 /** Counts observed local events, never provider billing, comprehension or effect authority. */
 export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEvent[]) {
   const ordered = events.slice(-512).flatMap(e => { const s=structuralDiagnosticEvent(e);return s?[s]:[]; }).sort((a,b)=>a.ts.localeCompare(b.ts));
@@ -36,12 +85,13 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
   const budgetRefusal=at('native_checkpoint_preparation_rejected')[0];
   const fitRefusal=at('native_context_fit_rejected')[0];
   const last=rows.at(-1), retired=at('native_turn_retired').at(-1);
-  const state=final?'completed':failure?'failed':retired?'retired_without_final':events.length>512?'unknown':'in_progress';
+  const nativeInterrupted=at('native_watch_terminated').some(e=>e.reason_class==='native_interrupted');
+  const state=final?'completed':failure?'failed':nativeInterrupted?'interrupted':retired?'retired_without_final':events.length>512?'unknown':'in_progress';
   const bytes=sum('web_send_activation_started','composer_wire_bytes');
   const protocol=sum('web_send_activation_started','protocol_wire_bytes');
   const body=sum('web_send_activation_started','context_wire_bytes');
   const results=sum('mcp_native_result_projected','text_bytes');
-  const expectedResults=unique('native_tool_result_received')+unique('native_tool_result_error')+unique('native_tool_result_signal_anomaly');
+  const expectedResults=unique('native_tool_result_received')+unique('native_tool_result_error');
   results.complete=results.complete&&at('mcp_native_result_projected').every(e=>e.text_measurement_complete!==false)&&expectedResults>0&&unique('mcp_native_result_projected')===expectedResults;
   const mcpRequest=sum('tool_started','request_bytes'),mcpResult=sum('tool_settled','result_bytes');
   mcpRequest.complete=mcpRequest.complete&&expectedResults>0&&unique('tool_started')===expectedResults;
@@ -68,6 +118,7 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
       fitRefusal:fitRefusal?{reason:fitRefusal.reason_class,phase:fitRefusal.phase,requiredChars:fitRefusal.required_chars,composerLimit:fitRefusal.composer_limit,logicalEstimate:fitRefusal.logical_estimate,budget:fitRefusal.fit_budget,
         revisions:fitRefusal.revision_count,checkpointSelected:fitRefusal.checkpoint_selected,largestRevisionBytes:fitRefusal.largest_revision_bytes,
         authorityBytes:fitRefusal.authority_bytes,userBytes:fitRefusal.user_bytes,toolBytes:fitRefusal.tool_bytes,mediaCount:fitRefusal.media_count}:undefined,
+      termination:diagnoseTermination(rows,final,events.length>512),
       replayDenials:at('native_replay_rejected').length,
       certainty:typeof firstFailureReason==='string'&&!['unknown','unclassified'].includes(firstFailureReason)?'classified_boundary':'insufficient_evidence'},
     contractVersion:1, state, localFinalCommitted:final, durationMs:duration,completedAt:terminal?.ts,observationThrough:last?.ts,warnings,
@@ -83,7 +134,7 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
       observationTimeouts:at('web_turn_acceptance_timeout').length, repeatedActivationKeys:repeatActivations},
     transport:{responseObservers:at('native_response_observer_started').length, observerReplacements:at('native_response_observer_replaced').length,
       disconnects:at('http_transport_closed').length},
-    tools:{queued:unique('native_tool_queued'), results:unique('native_tool_result_received')+unique('native_tool_result_error')+unique('native_tool_result_signal_anomaly'),
+    tools:{queued:unique('native_tool_queued'), results:unique('native_tool_result_received')+unique('native_tool_result_error'),
       released:unique('native_tool_result_released'), releaseCoverage:unique('native_tool_result_released')>0?'observed':'unmeasured', reportedErrors:at('native_tool_result_error').length,
       incompleteSignalInspections:rows.filter(e=>e.stage.startsWith('native_tool_result_')&&e.inspection_complete===false).length,
       projection:results},

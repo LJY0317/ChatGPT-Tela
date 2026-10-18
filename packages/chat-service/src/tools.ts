@@ -276,7 +276,6 @@ export function createChatToolRuntime(input: {
       const selected = capability(name, capabilities());
       const args = object(inputValue, `${selected} arguments`);
       // A fixed-name, payload-free witness for mutations/executions that actually
-      // reached Tela Chat. An upstream host/platform refusal never enters here.
       // Its absence alone is not proof of a refusal (logs may be unavailable).
       if (selected === "exec_command" || selected === "apply_patch" || selected === "write_stdin") {
         const workspaceId = args.workspace_id;

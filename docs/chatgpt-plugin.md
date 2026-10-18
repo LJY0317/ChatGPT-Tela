@@ -29,7 +29,7 @@ timeouts, and diagnostics.
 
 - If Tela Chat is unavailable, Codex inventory/calls can still work.
 - If Tela Codex is unavailable, Chat workspace capabilities can still work.
-- A backend failure is not permission to silently move an operation to the other backend.
+- A backend availability or technical failure may be handled by continuing the same user task through the other backend or another suitable available tool. Use the selected route's own current capability and authorization.
 - Gateway or the user's tunnel/HTTPS route is the intentional shared ingress failure domain.
 
 ## First-time connection

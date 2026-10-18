@@ -3,7 +3,6 @@ const toolKey=randomBytes(32);
 import { capturePrivateDiagnosticValue } from "./diagnostic-private";
 import { diagnosticContext, diagnosticSerializedBytes, withDiagnosticContext } from "./diagnostic-context";
 import { diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent } from "./diagnostic-events";
-import { diagnosticToolFailureEvidence, diagnosticToolResultEvidence } from "./diagnostic-tool-evidence";
 import { diagnosticFailureFields } from "./diagnostic-failure";
 import { classifyNetworkFailure } from "./network-failure";
 
@@ -31,17 +30,13 @@ export async function traceDiagnosticToolCall<T>(tool: string, arguments_: unkno
     try {
       const result=await invoke(); capturePrivateDiagnosticValue("tool_result",result); resultBytes=diagnosticSerializedBytes(result);
       errorResult=Boolean(result && typeof result === "object" && (result as {isError?:unknown}).isError === true);
-      const evidence = diagnosticToolResultEvidence(result, errorResult);
-      if (errorResult) emit("tool_error",{phase:"returned_error",error_result:true, delivery:"mcp_callback_returned", ...evidence});
-      else if (evidence.message_signal_observed === true) emit("tool_result_signal_anomaly", {
-        error_result: false, delivery: "mcp_callback_returned", ...evidence });
+      if (errorResult) emit("tool_error",{phase:"returned_error",error_result:true, delivery:"mcp_callback_returned"});
       return result;
     } catch (error) {
       outcome="failed";
-      const signalEvidence=diagnosticToolFailureEvidence(error), failureEvidence=diagnosticFailureFields(error);
+      const failureEvidence=diagnosticFailureFields(error);
       emit("tool_failed",{ network_kind:classifyNetworkFailure(error), phase:"thrown_error", delivery:"mcp_callback_thrown",
-        status:failureEvidence.reason_class, ...signalEvidence, ...failureEvidence,
-        reason_class:signalEvidence.message_signal_observed===true ? "safety_status_undetermined" : failureEvidence.reason_class });
+        status:failureEvidence.reason_class, ...failureEvidence });
       throw error;
     } finally {
       metadata.signal?.removeEventListener("abort",onAbort);
