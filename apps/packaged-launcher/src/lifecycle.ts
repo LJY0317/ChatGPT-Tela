@@ -47,6 +47,7 @@ export interface PackagedLifecycleOptions {
   readonly runner?: ServiceRegistrationCommandRunner;
   readonly userId?: number;
   readonly shutdownService?: (service: TelaServiceId) => Promise<void>;
+  readonly prepareShutdownService?: (service: TelaServiceId) => Promise<void>;
 }
 
 function oneValue(arguments_: readonly string[], index: number, name: string): string {
@@ -231,9 +232,11 @@ export async function runPackagedLifecycleCommand(
         services: plan.services,
       });
     }
+    const shutdown = ownedServiceShutdown(plan.installId, plan.blueprint.paths);
     const services = new PackagedPlatformServiceController({
       blueprint: plan.blueprint,
-      shutdownService: options.shutdownService ?? ownedServiceShutdown(plan.installId, plan.blueprint.paths),
+      shutdownService: options.shutdownService ?? shutdown,
+      prepareShutdownService: options.prepareShutdownService ?? (options.shutdownService ? undefined : shutdown.prepare),
       ...(options.runner ? { runner: options.runner } : {}),
       ...(options.userId === undefined ? {} : { userId: options.userId }),
     });
@@ -288,9 +291,11 @@ export async function runPackagedLifecycleCommand(
       }))),
     });
   }
+  const shutdown = ownedServiceShutdown(plan.installId, plan.targetBlueprint.paths);
   const services = new PackagedPlatformServiceController({
     blueprint: plan.targetBlueprint,
-    shutdownService: options.shutdownService ?? ownedServiceShutdown(plan.installId, plan.targetBlueprint.paths),
+    shutdownService: options.shutdownService ?? shutdown,
+    prepareShutdownService: options.prepareShutdownService ?? (options.shutdownService ? undefined : shutdown.prepare),
     ...(options.runner ? { runner: options.runner } : {}),
     ...(options.userId === undefined ? {} : { userId: options.userId }),
   });

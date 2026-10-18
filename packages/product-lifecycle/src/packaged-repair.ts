@@ -40,6 +40,7 @@ const QUIESCE_ORDER = Object.freeze(["gateway", "codex", "chat"] as const);
 const RESUME_ORDER = Object.freeze(["chat", "codex", "gateway"] as const);
 
 export interface PackagedRepairServiceController {
+  prepare?(services: readonly TelaServiceId[]): Promise<void>;
   inspect(service: TelaServiceId): Promise<"running" | "stopped">;
   quiesce(service: TelaServiceId): Promise<void>;
   resume(service: TelaServiceId): Promise<void>;
@@ -426,6 +427,7 @@ async function applyPackagedRepairOwned(input: {
       controlled.push(service);
       if (await input.services.inspect(service) === "running") resume.push(service);
     }
+    await input.services.prepare?.(controlled);
     journal = initialJournal({ plan: input.plan, controlled, repairServices, resume });
     writeJournal(journalPath, journal);
   }

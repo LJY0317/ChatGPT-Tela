@@ -1,6 +1,25 @@
 import {expect,test} from 'bun:test';
 import {observeDiagnosticEvents,structuralDiagnosticEvent} from '@chatgpt-tela/core';
-import {LocalServiceClient,ServiceHttpError} from './client';
+import {LocalServiceClient,ServiceHttpError,ServiceShutdownNotStartedError} from './client';
+
+test("only an exact shutdown admission receipt proves that no shutdown started", async () => {
+ const receipt = { contractVersion: 1, service: "chat", instanceId: "fixture", shutdown: "not-started" };
+ let body: unknown = receipt, status = 409;
+ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { return Response.json(body, { status }); } });
+ const client = new LocalServiceClient({ version: 1, service: "chat", instanceId: "fixture", installId: "fixture", pid: process.pid,
+  endpoint: `http://127.0.0.1:${server.port}/`, bearerToken: "fixture-token", startedAt: new Date().toISOString() });
+ try {
+  await expect(client.shutdown()).rejects.toBeInstanceOf(ServiceShutdownNotStartedError);
+  for (const invalid of [{ error: { type: "tela_chat_shutdown_blocked", message: "not-started" } },
+   { ...receipt, instanceId: "successor" }, { ...receipt, service: "codex" }, { ...receipt, contractVersion: 2 }, { ...receipt, shutdown: "unknown" }, null]) {
+   body = invalid;
+   try { await client.shutdown(); throw Error("expected rejection"); }
+   catch (error) { expect(error).toBeInstanceOf(ServiceHttpError); expect(error).not.toBeInstanceOf(ServiceShutdownNotStartedError); }
+  }
+  body = receipt; status = 503;
+  await expect(client.shutdown()).rejects.not.toBeInstanceOf(ServiceShutdownNotStartedError);
+ } finally { await server.stop(true); }
+});
 
 test('service boundary preserves HTTP/cancellation/decode evidence without response bodies or credentials',async()=>{
  const events:any[]=[];const stop=observeDiagnosticEvents(row=>{if(row.stage.startsWith('service_'))events.push(row)});

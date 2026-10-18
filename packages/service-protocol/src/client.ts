@@ -48,6 +48,11 @@ export class ServiceHttpError extends Error {
   constructor(readonly httpStatus: number, message: string) { super(message); this.name = "ServiceHttpError"; }
 }
 
+/** Exact authenticated response from the shutdown admission boundary, not an HTTP error guess. */
+export class ServiceShutdownNotStartedError extends ServiceHttpError {
+  constructor() { super(409, "The service acknowledged that shutdown was not started"); this.name = "ServiceShutdownNotStartedError"; }
+}
+
 export class LocalServiceClient {
   readonly descriptor: ServiceRuntimeDescriptor;
 
@@ -84,6 +89,12 @@ export class LocalServiceClient {
       }) as unknown;
       phase = "http";
       if (!response.ok) {
+        const receipt = value as Record<string, unknown> | undefined;
+        if (path === "v1/shutdown" && method === "POST" && response.status === 409
+          && receipt?.contractVersion === 1 && receipt.service === this.descriptor.service
+          && receipt.instanceId === this.descriptor.instanceId && receipt.shutdown === "not-started") {
+          throw new ServiceShutdownNotStartedError();
+        }
         throw new ServiceHttpError(response.status, errorMessage(value, `${this.descriptor.service} service request failed with HTTP ${response.status}`));
       }
       return value;
@@ -96,8 +107,9 @@ export class LocalServiceClient {
     }
   }
 
-  async status(signal?: AbortSignal): Promise<ServiceStatus> {
-    const status = parseServiceStatus(await this.request("v1/status", "GET", undefined, signal));
+  async status(signal?: AbortSignal, options?: { readonly shutdownReadiness?: boolean }): Promise<ServiceStatus> {
+    const path = options?.shutdownReadiness ? "v1/status?shutdown-readiness=1" : "v1/status";
+    const status = parseServiceStatus(await this.request(path, "GET", undefined, signal));
     if (status.service !== this.descriptor.service || status.instanceId !== this.descriptor.instanceId) {
       throw new Error("service status identity does not match its runtime descriptor");
     }

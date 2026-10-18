@@ -75,17 +75,15 @@ export async function startChatService(input: {
   const instanceId = randomUUID();
   let stopping = false;
   let activeCalls = 0;
+  const assertShutdownReady = () => {
+    if (activeCalls > 0) throw new Error("Tela Chat has an active capability request; finish it before shutdown");
+    input.tools?.assertCanClose();
+  };
   const prepareShutdown = () => {
-    if (activeCalls > 0) {
-      emitDiagnosticEvent("chatgpt_tela_chat", "shutdown_rejected", {
-        reason_class: "active_calls", active_calls: activeCalls,
-      });
-      throw new Error("Tela Chat has an active capability request; finish it before shutdown");
-    }
-    try { input.tools?.assertCanClose(); }
+    try { assertShutdownReady(); }
     catch (error) {
       emitDiagnosticEvent("chatgpt_tela_chat", "shutdown_rejected", {
-        reason_class: "unresolved_work", active_calls: activeCalls,
+        reason_class: activeCalls > 0 ? "active_calls" : "unresolved_work", active_calls: activeCalls,
       });
       throw error;
     }
@@ -93,11 +91,16 @@ export async function startChatService(input: {
   };
   let resolveShutdown!: () => void;
   const shutdownRequested = new Promise<void>(resolvePromise => { resolveShutdown = resolvePromise; });
-  const status = (): ServiceStatus => Object.freeze({
+  const status = (includeShutdownReadiness = false): ServiceStatus => Object.freeze({
     contractVersion: 1,
     service: "chat",
     instanceId,
     state: stopping ? "stopping" : "ready",
+    ...(includeShutdownReadiness ? { shutdownReadiness: (() => {
+      if (stopping) return "blocked" as const;
+      try { assertShutdownReady(); return "ready" as const; }
+      catch { return "blocked" as const; }
+    })() } : {}),
   });
   const server = await startWebHttpServer({
     hostname: "127.0.0.1",
@@ -109,7 +112,9 @@ export async function startChatService(input: {
       const candidate = header?.startsWith("Bearer ") ? header.slice(7).trim() : undefined;
       if (!sameSecret(candidate, input.bearerToken)) return new Response(null, { status: 401 });
       const url = new URL(request.url);
-      if (request.method === "GET" && url.pathname === "/v1/status") return Response.json(status());
+      if (request.method === "GET" && url.pathname === "/v1/status") {
+        return Response.json(status(url.searchParams.get("shutdown-readiness") === "1"));
+      }
       if (request.method === "GET" && url.pathname === "/v1/chat/workspace-policy") {
         return Response.json({contractVersion:1,service:"chat",fingerprint:input.workspacePolicyFingerprint ?? null});
       }
@@ -175,9 +180,11 @@ export async function startChatService(input: {
         } finally { workFinished = true; release(); }
       }
       if (request.method === "POST" && url.pathname === "/v1/shutdown") {
+        if (stopping) return Response.json({ error: { type: "tela_chat_stopping", message: "Tela Chat is already shutting down" } }, { status: 409 });
         try { prepareShutdown(); }
         catch {
-          return Response.json({ error: { type: "tela_chat_shutdown_blocked", message: "Finish active or unresolved Chat work before shutting down" } }, { status: 409 });
+          return Response.json({ contractVersion: 1, service: "chat", instanceId, shutdown: "not-started",
+            error: { type: "tela_chat_shutdown_blocked", message: "Finish active or unresolved Chat work before shutting down" } }, { status: 409 });
         }
         lifecycle.afterResponse(resolveShutdown);
         return Response.json({ status: "shutting-down" });

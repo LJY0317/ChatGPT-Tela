@@ -25,6 +25,7 @@ import { readOwnershipManifest } from "./ownership";
 import type { ServiceRegistrationCommandResult, ServiceRegistrationCommandRunner } from "./service-registration";
 import type { TelaServiceId } from "./layout";
 import { resolveProductPaths } from "./layout";
+import { PackagedServiceShutdownNotStartedError } from "./service-shutdown";
 
 class SystemdUpgradeRunner implements ServiceRegistrationCommandRunner {
   readonly loaded = new Set<string>();
@@ -82,6 +83,39 @@ async function recoveryFixture() {
   const plan = await planPackagedUpgradeFromPayload({ payloadSourcePath: target, ...options });
   return { root, source, target, plan, trustedKeys, options, services: new UpgradeServices(["gateway", "chat", "codex"]) };
 }
+
+test("a known participant blocker refuses the complete upgrade before any stop or journal", async () => {
+  const f = await recoveryFixture();
+  try {
+    const services: PackagedUpgradeServiceController = { ...f.services,
+      inspect: f.services.inspect.bind(f.services), quiesce: f.services.quiesce.bind(f.services), resume: f.services.resume.bind(f.services),
+      async prepare() { throw new PackagedServiceShutdownNotStartedError("chat"); },
+    };
+    await expect(applySignedPackagedUpgradeFromPayload({ plan: f.plan, payloadSourcePath: f.target,
+      trustedKeys: f.trustedKeys, services, ...f.options })).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
+    expect(f.services.events).toEqual([]);
+    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(f.plan.targetBlueprint.paths))).toBeUndefined();
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("a late no-admission receipt restores stopped peers and leaves the refusing service running", async () => {
+  const f = await recoveryFixture();
+  try {
+    const original = f.services.quiesce.bind(f.services);
+    f.services.quiesce = async service => {
+      if (service === "chat") throw new PackagedServiceShutdownNotStartedError(service);
+      await original(service);
+    };
+    // Restoration must use the persisted acknowledgement, not an in-memory settlement guess.
+    f.services.settleQuiescence = async () => false;
+    await expect(applySignedPackagedUpgradeFromPayload({ plan: f.plan, payloadSourcePath: f.target,
+      trustedKeys: f.trustedKeys, services: f.services, ...f.options })).rejects.toMatchObject({ recoveryState: "source-restored" });
+    expect(f.services.events).toEqual(["stop:gateway", "stop:codex", "start:codex", "start:gateway"]);
+    expect([...f.services.states.values()]).toEqual(["running", "running", "running"]);
+    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(f.plan.targetBlueprint.paths))).toBeUndefined();
+    expect(readOwnershipManifest(f.plan.targetBlueprint.paths.installManifest)?.productVersion).toBe("1.0.0");
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
 
 test("ordinary signed upgrade snapshots the installed source and restores without an operator recovery path", async () => {
   const f = await recoveryFixture();

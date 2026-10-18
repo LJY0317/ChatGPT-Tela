@@ -21,3 +21,4 @@ export * from "./packaged-launch-admission";
 export * from "./transition-owner";
 export * from "./native-backend-owner";
 export * from "./recovery-artifact";
+export * from "./service-shutdown";

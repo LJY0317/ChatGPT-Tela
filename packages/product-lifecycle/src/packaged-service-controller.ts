@@ -16,6 +16,7 @@ import {
   type ServiceRegistrationCommandRunner,
 } from "./service-registration";
 import type { TelaServiceId } from "./layout";
+import { PackagedServiceShutdownNotStartedError } from "./service-shutdown";
 
 export interface PackagedServiceControlIdentity {
   readonly platform: PackagedInstallBlueprint["platform"];
@@ -71,6 +72,7 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
   readonly #blueprint: PackagedServiceControlIdentity;
   readonly #runner: ServiceRegistrationCommandRunner;
   readonly #shutdownService: (service: TelaServiceId) => Promise<void>;
+  readonly #prepareShutdownService: ((service: TelaServiceId) => Promise<void>) | undefined;
   readonly #transitionTimeoutMs: number;
   readonly #userId: number | undefined;
   readonly #stopDeadlines = new Map<TelaServiceId, number>();
@@ -78,12 +80,14 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
   constructor(input: {
     readonly blueprint: PackagedServiceControlIdentity;
     readonly shutdownService: (service: TelaServiceId) => Promise<void>;
+    readonly prepareShutdownService?: ((service: TelaServiceId) => Promise<void>) | undefined;
     readonly runner?: ServiceRegistrationCommandRunner;
     readonly transitionTimeoutMs?: number;
     readonly userId?: number;
   }) {
     this.#blueprint = input.blueprint;
     this.#shutdownService = input.shutdownService;
+    this.#prepareShutdownService = input.prepareShutdownService;
     this.#runner = input.runner ?? new SystemServiceRegistrationCommandRunner();
     this.#transitionTimeoutMs = input.transitionTimeoutMs ?? DEFAULT_TRANSITION_TIMEOUT_MS;
     if (!Number.isSafeInteger(this.#transitionTimeoutMs) || this.#transitionTimeoutMs < 100 || this.#transitionTimeoutMs > 60_000) {
@@ -122,13 +126,24 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
     throw new Error(`packaged ${service} service did not become ${expected}`, lastError ? { cause: lastError } : undefined);
   }
 
+  /** Check every participant before stopping the first; admission is still rechecked by shutdown. */
+  async prepare(services: readonly TelaServiceId[]): Promise<void> {
+    for (const service of services) {
+      if (await this.inspect(service) === "running") await this.#prepareShutdownService?.(service);
+    }
+  }
+
   async quiesce(service: TelaServiceId): Promise<void> {
     if (await this.inspect(service) === "stopped") return;
     const deadline = Date.now() + this.#transitionTimeoutMs;
     this.#stopDeadlines.set(service, deadline);
     // Service authority, not an OS stop command, decides whether active work may end.
     // Refusal/unreachable identity is final for this attempt: never escalate or bypass it.
-    await this.#shutdownService(service);
+    try { await this.#shutdownService(service); }
+    catch (error) {
+      if (error instanceof PackagedServiceShutdownNotStartedError && error.service === service) this.#stopDeadlines.delete(service);
+      throw error;
+    }
     await this.#waitFor(service, "stopped", deadline);
   }
 

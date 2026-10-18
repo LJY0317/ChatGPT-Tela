@@ -43,12 +43,15 @@ async function runPackagedServicesOwned(args: readonly string[], input: {
       throw new Error(`installed ${entry.service} registration ownership could not be verified; services preserved`);
     }
   }
+  const shutdown = ownedServiceShutdown(ownership.installId, resolveProductPaths(input.pathOptions));
   const controller = new PackagedPlatformServiceController({
-    blueprint, shutdownService: input.shutdownService ?? ownedServiceShutdown(ownership.installId, resolveProductPaths(input.pathOptions)),
+    blueprint, shutdownService: input.shutdownService ?? shutdown,
+    prepareShutdownService: input.shutdownService ? undefined : shutdown.prepare,
     ...(input.runner ? { runner: input.runner } : {}),
   });
   const services: Array<{ service: "gateway" | "chat" | "codex"; state: "running" | "stopped" | "failed" }> = [];
   const order = chatRestart ? ["chat"] as const : action === "start" ? ["chat", "codex", "gateway"] as const : ["gateway", "codex", "chat"] as const;
+  if (action !== "start") await controller.prepare(order);
   for (const service of order) {
     try {
       // Re-prove at each mutation as well as during preflight.

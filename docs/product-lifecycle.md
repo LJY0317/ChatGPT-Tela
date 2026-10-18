@@ -261,6 +261,25 @@ Gateway first followed by Codex and Chat. Only after all three are stopped does 
 payload. The new receipt is verified before the ownership manifest version is committed, then only the
 previously running services are restored backend-first with Gateway last.
 
+Before the first stop, the launcher checks every running participant through its authenticated runtime.
+Chat evaluates shutdown readiness only for this on-demand maintenance probe; routine health checks do
+not scan process reservations. A known blocker refuses maintenance before a stop journal is created.
+This observation is advisory: the service checks admission again at the actual shutdown boundary.
+
+If new work arrives after preflight, Chat can acknowledge `shutdown: not-started` with its exact service
+and instance identity. The launcher translates only that authenticated receipt into durable settlement
+of the pending stop. The existing signed recovery journal then restores peers already stopped, without
+restarting the refusing service or replacing payload bytes. HTTP status, error text, absent descriptors,
+timeouts and a previous in-progress shutdown cannot supply this proof. Unknown requests retain the
+settlement checkpoint. The shared service controller also performs preflight for repair and explicit
+service stops/restarts; damaged-payload repair retains its own recovery restrictions.
+
+Run maintenance through the independent launcher/UI, outside the service being replaced. Launching
+an upgrade as a live Tela Chat command makes that command itself unresolved Chat work. Stopping a
+service registration and restoring its process is separate from profile/Web readiness: verify the
+previously intended profiles, Native connection and Web model catalog after the signed transition.
+Saved connection intent never authorizes taking over an app the user opened independently.
+
 The journal records each quiesce/replacement/commit/resume boundary. A crash during binary replacement can
 therefore rebuild the target only inside the exact marker-owned binary root, while a restart failure after the
 version commit retries only outstanding service resumes. Ordinary source `start` and destructive uninstall
@@ -273,7 +292,7 @@ authority stops the transition without OS stop/kill fallback. Bounded platform o
 stopped state before payload replacement. Resume uses `systemctl --user start`, macOS `launchctl kickstart`,
 or Windows `Start-ScheduledTask`. Transitional or unrecognized states fail closed. The controller requires
 an explicit shutdown dependency; production uses the owned supervisor, isolated tests a fake contract/OS
-runner. This source change is not installed; actual OS-service/update acceptance remains separate.
+runner. Source fixtures and actual OS-service/update acceptance remain separate evidence.
 
 Same-version packaged repair is separate from both install and upgrade. Normal install deliberately treats a
 completed payload whose bytes drifted as ownership drift and will not overwrite it. Repair adds one narrower

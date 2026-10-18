@@ -64,16 +64,24 @@ test("refused shutdown preserves the private endpoint and work; completion allow
     ...init, headers: { authorization: `Bearer ${f.token}`, "content-type": "application/json" },
   });
   try {
-    expect((await request("v1/shutdown", { method: "POST" })).status).toBe(409);
+    const blocked = await request("v1/shutdown", { method: "POST" });
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toMatchObject({ contractVersion: 1, service: "chat", instanceId: service.instanceId, shutdown: "not-started" });
+    expect(await (await request("v1/status?shutdown-readiness=1")).json()).toMatchObject({ shutdownReadiness: "blocked" });
+    expect(await (await request("v1/status")).json()).not.toHaveProperty("shutdownReadiness");
     await expect(service.close()).rejects.toThrow("unresolved owner");
     expect(closes).toBe(0); expect(service.status().state).toBe("ready");
     expect((await request("v1/status")).status).toBe(200);
     const opened = await request("v1/call", { method: "POST", body: JSON.stringify({ capability: "open_workspace", arguments: { path: f.root } }) });
     expect(opened.status).toBe(200); await opened.json();
     unresolved = false;
+    expect(await (await request("v1/status?shutdown-readiness=1")).json()).toMatchObject({ shutdownReadiness: "ready" });
     expect((await request("v1/shutdown", { method: "POST" })).status).toBe(200);
     await service.shutdownRequested;
     expect(service.status().state).toBe("stopping");
+    const repeated = await request("v1/shutdown", { method: "POST" });
+    expect(repeated.status).toBe(409);
+    expect(await repeated.json()).not.toHaveProperty("shutdown");
     expect((await request("v1/call", { method: "POST", body: JSON.stringify({ capability: "open_workspace", arguments: { path: f.root } }) })).status).toBe(503);
     await Promise.all([service.close(), service.close()]); expect(closes).toBe(1);
   } finally { unresolved = false; await service.close(); rmSync(f.base, { recursive: true, force: true }); }

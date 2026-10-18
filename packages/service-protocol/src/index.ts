@@ -32,6 +32,8 @@ export interface ServiceStatus {
   readonly instanceId: string;
   readonly state: "ready" | "degraded" | "stopping";
   readonly detail?: string;
+  /** Advisory only: actual shutdown admission remains atomic at the service. */
+  readonly shutdownReadiness?: "ready" | "blocked";
 }
 
 export interface CodexToolInventoryRequest {
@@ -392,9 +394,13 @@ export function parseServiceStatus(value: unknown): ServiceStatus {
   if (item.contractVersion !== 1) throw new Error("unsupported service status version");
   if (!(["gateway", "chat", "codex"] as const).includes(item.service as never)) throw new Error("service status id is invalid");
   if (!(["ready", "degraded", "stopping"] as const).includes(item.state as never)) throw new Error("service status state is invalid");
+  if (item.shutdownReadiness !== undefined && item.shutdownReadiness !== "ready" && item.shutdownReadiness !== "blocked") {
+    throw new Error("service shutdown readiness is invalid");
+  }
   return Object.freeze({ contractVersion: 1, service: item.service as TelaServiceId,
     instanceId: text(item.instanceId, "service status instance id"), state: item.state as ServiceStatus["state"],
-    ...(item.detail === undefined ? {} : { detail: text(item.detail, "service status detail") }) });
+    ...(item.detail === undefined ? {} : { detail: text(item.detail, "service status detail") }),
+    ...(item.shutdownReadiness === undefined ? {} : { shutdownReadiness: item.shutdownReadiness as "ready" | "blocked" }) });
 }
 
 function object(value: unknown, field: string): Record<string, unknown> {

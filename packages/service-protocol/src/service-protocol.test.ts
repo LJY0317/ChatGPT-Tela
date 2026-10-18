@@ -41,6 +41,9 @@ describe("private service protocol", () => {
   });
 
   test("service health is independent of product/public tool naming", () => {
+    const ready = { contractVersion: 1, service: "chat", instanceId: "chat-1", state: "ready", shutdownReadiness: "blocked" } as const;
+    expect(parseServiceStatus(ready)).toEqual(ready);
+    expect(() => parseServiceStatus({ ...ready, shutdownReadiness: false })).toThrow();
     expect(parseServiceStatus({
       contractVersion: 1,
       service: "codex",

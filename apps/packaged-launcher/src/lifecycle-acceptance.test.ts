@@ -7,6 +7,7 @@ import {
   buildPackagedPayload, createEd25519PackagedPayloadSigner, prepareOwnedDirectory, CURRENT_PACKAGED_LIFECYCLE,
   readOwnershipManifest, resolveProductPaths, packagedUninstallJournalPath, withPackagedTransitionOwner,
   type ServiceRegistrationCommandResult, type ServiceRegistrationCommandRunner,
+  PackagedServiceShutdownNotStartedError, packagedUpgradeJournalPath,
 } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { runPackagedLifecycleCommand } from "./lifecycle";
@@ -196,6 +197,20 @@ test("signed install -> update -> keep-data removal -> reinstall -> complete rem
     await execute("upgrade", "dry-run", next);
     assertSaved();
     expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("1.0.0");
+    const upgrade = ["upgrade", "--apply", "--payload", next, "--trusted-public-key", publicKey];
+    await expect(runPackagedLifecycleCommand(upgrade, { ...options, async prepareShutdownService(service) {
+      if (service === "chat") throw new PackagedServiceShutdownNotStartedError(service);
+    } })).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
+    expect(runner.running.size).toBe(3);
+    expect(existsSync(packagedUpgradeJournalPath(paths))).toBe(false);
+    await expect(runPackagedLifecycleCommand(upgrade, { ...options, async shutdownService(service) {
+      if (service === "chat") throw new PackagedServiceShutdownNotStartedError(service);
+      await shutdownService(service);
+    } })).rejects.toMatchObject({ recoveryState: "source-restored" });
+    expect(runner.running.size).toBe(3);
+    expect(existsSync(packagedUpgradeJournalPath(paths))).toBe(false);
+    expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("1.0.0");
+    assertSaved();
     await execute("upgrade", "apply", next);
     expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("1.0.1");
     expect(runner.running.size).toBe(3);

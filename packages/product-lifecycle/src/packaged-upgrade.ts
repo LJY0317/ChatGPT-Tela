@@ -1,5 +1,6 @@
 import { retainPackagedRecoveryArtifact, reviewPackagedRecoveryArtifact } from "./recovery-artifact";
 import { withPackagedTransitionOwner } from "./transition-owner";
+import { PackagedServiceShutdownNotStartedError } from "./service-shutdown";
 import {
   chmodSync,
   existsSync,
@@ -29,6 +30,7 @@ const QUIESCE_ORDER = Object.freeze(["gateway", "codex", "chat"] as const);
 const RESUME_ORDER = Object.freeze(["chat", "codex", "gateway"] as const);
 
 export interface PackagedUpgradeServiceController {
+  prepare?(services: readonly TelaServiceId[]): Promise<void>;
   inspect(service: TelaServiceId): Promise<"running" | "stopped">;
   quiesce(service: TelaServiceId): Promise<void>;
   resume(service: TelaServiceId): Promise<void>;
@@ -300,6 +302,7 @@ async function applyPackagedUpgradeOwned(input: {
   if (journal?.phase === "restoring-source") throw new Error("packaged upgrade cancellation must finish before another upgrade");
   if (!journal) {
     if (manifest.productVersion !== input.plan.fromVersion) throw new Error("upgrade journal is missing after product version already changed");
+    await input.services.prepare?.(QUIESCE_ORDER);
     journal = initialJournal(input.plan);
     writeJournal(journalPath, journal);
   }
@@ -317,7 +320,15 @@ async function applyPackagedUpgradeOwned(input: {
     for (const service of QUIESCE_ORDER) {
       if (quiesced.includes(service)) continue;
       if (journal.stopEvidenceVersion === 1) journal = updateJournal(journalPath, journal, { pendingStop: service });
-      await input.services.quiesce(service);
+      try { await input.services.quiesce(service); }
+      catch (error) {
+        // Only the exact owner's explicit no-admission receipt settles this stop.
+        // Persist it before recovery; a transport/HTTP failure alone remains unknown.
+        if (journal.stopEvidenceVersion === 1 && error instanceof PackagedServiceShutdownNotStartedError && error.service === service) {
+          journal = updateJournal(journalPath, journal, { pendingStop: null });
+        }
+        throw error;
+      }
       quiesced.push(service);
       journal = updateJournal(journalPath, journal, { quiescedServices: Object.freeze([...quiesced]),
         ...(journal.stopEvidenceVersion === 1 ? { pendingStop: null } : {}) });

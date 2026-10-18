@@ -6,6 +6,7 @@ import { createPackagedInstallBlueprint } from "./packaged-install";
 import { PackagedPlatformServiceController } from "./packaged-service-controller";
 import type { ServiceRegistrationCommandResult, ServiceRegistrationCommandRunner } from "./service-registration";
 import type { TelaServiceId } from "./layout";
+import { PackagedServiceShutdownNotStartedError } from "./service-shutdown";
 
 function blueprint(root: string, platform: "darwin" | "linux" | "win32") {
   const source = join(root, `payload-${platform}`);
@@ -232,6 +233,24 @@ test('stop settlement observes eventual registration exit without sending anothe
   expect(await controller.settleQuiescence()).toBe(true);expect(sends).toBe(1);
   expect(runner.calls.some(x=>x.includes(' stop '))).toBe(false);
  }finally{if(timer)clearTimeout(timer);rmSync(root,{recursive:true,force:true});}
+});
+
+test("an acknowledged no-admission does not leave a pending OS stop on any platform", async () => {
+ for (const platform of ["darwin", "linux", "win32"] as const) {
+  const root = mkdtempSync(join(tmpdir(), "tela-stop-not-started-"));
+  try {
+   const built = blueprint(root, platform);
+   const runner = platform === "darwin" ? new DarwinRunner(built) : platform === "linux" ? new LinuxRunner() : new WindowsRunner();
+   const target = platform === "darwin" ? `gui/501/${registration(built, "chat")}` : registration(built, "chat");
+   runner.state.set(target, "running");
+   const controller = new PackagedPlatformServiceController({ blueprint: built, runner, userId: 501, transitionTimeoutMs: 100,
+    shutdownService: async service => { throw new PackagedServiceShutdownNotStartedError(service); } });
+   await expect(controller.quiesce("chat")).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
+   expect(await controller.settleQuiescence()).toBe(false); // No outstanding stop to settle, not a fresh-controller proof.
+   expect(runner.state.get(target)).toBe("running");
+   expect(runner.calls.some(call => /\bkill\b|\bstop\b|Stop-ScheduledTask|bootout/.test(call))).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+ }
 });
 
 test('unknown previous stops and deadline-expired live services cannot authorize restoration',async()=>{
