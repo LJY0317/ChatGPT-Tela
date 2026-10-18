@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { CodexService } from "./controller";
 import { startCodexServiceHttpServer } from "./http-server";
 import { CodexServiceClient } from "@chatgpt-tela/service-protocol/client";
+import { ServiceShutdownNotStartedError } from "@chatgpt-tela/service-protocol/client";
 
 function fixtureService(): CodexService {
   return {
@@ -17,6 +18,7 @@ function fixtureService(): CodexService {
     serviceStatus() {
       return { contractVersion: 1, service: "codex", instanceId: "codex-fixture", state: "ready" };
     },
+    async shutdownReadiness() { return "ready"; },
     async profiles() { return []; },
     async startProfile() { throw new Error("not used"); },
     async waitWebPreparation() { throw new Error("not used"); },
@@ -57,6 +59,53 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("maintenance status and shutdown reject unproven Native activity without stopping a profile", async () => {
+    const service = fixtureService();
+    let canStop: "ready" | "blocked" = "blocked", closeCalls = 0;
+    service.shutdownReadiness = async () => canStop;
+    service.close = async () => { closeCalls++; };
+    const token = "m".repeat(48);
+    const server = await startCodexServiceHttpServer({ service, bearerToken: token });
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      const normal = await (await fetch(new URL("v1/status", server.endpoint), { headers })).json();
+      expect(normal).not.toHaveProperty("shutdownReadiness");
+      const observed = await fetch(new URL("v1/status?shutdown-readiness=1", server.endpoint), { headers });
+      expect(observed.headers.get("cache-control")).toBe("no-store");
+      expect(await observed.json()).toMatchObject({ shutdownReadiness: "blocked" });
+      const blocked = await fetch(new URL("v1/shutdown", server.endpoint), { method: "POST", headers });
+      expect(blocked.status).toBe(409);
+      expect(await blocked.json()).toMatchObject({ contractVersion: 1, service: "codex",
+        instanceId: "codex-fixture", shutdown: "not-started" });
+      const client = new CodexServiceClient({ version: 1, service: "codex",
+        instanceId: service.instanceId, installId: "fixture", pid: process.pid,
+        endpoint: server.endpoint.href, bearerToken: token, startedAt: new Date().toISOString() });
+      await expect(client.shutdown()).rejects.toBeInstanceOf(ServiceShutdownNotStartedError);
+      expect(closeCalls).toBe(0);
+      canStop = "ready";
+      expect(await (await fetch(new URL("v1/status?shutdown-readiness=1", server.endpoint), { headers })).json())
+        .toMatchObject({ shutdownReadiness: "ready" });
+      expect((await fetch(new URL("v1/shutdown", server.endpoint), { method: "POST", headers })).status).toBe(200);
+      await server.shutdownRequested;
+      expect(closeCalls).toBe(1);
+    } finally { await server.close(); }
+  });
+
+  test("missing activity authority never permits an authenticated service shutdown", async () => {
+    const service = fixtureService();
+    delete service.shutdownReadiness;
+    let closeCalls = 0; service.close = async () => { closeCalls++; };
+    const token = "x".repeat(48);
+    const server = await startCodexServiceHttpServer({ service, bearerToken: token });
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      expect(await (await fetch(new URL("v1/status?shutdown-readiness=1", server.endpoint), { headers })).json())
+        .toMatchObject({ shutdownReadiness: "blocked" });
+      expect((await fetch(new URL("v1/shutdown", server.endpoint), { method: "POST", headers })).status).toBe(409);
+      expect(closeCalls).toBe(0);
+    } finally { await server.close(); }
+  });
+
   test("shutdown does not acknowledge or stop the service when child cleanup is refused", async () => {
     const service = fixtureService(); let refuse = true, calls = 0, signaled = false;
     service.close = async () => { calls++; if (refuse) throw Error("normal owned quit refused"); };

@@ -81,6 +81,11 @@ async function main(): Promise<void> {
       inspectHistoryUi: () => runtime.inspectWebHistoryUi(),
       runSavedDeleteAcceptance: () => runtime.runSavedChatDeleteAcceptance(),
       recoverSyntheticSavedChat: () => runtime.recoverSyntheticSavedChat(),
+      observeActivity: () => {
+        if (!runtime.webRuntime) throw new Error("Web activity owner is unavailable");
+        return { ...runtime.webRuntime.inspectBridgeActivity(),
+          accountManagementActive: runtime.accountManagementActive };
+      },
       observe: id => runtime.webRuntime?.observeBridgePreview(id) ?? Promise.resolve({ activeSurfaceCount: 0 }),
       reveal: async (id, interactive) => {
         if (!runtime.webRuntime) throw new Error("Web connection is not ready");

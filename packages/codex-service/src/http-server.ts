@@ -87,7 +87,15 @@ export async function startCodexServiceHttpServer(input: {
       const url = new URL(request.url);
       try {
         if (request.method === "GET" && url.pathname === "/v1/status") {
-          return Response.json(input.service.serviceStatus());
+          const status = input.service.serviceStatus();
+          if (url.searchParams.get("shutdown-readiness") === "1") {
+            const readiness = await input.service.shutdownReadiness?.().catch(() => "blocked" as const)
+              ?? "blocked";
+            return Response.json({ ...status, shutdownReadiness: readiness }, {
+              headers: { "cache-control": "no-store" },
+            });
+          }
+          return Response.json(status);
         }
         if (request.method === "GET" && url.pathname === "/v1/codex/profiles") {
           const profiles = await input.service.profiles();
@@ -323,6 +331,16 @@ export async function startCodexServiceHttpServer(input: {
         if (request.method === "POST" && url.pathname === "/v1/shutdown") {
           // Acknowledgement authorizes payload replacement. A refused child
           // cleanup must return failure while service/control ownership survives.
+          if (await input.service.shutdownReadiness?.().catch(() => "blocked" as const) !== "ready") {
+            // This request has NOT started any quit. The exact receipt allows
+            // signed rollback to distinguish a safe refusal from an uncertain
+            // partially completed shutdown.
+            return Response.json({ contractVersion: 1, service: "codex",
+              instanceId: input.service.instanceId, shutdown: "not-started",
+              error: { type: "tela_codex_shutdown_blocked",
+                message: "Other Native or Web work is active or cannot be proved idle" } },
+            { status: 409, headers: { "cache-control": "no-store" } });
+          }
           await input.service.close();
           lifecycle.afterResponse(resolveShutdown);
           return Response.json({ status: "shutting-down" });

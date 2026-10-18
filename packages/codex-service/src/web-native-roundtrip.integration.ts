@@ -5,9 +5,9 @@
  * Before any model request, prove official Delete + exact absence on a new,
  * empty paginated thread. On failure, do not start a model or retry a delete.
  *
- *   bun run packages/codex-service/src/web-native-roundtrip.integration.ts --preflight
+ *   bun run packages/codex-service/src/web-native-roundtrip.integration.ts --preflight [--slot 1|2]
  *   TELA_EXPLICIT_REAL_WEB_NATIVE_ACCEPTANCE=1 bun run \
- *     packages/codex-service/src/web-native-roundtrip.integration.ts --acceptance
+ *     packages/codex-service/src/web-native-roundtrip.integration.ts --acceptance [--slot 1|2]
  *
  * This is a test-only source script, not installed product functionality.
  */
@@ -26,8 +26,10 @@ import { runReadOnlyWebDelegation, WebDelegationStore } from "./web-delegation";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const mode = process.argv[2];
-if (!(mode === "--preflight" || mode === "--acceptance") || process.argv.length !== 3) {
-  throw new Error("Choose exactly --preflight or --acceptance");
+const selectedSlot = process.argv.length === 5 && process.argv[3] === "--slot"
+  ? Number(process.argv[4]) : process.argv.length === 3 ? 1 : NaN;
+if (!(mode === "--preflight" || mode === "--acceptance") || ![1, 2].includes(selectedSlot)) {
+  throw new Error("Choose --preflight or --acceptance and optionally --slot 1|2");
 }
 if (mode === "--acceptance" && process.env.TELA_EXPLICIT_REAL_WEB_NATIVE_ACCEPTANCE !== "1") {
   throw new Error("Real Web model acceptance requires explicit opt-in");
@@ -107,7 +109,7 @@ async function main() {
   });
   if (!owner) throw new Error("Exact installed Codex service is unavailable");
   const client = new CodexServiceClient(descriptorForService(owner.descriptor, "codex"));
-  const slot = 1;
+  const slot = selectedSlot;
   const currentSession = async (): Promise<TrustedNativeProfileSession> => {
     const profile = (await client.profiles()).find(row => row.slot === slot);
     if (!profile || profile.controlState !== "running" || profile.targetSessionState !== "ready"

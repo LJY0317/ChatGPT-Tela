@@ -95,3 +95,13 @@ was not established, so it was not closed. Live events with content-free
 result witnesses are now included in the fixture for a later independently
 authorized acceptance; no uncertain or retired turn was replayed. This is
 not evidence of opaque Legacy-context continuity or an installed new release.
+
+On the independently owned **Profile 2**, the official empty-thread Delete
+preflight passed again, followed by **one real Web model request** in a new
+disposable repository. The live Native `commandExecution` completion carried
+the exact randomly generated file marker, and the Web final answer in the
+**same turn** matched it. All acknowledged synthetic Native threads were
+officially deleted and proven absent; no personal thread was read. Profile 1
+remained untouched. This proves one actual account-backed Web/tool/final round
+trip, **not** opaque Legacy continuation or task success on the original chat.
+The test-only script accepts `--slot 1|2`; it does not alter consumer defaults.

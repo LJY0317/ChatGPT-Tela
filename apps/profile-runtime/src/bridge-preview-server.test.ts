@@ -2,6 +2,60 @@ import { describe, expect, test } from "bun:test";
 import { startProfileBridgePreviewServer } from "./bridge-preview-server";
 
 describe("profile bridge preview server", () => {
+  test("maintenance activity scan is independently authenticated and reads no browser pixels or DOM", async () => {
+    const token = "b".repeat(48);
+    let scans = 0, previews = 0;
+    const server = await startProfileBridgePreviewServer({
+      slot: 2, bearerToken: token,
+      observeActivity() { scans++; return { activeSurfaceCount: 2, accountManagementActive: false }; },
+      async observe() { previews++; throw Error("Sensitive UI capture must never run"); },
+    });
+    const url = new URL("v1/bridge-activity", server.endpoint);
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      expect((await fetch(url)).status).toBe(401);
+      expect((await fetch(url, { headers: { ...headers, origin: "https://chatgpt.com" } })).status).toBe(403);
+      const result = await fetch(url, { headers });
+      expect(result.status).toBe(200);
+      expect(result.headers.get("cache-control")).toBe("no-store");
+      expect(await result.json()).toEqual({ contractVersion: 1, slot: 2,
+        activeSurfaceCount: 2, accountManagementActive: false });
+      expect(scans).toBe(1);
+      expect(previews).toBe(0);
+    } finally { await server.close(); }
+  });
+
+  test("unavailable Web activity observation is unknown, never silently idle", async () => {
+    const token = "b".repeat(48);
+    const server = await startProfileBridgePreviewServer({
+      slot: 1, bearerToken: token,
+      observeActivity() { throw Error("private browser state"); },
+      async observe() { return { activeSurfaceCount: 0 }; },
+    });
+    try {
+      const response = await fetch(new URL("v1/bridge-activity", server.endpoint), {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(409);
+      expect(await response.text()).not.toContain("private browser");
+    } finally { await server.close(); }
+  });
+
+  test("missing owner account-management activity never yields an idle receipt", async () => {
+    const token = "b".repeat(48);
+    const server = await startProfileBridgePreviewServer({
+      slot: 1, bearerToken: token,
+      observeActivity() { return { activeSurfaceCount: 0,
+        accountManagementActive: undefined as unknown as boolean }; },
+      async observe() { return { activeSurfaceCount: 0 }; },
+    });
+    try {
+      expect((await fetch(new URL("v1/bridge-activity", server.endpoint), {
+        headers: { authorization: `Bearer ${token}` },
+      })).status).toBe(409);
+    } finally { await server.close(); }
+  });
+
   test("shutdown requires owned auth, coalesces cleanup and retains a receipt without closing control", async () => {
     const token = "s".repeat(48); let calls = 0;
     let release!: () => void;

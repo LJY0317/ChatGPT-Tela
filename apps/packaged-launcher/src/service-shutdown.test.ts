@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveProductPaths, PackagedServiceShutdownNotStartedError } from "@chatgpt-tela/product-lifecycle";
 import { startChatService, createChatToolRuntime } from "@chatgpt-tela/chat-service";
+import { startCodexServiceHttpServer, type CodexService } from "@chatgpt-tela/codex-service";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 import { ownedServiceShutdown } from "./service-shutdown";
 
@@ -30,6 +31,33 @@ test("real Chat admission reports a blocker without closing and translates only 
     await expect(shutdown("chat")).rejects.toMatchObject({ service: "chat", name: "PackagedServiceShutdownNotStartedError" });
     expect(service.status().state).toBe("ready");
   } finally { blocked = false; await service.close(); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("signed maintenance refuses Codex without explicit current Native/Web idle evidence", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tela-codex-shutdown-readiness-"));
+  const paths = resolveProductPaths({ platform: "linux", home, environment: {} });
+  const token = "q".repeat(48);
+  let checked = 0, readiness: "ready" | "blocked" = "blocked";
+  const service = {
+    instanceId: "codex-maintenance-test",
+    serviceStatus() { return { contractVersion: 1, service: "codex", instanceId: "codex-maintenance-test", state: "ready" }; },
+    async shutdownReadiness() { checked++; return readiness; },
+    async close() { throw Error("The admission test must never stop a service"); },
+  } as unknown as CodexService;
+  const server = await startCodexServiceHttpServer({ service, bearerToken: token });
+  try {
+    mkdirSync(paths.serviceRuntime("codex"), { recursive: true });
+    writeServiceRuntimeDescriptor(join(paths.serviceRuntime("codex"), "descriptor.json"), {
+      version: 1, service: "codex", instanceId: service.instanceId, installId: "fixture",
+      pid: process.pid, endpoint: server.endpoint.href, bearerToken: token, startedAt: new Date().toISOString(),
+    });
+    const shutdown = ownedServiceShutdown("fixture", paths);
+    await expect(shutdown.prepare("codex")).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
+    expect(checked).toBe(1);
+    readiness = "ready";
+    await shutdown.prepare("codex");
+    expect(checked).toBe(2);
+  } finally { await server.close(); rmSync(home, { recursive: true, force: true }); }
 });
 
 test("a running registration without a runtime descriptor cannot authorize shutdown", async () => {

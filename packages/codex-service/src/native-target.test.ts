@@ -167,6 +167,7 @@ describe("composite product native-target adapter", () => {
     const adapter = new CompositeNativeTargetAdapter({ defaultDesktop: defaultAdapter, multiProfile: optional });
     expect((await adapter.resolve(1)).target.adapterKind).toBe("default-desktop");
     expect((await adapter.profiles()).map(item => item.target.slot)).toEqual([1]);
+    await expect(adapter.maintenanceProfiles()).rejects.toThrow("optional Multi-Profile launcher is unavailable");
     await expect(adapter.resolve(2)).rejects.toThrow("optional Multi-Profile launcher is unavailable");
   });
 });

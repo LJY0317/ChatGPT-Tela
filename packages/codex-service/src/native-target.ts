@@ -34,6 +34,9 @@ export interface CodexNativeTargetAdapter {
     readonly target: CodexNativeTarget;
     readonly session: CodexNativeTargetSession;
   }[]>;
+  /** Full maintenance inventory. An optional provider failure must NOT be
+   * represented as an empty list (regular UI listing may degrade safely). */
+  maintenanceProfiles?(signal?: AbortSignal): ReturnType<CodexNativeTargetAdapter["profiles"]>;
   resolve(slot: number, signal?: AbortSignal): Promise<{
     readonly target: CodexNativeTarget;
     readonly session: CodexNativeTargetSession;
@@ -190,14 +193,14 @@ export class CompositeNativeTargetAdapter implements CodexNativeTargetAdapter {
     this.#multiProfile = input.multiProfile;
   }
 
-  async profiles(signal?: AbortSignal) {
+  async #profiles(signal?: AbortSignal, requireComplete = false) {
     const primary = await this.#defaultDesktop.resolve(1, signal);
     if (!this.#multiProfile) return Object.freeze([primary]);
     let optionalProfiles: readonly { readonly target: CodexNativeTarget; readonly session: CodexNativeTargetSession }[];
     try {
       optionalProfiles = await this.#multiProfile.profiles(signal);
     } catch (error) {
-      if (signal?.aborted) throw error;
+      if (requireComplete || signal?.aborted) throw error;
       return Object.freeze([primary]);
     }
     const extras = optionalProfiles.filter(item => item.target.slot > 1);
@@ -208,6 +211,9 @@ export class CompositeNativeTargetAdapter implements CodexNativeTargetAdapter {
     }
     return Object.freeze([primary, ...extras]);
   }
+
+  profiles(signal?: AbortSignal) { return this.#profiles(signal); }
+  maintenanceProfiles(signal?: AbortSignal) { return this.#profiles(signal, true); }
 
   async resolve(slotValue: number, signal?: AbortSignal) {
     const selected = slot(slotValue);

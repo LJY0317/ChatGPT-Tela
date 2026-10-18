@@ -99,6 +99,31 @@ Service readiness does not prove that every profile's Web model has completed a 
 
 ## Stop evidence
 
+The source Codex service now exposes authenticated, on-demand shutdown readiness
+separately from ordinary `ready` health. It checks all owned Native app-server
+loaded-thread metadata (never Legacy history pages) and each owned Web runtime's
+new count-only activity endpoint with owner account-browser activity (no DOM
+or screenshot). Unknown, incomplete or
+active work blocks official shutdown. The service also blocks on unowned running
+profile targets and in-flight routed Native tool operations, and rejects new
+route admissions while an approved shutdown is underway. An unsuccessful service
+stop reopens that route admission. Maintenance requires a complete optional
+multi-profile target inventory; a provider outage cannot silently omit a running
+profile as the ordinary UI inventory may. A service with no owned profiles and
+no mounted tool routes can stop without inspecting an unrelated external app.
+Pre-stop refusal returns the exact authenticated `shutdown:not-started` receipt,
+which preserves the signed upgrader's cancellation boundary. Readiness is rechecked on the shutdown
+endpoint, not inferred from a profile count. The packaged launcher requires an
+explicit readiness receipt for Chat and Codex, while Gateway preserves its
+separate contract. This is a source-level, conservative **idle admission** gate:
+it cannot authorize pausing the one currently requesting maintenance turn.
+That requires an authenticated exact-turn origin, host-supported durable
+continuation, and a separately verified independent installer/restart path.
+Do not claim this source addition is installed merely from local tests.
+As the external Native engine remains free to start turns while being inspected,
+an on-demand readiness snapshot is not an engine-enforced atomic no-new-turn
+freeze; production automatic in-turn upgrades remain disabled.
+
 The default Desktop target settles canonically proven active Native turns through the public
 app-server protocol before asking Desktop to quit or closing its proxy/backend. Unproven active
 history stops before the first app quit. Backend draining alone is insufficient: it can retain

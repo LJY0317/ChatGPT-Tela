@@ -26,8 +26,12 @@ export function ownedServiceShutdown(installId: string, paths: ProductPaths) {
       const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json") });
       if (!current || current.status.state !== "ready") throw new Error(`${service} runtime is not ready for maintenance`);
       // This potentially scans durable work; request it only for maintenance, never routine health polls.
-      const status = await new LocalServiceClient(current.descriptor).status(AbortSignal.timeout(1_500), { shutdownReadiness: true });
-      if (status.state !== "ready" || status.shutdownReadiness === "blocked") throw new PackagedServiceShutdownNotStartedError(service);
+      const status = await new LocalServiceClient(current.descriptor).status(AbortSignal.timeout(service === "codex" ? 30_000 : 1_500),
+        { shutdownReadiness: true });
+      if (status.state !== "ready" || (service === "chat" || service === "codex"
+        ? status.shutdownReadiness !== "ready" : status.shutdownReadiness === "blocked")) {
+        throw new PackagedServiceShutdownNotStartedError(service);
+      }
     },
   });
 }

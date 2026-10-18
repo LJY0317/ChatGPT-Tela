@@ -19,6 +19,32 @@ function child(label: string, events: string[]): RemoteTurnBridge {
 }
 
 describe("Tela Codex routed turn bridge", () => {
+  test("maintenance records unresolved Native tool operations and fences new admissions", async () => {
+    const router = new RoutedCodexTurnBridge();
+    let finish!: (value: { callId: string; content: string; isError: boolean }) => void;
+    const deferred = new Promise<{ callId: string; content: string; isError: boolean }>(resolve => { finish = resolve; });
+    const bridge: RemoteTurnBridge = {
+      async inventory() { return []; },
+      invoke: async () => deferred,
+      async close() {},
+    };
+    router.mount("ProfileA1", bridge);
+    const token = `turnr_ProfileA1_${"a".repeat(43)}`;
+    const invoking = router.invoke(token, { callId: "call", wireName: "runtime-dynamic-tool",
+      mode: "structured", arguments: {} });
+    expect(router.activeOperationCount).toBe(1);
+    router.closeAdmission();
+    await expect(router.inventory(token)).rejects.toThrow("admission is closed");
+    await expect(router.invoke(token, { callId: "new", wireName: "runtime-dynamic-tool",
+      mode: "structured", arguments: {} })).rejects.toThrow("admission is closed");
+    expect(router.activeOperationCount).toBe(1);
+    finish({ callId: "call", content: "fixture", isError: false });
+    expect(await invoking).toMatchObject({ callId: "call" });
+    expect(router.activeOperationCount).toBe(0);
+    router.reopenAdmission();
+    expect(await router.inventory(token)).toEqual([]);
+  });
+
   test("routes opaque capabilities to only the owning profile without assuming Native tool names", async () => {
     const events: string[] = [];
     const router = new RoutedCodexTurnBridge();

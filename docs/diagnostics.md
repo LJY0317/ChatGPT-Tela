@@ -12,6 +12,13 @@ claims. A host/platform refusal before ingress cannot emit this event; its
 absence alone proves nothing when diagnostic transport or retention is unknown.
 Do not replay an upstream-refused action through another execution route.
 
+The Codex maintenance inspection emits the fixed, payload-free
+`maintenance_activity_unproven` event only on a failed on-demand Native/Web
+activity census. It contains no loaded-thread IDs, content, paths or screenshots.
+The absence of this event does not establish idle activity or authorize a stop;
+use the authenticated `shutdownReadiness` response and official lifecycle
+receipt.
+
 ## Native-to-Web preparation triage
 
 Start with `chatgpt-tela diagnostics context --at <ISO-time> --minutes 15 --view summary`.
