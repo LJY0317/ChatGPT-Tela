@@ -265,6 +265,7 @@ class UpgradeServices implements PackagedUpgradeServiceController {
   }
 
   async resume(service: TelaServiceId): Promise<void> {
+    if (this.states.get(service) === "running") return;
     this.events.push(`start:${service}`);
     if (this.failResumeOnce === service) {
       this.failResumeOnce = undefined;

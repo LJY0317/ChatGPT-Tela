@@ -33,6 +33,7 @@ export interface PackagedUpgradeServiceController {
   prepare?(services: readonly TelaServiceId[]): Promise<void>;
   inspect(service: TelaServiceId): Promise<"running" | "stopped">;
   quiesce(service: TelaServiceId): Promise<void>;
+  /** Idempotent start; an already running service still completes runtime readiness. */
   resume(service: TelaServiceId): Promise<void>;
   /** Prove prior stop requests cannot outlive restoration. No new stop request. */
   settleQuiescence?(): Promise<boolean>;
