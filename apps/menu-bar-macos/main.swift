@@ -25,6 +25,33 @@ private struct ProfilesEnvelope: Decodable {
   let profiles: [ProfileStatus]
 }
 
+struct TelaPreferences: Codable {
+  let version: Int
+  var approvalAutomation: String
+  var approvalDelay: String?
+  var workProfileConnections: [String]?
+}
+
+enum TelaPreferencesStore {
+  static let delays = ["instant", "250ms", "500ms", "1s", "2s", "5s", "10s", "15s"]
+
+  static func read(at url: URL) throws -> TelaPreferences {
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      return TelaPreferences(version: 1, approvalAutomation: "off", approvalDelay: "instant")
+    }
+    let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+    guard values.isRegularFile == true, values.isSymbolicLink != true else {
+      throw NSError(domain: "ChatGPTTelaPreferences", code: 1)
+    }
+    let value = try JSONDecoder().decode(TelaPreferences.self, from: Data(contentsOf: url))
+    guard value.version == 1,
+          ["off", "full_access", "recognized_once", "recognized_conversation"].contains(value.approvalAutomation),
+          delays.contains(value.approvalDelay ?? "instant") else {
+      throw NSError(domain: "ChatGPTTelaPreferences", code: 2)
+    }
+    return value
+  }
+
   static func write(_ value: TelaPreferences, at url: URL) throws {
     let directory = url.deletingLastPathComponent()
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
