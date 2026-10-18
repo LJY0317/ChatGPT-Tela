@@ -83,7 +83,7 @@ test("detached trusted receipt survives immediate card removal once, without gra
   expect(otherTurn.recordInputReceipt(receipt, 4)).toBeUndefined();
   expect(otherTurn.unverifiedDispatchCount).toBe(0);
 });
-test("after an owned approval dropdown rotates proof, only the prepared-choice receipt releases the success budget", () => {
+test("after an owned approval dropdown rotates proof, only the prepared-choice receipt is accepted", () => {
   const observation = new ChatGptApprovalObservation();
   observation.observe(card, "before", true, 10);
   const newRevision = "scoped-menu-choice-proof";
@@ -114,22 +114,6 @@ test("late input evidence does not rewind cleared-card lifecycle or count disapp
   expect(observation.observe(undefined, "body", true, 4)).toBeUndefined();
   expect(observation.unverifiedDispatchCount).toBe(1);
 });
-test("only trusted input plus clearance plus new assistant progress releases an approval budget slot", () => {
-  const observation = new ChatGptApprovalObservation();
-  for (let index = 0; index < 18; index++) {
-    const c = { ...card, cardFingerprint: String(index).padStart(24, "x"),
-      revisionFingerprint: "revision-" + index };
-    observation.observe(c, "body-start-" + index, true, index * 100);
-    observation.dispatched(c.cardFingerprint, index * 100 + 1);
-    expect(observation.unverifiedDispatchCount).toBe(1);
-    observation.observe({ ...c, inputReceived: true }, "body-start-" + index, true, index * 100 + 2);
-    observation.observe(undefined, "body-start-" + index, true, index * 100 + 3);
-    expect(observation.unverifiedDispatchCount).toBe(1);
-    observation.observe(undefined, "body-next-" + index, true, index * 100 + 4);
-    expect(observation.unverifiedDispatchCount).toBe(0);
-  }
-  expect(observation.unverifiedDispatchCount).toBe(0);
-});
 test("a vanished card, failed assistant, duplicate receipt or late evidence never masquerades as verified success", () => {
   const observation = new ChatGptApprovalObservation();
   observation.observe(card, "a", true, 0);
@@ -142,19 +126,6 @@ test("a vanished card, failed assistant, duplicate receipt or late evidence neve
 });
 
 
-test("direct card replacement needs trusted receipt and changed owned assistant to verify the prior approval", () => {
-  for (const receipt of [false, true]) for (const progress of [false, true]) {
-    const observation = new ChatGptApprovalObservation();
-    observation.observe(card, "before", true, 0);
-    observation.dispatched(card.cardFingerprint, 1);
-    if (receipt) observation.recordInputReceipt({ cardFingerprint: card.cardFingerprint,
-      revisionFingerprint: card.revisionFingerprint }, 2);
-    observation.observe({ ...card, cardFingerprint: "b".repeat(24), revisionFingerprint: "proof-b" },
-      progress ? "after" : "before", true, 3);
-    expect(observation.unverifiedDispatchCount).toBe(receipt && progress ? 0 : 1);
-  }
-});
-
 test("an ambiguous multi-card snapshot cannot establish the previous card's clearance", () => {
   const observation = new ChatGptApprovalObservation();
   observation.observe(card, "before", true, 0);
@@ -162,11 +133,13 @@ test("an ambiguous multi-card snapshot cannot establish the previous card's clea
   observation.recordInputReceipt({ cardFingerprint: card.cardFingerprint, revisionFingerprint: card.revisionFingerprint }, 2);
   const { cardFingerprint: _fingerprint, ...ambiguous } = card;
   observation.observe({ ...ambiguous, cardCount: 2, revisionFingerprint: "ambiguous-two" }, "after", true, 3);
-  expect(observation.unverifiedDispatchCount).toBe(1);
+  expect(observation.wasDispatched(card.cardFingerprint)).toBe(true);
+  expect(observation.phase).toBe("pending");
+  expect(observation.unverifiedDispatchCount).toBe(0);
 });
 
 
-test("unresolved card replacement retains its age while verified approval starts a new episode", () => {
+test("each distinct card starts a new wait regardless of earlier input or assistant text", () => {
   for (const trustedInput of [false, true]) {
     const observation = new ChatGptApprovalObservation();
     observation.observe(card, "before", true, 1_000);
@@ -175,20 +148,10 @@ test("unresolved card replacement retains its age while verified approval starts
       revisionFingerprint: card.revisionFingerprint }, 3_000);
     const second = { ...card, cardFingerprint: "b".repeat(24), revisionFingerprint: "proof-b" };
     observation.observe(second, trustedInput ? "after" : "before", true, 541_000);
-    expect(observation.pendingElapsedMs(541_000)).toBe(trustedInput ? 0 : 540_000);
+    expect(observation.pendingElapsedMs(541_000)).toBe(0);
+    expect(observation.unverifiedDispatchCount).toBe(0);
     expect(observation.wasDispatched(card.cardFingerprint)).toBe(true);
-  }
-});
-
-test("manual clearance and owned progress end the wait episode; hiding alone does not", () => {
-  for (const progress of [false, true]) {
-    const observation = new ChatGptApprovalObservation();
-    observation.observe(card, "before", true, 1_000);
-    observation.observe(undefined, "before", true, 200_000);
-    if (progress) observation.observe(undefined, "after", true, 201_000);
-    observation.observe({ ...card, cardFingerprint: "b".repeat(24), revisionFingerprint: "proof-b" },
-      progress ? "after" : "before", true, 541_000);
-    expect(observation.pendingElapsedMs(601_000)).toBe(progress ? 60_000 : 600_000);
+    expect(observation.wasDispatched(second.cardFingerprint)).toBe(false);
   }
 });
 

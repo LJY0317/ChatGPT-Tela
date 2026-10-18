@@ -12,26 +12,17 @@ export class ChatGptApprovalObservation {
   #current?: { cardFingerprint?: string; revision: string; phase: ApprovalObservationPhase; seenAt: number; assistantVersion: string };
   // Lifetime is one owned Native turn on its surface; no global card registry or idle timer.
   readonly #dispatched = new Set<string>();
-  /** Card success needs trusted input, clearance and renewed owned assistant progress. */
-  readonly #verified = new Set<string>();
-  readonly #trustedInput = new Set<string>();
-  readonly #clearance = new Set<string>();
-  readonly #resumed = new Set<string>();
   readonly #received = new Set<string>();
-  get unverifiedDispatchCount(): number { return this.#dispatched.size - this.#verified.size; }
+  /** Diagnostic for the current card only; older cards never block a distinct approval. */
+  get unverifiedDispatchCount(): number {
+    const card = this.#current?.cardFingerprint;
+    return card && this.#dispatched.has(card) && this.#current?.phase !== "task_progress" ? 1 : 0;
+  }
   /** Read-only age of the unresolved current card; never a grant or timeout. */
   pendingElapsedMs(now: number): number | undefined {
     return this.#current && ["pending", "dispatch_sent", "input_received", "card_cleared"].includes(this.#current.phase)
       ? Math.max(0, now - this.#current.seenAt) : undefined;
   }
-  #verifyCard(): void {
-    const key = this.#current?.cardFingerprint;
-    if (key && this.#dispatched.has(key) && this.#trustedInput.has(key)
-      && this.#clearance.has(key) && this.#resumed.has(key)) {
-      this.#verified.add(key);
-    }
-  }
-
   recordInputReceipt(receipt: ChatGptSurfaceSnapshot["approvalInputReceipt"], now: number): ApprovalObservationTransition | undefined {
     if (!receipt || !this.#current || receipt.cardFingerprint !== this.#current.cardFingerprint
       || receipt.revisionFingerprint !== this.#current.revision || !this.wasDispatched(receipt.cardFingerprint)) return;
@@ -42,8 +33,6 @@ export class ChatGptApprovalObservation {
     const key = this.#current!.revision;
     if (this.#received.has(key)) return;
     this.#received.add(key);
-    if (this.#current?.cardFingerprint) this.#trustedInput.add(this.#current.cardFingerprint);
-    this.#verifyCard();
     if (this.#current!.phase === "card_cleared" || this.#current!.phase === "task_progress") {
       // A delayed receipt enriches evidence; it must not rewind the observed card lifecycle.
       return Object.freeze({ phase: "input_received",
@@ -59,23 +48,9 @@ export class ChatGptApprovalObservation {
         ? this.#current.cardFingerprint === approval.cardFingerprint
         : this.#current.revision === approval.revisionFingerprint);
       if (!same) {
-        const prior = this.#current?.cardFingerprint;
-        const replacedWithProgress = approval.cardCount === 1 && approval.cardFingerprint !== undefined
-          && canProgress && this.#current !== undefined && assistantVersion !== this.#current.assistantVersion;
-        if (prior && approval.cardCount === 1 && approval.cardFingerprint) {
-          this.#clearance.add(prior);
-          if (replacedWithProgress) this.#resumed.add(prior);
-          this.#verifyCard();
-        }
-        // A changed card is presentation, not a new waiting allowance. Only an
-        // ended owned episode starts a fresh deadline; dispatch fences remain per card.
-        const priorResolved = this.#current?.phase === "task_progress"
-          || (prior !== undefined && (this.#verified.has(prior)
-            || (!this.#dispatched.has(prior) && replacedWithProgress)));
-        const seenAt = this.#current && !priorResolved ? this.#current.seenAt : now;
         const phase = this.wasDispatched(approval.cardFingerprint) ? "dispatch_sent" : "pending";
         this.#current = { ...(approval.cardFingerprint ? { cardFingerprint: approval.cardFingerprint } : {}), revision: approval.revisionFingerprint,
-          phase, seenAt, assistantVersion };
+          phase, seenAt: now, assistantVersion };
         return this.#transition(phase, now);
       }
       this.#current!.assistantVersion = assistantVersion;
@@ -115,11 +90,7 @@ export class ChatGptApprovalObservation {
   get cardFingerprint(): string | undefined { return this.#current?.cardFingerprint; }
 
   #transition(phase: ApprovalObservationPhase, now: number): ApprovalObservationTransition {
-    const key = this.#current?.cardFingerprint;
-    if (key && phase === "card_cleared") this.#clearance.add(key);
-    if (key && phase === "task_progress") this.#resumed.add(key);
     this.#current!.phase = phase;
-    this.#verifyCard();
     return Object.freeze({ phase, ...(this.#current!.cardFingerprint ? { cardFingerprint: this.#current!.cardFingerprint } : {}),
       elapsedMs: Math.max(0, now - this.#current!.seenAt) });
   }

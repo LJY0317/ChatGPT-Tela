@@ -35,12 +35,9 @@ private struct ControlCenterProfilesEnvelope: Decodable {
 }
 
 private struct ControlCenterBridgeSurface: Decodable { let id: String; let label: String }
-private struct ControlCenterApprovalReview: Decodable { let classification: String }
 private struct ControlCenterApprovalWait: Decodable {
   let phase: String
   let elapsedMs: Int
-  let expiresAfterMs: Int
-  let unverifiedDispatchCount: Int
   let operationState: String
 
   var statusText: String {
@@ -48,14 +45,13 @@ private struct ControlCenterApprovalWait: Decodable {
     let seconds = max(0, elapsedMs) / 1000
     let elapsed = "\(seconds / 60)m \(seconds % 60)s"
     if phase == "card_cleared" { return "Card cleared; task progress unconfirmed · \(elapsed)" }
-    return "Approval waiting · \(elapsed) · ends at \(max(0, expiresAfterMs) / 60000)m"
+    return "Approval waiting · \(elapsed)"
   }
 }
 
 private struct ControlCenterBridgePreview: Decodable {
   let approvalState: String?
   let approvalObservationReason: String?
-  let approvalReview: ControlCenterApprovalReview?
   let approvalWait: ControlCenterApprovalWait?
   let contractVersion: Int
   let slot: Int
@@ -1767,15 +1763,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         bridgeMessage += "\n\(wait.statusText)"
       }
       if preview.selectedSurfaceId != nil && preview.approvalState == "pending" {
-        if preview.approvalReview?.classification == "limit_reached" {
-          bridgeMessage += "\nA previous approval has not been confirmed. Open Interact to inspect the current card; Tela will not click again while its outcome is uncertain."
-        } else if preview.approvalReview?.classification == "eligible_conversation" {
-          bridgeMessage += "\nThe owning Work turn will allow this conversation when available, otherwise allow once."
-        } else if preview.approvalReview?.classification == "eligible_once" {
-          bridgeMessage += "\nThe owning Work turn will allow this request once."
-        } else {
-          bridgeMessage += "\nApproval is waiting in this browser session. Choose Interact to review the card."
-        }
+        bridgeMessage += "\nApproval is waiting in this browser session. Choose Interact to review the card."
       } else if preview.selectedSurfaceId != nil && preview.approvalState == "unavailable" {
         bridgeMessage += preview.approvalObservationReason == "automation_unavailable"
           ? "\nApproval cannot be checked because this session has no page-observation capability."

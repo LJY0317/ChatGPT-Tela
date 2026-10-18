@@ -2198,7 +2198,7 @@ describe("ChatGPT semantic provider", () => {
       expect(driver.activated).toHaveLength(1);
     } finally { if (accepted) await provider.cancelTurn(surface.lease,accepted); await surface.host.close(); }
   });
-  test("agent automation cannot dispatch unbounded new one-shot cards within one accepted Web turn", async () => {
+  test("different owned approvals proceed without prior assistant text changes; the same card is never clicked twice", async () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.approveRecognizedCard = true;
     const surface = await leaseFor(driver);
@@ -2210,27 +2210,38 @@ describe("ChatGPT semantic provider", () => {
       const submitted = await submitting;
       if (submitted.state !== "proven") throw Error("expected accepted Web turn");
       const owned = driver.current;
+      const thinking = [...owned.turns, {
+        key: "assistant-sequential", role: "assistant" as const, parentUserTurnKey: "user-turn-1",
+        phase: "thinking" as const,
+      }];
       for (let index = 0; index < 3; index++) {
         driver.queued.push({
-          ...owned, revision: `approval-budget-card-${index}`,
+          ...owned, revision: "approval-card-" + index,
           approval: { ...recognizedApproval,
-            cardFingerprint: `card-${index}`,
-            revisionFingerprint: `card-proof-${index}` },
-          turns: [...owned.turns, {
-            key: "assistant-budget", role: "assistant", parentUserTurnKey: "user-turn-1",
-            phase: "thinking",
-          }],
+            cardFingerprint: "card-" + index,
+            revisionFingerprint: "card-proof-" + index },
+          turns: thinking,
+        });
+        const dispatched = await provider.waitForTurnEvent(surface.lease, submitted.value);
+        expect(dispatched.state === "proven" && dispatched.value).toMatchObject({
+          kind: "progress", summary: "Approval click sent; waiting for the Web browser to receive and process it.",
+        });
+        expect(driver.approvalCalls).toBe(index + 1);
+        driver.queued.push({ ...owned, revision: "card-cleared-" + index, turns: thinking });
+        const cleared = await provider.waitForTurnEvent(surface.lease, submitted.value);
+        expect(cleared.state === "proven" && cleared.value).toMatchObject({
+          kind: "progress", summary: "Approval card cleared; waiting for the task to resume.",
         });
       }
-      const first = await provider.waitForTurnEvent(surface.lease, submitted.value);
-      expect(first.state === "proven" && first.value).toMatchObject({
+      driver.queued.push({
+        ...owned, revision: "previous-card-returned", turns: thinking,
+        approval: { ...recognizedApproval, cardFingerprint: "card-0", revisionFingerprint: "card-proof-0" },
+      });
+      const returned = await provider.waitForTurnEvent(surface.lease, submitted.value);
+      expect(returned.state === "proven" && returned.value).toMatchObject({
         kind: "progress", summary: "Approval click sent; waiting for the Web browser to receive and process it.",
       });
-      const exhausted = await provider.waitForTurnEvent(surface.lease, submitted.value);
-      expect(exhausted.state === "proven" && exhausted.value).toMatchObject({
-        kind: "progress", summary: expect.stringContaining("remains unverified"),
-      });
-      expect(driver.approvalCalls).toBe(1);
+      expect(driver.approvalCalls).toBe(3);
     } finally { await surface.host.close(); }
   });
 

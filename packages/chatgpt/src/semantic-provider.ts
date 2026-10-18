@@ -1744,7 +1744,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       let preparationFailure: string | undefined;
       if (observedApproval?.cardCount === 1 && observedApproval.cardFingerprint
         && !tracked.approvalObservation.wasDispatched(observedApproval.cardFingerprint)
-        && tracked.approvalObservation.unverifiedDispatchCount === 0
         && assistant?.phase !== "failed" && driver.processApprovalCard
         && approvalChoice?.action !== "none" && approvalChoice !== undefined) {
         signal?.throwIfAborted();
@@ -1763,11 +1762,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       signal?.throwIfAborted();
       const approvalPhase = tracked.approvalObservation.phase;
-      const approvalProgress = preparationFailure ?? (approvalPhase
-        ? approvalPhase === "pending" && tracked.approvalObservation.unverifiedDispatchCount > 0
-          ? "A previous automatic approval remains unverified. Review the existing operation in the browser; Tela will not click another card or resend the request."
-          : approvalObservationSummary(approvalPhase)
-        : "");
+      const approvalProgress = preparationFailure ?? (approvalPhase ? approvalObservationSummary(approvalPhase) : "");
       if (approvalProgress && tracked.approvalProgress !== approvalProgress) {
         tracked.approvalProgress = approvalProgress;
         tracked.observeAgain = true;

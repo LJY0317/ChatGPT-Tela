@@ -22,9 +22,11 @@ unambiguous scoped Allow choice. Prefer **Allow for this conversation**,
 then **Allow once**, then the sole generic **Allow**. The browser driver
 checks the same current card, target, owner and single-click admission
 immediately before input. Indeterminate click results are never replayed.
-Until trusted input, card clearance and owned assistant progress have been
-observed, no second automatic card click is dispatched. Unknown choices
-are left for the user, not treated as task failures.
+A different, uniquely owned card may be activated without waiting for
+the previous card's assistant text to change. Input receipt, card clearance
+and task progress remain diagnostic observations, not cumulative admission
+limits. The same card is activated at most once. Unknown choices are left
+for the user, not treated as task failures.
 
 No agent-facing second policy classifier, repeated screenshot capture or
 30-second/two-minute/five-minute revalidation is needed. In particular,
