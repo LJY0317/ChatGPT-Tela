@@ -543,8 +543,6 @@ reports contain only artifact references, types and sizes, never their contents.
 Private artifacts have no upload/export path. Analyze them locally and return only structural
 classifications/counts; never return raw files through model tools or include them in Git/releases.
 
-The capture is read-only, does not click approvals, resend requests, alter permissions, change models,
-or attach to the official Desktop app. Native/Work authority remains intact.
 The browser capture has a three-second deadline and deduplication. A diagnostic failure never replaces
 an execution result. Enabling capture can add active-request latency; leave it disabled for ordinary use.
 

@@ -76,8 +76,7 @@ second client to the owner's unrestricted App Server:
 
 - A trusted local user-approval callback selects **one exact Native thread
   T**, original source profile A, destination profile B and read/continue
-  permission. An unpredictable, hashed, ephemeral capability is restricted
-  to that selection; permission is never inferred from a thread ID.
+  permission.
 - Every operation re-proves the authenticated source profile's account,
   session and route binding and the calling destination's exact binding.
   Account switch, owner restart, expiration and explicit revocation deny

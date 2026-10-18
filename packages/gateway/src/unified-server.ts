@@ -50,7 +50,7 @@ export const UNIFIED_CHAT_TOOL_DEFINITIONS: readonly ChatToolDefinition[] = Obje
     name: "tela_chat_inspect_native_evidence",
     capability: "inspect_native_evidence",
     title: "Inspect historical Native work evidence",
-    description: "Read-only, bounded approval/failure event history by exact Native UUID even when its profile is stopped. Historical logs never prove current ownership, live card state, or permission to approve or replay. No shell, credentials, raw conversation, browser input or mutation.",
+    description: "Read-only, bounded approval/failure event history by exact Native UUID even when its profile is stopped. No shell, credentials, raw conversation, browser input or mutation.",
     inputSchema: z.object({
       workspace_id: workspaceId,
       thread_id: z.string().uuid(),

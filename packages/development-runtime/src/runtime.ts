@@ -79,7 +79,7 @@ export type DevelopmentWebTurnPlanner = (
   preparation?: {
     readonly signal: AbortSignal;
     readonly onProgress: (summary: string) => void;
-    /** Optional diagnostic observer, not an execution or permission grant. */
+    /** Optional diagnostic observer. */
     readonly onPlannerStage?: (stage: WebContextPlannerStage) => void;
   },
 ) => Promise<DevelopmentWebTurnPlan> | DevelopmentWebTurnPlan;
