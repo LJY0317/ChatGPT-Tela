@@ -15,6 +15,9 @@ import { runPackagedChatCommand } from "./chat";
 import { runPackagedServicesCommand } from "./services";
 import { readConfigurationInput, runPackagedBootstrapCommand } from "./bootstrap";
 import { resolveChatGptTelaBrowserProfile } from "@chatgpt-tela/development-runtime/browser-profile";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 /** No real service manager, profile, credential store or user installation is used. */
 class LifecycleServices implements ServiceRegistrationCommandRunner {
@@ -237,7 +240,7 @@ test("signed install -> update -> keep-data removal -> reinstall -> complete rem
       paths.serviceState("chat"), browser, setupProfile.userDataDir, paths.installManifest]) expect(existsSync(path)).toBe(false);
     expect(runner.loaded.size).toBe(0);
     for (const path of external) expect(readFileSync(path, "utf8")).toBe("external fixture: preserve exactly\n");
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { removeFixture(root); }
 });
 
 test("UI configuration input counts bytes and stops an oversized stream before parsing", async () => {

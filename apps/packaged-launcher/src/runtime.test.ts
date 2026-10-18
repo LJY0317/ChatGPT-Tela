@@ -18,6 +18,9 @@ import {
   type ServiceRegistrationCommandRunner,
 } from "@chatgpt-tela/product-lifecycle";
 import { resolvePackagedServiceLaunch } from "./runtime";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
   readonly loaded = new Set<string>();
@@ -133,7 +136,7 @@ describe("packaged service launcher", () => {
       const foreign = join(root, "foreign-journal"); writeFileSync(foreign, JSON.stringify(repair));
       symlinkSync(foreign, packagedRepairJournalPath(paths));
       expect(() => launch("chat")).toThrow("transition journal");
-    } finally { rmSync(root, { recursive: true, force: true }); }
+    } finally { removeFixture(root); }
   });
   test("signed install registers the stable launcher while the launcher resolves the manifest-defined service binary", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-packaged-launcher-"));
@@ -213,7 +216,7 @@ describe("packaged service launcher", () => {
       expect(() => resolvePackagedServiceLaunch({ service: "codex", payloadRoot: paths.binaryRoot, pathOptions })).not.toThrow();
       expect(() => resolvePackagedServiceLaunch({ service: "gateway", payloadRoot: paths.binaryRoot, pathOptions })).not.toThrow();
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeFixture(root);
     }
   });
 
@@ -247,7 +250,7 @@ describe("packaged service launcher", () => {
         pathOptions,
       })).toThrow("launcher executable");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeFixture(root);
     }
   });
 
@@ -284,7 +287,7 @@ describe("packaged service launcher", () => {
         pathOptions,
       })).toThrow("transition journal");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeFixture(root);
     }
   });
 });

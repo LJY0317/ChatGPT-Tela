@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatProcessManager } from "./processes";
 import { ChatWorkspaceRegistry } from "./workspaces";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 describe("Tela Chat failure-only process diagnostics", () => {
   test("full protected registry reports structural capacity occupancy without command or paths", async () => {
@@ -61,7 +64,7 @@ describe("Tela Chat failure-only process diagnostics", () => {
       if (oldDiagnosticFile === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
       else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = oldDiagnosticFile;
       await expect(manager!.close()).rejects.toThrow("unresolved execution");
-      rmSync(base, { recursive: true, force: true });
+      removeFixture(base);
     }
   });
 
@@ -88,7 +91,7 @@ describe("Tela Chat failure-only process diagnostics", () => {
     } finally {
       if (oldDiagnosticFile === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
       else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = oldDiagnosticFile;
-      rmSync(base, { recursive: true, force: true });
+      removeFixture(base);
     }
   });
 });

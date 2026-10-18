@@ -1,10 +1,13 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatWorkspaceRegistry } from "./workspaces";
 import { ChatProcessManager } from "./processes";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 function fixture() {
   const base = mkdtempSync(join(tmpdir(), "tela-removal-admission-"));
@@ -29,7 +32,7 @@ test("exclusive removal blocks new execution and aliases until its finally relea
     const result = await processes.exec({ workspaceId: f.workspace.id, command: "true", yieldTimeMs: 1000 });
     expect(result.state).toBe("exited");
     f.workspaces.reserveRemoval(f.workspace.id)();
-  } finally { await processes.close(); rmSync(f.base, { recursive: true, force: true }); }
+  } finally { await processes.close(); removeFixture(f.base); }
 });
 
 test("restart leaves unfinished durable operations unresolved and refuses destructive admission", async () => {
@@ -53,7 +56,7 @@ test("restart leaves unfinished durable operations unresolved and refuses destru
       expect(workspaces.get(f.workspace.id)).toEqual(f.workspace);
       expect(JSON.parse(readFileSync(f.processStore, "utf8")).operations[0].state).toBe("unknown");
     } finally { await expect(restarted.close()).rejects.toThrow("unresolved execution"); }
-  } finally { await processes.close(); rmSync(f.base, { recursive: true, force: true }); }
+  } finally { await processes.close(); removeFixture(f.base); }
 });
 
 
@@ -74,5 +77,5 @@ test("in-flight async use protects overlapping workspace scopes and releases on 
     try { expect(() => f.workspaces.get(f.workspace.id)).toThrow("removal is in progress"); }
     finally { done(); }
     expect(f.workspaces.get(nested.id)).toEqual(nested);
-  } finally { rmSync(f.base, { recursive: true, force: true }); }
+  } finally { removeFixture(f.base); }
 });

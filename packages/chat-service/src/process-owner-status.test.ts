@@ -7,6 +7,9 @@ import { createChatToolRuntime } from "./tools";
 import { ChatWorkspaceRegistry } from "./workspaces";
 import { ProcessExecutionJournal } from "./process-execution-journal";
 import { startProcessOwnerControl } from "./process-owner";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 async function fixture(options: { holdWait?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-owner-status-")), stateRoot = join(root, "state");
@@ -50,7 +53,7 @@ async function fixture(options: { holdWait?: boolean } = {}) {
     complete, waitStarted, releaseWait, counts: () => ({ queries, waits, writes }),
     corruptOwner: () => { wrongOwner = true; }, async close() {
       complete();
-      await runtime.close(); await control.close(); rmSync(root, { recursive: true, force: true });
+      await runtime.close(); await control.close(); removeFixture(root);
     } };
 }
 

@@ -1,11 +1,14 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ChatWorkspaceRegistry } from "./workspaces";
 import { createChatToolRuntime } from "./tools";
 import { processAdmissionOutlook } from "./processes";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 function fixture() {
   const base = mkdtempSync(join(tmpdir(), "tela-process-list-"));
@@ -60,7 +63,7 @@ test("public registry discovery paginates unresolved work without cross-workspac
     expect(first.processes.every((row: any) => row.workspaceId === f.first.id)).toBe(true);
     expect(readFileSync(f.storePath, "utf8")).toBe(before);
     await expect(f.runtime.close()).rejects.toThrow("unresolved execution");
-  } finally { rmSync(f.base, { recursive: true, force: true }); }
+  } finally { removeFixture(f.base); }
 });
 
 test("on-demand admission outlook distinguishes hot occupancy from execution blockage without side effects", () => {
@@ -90,5 +93,5 @@ test("list bounds and workspace authority reject invalid discovery without chang
     }
     await expect(f.runtime.call("list_processes", { workspace_id: "unapproved" })).rejects.toThrow();
     expect(readFileSync(f.storePath, "utf8")).toBe(before);
-  } finally { rmSync(f.base, { recursive: true, force: true }); }
+  } finally { removeFixture(f.base); }
 });

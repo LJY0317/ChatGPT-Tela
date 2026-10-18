@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createChatToolRuntime } from "./tools";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 test("Chat command accepts multiline scripts and preserves idempotent execution", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-chat-command-"));
@@ -35,6 +38,6 @@ test("Chat command accepts multiline scripts and preserves idempotent execution"
     }
   } finally {
     await runtime.close();
-    rmSync(root, { recursive: true, force: true });
+    removeFixture(root);
   }
 });

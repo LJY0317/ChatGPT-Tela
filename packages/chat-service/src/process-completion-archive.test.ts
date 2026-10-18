@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProcessCompletionArchive } from "./process-completion-archive";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 function setup() {
   const root = mkdtempSync(join(tmpdir(), "tela-completion-archive-"));
@@ -33,7 +36,7 @@ describe("separate authenticated completion archive", () => {
       const reopened = new ProcessCompletionArchive(f.path, f.key, 3);
       try { expect(reopened.get(operation.operationId)).toEqual(operation); }
       finally { reopened.close(); }
-    } finally { rmSync(f.root, { recursive: true, force: true }); }
+    } finally { removeFixture(f.root); }
   });
 
   test("refuses silent eviction of recent terminal deduplication evidence", () => {
@@ -42,7 +45,7 @@ describe("separate authenticated completion archive", () => {
       for (let i = 1; i <= 3; i++) f.archive.save(f.make(i));
       expect(() => f.archive.save(f.make(4))).toThrow("capacity");
       expect(f.archive.count()).toBe(3);
-    } finally { f.archive.close(); rmSync(f.root, { recursive: true, force: true }); }
+    } finally { f.archive.close(); removeFixture(f.root); }
   });
 
   test("atomic bulk promotion publishes all verified identities or none", () => {
@@ -62,7 +65,7 @@ describe("separate authenticated completion archive", () => {
       expect(() => f.archive.saveMany([f.make(3), f.make(4, "unknown")]))
         .toThrow("unresolved");
       expect(f.archive.count()).toBe(2);
-    } finally { f.archive.close(); rmSync(f.root, { recursive: true, force: true }); }
+    } finally { f.archive.close(); removeFixture(f.root); }
   });
 
 });

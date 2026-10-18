@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,9 @@ import {
   type ServiceRegistrationCommandRunner,
 } from "@chatgpt-tela/product-lifecycle";
 import { parsePackagedLifecycleCommand, runPackagedLifecycleCommand } from "./lifecycle";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
   readonly loaded = new Set<string>();
@@ -109,7 +112,7 @@ describe("packaged lifecycle CLI", () => {
       expect(applied.verify.ready).toBe(true);
       expect(existsSync(resolveProductPaths({ platform: "linux", home, environment: {} }).installManifest)).toBe(true);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeFixture(root);
     }
   });
 
@@ -129,7 +132,7 @@ describe("packaged lifecycle CLI", () => {
         .rejects.toThrow("signature verification failed");
       expect(existsSync(paths.installManifest)).toBe(false);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeFixture(root);
     }
   });
 });

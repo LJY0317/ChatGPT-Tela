@@ -7,6 +7,9 @@ import { ChatWorkspaceRegistry } from "./workspaces";
 import { ChatProcessManager } from "./processes";
 import { ProcessExecutionJournal } from "./process-execution-journal";
 import { ProcessCompletionArchive } from "./process-completion-archive";
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 function fixture() {
   const base = mkdtempSync(join(tmpdir(), "tela-chat-process-"));
@@ -45,7 +48,7 @@ describe("Tela Chat process operations", () => {
       expect(recovered.status(f.workspace.id, previous[0]!.operationId).state).toBe("exited");
       expect(recovered.list({ workspaceId: f.workspace.id }).capacity.archivedTerminalCount).toBe(257);
       expect(stored.nextSessionId).toBe(258);
-    } finally { await recovered.close(); await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+    } finally { await recovered.close(); await f.manager.close(); removeFixture(f.base); }
   });
   test("failed completion commit retains uncertainty and blocks shutdown across restart", async () => {
     if (process.platform === "win32") return;
@@ -75,7 +78,7 @@ describe("Tela Chat process operations", () => {
       if (sessionId) await f.manager.writeStdin({ workspaceId: f.workspace.id, sessionId,
         chars: "cleanup\n", yieldTimeMs: 1000 });
       await expect(f.manager.close()).rejects.toThrow("unresolved execution");
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -90,7 +93,7 @@ describe("Tela Chat process operations", () => {
         sessionId: live.sessionId, yieldTimeMs: 1000 });
       expect(result.state).toBe("exited");
       expect(result.output).toContain("finished");
-    } finally { await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+    } finally { await f.manager.close(); removeFixture(f.base); }
   });
 
   test("normal shutdown refuses live direct execution and preserves stdin until completion", async () => {
@@ -117,7 +120,7 @@ describe("Tela Chat process operations", () => {
       if (sessionId && !completedAndClosed) await f.manager.writeStdin({ workspaceId: f.workspace.id, sessionId,
         chars: "cleanup\n", yieldTimeMs: 1000 });
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -137,7 +140,7 @@ describe("Tela Chat process operations", () => {
       expect(result.sessionId).toBe(1024);
       expect(result.output).toBe("transition");
       expect(JSON.parse(readFileSync(f.storePath, "utf8")).nextSessionId).toBe(1025);
-    } finally { await expect(recovered.close()).rejects.toThrow("unresolved execution"); await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+    } finally { await expect(recovered.close()).rejects.toThrow("unresolved execution"); await f.manager.close(); removeFixture(f.base); }
   });
   test("version-2 missing authority or unknown versions never rewrite evidence", async () => {
     const f = fixture();
@@ -151,7 +154,7 @@ describe("Tela Chat process operations", () => {
         expect(() => new ChatProcessManager({ workspaces: f.registry, storePath: f.storePath })).toThrow();
         expect(readFileSync(f.storePath, "utf8")).toBe(bytes);
       }
-    } finally { await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+    } finally { await f.manager.close(); removeFixture(f.base); }
   });
   test("a regressed session high-water mark refuses startup without rewriting evidence", async () => {
     const f = fixture();
@@ -161,7 +164,7 @@ describe("Tela Chat process operations", () => {
       writeFileSync(f.storePath,bytes);
       expect(() => new ChatProcessManager({workspaces:f.registry,storePath:f.storePath})).toThrow("high-water mark");
       expect(readFileSync(f.storePath,"utf8")).toBe(bytes);
-    } finally { await f.manager.close(); rmSync(f.base,{recursive:true,force:true}); }
+    } finally { await f.manager.close(); removeFixture(f.base); }
   });
   test("retirement preserves the session high-water mark across another restart", async () => {
     const f = fixture(); const old = "2000-01-01T00:00:00.000Z";
@@ -177,7 +180,7 @@ describe("Tela Chat process operations", () => {
         expect(result.sessionId).toBe(2048); expect(result.output).toBe("high-water");
         expect(JSON.parse(readFileSync(f.storePath, "utf8")).nextSessionId).toBe(2049);
       } finally { await expect(reopened.close()).rejects.toThrow("unresolved execution"); }
-    } finally { await expect(retired.close()).rejects.toThrow("unresolved execution"); await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+    } finally { await expect(retired.close()).rejects.toThrow("unresolved execution"); await f.manager.close(); removeFixture(f.base); }
   });
   test("invalid interrupted retirement evidence preserves archived authority and blocks a new command", async () => {
     const f = fixture(), old = "2000-01-01T00:00:00.000Z", retiredId = randomUUID();
@@ -213,7 +216,7 @@ describe("Tela Chat process operations", () => {
     } finally {
       await expect(manager.close()).rejects.toThrow("unresolved execution");
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
   test("owned terminal retirement authenticates and removes its complete bounded evidence set", async () => {
@@ -236,7 +239,7 @@ describe("Tela Chat process operations", () => {
       for (const phase of ["claim", "live", "completed"]) expect(existsSync(`${f.storePath}.executions/${operationId}.${phase}.json`)).toBe(false);
       expect(existsSync(`${f.storePath}.results/${operationId}.bin`)).toBe(false);
       expect(existsSync(`${f.storePath}.retirement.json`)).toBe(false);
-    } finally { await expect(recovered.close()).rejects.toThrow("unresolved execution"); await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+    } finally { await expect(recovered.close()).rejects.toThrow("unresolved execution"); await f.manager.close(); removeFixture(f.base); }
   });
   test("command byte limit rejects multibyte bootstrap overflow before reserving execution", async () => {
     const f = fixture();
@@ -245,7 +248,7 @@ describe("Tela Chat process operations", () => {
         await expect(f.manager.exec({ workspaceId: f.workspace.id, command, yieldTimeMs: 0 })).rejects.toThrow("command");
       }
       expect(existsSync(f.storePath)).toBe(false);
-    } finally { await f.manager.close(); rmSync(f.base, { recursive: true, force: true }); }
+    } finally { await f.manager.close(); removeFixture(f.base); }
   });
   test("uncertain owner launch preserves its reservation and never falls back to direct execution", async () => {
     const f = fixture();
@@ -265,7 +268,7 @@ describe("Tela Chat process operations", () => {
       await expect(manager.close()).rejects.toThrow();
     } finally {
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -287,7 +290,7 @@ describe("Tela Chat process operations", () => {
       }
     } finally {
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -300,7 +303,7 @@ describe("Tela Chat process operations", () => {
       expect(readFileSync(f.storePath, "utf8")).toBe(original);
     } finally {
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -322,7 +325,7 @@ describe("Tela Chat process operations", () => {
     } finally {
       await expect(recovered.close()).rejects.toThrow("unresolved execution");
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -346,7 +349,7 @@ describe("Tela Chat process operations", () => {
     } finally {
       await recovered.close();
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -370,7 +373,7 @@ describe("Tela Chat process operations", () => {
     } finally {
       await expect(recovered.close()).rejects.toThrow("unresolved execution");
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -388,7 +391,7 @@ describe("Tela Chat process operations", () => {
       expect(second.output).toBe("");
     } finally {
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -418,7 +421,7 @@ describe("Tela Chat process operations", () => {
     } finally {
       await recovered?.close();
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -437,7 +440,7 @@ describe("Tela Chat process operations", () => {
     } finally {
       await recovered?.close();
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -469,7 +472,7 @@ describe("Tela Chat process operations", () => {
     } finally {
       if (recovered) await expect(recovered.close()).rejects.toThrow("unresolved execution");
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -487,7 +490,7 @@ describe("Tela Chat process operations", () => {
       expect(readFileSync(join(f.root, "count.txt"), "utf8").trim()).toBe("once");
     } finally {
       await expect(f.manager.close()).rejects.toThrow("unresolved execution");
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -510,7 +513,7 @@ describe("Tela Chat process operations", () => {
     } finally {
       await recovered?.close();
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -531,7 +534,7 @@ describe("Tela Chat process operations", () => {
     } finally {
       await expect(recovered.close()).rejects.toThrow("unresolved execution");
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -545,7 +548,7 @@ describe("Tela Chat process operations", () => {
       expect(() => f.manager.status(f.workspace.id, operationId)).toThrow("unknown process operation");
     } finally {
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -567,7 +570,7 @@ describe("Tela Chat process operations", () => {
       expect(persisted).not.toContain(f.root);
     } finally {
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 
@@ -596,7 +599,7 @@ describe("Tela Chat process operations", () => {
     } finally {
       if (sessionId) await f.manager.writeStdin({ workspaceId: f.workspace.id, sessionId, yieldTimeMs: 3000 });
       await f.manager.close();
-      rmSync(f.base, { recursive: true, force: true });
+      removeFixture(f.base);
     }
   });
 });
