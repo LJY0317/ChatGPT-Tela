@@ -1,3 +1,5 @@
+import { getDefaultAutoSelectFamily, getDefaultAutoSelectFamilyAttemptTimeout, isIP } from "node:net";
+import { getDefaultResultOrder } from "node:dns";
 import { capturePrivateDiagnosticValue, networkFailureDiagnostics, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { diagnoseNativeFailure, nativeRequestShape } from "./native-failure-diagnostics";
 import { observeNativeResponse } from "./native-reasoning-observation";
@@ -155,21 +157,40 @@ export async function forwardNativeCodexRequest(input: {
     }
     upstream = await fetchUpstream(outgoing);
   } catch (error) {
-    const failure = networkFailureDiagnostics(error);
+    const causes: Record<string, unknown>[] = [];
+    const attempts: Record<string, string | number | boolean>[] = [];
+    const failure = networkFailureDiagnostics(error, cause => {
+      const item = cause.value as { name?: unknown; message?: unknown; stack?: unknown; code?: unknown;
+        address?: unknown; port?: unknown; syscall?: unknown };
+      const family = typeof item.address === "string" ? isIP(item.address) : 0;
+      const action = ["connect", "getaddrinfo", "read", "write"].includes(String(item.syscall)) ? String(item.syscall) : "unknown";
+      if (family || action === "connect") attempts.push({ attempt_index: attempts.length, cause_index: cause.index,
+        cause_depth: cause.depth, address_family: family, action, network_kind: cause.network_kind,
+        failure_class: cause.failure_class, phase: cause.phase, tls_port: item.port === 443 });
+      // Raw endpoint and exception details are passed only to the opt-in private sink.
+      // Do not serialize Error itself: cause/errors/message/stack are often non-enumerable.
+      causes.push({ index: cause.index, depth: cause.depth, name: item.name, message: item.message,
+        stack: item.stack, code: item.code, syscall: item.syscall, address: item.address, port: item.port });
+    });
     emitDiagnosticEvent("chatgpt_tela_network", "native_backend_request_failed", {
       ...shape.fields, ...failure, route_kind: input.endpoint.replaceAll("/", "_"), reason_class: failure.network_kind,
       duration_ms: Date.now() - started, cancelled: input.request.signal.aborted,
+      attempt_count: attempts.length,
+      ipv4_attempt_count: attempts.filter(attempt => attempt.address_family === 4).length,
+      ipv6_attempt_count: attempts.filter(attempt => attempt.address_family === 6).length,
     });
-    // Exception details stay in the existing private, opt-in, bounded evidence store.
     try {
-      const causes = []; let current: unknown = error;
-      const seen = new Set<unknown>();
-      for (let depth = 0; depth < 4 && current instanceof Error && !seen.has(current); depth++) {
-        seen.add(current);
-        causes.push({ name: current.name, message: current.message, stack: current.stack,
-          code: (current as Error & { code?: unknown }).code });
-        current = current.cause;
-      }
+      // Read settings in the failing Electron/Node process, never infer them from the shell's Node.
+      emitDiagnosticEvent("chatgpt_tela_network", "native_backend_connection_policy", {
+        route_kind: input.endpoint.replaceAll("/", "_"),
+        family_autoselection: getDefaultAutoSelectFamily(), family_attempt_timeout_ms: getDefaultAutoSelectFamilyAttemptTimeout(),
+        policy: getDefaultResultOrder(), fetch_override: Boolean(input.fetchUpstream),
+        node_major: Number(process.versions.node.split(".")[0]),
+        proxy_env_present: Boolean(process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.ALL_PROXY
+          || process.env.https_proxy || process.env.http_proxy || process.env.all_proxy),
+        env_proxy_enabled: process.env.NODE_USE_ENV_PROXY === "1",
+      });
+      for (const attempt of attempts) emitDiagnosticEvent("chatgpt_tela_network", "native_backend_connection_attempt", attempt);
       capturePrivateDiagnosticValue("native_backend_failure", { route: input.endpoint, failure, causes });
     } catch { /* Diagnostics preserve the original backend failure. */ }
     throw error;

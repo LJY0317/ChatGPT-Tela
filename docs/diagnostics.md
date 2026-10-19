@@ -1195,3 +1195,12 @@ not prove that the client completed its HTTP continuation. A Desktop peer close
 during an owner's normal-quit request records shutdown intent as a transition;
 unknown closes, payload limits, invalid text and socket errors remain failures.
 These distinctions change diagnostics only, never transport or shutdown behavior.
+
+Connection failures also preserve the bounded aggregate-error graph, including
+per-address child errors. Structural records expose only attempt order, IP family,
+fixed failure/syscall categories and TLS-port presence. Endpoint addresses and full
+exceptions remain in private opt-in evidence. The failing process reports its own
+Node family-autoselection/attempt timeout and DNS ordering, plus proxy-environment
+flags without their values; environment presence does not prove proxy use. No DNS
+lookup, connection probe, socket hook, retry or global network-setting change is
+introduced. A connect syscall refines an otherwise ambiguous ETIMEDOUT phase.

@@ -14,7 +14,16 @@ const CODES: Readonly<Record<string, readonly [NetworkFailureKind, string, strin
 const TLS_CODES = new Set(["CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "ERR_TLS_CERT_ALTNAME_INVALID", "ERR_SSL_PROTOCOL_ERROR"]);
 
 /** One bounded cause/aggregate traversal; only fixed categories leave this boundary. */
-export function networkFailureDiagnostics(error: unknown) {
+export interface NetworkFailureCause {
+  readonly value: object;
+  readonly depth: number;
+  readonly index: number;
+  readonly network_kind: NetworkFailureKind;
+  readonly failure_class: string;
+  readonly phase: string;
+}
+
+export function networkFailureDiagnostics(error: unknown, observeCause?: (cause: NetworkFailureCause) => void) {
   const pending: { value: unknown; depth: number }[] = [{ value: error, depth: 0 }];
   const visited = new Set<unknown>();
   let selected: readonly [NetworkFailureKind, string, string] = ["unknown", "unclassified", "unknown"];
@@ -24,19 +33,29 @@ export function networkFailureDiagnostics(error: unknown) {
       const { value, depth } = pending.shift()!;
       if (!value || typeof value !== "object" || visited.has(value)) continue;
       visited.add(value);
-      const item = value as { code?: unknown; name?: unknown; cause?: unknown; errors?: unknown };
+      const item = value as { code?: unknown; name?: unknown; cause?: unknown; errors?: unknown; syscall?: unknown };
       const code = typeof item.code === "string" ? item.code : "";
       const known = Object.hasOwn(CODES, code) ? CODES[code] : undefined;
-      const detail: readonly [NetworkFailureKind, string, string] = TLS_CODES.has(code) ? ["tls", "tls_validation", "connect"]
+      let detail: readonly [NetworkFailureKind, string, string] = TLS_CODES.has(code) ? ["tls", "tls_validation", "connect"]
         : known ?? (item.name === "TimeoutError" ? ["timeout", "deadline", "unknown"]
           : item.name === "AbortError" ? ["cancelled", "aborted", "unknown"] : ["unknown", "unclassified", "unknown"]);
+      // ETIMEDOUT alone has no phase. A leaf's actual syscall can prove the
+      // connect boundary without matching error prose or guessing from duration.
+      if (detail[0] === "timeout" && detail[2] === "unknown" && item.syscall === "connect") {
+        detail = ["timeout", "connect_timeout", "connect"];
+      }
+      try { observeCause?.({ value, depth, index: visited.size - 1,
+        network_kind: detail[0], failure_class: detail[1], phase: detail[2] }); } catch { /* Diagnostic visitor only. */ }
       const preferred = detail[0] === "dns" || detail[0] === "tls";
       if ((!priority && preferred) || selected[0] === "unknown"
         || (!priority && detail[0] === selected[0] && selected[2] === "unknown" && detail[2] !== "unknown")) {
         selected = detail; causeDepth = depth; priority = preferred;
       }
       if (item.cause !== undefined) pending.push({ value: item.cause, depth: depth + 1 });
-      if (Array.isArray(item.errors)) for (const cause of item.errors.slice(0,4)) pending.push({ value: cause, depth: depth + 1 });
+      if (Array.isArray(item.errors)) {
+        if (item.errors.length > 4) complete = false;
+        for (const cause of item.errors.slice(0,4)) pending.push({ value: cause, depth: depth + 1 });
+      }
     }
   } catch { complete = false; }
   return { network_kind: selected[0], failure_class: selected[1], phase: selected[2], cause_depth: causeDepth,
