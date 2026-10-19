@@ -13,50 +13,6 @@ import { FileNativeVisiblePrefixStageJournal } from './native-visible-prefix-jou
 const canonical:CanonicalCurrentTurnEvidence={threadId:'thread',turnId:'turn',cwd:'/fixture',workspaceRoots:['/fixture'],sandbox:{kind:'native-enforced'},proof:'app-server-active-turn',environmentSourceTurnId:'turn'};
 function body(extra:any={}){return {model:chatGptWebModelId(chatGptWebFamilyKey('Fixture')),reasoning:{effort:'medium'},tools:[],input:[{type:'message',role:'user',content:'Observed old result'},{type:'message',role:'user',content:'Summarize the task'}],client_metadata:{'x-codex-turn-metadata':JSON.stringify({request_kind:'compaction',thread_id:'thread',turn_id:'turn'})},...extra}}
 function request(value:any){return new Request('http://127.0.0.1/v1/responses',{method:'POST',body:JSON.stringify(value)})}
-test('oversized readable compaction uses shared durable stages, covers all bytes and reuses completed stages after restart',async()=>{
- const directory=mkdtempSync(join(tmpdir(),'tela-compact-stages-'));
- try{
-  const calls:any[]=[];
-  const visiblePrefix={accountNamespace:'fixture-account',journal:new FileNativeVisiblePrefixStageJournal({directory:join(directory,'ledger'),initializationPath:join(directory,'init')}),async read():Promise<never>{throw Error('readable compaction must not page history')}};
-  const summarize=async (input:any)=>{
-   expect(chatGptCheckpointInputTokens(input.physicalContext)).toBeLessThanOrEqual(chatGptWebCheckpointSourceTokenLimit('medium'));
-   calls.push(JSON.parse(input.physicalContext.segments[0].content));
-   const result={nativeTaskId:input.nativeTaskId,sourceRevisionId:input.sourceRevisionId,content:'Complete derived summary; evidence needs Native readback'};
-   await input.persistResult?.(result);
-   return result.content;
-  };
-  const options={source:{currentTurn:async()=>canonical},visiblePrefix,summarize,checkpointPreparationPolicy:{maxModelCalls:10,maxInputTokens:chatGptWebCheckpointSourceTokenLimit('medium')*10,maxElapsedMs:600000}};
-  const text='과거 한글 문맥 '.repeat(90000);
-  const wire=body({input:[{role:'user',content:text},{role:'user',content:'Keep newest request'}]});
-  expect((await createNativeLocalCompactionRouter(options)(request(wire)))?.status).toBe(200);
-  const fragments=calls.filter(row=>row.mode==='fragment');expect(fragments.length).toBeGreaterThan(1);
-  let end=0;for(const f of fragments){expect(f.startByte).toBe(end);end=f.endByte;}
-  const source=JSON.parse(fragments.map(f=>f.fragment).join(''));
-  expect(source.items.map((item:any)=>item.content)).toEqual([text,'Keep newest request']);
-  expect(calls.filter(row=>row.mode==='merge')).toHaveLength(1);
-  const count=calls.length;expect(count).toBeLessThanOrEqual(8);
-  expect((await createNativeLocalCompactionRouter(options)(request({...wire,stream:true})))?.status).toBe(200);
-  expect(calls).toHaveLength(count);
- }finally{rmSync(directory,{recursive:true,force:true});}
-},30000);
-test('oversized compaction preserves shared budget admission and unknown-stage replay refusal',async()=>{
- for(const denied of ['budget','default_budget','unknown'] as const){
-  const directory=mkdtempSync(join(tmpdir(),'tela-compact-denied-'));
-  try{
-   let calls=0;
-   const options={source:{currentTurn:async()=>canonical},visiblePrefix:{accountNamespace:'fixture-account',journal:new FileNativeVisiblePrefixStageJournal({directory:join(directory,'ledger'),initializationPath:join(directory,'init')}),async read():Promise<never>{throw Error('must not read')}},
-    ...(denied==='budget'?{checkpointPreparationPolicy:{maxModelCalls:0,maxInputTokens:0,maxElapsedMs:10000}}:{}),
-    summarize:async()=>{calls++;throw Error('PRIVATE_UNCERTAIN_RESULT')},};
-   const wire=body({input:[{role:'user',content:'P'.repeat(denied==='default_budget'?1900000:405000)}]});
-   const rejected=await createNativeLocalCompactionRouter(options)(request(wire));
-   expect(rejected?.status).toBe(422);
-   expect((await rejected?.json()).error.code).toBe(denied==='unknown'?'tela_compaction_requires_readable_checkpoint':'tela_compaction_preparation_budget_exceeded');
-   const initial=calls;expect(initial).toBe(denied==='unknown'?1:0);
-   expect((await createNativeLocalCompactionRouter(options)(request(wire)))?.status).toBe(422);
-   expect(calls).toBe(initial);
-  }finally{rmSync(directory,{recursive:true,force:true});}
- }
-},30000);
 test('local compaction retains full source, returns an ordinary summary and coalesces exact retries',async()=>{
  let calls=0;const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical},summarize:async source=>{calls++;expect(source.physicalContext.segments.map(x=>x.content)).toEqual(['Observed old result','Summarize the task']);return 'Readable Native summary'}});
  const [a,b]=await Promise.all([router(request(body())),router(request(body()))]);

@@ -48,7 +48,7 @@ test("marker-free opaque continuity consumes complete public prefix, revalidates
   const directory = mkdtempSync(join(tmpdir(), "native-prefix-continuity-"));
   try {
     const content = JSON.stringify({ type: "tela_native_visible_prefix_v1", items: [
-      { turnId: "prior", item: { type: "agentMessage", id: "prior-answer", text: "한글 visible historical tool result ".repeat(45_000) } },
+      { turnId: "prior", item: { type: "agentMessage", id: "prior-answer", text: "한글 visible historical tool result ".repeat(450) } },
     ] });
     const source: NativeVisiblePrefixSnapshot = { kind: "native-visible-prefix", threadId: "task-1", currentTurnId: "web-current",
       contentDigest: createHash("sha256").update(content).digest("hex"), digest: createHash("sha256").update(content).digest("hex"), sourceItemCount: 1, content,
@@ -68,7 +68,7 @@ test("marker-free opaque continuity consumes complete public prefix, revalidates
     };
     const first = await resolveNativeContextContinuity(input({ options, effort: "medium", browserModel: { familyKey: "discovered-family", effort: "medium" } }));
     expect(first.mode).toBe("visible-prefix-checkpoint"); expect(first.checkpointProduced).toBe(true);
-    expect(calls).toBeGreaterThan(1); expect(reads).toBe(3);
+    expect(calls).toBe(1); expect(reads).toBe(3);
     const previousCalls = calls;
     const again = await resolveNativeContextContinuity(input({ options: { ...options,
       visiblePrefix: { ...options.visiblePrefix, journal: new FileNativeVisiblePrefixStageJournal(journalOptions) },

@@ -1,3 +1,4 @@
+import { webWorkingContextPolicy } from "./web-working-context-policy";
 import {
   chatGptWebModelId,
   type ChatGptWebEffort,
@@ -89,8 +90,14 @@ function webModel(template: JsonObject, family: ChatGptWebModelFamily, localComp
   // Only a verified model-aware Native engine may request portable local compaction.
   delete model.compaction_mode;
   // Native template context/compaction/output metadata is not Web-route evidence.
-  delete model.context_window;
-  delete model.auto_compact_token_limit;
+  // Publish Web-owned capacity to Native so ordinary local compaction runs before
+  // a fork/turn grows beyond a single Web input. Never inherit the Native template.
+  const policies = family.availableEfforts.map(effort => webWorkingContextPolicy(effort));
+  const contextWindow = Math.min(...policies.map(policy => policy.hard.contextWindowTokenLimit));
+  model.context_window = contextWindow;
+  model.max_context_window = contextWindow;
+  model.effective_context_window_percent = 100;
+  model.auto_compact_token_limit = Math.min(...policies.map(policy => policy.hard.rolloverTokenLimit));
   delete model.max_output_tokens;
   if (localCompaction) model.compaction_mode = "local";
   return model;

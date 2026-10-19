@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
+import { webWorkingContextPolicy } from "./web-working-context-policy";
 import { augmentNativeCodexModelCatalog } from "./web-model-catalog";
 
 describe("composite Native + ChatGPT Web model catalog", () => {
@@ -105,5 +106,9 @@ test("local compaction metadata is opt-in and never changes Native catalog rows"
   const enabled = augmentNativeCodexModelCatalog(native, families, { localCompaction: true });
   expect((ordinary.models as any[])[1].compaction_mode).toBeUndefined();
   expect((enabled.models as any[])[1].compaction_mode).toBe("local");
+  const policy = webWorkingContextPolicy("medium");
+  expect((enabled.models as any[])[1]).toMatchObject({context_window:policy.hard.contextWindowTokenLimit,
+    max_context_window:policy.hard.contextWindowTokenLimit,auto_compact_token_limit:policy.hard.rolloverTokenLimit,
+    effective_context_window_percent:100});
   expect((enabled.models as any[])[0]).toEqual(native.models[0]);
 });

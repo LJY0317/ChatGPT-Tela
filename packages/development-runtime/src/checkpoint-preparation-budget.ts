@@ -38,7 +38,7 @@ export class CheckpointPreparationBudget {
   constructor(stageInputLimit: number, policy?: CheckpointPreparationPolicy,
     private readonly now: () => number = () => performance.now()) {
     this.policy = checkpointPreparationPolicy(policy ?? {
-      maxModelCalls: 8, maxInputTokens: stageInputLimit * 8, maxElapsedMs: 10 * 60 * 1000,
+      maxModelCalls: 1, maxInputTokens: stageInputLimit, maxElapsedMs: 10 * 60 * 1000,
     });
     if (!Number.isSafeInteger(stageInputLimit) || stageInputLimit < 1) {
       throw Error("Invalid checkpoint preparation policy");

@@ -139,8 +139,8 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
   readonly signal?: AbortSignal;
   readonly preparation?: Parameters<NativeRequestCheckpointProducer>[1];
   readonly forceMaintenance?: boolean;
-  /** Native compaction is already a summary operation; do not bootstrap another without prior state. */
-  readonly allowBootstrap?: boolean;
+  /** Native compaction already owns one summary operation; select maintained state without producing another. */
+  readonly allowMaintenance?: boolean;
 }): Promise<WorkingCheckpointDecision> {
   const { projection } = input;
   const anchor = workingCheckpointAnchor(projection);
@@ -190,7 +190,7 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     || (input.forceMaintenance === true && sealedTokens > 0
       && prospectiveSeed > input.policy.firstMessageTargetTokens)
   );
-  if (!shouldAdvance || (!selected && input.allowBootstrap === false)
+  if (!shouldAdvance || input.allowMaintenance === false
     || !input.cache || !input.producer || !input.visiblePrefix || !input.browserModel) {
     return Object.freeze({ ...(selected ? { checkpoint: selected } : {}),
       produced: false, reused: selected !== undefined, pendingSuffixTokens });

@@ -1,3 +1,4 @@
+import { webWorkingContextPolicy } from "./web-working-context-policy";
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -96,7 +97,7 @@ test("rolling derived context stays bounded across long archives, repeated physi
       async read(): Promise<never> { throw Error("request prefix is already readable"); },
     };
     const stageInputs: number[] = [];
-    const sourceSamples: { mode: string; fragment?: string; summaries?: unknown[] }[] = [];
+    const sourceSamples: { mode: string; source?: {items?: {type?: string}[]} }[] = [];
     let calls = 0;
     const producer = async (input: any) => {
       calls++;
@@ -120,9 +121,11 @@ test("rolling derived context stays bounded across long archives, repeated physi
     let priorPhysical: string | undefined;
     let initialTransfer: number | undefined;
     for (let index = 0; index < 31; index++) {
+      const beforePreparation = calls;
       const task = await planner(registered(`turn-${index}`), {
         model, reasoning: { effort: "high" }, instructions, input,
       });
+      expect(calls - beforePreparation).toBeLessThanOrEqual(1);
       if (task.webEpochId !== priorEpoch) {
         generations++;
         priorEpoch = task.webEpochId;
@@ -154,8 +157,8 @@ test("rolling derived context stays bounded across long archives, repeated physi
     expect(calls).toBeGreaterThanOrEqual(5);
     expect(calls).toBeLessThan(31);
     expect(Math.max(...stageInputs)).toBeLessThan(45_000);
-    expect(sourceSamples.some(item => item.mode === "fragment"
-      && item.fragment?.includes('"type":"checkpoint"'))).toBe(true);
+    expect(sourceSamples.some(item => item.mode === "snapshot"
+      && item.source?.items?.some(part => part.type === "checkpoint"))).toBe(true);
 
     const published = await prefix.journal.publishedCheckpoints!(
       (await import("./native-working-context")).nativeWorkingCheckpointScope(
@@ -177,75 +180,6 @@ test("rolling derived context stays bounded across long archives, repeated physi
     expect(calls).toBe(beforeRestart); // Journal publication survives disposable cache loss.
     cold.settle?.({ status: "failed" });
   } finally { rmSync(directory, { recursive: true, force: true }); }
-}, 60_000);
-
-test("after initialization archive size varies by two orders while fresh seed, maintenance input and new model-call count stay bounded", async () => {
-  const observed: Array<{ archiveBytes: number; seedTokens: number; updateTokens: number; newCalls: number }> = [];
-  for (const size of [120_000, 1_200_000, 12_000_000]) {
-    const directory = root();
-    try {
-      const cache = new FileContextCheckpointCache({ directory: join(directory, "cache") });
-      const visiblePrefix = { accountNamespace: "stable-account",
-        journal: new FileNativeVisiblePrefixStageJournal({
-          directory: join(directory, "ledger"), initializationPath: join(directory, "init"),
-        }), async read(): Promise<never> { throw Error("no raw history read"); } };
-      const input: any[] = [
-        { type: "message", role: "user", content: "Start the same kind of task" },
-        { type: "message", role: "assistant", content: "A".repeat(size) },
-        { type: "message", role: "user", content: "Continue the task" },
-      ];
-      let calls = 0;
-      const stageSizes: number[] = [];
-      const producer = async (request: any) => {
-        calls++;
-        stageSizes.push(chatGptCheckpointInputTokens(request.physicalContext));
-        return { nativeTaskId: request.nativeTaskId,
-          sourceRevisionId: request.sourceRevisionId, content: "Bounded settled work; original evidence needs Native readback" };
-      };
-      // Explicit bootstrap cost policy is intentionally not inherited by the
-      // steady-state followups; it admits larger exceptional cold histories.
-      const bootstrap = createNativeRequestDevelopmentWebTurnPlanner({
-        checkpointCache: cache, visiblePrefix, checkpointProducer: producer,
-        checkpointPreparationPolicy: { maxModelCalls: 128, maxInputTokens: 20_000_000,
-          maxElapsedMs: 600_000 },
-      });
-      const first = await bootstrap(registered("initial"), {
-        model, reasoning: { effort: "high" }, input,
-      });
-      expect(first.physicalContext.mode).toBe("checkpoint-delta");
-      first.settle?.({ status: "failed" });
-      const initialCalls = calls;
-      expect(initialCalls).toBeGreaterThanOrEqual(1);
-      // Reopened planner uses only default finite preparation settings.
-      const steady = createNativeRequestDevelopmentWebTurnPlanner({
-        checkpointCache: new FileContextCheckpointCache({ directory: join(directory, "cache") }),
-        visiblePrefix: { ...visiblePrefix, journal: new FileNativeVisiblePrefixStageJournal({
-          directory: join(directory, "ledger"), initializationPath: join(directory, "init"),
-        }) },
-        checkpointProducer: producer,
-      });
-      input.push({ type: "message", role: "assistant", content: "R".repeat(60_000) });
-      input.push({ type: "message", role: "user", content: "Perform identical next task" });
-      const followup = await steady(registered("fresh"), {
-        model, reasoning: { effort: "high" }, input,
-      });
-      expect(followup.physicalContext.mode).toBe("checkpoint-delta");
-      expect(followup.physicalContext.segments.at(-1)?.content).toBe("Perform identical next task");
-      expect(followup.contextAttachment).toBeUndefined();
-      followup.settle?.({ status: "failed" });
-      const newCalls = calls - initialCalls;
-      expect(newCalls).toBe(1);
-      const updateTokens = stageSizes.at(-1)!;
-      expect(updateTokens).toBeLessThan(30_000);
-      expect(followup.physicalContext.transferTokens).toBeLessThan(24_000);
-      observed.push({ archiveBytes: size, seedTokens: followup.physicalContext.transferTokens,
-        updateTokens, newCalls });
-    } finally { rmSync(directory, { recursive: true, force: true }); }
-  }
-  expect(observed).toHaveLength(3);
-  expect(Math.max(...observed.map(item => item.seedTokens))).toBeLessThan(24_000);
-  expect(Math.max(...observed.map(item => item.updateTokens))
-    - Math.min(...observed.map(item => item.updateTokens))).toBeLessThan(2_000);
 }, 60_000);
 
 test("irreducible current user request refuses before any summary model call or page replacement", async () => {
@@ -566,7 +500,7 @@ test("Web model metadata is scoped to Web evidence, not inherited Native capacit
     availableEfforts: ["high"],
   }]);
   expect((models as any[])[0]).toEqual(source.models[0]);
-  expect((models as any[])[1]).not.toHaveProperty("context_window");
-  expect((models as any[])[1]).not.toHaveProperty("auto_compact_token_limit");
+  expect((models as any[])[1].context_window).toBe(webWorkingContextPolicy("high").hard.contextWindowTokenLimit);
+  expect((models as any[])[1].auto_compact_token_limit).toBe(webWorkingContextPolicy("high").hard.rolloverTokenLimit);
   expect((models as any[])[1]).not.toHaveProperty("max_output_tokens");
 });

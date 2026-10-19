@@ -19,7 +19,7 @@ Read coverage limits before interpreting an absent event. `unclassified` remains
 a later `retired_turn` is a replay rejection, not the original failure's explanation.
 
 Checkpoint plans report a **conservative upper bound**, not actual model calls or billing.
-Source bytes/items and fragment counts are recorded before budget admission, so a zero-call
+Source bytes/items and single-snapshot counts are recorded before budget admission, so a zero-call
 refusal remains explainable. Physical-fit failures record numeric authority/user/tool sizes,
 largest revision, checkpoint selection and budget only on failure; no context bodies,
 identifiers or exception text are added. The existing bounded event/incident retention applies.
@@ -280,7 +280,7 @@ quality, semantic recall or host display. Repeated file reads alone do not prove
 
 `native_response_observer_replaced` means a canonically admitted reconnect replaced the previous
 response wait without restarting Web execution. `native_checkpoint_model_started` and the matching
-stage-fingerprinted failure/settlement record identify fragment/merge stage and duration. A missing
+stage-fingerprinted failure/settlement record identify snapshot stage and duration (legacy records may contain fragment/merge phases). A missing
 completion is uncertainty, not permission to resend a submitted checkpoint. No source, summary,
 tool contents or remote/account identity enters these records.
 
@@ -820,7 +820,7 @@ interruption, and incomplete inspection from a completed stream. An incomplete o
 proof of absence of a server failure. Diagnostics preserve status, headers, bytes, backpressure,
 cancellation, and original read errors; they neither recover nor retry the user's task.
 
-| Native visible-prefix checkpoint | `native_visible_prefix_checkpoint_started`, `native_visible_prefix_stage_settled`, `native_visible_prefix_stage_rejected` | Complete indexed visible history can bootstrap Web without an optional UI compaction marker. Records bounded source bytes/item count, fragment/stage counts, fixed fragment/merge phase and completed/reused/uncertain outcome. No historical text or source identifiers. The account-scoped execution journal owns submitted-stage receipts; disposable caches do not authorize reuse or retries. An uncertain submission returns `tela_native_checkpoint_reconciliation_required` with `retryable=false`; subsequent retired-turn retries preserve that recovery decision. |
+| Native visible-prefix checkpoint | `native_visible_prefix_checkpoint_started`, `native_visible_prefix_stage_settled`, `native_visible_prefix_stage_rejected` | Complete indexed visible history can bootstrap Web without an optional UI compaction marker. Records bounded source bytes/item count, fragment/stage counts, fixed snapshot phase (older records can contain fragment/merge phases) and completed/reused/uncertain outcome. No historical text or source identifiers. The account-scoped execution journal owns submitted-stage receipts; disposable caches do not authorize reuse or retries. An uncertain submission returns `tela_native_checkpoint_reconciliation_required` with `retryable=false`; subsequent retired-turn retries preserve that recovery decision. |
 | Checkpoint resource cost | `checkpoint_transfer_planned`, `native_checkpoint_efficiency_settled` | Tool-free summary transport reports source bytes, local transfer estimates, one planned model call and zero separate acknowledgement calls. Successful prefix preparation reports stage attempts and completed-stage reuse; interrupted work retains the existing per-stage evidence. See [efficiency contract](token-efficiency.md). These counters do not measure provider billing or semantic comprehension. |
 | Web submission acceptance | `web_turn_acceptance_pending`, `web_turn_acceptance_timeout`, `web_turn_identity_accepted` | Distinguishes a sent message from exact accepted-turn proof. Structural candidate count, nesting and endpoint equivalence identify accepted redundant wrappers or rejected differing payloads without recording text. Pending/timeout reasons use closed author-root/payload enums; timeout includes structural user count and whether any completed assistant was observed, without adopting that answer or proving its lineage. The existing surface-confirmation deadline bounds receipt waiting; it does not impose an inference deadline or authorize resend. |
 | Checkpoint response rejection | `checkpoint_response_rejected` | Separates unproven completion, missing plain body, invalid JSON/envelope, operation/source/file-receipt mismatch, empty or oversized summary, foreign completion and browser failure. Emits only closed reason enums and semantic observation state, never response/source bodies or expected receipt values. Completion observed in the browser does not prove an accepted checkpoint; a generic uncertain-checkpoint error alone does not establish a failed send. This diagnostic does not relax validation or authorize retry. |

@@ -154,7 +154,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
               ...(input.checkpointCache ? { cache: input.checkpointCache } : {}),
               ...(input.visiblePrefix ? { visiblePrefix: input.visiblePrefix } : {}),
               producer, browserModel, policy, preparationBudget,
-              allowBootstrap: false,
+              allowMaintenance: false,
               ...(watch ? { signal: watch.signal,
                 preparation: { signal: watch.signal, onProgress: (_message: string) => {} } } : {}),
             });

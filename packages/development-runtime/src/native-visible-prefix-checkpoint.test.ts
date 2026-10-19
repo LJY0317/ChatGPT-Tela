@@ -50,56 +50,10 @@ test('checkpoint presentation follows real phases and observer failure cannot au
  const f=fixture(),messages:string[]=[];
  const preparation={signal:new AbortController().signal,onProgress:(message:string)=>{messages.push(message);throw Error('presentation observer unavailable');}};
  await produceNativePrefixCheckpoint({...f.input,preparation});
- expect(messages).toEqual(['Preparing conversation context (1/1).','Conversation context prepared.']);
+ expect(messages).toEqual(['Preparing conversation context.','Conversation context prepared.']);
  expect(f.calls).toHaveLength(1);
  await produceNativePrefixCheckpoint({...f.input,preparation});
  expect(f.calls).toHaveLength(1);
-});
-
-test('large Korean and escaped source has exact contiguous UTF8 byte coverage and bounded ordered merge',async()=>{
- const f=fixture(('한글😀\\\"\n').repeat(80_000));
- const result=JSON.parse(await produceNativePrefixCheckpoint(f.input));
- const fragments=f.calls.map(payload).filter(x=>x.mode==='fragment');
- expect(fragments.length).toBeGreaterThan(1);
- let end=0;
- for(const fragment of fragments){
-  expect(fragment.startByte).toBe(end);
-  expect(Buffer.byteLength(fragment.fragment,'utf8')).toBe(fragment.endByte-fragment.startByte);
-  expect(fragment.fragment).not.toContain('\ufffd');end=fragment.endByte;
- }
- expect(end).toBe(Buffer.byteLength(f.source.content,'utf8'));
- expect(fragments.map(x=>x.fragment).join('')).toBe(f.source.content);
- const merges=f.calls.map(payload).filter(x=>x.mode==='merge');
- expect(merges.length).toBeGreaterThan(0);
- for(const merge of merges){
-  expect(merge.startByte).toBe(merge.summaries[0].startByte);
-  expect(merge.endByte).toBe(merge.summaries.at(-1).endByte);
-  for(let i=1;i<merge.summaries.length;i++)expect(merge.summaries[i].startByte).toBe(merge.summaries[i-1].endByte);
- }
- expect(result.sourceDigest).toBe(f.source.digest);
- expect(result.coverage).toBe('complete-visible-prefix-before-current-native-turn');
- expect(result.evidence).toContain('lossy-summary');
- expect(result).not.toHaveProperty('compactionItemId');
- expect(f.confirmations()).toBe(2);
- const calls=f.calls.length;
- expect(await produceNativePrefixCheckpoint(f.input)).toBe(JSON.stringify(result));
- expect(f.calls).toHaveLength(calls);
- expect(f.confirmations()).toBe(4);
-},30_000);
-
-test('completed stages resume after a later ambiguous submission; uncertain stage is never resent after a new invocation',async()=>{
- const f=fixture('한글'.repeat(150_000));
- const producer=f.input.producer;
- let attempts=0;
- const failing={...f.input,producer:async (...args:Parameters<typeof producer>)=>{
-  if(++attempts===2)throw Error('connection lost after possible submission');
-  return producer(...args);
- }};
- await expect(produceNativePrefixCheckpoint(failing)).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
- expect(attempts).toBe(2);
- expect([...f.journal.records.values()].filter(x=>x.receipt)).toHaveLength(1);
- await expect(produceNativePrefixCheckpoint(failing)).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
- expect(attempts).toBe(2);
 });
 
 test('changed source prevents fresh or reused final return',async()=>{
@@ -152,7 +106,7 @@ test('inline media and insufficient finite call budgets are explicit failures be
  await expect(produceNativePrefixCheckpoint({...f.input,source:{...f.source,inlineAssets:[{} as any]}})).rejects.toThrow('inline media');
  expect(f.calls).toHaveLength(0);
  const large=fixture('x'.repeat(1_400_000));
- await expect(produceNativePrefixCheckpoint({...large.input,preparationPolicy:{maxModelCalls:1,maxInputTokens:1_000_000,maxElapsedMs:600_000}})).rejects.toMatchObject({budgetReason:'model_calls'});
+ await expect(produceNativePrefixCheckpoint({...large.input,preparationPolicy:{maxModelCalls:1,maxInputTokens:1_000_000,maxElapsedMs:600_000}})).rejects.toMatchObject({recoveryReason:'source_budget'});
  expect(large.calls).toHaveLength(0);
  expect(large.journal.records.size).toBe(0);
 });
@@ -169,21 +123,6 @@ test('journal receipt binding is strict and account namespaces cannot reuse subm
  expect(other.calls).toHaveLength(0);
 });
 
-test('large escaped summaries require bounded multi-level hierarchical merges with strict coverage reduction',async()=>{
- const f=fixture('x'.repeat(8_000_000));
- const producer=f.input.producer;
- const result=await produceNativePrefixCheckpoint({...f.input,
-  preparationPolicy:{maxModelCalls:128,maxInputTokens:20_000_000,maxElapsedMs:600_000},producer:async request=>{
-  await producer(request);
-  return {nativeTaskId:request.nativeTaskId,sourceRevisionId:request.sourceRevisionId,content:'"'.repeat(16*1024)};
- }});
- const stages=f.calls.map(payload),merges=stages.filter(x=>x.mode==='merge');
- expect(merges.length).toBeGreaterThan(1);
- expect(merges.at(-1).startByte).toBe(0);
- expect(merges.at(-1).endByte).toBe(Buffer.byteLength(f.source.content,'utf8'));
- expect(JSON.parse(result).summary.length).toBe(16*1024);
-},30_000);
-
 test('failed journal completion remains explicitly uncertain and never authorizes replay',async()=>{
  const f=fixture();
  await expect(produceNativePrefixCheckpoint({...f.input,journal:{
@@ -195,31 +134,30 @@ test('failed journal completion remains explicitly uncertain and never authorize
 });
 
 test('preflight rejects costly cold preparation without claiming or sending; exact warm reuse costs zero',async()=>{
- const f=fixture('x'.repeat(900_000));
+ const f=fixture('x'.repeat(9_000));
  const zero={maxModelCalls:0,maxInputTokens:0,maxElapsedMs:0};
  await expect(produceNativePrefixCheckpoint({...f.input,preparationPolicy:zero}))
   .rejects.toMatchObject({recoveryReason:'source_budget',budgetReason:'model_calls'});
  expect(f.journal.records.size).toBe(0);expect(f.calls).toHaveLength(0);
  const result=await produceNativePrefixCheckpoint(f.input);const calls=f.calls.length;
- expect(calls).toBeGreaterThan(1);
+ expect(calls).toBe(1);
  expect(await produceNativePrefixCheckpoint({...f.input,preparationPolicy:zero})).toBe(result);
  expect(f.calls).toHaveLength(calls);
-});
-test('transfer and elapsed admission stop before a durable claim, preserving completed work',async()=>{
- const f=fixture();
- await expect(produceNativePrefixCheckpoint({...f.input,preparationPolicy:{
-  maxModelCalls:8,maxInputTokens:0,maxElapsedMs:600_000,
- }})).rejects.toMatchObject({budgetReason:'input_tokens'});
- await expect(produceNativePrefixCheckpoint({...f.input,preparationPolicy:{
-  maxModelCalls:8,maxInputTokens:1_000_000,maxElapsedMs:0,
- }})).rejects.toMatchObject({budgetReason:'elapsed_time'});
- expect(f.calls).toHaveLength(0);expect(f.journal.records.size).toBe(0);
- await produceNativePrefixCheckpoint(f.input);
- expect(await f.journal.completedReceipts()).toHaveLength(1);
 });
 test('default preparation policy refuses oversized cold work instead of launching a long stage chain',async()=>{
  const f=fixture('x'.repeat(2_000_000));
  const {preparationPolicy:_,...productionDefaults}=f.input;
- await expect(produceNativePrefixCheckpoint(productionDefaults)).rejects.toMatchObject({budgetReason:'model_calls'});
+ await expect(produceNativePrefixCheckpoint(productionDefaults)).rejects.toMatchObject({recoveryReason:'source_budget'});
  expect(f.calls).toHaveLength(0);expect(f.journal.records.size).toBe(0);
+});
+
+test('escaped Korean source is embedded once in one complete snapshot and reused without another call', async()=>{
+ const f=fixture(('한글😀\\\"\n').repeat(1000));
+ const result=JSON.parse(await produceNativePrefixCheckpoint(f.input));
+ expect(f.calls).toHaveLength(1);
+ expect(payload(f.calls[0])).toMatchObject({mode:'snapshot',source:JSON.parse(f.source.content)});
+ expect(result.summary).toBe('Bounded source-specific derived summary.');
+ expect(result.sourceBytes).toBe(Buffer.byteLength(f.source.content));
+ await produceNativePrefixCheckpoint({...f.input, preparationPolicy:{maxModelCalls:0,maxInputTokens:0,maxElapsedMs:0}});
+ expect(f.calls).toHaveLength(1);
 });

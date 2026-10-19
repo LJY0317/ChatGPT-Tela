@@ -44,3 +44,10 @@ test("all phases share one budget and rewrapping never charges twice", async () 
   expect(() => budget.producer(original)(request)).toThrow();
   expect(calls).toBe(2); expect(budget.modelCalls).toBe(2);
 });
+
+test("default preparation owns only one model call instead of a hidden multi-stage allowance", () => {
+ const budget=new CheckpointPreparationBudget(100);
+ expect(budget.policy.maxModelCalls).toBe(1);
+ budget.beforeClaim(50);budget.recordInvocation(50);
+ expect(()=>budget.beforeClaim(1)).toThrow();
+});

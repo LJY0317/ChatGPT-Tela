@@ -1718,7 +1718,7 @@ test("an attributed agent JSON matching the prior answer cannot replace Native f
   next.settle?.({status:"failed"});
 });
 
-test('cold readable request uses bounded durable prefix stages and preserves the newest request exact', async () => {
+test('cold readable request uses one durable complete snapshot and preserves the newest request exact', async () => {
   const root = scratch();
   try {
     const calls: any[] = [];
@@ -1737,7 +1737,7 @@ test('cold readable request uses bounded durable prefix stages and preserves the
       },
     };
     const current = '현재 요청은 그대로 보존';
-    const prior = 'P'.repeat(200_499 * 4);
+    const prior = 'P'.repeat(20_000);
     const request = { model: chatGptWebModelId(chatGptWebFamilyKey('Fixture')), reasoning: { effort: 'medium' },
       instructions: 'Preserve the current Native task constraints.', input: [
         { role: 'user', content: prior },
@@ -1748,18 +1748,13 @@ test('cold readable request uses bounded durable prefix stages and preserves the
     expect(plan.physicalContext.mode).toBe('checkpoint-delta');
     expect(plan.physicalContext.segments.at(-1)).toMatchObject({ type: 'revision', kind: 'user', content: current });
     const payloads = calls.map(call => JSON.parse(call.physicalContext.segments[0].content));
-    const fragments = payloads.filter(row => row.mode === 'fragment');
-    expect(fragments.length).toBeGreaterThan(1);
-    let end = 0;
-    for (const fragment of fragments) { expect(fragment.startByte).toBe(end); end = fragment.endByte; }
-    const recovered = fragments.map(fragment => fragment.fragment).join('');
-    expect(Buffer.byteLength(recovered, 'utf8')).toBe(end);
-    const source = JSON.parse(recovered);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].mode).toBe('snapshot');
+    const source = payloads[0].source;
     expect(source.type).toBe('tela_native_request_prefix_v1');
     expect(source.items.map((item: any) => item.content).join(''))
       .toBe(request.instructions + prior + 'Previous step completed.');
-    expect(recovered).not.toContain(current);
-    expect(payloads.some(row => row.mode === 'merge')).toBe(true);
+    expect(JSON.stringify(source)).not.toContain(current);
     const checkpoint = JSON.parse((await options.checkpointCache.list('thread-1'))[0]!.content);
     expect(checkpoint.coverage).toBe('complete-canonical-request-prefix-through-checkpoint-anchor');
     const count = calls.length;
@@ -1785,22 +1780,22 @@ test('uncertain readable-prefix model stage is not replayed by a new planner or 
         journal: new FileNativeVisiblePrefixStageJournal({ directory: join(root, 'ledger'), initializationPath: join(root, 'ledger-init') }),
         async read(): Promise<never> { throw Error('must not page history'); } },
       checkpointProducer: async (input: any) => {
-        if (++calls === 2) throw Error('unknown outcome after possible submission');
+        if (++calls === 1) throw Error('unknown outcome after possible submission');
         return { nativeTaskId: input.nativeTaskId, sourceRevisionId: input.sourceRevisionId, content: 'First derived fragment summary.' };
       },
     };
     const request = { instructions: 'Current immutable priority.',
       input: [
-        { role: 'user', content: 'P'.repeat(200_499 * 4) },
+        { role: 'user', content: 'P'.repeat(20_000) },
         { role: 'assistant', content: 'Previous step finished' },
         { role: 'user', content: 'Exact newest request' },
       ] };
     await expect(createNativeRequestDevelopmentWebTurnPlanner(options)(registered(), request)).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
     const planner = createNativeRequestDevelopmentWebTurnPlanner({ ...options,
       visiblePrefix: { ...options.visiblePrefix, journal: new FileNativeVisiblePrefixStageJournal({ directory: join(root, 'ledger'), initializationPath: join(root, 'ledger-init') }) } });
     await expect(planner(registered('turn-2'), request)).rejects.toBeInstanceOf(NativePrefixCheckpointInterrupted);
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
     expect(await options.checkpointCache.list('thread-1')).toHaveLength(0);
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 30_000);
