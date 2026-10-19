@@ -1,5 +1,17 @@
 # Diagnostic evidence
 
+## Web profile authentication
+
+Web auth probes record only outcome, bounded reason class, HTTP status and duration. The Electron profile host
+records main-frame ChatGPT/auth route classes, auth-cookie change/removal cause classes and a fingerprint of the
+profile storage generation. Cookie names, values, account identifiers, request headers, URLs and page content are
+excluded. Explicit sign-out observations and auth-entry removals retain a coalesced incident timeline. An HTTP
+failure stays `unavailable`; only an explicit 401 or unauthenticated session shape is classified signed out.
+Provider-side revocation reasons and storage changes made outside the observed Electron session remain unknowable.
+
+Service JSONL is bounded to 32 MiB per service; incident records are bounded by 16 MiB and 30 days without a
+separate incident-count cap. Raw private capture remains opt-in, local and separately bounded.
+
 ## Tela Chat ingress boundary
 
 `chat_capability_dispatch_received` is emitted only after a supported effectful

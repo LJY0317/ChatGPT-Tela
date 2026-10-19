@@ -239,6 +239,7 @@ export async function startElectronDevelopmentRuntime(
     browserHost,
     provider,
     modelFamilyDiscovery,
+    diagnosticProfileFingerprint: diagnosticFingerprint(input.profileId),
     ...(input.accountIdentityObserver ? { accountIdentityObserver: input.accountIdentityObserver } : {}),
   });
 

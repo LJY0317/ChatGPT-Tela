@@ -142,6 +142,7 @@ export function createChatGptProfileControl(input: {
   readonly browserHost: BrowserHost;
   readonly provider: Pick<WebConversationProvider, "observeCapabilities"> & Partial<ChatGptConnectorProbe>;
   readonly accountIdentityObserver?: ChatGptAccountIdentityObserver;
+  readonly diagnosticProfileFingerprint?: string;
   readonly modelFamilyDiscovery?: (surface: BrowserSurfaceLease, signal?: AbortSignal) => Promise<readonly ChatGptWebModelFamily[]>;
 }): ChatGptProfileControl {
   const setupLeases = new Set<string>();
@@ -151,7 +152,10 @@ export function createChatGptProfileControl(input: {
   const requireOpen = (): void => {
     if (closed || closing) throw new Error("ChatGPT profile control is closing");
   };
-  const accountIdentityObserver = input.accountIdentityObserver ?? observeChatGptAccountIdentity;
+  const identityObserver = input.accountIdentityObserver ?? observeChatGptAccountIdentity;
+  const accountIdentityObserver: ChatGptAccountIdentityObserver = (surface, signal) => input.diagnosticProfileFingerprint
+    ? withDiagnosticContext({ profile_fingerprint: input.diagnosticProfileFingerprint }, () => identityObserver(surface, signal))
+    : identityObserver(surface, signal);
 
   async function withConnectorSurface<T>(
     signal: AbortSignal | undefined,
@@ -284,7 +288,11 @@ export function createChatGptProfileControl(input: {
       requireOpen();
       signal?.throwIfAborted();
       const lease = await input.browserHost.acquire({ taskId: "chatgpt-tela-account-display", epochId: `display-${randomUUID()}` });
-      try { return await observeChatGptAccountDisplay(lease, signal); }
+      try {
+        return await (input.diagnosticProfileFingerprint
+          ? withDiagnosticContext({ profile_fingerprint: input.diagnosticProfileFingerprint }, () => observeChatGptAccountDisplay(lease, signal))
+          : observeChatGptAccountDisplay(lease, signal));
+      }
       finally { await input.browserHost.release(lease.leaseId); }
     },
     async probeChatGptReadiness(signal?: AbortSignal) {

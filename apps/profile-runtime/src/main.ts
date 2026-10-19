@@ -11,7 +11,7 @@ import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import { createAccountCheck } from "./account-check";
 import { createAccountDisplay } from "./account-display";
 import { startNativeAccountLifecycle } from "./native-account-lifecycle";
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 
 function writeStderr(value: unknown): void {
   try {
@@ -22,8 +22,7 @@ function writeStderr(value: unknown): void {
   }
 }
 
-async function main(): Promise<void> {
-  const config = loadProductProfileRuntimeConfig();
+async function main(config: ReturnType<typeof loadProductProfileRuntimeConfig>): Promise<void> {
   // Electron's persistent profile root must be fixed before *any* async work.
   // Waiting for the supervisor handshake first can let Electron reach app-ready
   // with its default userData path, causing the hidden ChatGPT surface to start
@@ -170,7 +169,15 @@ async function main(): Promise<void> {
   await stop();
 }
 
-void main().catch(error => {
+function start(): Promise<void> {
+  const config = loadProductProfileRuntimeConfig();
+  return withDiagnosticContext({
+    profile_fingerprint: diagnosticFingerprint(config.browserProfile.profileId),
+    storage_fingerprint: diagnosticFingerprint(config.browserProfile.userDataDir),
+  }, () => main(config));
+}
+
+void start().catch(error => {
   writeStderr(error);
   app.exit(1);
 });

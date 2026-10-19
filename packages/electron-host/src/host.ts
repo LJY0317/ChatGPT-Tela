@@ -11,6 +11,7 @@ import {
   type BrowserSurfaceCapability,
 } from "@chatgpt-tela/browser-host";
 import type { BrowserWindowConstructorOptions } from "electron";
+import { lstatSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { ElectronWebContentsPageAutomation, type ElectronWebContentsLike } from "./page-automation";
 import { InspectionInput } from "./inspection-input";
@@ -31,6 +32,166 @@ export interface ElectronBrowserWindowLike {
 export type ElectronWindowFactory = (
   options: BrowserWindowConstructorOptions,
 ) => ElectronBrowserWindowLike | Promise<ElectronBrowserWindowLike>;
+
+interface ElectronAuthCookieLike {
+  readonly domain?: string;
+  readonly name?: string;
+  readonly expirationDate?: number;
+  readonly session?: boolean;
+  readonly secure?: boolean;
+  readonly httpOnly?: boolean;
+}
+
+interface ElectronProfileSessionLike {
+  readonly storagePath?: string | null;
+  readonly cookies?: {
+    on?(event: "changed", listener: (event: unknown, cookie: ElectronAuthCookieLike, cause: string, removed: boolean) => void): void;
+    removeListener?(event: "changed", listener: (event: unknown, cookie: ElectronAuthCookieLike, cause: string, removed: boolean) => void): void;
+  };
+}
+
+interface SessionAuthObserver {
+  refs: number;
+  storageSignature?: string;
+  readonly listener: (event: unknown, cookie: ElectronAuthCookieLike, cause: string, removed: boolean) => void;
+  readonly session: ElectronProfileSessionLike;
+  readonly origin: ReturnType<typeof diagnosticContext>;
+}
+
+interface SessionAuthDiagnosticsLease {
+  refreshStorage(): void;
+  release(): void;
+}
+
+const sessionAuthObservers = new WeakMap<object, SessionAuthObserver>();
+
+function authDomainClass(value: string | undefined): string | undefined {
+  const domain = value?.toLowerCase().replace(/^\./, "");
+  if (!domain) return undefined;
+  if (domain === "chatgpt.com" || domain.endsWith(".chatgpt.com")) return "chatgpt";
+  if (domain === "openai.com" || domain.endsWith(".openai.com")) return "openai";
+  return undefined;
+}
+
+function authEntryClass(name: string | undefined): string | undefined {
+  const value = name?.toLowerCase();
+  if (!value) return undefined;
+  if (value.includes("session")) return "session";
+  if (value.includes("csrf")) return "csrf";
+  if (value.includes("auth")) return "auth";
+  if (value.includes("token")) return "token";
+  return undefined;
+}
+
+function authRemovalCause(value: string): string {
+  return new Set(["explicit", "overwrite", "expired", "evicted", "expired-overwrite"]).has(value)
+    ? value.replaceAll("-", "_") : "unknown";
+}
+
+function storageObservation(session: ElectronProfileSessionLike): {
+  readonly state: "present" | "missing" | "unavailable";
+  readonly fingerprint?: string;
+} {
+  const path = session.storagePath;
+  if (!path) return { state: "unavailable" };
+  try {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return { state: "unavailable" };
+    return {
+      state: "present",
+      fingerprint: diagnosticFingerprint(JSON.stringify([stat.dev, stat.ino, stat.birthtimeMs])),
+    };
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? { state: "missing" } : { state: "unavailable" };
+  }
+}
+
+function retainSessionAuthDiagnostics(session: ElectronProfileSessionLike | undefined, origin: ReturnType<typeof diagnosticContext>): SessionAuthDiagnosticsLease {
+  if (!session || typeof session !== "object" || !session.cookies?.on || !session.cookies.removeListener) {
+    withDiagnosticContext(origin, () => emitDiagnosticEvent("chatgpt_tela_web_auth", "session_observer_unavailable", {}));
+    return { refreshStorage() {}, release() {} };
+  }
+  let observer = sessionAuthObservers.get(session as object);
+  if (!observer) {
+    observer = {
+      refs: 0,
+      session,
+      origin,
+      listener: (_event, cookie, cause, removed) => {
+        const domainClass = authDomainClass(cookie.domain);
+        const entryClass = authEntryClass(cookie.name);
+        if (!domainClass || !entryClass) return;
+        const nowSeconds = Date.now() / 1000;
+        const expiryClass = cookie.session === true || cookie.expirationDate === undefined ? "session"
+          : cookie.expirationDate <= nowSeconds ? "expired" : cookie.expirationDate <= nowSeconds + 86400 ? "near" : "future";
+        const fields = {
+          domain_class: domainClass,
+          entry_class: entryClass,
+          removal_cause: authRemovalCause(cause),
+          expiry_class: expiryClass,
+          removed,
+          secure: cookie.secure === true,
+          http_only: cookie.httpOnly === true,
+        };
+        withDiagnosticContext(origin, () => emitDiagnosticEvent("chatgpt_tela_web_auth",
+          removed ? "auth_entry_removed" : "auth_entry_changed", fields));
+      },
+    };
+    sessionAuthObservers.set(session as object, observer);
+  }
+  observer.refs++;
+  const current = observer;
+  const observeStorage = () => {
+    const snapshot = storageObservation(current.session);
+    const signature = `${snapshot.state}:${snapshot.fingerprint ?? ""}`;
+    if (signature === current.storageSignature) return;
+    current.storageSignature = signature;
+    withDiagnosticContext(current.origin, () => emitDiagnosticEvent("chatgpt_tela_web_auth", "session_storage_observed", {
+      storage_state: snapshot.state,
+      ...(snapshot.fingerprint ? { storage_generation_fingerprint: snapshot.fingerprint } : {}),
+    }));
+  };
+  if (observer.refs === 1) {
+    session.cookies.on("changed", observer.listener);
+    observeStorage();
+  }
+  let released = false;
+  return {
+    refreshStorage: observeStorage,
+    release() {
+      if (released) return;
+      released = true;
+      current.refs--;
+      if (current.refs === 0) {
+        current.session.cookies?.removeListener?.("changed", current.listener);
+        sessionAuthObservers.delete(session as object);
+      }
+    },
+  };
+}
+
+function navigationRouteClass(value: unknown): string {
+  if (typeof value !== "string") return "unknown";
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    if (host === "auth.openai.com" || host.endsWith(".auth.openai.com")) return "auth_host";
+    if (host === "chatgpt.com" || host.endsWith(".chatgpt.com")) {
+      return /\/(?:auth|login|log-in|sign-in|logout)(?:\/|$)/i.test(url.pathname) ? "auth_route" : "chatgpt";
+    }
+    if (host === "openai.com" || host.endsWith(".openai.com")) return "openai";
+    return "other";
+  } catch { return "unknown"; }
+}
+
+function observeMainFrameRoute(origin: ReturnType<typeof diagnosticContext>, route: unknown, status?: unknown): void {
+  const routeClass = navigationRouteClass(route);
+  if (routeClass === "other" || routeClass === "unknown") return;
+  withDiagnosticContext(origin, () => emitDiagnosticEvent("chatgpt_tela_web_auth", "main_frame_route_observed", {
+    route_class: routeClass,
+    ...(typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599 ? { http_status: status } : {}),
+  }));
+}
 
 export interface ElectronMainRuntimeLike {
   readonly app: {
@@ -64,6 +225,7 @@ function supportedNavigation(url: string): URL {
  */
 export function createElectronBrowserHost(input: {
   readonly profileId: string;
+  readonly storageFingerprint?: string;
   readonly createWindow: ElectronWindowFactory;
   readonly initialUrl?: string;
   readonly window?: Readonly<Pick<BrowserWindowConstructorOptions,
@@ -93,7 +255,11 @@ export function createElectronBrowserHost(input: {
     }
 
     const origin = { ...diagnosticContext(), profile_fingerprint: diagnosticFingerprint(input.profileId),
+      partition_fingerprint: diagnosticFingerprint(profile.partition),
+      ...(input.storageFingerprint ? { storage_fingerprint: input.storageFingerprint } : {}),
       surface_fingerprint: diagnosticFingerprint(JSON.stringify([input.profileId, taskId, epochId])) };
+    const browserSession = (window.webContents as unknown as { readonly session?: ElectronProfileSessionLike }).session;
+    const sessionAuthDiagnostics = retainSessionAuthDiagnostics(browserSession, origin);
     const emitter = window.webContents as typeof window.webContents & {
       on?: (event: string, listener: (...args: unknown[]) => void) => void;
       removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
@@ -150,6 +316,19 @@ export function createElectronBrowserHost(input: {
       };
       emitter.on(event, listener); listeners.push([event, listener]);
     }
+    if (emitter.on && emitter.removeListener) {
+      const navigationListener = (...args: unknown[]) => {
+        if ((args[0] as { isMainFrame?: boolean } | undefined)?.isMainFrame === false) return;
+        observeMainFrameRoute(origin, args[1], args[2]);
+      };
+      const redirectListener = (...args: unknown[]) => {
+        const details = args[1] as { url?: unknown; isMainFrame?: boolean } | undefined;
+        if (details?.isMainFrame === false) return;
+        observeMainFrameRoute(origin, details?.url);
+      };
+      emitter.on("did-navigate", navigationListener); listeners.push(["did-navigate", navigationListener]);
+      emitter.on("did-redirect-navigation", redirectListener); listeners.push(["did-redirect-navigation", redirectListener]);
+    }
     const detachDiagnostics = () => { for (const [event, listener] of listeners) emitter.removeListener?.(event, listener); };
     const inspection = withDiagnosticContext(origin, () => new InspectionInput(emitter));
     inputHitTestPending = () => inspection.observationCurrent().pending;
@@ -171,9 +350,11 @@ export function createElectronBrowserHost(input: {
       : undefined;
     try {
       if (initialUrl) await window.loadURL(initialUrl);
+      sessionAuthDiagnostics.refreshStorage();
     } catch (error) {
       inspection.dispose();
       detachDiagnostics();
+      sessionAuthDiagnostics.release();
       if (!window.isDestroyed()) window.destroy();
       throw error;
     }
@@ -226,6 +407,7 @@ export function createElectronBrowserHost(input: {
         recordInspection("release");
         inspection.dispose();
         detachDiagnostics();
+        sessionAuthDiagnostics.release();
         if (!window.isDestroyed()) window.destroy();
       },
       capability<T>(capability: BrowserSurfaceCapability<T>): T | undefined {
@@ -292,6 +474,7 @@ export async function createElectronMainProcessBrowserHost(input: {
   await runtime.app.whenReady();
   return createElectronBrowserHost({
     profileId: input.profileId,
+    ...(input.userDataDir ? { storageFingerprint: diagnosticFingerprint(normalizedUserDataDir(input.userDataDir)) } : {}),
     ...(input.initialUrl ? { initialUrl: input.initialUrl } : {}),
     ...(input.window ? { window: input.window } : {}),
     createWindow: options => new runtime.BrowserWindow(options),

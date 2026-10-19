@@ -199,8 +199,9 @@ only when they start/restart.
 
 Service diagnostics live under the platform-standard Tela logs root. Source supervision writes
 `<service>.log.diagnostics.jsonl`; installed packaged services write `<service>.diagnostics.jsonl`. Both use the
-same bounded payload-free event format and retain at most one rotated predecessor. The CLI diagnostics summary
-reads only file metadata and deliberately omits absolute paths and event contents.
+same bounded payload-free event format with a 32 MiB per-service byte budget. Coalesced incidents use a separate
+16 MiB/30-day budget. The CLI diagnostics summary reads only file metadata and deliberately omits absolute paths
+and event contents.
 
 Each running service publishes a private mode-600 runtime descriptor containing only its install/instance
 identity, PID, loopback endpoint, ephemeral bearer, and start time. Supervision reuses a descriptor only after

@@ -7,7 +7,7 @@ export function diagnosticSourcePaths(logsRoot: string): readonly string[] {
   return Object.freeze(["gateway", "chat", "codex"].flatMap(service => {
     const source = join(logsRoot, `${service}.log.diagnostics.jsonl`);
     const packaged = join(logsRoot, `${service}.diagnostics.jsonl`);
-    return [source, packaged].flatMap(path => Array.from({ length: DIAGNOSTIC_LIMITS.logFiles }, (_, index) => index ? `${path}.${index}` : path));
+    return [source, packaged].flatMap(path => Array.from({ length: DIAGNOSTIC_LIMITS.logSegments }, (_, index) => index ? `${path}.${index}` : path));
   }));
 }
 

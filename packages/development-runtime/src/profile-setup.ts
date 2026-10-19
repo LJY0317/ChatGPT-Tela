@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { diagnosticFingerprint } from "@chatgpt-tela/core";
 import {
   createElectronMainProcessBrowserHost,
   type ElectronMainRuntimeLike,
@@ -134,6 +135,7 @@ export async function startElectronProfileSetupRuntime(
     browserHost,
     provider,
     accountIdentityObserver,
+    diagnosticProfileFingerprint: diagnosticFingerprint(config.profileId),
   });
   let stopping: Promise<void> | undefined;
   return Object.freeze({

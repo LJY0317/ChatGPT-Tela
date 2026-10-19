@@ -3,9 +3,11 @@ import { randomUUID } from "node:crypto";
 import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+const LOG_FILE_BYTES = 4 * 1024 * 1024;
+const LOG_TOTAL_BYTES = 32 * 1024 * 1024;
 export const DIAGNOSTIC_LIMITS = Object.freeze({ tailBytes: 4 * 1024 * 1024, sources: 24, events: 4096, timeline: 128,
-  logFileBytes: 4 * 1024 * 1024, logFiles: 4,
-  incidents: 256, incidentBytes: 16 * 1024 * 1024, incidentAgeMs: 30 * 86400000,
+  logFileBytes: LOG_FILE_BYTES, logBytes: LOG_TOTAL_BYTES, logSegments: Math.ceil(LOG_TOTAL_BYTES / LOG_FILE_BYTES),
+  incidentBytes: 16 * 1024 * 1024, incidentAgeMs: 30 * 86400000,
   privateFiles: 256, privateBytes: 64 * 1024 * 1024, privateFileBytes: 8 * 1024 * 1024, privateAgeMs: 7 * 86400000 });
 export interface StructuralDiagnosticEvent { readonly ts: string; readonly event: string; readonly stage: string; readonly [key: string]: string | number | boolean; }
 const SAFE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
@@ -24,7 +26,7 @@ const SAFE_WEB_CONTEXT_PLANNER_STAGES = new Set<string>(WEB_CONTEXT_PLANNER_STAG
 export function isWebContextPlannerStage(value: unknown): value is WebContextPlannerStage {
   return typeof value === "string" && SAFE_WEB_CONTEXT_PLANNER_STAGES.has(value);
 }
-const STRINGS = new Set(["observation_failure", "failure_class", "service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "browser_response", "next_action"]);
+const STRINGS = new Set(["observation_failure", "failure_class", "service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "route_class", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "browser_response", "next_action", "probe_kind", "auth_state", "entry_class", "removal_cause", "expiry_class", "domain_class", "storage_state"]);
 /** Never copies unclassified text, identifiers or payloads from a raw diagnostic file. */
 export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticEvent | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
@@ -253,7 +255,7 @@ function files(root: string, type: "incidents" | "private") {
 function prune(root: string, type: "incidents" | "private", now = Date.now(), entries = files(root, type)) {
   let bytes = 0; let count = 0;
   const kept = new Set<string>();
-  const maxCount = type === "incidents" ? DIAGNOSTIC_LIMITS.incidents : DIAGNOSTIC_LIMITS.privateFiles;
+  const maxCount = type === "incidents" ? Number.POSITIVE_INFINITY : DIAGNOSTIC_LIMITS.privateFiles;
   const maxBytes = type === "incidents" ? DIAGNOSTIC_LIMITS.incidentBytes : DIAGNOSTIC_LIMITS.privateBytes;
   const age = type === "incidents" ? DIAGNOSTIC_LIMITS.incidentAgeMs : DIAGNOSTIC_LIMITS.privateAgeMs;
   const groups = new Map<string, ReturnType<typeof files>>();

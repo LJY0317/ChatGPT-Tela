@@ -104,7 +104,9 @@ export function emitDiagnosticEvent(
       recent.push(safe);
       if (recent.length > 128) recent.shift();
       const root = configuredDiagnosticRoot();
-      if (root && /(?:failed|error|timeout|crashed|unresponsive|rejected|anomaly)$/.test(stage)) {
+      const authenticationBoundary = event === "chatgpt_tela_web_auth"
+        && ["auth_session_signed_out", "auth_entry_removed"].includes(stage);
+      if (root && (authenticationBoundary || /(?:failed|error|timeout|crashed|unresponsive|rejected|anomaly)$/.test(stage))) {
         // Failure-triggered only. Never scan raw files, poll, capture payloads or block recovery.
         scheduleIncident(root, safe);
       }
@@ -127,10 +129,8 @@ export function configuredDiagnosticRoot(): string | undefined {
 
 function diagnosticMaxFileBytes(): number {
   const parsed = Number(process.env.CHATGPT_TELA_DIAGNOSTIC_MAX_BYTES ?? "");
-  if (!Number.isSafeInteger(parsed) || parsed < 64 * 1024 || parsed > 64 * 1024 * 1024) {
-    return DEFAULT_MAX_FILE_BYTES;
-  }
-  return parsed;
+  if (!Number.isSafeInteger(parsed) || parsed < 64 * 1024) return DEFAULT_MAX_FILE_BYTES;
+  return Math.min(parsed, DIAGNOSTIC_LIMITS.logBytes / DIAGNOSTIC_LIMITS.logSegments);
 }
 
 function appendConfiguredDiagnosticFile(line: string): void {
@@ -146,8 +146,8 @@ function appendConfiguredDiagnosticFile(line: string): void {
         if (!stat.isFile() || stat.isSymbolicLink()) return;
         if (stat.size > diagnosticMaxFileBytes()) {
           // Rotate a fixed chain, newest first on read, with no background housekeeping.
-          rmSync(`${path}.${DIAGNOSTIC_LIMITS.logFiles - 1}`, { force: true });
-          for (let index = DIAGNOSTIC_LIMITS.logFiles - 2; index >= 0; index--) {
+          rmSync(`${path}.${DIAGNOSTIC_LIMITS.logSegments - 1}`, { force: true });
+          for (let index = DIAGNOSTIC_LIMITS.logSegments - 2; index >= 0; index--) {
             const source = index === 0 ? path : `${path}.${index}`;
             const destination = `${path}.${index + 1}`;
             try {

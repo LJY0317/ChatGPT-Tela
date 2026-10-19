@@ -130,10 +130,10 @@ test("parent transport correlation and report-time process state remain separate
   expect(report.boundaries.processEvidence?.stage).toBe("process_started"); expect(report.boundaries.hostContinuation).toBe("unverified");
   expect(report.boundaries.otherScopeCount).toBe(0);
 });
-test("owned incident retention preserves foreign data and rebuilds discovery", () => {
-  const root=fixture(); for (let i=0;i<DIAGNOSTIC_LIMITS.incidents+2;i++) writeDiagnosticIncident(root,{stage:"test_failed",observedAt:new Date().toISOString(),timeline:[event("test_failed")]});
+test("owned incident retention preserves foreign data and rebuilds discovery without a count cap", () => {
+  const root=fixture(); for (let i=0;i<300;i++) writeDiagnosticIncident(root,{stage:"test_failed",observedAt:new Date().toISOString(),timeline:[event("test_failed")]});
   const foreign=join(root,"incidents","incident_00000000-0000-0000-0000-000000000000.json"); writeFileSync(foreign,JSON.stringify({owner:"other",secret:"foreign"}));
-  const records=listDiagnosticIncidents(root); expect(records).toHaveLength(DIAGNOSTIC_LIMITS.incidents);
+  const records=listDiagnosticIncidents(root); expect(records).toHaveLength(300);
   expect(readFileSync(foreign,"utf8")).toContain("foreign"); expect(readDiagnosticIncident(root,records[0]!.ref)).toMatchObject({owner:"chatgpt-tela-diagnostics-v1"});
   expect(readFileSync(join(root,"START-HERE.md"),"utf8")).toContain("diagnostics inspect");
   expect(()=>readDiagnosticIncident(root,"../../secret")).toThrow();

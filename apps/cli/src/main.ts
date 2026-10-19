@@ -178,9 +178,9 @@ function diagnosticsSummary(productPaths: ReturnType<typeof resolveProductPaths>
     const packagedDiagnostics = join(productPaths.logsRoot, `${id}.diagnostics.jsonl`);
     return Object.freeze({
       serviceLog: diagnosticFileMetadata(raw),
-      sourceDiagnostics: Array.from({ length: DIAGNOSTIC_LIMITS.logFiles }, (_, index) =>
+      sourceDiagnostics: Array.from({ length: DIAGNOSTIC_LIMITS.logSegments }, (_, index) =>
         diagnosticFileMetadata(index ? `${sourceDiagnostics}.${index}` : sourceDiagnostics)),
-      packagedDiagnostics: Array.from({ length: DIAGNOSTIC_LIMITS.logFiles }, (_, index) =>
+      packagedDiagnostics: Array.from({ length: DIAGNOSTIC_LIMITS.logSegments }, (_, index) =>
         diagnosticFileMetadata(index ? `${packagedDiagnostics}.${index}` : packagedDiagnostics)),
     });
   };
@@ -188,10 +188,10 @@ function diagnosticsSummary(productPaths: ReturnType<typeof resolveProductPaths>
     privacy: "metadata-only",
     contentRead: false,
     pathsEmitted: false,
-    rotation: "current-plus-three-previous",
+    rotation: "byte-bounded",
     retention: {
-      detailed: { fileBytes: DIAGNOSTIC_LIMITS.logFileBytes, filesPerService: DIAGNOSTIC_LIMITS.logFiles },
-      incidents: { bytes: DIAGNOSTIC_LIMITS.incidentBytes, count: DIAGNOSTIC_LIMITS.incidents, days: DIAGNOSTIC_LIMITS.incidentAgeMs / 86400000 },
+      detailed: { bytes: DIAGNOSTIC_LIMITS.logBytes, segmentBytes: DIAGNOSTIC_LIMITS.logFileBytes },
+      incidents: { bytes: DIAGNOSTIC_LIMITS.incidentBytes, days: DIAGNOSTIC_LIMITS.incidentAgeMs / 86400000 },
       private: { bytes: DIAGNOSTIC_LIMITS.privateBytes, files: DIAGNOSTIC_LIMITS.privateFiles, days: DIAGNOSTIC_LIMITS.privateAgeMs / 86400000 },
     },
     discovery: { guide: "logs/diagnostics/START-HERE.md", index: "logs/diagnostics/INDEX.json",
