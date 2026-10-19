@@ -281,7 +281,7 @@ class RendererFixturePage extends FakePage {
     if (source.includes("return { url: location.href, composers, sendControls, turns }") || source.includes("const cards =")) {
       return runInNewContext(`(${source})(argument)`, Object.assign(this.rendererState, {
         argument, innerWidth: 800, innerHeight: 600, requestAnimationFrame: (callback: () => void) => this.animationFrame(callback),
-        document: Object.assign(this.document, { documentElement: this.document, elementFromPoint: this.hitTest }), HTMLElement: FixtureElement, HTMLButtonElement: FixtureElement,
+        document: Object.assign(this.document, { documentElement: this.document, elementFromPoint: this.hitTest, baseURI: "https://chatgpt.com/" }), URL, HTMLElement: FixtureElement, HTMLButtonElement: FixtureElement,
         getComputedStyle: (element: FixtureElement) => ({ display: element.getAttribute("data-fixture-display") ?? "block", visibility: element.getAttribute("data-fixture-visibility") ?? "visible", opacity: element.getAttribute("data-fixture-opacity") ?? "1", pointerEvents: element.getAttribute("data-fixture-pointer-events") ?? "auto", overflowY: element.getAttribute("data-fixture-overflow-y") ?? "visible" }),
         location: { href: "https://chatgpt.com/" }, crypto: { randomUUID: () => "synthetic-card" },
       })) as Result;
@@ -531,6 +531,43 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(observation.plainBodyFingerprint).toBe(digest(receipt));
     expect(observation.bodyProof?.digest).toBeDefined();
     expect(observation.contentFingerprint).toBeUndefined();
+  });
+
+  test("machine JSON uses literal body text instead of layout line breaks", async () => {
+    const wire = JSON.stringify({ type: "tela_context_checkpoint_v1", summary: "one two" });
+    const body = new FixtureElement();
+    body.textContent = wire;
+    body.innerText = wire.replace("one two", "one\ntwo");
+    body.childNodes = [{ nodeType: 3, textContent: wire }];
+    const group = new FixtureElement({ 'data-turn-key': 'checkpoint' }, {
+      '[data-markdown-text-style="assistant-message"]': [body],
+      'button[data-testid="copy-turn-action-button"]': [new FixtureElement()],
+    });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
+    const answer = (await driver.observe()).turns[0]!;
+    expect(() => JSON.parse(body.innerText)).toThrow();
+    expect(JSON.parse(answer.plainBodyText!)).toEqual(JSON.parse(wire));
+  });
+
+  test("retained answer ignores link icon hydration but preserves destination and author changes", async () => {
+    const icon = new FixtureElement({ 'data-fixture-tag': 'IMG', src: '/placeholder' });
+    const graphic = new FixtureElement({ 'data-fixture-tag': 'SVG' });
+    const label = { nodeType: 3, textContent: 'Reference' };
+    const link = new FixtureElement({ 'data-fixture-tag': 'A', href: 'https://example.com/one' });
+    link.childNodes = [graphic, icon, label];
+    const body = new FixtureElement(); body.childNodes = [link];
+    const group = new FixtureElement({ 'data-turn-key': 'prior' }, {
+      '[data-markdown-text-style="assistant-message"]': [body],
+      'button[data-testid="copy-turn-action-button"]': [new FixtureElement()],
+    });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
+    const before = (await driver.observe()).turns[0]!;
+    link.childNodes = [icon, label]; icon.attributes.src = '/loaded';
+    expect((await driver.observe()).turns[0]!.bodyProof).toEqual(before.bodyProof);
+    link.attributes.href = 'https://example.com/two';
+    expect((await driver.observe()).turns[0]!.bodyProof).not.toEqual(before.bodyProof);
+    link.attributes.href = 'https://example.com/one'; label.textContent = 'Changed author text';
+    expect((await driver.observe()).turns[0]!.bodyProof).not.toEqual(before.bodyProof);
   });
 
   test("logical document/turn identity survives optimistic-key replacement and an unrendered user", async () => {

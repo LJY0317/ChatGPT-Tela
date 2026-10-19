@@ -44,12 +44,13 @@ export interface ChatGptTurnObservation {
   /** Content-free adapter witness, count saturated at 65; never acceptance authority. */
   readonly userPayloadProbe?: Readonly<Record<string, number | boolean>>;
   readonly userPayloadStructure?: { readonly rootCount: number; readonly nestedRoots?: boolean; readonly equivalentRoots?: boolean; readonly outerLength?: number; readonly innerLength?: number };
+  /** Delivered answer serialization, including presentation-hidden author text; excludes DOM attributes. */
   readonly bodyProof?: { readonly version: 1; readonly digest?: string; readonly reason?: string };
   /** Opt-in bounded diagnostic witness; never authority or public progress. */
   readonly privateBodyEvidence?: { readonly chunks: readonly string[]; readonly complete: boolean };
-  /** Trimmed, rendered owned body before Markdown conversion; protocol equality only. */
+  /** Trimmed literal owned-body text before Markdown conversion; protocol equality only. */
   readonly plainBodyFingerprint?: string;
-  /** Rendered owned body before Markdown conversion; machine-readable consumers require it. */
+  /** Literal DOM text without layout-derived line breaks; machine-readable consumers require it. */
   readonly plainBodyText?: string;
   readonly phase?: ChatGptAssistantPhase;
   /** Observed owned body, possibly partial; only phase/lineage authorize final delivery. */

@@ -7,7 +7,6 @@ import type { BrowserPageAutomation } from "@chatgpt-tela/browser-host";
 import { configuredDiagnosticRoot, privateDiagnosticCaptureEnabled, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { decideChatGptApproval, type ChatGptApprovalAutomationMode } from "./approval-policy";
 import { assistantMarkdown } from "./answer-markdown";
-import { assistantBody } from "./answer-body";
 import { userPayload } from "./user-payload";
 import {
   ChatGptConnectorCatalogUnavailableError,
@@ -636,7 +635,6 @@ const OBSERVE_EXPECTED_ATTACHMENT_IDENTITY = String.raw`function (argument) {
 
 const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
   const answerMarkdown = ${assistantMarkdown.toString()};
-  const answerBodyProof = ${assistantBody.toString()};
   const requestPayload = ${userPayload.toString()};
   const visible = element => {
     if (!(element instanceof HTMLElement)) return false;
@@ -922,10 +920,11 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         // Body content and completion authority are independent. Historical action controls
         // can disappear during a new turn without changing the committed answer body.
         text: answerBody ? answerMarkdown(answerBody) : complete ? answerMarkdown(answer || assistant) : undefined,
-        // Protocol receipts compare the rendered body, never its Markdown serialization.
-        plainBodyText: answerBody ? text(answerBody) : complete ? text(answer || assistant) : undefined,
-        // Identity uses the same owned body without presentation visibility. Never use page text.
-        bodyProof: answerBody ? answerBodyProof(answerBody) : undefined,
+        // Machine protocols consume literal DOM text, never layout-derived innerText.
+        plainBodyText: answerBody ? answerBody.textContent : complete ? (answer || assistant).textContent : undefined,
+        // Reuse the delivered answer serializer. A separate DOM-attribute codec made
+        // decorative icon hydration invalidate unchanged answers.
+        bodyProof: answerBody ? { version: 1, value: answerMarkdown(answerBody, true) } : undefined,
         failureDetail: failure ? text(failure) : undefined,
         publicProgress,
         progressProbe: { unmappedVisibleProsePresent, linkedRegionCount, visibleLinkedRegionCount, containerPresent: !!progressRoot, anchorCount: progressAnchors.length, titleCount: progressTitleCount, descriptionCount: progressDescriptionCount, containerVisible: !!progressRoot && progressVisible(progressRoot), markerCount: agentStarts.length, agentShellEligible: !!ownedAgentShell, shellSearchDepth, shellCandidateCount, visibleAnchorCount, controlCount, visibleControlCount, localLabelCount, visibleLabelCount,

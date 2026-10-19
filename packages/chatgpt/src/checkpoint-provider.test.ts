@@ -253,8 +253,15 @@ test('checkpoint rejection diagnostics distinguish validation causes without sav
       await expect(f.provider.createContextCheckpoint(surface,large)).rejects.toThrow('does not prove');
       expect(f.submits()).toBe(1);expect(f.preloads()).toBe(0);
     }
+    const malformed='{"summary":"private-summary-marker\nvalue"}';
+    const invalid=fixture(v=>v,()=>({answer:'unused',plainAnswer:malformed}));
+    await expect(invalid.provider.createContextCheckpoint(surface,large)).rejects.toThrow('exact JSON');
     const lines=readFileSync(file,'utf8');
-    expect(lines.split('\n').filter(Boolean).map(s=>JSON.parse(s)).filter(d=>d.stage==='checkpoint_response_rejected').map(d=>d.reason_class)).toEqual(cases.map(([reason])=>reason));
+    const rows=lines.split('\n').filter(Boolean).map(s=>JSON.parse(s));
+    expect(rows.filter(d=>d.stage==='checkpoint_response_rejected').map(d=>d.reason_class)).toEqual([...cases.map(([reason])=>reason),'json_invalid']);
+    expect(rows.find(d=>d.stage==='checkpoint_json_parse_failed')).toMatchObject({
+      body_characters:malformed.length,body_bytes:Buffer.byteLength(malformed),line_break_count:1,
+    });
     expect(lines).not.toContain('private-source-marker');expect(lines).not.toContain('private-summary-marker');
   } finally {
     if(previous===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;

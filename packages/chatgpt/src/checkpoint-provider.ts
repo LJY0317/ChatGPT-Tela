@@ -169,7 +169,16 @@ export class ChatGptContextCheckpointProvider implements WebContextCheckpointPro
           return rejectCompleted("plain_body_unavailable", "checkpoint completion has no proven unformatted body");
         }
         let parsed: unknown;
-        try { parsed = JSON.parse(event.plainAnswer); } catch { rejectCompleted("json_invalid", "checkpoint response is not an exact JSON envelope"); }
+        try { parsed = JSON.parse(event.plainAnswer); } catch (error) {
+          const position = error instanceof SyntaxError ? /position (\d+)/.exec(error.message) : null;
+          emitDiagnosticEvent("chatgpt_tela_work", "checkpoint_json_parse_failed", {
+            body_characters: event.plainAnswer.length,
+            body_bytes: Buffer.byteLength(event.plainAnswer, "utf8"),
+            line_break_count: (event.plainAnswer.match(/\n/g) ?? []).length,
+            json_error_offset: position ? Number(position[1]) : -1,
+          });
+          rejectCompleted("json_invalid", "checkpoint response is not an exact JSON envelope");
+        }
         const result = parsed as Record<string, unknown> | null;
         const rejection = !result || Array.isArray(result) || result.type !== "tela_context_checkpoint_v1" ? "envelope_invalid"
           : result.operation !== operation ? "operation_mismatch"

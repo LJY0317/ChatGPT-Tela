@@ -1,5 +1,3 @@
-import { runInNewContext } from "node:vm";
-import { assistantBody } from "./answer-body";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -486,15 +484,8 @@ describe("ChatGPT semantic provider", () => {
       expect(driver.activated).toHaveLength(1);
     } finally { await surface.host.close(); }
   });
-  test.each(["generic-preserved", "generic-changed", "preserved", "presentation-change", "semantic-change", "missing", "changed-answer", "changed-lineage", "unreadable-answer", "committed-body-unavailable", "observed-body-unavailable", "untrusted-body-reason"] as const)(
+  test.each(["preserved", "presentation-change", "semantic-change", "missing", "changed-answer", "changed-lineage", "unreadable-answer", "committed-body-unavailable", "observed-body-unavailable", "untrusted-body-reason"] as const)(
     "retained submission proves prior semantic answer when conversation is %s", async mode => {
-      const extensionDigest = (target: string): string => {
-        // Execute the production codec, not a text-derived or invented semantic digest.
-        const image = { nodeType: 1, tagName: "IMG", namespaceURI: "http://www.w3.org/1999/xhtml", childNodes: [],
-          attributes: [{ localName: "src", namespaceURI: null, textContent: target }] };
-        const proof = runInNewContext(`(${assistantBody.toString()})(root)`, { root: { childNodes: [image] } });
-        expect(proof.value).toBeDefined(); return hash(proof.value);
-      };
       const driver = new FixtureDriver(fixture("ready-new-chat"));
       const {host, lease} = await leaseFor(driver);
       const provider = new ChatGptSemanticProvider();
@@ -512,7 +503,6 @@ describe("ChatGPT semantic provider", () => {
         if (submitted.state !== "proven") throw new Error("fixture acceptance");
         driver.queued.push({ ...accepted, revision: "complete", turns: [
           ...accepted.turns, { key: "answer-1", role: "assistant", parentUserTurnKey: "user-turn-1", phase: "complete", text: "Exact prior answer", contentFingerprint: hash("Exact prior answer"),
-            ...(mode.startsWith("generic-") ? { bodyProof: { version: 1 as const, digest: extensionDigest("/one") } } : {}),
             ...(mode === "committed-body-unavailable" ? { bodyProof: { version: 1 as const, reason: "unsupported_node" } } : {}) },
         ] });
         expect((await provider.waitForTurnEvent(lease, submitted.value)).state).toBe("proven");
@@ -528,7 +518,6 @@ describe("ChatGPT semantic provider", () => {
             const { text: priorAnswer, ...identity } = turn;
             return {
               ...identity, ...(mode === "changed-answer" || mode === "semantic-change" ? {contentFingerprint: hash("Other answer")} : {}), phase: "streaming" as const, // global page activity must not change prefix identity
-              ...(mode === "generic-changed" ? { bodyProof: { version: 1 as const, digest: extensionDigest("/two") } } : {}),
               ...(mode === "observed-body-unavailable" || mode === "untrusted-body-reason"
                 ? { bodyProof: { version: 1 as const, reason: mode === "untrusted-body-reason" ? "SYNTHETIC_PRIVATE_BROWSER_TEXT" : "unsupported_node" } } : {}),
               ...(mode === "unreadable-answer" ? {} : { text: mode === "changed-answer" ? "Other answer" : mode === "presentation-change" ? "**Exact prior answer**" : priorAnswer! }),
@@ -537,7 +526,7 @@ describe("ChatGPT semantic provider", () => {
           }),
         };
         const retained = { ...request(), nativeTurnId: "turn-2", physicalContext: { ...request().physicalContext, mode: "retained-delta" as const, baseRevisionId: "rev-1" } };
-        if (mode === "preserved" || mode === "presentation-change" || mode === "generic-preserved") {
+        if (mode === "preserved" || mode === "presentation-change") {
           const continuing = provider.submitTurn(lease, retained);
           while (driver.activated.length < 2) await Promise.resolve();
           driver.queued.push({ ...driver.current, revision: "accepted-2", turns: [...driver.current.turns, {key:"user-turn-next",role:"user",contentFingerprint: driver.current.composers[0]!.textFingerprint!}] });
