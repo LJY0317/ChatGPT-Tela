@@ -26,6 +26,7 @@ private struct ControlCenterIngressStatus: Decodable, Equatable {
   let cause: String
   let detail: String
   let exposureKind: String?
+  let externalClientReachability: String?
 }
 
 private typealias ControlCenterProfileStatus = TelaWorkProfile
@@ -903,8 +904,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         addStatus(titles[service]!, value: serviceStates[service] ?? "Checking…", to: connections)
       }
       divider(in: connections)
-      addStatus("ChatGPT connector", value: ingressStatus?.availability.capitalized ?? "Checking…", to: connections)
-      if let ingressStatus, ingressStatus.availability != "ready" {
+      let localOnly = ingressStatus?.availability == "ready" && ingressStatus?.externalClientReachability == "not-observed"
+      addStatus("ChatGPT connector", value: localOnly ? "Local route ready" : ingressStatus?.availability.capitalized ?? "Checking…", to: connections)
+      if let ingressStatus, ingressStatus.availability != "ready" || localOnly {
         append(secondary(ingressStatus.detail), to: connections)
       }
       if installedServiceControlsAvailable() {

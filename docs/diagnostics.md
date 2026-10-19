@@ -1123,12 +1123,21 @@ response bodies or credentials. An HTTP response proves transport only; it does 
 prove MCP tool access or a cloud client's reachability. The default JSON DNS resolver
 is `https://dns.google/resolve`, which receives the endpoint hostname; override it with
 `--public-dns-url <DNS-JSON-URL>`. No background probe, restart or admission gate is added. The installed launcher also
-saves the structural report as a bounded incident for later inspection.
+saves the structural report as a bounded incident for later inspection. For managed
+Tailscale, it samples `peerapi_ingress` immediately before and after the relay probe.
+The report distinguishes an unavailable counter and a counter reset from a zero delta.
+These shared-daemon counters do not identify individual requests. They are diagnostic
+observations, with no service restart or background sampling.
 
 Public progress extraction also records counts and visibility of assistant markdown
 bodies, whether the selected body lies outside the progress shell, animation presence
 and block count. These bounded, deduplicated facts expose prose excluded by the adapter
-without changing answer/progress classification or recording prose.
+without recording prose. Status ownership is resolved before final-answer selection:
+Markdown inside the dedicated agent-status branch is public progress when rendered;
+actual message identity wrappers and bodies outside that branch belong to the answer.
+The adapter reads current visible content without opening disclosures. Gateway status
+and Control Center explicitly distinguish same-machine readiness from unobserved public
+client reachability.
 
 ### Context efficiency receipts
 

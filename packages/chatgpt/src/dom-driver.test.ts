@@ -619,7 +619,7 @@ describe("current ChatGPT DOM surface driver", () => {
     const button = new FixtureElement({ 'aria-expanded': 'false', 'aria-labelledby': variant === "foreign-label" ? 'outside' : 'public-label' });
     const description = new FixtureElement(); description.childNodes = [{ nodeType: 3, textContent: 'Reading the submitted context.' }];
     const shell = new FixtureElement({}, { 'button[aria-expanded][aria-labelledby]': [button], '[id]': [label],
-      ...(variant === 'answer-in-shell' ? { '[data-markdown-text-style="assistant-message"]': [new FixtureElement()] } : {}) });
+      ...(variant === 'answer-in-shell' ? { '[data-user-message-bubble], [data-content-search-unit-key], [data-message-author-role], [data-turn-key]': [new FixtureElement({ 'data-content-search-unit-key': 'final:assistant' })] } : {}) });
     shell.childNodes = [button, label, description];
     const marker = Object.assign(new FixtureElement(), { parentElement: shell });
     const group = new FixtureElement({ 'data-turn-key': 'synthetic-agent' }, {

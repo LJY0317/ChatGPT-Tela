@@ -20,6 +20,8 @@ export interface GatewayIngressStatus {
   readonly cause: string;
   readonly detail: string;
   readonly exposureKind?: string;
+  readonly observationScope?: "this-machine";
+  readonly externalClientReachability?: "not-observed";
 }
 
 export type GatewayIngressStatusResolver = (

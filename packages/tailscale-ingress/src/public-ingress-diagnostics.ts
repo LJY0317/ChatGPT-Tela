@@ -1,10 +1,29 @@
+import type { TailscaleCommandRunner } from "./index";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { performance } from "node:perf_hooks";
 
+export interface IngressCounterEvidence {
+  readonly observed: boolean;
+  readonly before?: number;
+  readonly after?: number;
+  readonly delta?: number;
+  readonly counterResetObserved?: boolean;
+}
+
+async function ingressCounter(runner?: TailscaleCommandRunner): Promise<number | undefined> {
+  if (!runner) return undefined;
+  try {
+    const result = await runner.run(["debug", "metrics"], AbortSignal.timeout(4000));
+    const match = /^peerapi_ingress ([0-9]+)$/m.exec(result.stdout);
+    const value = match ? Number(match[1]) : NaN;
+    return Number.isSafeInteger(value) ? value : undefined;
+  } catch { return undefined; }
+}
+
 /** On-demand transport evidence, independent of MagicDNS and MCP admission. */
-export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string): Promise<Record<string, unknown>> {
+export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string, runner?: TailscaleCommandRunner): Promise<Record<string, unknown> & { localIngress?: IngressCounterEvidence }> {
   const resolver = new URL(resolverUrl);
   resolver.searchParams.set("name", endpoint.hostname);
   resolver.searchParams.set("type", "A");
@@ -19,6 +38,7 @@ export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string):
   } catch (error) {
     return { ...scope, state: "unavailable", stage: "dns", errorName: error instanceof Error ? error.name : "unknown" };
   }
+  const before = await ingressCounter(runner);
   const relays = await Promise.all(addresses.map((address, index) => new Promise<Record<string, unknown>>(resolve => {
     const started = performance.now();
     let tcpConnected = false, tlsConnected = false, settled = false;
@@ -49,6 +69,15 @@ export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string):
       stage: tlsConnected ? "http" : tcpConnected ? "tls" : "tcp", errorCode: error.code ?? error.name }));
     req.end();
   })));
-  return { ...scope, state: relays.every(row => row.state === "http-response") ? "http-responsive" : "unavailable",
+  const after = await ingressCounter(runner);
+  const observed = before !== undefined && after !== undefined;
+  const localIngress: IngressCounterEvidence = { observed,
+    ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}),
+    ...(observed ? { counterResetObserved: after < before, ...(after >= before ? { delta: after - before } : {}) } : {}) };
+  if (runner) emitDiagnosticEvent("chatgpt_tela_ingress", "local_ingress_counter_observed", {
+    observed, ...(observed ? { count_before: before, count_after: after, counter_reset_observed: after < before,
+      ...(after >= before ? { count_delta: after - before } : {}) } : {}),
+  });
+  return { ...scope, ...(runner ? { localIngress } : {}), state: relays.every(row => row.state === "http-response") ? "http-responsive" : "unavailable",
     addressCount: addresses.length, relays, mcpContract: "not-probed" };
 }

@@ -121,7 +121,9 @@ async function main(): Promise<void> {
               contractVersion: 1 as const,
               availability: "ready" as const,
               cause: "ready",
-              detail: "The public ChatGPT Tela MCP endpoint is reachable",
+              detail: "The configured MCP endpoint responds from this machine; public client access is not independently verified",
+              observationScope: "this-machine" as const,
+              externalClientReachability: "not-observed" as const,
               exposureKind: tailscaleManager ? "tailscale-funnel" : "existing-https",
             })
           : Object.freeze({

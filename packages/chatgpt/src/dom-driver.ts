@@ -770,16 +770,16 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
       };
       turns.push(turn); latestUserTurn = turn;
     }
-    // The current renderer identifies assistant bodies directly, without the role wrapper.
-    // Keep the proof inside the keyed turn; generic markdown or user content is not an answer.
-    const answerBody = group.querySelector('[data-markdown-text-style="assistant-message"]')
-      || group.querySelector('[data-message-author-role="assistant"] .markdown');
-    // Observed agent-status shell: one start marker in a dedicated sibling branch,
-    // outside both user and answer bodies. Never treat an arbitrary disclosure as progress.
+    // Markdown styling is shared by public status prose and final messages.
+    // Classify the marker-owned status branch before choosing an answer body.
+    const authoredMessageSelector = '[data-user-message-bubble], [data-content-search-unit-key], [data-message-author-role], [data-turn-key]';
+    const isStatusBranch = branch => branch instanceof HTMLElement
+      && !['data-user-message-bubble', 'data-content-search-unit-key', 'data-message-author-role', 'data-turn-key']
+        .some(name => branch.getAttribute(name) !== null)
+      && !branch.querySelector(authoredMessageSelector);
     const agentStarts = [...group.querySelectorAll('[data-chatgpt-agent-turn-start]')];
     const agentShell = agentStarts.length === 1 ? agentStarts[0].parentElement : undefined;
-    let ownedAgentShell = agentShell && group.contains(agentShell)
-      && !agentShell.querySelector('[data-user-message-bubble], [data-markdown-text-style="assistant-message"], [data-turn-key]')
+    let ownedAgentShell = agentShell && group.contains(agentShell) && isStatusBranch(agentShell)
       ? agentShell : undefined;
     // A start marker can be a sibling of the public disclosure rather than its
     // child. Search only bounded sibling branches of that exact owned marker;
@@ -791,11 +791,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         shellSearchDepth++;
         if (parent.children.length > 64) { shellCandidateCount = 65; break; }
         const candidates = [...parent.children].slice(0, 64).filter(branch =>
-          branch instanceof HTMLElement
-          && !branch.querySelector('[data-user-message-bubble], [data-markdown-text-style="assistant-message"], [data-turn-key]')
-          && branch.getAttribute('data-user-message-bubble') === null
-          && branch.getAttribute('data-markdown-text-style') !== 'assistant-message'
-          && branch.getAttribute('data-turn-key') === null
+          isStatusBranch(branch)
           && branch.querySelectorAll('button[aria-expanded][aria-labelledby]').length === 1);
         shellCandidateCount = candidates.length;
         if (candidates.length === 1) { ownedAgentShell = candidates[0]; break; }
@@ -803,6 +799,9 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
       }
     }
     const progressRoot = group.querySelector('[data-streaming-response-status]') || ownedAgentShell;
+    const answerBody = [...group.querySelectorAll('[data-markdown-text-style="assistant-message"]'),
+      ...group.querySelectorAll('[data-message-author-role="assistant"] .markdown')]
+      .find(body => !progressRoot?.contains(body));
     const progressAnchors = progressRoot ? (progressRoot === ownedAgentShell
       ? [progressRoot] : [...progressRoot.querySelectorAll('[data-item-anchor]')]) : [];
     // A display:contents wrapper has no box even when its owned children render.

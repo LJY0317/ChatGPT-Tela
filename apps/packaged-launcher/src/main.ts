@@ -1,4 +1,4 @@
-import { diagnosePublicIngress } from "@chatgpt-tela/tailscale-ingress";
+import { diagnosePublicIngress, SystemTailscaleCommandRunner } from "@chatgpt-tela/tailscale-ingress";
 import { readProductConfig } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { writeDiagnosticIncident, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
@@ -65,7 +65,8 @@ async function main(): Promise<void> {
     }
     const paths = resolveProductPaths();
     const config = readProductConfig(join(paths.configRoot, "product-v1.json"));
-    const result = await diagnosePublicIngress(new URL(config.exposure.publicUrl), args[4] ?? "https://dns.google/resolve");
+    const result = await diagnosePublicIngress(new URL(config.exposure.publicUrl), args[4] ?? "https://dns.google/resolve",
+      config.exposure.kind === "tailscale-funnel" ? new SystemTailscaleCommandRunner(config.exposure.tailscaleCli) : undefined);
     const observedAt = new Date().toISOString();
     const relays = Array.isArray(result.relays) ? result.relays : [];
     const timeline: StructuralDiagnosticEvent[] = relays.map(row => ({ ts: observedAt, event: "chatgpt_tela_ingress",
@@ -75,6 +76,13 @@ async function main(): Promise<void> {
       ...(row.errorCode ? { failure_class: String(row.errorCode) } : {}),
       ...(typeof row.httpStatus === "number" ? { http_status: row.httpStatus } : {}),
     }));
+    if (result.localIngress) timeline.push({ ts: observedAt, event: "chatgpt_tela_ingress", stage: "local_ingress_counter_observed",
+      observed: result.localIngress.observed,
+      ...(result.localIngress.before !== undefined ? { count_before: result.localIngress.before } : {}),
+      ...(result.localIngress.after !== undefined ? { count_after: result.localIngress.after } : {}),
+      ...(result.localIngress.delta !== undefined ? { count_delta: result.localIngress.delta } : {}),
+      ...(result.localIngress.counterResetObserved !== undefined ? { counter_reset_observed: result.localIngress.counterResetObserved } : {}),
+    });
     timeline.push({ ts: observedAt, event: "chatgpt_tela_ingress", stage: "public_ingress_probe",
       phase: String(result.stage ?? "http"), state: String(result.state), relay_count: relays.length });
     const ref = writeDiagnosticIncident(join(paths.logsRoot, "diagnostics"), {
