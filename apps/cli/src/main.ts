@@ -11,7 +11,7 @@ import { prepareProfileOwnership } from "./profile-ownership";
 import { summarizeDiagnosticWorkload } from "./diagnostic-workload";
 import { summarizeWorkIncident } from "./work-incident";
 import { observeDesktopPerformance } from "./desktop-performance";
-import { diagnosePublicIngress } from "./public-ingress-diagnostics";
+import { diagnosePublicIngress } from "@chatgpt-tela/tailscale-ingress";
 import { summarizeRetentionCanary } from "./retention-canary";
 import { workTerminalArguments, runWorkTerminal, connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import { diagnoseDefaultDesktop, resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";

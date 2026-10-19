@@ -1,3 +1,4 @@
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { performance } from "node:perf_hooks";
@@ -24,7 +25,13 @@ export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string):
     const finish = (result: Record<string, unknown>) => {
       if (settled) return;
       settled = true;
-      resolve({ index, tcpConnected, tlsConnected, durationMs: Math.round(performance.now() - started), ...result });
+      const durationMs = Math.round(performance.now() - started);
+      emitDiagnosticEvent("chatgpt_tela_ingress", result.state === "unavailable" ? "public_relay_failed" : "public_relay_observed", {
+        relay_index: index, tcp_connected: tcpConnected, tls_connected: tlsConnected, duration_ms: durationMs,
+        phase: String(result.stage), ...(typeof result.httpStatus === "number" ? { http_status: result.httpStatus } : {}),
+        ...(typeof result.errorCode === "string" ? { failure_class: result.errorCode } : {}),
+      });
+      resolve({ index, tcpConnected, tlsConnected, durationMs, ...result });
     };
     // Keep the original URL, Host, SNI and certificate validation. Only DNS is pinned.
     const req = request(endpoint, { method: "GET", agent: false, family: 4,

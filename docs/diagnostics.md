@@ -1122,7 +1122,8 @@ It reports DNS, TCP, TLS and HTTP boundaries per relay without returning address
 response bodies or credentials. An HTTP response proves transport only; it does not
 prove MCP tool access or a cloud client's reachability. The default JSON DNS resolver
 is `https://dns.google/resolve`, which receives the endpoint hostname; override it with
-`--public-dns-url <DNS-JSON-URL>`. No background probe, restart or admission gate is added.
+`--public-dns-url <DNS-JSON-URL>`. No background probe, restart or admission gate is added. The installed launcher also
+saves the structural report as a bounded incident for later inspection.
 
 Public progress extraction also records counts and visibility of assistant markdown
 bodies, whether the selected body lies outside the progress shell, animation presence
@@ -1218,3 +1219,7 @@ Node family-autoselection/attempt timeout and DNS ordering, plus proxy-environme
 flags without their values; environment presence does not prove proxy use. No DNS
 lookup, connection probe, socket hook, retry or global network-setting change is
 introduced. A connect syscall refines an otherwise ambiguous ETIMEDOUT phase.
+
+Public progress stream diagnostics include rejection reasons, producer completion,
+queued/pulled frame and summary counts, and drained versus consumer-cancelled closure.
+These establish the local HTTP consumption boundary, not a desktop UI render receipt.

@@ -1,3 +1,8 @@
+import { diagnosePublicIngress } from "@chatgpt-tela/tailscale-ingress";
+import { readProductConfig } from "@chatgpt-tela/product-config";
+import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
+import { writeDiagnosticIncident } from "@chatgpt-tela/core";
+import { join } from "node:path";
 import {
   payloadRootForLauncherExecutable,
   resolvePackagedMenuBarLaunch,
@@ -19,6 +24,7 @@ Usage:
   chatgpt-tela configure --file <product-config.json>
   chatgpt-tela configure --stdin [--if-missing]
   chatgpt-tela setup [--slot <profile>]
+  chatgpt-tela ingress status --public [--public-dns-url <DNS-JSON-URL>]
   chatgpt-tela services <start|stop>
   chatgpt-tela services restart chat
   chatgpt-tela chat roots
@@ -52,6 +58,20 @@ function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat"
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args[0] === "ingress") {
+    if (args[1] !== "status" || args[2] !== "--public"
+      || !(args.length === 3 || args.length === 5 && args[3] === "--public-dns-url")) {
+      throw new Error("usage: ingress status --public [--public-dns-url <DNS-JSON-URL>]");
+    }
+    const paths = resolveProductPaths();
+    const config = readProductConfig(join(paths.configRoot, "product-v1.json"));
+    const result = await diagnosePublicIngress(new URL(config.exposure.publicUrl), args[4] ?? "https://dns.google/resolve");
+    const ref = writeDiagnosticIncident(join(paths.logsRoot, "diagnostics"), {
+      stage: "public_ingress_probe", observedAt: new Date().toISOString(), report: result,
+    });
+    process.stdout.write(`${JSON.stringify({ ...result, ref }, null, 2)}\n`);
+    return;
+  }
   if (args[0] === "diagnostics") {
     process.stdout.write(`${JSON.stringify(runPackagedDiagnosticsCommand(args), null, 2)}\n`);
     return;

@@ -19,7 +19,21 @@ export class NativeProgressStream {
     index: number; characters: number; context: ReturnType<typeof diagnosticContext>;
   } }> = [];
   readonly #summaries: string[] = [];
+  readonly #diagnostics = diagnosticContext();
+  #pulledFrames = 0;
+  #pulledSummaries = 0;
+  #diagnosticClosed = false;
   #chars = 0;
+
+  #recordDelivery(reason: string): void {
+    if (this.#diagnosticClosed) return;
+    this.#diagnosticClosed = true;
+    withDiagnosticContext(this.#diagnostics, () => emitDiagnosticEvent("chatgpt_tela_work", "public_progress_stream_closed", {
+      reason_class: reason, summary_count: this.#summaries.length, progress_characters: this.#chars,
+      pulled_frame_count: this.#pulledFrames, pulled_summary_count: this.#pulledSummaries,
+      queued_frame_count: this.#frames.length, producer_ended: this.#ended,
+    }));
+  }
   #sequence = 0;
   #started = false;
   #ended = false;
@@ -46,7 +60,14 @@ export class NativeProgressStream {
 
   progress = (summary: string): boolean => {
     if (this.#ended || this.signal.signal.aborted || !summary.trim() || summary.length > 16384
-      || this.#chars + summary.length > 65536) return false;
+      || this.#chars + summary.length > 65536) {
+      emitDiagnosticEvent("chatgpt_tela_work", "public_progress_sse_rejected", {
+        reason_class: this.#ended ? "producer_ended" : this.signal.signal.aborted ? "consumer_aborted"
+          : !summary.trim() ? "empty" : summary.length > 16384 ? "summary_budget" : "stream_budget",
+        progress_characters: summary.length, accepted_characters: this.#chars,
+      });
+      return false;
+    }
     this.#chars += summary.length;
     if (!this.#started) {
       this.#started = true;
@@ -79,6 +100,10 @@ export class NativeProgressStream {
     const plan = nativeResponsesSsePlan(outcome, encoded, { sequenceStart: this.#sequence, includeCreated: false });
     plan.frames.forEach((text, index) => this.#frames.push({ text,
       ...(index === plan.commitAfterFrame ? { commit: () => gateway.commit(outcome) } : {}) }));
+    emitDiagnosticEvent("chatgpt_tela_work", "public_progress_producer_ended", {
+      summary_count: this.#summaries.length, progress_characters: this.#chars,
+      queued_frame_count: this.#frames.length,
+    });
     this.#ended = true;
     this.#wake?.();
   }
@@ -137,6 +162,8 @@ export class NativeProgressStream {
         const frame = this.#frames.shift();
         if (frame) {
           controller.enqueue(encoder.encode(frame.text));
+          this.#pulledFrames++;
+          if (frame.progress) this.#pulledSummaries++;
           if (frame.progress) withDiagnosticContext(frame.progress.context, () =>
             emitDiagnosticEvent("chatgpt_tela_work", "public_progress_sse_pulled", {
               summary_index: frame.progress!.index, progress_characters: frame.progress!.characters,
@@ -144,9 +171,12 @@ export class NativeProgressStream {
             }));
           frame.commit?.();
         }
-        if (this.#ended && !this.#frames.length) controller.close();
+        if (this.#ended && !this.#frames.length) {
+          this.#recordDelivery("drained");
+          controller.close();
+        }
       },
-      cancel: () => { this.signal.abort(); this.#frames.length = 0; this.#wake?.(); },
+      cancel: () => { this.#recordDelivery("consumer_cancelled"); this.signal.abort(); this.#frames.length = 0; this.#wake?.(); },
     }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
   }
 }

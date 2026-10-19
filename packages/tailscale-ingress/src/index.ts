@@ -1,3 +1,4 @@
+export { diagnosePublicIngress } from "./public-ingress-diagnostics";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
