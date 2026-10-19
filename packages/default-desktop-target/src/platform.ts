@@ -27,7 +27,7 @@ export interface DefaultDesktopCommandRunner {
 
 /** Content-free, platform-neutral classification of a normal Desktop quit refusal. */
 export class DesktopNormalQuitError extends Error {
-  constructor(readonly reasonClass: "unsupported" | "identity_changed" | "request_failed" | "request_rejected") {
+  constructor(readonly reasonClass: "unsupported" | "identity_changed" | "request_failed" | "request_rejected" | "exit_timeout") {
     super(`ChatGPT normal quit ${reasonClass.replaceAll("_", " ")}; existing app preserved`);
     this.name = "DesktopNormalQuitError";
   }

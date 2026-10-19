@@ -6,10 +6,12 @@ import {
 } from "@chatgpt-tela/setup";
 import {
   defaultDesktopProcessIds,
+  DesktopNormalQuitError,
   requestDefaultDesktopNormalQuit,
   resolveDefaultDesktopInstallation,
   type DefaultDesktopInstallation,
 } from "@chatgpt-tela/default-desktop-target";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 
 export interface CodexNativeTarget {
   readonly slot: number;
@@ -157,13 +159,18 @@ export class DefaultDesktopNativeTargetAdapter implements CodexNativeTargetAdapt
     if (before.state === "available") return before;
     if (!before.desktopProcessId) throw new Error("default Desktop process identity is unavailable for normal quit");
     await this.#normalQuit(this.#installation(), before.desktopProcessId);
+    emitDiagnosticEvent("chatgpt_tela_codex", "desktop_quit_requested", { slot: 1, phase: "normal_quit", accepted: true });
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
       const current = await this.session(targetId);
-      if (current.state === "available") return current;
+      if (current.state === "available") {
+        emitDiagnosticEvent("chatgpt_tela_codex", "desktop_quit_observed", { slot: 1, phase: "closed", exit_observed: true });
+        return current;
+      }
       await new Promise(resolvePromise => setTimeout(resolvePromise, 100));
     }
-    throw new Error("official ChatGPT Desktop did not exit after normal quit request");
+    emitDiagnosticEvent("chatgpt_tela_codex", "desktop_quit_observed", { slot: 1, phase: "exit_pending", accepted: true, exit_observed: false, reason_class: "exit_timeout" });
+    throw new DesktopNormalQuitError("exit_timeout");
   }
 
   profileRuntimeEnvironment(target: CodexNativeTarget): Readonly<Record<string, string>> {

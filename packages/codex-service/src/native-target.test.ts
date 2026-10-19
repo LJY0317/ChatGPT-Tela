@@ -197,3 +197,21 @@ test("provider failure and later removal preserve the same default owner and exa
   expect(quitCalls).toEqual([["local.plura-desktop.profile2", 4321], 111]);
   expect((await new CompositeNativeTargetAdapter({ defaultDesktop: primary }).resolve(1)).session.state).toBe("available");
 });
+
+test("normal quit diagnostics distinguish request acceptance from observed exit without app identity", async () => {
+  const {mkdtempSync,readFileSync,rmSync}=await import('node:fs');
+  const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+  const root=mkdtempSync(join(tmpdir(),'tela-quit-diagnostics-')),file=join(root,'events.jsonl');
+  const prior=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;let pid:number|undefined=7654;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+  const adapter=new DefaultDesktopNativeTargetAdapter({installation:{platform:'darwin',
+    chatGptExecutable:'/private-fixture/chat',codexExecutable:'/private-fixture/codex',codexHome:'/private-fixture/home',userDataDir:'/private-fixture/data',normalQuitSupported:true},
+    processIds:async()=>pid?[pid]:[],normalQuit:async()=>{pid=undefined;}});
+  try{
+    await adapter.quit('default',undefined,7654);
+    const text=readFileSync(file,'utf8'),rows=text.trim().split('\n').map(l=>JSON.parse(l));
+    expect(rows.find(r=>r.stage==='desktop_quit_requested')).toMatchObject({accepted:true});
+    expect(rows.find(r=>r.stage==='desktop_quit_observed')).toMatchObject({exit_observed:true,phase:'closed'});
+    expect(text).not.toContain('7654');expect(text).not.toContain('private-fixture');
+  }finally{if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;rmSync(root,{recursive:true,force:true});}
+});

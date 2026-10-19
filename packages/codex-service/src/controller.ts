@@ -330,6 +330,7 @@ export async function startCodexService(input: {
   };
 
   const interruptNativeTurns = async (slot: number, session: CodexNativeTargetSession): Promise<void> => {
+    emitDiagnosticEvent("chatgpt_tela_codex", "profile_native_work_settlement", { slot, endpoint_available: !!session.endpoint });
     if (!session.endpoint) return;
     const count = await interruptLoadedAppServerTurns(session.endpoint, {
       ...(input.signal ? { signal: input.signal } : {}),
@@ -509,6 +510,9 @@ export async function startCodexService(input: {
       if (session.state === "restart-required"
         || (session.state === "ready" && session.responsesRouteFingerprint === undefined)) {
         progress("closing");
+        emitDiagnosticEvent("chatgpt_tela_codex", "profile_reopen_quit_started", { slot,
+          endpoint_available: !!session.endpoint, pid_bound: options?.expectedDesktopProcessId !== undefined,
+          native_work_settlement_requested: options?.expectedDesktopProcessId === undefined });
         if (options?.expectedDesktopProcessId === undefined) await interruptNativeTurns(slot, session);
         session = await targets.quit(target.id, input.signal, options?.expectedDesktopProcessId);
       }
