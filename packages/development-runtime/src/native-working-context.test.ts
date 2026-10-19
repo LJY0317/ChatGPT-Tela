@@ -10,7 +10,7 @@ import { NativeToolInventory, defineNativeTurnAuthority } from "@chatgpt-tela/co
 import { FileContextCheckpointCache } from "./context-cache";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 import { createNativeRequestDevelopmentWebTurnPlanner, projectNativeRequestContext } from "./native-request-planner";
-import { withExactCurrentInstructions } from "./native-working-context";
+import { nativeWorkingPhysicalContext, withExactCurrentInstructions } from "./native-working-context";
 
 test("checkpoint projection injects each exact current instruction revision only once", () => {
   const projection = projectNativeRequestContext("task", {
@@ -44,6 +44,15 @@ test("checkpoint projection injects each exact current instruction revision only
     content: "Current priority, retained without rewriting" });
   expect(restored.transferTokens).toBe(physical.transferTokens + Math.ceil(Buffer.byteLength(projection.revisions[0]!.content) / 4));
   expect(withExactCurrentInstructions(restored, projection)).toBe(restored);
+  // Native compaction uses a full working bundle, unlike ordinary checkpoint-delta transport.
+  const working = nativeWorkingPhysicalContext(projection, {
+    checkpoint: { id: "verified", revisionId: projection.revisions[2]!.revision.id,
+      estimatedTokens: 10 }, content: "Previous work was completed",
+  } as any);
+  expect(working.segments.filter(segment => segment.type === "revision"
+    && segment.revisionId === later.revision.id)).toHaveLength(1);
+  expect(withExactCurrentInstructions(working, projection)).toBe(working);
+
 
   const conflicting = { ...physical, segments: [physical.segments[0]!,
     { ...physical.segments[1]!, content: "Altered developer authority" }, physical.segments[2]!] };
@@ -71,17 +80,17 @@ import { createNativeLocalCompactionRouter } from "./native-local-compaction";
 
 const model = chatGptWebModelId(chatGptWebFamilyKey("Working Set Fixture"));
 const root = () => mkdtempSync(join(tmpdir(), "tela-rolling-context-"));
-function registered(turnId: string) {
+function registered(turnId: string, threadId = "task") {
   const claim = {
-    threadId: "task", turnId, requestKind: "turn" as const, toolObservations: [],
+    threadId: threadId, turnId, requestKind: "turn" as const, toolObservations: [],
   };
   const authority = defineNativeTurnAuthority({
-    threadId: "task", turnId, cwd: "/fixture", workspaceRoots: ["/fixture"],
+    threadId: threadId, turnId, cwd: "/fixture", workspaceRoots: ["/fixture"],
     sandbox: { kind: "read-only" as const, network: "restricted" as const },
   });
   return new ActiveTurnRegistry().register({ claim, authority,
-    tools: NativeToolInventory.fromObservations("task", turnId, []),
-    canonicalEvidence: { threadId: "task", turnId, cwd: "/fixture",
+    tools: NativeToolInventory.fromObservations(threadId, turnId, []),
+    canonicalEvidence: { threadId: threadId, turnId, cwd: "/fixture",
       workspaceRoots: ["/fixture"], sandbox: authority.sandbox,
       proof: "turn-context", environmentSourceTurnId: turnId },
   });
@@ -270,7 +279,7 @@ test("zero-budget optional maintenance cannot block a proven healthy retained pa
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("completed summaries reuse only under the exact account, Web family, effort and active ancestry", async () => {
+test("completed summaries reuse across model changes and exact-prefix forks, while account and edited ancestry stay isolated", async () => {
   const directory = root();
   try {
     const cache = new FileContextCheckpointCache({ directory: join(directory, "cache") });
@@ -307,6 +316,16 @@ test("completed summaries reuse only under the exact account, Web family, effort
     expect(same.physicalContext.segments.at(-1)?.content).toBe("A changed current request");
     same.settle?.({ status: "failed" });
     expect(calls).toBe(1);
+    const fork = await createNativeRequestDevelopmentWebTurnPlanner({
+      ...options, checkpointPreparationPolicy: noSpending,
+    })(registered("edited-current", "child-task"), {
+      model, reasoning: { effort: "high" },
+      input: [...source.slice(0, 2), { role: "user", content: "Edited followup in child" }],
+    });
+    expect(fork.physicalContext.mode).toBe("checkpoint-delta");
+    expect(fork.physicalContext.segments.at(-1)?.content).toBe("Edited followup in child");
+    fork.settle?.({ status: "failed" });
+    expect(calls).toBe(1);
     for (const variant of [
       { account: "account-b", webModel: model, effort: "high" },
       { account: "account-a", webModel: chatGptWebModelId(chatGptWebFamilyKey("Another Family")), effort: "high" },
@@ -316,9 +335,16 @@ test("completed summaries reuse only under the exact account, Web family, effort
         ...options, checkpointPreparationPolicy: noSpending,
         visiblePrefix: { ...options.visiblePrefix, accountNamespace: variant.account },
       });
-      await expect(isolated(registered(`isolated-${variant.account}-${variant.effort}`), {
+      const pending = isolated(registered(`isolated-${variant.account}-${variant.effort}`), {
         model: variant.webModel, reasoning: { effort: variant.effort }, input: source,
-      })).rejects.toMatchObject({ budgetReason: "model_calls" });
+      });
+      if (variant.account !== "account-a") {
+        await expect(pending).rejects.toMatchObject({ budgetReason: "model_calls" });
+      } else {
+        const reused = await pending;
+        expect(reused.physicalContext.mode).toBe("checkpoint-delta");
+        reused.settle?.({ status: "failed" });
+      }
       expect(calls).toBe(1);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }

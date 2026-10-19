@@ -33,6 +33,9 @@ export interface PublishedNativeWorkingCheckpoint {
   readonly stageKey: string;
   readonly content: string;
   readonly estimatedTokens: number;
+  /** Exact immutable prefix identity, independent of task execution and Web model. */
+  readonly prefixDigest?: string;
+  readonly reuseScopeFingerprint?: string;
 }
 /**
  * Strict durable execution ledger, account scoped, under the caller's single-writer ownership.
@@ -55,7 +58,7 @@ export interface NativeVisiblePrefixStageJournal {
    * it never proves remote cancellation or authorizes replay of this turn. */
   settleClosed?(input: NativeVisiblePrefixStageIdentity & { readonly claimId: string; readonly ownerFingerprint: string }): Promise<void>;
   /** Optional on older test journals. Publication requires the completed stage and matching summary. */
-  publishedCheckpoints?(scopeFingerprint: string): Promise<readonly PublishedNativeWorkingCheckpoint[]>;
+  publishedCheckpoints?(scopeFingerprint: string, reuseScopeFingerprint?: string): Promise<readonly PublishedNativeWorkingCheckpoint[]>;
   publishCheckpoint?(input: PublishedNativeWorkingCheckpoint): Promise<void>;
 }
 export class NativePrefixCheckpointInterrupted extends NativeHistoryBootstrapRequired {

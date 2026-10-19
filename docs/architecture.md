@@ -1817,3 +1817,12 @@ Missing ownership, unsupported media, uncertain stages or insufficient budget re
 checkpoint/handoff; none permits truncation, automatic budget expansion or replay. Browser results
 are persisted through the shared callback before surface release. Cross-layer diagnostics follow
 the same boundaries without granting authority.
+
+### Web model discovery versus admission
+
+The last verified, account-bound display catalog survives transient Web preparation failure
+and account-window management. These operations revoke admission, not model discoverability.
+Changing the saved account binding makes the persisted projection ineligible; a proven missing
+model invalidates it. Every Web request still requires fresh account/connector admission.
+The Desktop owns its model-list cache. Engine refresh and socket delivery are not UI rendering
+proof, and cold discovery after an empty initial list has no verified live-invalidation contract.

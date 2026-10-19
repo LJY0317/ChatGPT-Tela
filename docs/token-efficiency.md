@@ -53,9 +53,14 @@ soft target. Diagnose upstream authority duplication separately.
 
 ## Cold imports and forks
 
-A fork is a new Native task identity and can inherit a large unmaintained history. Do not
-assume another task's account/model/source-bound checkpoint belongs to the fork. A large
-cold import is different from failed maintenance of a previously managed Web working set.
+A fork or edited continuation has independent execution and physical Web ownership. Completed
+plaintext working summaries can be reused across tasks or Web model changes only when the
+account, summary policy and complete ordered source prefix match exactly. A change inside
+that prefix invalidates reuse; changed current suffixes remain independent. Durable prefix
+digests are published with the existing completed checkpoint, without another model call.
+Legacy publications gain this proof only after exact same-task ancestor validation. Media
+prefixes are not shared across tasks. A large unmaintained cold import remains different
+from failed maintenance of a previously managed Web working set.
 
 If the complete cold source cannot fit one summary input, preserve it and return the
 explicit checkpoint/handoff recovery. Do not launch repeated fragment/merge requests,
@@ -67,8 +72,9 @@ switching back to Web; the preventive working-set policy does not retroactively 
 
 One account-scoped stage journal owns summary submissions and completed receipts.
 Caches are disposable derived data. Preserve compatible published checkpoints across
-cache loss; never clear uncertain claims to allow another send. Exact account, task,
-model/effort, policy, source and active ancestry determine reuse. Current turn identity
+cache loss; never clear uncertain claims to allow another send. Exact account,
+policy, source and active ancestry determine derived-summary reuse. Model/effort and task
+identity still bind physical Web sessions, execution claims and uncertain operations. Current turn identity
 owns execution; derived historical prose cannot grant tool or approval authority.
 
 Persist each validated bounded summary before releasing its isolated browser surface.

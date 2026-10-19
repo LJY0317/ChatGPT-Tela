@@ -383,6 +383,8 @@ test("running Native profile opens one account browser, blocks Web submissions, 
     expect(f.accountBrowserReveals).toBe(2);
     expect(f.runtime.webState).toBe("preparing");
     expect(f.runtime.accountManagementActive).toBe(true);
+    expect((await f.catalog()).models.map((row: { slug: string }) => row.slug))
+      .toEqual(["native-fixture", model]);
     expect((await f.post(model)).status).toBe(400);
     expect((await f.post("native-fixture")).status).toBe(200);
     await expect(f.runtime.reconnectWeb()).rejects.toThrow("Close the account browser");
@@ -700,6 +702,24 @@ test("warm discovery appears in initial catalog but grants no Web execution auth
     f.gate.resolve(); await f.runtime.waitForWeb();
     expect(f.runtime.webState).toBe("ready");
     expect((await (await f.post(model)).text())).toContain("mock Web reply");
+  } finally { await f.cleanup(); }
+});
+
+
+test("account-bound discovery survives failed preparation while Web execution stays unavailable", async () => {
+  const f = await fixture({ warmDisplay: true, fail: "discovery" });
+  try {
+    await f.runtime.waitForWeb();
+    expect(f.runtime.webState).toBe("failed");
+    expect(f.runtime.webModelIds).toEqual([]);
+    expect((await f.catalog()).models.map((row: { slug: string }) => row.slug))
+      .toEqual(["native-fixture", model]);
+    expect((await f.post(model)).status).toBe(400);
+    expect(f.webGenerations).toBe(0);
+    await f.runtime.invalidateWebAccount();
+    expect((await f.catalog()).models.map((row: { slug: string }) => row.slug))
+      .toEqual(["native-fixture", model]);
+    expect((await f.post(model)).status).toBe(400);
   } finally { await f.cleanup(); }
 });
 

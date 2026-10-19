@@ -448,7 +448,8 @@ export async function startNativeFirstProductProfileRuntime(
           duration_ms: Math.max(0, Math.round(performance.now() - startedAt)),
         });
         admitted = [];
-        displayed = [];
+        // A failed admission revokes execution, not account-bound display metadata.
+        // Desktop caches model/list independently of this Web lifecycle.
         await router.refreshWebModelFamilies();
         if (!isClosed()) setState(!signal.aborted && failure?.reasonClass === "login_required" ? "login-required" : "failed");
         // Includes late browser creation after cancellation; never leaves an orphan or admits it.
@@ -576,8 +577,7 @@ export async function startNativeFirstProductProfileRuntime(
             ...(fallbackOwner ? { fallback: fallbackOwner } : {}) };
           // These models cannot be used while the human may change the shared
           // persistent cookie jar. Web re-verification is mandatory on close.
-          admitted = []; displayed = [];
-          writeWebModelDisplayCache(config.browserProfile, []);
+          admitted = [];
           setState("preparing");
           suspended = true;
           await owned.reveal();
@@ -662,11 +662,10 @@ export async function startNativeFirstProductProfileRuntime(
       managedSurface?.detach();
       accountBrowserBlocked = false;
       native?.invalidateIngressMedia?.();
-      // Revoke before awaiting cleanup: old cached rows and late browser completions
-      // cannot authorize work under the next account.
+      // Revoke execution before cleanup. Display-only rows remain bound to the saved
+      // account; they are neither admission nor current-turn authority. A new account
+      // binding makes the persisted projection ineligible at the next startup.
       admitted = [];
-      displayed = [];
-      writeWebModelDisplayCache(config.browserProfile, []);
       controller?.abort(reason);
       turns.cancelAll(reason);
       setState("failed");

@@ -172,6 +172,12 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
               logical_estimate: tokens, revision_count: projection.revisions.length,
               transfer_estimate: Math.max(physicalContext.transferTokens, chatGptCheckpointInputTokens(physicalContext, projection.media)),
               source_limit: chatGptWebCheckpointSourceTokenLimit(browserModel.effort), source_fits: !!bounded,
+              instruction_estimate: physicalContext.segments.filter(segment => segment.type === "revision"
+                && (segment.kind === "system" || segment.kind === "developer"))
+                .reduce((sum, segment) => sum + Math.ceil(Buffer.byteLength(segment.content, "utf8") / 4), 0),
+              checkpoint_estimate: physicalContext.segments.filter(segment => segment.type === "checkpoint")
+                .reduce((sum, segment) => sum + Math.ceil(Buffer.byteLength(segment.content, "utf8") / 4), 0),
+              segment_count: physicalContext.segments.length,
               working_checkpoint_reused: maintained.reused,
               working_checkpoint_advanced: maintained.produced,
             });

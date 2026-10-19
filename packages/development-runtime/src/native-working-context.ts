@@ -12,7 +12,7 @@ import type {
 } from "./native-request-planner";
 import {
   produceNativePrefixCheckpoint, type NativeRequestPrefixSnapshot,
-  type NativeVisiblePrefixStageJournal,
+  type NativeVisiblePrefixStageJournal, type PublishedNativeWorkingCheckpoint,
 } from "./native-visible-prefix-checkpoint";
 import type { WebWorkingContextPolicy } from "./web-working-context-policy";
 
@@ -57,7 +57,7 @@ export function exactCurrentInstructions(projection: NativeRequestContextProject
 
 export function withExactCurrentInstructions(context: WebPhysicalContext,
   projection: NativeRequestContextProjection): WebPhysicalContext {
-  if (context.mode !== "checkpoint-delta") return context;
+  if (context.mode !== "checkpoint-delta" && context.mode !== "full") return context;
   // A checkpoint may precede a later system/developer revision. The physical
   // suffix already includes that *same* exact revision, so injecting it again
   // duplicates authority and pays for the same instruction twice. Do not
@@ -94,14 +94,13 @@ export function nativeWorkingPhysicalContext(projection: NativeRequestContextPro
   if (selected && index < 0) throw Error("Web checkpoint is not on the current Native branch");
   const suffix = projection.revisions.slice(index + 1);
   const segments: WebPhysicalContext["segments"] = Object.freeze([
-    ...(selected ? exactCurrentInstructions(projection) : []),
     ...(selected ? [{ type: "checkpoint" as const, checkpointId: selected.checkpoint.id,
       sourceRevisionId: selected.checkpoint.revisionId, content: selected.content }] : []),
     ...suffix.map(item => Object.freeze({ type: "revision" as const,
       revisionId: item.revision.id, kind: item.revision.kind, content: item.content })),
   ]);
   const transferTokens = segments.reduce((sum, item) => sum + tokens(item.content), 0);
-  return Object.freeze({
+  const context: WebPhysicalContext = Object.freeze({
     // A summarizer requires a complete source *working bundle* in one operation.
     // Its embedded checkpoint is explicitly lossy; this is not whole-archive coverage.
     mode: "full",
@@ -109,6 +108,7 @@ export function nativeWorkingPhysicalContext(projection: NativeRequestContextPro
     logicalTokens: projection.revisions.reduce((sum, item) => sum + item.revision.estimatedTokens, 0),
     transferTokens, segments,
   });
+  return selected ? withExactCurrentInstructions(context, projection) : context;
 }
 
 export interface WorkingCheckpointSources {
@@ -148,15 +148,36 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
   const scope = input.visiblePrefix && input.browserModel
     ? nativeWorkingCheckpointScope(input.visiblePrefix.accountNamespace, projection.nativeTaskId, input.browserModel)
     : undefined;
+  const reuseScope = input.visiblePrefix
+    ? sha(JSON.stringify(["native-working-prefix-v1", input.visiblePrefix.accountNamespace, chatGptCheckpointPolicyFingerprint()]))
+    : undefined;
+  // The digest proves the whole ordered prefix, including instructions. It grants no
+  // turn, tool, physical-page or pending-operation ownership to another branch.
+  const prefixDigests = new Map<string, number>();
+  let prefixDigest = sha("native-working-prefix-v1");
+  for (const [index, item] of projection.revisions.entries()) {
+    prefixDigest = sha(JSON.stringify([prefixDigest, item.revision.kind, item.content]));
+    if (index <= anchorIndex) prefixDigests.set(prefixDigest, index);
+  }
   const candidates: CachedContextCheckpoint[] = [];
+  const legacyPublications = new Map<string, PublishedNativeWorkingCheckpoint>();
   if (input.cache) {
     try { candidates.push(...await input.cache.list(projection.nativeTaskId)); }
     catch { /* Derived cache loss is not authority loss. */ }
   }
   if (scope && input.visiblePrefix?.journal.publishedCheckpoints) {
-    for (const item of await input.visiblePrefix.journal.publishedCheckpoints(scope)) {
+    for (const item of await input.visiblePrefix.journal.publishedCheckpoints(scope, reuseScope)) {
+      let revisionId = item.revisionId;
+      if (item.scopeFingerprint !== scope) {
+        const index = item.reuseScopeFingerprint === reuseScope && item.prefixDigest
+          ? prefixDigests.get(item.prefixDigest) : undefined;
+        if (index === undefined || projection.media.some(media =>
+          projection.revisions.slice(0, index + 1).some(revision => revision.revision.id === media.revisionId))) continue;
+        revisionId = projection.revisions[index]!.revision.id;
+      }
+      if (!item.prefixDigest && item.scopeFingerprint === scope) legacyPublications.set(revisionId, item);
       candidates.push(derivedContextCheckpoint({
-        revisionId: item.revisionId, content: item.content, estimatedTokens: item.estimatedTokens,
+        revisionId, content: item.content, estimatedTokens: item.estimatedTokens,
         scopeFingerprint: scope,
       }));
     }
@@ -174,6 +195,26 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     if (plan.status !== "ready" || plan.mode !== "checkpoint-delta") continue;
     selected = candidate; selectedIndex = index;
   }
+  const legacy = selected ? legacyPublications.get(selected.checkpoint.revisionId) : undefined;
+  if (legacy && reuseScope && input.visiblePrefix?.journal.publishCheckpoint) {
+    // An exact same-task canonical ancestor supplies the missing portable prefix
+    // proof for older publications; the completed model stage is not executed again.
+    try {
+      await input.visiblePrefix.journal.publishCheckpoint({ ...legacy,
+        prefixDigest: [...prefixDigests].find(([, index]) => index === selectedIndex)![0],
+        reuseScopeFingerprint: reuseScope,
+      });
+    } catch {
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_working_prefix_publication_failed", {
+        checkpoint_reused: true,
+      });
+    }
+  }
+  emitDiagnosticEvent("chatgpt_tela_codex", "native_working_checkpoint_selected", {
+    candidate_count: candidates.length, source_revision_count: projection.revisions.length,
+    covered_revision_count: selectedIndex + 1, checkpoint_reused: selected !== undefined,
+    summary_estimate: selected?.checkpoint.estimatedTokens ?? 0,
+  });
   const pendingSuffixTokens = projection.revisions.slice(selectedIndex + 1)
     .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
   const sealedTokens = anchorIndex < 0 ? 0 : projection.revisions.slice(selectedIndex + 1, anchorIndex + 1)
@@ -181,7 +222,9 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
   const activeTokens = projection.revisions.slice(anchorIndex + 1)
     .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
   const summaryTokens = selected?.checkpoint.estimatedTokens ?? 0;
+  const suffixIds = new Set(projection.revisions.slice(selectedIndex + 1).map(item => item.revision.id));
   const currentInstructionsTokens = exactCurrentInstructions(projection)
+    .filter(item => item.type === "revision" && !suffixIds.has(item.revisionId))
     .reduce((sum, item) => sum + tokens(item.content), 0);
   const prospectiveSeed = summaryTokens + pendingSuffixTokens + (selected ? currentInstructionsTokens : 0);
   const shouldAdvance = anchorIndex >= 0 && (
@@ -247,6 +290,8 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
   const parsed = JSON.parse(content) as Record<string, unknown>;
   const published = {
     scopeFingerprint: scope!, revisionId: anchor!.revision.id,
+    prefixDigest: [...prefixDigests].find(([, index]) => index === anchorIndex)![0],
+    reuseScopeFingerprint: reuseScope!,
     sourceRootDigest: source.digest, stageKey: parsed.completedStageKey as string,
     content, estimatedTokens: tokens(content),
   };

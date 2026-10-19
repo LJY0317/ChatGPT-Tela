@@ -34,7 +34,10 @@ interface PublishedEntry extends PublishedNativeWorkingCheckpoint {
 interface State { version: 1; entries: Entry[]; checkpoints?: PublishedEntry[] }
 function sha(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 function validPublished(input: PublishedNativeWorkingCheckpoint): boolean {
-  return /^[a-f0-9]{64}$/.test(input.scopeFingerprint)
+  return ((input.prefixDigest === undefined && input.reuseScopeFingerprint === undefined)
+      || (typeof input.prefixDigest === "string" && /^[a-f0-9]{64}$/.test(input.prefixDigest)
+        && typeof input.reuseScopeFingerprint === "string" && /^[a-f0-9]{64}$/.test(input.reuseScopeFingerprint)))
+    && /^[a-f0-9]{64}$/.test(input.scopeFingerprint)
     && /^native_[a-zA-Z0-9_-]{20}$/.test(input.revisionId)
     && /^[a-f0-9]{64}$/.test(input.sourceRootDigest)
     && /^native-visible-stage-v2-[a-f0-9]{64}$/.test(input.stageKey)
@@ -218,12 +221,15 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
   }
   /** Source-bound, durable rolling pointers, published only after a matching model stage completed.
    * These are derived summary data, not execution claims. Old v1 journals remain readable. */
-  async publishedCheckpoints(scopeFingerprint: string): Promise<readonly PublishedNativeWorkingCheckpoint[]> {
+  async publishedCheckpoints(scopeFingerprint: string, reuseScopeFingerprint?: string): Promise<readonly PublishedNativeWorkingCheckpoint[]> {
     if (!/^[a-f0-9]{64}$/.test(scopeFingerprint)) throw Error("Invalid Web checkpoint scope");
+    if (reuseScopeFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(reuseScopeFingerprint)) throw Error("Invalid Web prefix reuse scope");
     return this.#transaction(async state => Object.freeze((state.checkpoints ?? [])
-      .filter(item => item.scopeFingerprint === scopeFingerprint)
-      .map(({ scopeFingerprint, revisionId, sourceRootDigest, stageKey, content, estimatedTokens }) =>
-        Object.freeze({ scopeFingerprint, revisionId, sourceRootDigest, stageKey, content, estimatedTokens }))));
+      .filter(item => item.scopeFingerprint === scopeFingerprint
+        || (reuseScopeFingerprint !== undefined && item.reuseScopeFingerprint === reuseScopeFingerprint))
+      .map(({ scopeFingerprint, revisionId, sourceRootDigest, stageKey, content, estimatedTokens, prefixDigest, reuseScopeFingerprint }) =>
+        Object.freeze({ scopeFingerprint, revisionId, sourceRootDigest, stageKey, content, estimatedTokens,
+          ...(prefixDigest ? { prefixDigest, reuseScopeFingerprint } : {}) }))));
   }
   async publishCheckpoint(input: PublishedNativeWorkingCheckpoint): Promise<void> {
     if (!validPublished(input)) throw Error("Invalid Web checkpoint publication");
