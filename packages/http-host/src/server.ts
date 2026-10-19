@@ -123,8 +123,8 @@ export async function startWebHttpServer(input: {
       outgoing.once("close", () => resolve(outgoing.writableFinished));
     });
     const origin = diagnosticContext();
-    let writeCount = 0, writeBytes = 0, lastWriteAt = 0;
-    const transportEvidence = () => ({ socket_write_count: writeCount, socket_write_bytes: writeBytes,
+    let writeCount = 0, writeBytes = 0, lastWriteAt = 0, requestBytes = 0, responseReadyMs = -1;
+    const transportEvidence = () => ({ request_bytes: requestBytes, response_ready_ms: responseReadyMs, socket_write_count: writeCount, socket_write_bytes: writeBytes,
       last_socket_write_at_ms: lastWriteAt, last_socket_write_age_ms: lastWriteAt ? Math.max(0, Date.now() - lastWriteAt) : -1,
       delivery: "socket_write_only" });
     const written = (bytes: number) => { writeCount++; writeBytes += bytes; lastWriteAt = Date.now(); };
@@ -190,7 +190,10 @@ export async function startWebHttpServer(input: {
       }
 
       const requestBodyInit = body ? Uint8Array.from(body).buffer : undefined;
-      emitDiagnosticEvent("chatgpt_tela_http", "http_request_received", { request_bytes: body?.byteLength ?? 0 });
+      requestBytes = body?.byteLength ?? 0;
+      // Empty GET/status/catalog requests need no separate body-received record.
+      // Preserve the upload boundary for requests that actually carry a body.
+      if (requestBytes > 0) emitDiagnosticEvent("chatgpt_tela_http", "http_request_received", { request_bytes: requestBytes });
       const request = new Request(localRequestUrl(incoming, input.hostname, boundPort), {
         method: incoming.method ?? "GET",
         headers: requestHeaders(incoming.headers),
@@ -198,7 +201,12 @@ export async function startWebHttpServer(input: {
         ...(requestBodyInit ? { body: requestBodyInit } : {}),
       });
       const response = await input.fetch(request, { responseFinished });
-      emitDiagnosticEvent("chatgpt_tela_http", response.status >= 400 ? "http_response_error" : "http_response_ready", { status: response.status, duration_ms: diagnosticDurationMs(startedAt) });
+      responseReadyMs = diagnosticDurationMs(startedAt);
+      // Final receipt includes readiness duration for ordinary successful replies.
+      // Streaming keeps the early-ready boundary; failures are always recorded.
+      if (response.status >= 400 || response.headers.get("content-type")?.includes("text/event-stream")) {
+        emitDiagnosticEvent("chatgpt_tela_http", response.status >= 400 ? "http_response_error" : "http_response_ready", { status: response.status, duration_ms: responseReadyMs });
+      }
       await writeResponse(response, outgoing, controller.signal, written);
     } catch (error) {
       emitDiagnosticEvent("chatgpt_tela_http", "http_request_failed", { duration_ms: diagnosticDurationMs(startedAt), network_kind: classifyNetworkFailure(error), abort_observed: controller.signal.aborted, ...transportEvidence() });

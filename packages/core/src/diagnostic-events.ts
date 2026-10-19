@@ -10,13 +10,13 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { diagnosticContext, DIAGNOSTIC_INSTANCE } from "./diagnostic-context";
-import { structuralDiagnosticEvent, writeDiagnosticIncident, type StructuralDiagnosticEvent } from "./diagnostic-store";
+import { structuralDiagnosticEvent, writeDiagnosticIncident, diagnosticFailureIncidentRef, DIAGNOSTIC_LIMITS, type StructuralDiagnosticEvent } from "./diagnostic-store";
 
 export type DiagnosticScalar = string | number | boolean;
 
 const SAFE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const FORBIDDEN_FIELD = /(prompt|path|url|uri|token|secret|email|content|command|output|argument|authorization|cookie|session|turn_capability|workspace_id|account_id|user_id)/i;
-const DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MAX_FILE_BYTES = DIAGNOSTIC_LIMITS.logFileBytes;
 let emittedSinceRotationCheck = 0;
 const recent: StructuralDiagnosticEvent[] = [];
 const observers = new Set<(event: StructuralDiagnosticEvent) => void>();
@@ -26,16 +26,17 @@ export function observeDiagnosticEvents(observer: (event: StructuralDiagnosticEv
   observers.add(observer);
   return () => { observers.delete(observer); };
 }
-const pendingIncidents = new Map<string, { stage: string; observedAt: string; timeline: StructuralDiagnosticEvent[]; occurrences: number }>();
+const pendingIncidents = new Map<string, { root: string; stage: string; observedAt: string; firstObservedAt: string; timeline: StructuralDiagnosticEvent[]; occurrences: number; failure: StructuralDiagnosticEvent }>();
 function scheduleIncident(root: string, event: StructuralDiagnosticEvent) {
-  const previous = pendingIncidents.get(root);
-  if (previous) { previous.stage = event.stage; previous.observedAt = event.ts; previous.timeline = recent.slice(-64); previous.occurrences++; return; }
-  if (pendingIncidents.size >= 8) return;
-  pendingIncidents.set(root, { stage: event.stage, observedAt: event.ts, timeline: recent.slice(-64), occurrences: 1 });
-  // One deferred flush per failure burst; no timer, idle wakeups or file scan on success.
+  const key = `${root}\n${diagnosticFailureIncidentRef(event)}`;
+  const previous = pendingIncidents.get(key);
+  if (previous) { previous.observedAt = event.ts; previous.timeline = recent.slice(-64); previous.occurrences++; return; }
+  if (pendingIncidents.size >= 32) return;
+  pendingIncidents.set(key, { root, stage: event.stage, observedAt: event.ts, firstObservedAt: event.ts, timeline: recent.slice(-64), occurrences: 1, failure: event });
+  // One deferred write for matching failures in a burst. Other failure kinds remain separate.
   setImmediate(() => {
-    const incident = pendingIncidents.get(root); pendingIncidents.delete(root);
-    if (incident) try { writeDiagnosticIncident(root, incident); } catch { /* Best effort. */ }
+    const incident = pendingIncidents.get(key); pendingIncidents.delete(key);
+    if (incident) try { const { root: target, ...record } = incident; writeDiagnosticIncident(target, record); } catch { /* Best effort. */ }
   });
 }
 
@@ -144,10 +145,18 @@ function appendConfiguredDiagnosticFile(line: string): void {
         const stat = lstatSync(path);
         if (!stat.isFile() || stat.isSymbolicLink()) return;
         if (stat.size > diagnosticMaxFileBytes()) {
-          const previous = `${path}.1`;
-          rmSync(previous, { force: true });
-          renameSync(path, previous);
-          try { chmodSync(previous, 0o600); } catch { /* Windows ACLs own permissions there. */ }
+          // Rotate a fixed chain, newest first on read, with no background housekeeping.
+          rmSync(`${path}.${DIAGNOSTIC_LIMITS.logFiles - 1}`, { force: true });
+          for (let index = DIAGNOSTIC_LIMITS.logFiles - 2; index >= 0; index--) {
+            const source = index === 0 ? path : `${path}.${index}`;
+            const destination = `${path}.${index + 1}`;
+            try {
+              const stat = lstatSync(source);
+              if (!stat.isFile() || stat.isSymbolicLink()) return;
+              renameSync(source, destination);
+              try { chmodSync(destination, 0o600); } catch { /* Windows ACLs own permissions there. */ }
+            } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+          }
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;

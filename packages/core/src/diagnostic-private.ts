@@ -16,6 +16,7 @@ export function capturePrivateDiagnosticValue(phase: "tool_request" | "tool_resu
     if (!operation) return;
     const bytes=Buffer.from(JSON.stringify({ phase, context, value:redact(value) }));
     if(bytes.length>256*1024) return;
-    writePrivateDiagnosticArtifact(root,{kind:"json",bytes,operationFingerprint:operation});
+    writePrivateDiagnosticArtifact(root,{kind:"json",bytes,operationFingerprint:operation,
+      evidenceClass: /failure|mismatch/.test(phase) ? "failure" : "trace"});
   } catch { /* Private diagnostics cannot affect primary execution. */ }
 }

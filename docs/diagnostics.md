@@ -591,10 +591,10 @@ response; `web_turn_observed` includes the matched public-progress part count. E
 These distinguish extraction misses from presentation gaps without storing prose, changing
 semantic revisions, adding observations, or logging each streamed update. They do not prove UI receipt.
 
-- Structural events rotate current plus one predecessor. Default file budget: 2 MiB.
-- An analysis reads at most 12 sources, 2 MiB per source, 4096 events per source, 128 timeline events.
-- Canonical incidents: at most 64 / 4 MiB / 30 days; individual envelope at most 128 KiB.
-- Private artifacts and metadata: at most 24 files / 64 MiB / 7 days; payload at most 8 MiB.
+- Structural events rotate current plus three predecessors. Default file budget: 4 MiB; three active service streams retain about 48 MiB in total.
+- An analysis reads at most 24 sources, 4 MiB per source, 4096 events per source, 128 timeline events.
+- Canonical incidents: at most 256 / 16 MiB / 30 days; individual envelope at most 128 KiB.
+- Private artifacts and metadata: at most 256 files / 64 MiB / 7 days; payload at most 8 MiB.
   DOM text is capped at one million characters; private JSON at 256 KiB with depth/member/string caps.
 - Failure bursts coalesce into one deferred incident flush; inventory snapshots are change-only,
   bounded to 256 scopes and expire on subsequent calls. No idle sampler, screenshot loop or cleanup timer.
@@ -1098,8 +1098,7 @@ Use `chatgpt-tela diagnostics capture --mode until-disabled` for a local diagnos
 then `chatgpt-tela diagnostics capture --minutes 0` to stop. Raw HTML, screenshots and private
 JSON remain sensitive, local-only artifacts outside source/build inputs. Never upload them,
 return them through model tools, or include them in a commit/release. Public diagnostics contain
-structural events only; private artifact references carry no bodies. Existing limits remain
-7 days, 64 MiB and 24 private files, with no background sampler.
+structural events only; private artifact references carry no bodies. Retention follows the default budget above, with no background sampler.
 
 
 ### Funnel reachability boundary
@@ -1129,7 +1128,7 @@ model calls and elapsed model time. A small retained delta is not the total cost
 that also prepares a checkpoint; none of these values are provider billing receipts.
 
 At cycle closure, a sparse structural timeline and its exact summary receipt are saved through
-the existing local incident store (64 incidents, 30 days, 4 MiB total). `diagnostics context`
+the existing bounded local incident store. `diagnostics context`
 merges these receipts with available detailed events and deduplicates them. Rotated details
 remain unknown; this bounded archive does not promise lifetime history for every conversation.
 No model input, browser prose, extra polling or remote upload is added.
@@ -1148,4 +1147,34 @@ failures receive the same preparation-stage evidence boundary. Existing explicit
 capture controls HTML/JPEG and exception details; no raw labels or exception prose enter
 structural logs. Capture stays bounded and best effort. No model request, extra UI input,
 retry, background sampler or approval policy change is introduced. Picker observations
-are emitted only when their structural shape changes. Global retention limits are unchanged.
+are emitted only when their structural shape changes. Global retention follows the budget below.
+
+### Default retention budget and aggregation
+
+The active three-service runtime has a nominal 128-MiB diagnostic budget: 48 MiB
+for rotated detail, 16 MiB for incident summaries and 64 MiB for private evidence.
+Small guides/indexes/metadata, rotation-check overshoot, historical experiments and
+additional source-run streams are outside that nominal sum. The existing explicit
+per-file environment override remains supported. This is bounded storage, not a
+guarantee that a particular number of days of detail survives a traffic burst.
+
+All four generations are discoverable by time-window analysis. Matching automatic
+failures aggregate by structural failure and scope/operation owner, recording
+occurrences, first/latest observations, an initial timeline and the latest timeline.
+Different failure categories and manual reports remain distinct. No arbitrary
+exception prose participates in grouping. Index generation and retention share one
+pass per incident write. Old incident and artifact metadata remain readable.
+
+Private browser captures and failure details group by their operation fingerprint
+and expire together, including paired metadata. High-volume tool trace JSON remains
+individually disposable and cannot enlarge a browser-evidence bundle. Byte and age
+limits are primary; 256 incident/file limits also bound directory size. Pruning is
+on write/inspection, with no idle housekeeping. Ownership rules and explicit private
+capture consent remain unchanged.
+
+Successful empty HTTP requests omit the redundant body-received record. Ordinary
+successful replies carry readiness duration in the completion record instead of a
+separate ready event; streaming and failure boundaries remain explicit. A supervisor
+records unchanged readiness once per service instance/state, and records readiness
+again after a failure or replacement. Request start/finish and disconnect/error
+evidence remain available.

@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-export const DIAGNOSTIC_LIMITS = Object.freeze({ tailBytes: 2 * 1024 * 1024, sources: 12, events: 4096, timeline: 128,
-  incidents: 64, incidentBytes: 4 * 1024 * 1024, incidentAgeMs: 30 * 86400000,
-  privateFiles: 24, privateBytes: 64 * 1024 * 1024, privateFileBytes: 8 * 1024 * 1024, privateAgeMs: 7 * 86400000 });
+export const DIAGNOSTIC_LIMITS = Object.freeze({ tailBytes: 4 * 1024 * 1024, sources: 24, events: 4096, timeline: 128,
+  logFileBytes: 4 * 1024 * 1024, logFiles: 4,
+  incidents: 256, incidentBytes: 16 * 1024 * 1024, incidentAgeMs: 30 * 86400000,
+  privateFiles: 256, privateBytes: 64 * 1024 * 1024, privateFileBytes: 8 * 1024 * 1024, privateAgeMs: 7 * 86400000 });
 export interface StructuralDiagnosticEvent { readonly ts: string; readonly event: string; readonly stage: string; readonly [key: string]: string | number | boolean; }
 const SAFE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const FORBIDDEN = /(prompt|path|url|uri|secret|email|content|command|output|argument|authorization|cookie|raw_|token|workspace_id|account_id|user_id|session_id|turn_id|thread_id)/i;
@@ -228,31 +230,37 @@ function ownedRoot(root: string) {
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; writeFileSync(marker, JSON.stringify({ owner: OWNER, schemaVersion: 1 })+"\n", { flag: "wx", mode: 0o600 }); }
   directory(join(root, "incidents")); directory(join(root, "private"));
   const guide = join(root, "START-HERE.md");
-  if (!readdirSync(root).includes("START-HERE.md")) writeFileSync(guide, "# Tela diagnostics\n\nFirst run `chatgpt-tela diagnostics list`. Canonical incidents live in incidents/; INDEX.json is a rebuildable discovery index. Use `diagnostics inspect --ref <incident>` before raw events. `diagnostics record --at <ISO-time> --symptom <kind>` captures a bounded cross-service timeline. Private HTML/screenshots require explicit `diagnostics capture --minutes 15` or `--mode until-disabled`; stop with `--minutes 0`. Private capture stays local, retains at most 7 days/64 MiB/24 files, and must never be uploaded, returned through model tools or committed. Absence of evidence is not success. No background sampler runs.\n", { flag: "wx", mode: 0o600 });
+  const guideText = `# Tela diagnostics\n\nFirst run \`chatgpt-tela diagnostics list\`. Canonical incidents live in incidents/; INDEX.json is a rebuildable discovery index. Use \`diagnostics inspect --ref <incident>\` before raw events. \`diagnostics record --at <ISO-time> --symptom <kind>\` captures a bounded cross-service timeline. Private HTML/screenshots require explicit \`diagnostics capture --minutes 15\` or \`--mode until-disabled\`; stop with \`--minutes 0\`. Private capture stays local, retains at most 7 days/64 MiB/${DIAGNOSTIC_LIMITS.privateFiles} files, and must never be uploaded, returned through model tools or committed. Absence of evidence is not success. No background sampler runs.\n`;
+  if (!readdirSync(root).includes("START-HERE.md")) writeFileSync(guide, guideText, { flag: "wx", mode: 0o600 });
 }
 function files(root: string, type: "incidents" | "private") {
   const path = join(root, type); if (!lstatSync(path).isDirectory() || lstatSync(path).isSymbolicLink()) throw new Error("unsafe diagnostics directory");
   const pattern = type === "incidents" ? INCIDENT_NAME : ARTIFACT_NAME;
-  return readdirSync(path).filter(name => pattern.test(name)).slice(0, 256).flatMap(name => {
+  return readdirSync(path).filter(name => pattern.test(name)).flatMap(name => {
     try {
       const stat = lstatSync(join(path,name)); if (!stat.isFile() || stat.isSymbolicLink()) return [];
       const proofName = type === "incidents" ? name : name.replace(/\.(?:html|jpg|json|meta\.json)$/, ".meta.json");
       const proofPath = join(path, proofName); const proofStat = lstatSync(proofPath);
       if (!proofStat.isFile() || proofStat.isSymbolicLink() || proofStat.size > (type === "incidents" ? 128*1024 : 4096)) return [];
-      if (JSON.parse(readFileSync(proofPath,"utf8")).owner !== OWNER) return [];
-      return [{ name, bytes: stat.size, time: stat.mtimeMs }];
+      const proof = JSON.parse(readFileSync(proofPath,"utf8"));
+      if (proof.owner !== OWNER) return [];
+      return [{ name, bytes: stat.size, time: stat.mtimeMs, proof,
+        operation: type === "private" && FINGERPRINT.test(proof.operationFingerprint)
+          && (proof.kind === "html" || proof.kind === "jpg" || proof.evidenceClass === "failure") ? proof.operationFingerprint as string : undefined }];
     } catch { return []; }
   }).sort((a,b) => b.time - a.time);
 }
-function prune(root: string, type: "incidents" | "private", now = Date.now()) {
+function prune(root: string, type: "incidents" | "private", now = Date.now(), entries = files(root, type)) {
   let bytes = 0; let count = 0;
   const kept = new Set<string>();
   const maxCount = type === "incidents" ? DIAGNOSTIC_LIMITS.incidents : DIAGNOSTIC_LIMITS.privateFiles;
   const maxBytes = type === "incidents" ? DIAGNOSTIC_LIMITS.incidentBytes : DIAGNOSTIC_LIMITS.privateBytes;
   const age = type === "incidents" ? DIAGNOSTIC_LIMITS.incidentAgeMs : DIAGNOSTIC_LIMITS.privateAgeMs;
   const groups = new Map<string, ReturnType<typeof files>>();
-  for (const item of files(root,type)) {
-    const key = type === "private" ? item.name.slice(0,45) : item.name;
+  for (const item of entries) {
+    // One operation's HTML, screenshots, error details and their metadata expire together.
+    // Older metadata without an operation fingerprint retains artifact-pair ownership.
+    const key = type === "private" ? item.operation ?? item.name.slice(0,45) : item.name;
     const group = groups.get(key) ?? []; group.push(item); groups.set(key,group);
   }
   // Tool request/result JSON can churn many times during one browser turn. Keep
@@ -263,7 +271,7 @@ function prune(root: string, type: "incidents" | "private", now = Date.now()) {
   });
   for (const group of retained) {
     const groupBytes = group.reduce((sum,item) => sum+item.bytes,0);
-    if (now-Math.max(...group.map(item=>item.time)) > age || count+group.length > maxCount || bytes+groupBytes > maxBytes) {
+    if (now-Math.min(...group.map(item=>item.time)) > age || count+group.length > maxCount || bytes+groupBytes > maxBytes) {
       for (const item of group) rmSync(join(root,type,item.name), { force: true });
     } else { bytes += groupBytes; count+=group.length; for (const item of group) kept.add(item.name); }
   }
@@ -271,31 +279,74 @@ function prune(root: string, type: "incidents" | "private", now = Date.now()) {
 }
 export function listDiagnosticIncidents(root: string) {
   ownedRoot(resolve(root));
-  prune(root,"incidents"); prune(root,"private");
-  const records = files(root,"incidents").flatMap(item => {
+  const incidents = files(root,"incidents");
+  const kept = prune(root,"incidents", Date.now(), incidents);
+  prune(root,"private");
+  const records = incidents.filter(item => kept.has(item.name)).flatMap(item => {
     if (item.bytes > 128 * 1024) return [];
-    try { const record = JSON.parse(readFileSync(join(root,"incidents",item.name),"utf8"));
-      return record.owner === OWNER && record.schemaVersion === 1 ? [{ ref: item.name.replace(/\.json$/,""), recordedAt: record.recordedAt, observedAt: record.observedAt, stage: record.stage, symptom: record.hostReported?.symptom ?? "unknown", privateArtifactCount: record.privateArtifactCount ?? 0 }] : [];
+    try { const record = item.proof;
+      return record.owner === OWNER && record.schemaVersion === 1 ? [{ ref: item.name.replace(/\.json$/,""), recordedAt: record.recordedAt, observedAt: record.observedAt, stage: record.stage, symptom: record.hostReported?.symptom ?? "unknown", privateArtifactCount: record.privateArtifactCount ?? 0, occurrences: record.occurrences ?? 1, firstObservedAt: record.firstObservedAt ?? record.observedAt }] : [];
     } catch { return []; }
   });
-  atomic(join(root,"INDEX.json"), { owner: OWNER, schemaVersion: 1, generatedAt: new Date().toISOString(), entryPoint: "START-HERE.md", incidents: records });
+  atomic(join(root,"INDEX.json"), { owner: OWNER, schemaVersion: 1, generatedAt: new Date().toISOString(), entryPoint: "START-HERE.md", retention: DIAGNOSTIC_LIMITS, incidents: records });
   return records;
 }
-export function writeDiagnosticIncident(root: string, data: ReturnType<typeof analyzeDiagnosticEvents> | { readonly stage: string; readonly observedAt: string; readonly timeline: readonly StructuralDiagnosticEvent[] }) {
+interface AutomaticDiagnosticIncident {
+  readonly stage: string;
+  readonly observedAt: string;
+  readonly timeline: readonly StructuralDiagnosticEvent[];
+  readonly occurrences?: number;
+  readonly firstObservedAt?: string;
+  readonly failure?: StructuralDiagnosticEvent;
+}
+
+/** Repeated automatic failures share a structural signature, never a raw message or request ID.
+ * Scope/operation ownership keeps distinct tasks separate. Manual reports remain immutable snapshots.
+ */
+export function diagnosticFailureIncidentRef(failure: StructuralDiagnosticEvent): string {
+  const keys = ["event", "stage", "reason_class", "failure_class", "phase", "proof_stage", "service", "route_kind", "kind", "status"];
+  const owner = failure.scope_fingerprint ?? failure.operation_fingerprint ?? failure.profile_fingerprint ?? failure.instance_fingerprint;
+  const signature = JSON.stringify([owner, ...keys.map(key => failure[key] ?? null)]);
+  const hex = createHash("sha256").update(signature).digest("hex").slice(0,32);
+  return `incident_${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+
+export function writeDiagnosticIncident(root: string, data: ReturnType<typeof analyzeDiagnosticEvents> | AutomaticDiagnosticIncident) {
   ownedRoot(root);
-  const ref = `incident_${randomUUID()}`;
-  const last = data.timeline.at(-1); const fingerprint = last?.operation_fingerprint ?? last?.request_fingerprint;
+  const failure = "failure" in data ? data.failure : undefined;
+  const ref = failure ? diagnosticFailureIncidentRef(failure) : `incident_${randomUUID()}`;
+  const path = join(root,"incidents",`${ref}.json`);
+  const previous = failure && (() => {
+    try { return readDiagnosticIncident(root, ref) as Record<string, any>; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+  })();
+  const last = failure ?? data.timeline.at(-1);
+  const fingerprint = last?.operation_fingerprint ?? last?.request_fingerprint;
+  const retainedRefs = new Set<string>((previous?.privateArtifacts ?? []).flatMap((artifact: { ref?: unknown }) =>
+    typeof artifact?.ref === "string" && /^artifact_[a-f0-9-]{36}$/.test(artifact.ref) ? [artifact.ref] : []));
   const artifacts = files(root,"private").filter(item => item.name.endsWith(".meta.json")).flatMap(item => {
     try {
-      const metadata=JSON.parse(readFileSync(join(root,"private",item.name),"utf8"));
-      return fingerprint && metadata.operationFingerprint === fingerprint && ["html","jpg","json"].includes(metadata.kind)
+      const metadata = item.proof;
+      const artifactRef = item.name.replace(/\.meta\.json$/,"");
+      return ((fingerprint && metadata.operationFingerprint === fingerprint) || retainedRefs.has(artifactRef))
+        && ["html","jpg","json"].includes(metadata.kind)
         ? [{ ref: item.name.replace(/\.meta\.json$/,""), kind: metadata.kind, bytes: metadata.bytes, privacy: "private" }] : [];
     } catch { return []; }
   });
-  const record = { ...data, timeline: data.timeline.slice(-DIAGNOSTIC_LIMITS.timeline), owner: OWNER, schemaVersion: 1, ref, recordedAt: new Date().toISOString(), privateArtifactCount: artifacts.length, privateArtifacts: artifacts };
+  const firstObservedAt = previous?.firstObservedAt ?? previous?.observedAt ?? ("firstObservedAt" in data ? data.firstObservedAt : undefined) ?? data.observedAt;
+  const occurrences = Math.min(Number.MAX_SAFE_INTEGER, Number(previous?.occurrences ?? 0) + ("occurrences" in data ? data.occurrences ?? 1 : 1));
+  const firstTimeline: StructuralDiagnosticEvent[] = failure
+    ? (previous?.firstTimeline ?? previous?.timeline ?? data.timeline).slice(0,32) : [];
+  const record = { ...data, timeline: data.timeline.slice(-DIAGNOSTIC_LIMITS.timeline),
+    ...(failure ? { firstTimeline, firstObservedAt, occurrences } : {}),
+    owner: OWNER, schemaVersion: 1, ref, recordedAt: new Date().toISOString(),
+    privateArtifactCount: artifacts.length, privateArtifacts: artifacts };
   while (Buffer.byteLength(JSON.stringify(record)) > 120 * 1024 && record.timeline.length) record.timeline.shift();
   if (Buffer.byteLength(JSON.stringify(record)) > 128 * 1024) throw new Error("incident exceeds budget");
-  atomic(join(root,"incidents",`${ref}.json`), record); prune(root,"incidents"); listDiagnosticIncidents(root); return ref;
+  atomic(path, record);
+  // One retention/index pass per write, rather than pruning and scanning the same bucket twice.
+  listDiagnosticIncidents(root);
+  return ref;
 }
 export function readDiagnosticIncident(root: string, ref: string): unknown {
   if (!INCIDENT_NAME.test(`${ref}.json`)) throw new Error("invalid incident reference");
@@ -322,12 +373,12 @@ export function privateDiagnosticCaptureEnabled(root: string): boolean {
     if (record.mode !== undefined && record.mode !== "timed") return false;
     return Number.isFinite(record.enabledUntil) && record.enabledUntil>Date.now() && record.enabledUntil<=Date.now()+60*60000; } catch { return false; }
 }
-export function writePrivateDiagnosticArtifact(root: string, input: { kind: "html" | "jpg" | "json"; bytes: Uint8Array; operationFingerprint: string; captureScope?: "document" | "latest_turn_shell" }) {
+export function writePrivateDiagnosticArtifact(root: string, input: { kind: "html" | "jpg" | "json"; bytes: Uint8Array; operationFingerprint: string; captureScope?: "document" | "latest_turn_shell"; evidenceClass?: "failure" | "trace" }) {
   if (!privateDiagnosticCaptureEnabled(root) || !FINGERPRINT.test(input.operationFingerprint)) return;
   if (!["html","jpg","json"].includes(input.kind)) throw new Error("invalid artifact kind");
   if (input.bytes.byteLength > DIAGNOSTIC_LIMITS.privateFileBytes) throw new Error("private artifact exceeds budget");
   ownedRoot(root); const ref=`artifact_${randomUUID()}`;
   writeFileSync(join(root,"private",`${ref}.${input.kind}`),input.bytes,{flag:"wx",mode:0o600});
-  atomic(join(root,"private",`${ref}.meta.json`), { owner:OWNER, privacy:"private", operationFingerprint:input.operationFingerprint, kind:input.kind, bytes:input.bytes.byteLength, ...(input.captureScope ? { captureScope: input.captureScope } : {}) });
+  atomic(join(root,"private",`${ref}.meta.json`), { owner:OWNER, privacy:"private", operationFingerprint:input.operationFingerprint, kind:input.kind, bytes:input.bytes.byteLength, ...(input.captureScope ? { captureScope: input.captureScope } : {}), ...(input.evidenceClass ? { evidenceClass: input.evidenceClass } : {}) });
   return prune(root,"private").has(`${ref}.${input.kind}`) ? ref : undefined;
 }

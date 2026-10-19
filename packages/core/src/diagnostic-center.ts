@@ -1,4 +1,4 @@
-import { analyzeDiagnosticEvents, HOST_SYMPTOMS, HOST_REPORT_ORIGINS, listDiagnosticIncidents, readDiagnosticIncident,
+import { analyzeDiagnosticEvents, DIAGNOSTIC_LIMITS, HOST_SYMPTOMS, HOST_REPORT_ORIGINS, listDiagnosticIncidents, readDiagnosticIncident,
   readDiagnosticSources, setPrivateDiagnosticCapture, writeDiagnosticIncident, structuralDiagnosticEvent, type HostSymptom, type HostReportOrigin } from "./diagnostic-store";
 import { join } from "node:path";
 import { summarizeContextContinuity } from "./diagnostic-context-continuity";
@@ -7,7 +7,7 @@ export function diagnosticSourcePaths(logsRoot: string): readonly string[] {
   return Object.freeze(["gateway", "chat", "codex"].flatMap(service => {
     const source = join(logsRoot, `${service}.log.diagnostics.jsonl`);
     const packaged = join(logsRoot, `${service}.diagnostics.jsonl`);
-    return [source, `${source}.1`, packaged, `${packaged}.1`];
+    return [source, packaged].flatMap(path => Array.from({ length: DIAGNOSTIC_LIMITS.logFiles }, (_, index) => index ? `${path}.${index}` : path));
   }));
 }
 

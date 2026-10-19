@@ -1,4 +1,4 @@
-import { diagnosticCenter, diagnosticSourcePaths } from "@chatgpt-tela/core";
+import { DIAGNOSTIC_LIMITS, diagnosticCenter, diagnosticSourcePaths } from "@chatgpt-tela/core";
 import {
   existsSync,
   lstatSync,
@@ -177,17 +177,22 @@ function diagnosticsSummary(productPaths: ReturnType<typeof resolveProductPaths>
     const packagedDiagnostics = join(productPaths.logsRoot, `${id}.diagnostics.jsonl`);
     return Object.freeze({
       serviceLog: diagnosticFileMetadata(raw),
-      sourceDiagnostics: diagnosticFileMetadata(sourceDiagnostics),
-      sourceDiagnosticsPrevious: diagnosticFileMetadata(`${sourceDiagnostics}.1`),
-      packagedDiagnostics: diagnosticFileMetadata(packagedDiagnostics),
-      packagedDiagnosticsPrevious: diagnosticFileMetadata(`${packagedDiagnostics}.1`),
+      sourceDiagnostics: Array.from({ length: DIAGNOSTIC_LIMITS.logFiles }, (_, index) =>
+        diagnosticFileMetadata(index ? `${sourceDiagnostics}.${index}` : sourceDiagnostics)),
+      packagedDiagnostics: Array.from({ length: DIAGNOSTIC_LIMITS.logFiles }, (_, index) =>
+        diagnosticFileMetadata(index ? `${packagedDiagnostics}.${index}` : packagedDiagnostics)),
     });
   };
   return Object.freeze({
     privacy: "metadata-only",
     contentRead: false,
     pathsEmitted: false,
-    rotation: "current-plus-one-previous",
+    rotation: "current-plus-three-previous",
+    retention: {
+      detailed: { fileBytes: DIAGNOSTIC_LIMITS.logFileBytes, filesPerService: DIAGNOSTIC_LIMITS.logFiles },
+      incidents: { bytes: DIAGNOSTIC_LIMITS.incidentBytes, count: DIAGNOSTIC_LIMITS.incidents, days: DIAGNOSTIC_LIMITS.incidentAgeMs / 86400000 },
+      private: { bytes: DIAGNOSTIC_LIMITS.privateBytes, files: DIAGNOSTIC_LIMITS.privateFiles, days: DIAGNOSTIC_LIMITS.privateAgeMs / 86400000 },
+    },
     discovery: { guide: "logs/diagnostics/START-HERE.md", index: "logs/diagnostics/INDEX.json",
       commands: ["diagnostics list", "diagnostics inspect --ref <ref>", "diagnostics record --at <ISO> --symptom <kind>", "diagnostics activity"],
       privateCapture: "off by default; explicit capture --minutes 15 or --mode until-disabled, stop with --minutes 0; private files stay local" },

@@ -91,6 +91,7 @@ class ServiceEndpointUnavailableError extends Error {}
 
 export class LocalServiceSupervisor {
   readonly #installId: string;
+  readonly #observedStatus = new Map<TelaServiceId, string>();
 
   constructor(input: { readonly installId: string }) {
     if (!input.installId.trim() || /[\u0000\r\n]/.test(input.installId)) throw new Error("Tela install id is invalid");
@@ -105,7 +106,10 @@ export class LocalServiceSupervisor {
     const startedAt = Date.now();
     const descriptor = readServiceRuntimeDescriptor(input.descriptorPath);
     if (!descriptor) {
-      emitDiagnosticEvent("chatgpt_tela_service", "descriptor_absent", { service: input.service });
+      if (this.#observedStatus.get(input.service) !== "absent") {
+        emitDiagnosticEvent("chatgpt_tela_service", "descriptor_absent", { service: input.service });
+        this.#observedStatus.set(input.service, "absent");
+      }
       return undefined;
     }
     if (descriptor.installId !== this.#installId) {
@@ -115,12 +119,16 @@ export class LocalServiceSupervisor {
     const deadline = deadlineSignal(input.requestTimeoutMs ?? 1_500);
     try {
       const status = await new LocalServiceClient(exact).status(deadline.signal);
-      emitDiagnosticEvent("chatgpt_tela_service", "status_ready", {
-        service: input.service,
-        duration_ms: diagnosticDurationMs(startedAt),
-      });
+      const observation = `${exact.instanceId}:${status.state}`;
+      if (this.#observedStatus.get(input.service) !== observation) {
+        emitDiagnosticEvent("chatgpt_tela_service", "status_ready", {
+          service: input.service, state: status.state, duration_ms: diagnosticDurationMs(startedAt),
+        });
+        this.#observedStatus.set(input.service, observation);
+      }
       return Object.freeze({ descriptor: exact, status: status as ServiceStatus & { readonly service: S } });
     } catch (error) {
+      this.#observedStatus.delete(input.service);
       if (error instanceof ServiceHttpError || error instanceof ServiceStatusValidationError) throw error;
       if (pidAlive(exact.pid)) {
         emitDiagnosticEvent("chatgpt_tela_service", "status_endpoint_failed", {
