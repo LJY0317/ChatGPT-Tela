@@ -55,7 +55,9 @@ const ACCOUNT_IDENTITY_PROBE = `async () => {
     const accountId = session && session.account && session.account.id;
     if (typeof userId !== "string" || !userId || userId.length > 256
       || typeof accountId !== "string" || !accountId || accountId.length > 256) {
-      return result("unavailable", "invalid_session_shape", { httpStatus: response.status });
+      return result("unavailable", "invalid_session_shape", { httpStatus: response.status,
+        userPresent: !!(session && session.user), userIdValid: typeof userId === "string" && !!userId && userId.length <= 256,
+        accountPresent: !!(session && session.account), accountIdValid: typeof accountId === "string" && !!accountId && accountId.length <= 256 });
     }
     const structure = session && session.account && session.account.structure;
     const bytes = new TextEncoder().encode(userId + "\\0" + accountId);
@@ -92,7 +94,9 @@ const ACCOUNT_DISPLAY_PROBE = `async () => {
     try { value = await response.json(); }
     catch { return result("unavailable", "invalid_response", { httpStatus: response.status }); }
     if ((${SIGNED_OUT_SESSION})(value)) return result("signed-out", "empty_session", { httpStatus: response.status });
-    if (!value || !value.user || typeof value.user.id !== "string" || !value.user.id) return result("unavailable", "invalid_session_shape", { httpStatus: response.status });
+    if (!value || !value.user || typeof value.user.id !== "string" || !value.user.id) return result("unavailable", "invalid_session_shape", { httpStatus: response.status,
+      userPresent: !!(value && value.user), userIdValid: !!(value && value.user && typeof value.user.id === "string" && value.user.id),
+      accountPresent: !!(value && value.account), accountIdValid: !!(value && value.account && typeof value.account.id === "string" && value.account.id) });
     const email = value.user.email;
     return result("signed-in", "verified", { httpStatus: response.status, ...(typeof email === "string" ? { email } : {}) });
   } finally { clearTimeout(timeout); }
@@ -104,11 +108,19 @@ const AUTH_REASON_CLASSES = new Set([
   "invalid_response", "invalid_session_shape", "observation_aborted", "page_evaluation_failed",
 ]);
 
+interface AuthShapeObservation {
+  readonly userPresent?: boolean;
+  readonly userIdValid?: boolean;
+  readonly accountPresent?: boolean;
+  readonly accountIdValid?: boolean;
+}
+
 function recordAccountProbe(input: {
   readonly kind: "identity" | "display";
   readonly state: "signed-in" | "signed-out" | "unavailable";
   readonly reasonClass: string;
   readonly httpStatus?: number;
+  readonly shape?: AuthShapeObservation;
   readonly startedAt: number;
 }): void {
   const reasonClass = AUTH_REASON_CLASSES.has(input.reasonClass) ? input.reasonClass : "page_evaluation_failed";
@@ -117,6 +129,10 @@ function recordAccountProbe(input: {
     auth_state: input.state,
     reason_class: reasonClass,
     duration_ms: diagnosticDurationMs(input.startedAt),
+    ...(typeof input.shape?.userPresent === "boolean" ? { user_present: input.shape.userPresent } : {}),
+    ...(typeof input.shape?.userIdValid === "boolean" ? { user_key_valid: input.shape.userIdValid } : {}),
+    ...(typeof input.shape?.accountPresent === "boolean" ? { account_present: input.shape.accountPresent } : {}),
+    ...(typeof input.shape?.accountIdValid === "boolean" ? { account_key_valid: input.shape.accountIdValid } : {}),
     ...(Number.isInteger(input.httpStatus) && input.httpStatus! >= 100 && input.httpStatus! <= 599
       ? { http_status: input.httpStatus! } : {}),
   };
@@ -144,7 +160,7 @@ export async function observeChatGptAccountDisplay(surface: BrowserSurfaceLease,
     recordAccountProbe({ kind: "display", state: "unavailable", reasonClass: "page_evaluation_failed", startedAt });
     throw new Error("browser surface does not expose account display observation");
   }
-  let row: { state: string; reasonClass?: string; httpStatus?: number; email?: unknown };
+  let row: AuthShapeObservation & { state: string; reasonClass?: string; httpStatus?: number; email?: unknown };
   try { row = await page.evaluate<null, typeof row>(ACCOUNT_DISPLAY_PROBE, null, signal); }
   catch (error) {
     recordAccountProbe({ kind: "display", state: "unavailable", reasonClass: probeFailureReason(error, signal), startedAt });
@@ -152,7 +168,7 @@ export async function observeChatGptAccountDisplay(surface: BrowserSurfaceLease,
   }
   const state = ["signed-in", "signed-out"].includes(row.state) ? row.state as "signed-in" | "signed-out" : "unavailable";
   const reasonClass = typeof row.reasonClass === "string" && AUTH_REASON_CLASSES.has(row.reasonClass) ? row.reasonClass : "page_evaluation_failed";
-  recordAccountProbe({ kind: "display", state, reasonClass,
+  recordAccountProbe({ kind: "display", state, reasonClass, shape: row,
     ...(typeof row.httpStatus === "number" ? { httpStatus: row.httpStatus } : {}), startedAt });
   if (state === "unavailable" || (row.email !== undefined && (row.state !== "signed-in" || typeof row.email !== "string" || row.email.length > 254
       || !/^[^\s@\x00-\x1f\x7f]+@[^\s@\x00-\x1f\x7f]+$/.test(row.email)))) throw new Error("Invalid account display observation");
@@ -169,7 +185,7 @@ export async function observeChatGptAccountIdentity(
     recordAccountProbe({ kind: "identity", state: "unavailable", reasonClass: "page_evaluation_failed", startedAt });
     throw new Error("browser surface does not expose page automation for ChatGPT account identity");
   }
-  let identity: { state?: string; reasonClass?: string; httpStatus?: number; accountFingerprint?: string; containerFingerprint?: string; accountStructure?: string };
+  let identity: AuthShapeObservation & { state?: string; reasonClass?: string; httpStatus?: number; accountFingerprint?: string; containerFingerprint?: string; accountStructure?: string };
   try { identity = await page.evaluate<null, typeof identity>(ACCOUNT_IDENTITY_PROBE, null, signal); }
   catch (error) {
     recordAccountProbe({ kind: "identity", state: "unavailable", reasonClass: probeFailureReason(error, signal), startedAt });
@@ -177,7 +193,7 @@ export async function observeChatGptAccountIdentity(
   }
   const state = identity?.state === "signed-in" || identity?.state === "signed-out" ? identity.state : "unavailable";
   const reasonClass = typeof identity?.reasonClass === "string" && AUTH_REASON_CLASSES.has(identity.reasonClass) ? identity.reasonClass : "page_evaluation_failed";
-  recordAccountProbe({ kind: "identity", state, reasonClass,
+  recordAccountProbe({ kind: "identity", state, reasonClass, shape: identity,
     ...(typeof identity?.httpStatus === "number" ? { httpStatus: identity.httpStatus } : {}), startedAt });
   if (state === "unavailable") throw new Error("ChatGPT account identity is unavailable; sign in and retry");
   if (identity?.state === "signed-out") throw new ChatGptWebLoginRequiredError();

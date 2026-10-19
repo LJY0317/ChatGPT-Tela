@@ -5,6 +5,26 @@ import {
   type BrowserSurfaceLease,
 } from "@chatgpt-tela/browser-host";
 import { ChatGptWebLoginRequiredError, observeChatGptAccountDisplay, observeChatGptAccountIdentity } from "./account-identity";
+import { observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
+
+test("schema failure preserves presence evidence without account values", async () => {
+  const rows: StructuralDiagnosticEvent[] = [];
+  const stop = observeDiagnosticEvents(row => rows.push(row));
+  const page = { async evaluate(source: string) {
+    const run = new Function("fetch", "location", "crypto", `return (${source})();`);
+    return run(async () => ({ status: 200, ok: true, url: "https://chatgpt.com/api/auth/session",
+      async json() { return { user: { id: "private-auth-canary", email: "private@example.invalid" } }; } }),
+      { origin: "https://chatgpt.com" }, crypto);
+  } } as unknown as BrowserPageAutomation;
+  try {
+    await expect(observeChatGptAccountIdentity({ capability: () => page } as unknown as BrowserSurfaceLease))
+      .rejects.not.toBeInstanceOf(ChatGptWebLoginRequiredError);
+    expect(rows.at(-1)).toMatchObject({ reason_class: "invalid_session_shape", http_status: 200,
+      user_present: true, user_key_valid: true, account_present: false, account_key_valid: false });
+    expect(JSON.stringify(rows)).not.toContain("private-auth-canary");
+    expect(JSON.stringify(rows)).not.toContain("private@example.invalid");
+  } finally { stop?.(); }
+});
 
 test("session authentication is explicit, bounded and never inferred from transport failure", async () => {
   let status = 200, body: unknown = {}, url = "https://chatgpt.com/api/auth/session";

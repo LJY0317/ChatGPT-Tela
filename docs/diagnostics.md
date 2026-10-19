@@ -3,6 +3,7 @@
 ## Web profile authentication
 
 Web auth probes record only outcome, bounded reason class, HTTP status and duration. The Electron profile host
+records expected user/account field-presence booleans when the response schema is unusable. It also
 records main-frame ChatGPT/auth route classes, auth-cookie change/removal cause classes and a fingerprint of the
 profile storage generation. Cookie names, values, account identifiers, request headers, URLs and page content are
 excluded. Explicit sign-out observations and auth-entry removals retain a coalesced incident timeline. An HTTP
