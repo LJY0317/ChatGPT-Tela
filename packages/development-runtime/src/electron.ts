@@ -30,8 +30,7 @@ import {
   type WebContextCheckpointProvider,
 } from "@chatgpt-tela/chatgpt";
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
-import { ActiveTurnRegistry, acceptNativeResponsesToolResult, runBrowserContextCheckpoint } from "@chatgpt-tela/runtime";
-import { extractNativeToolResults } from "@chatgpt-tela/codex";
+import { ActiveTurnRegistry, settleNativeCompactionToolResult, runBrowserContextCheckpoint } from "@chatgpt-tela/runtime";
 import type { ContextCheckpointCache } from "./context-cache";
 import {
   startDevelopmentRuntime,
@@ -258,30 +257,7 @@ export async function startElectronDevelopmentRuntime(
   const turns = input.turns ?? new ActiveTurnRegistry();
   const localCompactionRouter = input.checkpointProvider ? createNativeLocalCompactionRouter({
     source: input.currentTurnSource,
-    settlePendingToolResult: (threadId, turnId, body) => {
-      const channel = turns.active(threadId, turnId)?.channel;
-      const callId = channel?.outstandingToolCallId;
-      const results = extractNativeToolResults(body);
-      const matches = callId ? results.filter(result => result.callId === callId) : [];
-      if (callId && channel) {
-        if (matches.length === 0 && channel.outstandingNativeDelivery === "delivered"
-          && channel.state().nativeResultReady !== true) {
-          emitDiagnosticEvent("chatgpt_tela_work", "native_compaction_result_missing", {
-            scope_fingerprint: diagnosticFingerprint(threadId), turn_fingerprint: diagnosticFingerprint(turnId),
-            operation_fingerprint: diagnosticFingerprint(callId), turn_phase: channel.phase,
-            native_delivery_committed: true, result_received: channel.state().nativeResultReady === true,
-          });
-          throw new Error("Native compaction omitted the delivered outstanding tool result");
-        }
-        if (matches.length) {
-          const state = acceptNativeResponsesToolResult(channel, body);
-          emitDiagnosticEvent("chatgpt_tela_work", "native_compaction_result_settled", {
-            scope_fingerprint: diagnosticFingerprint(threadId), turn_fingerprint: diagnosticFingerprint(turnId),
-            operation_fingerprint: diagnosticFingerprint(callId), state,
-          });
-        }
-      }
-    },
+    settlePendingToolResult: (threadId, turnId, body) => settleNativeCompactionToolResult(turns, threadId, turnId, body),
     ...(checkpointCache ? { checkpointCache } : {}),
     ...(input.context?.checkpointPreparationPolicy ? { checkpointPreparationPolicy: input.context.checkpointPreparationPolicy } : {}),
     ...(input.context?.visiblePrefix ? { visiblePrefix: input.context.visiblePrefix } : {}),

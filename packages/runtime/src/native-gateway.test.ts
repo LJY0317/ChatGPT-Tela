@@ -348,7 +348,13 @@ describe("Native Responses semantic gateway", () => {
       expect(acceptNativeResponsesToolResult(channel, { input: [
         { type: "function_call_output", call_id: "call-1", output: "compacted-ok" },
       ] })).toBe("received");
-      const final = await gateway.handle(request("turn-1"));
+      let state = channel.state();
+      while (state.phase !== "completed") state = await channel.waitForStateChange(state.revision);
+      // Compaction replaced the original tool result in Native history after
+      // Web had already consumed it and finished the original response.
+      const final = await gateway.handle(request("turn-1", [
+        { role: "user", content: "Verified compacted continuation summary" },
+      ]));
       expect(final.type).toBe("final");
       if (final.type !== "final") throw Error("expected final");
       expect(final.answer).toBe("final:compacted-ok");

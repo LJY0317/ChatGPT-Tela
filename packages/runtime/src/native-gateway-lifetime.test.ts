@@ -113,16 +113,21 @@ test("body mutation, stale request and wrong-input witness never authorize anoth
   expect(f.launches()).toBe(1); await f.gateway.close();
 });
 
-test("uncommitted final replays only its exact request; steering cannot replace an uncertain delivery", async () => {
+test("pending steering cannot replace an uncommitted final and starts only after its delivery", async () => {
   const f = fixture(), body = f.request();
   const first = await f.gateway.handle(body);
   expect(await f.gateway.handle(body)).toEqual(first);
-  await expect(f.gateway.handle(f.steer())).rejects.toThrow("exact uncommitted request");
+  const steering = f.steer();
+  expect(await f.gateway.handle(steering)).toEqual(first);
   expect(f.launches()).toBe(1);
   f.gateway.commit(first);
+  const second = await f.gateway.handle(steering);
+  expect(second).toMatchObject({ type: "final", answer: "answer 2" });
+  expect(f.launches()).toBe(2);
+  f.gateway.commit(second);
   f.loseProof();
   await expect(f.gateway.handle(f.steer("followup", "other"))).rejects.toThrow("canonical current-turn authority");
-  expect(f.launches()).toBe(1); await f.gateway.close();
+  expect(f.launches()).toBe(2); await f.gateway.close();
 });
 
 test("concurrent continuation requests serialize admission without starting duplicate Web cycles", async () => {

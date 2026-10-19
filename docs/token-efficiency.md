@@ -86,6 +86,11 @@ policy, source and active ancestry determine derived-summary reuse. Model/effort
 identity still bind physical Web sessions, execution claims and uncertain operations. Current turn identity
 owns execution; derived historical prose cannot grant tool or approval authority.
 
+An undelivered completed response belongs to its canonically bound Native turn, not the
+request's transport bytes. Compaction may replace the history before final delivery; return
+the existing immutable result without re-execution. Pending steering stays unconsumed until
+that final commits, then requires the ordinary final anchor and canonical input witnesses.
+
 Persist each validated bounded summary before releasing its isolated browser surface.
 A cleanup failure cannot erase a completed receipt or require a second summary call.
 Failed durable writes and uncertain submission remain unknown. A proven unusable result

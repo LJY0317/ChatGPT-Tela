@@ -10,6 +10,8 @@ import { join } from 'node:path';
 import { FileContextCheckpointCache } from './context-cache';
 import { maybeProduceNativeHistoryCheckpoint } from './native-history-checkpoint';
 import { FileNativeVisiblePrefixStageJournal } from './native-visible-prefix-journal';
+import { ActiveTurnRegistry, NativeResponsesGateway, settleNativeCompactionToolResult } from '@chatgpt-tela/runtime';
+import { handleNativeResponsesHttp } from '@chatgpt-tela/responses';
 const canonical:CanonicalCurrentTurnEvidence={threadId:'thread',turnId:'turn',cwd:'/fixture',workspaceRoots:['/fixture'],sandbox:{kind:'native-enforced'},proof:'app-server-active-turn',environmentSourceTurnId:'turn'};
 function body(extra:any={}){return {model:chatGptWebModelId(chatGptWebFamilyKey('Fixture')),reasoning:{effort:'medium'},tools:[],input:[{type:'message',role:'user',content:'Observed old result'},{type:'message',role:'user',content:'Summarize the task'}],client_metadata:{'x-codex-turn-metadata':JSON.stringify({request_kind:'compaction',thread_id:'thread',turn_id:'turn'})},...extra}}
 function request(value:any){return new Request('http://127.0.0.1/v1/responses',{method:'POST',body:JSON.stringify(value)})}
@@ -204,6 +206,62 @@ test('changed-source retry cannot settle an outstanding Native tool result',asyn
  expect(settled).toBe(1);
  expect((await router(request(body({instructions:'changed history and source'}))))?.status).toBe(400);
  expect(settled).toBe(1);
+});
+test('compaction router settles one tool result and delivers a fast final after history replacement', async () => {
+ const turns = new ActiveTurnRegistry();
+ const source = { currentTurn: async () => canonical };
+ let launches = 0, summaries = 0;
+ const gateway = new NativeResponsesGateway(source, turns, async turn => {
+  launches++;
+  const channel = turn.channel;
+  channel.markSubmitted(); channel.markAccepted();
+  const waiting = channel.requestTool({ callId: 'call', wireName: 'exec_command',
+   mode: 'structured', arguments: { cmd: 'fixture' } });
+  let state = channel.state();
+  while (!state.nativeResultReady) state = await channel.waitForStateChange(state.revision);
+  channel.releaseNativeToolResultToWeb('call');
+  const result = await waiting;
+  channel.markWebContinuation(); channel.complete(`Result: ${String(result.content)}`);
+ });
+ const router = createNativeLocalCompactionRouter({ source,
+  settlePendingToolResult: (thread, turn, value) => settleNativeCompactionToolResult(turns, thread, turn, value),
+  summarize: async input => {
+   summaries++;
+   expect(input.physicalContext.segments.some(segment => segment.content.includes('exact Native evidence'))).toBe(true);
+   const channel = turns.active('thread', 'turn')!.channel;
+   let state = channel.state();
+   while (state.phase !== 'completed') state = await channel.waitForStateChange(state.revision);
+   return 'Verified compacted continuation summary';
+  },
+ });
+ const ordinary = body({ client_metadata: { 'x-codex-turn-metadata': JSON.stringify({
+  request_kind: 'turn', thread_id: 'thread', turn_id: 'turn',
+ }) }, tools: [{ type: 'function', name: 'exec_command', parameters: { type: 'object' } }] });
+ try {
+  const first = await handleNativeResponsesHttp(request(ordinary), gateway);
+  expect(first.status).toBe(200);
+  expect((await first.json()).output[0]).toMatchObject({ type: 'function_call', call_id: 'call' });
+  const compact = body({ input: [
+   { type: 'function_call', call_id: 'call', name: 'exec_command', arguments: '{"cmd":"fixture"}' },
+   { type: 'function_call_output', call_id: 'call', output: 'exact Native evidence' },
+   { role: 'user', content: 'Summarize current task' },
+  ] });
+  const wrong = structuredClone(compact);
+  wrong.input[1].call_id = 'different-call';
+  expect((await router(request(wrong)))?.status).toBe(400);
+  expect(summaries).toBe(0);
+  expect(turns.active('thread', 'turn')!.channel.state().nativeResultReady).toBe(false);
+  const summary = await router(request(compact));
+  expect(summary?.status).toBe(200);
+  expect((await router(request({ ...compact, stream: true })))?.status).toBe(200);
+  const final = await handleNativeResponsesHttp(request({ ...ordinary,
+   input: [{ role: 'user', content: 'Verified compacted continuation summary' }],
+  }), gateway);
+  expect(final.status).toBe(200);
+  expect(await final.text()).toContain('Result: exact Native evidence');
+  expect(launches).toBe(1); expect(summaries).toBe(1);
+  expect(turns.active('thread', 'turn')!.channel.toolRoundCount).toBe(1);
+ } finally { await gateway.close(); }
 });
 test('oversized-source rejection remains stable across retries without another summary attempt',async()=>{
  let calls=0;const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical},summarize:async()=>{calls++;return 'must not run'}});

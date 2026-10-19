@@ -278,9 +278,13 @@ export class NativeResponsesGateway {
         emitDiagnosticEvent("chatgpt_tela_work", "native_steering_cycle_started", { input_count: fresh.length,
           current_authority_proven: true, prior_final_present: true }));
     } else if (registered && terminalPhase(registered.channel.phase)) {
-      if (!lifetime || lifetime.requestHash !== requestHash(body)) {
-        this.#rejectCycle(identity, "uncommitted_delivery", "Completed response may only replay its exact uncommitted request");
+      if (!lifetime) {
+        this.#rejectCycle(identity, "uncommitted_delivery", "Completed response has no owned uncommitted delivery");
       }
+      // Canonical owner binding above still applies. Compaction or steering may
+      // change this request while the immutable final is awaiting delivery.
+      // Return that final without adopting new input or starting another cycle;
+      // after commit, the normal final-anchor/input-witness checks own steering.
       return registered;
     }
     if (!registered || registered.channel.phase === "prepared" && !this.#launches.has(registered.capability)) {

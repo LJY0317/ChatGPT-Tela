@@ -1,3 +1,5 @@
+import { diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import type { ActiveTurnRegistry } from "./registry";
 import {
   encodeNativeToolInvocation,
   extractNativeToolResults,
@@ -53,4 +55,32 @@ export function acceptBoundNativeRoundRequest(
   }
   acceptNativeResponsesToolResult(channel, body);
   channel.refreshBinding(binding);
+}
+
+/** Settle a compaction source only after its caller has bound the exact canonical turn. */
+export function settleNativeCompactionToolResult(
+  turns: ActiveTurnRegistry, threadId: string, turnId: string, body: unknown,
+): void {
+  const channel = turns.active(threadId, turnId)?.channel;
+  const callId = channel?.outstandingToolCallId;
+  const results = extractNativeToolResults(body);
+  const matches = callId ? results.filter(result => result.callId === callId) : [];
+  if (callId && channel) {
+    if (matches.length === 0 && channel.outstandingNativeDelivery === "delivered"
+      && channel.state().nativeResultReady !== true) {
+      emitDiagnosticEvent("chatgpt_tela_work", "native_compaction_result_missing", {
+        scope_fingerprint: diagnosticFingerprint(threadId), turn_fingerprint: diagnosticFingerprint(turnId),
+        operation_fingerprint: diagnosticFingerprint(callId), turn_phase: channel.phase,
+        native_delivery_committed: true, result_received: channel.state().nativeResultReady === true,
+      });
+      throw new Error("Native compaction omitted the delivered outstanding tool result");
+    }
+    if (matches.length) {
+      const state = acceptNativeResponsesToolResult(channel, body);
+      emitDiagnosticEvent("chatgpt_tela_work", "native_compaction_result_settled", {
+        scope_fingerprint: diagnosticFingerprint(threadId), turn_fingerprint: diagnosticFingerprint(turnId),
+        operation_fingerprint: diagnosticFingerprint(callId), state,
+      });
+    }
+  }
 }
