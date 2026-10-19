@@ -1178,3 +1178,20 @@ separate ready event; streaming and failure boundaries remain explicit. A superv
 records unchanged readiness once per service instance/state, and records readiness
 again after a failure or replacement. Request start/finish and disconnect/error
 evidence remain available.
+
+### Startup network and shutdown classification
+
+Native catalog forwarding records dispatch/headers and fixed network cause/phase
+categories (connect, headers, body, transport, or unknown), bounded causal depth
+and incoming cancellation. Startup catalog requests also report Native-target
+readiness and Web preparation state. They are forwarded directly to the Native
+backend: do not wait for Desktop readiness, which may itself require catalog
+delivery. A roughly 500-ms failure alone does not prove a local 500-ms deadline.
+Exception detail remains opt-in private evidence; requests are not retried.
+
+A WebSocket Upgrade request answered with matching Upgrade/426 records an HTTP
+protocol transition while retaining its actual status and final receipt. It does
+not prove that the client completed its HTTP continuation. A Desktop peer close
+during an owner's normal-quit request records shutdown intent as a transition;
+unknown closes, payload limits, invalid text and socket errors remain failures.
+These distinctions change diagnostics only, never transport or shutdown behavior.

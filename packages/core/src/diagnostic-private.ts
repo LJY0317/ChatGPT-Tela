@@ -9,7 +9,7 @@ function redact(value: unknown, depth=0): unknown {
   return typeof value==="number" || typeof value==="boolean" || value===null ? value : undefined;
 }
 /** Explicit private capture only. Redaction is best effort; these files remain sensitive. */
-export function capturePrivateDiagnosticValue(phase: "tool_request" | "tool_result" | "web_context" | "web_preparation_failure" | "web_execution_failure" | "native_turn_failure" | "context_preload_failure" | "retained_body_mismatch", value: unknown): void {
+export function capturePrivateDiagnosticValue(phase: "tool_request" | "tool_result" | "web_context" | "web_preparation_failure" | "web_execution_failure" | "native_turn_failure" | "native_backend_failure" | "context_preload_failure" | "retained_body_mismatch", value: unknown): void {
   try {
     const root=configuredDiagnosticRoot(); if (!root || !privateDiagnosticCaptureEnabled(root)) return;
     const context=diagnosticContext(); const operation=context.operation_fingerprint ?? context.request_fingerprint;

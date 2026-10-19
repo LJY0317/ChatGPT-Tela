@@ -212,6 +212,7 @@ export async function startNativeFirstProductProfileRuntime(
   let stopping: Promise<void> | undefined;
   let controller: AbortController | undefined;
   let native: NativeFirstTarget | undefined;
+  const profileStartedAt = performance.now();
   let webRequests = 0;
   let accountBrowserBlocked = false;
   let accountBrowser: {
@@ -242,6 +243,12 @@ export async function startNativeFirstProductProfileRuntime(
     async requestRouter(request) {
       if (stopping) return Response.json({ error: { code: "tela_profile_stopping",
         message: "The profile is completing normal shutdown." } }, { status: 503 });
+      if (new URL(request.url).pathname === "/v1/models" && (!native || state === "preparing")) {
+        emitDiagnosticEvent("chatgpt_tela_profile_startup", "native_catalog_startup_request", {
+          native_target_ready: Boolean(native), state, provider_kind: "native", slot: config.slot,
+          duration_ms: Math.round(performance.now() - profileStartedAt),
+        });
+      }
       const routed = await router.route(request);
       if (routed) return routed;
       if (request.method !== "POST" || new URL(request.url).pathname !== "/v1/responses") return undefined;

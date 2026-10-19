@@ -1,4 +1,4 @@
-import { classifyNetworkFailure, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { capturePrivateDiagnosticValue, networkFailureDiagnostics, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { diagnoseNativeFailure, nativeRequestShape } from "./native-failure-diagnostics";
 import { observeNativeResponse } from "./native-reasoning-observation";
 const DEFAULT_CODEX_BACKEND = "https://chatgpt.com/backend-api/codex";
@@ -148,20 +148,33 @@ export async function forwardNativeCodexRequest(input: {
     signal: input.request.signal,
     redirect: input.endpoint.startsWith("images/") ? "manual" : "follow",
     });
-    if (input.endpoint === "responses" || input.endpoint === "responses/compact") {
+    if (input.endpoint === "models" || input.endpoint === "responses" || input.endpoint === "responses/compact") {
       emitDiagnosticEvent("chatgpt_tela_network", "native_dispatch_started", {
         ...shape.fields, provider_kind: "native", route_kind: input.endpoint.replaceAll("/", "_"), dispatch_count: 1,
       });
     }
     upstream = await fetchUpstream(outgoing);
   } catch (error) {
+    const failure = networkFailureDiagnostics(error);
     emitDiagnosticEvent("chatgpt_tela_network", "native_backend_request_failed", {
-      ...shape.fields, route_kind: input.endpoint.replaceAll("/", "_"), reason_class: classifyNetworkFailure(error),
+      ...shape.fields, ...failure, route_kind: input.endpoint.replaceAll("/", "_"), reason_class: failure.network_kind,
       duration_ms: Date.now() - started, cancelled: input.request.signal.aborted,
     });
+    // Exception details stay in the existing private, opt-in, bounded evidence store.
+    try {
+      const causes = []; let current: unknown = error;
+      const seen = new Set<unknown>();
+      for (let depth = 0; depth < 4 && current instanceof Error && !seen.has(current); depth++) {
+        seen.add(current);
+        causes.push({ name: current.name, message: current.message, stack: current.stack,
+          code: (current as Error & { code?: unknown }).code });
+        current = current.cause;
+      }
+      capturePrivateDiagnosticValue("native_backend_failure", { route: input.endpoint, failure, causes });
+    } catch { /* Diagnostics preserve the original backend failure. */ }
     throw error;
   }
-  if (input.endpoint === "responses" || input.endpoint === "responses/compact") {
+  if (input.endpoint === "models" || input.endpoint === "responses" || input.endpoint === "responses/compact") {
     emitDiagnosticEvent("chatgpt_tela_network", "native_dispatch_headers_received", {
       route_kind: input.endpoint.replaceAll("/", "_"), status_code: upstream.status,
       duration_ms: Date.now() - started,

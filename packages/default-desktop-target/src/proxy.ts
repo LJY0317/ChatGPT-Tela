@@ -127,6 +127,8 @@ export async function startDefaultDesktopAppServerProxy(input: {
   readonly upstreamEndpoint: string;
   readonly route: DefaultDesktopResponsesRoute;
   readonly augmentModelList?: DefaultDesktopAppServerModelListAugmenter;
+  /** Diagnostic-only owner intent; never authorizes transport or process actions. */
+  readonly shutdownRequested?: () => boolean;
   /** Structural fixture sink; never receives message bodies or native identifiers. */
   readonly onDiagnostic?: (stage: string, fields: Readonly<Record<string, DiagnosticScalar>>) => void;
 }): Promise<DefaultDesktopAppServerProxy> {
@@ -196,7 +198,7 @@ export async function startDefaultDesktopAppServerProxy(input: {
     let transportFailureRecorded = false;
     const diagnostic = (stage: string, fields: Readonly<Record<string, DiagnosticScalar>> = {}) => {
       // Bounded per-connection logging, no timer/watcher; never change transport behavior.
-      if (++diagnosticCount > 64 && stage !== "desktop_catalog_connection_closed" && stage !== "desktop_transport_failed"
+      if (++diagnosticCount > 64 && stage !== "desktop_catalog_connection_closed" && stage !== "desktop_transport_failed" && stage !== "desktop_transport_closed"
         && stage !== "desktop_remote_control_status" && stage !== "desktop_remote_control_failed") return;
       try {
         const structural = { connection_fingerprint: connectionFingerprint, kind: clientKind, ...fields };
@@ -210,7 +212,14 @@ export async function startDefaultDesktopAppServerProxy(input: {
     const transportFailure = (direction: "client_to_server" | "server_to_client", category: string, closeCode: number) => {
       if (state.closed || closing || transportFailureRecorded) return;
       transportFailureRecorded = true;
-      diagnostic("desktop_transport_failed", { kind: direction, reason_class: category, close_code: closeCode,
+      let shutdownRequested = false;
+      try { shutdownRequested = input.shutdownRequested?.() === true; } catch { /* Observation only. */ }
+      const requestedClose = category === "peer_closed" && shutdownRequested;
+      diagnostic(requestedClose ? "desktop_transport_closed" : "desktop_transport_failed", {
+        kind: direction, reason_class: category, close_code: closeCode,
+        shutdown_intent_observed: Boolean(input.shutdownRequested), shutdown_requested: shutdownRequested,
+        client_ready_state: client.readyState, upstream_ready_state: upstream.readyState,
+        pending_catalog_count: pendingCatalog.size, pending_history_count: pendingHistory.size,
         limit_bytes: MAX_MESSAGE_BYTES, client_received_count: clientReceivedCount,
         client_received_bytes: clientReceivedBytes, upstream_received_count: upstreamReceivedCount,
         upstream_received_bytes: upstreamReceivedBytes });

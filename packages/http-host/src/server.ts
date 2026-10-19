@@ -205,7 +205,14 @@ export async function startWebHttpServer(input: {
       // Final receipt includes readiness duration for ordinary successful replies.
       // Streaming keeps the early-ready boundary; failures are always recorded.
       if (response.status >= 400 || response.headers.get("content-type")?.includes("text/event-stream")) {
-        emitDiagnosticEvent("chatgpt_tela_http", response.status >= 400 ? "http_response_error" : "http_response_ready", { status: response.status, duration_ms: responseReadyMs });
+        const protocolTransition = response.status === 426
+          && request.headers.get("upgrade")?.toLowerCase() === "websocket"
+          && response.headers.get("upgrade")?.toLowerCase() === "websocket";
+        emitDiagnosticEvent("chatgpt_tela_http", protocolTransition ? "http_protocol_transition"
+          : response.status >= 400 ? "http_response_error" : "http_response_ready", {
+          status: response.status, duration_ms: responseReadyMs,
+          ...(protocolTransition ? { reason_class: "upgrade_required" } : {}),
+        });
       }
       await writeResponse(response, outgoing, controller.signal, written);
     } catch (error) {

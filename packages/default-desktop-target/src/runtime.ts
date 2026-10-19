@@ -181,6 +181,7 @@ export async function startDefaultDesktopTargetRuntime(input: {
   const fingerprint = randomBytes(12).toString("hex");
   let phase = "checking";
   let backendOwnership: BackendOwnership | undefined;
+  let quitRequested = false;
   const diagnostic = (stage: string, fields: Readonly<Record<string, DiagnosticScalar>> = {}) => {
     try {
       const structural = { operation_fingerprint: fingerprint, phase, platform: input.installation.platform,
@@ -271,6 +272,7 @@ export async function startDefaultDesktopTargetRuntime(input: {
     proxy = await startDefaultDesktopAppServerProxy({
       upstreamEndpoint: appServerEndpoint,
       route: input.route,
+      shutdownRequested: () => quitRequested,
       ...(input.onDiagnostic ? { onDiagnostic: input.onDiagnostic } : {}),
       ...(input.augmentModelList ? { augmentModelList: input.augmentModelList } : {}),
     });
@@ -348,9 +350,11 @@ export async function startDefaultDesktopTargetRuntime(input: {
               stopPhase = "normal_quit";
               diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: Math.round(performance.now() - stopStarted) });
               try {
+                quitRequested = true;
                 await normalQuit(input.installation, desktopPid!);
                 diagnostic("desktop_quit_requested", { phase: stopPhase, request_state: "accepted" });
               } catch (error) {
+                quitRequested = false;
                 stopFailureReason = error instanceof DesktopNormalQuitError ? error.reasonClass : "request_failed";
                 throw error;
               }
@@ -379,6 +383,7 @@ export async function startDefaultDesktopTargetRuntime(input: {
           if (catalogDirectory) rmSync(catalogDirectory, { recursive: true, force: true });
           diagnostic("desktop_stop_complete", { phase: "closed", duration_ms: Math.round(performance.now() - stopStarted) });
         })().catch(error => {
+          quitRequested = false;
           diagnostic("desktop_stop_failed", { phase: stopPhase,
             reason_class: stopFailureReason === "unknown" && ["proxy_cleanup", "backend_cleanup"].includes(stopPhase) ? "cleanup_failed" : stopFailureReason,
             duration_ms: Math.round(performance.now() - stopStarted) });
