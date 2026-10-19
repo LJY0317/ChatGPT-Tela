@@ -318,15 +318,25 @@ export class RuntimeTurnChannel {
     this.#move("accepted");
   }
 
+  #rejectToolRequest(reason: "turn_phase" | "pending_call" | "duplicate_call", message: string): never {
+    emitDiagnosticEvent("chatgpt_tela_work", "native_tool_request_rejected", {
+      scope_fingerprint: diagnosticFingerprint(this.#binding.authority.threadId),
+      turn_fingerprint: diagnosticFingerprint(this.#binding.authority.turnId),
+      reason_class: reason, turn_phase: this.#phase, tool_round_count: this.#toolRoundCount,
+      execution_dispatched: false,
+    });
+    throw new Error(message);
+  }
+
   requestTool(invocation: NativeToolInvocation): Promise<NativeToolResult> {
     if (this.#phase !== "accepted"
       && this.#phase !== "continuing"
       && this.#phase !== "tool-result-delivered") {
-      throw new Error(`cannot request a native tool from turn phase ${this.#phase}`);
+      this.#rejectToolRequest("turn_phase", `cannot request a native tool from turn phase ${this.#phase}`);
     }
-    if (this.#pendingTool) throw new Error("a native tool call is already outstanding for this turn");
+    if (this.#pendingTool) this.#rejectToolRequest("pending_call", "a native tool call is already outstanding for this turn");
     if (this.#usedCallIds.has(invocation.callId)) {
-      throw new Error(`native tool callId was already used: ${invocation.callId}`);
+      this.#rejectToolRequest("duplicate_call", `native tool callId was already used: ${invocation.callId}`);
     }
     const advertised = validateInvocation(this.binding, invocation);
     const diagnosticContract = diagnosticToolContract(advertised);

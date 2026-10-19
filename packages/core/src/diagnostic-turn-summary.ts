@@ -1,10 +1,10 @@
 import { configuredDiagnosticRoot, emitDiagnosticEvent, observeDiagnosticEvents } from './diagnostic-events';
 import { withDiagnosticContext } from './diagnostic-context';
-import { structuralDiagnosticEvent, type StructuralDiagnosticEvent } from './diagnostic-store';
+import { DIAGNOSTIC_LIMITS, structuralDiagnosticEvent, writeDiagnosticIncident, type StructuralDiagnosticEvent } from './diagnostic-store';
 
 const fp = (x: unknown): x is string => typeof x === 'string' && /^[a-f0-9]{24}$/.test(x);
 const number = (x: unknown): x is number => Number.isSafeInteger(x) && Number(x) >= 0;
-const relevant = (stage: string) => /^(native_|web_turn_|web_context_|web_send_|web_tool_bridge_|web_public_progress_|public_progress_|mcp_rpc_|mcp_native_inventory_|mcp_chat_inventory_|web_preparation_failed|browser_message_prepared|context_checkpoint_|http_transport_|inspection_ownership_revoked|tool_started|tool_settled|tool_failed|tool_error|web_media_upload_started|mcp_native_result_projected|approval_turn_resolution)/.test(stage);
+const relevant = (stage: string) => /^(native_|web_turn_|web_context_|web_retained_context_|web_send_|web_tool_bridge_|web_public_progress_|web_model_picker_|public_progress_|mcp_rpc_|mcp_native_inventory_|mcp_chat_inventory_|web_preparation_failed|browser_message_prepared|context_checkpoint_|checkpoint_transfer_|http_transport_|inspection_ownership_revoked|tool_started|tool_settled|tool_failed|tool_error|web_media_upload_started|mcp_native_result_projected|approval_turn_resolution)/.test(stage);
 
 /** A Native interrupted status proves the turn ended, but never who pressed Stop.
  * Transport closure proves even less. Later cleanup cannot replace the first
@@ -96,6 +96,10 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
   const mcpRequest=sum('tool_started','request_bytes'),mcpResult=sum('tool_settled','result_bytes');
   mcpRequest.complete=mcpRequest.complete&&expectedResults>0&&unique('tool_started')===expectedResults;
   mcpResult.complete=mcpResult.complete&&expectedResults>0&&unique('tool_settled')===expectedResults;
+  const taskOperations = new Set(at('web_turn_plan').map(e=>e.operation_fingerprint).filter(fp));
+  const taskSends = at('web_send_activation_started').filter(e=>fp(e.operation_fingerprint)&&taskOperations.has(e.operation_fingerprint));
+  const taskComposer = {observed:taskSends.length,total:taskSends.reduce((n,e)=>n+(number(e.composer_wire_bytes)?e.composer_wire_bytes:0),0),
+    complete:taskSends.length>0&&taskSends.every(e=>number(e.composer_wire_bytes))};
   const terminal = rows.filter(e=>e.stage==='native_outcome_committed'&&e.outcome==='final').at(-1)??retired;
   const end=terminal??last;
   const duration=rows.length&&end?Math.max(0,Date.parse(end.ts)-Date.parse(rows[0]!.ts)):undefined;
@@ -150,7 +154,10 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
       summaryAttempts:at('native_checkpoint_model_started').length, summaryCompleted:rows.filter(e=>e.stage==='native_visible_prefix_stage_settled'&&e.outcome==='completed').length,
       summaryReused:rows.filter(e=>e.stage==='native_visible_prefix_stage_settled'&&e.outcome==='reused').length,
       settled:at('web_context_settled').some(e=>e.status==='completed')},
-    cost:{composer:bytes, context:body, protocol, preparedComposer:sum('browser_message_prepared','composer_wire_bytes'), attachments:sum('web_media_upload_started','total_bytes'), toolText:results,
+    cost:{composer:bytes, context:body, protocol, taskComposer,
+      preparationTransfer:sum('checkpoint_transfer_planned','transfer_estimate'),
+      preparationModelCalls:sum('native_checkpoint_efficiency_settled','model_calls'),
+      preparationModelDuration:sum('native_visible_prefix_stage_settled','duration_ms'), preparedComposer:sum('browser_message_prepared','composer_wire_bytes'), attachments:sum('web_media_upload_started','total_bytes'), toolText:results,
       mcpRequestEnvelope:mcpRequest,mcpResultEnvelope:mcpResult, billedUsage:'unmeasured', semanticRecall:'not_evaluated'},
     evidence:{rows:rows.length, clipped:events.length>512,postTerminalEvents:terminal?rows.filter(e=>e.ts>terminal.ts).length:0, scope:'observed_local_events', hostDisplay:'not_observed'},
   };
@@ -160,23 +167,30 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
 export function startTurnDiagnosticSummary(scope: string, turn: string, request?: string) {
   if(!fp(scope)||!fp(turn)||!configuredDiagnosticRoot())return;
   const startedAt=performance.now();
+  const durable = new Map<string,StructuralDiagnosticEvent>();
   const rows:StructuralDiagnosticEvent[]=[];const requests=new Set<string>(fp(request)?[request]:[]);
   let clipped=false,closed=false;
+  let receipt: StructuralDiagnosticEvent | undefined;
   const stop=observeDiagnosticEvents(row=>{
+    if(closed&&row.stage==='native_cycle_summary'&&row.scope_fingerprint===scope&&row.turn_fingerprint===turn){receipt=row;return;}
     if(closed||row.stage==='native_cycle_summary'||!relevant(row.stage))return;
     const direct=fp(row.scope_fingerprint)&&fp(row.turn_fingerprint);
     if(direct?(row.scope_fingerprint!==scope||row.turn_fingerprint!==turn):!fp(row.request_fingerprint)||!requests.has(row.request_fingerprint))return;
     if(fp(row.request_fingerprint)&&requests.size<64)requests.add(row.request_fingerprint);
+    if (/^(web_turn_plan|web_retained_context_.*|web_context_settled|web_send_activation_started|native_seed_authority_observed|checkpoint_transfer_planned|native_checkpoint_efficiency_settled|native_checkpoint_model_started|native_visible_prefix_stage_settled|native_working_checkpoint_advanced|web_model_picker_timeout|native_execution_failed|native_tool_request_rejected|web_preparation_failed)$/.test(row.stage)) {
+      const key=JSON.stringify([row.stage,row.operation_fingerprint,row.phase]);
+      if(durable.has(key)||durable.size<DIAGNOSTIC_LIMITS.timeline-1)durable.set(key,row);
+    }
     if(rows.length>=512){clipped=true;rows.shift();}rows.push(row);
   });
   if(!stop)return;
   withDiagnosticContext({scope_fingerprint:scope,turn_fingerprint:turn,...(fp(request)?{request_fingerprint:request}:{})},()=>
     emitDiagnosticEvent('chatgpt_tela_work','native_cycle_observation_started'));
   return {finish(){
-    if(closed)return;closed=true;stop();
+    if(closed)return;closed=true;
     try{
       const s=summarizeTurnDiagnostics(rows);
-      withDiagnosticContext({scope_fingerprint:scope,turn_fingerprint:turn},()=>emitDiagnosticEvent('chatgpt_tela_work','native_cycle_summary',{
+      const fields = {
         contract_version:1,state:s.state,local_final_committed:s.localFinalCommitted,summary_complete:!clipped,process_local_only:true,
         observed_event_count:rows.length,web_send_count:s.submission.activations,web_accept_count:s.submission.accepted,
         causal_receipt:s.submission.causal,observer_count:s.transport.responseObservers,observer_replacement_count:s.transport.observerReplacements,
@@ -185,12 +199,19 @@ export function startTurnDiagnosticSummary(scope: string, turn: string, request?
         ...(s.submission.firstFailure?{first_reason_class:String(s.submission.firstFailure)}:{}),
         context_settled:s.context.settled,composer_measured:s.cost.composer.complete,protocol_measured:s.cost.protocol.complete,
         composer_wire_bytes:s.cost.composer.total,context_wire_bytes:s.cost.context.total,protocol_wire_bytes:s.cost.protocol.total,
+        task_composer_measured:s.cost.taskComposer.complete, task_composer_wire_bytes:s.cost.taskComposer.total,
+        preparation_measured:s.cost.preparationTransfer.complete, preparation_transfer_estimate:s.cost.preparationTransfer.total, preparation_model_call_count:s.cost.preparationModelCalls.total,
+        preparation_model_duration_ms:s.cost.preparationModelDuration.total,
         duration_ms:Math.max(0,Math.round(performance.now()-startedAt)),
         ...(s.context.mode?{context_mode:String(s.context.mode)}:{}),
         ...(s.context.checkpointReused===undefined?{}:{request_checkpoint_reused:s.context.checkpointReused}),
         ...(s.context.logicalEstimate===undefined?{}:{logical_estimate:s.context.logicalEstimate}),
         ...(s.context.transferEstimate===undefined?{}:{transfer_estimate:s.context.transferEstimate}),
-      }));
+      };
+      withDiagnosticContext({scope_fingerprint:scope,turn_fingerprint:turn},()=>emitDiagnosticEvent('chatgpt_tela_work','native_cycle_summary',fields));
+      const root=configuredDiagnosticRoot();
+      if(root&&receipt)writeDiagnosticIncident(root,{stage:receipt.stage,observedAt:receipt.ts,timeline:[...durable.values(),receipt]});
     }catch{/* Diagnostics never affect lifecycle. */}
+    finally{stop();}
   }};
 }

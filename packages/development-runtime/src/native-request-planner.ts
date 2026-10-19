@@ -298,12 +298,14 @@ function retainedDelta(
   committed: CommittedRetainedContext,
   currentRouteIdentity: string,
   budgetTokens: number | undefined,
+  onMiss?: (reason: string) => void,
 ): WebPhysicalContext | undefined {
-  if (committed.routeIdentity !== currentRouteIdentity) return undefined;
+  const miss = (reason: string): undefined => { onMiss?.(reason); return undefined; };
+  if (committed.routeIdentity !== currentRouteIdentity) return miss("route_changed");
   const inputHeadIndex = projection.revisions.findIndex(item => (
     item.revision.id === committed.inputHeadRevisionId
   ));
-  if (inputHeadIndex < 0) return undefined;
+  if (inputHeadIndex < 0) return miss("input_head_missing");
 
   // Match the answer to the immediately completed original Native request,
   // not to the last assistant message whose prose happens to repeat it.
@@ -317,29 +319,29 @@ function retainedDelta(
     if (kind === "assistant") {
       // Attributed agent data and source-bound summaries cannot witness our final,
       // even if their serialized text happens to equal its answer fingerprint.
-      if (projection.protectedRevisionIds.includes(projection.revisions[index]!.revision.id)) return undefined;
+      if (projection.protectedRevisionIds.includes(projection.revisions[index]!.revision.id)) return miss("protected_answer_boundary");
       // Ambiguous multi-message Native completion has no single proven
       // committed answer boundary. Rebuild from canonical history.
-      if (assistantIndex >= 0) return undefined;
+      if (assistantIndex >= 0) return miss("ambiguous_answer_boundary");
       assistantIndex = index;
     } else if (assistantIndex >= 0) {
       // A later tool event after a purported final answer is not proven to
       // exist on the retained physical Web page.
-      return undefined;
+      return miss("events_after_answer");
     }
   }
-  if (assistantIndex < 0) return undefined;
+  if (assistantIndex < 0) return miss("answer_boundary_missing");
   const assistant = projection.revisions[assistantIndex]!;
-  if (contentFingerprint(assistant.content) !== committed.answerFingerprint) return undefined;
+  if (contentFingerprint(assistant.content) !== committed.answerFingerprint) return miss("answer_changed");
 
   const delta = projection.revisions.slice(assistantIndex + 1);
-  if (delta.length === 0) return undefined;
+  if (delta.length === 0) return miss("empty_suffix");
   const activeRequest = [...delta].reverse().find(item => (
     item.revision.kind === "user" || item.revision.kind === "steering"
   ));
-  if (!activeRequest) return undefined;
+  if (!activeRequest) return miss("active_request_missing");
   const transferTokens = delta.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
-  if (budgetTokens !== undefined && transferTokens > budgetTokens) return undefined;
+  if (budgetTokens !== undefined && transferTokens > budgetTokens) return miss("suffix_budget");
   const logicalTokens = projection.revisions
     .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
   return Object.freeze({
@@ -364,9 +366,11 @@ function admittedRetainedContext(
   route: string,
   budgetTokens: number | undefined,
   outputReserveTokens: number,
+  diagnostic?: { reason?: string },
 ): { readonly physicalContext: WebPhysicalContext; readonly media: readonly WebTurnMedia[];
   readonly pressure?: WebEpochPressure } | undefined {
-  const delta = retainedDelta(projection, committed, route, budgetTokens);
+  const delta = retainedDelta(projection, committed, route, budgetTokens,
+    reason => { if (diagnostic) diagnostic.reason = reason; });
   if (!delta) return undefined;
   const bound = bindNativePhysicalEvidence(projection, delta);
   const media = includedMedia(projection, bound);
@@ -895,6 +899,12 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         provenRetainedProjection = provisional;
       }
     }
+    emitDiagnosticEvent("chatgpt_tela_work", "web_retained_context_hot_probe", {
+      prior_settlement_present: committed !== undefined, cached_history_present: hot !== undefined,
+      opaque_matches: !!opaqueFingerprint && hot?.opaqueFingerprint === opaqueFingerprint,
+      route_matches: committed?.routeIdentity === currentRouteIdentity,
+      reuse_eligible: provenRetainedProjection !== undefined,
+    });
     // The continuity resolver owns all cold-source and checkpoint decisions.
     // Native task authority and Web surface settlement stay in this planner.
     stage("native_continuity");
@@ -948,11 +958,19 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     const freshBudgetTokens = options.budgetTokens === undefined && physicalLimits
       && exactActiveTokens + 2_048 >= physicalLimits.rolloverTokenLimit
       ? physicalLimits.contextWindowTokenLimit : budgetTokens;
+    const retentionDiagnostic: { reason?: string } = {};
     const admitted = committed ? admittedRetainedContext(projection, committed,
-      currentRouteIdentity, budgetTokens, workingPolicy.outputReserveTokens) : undefined;
+      currentRouteIdentity, budgetTokens, workingPolicy.outputReserveTokens, retentionDiagnostic) : undefined;
     const pressure = admitted?.pressure;
     const healthyRetained = !!(admitted && committed
       && (!committed.physicalLimits || pressure && !pressure.shouldRollover));
+    emitDiagnosticEvent("chatgpt_tela_work", "web_retained_context_decision", {
+      reason_class: !committed ? "no_committed_context" : !admitted ? retentionDiagnostic.reason ?? "unclassified"
+        : pressure?.shouldRollover ? "physical_pressure" : healthyRetained ? "retained_match" : "pressure_unavailable",
+      prior_settlement_present: committed !== undefined, reuse_eligible: healthyRetained,
+      ...(pressure ? { epoch_input_estimate: pressure.estimatedEpochInputTokens,
+        epoch_rollover_limit: pressure.effectiveRolloverTokenLimit, physical_rollover: pressure.shouldRollover } : {}),
+    });
     // Maintenance is optional while the exact physical page is healthy.
     // A budget refusal BEFORE the first maintenance stage claim may defer
     // preparation; pending/uncertain sends and source/owner errors never may.

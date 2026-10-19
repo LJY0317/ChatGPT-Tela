@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  observeDiagnosticEvents,
   NativeToolInventory,
   defineNativeTurnAuthority,
   type NativeToolDescriptor,
@@ -190,12 +191,19 @@ describe("runtime turn channel", () => {
     await result;
     channel.markWebContinuation();
 
+    const rows:unknown[]=[];
+    const stop=observeDiagnosticEvents(row=>{if(row.stage==="native_tool_request_rejected")rows.push(row);});
+    try {
     expect(() => channel.requestTool({
       callId: "call-1",
       wireName: "exec_command",
       mode: "structured",
       arguments: {},
     })).toThrow("already used");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({reason_class:"duplicate_call",execution_dispatched:false,tool_round_count:1});
+      expect(JSON.stringify(rows)).not.toContain("call-1");
+    }finally{stop?.();}
   });
 
   test("committed Native tool delivery is not emitted again while its result is pending", async () => {

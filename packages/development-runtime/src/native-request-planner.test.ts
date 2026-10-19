@@ -9,6 +9,7 @@ import {
   chatGptWebCheckpointSourceTokenLimit,
 } from "@chatgpt-tela/chatgpt";
 import {
+  observeDiagnosticEvents,
   NativeToolInventory,
   decodeNativeInlineEvidence,
   nativeEvidenceRef,
@@ -1815,5 +1816,20 @@ test('failed context fitting retains numeric source composition without private 
   expect(rows).toHaveLength(1);
   expect(rows[0]).toMatchObject({phase:'physical_context_fit',fit_budget:1,checkpoint_selected:false,revision_count:2,authority_bytes:17,user_bytes:15});
   expect(JSON.stringify(rows)).not.toContain('PRIVATE');
+ }finally{stop?.();}
+});
+
+test('retention decisions explain answer mismatch without changing reconstruction',async()=>{
+ const reasons:unknown[]=[];
+ const stop=observeDiagnosticEvents(row=>{if(row.stage==='web_retained_context_decision')reasons.push(row.reason_class);});
+ try{
+  const planner=createNativeRequestDevelopmentWebTurnPlanner();
+  const request={input:[{type:'message',role:'user',content:'Do A.'}]};
+  const first=await planner(registered(),request);
+  first.settle?.({status:'completed',documentGeneration:1,surfaceLeaseId:'page',answer:'A done.'});
+  const next=await planner(registered(),{input:[...request.input,{type:'message',role:'assistant',content:'Changed answer.'},{type:'message',role:'user',content:'Do B.'}]});
+  expect(next.physicalContext.mode).not.toBe('retained-delta');
+  expect(reasons).toEqual(['no_committed_context','answer_changed']);
+  next.settle?.({status:'failed'});
  }finally{stop?.();}
 });

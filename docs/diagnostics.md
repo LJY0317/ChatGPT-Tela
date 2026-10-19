@@ -1115,3 +1115,21 @@ Tailscale reconnection; do not reset routes, credentials or user settings to pro
 Existing Tailscale status reads also record self-online observation, health-warning counts,
 peer/active-peer counts and exit-node selection. No peer identities, warning text, addresses
 or extra polling are retained. These local facts alone cannot prove public relay health.
+
+### Context efficiency receipts
+
+`web_retained_context_hot_probe` separates a cached-history miss from a surviving-page proof.
+`web_retained_context_decision` records the actual reuse or reconstruction reason (route,
+input/answer ancestry, suffix budget, or physical pressure) and the applicable estimates.
+It does not change the planner's choice. Native tool admission refusals distinguish duplicate
+call IDs, pending calls and turn phase, without recording IDs or dispatching another call.
+
+Cycle cost reports separate task-composer bytes from checkpoint preparation transfer estimates,
+model calls and elapsed model time. A small retained delta is not the total cost of a request
+that also prepares a checkpoint; none of these values are provider billing receipts.
+
+At cycle closure, a sparse structural timeline and its exact summary receipt are saved through
+the existing local incident store (64 incidents, 30 days, 4 MiB total). `diagnostics context`
+merges these receipts with available detailed events and deduplicates them. Rotated details
+remain unknown; this bounded archive does not promise lifetime history for every conversation.
+No model input, browser prose, extra polling or remote upload is added.

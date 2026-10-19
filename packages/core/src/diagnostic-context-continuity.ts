@@ -135,6 +135,10 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
   for (const [key,state] of turns) {
     const observations=attributedRows.get(key)??[];
     state.summary=summarizeTurnDiagnostics(observations);
+    state.retentionDecisions=observations.filter(row=>row.stage==='web_retained_context_decision').map(row=>({
+      at:row.ts,reason:row.reason_class,reuseEligible:row.reuse_eligible,priorSettlementPresent:row.prior_settlement_present,
+      inputEstimate:count(row.epoch_input_estimate),rolloverLimit:count(row.epoch_rollover_limit),
+    }));
     const latestPlan=state.plans.at(-1);
     state.summary.context.retentionLink=latestPlan?.retentionLink??"incomplete_evidence";
     state.summary.context.seedCost=latestPlan?.seedCost;
@@ -152,6 +156,10 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
       mode:MODES.has(String(row.context_mode))?row.context_mode:"unknown",
       logicalEstimate:count(row.logical_estimate),transferEstimate:count(row.transfer_estimate),
       composerBytes:row.composer_measured===true?count(row.composer_wire_bytes):undefined,
+      taskComposerBytes:row.task_composer_measured===true?count(row.task_composer_wire_bytes):undefined,
+      preparationTransferEstimate:row.preparation_measured===true?count(row.preparation_transfer_estimate):undefined,
+      preparationModelCalls:row.preparation_measured===true?count(row.preparation_model_call_count):undefined,
+      preparationModelDurationMs:count(row.preparation_model_duration_ms),
       protocolBytes:row.protocol_measured===true?count(row.protocol_wire_bytes):undefined,
       contextBytes:row.composer_measured===true?count(row.context_wire_bytes):undefined,
     }));

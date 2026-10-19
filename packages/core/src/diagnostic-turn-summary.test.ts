@@ -2,6 +2,7 @@ import {expect,test} from 'bun:test';
 import {mkdtempSync,readFileSync,rmSync} from 'node:fs';import{join}from'node:path';import{tmpdir}from'node:os';
 import {summarizeTurnDiagnostics,startTurnDiagnosticSummary} from './diagnostic-turn-summary';
 import {emitDiagnosticEvent} from './diagnostic-events';import{withDiagnosticContext}from'./diagnostic-context';
+import {listDiagnosticIncidents,readDiagnosticIncident} from './diagnostic-store';
 import type{StructuralDiagnosticEvent}from'./diagnostic-store';
 const scope='1'.repeat(24),turn='2'.repeat(24),request='3'.repeat(24),op='4'.repeat(24);
 let tick=0;
@@ -135,4 +136,41 @@ test('progress summary distinguishes local body delivery from host rendering',()
  const result=summarizeTurnDiagnostics([e('web_public_progress_title_only'),e('web_public_progress_ready'),e('public_progress_published'),e('public_progress_sse_queued'),e('public_progress_sse_pulled'),e('public_progress_transport_observed',{accepted:false})]);
  expect(result.progress).toEqual({titleOnlyObservations:1,ready:1,published:1,queued:1,pulled:1,transportRefusals:1,hostDisplay:'not_observed'});
  expect(result.state).toBe('in_progress');
+});
+
+test('task input and checkpoint preparation costs remain separate',()=>{
+ const preparation='5'.repeat(24);
+ const result=summarizeTurnDiagnostics([
+  e('web_turn_plan',{operation_fingerprint:op,context_mode:'retained-delta'}),
+  e('web_send_activation_started',{operation_fingerprint:op,composer_wire_bytes:100}),
+  e('web_send_activation_started',{operation_fingerprint:preparation,composer_wire_bytes:50}),
+  e('checkpoint_transfer_planned',{operation_fingerprint:preparation,transfer_estimate:23000}),
+  e('native_checkpoint_efficiency_settled',{model_calls:1}),
+  e('native_visible_prefix_stage_settled',{duration_ms:10000}),
+  e('native_tool_request_rejected',{reason_class:'duplicate_call'}),
+ ]);
+ expect(result.state).toBe('in_progress');
+ expect(result.cost.taskComposer).toEqual({observed:1,total:100,complete:true});
+ expect(result.cost.composer.total).toBe(150);
+ expect(result.cost.preparationTransfer.total).toBe(23000);
+ expect(result.cost.preparationModelDuration.total).toBe(10000);
+});
+
+test('cycle closure archives sparse context evidence locally without private prose',()=>{
+ const root=mkdtempSync(join(tmpdir(),'tela-durable-cycle-')),file=join(root,'events.jsonl');
+ const prior=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+ const observer=startTurnDiagnosticSummary(scope,turn,request)!;
+ try{
+  withDiagnosticContext({scope_fingerprint:scope,turn_fingerprint:turn,request_fingerprint:request},()=>{
+   emitDiagnosticEvent('chatgpt_tela_work','web_retained_context_decision',{reason_class:'retained_match',reuse_eligible:true});
+   emitDiagnosticEvent('chatgpt_tela_work','web_turn_plan',{context_mode:'retained-delta',transfer_estimate:4});
+   emitDiagnosticEvent('chatgpt_tela_work','native_outcome_committed',{outcome:'final'});
+  });
+  observer.finish();observer.finish();
+  const incidents=listDiagnosticIncidents(join(root,'diagnostics'));
+  expect(incidents).toHaveLength(1);
+  const incident=readDiagnosticIncident(join(root,'diagnostics'),incidents[0]!.ref) as {stage:string;timeline:StructuralDiagnosticEvent[]};
+  expect(incident.stage).toBe('native_cycle_summary');
+  expect(incident.timeline.map((row:any)=>row.stage)).toEqual(['web_retained_context_decision','web_turn_plan','native_cycle_summary']);
+ }finally{observer.finish();if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;rmSync(root,{recursive:true,force:true});}
 });
