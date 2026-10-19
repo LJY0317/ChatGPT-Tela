@@ -1133,3 +1133,19 @@ the existing local incident store (64 incidents, 30 days, 4 MiB total). `diagnos
 merges these receipts with available detailed events and deduplicates them. Rotated details
 remain unknown; this bounded archive does not promise lifetime history for every conversation.
 No model input, browser prose, extra polling or remote upload is added.
+
+### Web model discovery and preparation failures
+
+Each picker discovery, selection or canary has a surface-bound operation fingerprint.
+The trace records existing UI steps and dispatch outcomes, changed structural snapshots,
+control/menu linkage, document visibility/focus, model-row selection/duplication, effort
+range/tick state, and ownership/document lifetime at failure. Fixed error categories
+distinguish immediate validation/activation failures from timeouts. Original selection
+restoration has a separate flag; a cleanup error never hides the primary failure.
+
+Evidence is captured before restoration or lease release. Account, connector and readiness
+failures receive the same preparation-stage evidence boundary. Existing explicit private
+capture controls HTML/JPEG and exception details; no raw labels or exception prose enter
+structural logs. Capture stays bounded and best effort. No model request, extra UI input,
+retry, background sampler or approval policy change is introduced. Picker observations
+are emitted only when their structural shape changes. Global retention limits are unchanged.

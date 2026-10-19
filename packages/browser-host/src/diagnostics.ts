@@ -128,7 +128,7 @@ export const DIAGNOSTIC_DOM_CAPTURE = String.raw`function(privateCapture) {
   return result;
 }`;
 
-async function captureEvidence(surface: BrowserSurfaceLease, reason: "turn_failure" | "approval_anomaly" | "surface_anomaly" | "progress_description_missing" | "progress_prose_unmapped" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
+async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_picker_failed" | "web_preparation_failed" | "turn_failure" | "approval_anomaly" | "surface_anomaly" | "progress_description_missing" | "progress_prose_unmapped" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
   const root=configuredDiagnosticRoot(); if (!root) return;
   const operation=diagnosticContext().operation_fingerprint ?? diagnosticFingerprint([surface.taskId,surface.epochId].join("\n"));
   const key=operation+reason; const now=Date.now();
@@ -190,7 +190,7 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "turn_failu
 }
 
 /** Diagnostic failure never changes the browser turn result or approval policy. */
-export async function captureBrowserDiagnosticEvidence(surface: BrowserSurfaceLease, reason: "turn_failure" | "approval_anomaly" | "surface_anomaly" | "progress_description_missing" | "progress_prose_unmapped" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
+export async function captureBrowserDiagnosticEvidence(surface: BrowserSurfaceLease, reason: "model_picker_failed" | "web_preparation_failed" | "turn_failure" | "approval_anomaly" | "surface_anomaly" | "progress_description_missing" | "progress_prose_unmapped" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
   try { await captureEvidence(surface, reason); } catch { /* Best effort, including missing capabilities. */ }
 }
 

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { BROWSER_INSPECTION_INPUT, BROWSER_USER_HIDE, type BrowserHost, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { BROWSER_INSPECTION_INPUT, BROWSER_USER_HIDE, captureBrowserDiagnosticEvidence, type BrowserHost, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import { capturePrivateDiagnosticValue, diagnosticFailureFields, diagnosticFingerprint, withDiagnosticContext, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import type {
   ChatGptAccountIdentity,
   ChatGptCapabilities,
@@ -234,6 +234,20 @@ export function createChatGptProfileControl(input: {
           }
           return Object.freeze({ families, connector, capabilities });
         } catch (error) {
+          // Preparation owns this exact lease until finally. Capture before release,
+          // including failures outside the picker (account, connector, readiness).
+          await withDiagnosticContext({ operation_fingerprint: diagnosticFingerprint(surface.epochId),
+            surface_fingerprint: diagnosticFingerprint(surface.leaseId) }, async () => {
+            emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_preparation_stage_failed", {
+              proof_stage: stage, attempt, ...diagnosticFailureFields(error), cancelled: signal?.aborted ?? false,
+            });
+            try {
+              capturePrivateDiagnosticValue("web_preparation_failure", { stage, attempt,
+                error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { name: "unknown" } });
+              // The picker already captured its failure before restoring the selection.
+              if (stage !== "model-discovery") await captureBrowserDiagnosticEvidence(surface, "web_preparation_failed");
+            } catch { /* Evidence must not mask the original failure. */ }
+          });
           if (error instanceof ChatGptWebModelPickerControlUnavailableError
             && stage === "model-discovery" && attempt === 1 && !signal?.aborted) {
             emitDiagnosticEvent("chatgpt_tela_work", "web_preparation_recovery", {

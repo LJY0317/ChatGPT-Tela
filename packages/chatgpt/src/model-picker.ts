@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
 import {
-  BROWSER_PAGE_AUTOMATION,
-  type BrowserPageAutomation,
   type BrowserSurfaceLease,
 } from "@chatgpt-tela/browser-host";
 import { diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { runModelPickerOperation, type ModelPickerDiagnostics } from "./model-picker-diagnostics";
 import { CHATGPT_CURRENT_COMPOSER_SELECTOR } from "./dom-driver";
 
 export const CHATGPT_WEB_MODEL_PREFIX = "chatgpt-tela-web/family/";
@@ -91,6 +90,7 @@ interface PickerSlider {
   }[];
 }
 interface PickerSnapshot {
+  readonly diagnostic?: Readonly<Record<string, number | boolean>>;
   readonly structure?: {
     readonly composerCount: number;
     readonly composerFormPresent: boolean;
@@ -179,7 +179,39 @@ const OBSERVE_MODEL_PICKER = String.raw`function () {
     })) : [];
     sliderState = { min, max, value, power, ticks };
   }
+  let diagnostic = { probe_available: false };
+  try {
+    const linkedId = control?.getAttribute('aria-controls');
+    const rect = menu?.getBoundingClientRect();
+    const target = point(control);
+    const hit = target ? document.elementFromPoint(target.x, target.y) : undefined;
+    diagnostic = {
+      probe_available: true,
+      document_hidden: document.hidden,
+      document_focused: document.hasFocus(),
+      document_loading: document.readyState === 'loading',
+      document_complete: document.readyState === 'complete',
+      control_disabled: Boolean(control && (control.disabled || control.getAttribute('aria-disabled') === 'true')),
+      control_focused: Boolean(control && (control === document.activeElement || control.contains(document.activeElement))),
+      control_hit_proven: Boolean(control && hit && (hit === control || control.contains(hit))),
+      linked_menu_present: Boolean(linkedId && document.getElementById(linkedId)),
+      linked_menu_visible: Boolean(linkedId && visible(document.getElementById(linkedId))),
+      visible_menu_count: [...document.querySelectorAll('[role="menu"]')].filter(visible).length,
+      visible_radio_count: [...document.querySelectorAll('[role="menuitemradio"]')].filter(visible).length,
+      menu_in_form: Boolean(menu && form?.contains(menu)),
+      menu_connected: Boolean(menu?.isConnected),
+      menu_focused: Boolean(menu && menu.contains(document.activeElement)),
+      menu_width: rect ? Math.round(rect.width) : 0,
+      menu_height: rect ? Math.round(rect.height) : 0,
+      radio_row_count: rows.length,
+      hidden_radio_count: rows.filter(row => !visible(row)).length,
+      unlabelled_radio_count: rows.length - families.length,
+      slider_count: sliders.length,
+      advanced_trigger_count: advancedTriggers.length,
+    };
+  } catch { /* Diagnostic probes never affect picker decisions. */ }
   return {
+    diagnostic,
     structure: {
       composerCount: composers.length,
       composerFormPresent: Boolean(form),
@@ -306,12 +338,6 @@ const ACTIVATE_MODEL_PICKER_TARGET = String.raw`function (input) {
   return { ok: true };
 }`;
 
-function pageFor(surface: BrowserSurfaceLease): BrowserPageAutomation {
-  const page = surface.capability(BROWSER_PAGE_AUTOMATION);
-  if (!page) throw new Error("browser surface does not expose page automation for ChatGPT model selection");
-  return page;
-}
-
 function validSnapshot(raw: PickerSnapshot): PickerSnapshot {
   if (!Number.isSafeInteger(raw.controlCount) || raw.controlCount < 0 || !Number.isSafeInteger(raw.menuCount) || raw.menuCount < 0) {
     throw new Error("ChatGPT model picker returned invalid control counts");
@@ -325,12 +351,14 @@ function validSnapshot(raw: PickerSnapshot): PickerSnapshot {
   return raw;
 }
 
-async function observe(page: BrowserPageAutomation, signal?: AbortSignal): Promise<PickerSnapshot> {
-  return validSnapshot(await page.evaluate<undefined, PickerSnapshot>(OBSERVE_MODEL_PICKER, undefined, signal));
+async function observe(page: ModelPickerDiagnostics, signal?: AbortSignal): Promise<PickerSnapshot> {
+  const snapshot = await page.page.evaluate<undefined, PickerSnapshot>(OBSERVE_MODEL_PICKER, undefined, signal);
+  try { page.snapshot(snapshot); } catch { /* Diagnostic-only shape. */ }
+  return validSnapshot(snapshot);
 }
 
 async function activateTarget(
-  page: BrowserPageAutomation,
+  page: ModelPickerDiagnostics,
   input: {
     readonly target: "control" | "advanced" | "family" | "effort" | "effort-owner";
     readonly method: "focus" | "click" | "pointerdown" | "pointer-sequence";
@@ -339,18 +367,21 @@ async function activateTarget(
   },
   signal?: AbortSignal,
 ): Promise<void> {
-  const result = await page.evaluate<typeof input, { readonly ok: boolean; readonly reason?: string; readonly count?: number }>(
+  const result = await page.action(input.target + "_" + input.method.replaceAll("-", "_"), () => page.page.evaluate<typeof input, { readonly ok: boolean; readonly reason?: string; readonly count?: number }>(
     ACTIVATE_MODEL_PICKER_TARGET,
     input,
     signal,
-  );
+  ));
   if (!result.ok) {
+    emitDiagnosticEvent("chatgpt_tela_work", "web_model_picker_activation_rejected", { phase: page.phase,
+      target_kind: input.target, match_count: result.count ?? -1,
+      reason_class: ["composer-count", "control-count", "menu-count", "menu-missing", "advanced-count", "family-count", "slider-missing", "effort-index", "effort-owner-missing", "effort-tick-missing", "target-missing"].includes(result.reason ?? "") ? result.reason! : "unknown" });
     throw new Error(`ChatGPT model picker activation failed (${result.reason ?? "unknown"}${result.count === undefined ? "" : `:${result.count}`})`);
   }
 }
 
 async function waitForOptional(
-  page: BrowserPageAutomation,
+  page: ModelPickerDiagnostics,
   predicate: (snapshot: PickerSnapshot) => boolean,
   timeoutMs: number,
   signal?: AbortSignal,
@@ -366,12 +397,13 @@ async function waitForOptional(
 }
 
 async function waitFor(
-  page: BrowserPageAutomation,
+  page: ModelPickerDiagnostics,
   predicate: (snapshot: PickerSnapshot) => boolean,
   timeoutMs: number,
   stage: string,
   signal?: AbortSignal,
 ): Promise<PickerSnapshot> {
+  page.step(stage);
   const deadline = Date.now() + timeoutMs;
   let last: PickerSnapshot | undefined;
   while (true) {
@@ -410,7 +442,7 @@ async function waitFor(
   }
 }
 
-async function openPicker(page: BrowserPageAutomation, signal?: AbortSignal): Promise<PickerSnapshot> {
+async function openPicker(page: ModelPickerDiagnostics, signal?: AbortSignal): Promise<PickerSnapshot> {
   let snapshot = await waitFor(page, value => value.controlCount === 1, 15_000, "control", signal);
   if (snapshot.menuCount === 1) return snapshot;
   // Hidden/offscreen Electron surfaces do not always accept pointer hit-testing even though the
@@ -418,7 +450,7 @@ async function openPicker(page: BrowserPageAutomation, signal?: AbortSignal): Pr
   // then exact DOM click, then primary pointerdown. Every path is non-consequential and requires
   // structural menu readback before it is accepted.
   await activateTarget(page, { target: "control", method: "focus" }, signal);
-  await page.pressKey("Enter", signal);
+  await page.action("key_enter", () => page.page.pressKey("Enter", signal));
   const keyboard = await waitForOptional(page, value => value.menuCount === 1, 1_000, signal);
   if (keyboard) return keyboard;
 
@@ -431,14 +463,15 @@ async function openPicker(page: BrowserPageAutomation, signal?: AbortSignal): Pr
   return snapshot;
 }
 
-async function advancedPicker(page: BrowserPageAutomation, signal?: AbortSignal): Promise<PickerSnapshot> {
+async function advancedPicker(page: ModelPickerDiagnostics, signal?: AbortSignal): Promise<PickerSnapshot> {
+  page.step("advanced_view");
   let snapshot = await openPicker(page, signal);
   if (snapshot.view === "simple") {
     try {
       await activateTarget(page, { target: "advanced", method: "click" }, signal);
     } catch {
       if (!snapshot.advancedPoint) throw new Error("ChatGPT model picker has no unique advanced-family trigger");
-      await page.pointerClick(snapshot.advancedPoint, signal);
+      await page.action("trusted_pointer", () => page.page.pointerClick(snapshot.advancedPoint!, signal));
     }
     // Switching views can commit the preference and dismiss the menu. Reopen that same
     // control once; dismissal alone never proves either a family or an advanced view.
@@ -452,7 +485,7 @@ async function advancedPicker(page: BrowserPageAutomation, signal?: AbortSignal)
       if (current.menuCount !== 1 || current.view !== "simple" || !current.advancedPoint) {
         throw new Error("ChatGPT model picker advanced transition was not confirmed");
       }
-      await page.pointerClick(current.advancedPoint, signal);
+      await page.action("trusted_pointer", () => page.page.pointerClick(current.advancedPoint!, signal));
       const nativeTransition = await waitForOptional(page, value => value.menuCount === 0
         || ((value.view === "advanced" || value.view === "legacy") && value.families.length > 0), 1_000, signal);
       if (nativeTransition?.menuCount === 0) await openPicker(page, signal);
@@ -489,10 +522,11 @@ function effortAvailability(snapshot: PickerSnapshot): readonly ChatGptWebEffort
 }
 
 async function selectFamily(
-  page: BrowserPageAutomation,
+  page: ModelPickerDiagnostics,
   familyKey: string,
   signal?: AbortSignal,
 ): Promise<PickerSnapshot> {
+  page.step("select_family");
   const checked = (value: PickerSnapshot): boolean => {
     try {
       return families(value).some(row => row.key === familyKey && row.checked);
@@ -547,7 +581,7 @@ async function selectFamily(
       attempt: 2,
       method: "trusted-pointer",
     });
-    await page.pointerClick(target.point, signal);
+    await page.action("trusted_pointer", () => page.page.pointerClick(target.point!, signal));
     const committed = await verifyAfterActivation();
     if (committed) {
       emitDiagnosticEvent("chatgpt_tela_work", "web_model_family_selection_complete", {
@@ -561,10 +595,11 @@ async function selectFamily(
 }
 
 async function setEffort(
-  page: BrowserPageAutomation,
+  page: ModelPickerDiagnostics,
   effort: ChatGptWebEffort,
   signal?: AbortSignal,
 ): Promise<void> {
+  page.step("select_effort");
   let snapshot = await openPicker(page, signal);
   const slider = snapshot.slider;
   if (!slider) throw new Error("ChatGPT model picker exposes no effort slider");
@@ -589,7 +624,7 @@ async function setEffort(
     });
     if (slider.power) {
       if (tick.point) {
-        await page.pointerClick(tick.point, signal);
+        await page.action("trusted_pointer", () => page.page.pointerClick(tick.point!, signal));
         const pointerCommitted = await waitForOptional(page, value => value.slider?.value === targetValue, 1_500, signal);
         if (pointerCommitted) {
           emitDiagnosticEvent("chatgpt_tela_work", "web_model_effort_selection_complete", {
@@ -628,7 +663,7 @@ async function setEffort(
       for (let attempts = 0; attempts < CHATGPT_WEB_EFFORTS.length && current !== targetValue; attempts += 1) {
         const increasing = current < targetValue;
         const expected = current + (increasing ? 1 : -1);
-        await page.pressKey(increasing ? "ArrowRight" : "ArrowLeft", signal);
+        await page.action("key_effort_step", () => page.page.pressKey(increasing ? "ArrowRight" : "ArrowLeft", signal));
         const stepped = await waitForOptional(page, value => value.slider?.value !== current, 1_500, signal);
         if (!stepped?.slider || stepped.slider.value !== expected) {
           throw new Error(`ChatGPT effort slider did not move exactly one step toward ${effort}`);
@@ -653,46 +688,52 @@ export async function discoverChatGptWebModelFamilies(
   surface: BrowserSurfaceLease,
   signal?: AbortSignal,
 ): Promise<readonly ChatGptWebModelFamily[]> {
-  const page = pageFor(surface);
-  let snapshot = await advancedPicker(page, signal);
-  const candidates = families(snapshot);
-  if (candidates.length === 0) return Object.freeze([]);
-  const original = candidates.find(row => row.checked)!;
-  const originalSlider = snapshot.slider;
-  const originalEffortIndex = originalSlider ? originalSlider.value - originalSlider.min : undefined;
-  const discovered: ChatGptWebModelFamily[] = [];
-  let primaryError: unknown;
-  try {
-    for (const candidate of candidates) {
-      snapshot = await selectFamily(page, candidate.key, signal);
-      const availableEfforts = effortAvailability(snapshot);
-      if (availableEfforts.length > 0) {
-        discovered.push(Object.freeze({ key: candidate.key, label: candidate.label, availableEfforts }));
-      }
-    }
-    emitDiagnosticEvent("chatgpt_tela_work", "web_model_catalog_discovered", { family_count: discovered.length });
-    return Object.freeze(discovered);
-  } catch (error) {
-    primaryError = error;
-    throw error;
-  } finally {
+  return runModelPickerOperation(surface, "discovery", async page => {
+    let snapshot = await advancedPicker(page, signal);
+    const candidates = families(snapshot);
+    if (candidates.length === 0) return Object.freeze([]);
+    const original = candidates.find(row => row.checked)!;
+    const originalSlider = snapshot.slider;
+    const originalEffortIndex = originalSlider ? originalSlider.value - originalSlider.min : undefined;
+    const discovered: ChatGptWebModelFamily[] = [];
+    let primaryError: unknown;
     try {
-      await selectFamily(page, original.key, signal);
-      if (originalEffortIndex !== undefined) {
-        const restored = await openPicker(page, signal);
-        const slider = restored.slider;
-        if (!slider || originalEffortIndex < 0 || originalEffortIndex >= slider.ticks.length) {
-          throw new Error("ChatGPT model discovery could not restore the original effort");
+      for (const candidate of candidates) {
+        snapshot = await selectFamily(page, candidate.key, signal);
+        page.step("read_efforts");
+        const availableEfforts = effortAvailability(snapshot);
+        if (availableEfforts.length > 0) {
+          discovered.push(Object.freeze({ key: candidate.key, label: candidate.label, availableEfforts }));
         }
-        const effort = CHATGPT_WEB_EFFORTS[originalEffortIndex];
-        if (!effort) throw new Error("ChatGPT model discovery original effort is unsupported");
-        await setEffort(page, effort, signal);
       }
-      await page.pressKey("Escape", signal);
-    } catch (cleanupError) {
-      if (!primaryError) throw cleanupError;
+      emitDiagnosticEvent("chatgpt_tela_work", "web_model_catalog_discovered", { family_count: discovered.length });
+      return Object.freeze(discovered);
+    } catch (error) {
+      primaryError = error;
+      try { await page.failure(error); } catch { /* Best effort. */ }
+      throw error;
+    } finally {
+      page.restoration = true;
+      page.step("restore_original");
+      try {
+        await selectFamily(page, original.key, signal);
+        if (originalEffortIndex !== undefined) {
+          const restored = await openPicker(page, signal);
+          const slider = restored.slider;
+          if (!slider || originalEffortIndex < 0 || originalEffortIndex >= slider.ticks.length) {
+            throw new Error("ChatGPT model discovery could not restore the original effort");
+          }
+          const effort = CHATGPT_WEB_EFFORTS[originalEffortIndex];
+          if (!effort) throw new Error("ChatGPT model discovery original effort is unsupported");
+          await setEffort(page, effort, signal);
+        }
+        await page.action("key_escape", () => page.page.pressKey("Escape", signal));
+      } catch (cleanupError) {
+        try { await page.failure(cleanupError, true); } catch { /* Best effort. */ }
+        if (!primaryError) throw cleanupError;
+      }
     }
-  }
+  });
 }
 
 export async function selectChatGptWebModel(
@@ -700,53 +741,54 @@ export async function selectChatGptWebModel(
   input: { readonly familyKey: string; readonly effort: ChatGptWebEffort },
   signal?: AbortSignal,
 ): Promise<void> {
-  const page = pageFor(surface);
-  await selectFamily(page, input.familyKey, signal);
-  await setEffort(page, input.effort, signal);
-  await page.pressKey("Escape", signal);
+  return runModelPickerOperation(surface, "selection", async page => {
+    await selectFamily(page, input.familyKey, signal);
+    await setEffort(page, input.effort, signal);
+    await page.action("key_escape", () => page.page.pressKey("Escape", signal));
 
-  const effortIndex = CHATGPT_WEB_EFFORTS.indexOf(input.effort);
-  // A hidden Electron Power picker can occasionally commit a rendered effort tick while the
-  // family row drifts during the synthetic pointer fallback. Converge the two independent controls
-  // under exact readback, with a small fixed bound and no submit/resend side effect. Re-selecting a
-  // family or effort is allowed only after the mismatch itself has been structurally observed.
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const verified = await advancedPicker(page, signal);
-    const verifiedFamilies = families(verified);
-    const family = verifiedFamilies.find(row => row.key === input.familyKey);
-    const slider = verified.slider;
-    const familyReady = family?.checked === true;
-    const effortReady = Boolean(slider && slider.value === slider.min + effortIndex);
-    if (familyReady && effortReady) {
-      await page.pressKey("Escape", signal);
-      emitDiagnosticEvent("chatgpt_tela_work", "web_model_selected", {
-        provider_kind: "web", effort: input.effort,
-        family_fingerprint: diagnosticFingerprint(input.familyKey),
-        family_readback_proven: true, effort_readback_proven: true,
-        convergence_attempts: attempt,
+    const effortIndex = CHATGPT_WEB_EFFORTS.indexOf(input.effort);
+    // A hidden Electron Power picker can occasionally commit a rendered effort tick while the
+    // family row drifts during the synthetic pointer fallback. Converge the two independent controls
+    // under exact readback, with a small fixed bound and no submit/resend side effect. Re-selecting a
+    // family or effort is allowed only after the mismatch itself has been structurally observed.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const verified = await advancedPicker(page, signal);
+      const verifiedFamilies = families(verified);
+      const family = verifiedFamilies.find(row => row.key === input.familyKey);
+      const slider = verified.slider;
+      const familyReady = family?.checked === true;
+      const effortReady = Boolean(slider && slider.value === slider.min + effortIndex);
+      if (familyReady && effortReady) {
+        await page.action("key_escape", () => page.page.pressKey("Escape", signal));
+        emitDiagnosticEvent("chatgpt_tela_work", "web_model_selected", {
+          provider_kind: "web", effort: input.effort,
+          family_fingerprint: diagnosticFingerprint(input.familyKey),
+          family_readback_proven: true, effort_readback_proven: true,
+          convergence_attempts: attempt,
+        });
+        return;
+      }
+      emitDiagnosticEvent("chatgpt_tela_work", "web_model_selection_readback_mismatch", {
+        attempt,
+        requested_family_present: Boolean(family),
+        requested_family_checked: family?.checked ?? false,
+        checked_family_count: verifiedFamilies.filter(row => row.checked).length,
+        slider_present: Boolean(slider),
+        slider_min: slider?.min ?? -1,
+        slider_value: slider?.value ?? -1,
+        expected_slider_value: slider ? slider.min + effortIndex : -1,
+        view: verified.view ?? "none",
       });
-      return;
+      if (!familyReady) await selectFamily(page, input.familyKey, signal);
+      if (!effortReady) await setEffort(page, input.effort, signal);
+      await page.action("key_escape", () => page.page.pressKey("Escape", signal));
     }
-    emitDiagnosticEvent("chatgpt_tela_work", "web_model_selection_readback_mismatch", {
-      attempt,
-      requested_family_present: Boolean(family),
-      requested_family_checked: family?.checked ?? false,
-      checked_family_count: verifiedFamilies.filter(row => row.checked).length,
-      slider_present: Boolean(slider),
-      slider_min: slider?.min ?? -1,
-      slider_value: slider?.value ?? -1,
-      expected_slider_value: slider ? slider.min + effortIndex : -1,
-      view: verified.view ?? "none",
-    });
-    if (!familyReady) await selectFamily(page, input.familyKey, signal);
-    if (!effortReady) await setEffort(page, input.effort, signal);
-    await page.pressKey("Escape", signal);
-  }
-  throw new Error("ChatGPT model family/effort readback did not converge on the requested Web route");
+    throw new Error("ChatGPT model family/effort readback did not converge on the requested Web route");
+  });
 }
 
 async function currentChatGptWebModelSelection(
-  page: BrowserPageAutomation,
+  page: ModelPickerDiagnostics,
   signal?: AbortSignal,
 ): Promise<{ readonly familyKey: string; readonly effort: ChatGptWebEffort }> {
   try {
@@ -759,7 +801,7 @@ async function currentChatGptWebModelSelection(
     if (!effort) throw new Error("ChatGPT model picker current effort is outside the supported semantic range");
     return Object.freeze({ familyKey: family.key, effort });
   } finally {
-    await page.pressKey("Escape", signal).catch(() => {});
+    await page.action("key_escape", () => page.page.pressKey("Escape", signal)).catch(() => {});
   }
 }
 
@@ -775,71 +817,72 @@ export async function probeChatGptWebModelSelection(
   surface: BrowserSurfaceLease,
   signal?: AbortSignal,
 ): Promise<ChatGptWebModelSelectionCanary> {
-  const page = pageFor(surface);
-  const catalog = await discoverChatGptWebModelFamilies(surface, signal);
-  const original = await currentChatGptWebModelSelection(page, signal);
-  const originalFamily = catalog.find(family => family.key === original.familyKey);
-  if (!originalFamily || !originalFamily.availableEfforts.includes(original.effort)) {
-    throw new Error("ChatGPT model selection canary could not prove the original family/effort in the live catalog");
-  }
+  return runModelPickerOperation(surface, "canary", async page => {
+    const catalog = await discoverChatGptWebModelFamilies(surface, signal);
+    const original = await currentChatGptWebModelSelection(page, signal);
+    const originalFamily = catalog.find(family => family.key === original.familyKey);
+    if (!originalFamily || !originalFamily.availableEfforts.includes(original.effort)) {
+      throw new Error("ChatGPT model selection canary could not prove the original family/effort in the live catalog");
+    }
 
-  let target: { readonly familyKey: string; readonly effort: ChatGptWebEffort } | undefined;
-  const alternateEffort = originalFamily.availableEfforts.find(effort => effort !== original.effort);
-  if (alternateEffort) {
-    target = Object.freeze({ familyKey: original.familyKey, effort: alternateEffort });
-  } else {
-    const alternateFamily = catalog.find(family => family.key !== original.familyKey && family.availableEfforts.length > 0);
-    const effort = alternateFamily?.availableEfforts[0];
-    if (alternateFamily && effort) target = Object.freeze({ familyKey: alternateFamily.key, effort });
-  }
+    let target: { readonly familyKey: string; readonly effort: ChatGptWebEffort } | undefined;
+    const alternateEffort = originalFamily.availableEfforts.find(effort => effort !== original.effort);
+    if (alternateEffort) {
+      target = Object.freeze({ familyKey: original.familyKey, effort: alternateEffort });
+    } else {
+      const alternateFamily = catalog.find(family => family.key !== original.familyKey && family.availableEfforts.length > 0);
+      const effort = alternateFamily?.availableEfforts[0];
+      if (alternateFamily && effort) target = Object.freeze({ familyKey: alternateFamily.key, effort });
+    }
 
-  if (!target) {
+    if (!target) {
+      emitDiagnosticEvent("chatgpt_tela_work", "web_model_selection_canary_complete", {
+        family_count: catalog.length,
+        exercised: false,
+        restored: true,
+      });
+      return Object.freeze({
+        familyCount: catalog.length,
+        exercised: false,
+        restoredEffort: original.effort,
+      });
+    }
+
+    let primaryError: unknown;
+    try {
+      await selectChatGptWebModel(surface, target, signal);
+    } catch (error) {
+      primaryError = error;
+    }
+
+    let restoreError: unknown;
+    try {
+      await selectChatGptWebModel(surface, original, signal);
+      const restored = await currentChatGptWebModelSelection(page, signal);
+      if (restored.familyKey !== original.familyKey || restored.effort !== original.effort) {
+        throw new Error("ChatGPT model selection canary restoration readback did not match the original mode");
+      }
+    } catch (error) {
+      restoreError = error;
+    }
+
+    if (primaryError && restoreError) {
+      throw new AggregateError([primaryError, restoreError], "ChatGPT model selection canary failed and could not restore the original mode");
+    }
+    if (restoreError) throw restoreError;
+    if (primaryError) throw primaryError;
+
     emitDiagnosticEvent("chatgpt_tela_work", "web_model_selection_canary_complete", {
       family_count: catalog.length,
-      exercised: false,
+      exercised: true,
+      tested_effort: target.effort,
       restored: true,
     });
     return Object.freeze({
       familyCount: catalog.length,
-      exercised: false,
+      exercised: true,
+      testedEffort: target.effort,
       restoredEffort: original.effort,
     });
-  }
-
-  let primaryError: unknown;
-  try {
-    await selectChatGptWebModel(surface, target, signal);
-  } catch (error) {
-    primaryError = error;
-  }
-
-  let restoreError: unknown;
-  try {
-    await selectChatGptWebModel(surface, original, signal);
-    const restored = await currentChatGptWebModelSelection(page, signal);
-    if (restored.familyKey !== original.familyKey || restored.effort !== original.effort) {
-      throw new Error("ChatGPT model selection canary restoration readback did not match the original mode");
-    }
-  } catch (error) {
-    restoreError = error;
-  }
-
-  if (primaryError && restoreError) {
-    throw new AggregateError([primaryError, restoreError], "ChatGPT model selection canary failed and could not restore the original mode");
-  }
-  if (restoreError) throw restoreError;
-  if (primaryError) throw primaryError;
-
-  emitDiagnosticEvent("chatgpt_tela_work", "web_model_selection_canary_complete", {
-    family_count: catalog.length,
-    exercised: true,
-    tested_effort: target.effort,
-    restored: true,
-  });
-  return Object.freeze({
-    familyCount: catalog.length,
-    exercised: true,
-    testedEffort: target.effort,
-    restoredEffort: original.effort,
   });
 }
