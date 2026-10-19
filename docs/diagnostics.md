@@ -1240,3 +1240,18 @@ introduced. A connect syscall refines an otherwise ambiguous ETIMEDOUT phase.
 Public progress stream diagnostics include rejection reasons, producer completion,
 queued/pulled frame and summary counts, and drained versus consumer-cancelled closure.
 These establish the local HTTP consumption boundary, not a desktop UI render receipt.
+
+### Native outgoing connection trace
+
+Native forwarding passively observes request-scoped Node socket/Undici diagnostic events;
+it does not open diagnostic connections, change DNS/family policy or add retries. Existing
+failure/header records now include socket/lookup/attempt counts and observed TCP/TLS timing.
+No observed socket may mean reuse or unavailable runtime instrumentation; it is not failure.
+Concurrent requests use separate async contexts. Listeners detach at headers/failure; each
+request retains at most eight sockets and 48 events, with explicit incomplete coverage.
+Failure-time interface counts omit identities and distinguish nonlocal IPv6 availability
+from proof of a usable route. The existing opt-in local `native_backend_failure` artifact
+also retains ordered lookup/attempt/timeout/TCP/TLS events and address fingerprints; it
+contains no request headers or bodies and uses existing private retention. This can test
+whether 250-ms address attempts expire before an otherwise usable route connects, while
+leaving remote packet loss/filtering causes unproven without corresponding evidence.

@@ -1,3 +1,4 @@
+import { NativeConnectionTrace, nativeInterfaceShape } from "./native-connection-trace";
 import { getDefaultAutoSelectFamily, getDefaultAutoSelectFamilyAttemptTimeout, isIP } from "node:net";
 import { getDefaultResultOrder } from "node:dns";
 import { capturePrivateDiagnosticValue, networkFailureDiagnostics, emitDiagnosticEvent } from "@chatgpt-tela/core";
@@ -142,6 +143,7 @@ export async function forwardNativeCodexRequest(input: {
   target.search = incoming.search;
   const started = Date.now();
   let upstream: Response;
+  const transport = new NativeConnectionTrace();
   try {
     const outgoing = new Request(target, {
     method,
@@ -155,7 +157,8 @@ export async function forwardNativeCodexRequest(input: {
         ...shape.fields, provider_kind: "native", route_kind: input.endpoint.replaceAll("/", "_"), dispatch_count: 1,
       });
     }
-    upstream = await fetchUpstream(outgoing);
+    try { upstream = await transport.run(() => fetchUpstream(outgoing)); }
+    finally { transport.stop(); }
   } catch (error) {
     const causes: Record<string, unknown>[] = [];
     const attempts: Record<string, string | number | boolean>[] = [];
@@ -173,7 +176,7 @@ export async function forwardNativeCodexRequest(input: {
         stack: item.stack, code: item.code, syscall: item.syscall, address: item.address, port: item.port });
     });
     emitDiagnosticEvent("chatgpt_tela_network", "native_backend_request_failed", {
-      ...shape.fields, ...failure, route_kind: input.endpoint.replaceAll("/", "_"), reason_class: failure.network_kind,
+      ...shape.fields, ...failure, ...transport.fields(), ...nativeInterfaceShape(), route_kind: input.endpoint.replaceAll("/", "_"), reason_class: failure.network_kind,
       duration_ms: Date.now() - started, cancelled: input.request.signal.aborted,
       attempt_count: attempts.length,
       ipv4_attempt_count: attempts.filter(attempt => attempt.address_family === 4).length,
@@ -191,13 +194,13 @@ export async function forwardNativeCodexRequest(input: {
         env_proxy_enabled: process.env.NODE_USE_ENV_PROXY === "1",
       });
       for (const attempt of attempts) emitDiagnosticEvent("chatgpt_tela_network", "native_backend_connection_attempt", attempt);
-      capturePrivateDiagnosticValue("native_backend_failure", { route: input.endpoint, failure, causes });
+      capturePrivateDiagnosticValue("native_backend_failure", { route: input.endpoint, failure, causes, connectionTrace: transport.evidence() });
     } catch { /* Diagnostics preserve the original backend failure. */ }
     throw error;
   }
   if (input.endpoint === "models" || input.endpoint === "responses" || input.endpoint === "responses/compact") {
     emitDiagnosticEvent("chatgpt_tela_network", "native_dispatch_headers_received", {
-      route_kind: input.endpoint.replaceAll("/", "_"), status_code: upstream.status,
+      route_kind: input.endpoint.replaceAll("/", "_"), status_code: upstream.status, ...transport.fields(),
       duration_ms: Date.now() - started,
     });
   }
