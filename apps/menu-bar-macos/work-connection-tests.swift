@@ -78,17 +78,19 @@ precondition(signedOutWeb.connected && signedOutWeb.needsWebSignIn && TelaWebPre
 precondition(signedOutWeb.connectionLabel == "Web sign-in required")
 precondition(!TelaProfilePresentation(profile: signedOutWeb, inventoryError: nil, localProgress: nil).busy)
 var readyWeb = preparingWeb; readyWeb.webState = "ready"; readyWeb.webModelsReady = true
-precondition(readyWeb.connectionLabel == "Connected" && !TelaWebPresentation(profile: readyWeb).needsAttention)
+precondition(readyWeb.connectionLabel == "Connected" && TelaWebPresentation(profile: readyWeb).status == "Verified" && TelaWebPresentation(profile: readyWeb).buttonTitle == "Manage…")
+precondition(readyWeb.webModelsStatus == "Ready" && failedWeb.webModelsStatus == "Unavailable")
+precondition(accountBrowserWeb.webModelsStatus == "Paused")
 precondition(!TelaProfilePresentation(profile: readyWeb, inventoryError: nil, localProgress: nil).busy)
 precondition(TelaWebPresentation(profile: failedWeb, account: display).action == .reconnect)
 precondition(TelaWebPresentation(profile: preparingWeb, account: display).action == .none)
 let unverifiedAccount = TelaAccountDisplay(contractVersion: 1, slot: 1, native: display.native,
   web: .init(state: "unavailable", email: nil), comparison: "unavailable")
-precondition(TelaWebPresentation(profile: failedWeb, account: unverifiedAccount).buttonTitle == "Check account…")
+precondition(TelaWebPresentation(profile: failedWeb, account: unverifiedAccount).buttonTitle == "Verify…")
 precondition(TelaWebPresentation(profile: failedWeb, account: unverifiedAccount).status != "Sign-in required")
 let differentAccount = TelaAccountDisplay(contractVersion: 1, slot: 1, native: display.native,
   web: .init(state: "signed-in", email: "other@example.invalid"), comparison: "different")
-precondition(TelaWebPresentation(profile: readyWeb, account: differentAccount).buttonTitle == "Change account…")
+precondition(TelaWebPresentation(profile: readyWeb, account: differentAccount).buttonTitle == "Manage…")
 var recoveredProfile = readyWeb; recoveredProfile.targetId = "default"
 let startFailure = TelaProfileConnectionFailure(slot: 1, targetId: "default", goal: .connected)
 var recoveryInventory = TelaWorkInventory(); recoveryInventory.loaded([recoveredProfile])

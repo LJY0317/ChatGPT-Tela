@@ -261,7 +261,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       if let profile = workInventory.profiles.first(where: { $0.slot == slot }) {
         let presentation = TelaProfilePresentation(profile: profile, inventoryError: workInventory.error,
           localProgress: controlCenter.connectionProgressSlot == slot ? connectionProgress : nil)
-        let state = presentation.busy ? presentation.label : profile.connected ? "Connected" : profile.connectionLabel
+        let state = presentation.busy ? presentation.label : "Web models: \(profile.webModelsStatus)"
         item.title = "\(profile.targetDisplayName) — \(state)"
         item.state = profile.connected ? .on : .off
         profileToggleRows[slot]?.update(title: item.title,
@@ -574,7 +574,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         menu.addItem(item)
         addProfileOpen(profile.slot, name: profile.targetDisplayName, to: menu)
         let web = TelaWebPresentation(profile: profile)
-        if web.needsAttention, let title = web.buttonTitle {
+        if let title = web.buttonTitle {
           let selector: Selector
           switch web.action {
           case .finish: selector = #selector(finishWebAccountProfile(_:))

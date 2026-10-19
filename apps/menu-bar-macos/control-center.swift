@@ -700,9 +700,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         toggle.tag = profile.slot
         toggle.isEnabled = workInventory.error == nil && !operationInProgress && profile.connectionInProgress != true
         toggle.setAccessibilityLabel("Connect \(profile.targetDisplayName) to Tela")
-        let nativeState = workInventory.error != nil ? "Status unavailable"
-          : profile.connected ? "Ready" : profile.connectionInProgress == true ? "Connecting…" : "Off"
-        row("Computer work", subtitle: nativeState, control: toggle, in: profileCard)
+        let modelsState = workInventory.error != nil ? "Status unavailable" : profile.webModelsStatus
+        row("Web models", subtitle: modelsState, control: toggle, in: profileCard)
 
         let web = TelaWebPresentation(profile: profile, account: account)
         let controls = NSStackView()
@@ -735,7 +734,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         if controls.arrangedSubviews.isEmpty {
           controls.widthAnchor.constraint(equalToConstant: 0).isActive = true
         }
-        row("Web models", subtitle: workInventory.error == nil ? (localProgress ?? web.status) : "Status unavailable",
+        row("Account", subtitle: workInventory.error == nil ? (localProgress ?? web.status) : "Status unavailable",
             control: controls, in: profileCard)
         if connectionProfileSlot == profile.slot, let message = profileFailure {
           append(secondary(message), to: profileCard)

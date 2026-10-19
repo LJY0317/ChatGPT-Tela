@@ -42,6 +42,13 @@ struct TelaWorkProfile: Decodable, Equatable {
   var needsWebSignIn: Bool { connected && webState == "login-required" }
   var canReconnectWeb: Bool { connected && (webState == "failed" || webState == "ready") }
   var connected: Bool { controlState == "running" && targetSessionState == "ready" }
+  var webModelsStatus: String {
+    if !connected { return connectionInProgress == true ? "Connecting…" : "Off" }
+    if accountManagementActive == true { return "Paused" }
+    if webState == "preparing" { return "Connecting…" }
+    if webState == "ready" && webModelsReady != false { return "Ready" }
+    return "Unavailable"
+  }
   var action: String { connected ? "stop" : (targetState == "running" || controlState == "restart-required" ? "restart" : "start") }
   var connectionLabel: String {
     if connected && accountManagementActive == true { return "Finish account management" }
@@ -58,28 +65,27 @@ struct TelaWebPresentation {
   let status: String
   let action: Action
   let buttonTitle: String?
-  let needsAttention: Bool
 
   init(profile: TelaWorkProfile, account: TelaAccountDisplay? = nil) {
-    let result: (String, Action, String?, Bool)
+    let result: (String, Action, String?)
     if !profile.connected {
-      result = ("Off", .none, nil, false)
+      result = ("Off", .none, nil)
     } else if profile.accountManagementActive == true {
-      result = ("Finish in the browser", .finish, "Done", true)
+      result = ("Finish in the browser", .finish, "Done")
     } else if profile.connectionInProgress == true || profile.webState == "preparing" {
-      result = ("Connecting…", .none, nil, false)
+      result = ("Checking…", .none, nil)
     } else if profile.needsWebSignIn || account?.web.state == "signed-out" {
-      result = ("Sign-in required", .account, "Sign in…", true)
+      result = ("Sign-in required", .account, "Sign in…")
     } else if account?.comparison == "different" {
-      result = ("Different account", .account, "Change account…", true)
+      result = ("Different account", .account, "Manage…")
     } else if profile.webState == "ready" && profile.webModelsReady != false {
-      result = ("Ready", .account, "Account…", false)
+      result = ("Verified", .account, "Manage…")
     } else if account?.web.state == "signed-in" && profile.canReconnectWeb {
-      result = ("Unavailable", .reconnect, "Try again", true)
+      result = ("Verified", .reconnect, "Try again")
     } else {
-      result = ("Account not verified", .account, "Check account…", true)
+      result = ("Not verified", .account, "Verify…")
     }
-    status = result.0; action = result.1; buttonTitle = result.2; needsAttention = result.3
+    status = result.0; action = result.1; buttonTitle = result.2
   }
 }
 

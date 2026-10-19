@@ -819,11 +819,11 @@ Startup makes Native available first. The owned engine uses its official Native 
 cache and refresh path. Web preparation runs independently and adds only browser-discovered families after
 account binding, exact connector selection and a second fresh ChatGPT surface have been verified without
 sending a message. Work and the menu show Native readiness while Web prepares. A Web preparation failure
-keeps Native available. Work shows computer work and Web models separately. **Sign in…** opens a
-signed-out profile's browser; **Check account…** opens it when authentication cannot be verified.
+keeps Native available. Work shows **Web models** and **Account** separately. **Sign in…** opens a
+signed-out profile's browser; **Verify…** opens it when authentication cannot be verified.
 Sign in and close the browser, or choose **Done**, to check and restore Web models. **Try again**
 is offered for a failed connection only after Web sign-in has been verified. Failed submissions are
-never automatically resent. Duplicate account rows and technical diagnostics are omitted.
+never automatically resent. Verified accounts offer **Manage…** in Work and the menu. Duplicate account rows and technical diagnostics are omitted.
 
 Existing non-empty ChatGPT drafts are preserved. Clear or finish the draft with `bun run cli setup` for the
 default account, or `bun run cli setup --slot <n>` for an extra account. Connector-probe cleanup uses a bounded
