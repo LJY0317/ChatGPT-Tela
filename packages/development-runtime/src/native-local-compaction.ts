@@ -104,9 +104,6 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
         sourceMatches = operation.digest === sourceDigest; wireMatches = operation.wireDigest === wireDigest;
         if (!sourceMatches) throw new CompactionFailure(phase, "source_changed");
       }
-      // Never consume a Native tool result from a rejected changed-source retry.
-      // Settlement precedes summary execution but follows canonical source identity.
-      input.settlePendingToolResult?.(claim.threadId, claim.turnId, body);
       phase = "admission";
       if (!operation) {
         if (operations.size >= capacity) {
@@ -114,6 +111,9 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
           if (!oldest) throw new CompactionFailure(phase, "capacity_exhausted");
           operations.delete(oldest[0]);
         }
+        // A reused operation has already settled its exact canonical source.
+        // Do not deliver its Native tool result again on metadata-only retries.
+        input.settlePendingToolResult?.(claim.threadId, claim.turnId, body);
         const id = randomUUID(); operationId = id;
         const startedAt = Date.now();
         const result = withDiagnosticContext({ operation_fingerprint: diagnosticFingerprint(id), scope_fingerprint: diagnosticFingerprint(claim.threadId) }, async () => {

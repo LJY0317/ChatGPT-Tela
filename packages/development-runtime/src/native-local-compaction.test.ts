@@ -200,6 +200,8 @@ test('changed-source retry cannot settle an outstanding Native tool result',asyn
  });
  expect((await router(request(body())))?.status).toBe(200);
  expect(settled).toBe(1);
+ expect((await router(request(body({stream:true}))))?.status).toBe(200);
+ expect(settled).toBe(1);
  expect((await router(request(body({instructions:'changed history and source'}))))?.status).toBe(400);
  expect(settled).toBe(1);
 });
