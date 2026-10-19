@@ -819,12 +819,11 @@ Startup makes Native available first. The owned engine uses its official Native 
 cache and refresh path. Web preparation runs independently and adds only browser-discovered families after
 account binding, exact connector selection and a second fresh ChatGPT surface have been verified without
 sending a message. Work and the menu show Native readiness while Web prepares. A Web preparation failure
-keeps Native available. If the Web session is signed out, Tela shows **Web sign-in required**
-and **Sign in to Web…** opens that profile’s browser. Sign in and close the browser window;
-Tela checks the connection and restores Web models. You can also choose **Done — check Web connection**
-in Tela’s menu or profile settings. Native and Web sign-ins are separate.
-For other connection failures, **Reconnect Web** retries without reopening the Native app. Finish
-or stop an active Web turn before reconnecting. Failed submissions are never automatically resent.
+keeps Native available. Work shows computer work and Web models separately. **Sign in…** opens a
+signed-out profile's browser; **Check account…** opens it when authentication cannot be verified.
+Sign in and close the browser, or choose **Done**, to check and restore Web models. **Try again**
+is offered for a failed connection only after Web sign-in has been verified. Failed submissions are
+never automatically resent. Duplicate account rows and technical diagnostics are omitted.
 
 Existing non-empty ChatGPT drafts are preserved. Clear or finish the draft with `bun run cli setup` for the
 default account, or `bun run cli setup --slot <n>` for an extra account. Connector-probe cleanup uses a bounded
@@ -939,11 +938,11 @@ on exit or crash without polling. These source changes require a later package t
 binary. After a package upgrade, quit and reopen the menu bar to load its updated UI;
 the current upgrade operation restarts the background services but does not restart an already-running menu bar.
 
-The menu exposes a Web-model connection switch for each detected ChatGPT profile; single-profile
+The menu exposes a Tela connection switch for each detected ChatGPT profile; single-profile
 installs show one switch. The switch reflects verified live connection state, not service availability.
 Connecting an already-running ordinary app requires an explicit restart confirmation. Profile discovery
 errors retain the last known list with disabled controls and a refresh message rather than claiming no
-profiles exist. Background service controls are under Settings → Advanced in the Control Center. Stopping services requires interruption confirmation. Connection and approval switches use the native small control size.
+profiles exist. Background activity controls are under Settings → Tela in the Control Center. Stopping services requires interruption confirmation. Connection and approval switches use the native small control size.
 
 Connecting opens Work immediately and reports the actual checking, closing, preparing, and connecting
 stages. Controls remain disabled until a verified result arrives. A failed connection stays visible with
@@ -1226,7 +1225,7 @@ ChatGPT Tela is an independent, unofficial project and is not affiliated with Op
 
 ### macOS maintenance preview
 
-Open the control center → Settings → **Maintain Tela…** to update, repair, or remove Tela.
+Open the control center → Settings → **Updates & maintenance → Open…** to update, repair, or remove Tela.
 For an update or repair, select an extracted package from a trusted source. Repair needs the installed
 version. This preview does not yet download updates automatically.
 

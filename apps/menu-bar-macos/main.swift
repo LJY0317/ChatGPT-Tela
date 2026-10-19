@@ -261,8 +261,8 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       if let profile = workInventory.profiles.first(where: { $0.slot == slot }) {
         let presentation = TelaProfilePresentation(profile: profile, inventoryError: workInventory.error,
           localProgress: controlCenter.connectionProgressSlot == slot ? connectionProgress : nil)
-        let title = workInventory.profiles.count == 1 ? "Web models" : profile.targetDisplayName
-        item.title = "\(title) — \(presentation.label)"
+        let state = presentation.busy ? presentation.label : profile.connected ? "Connected" : profile.connectionLabel
+        item.title = "\(profile.targetDisplayName) — \(state)"
         item.state = profile.connected ? .on : .off
         profileToggleRows[slot]?.update(title: item.title,
           on: profile.connected, enabled: workInventory.error == nil && !controlCenter.connectionOperationInProgress
@@ -558,7 +558,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       }
       menu.addItem(.separator())
       for profile in workInventory.profiles {
-        let item = actionItem("Web in \(profile.targetDisplayName) — \(profile.connectionLabel)", action: #selector(toggleWorkProfile(_:)))
+        let item = actionItem(profile.targetDisplayName, action: #selector(toggleWorkProfile(_:)))
         item.tag = profile.slot
         item.state = profile.connected ? .on : .off
         item.image = profileIcon(profile)
@@ -573,22 +573,19 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         profileToggleRows[profile.slot] = row
         menu.addItem(item)
         addProfileOpen(profile.slot, name: profile.targetDisplayName, to: menu)
-        if profile.accountManagementActive == true {
-          let done = actionItem("Done — check Web connection", action: #selector(finishWebAccountProfile(_:)))
-          done.tag = profile.slot
-          done.isEnabled = !controlCenter.connectionOperationInProgress && workInventory.error == nil
-          menu.addItem(done)
-        } else if profile.needsWebSignIn {
-          let login = actionItem("Sign in to Web…", action: #selector(signInWebProfile(_:)))
-          login.tag = profile.slot
-          login.isEnabled = !controlCenter.connectionOperationInProgress && workInventory.error == nil
-          menu.addItem(login)
-        }
-        if profile.needsWebReconnect {
-          let retry = actionItem("Reconnect Web", action: #selector(reconnectWebProfile(_:)))
-          retry.tag = profile.slot
-          retry.isEnabled = !controlCenter.connectionOperationInProgress && workInventory.error == nil
-          menu.addItem(retry)
+        let web = TelaWebPresentation(profile: profile)
+        if web.needsAttention, let title = web.buttonTitle {
+          let selector: Selector
+          switch web.action {
+          case .finish: selector = #selector(finishWebAccountProfile(_:))
+          case .reconnect: selector = #selector(reconnectWebProfile(_:))
+          case .account: selector = #selector(signInWebProfile(_:))
+          case .none: selector = #selector(openControlCenter)
+          }
+          let action = actionItem(title, action: selector)
+          action.tag = profile.slot
+          action.isEnabled = !controlCenter.connectionOperationInProgress && workInventory.error == nil
+          menu.addItem(action)
         }
       }
     }

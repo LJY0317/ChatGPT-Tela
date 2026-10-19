@@ -35,20 +35,6 @@ private struct ControlCenterProfilesEnvelope: Decodable {
   let profiles: [ControlCenterProfileStatus]
 }
 
-private struct ControlCenterDelegationCapacity: Decodable {
-  struct Readers: Decodable { let used: Int; let limit: Int; let uncertain: Int }
-  let contractVersion: Int
-  let profileSlot: Int
-  let coverage: String
-  let available: Bool
-  let blockCode: String?
-  let readers: Readers
-  let writers: Readers
-  let total: ReadersTotal
-  let messageEn: String
-  struct ReadersTotal: Decodable { let used: Int; let limit: Int }
-}
-
 private struct ControlCenterBridgeSurface: Decodable { let id: String; let label: String }
 private struct ControlCenterApprovalWait: Decodable {
   let phase: String
@@ -222,7 +208,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var runningProfileApps: [Int: NSRunningApplication] = [:]
   private var profiles: [ControlCenterProfileStatus] { workInventory.profiles }
   private var profileAccounts: [Int: TelaAccountDisplay] = [:]
-  private var delegationCapacity: [Int: ControlCenterDelegationCapacity] = [:]
   private var accountInventory: [TelaWorkProfile] = []
   private var accountRevision = 0
   private var accountTask: Task<Void, Never>?
@@ -285,9 +270,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
   private var preferencesURL: URL {
     supportRoot.appendingPathComponent("config/preferences-v1.json", isDirectory: false)
-  }
-  private var logsURL: URL {
-    home.appendingPathComponent("Library/Logs/ChatGPT Tela", isDirectory: true)
   }
 
   func show() {
@@ -529,7 +511,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     return button
   }
 
-  private func row(_ title: String, subtitle: String? = nil, control: NSView, in stack: NSStackView) {
+  private func row(_ title: String, subtitle: String? = nil, control: NSView, in stack: NSStackView, emphasized: Bool = false) {
     let row = NSView()
     let text = NSStackView()
     text.distribution = .fill
@@ -537,7 +519,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     text.alignment = .leading
     text.spacing = 4
     let name = label(title)
-    name.font = .systemFont(ofSize: TelaStyle.bodySize, weight: .regular)
+    name.font = .systemFont(ofSize: TelaStyle.bodySize, weight: emphasized ? .semibold : .regular)
     append(name, to: text)
     if let subtitle { append(secondary(subtitle), to: text) }
     text.translatesAutoresizingMaskIntoConstraints = false
@@ -675,7 +657,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       }
       stack.addArrangedSubview(actionButton("Refresh status", action: #selector(refreshPage)))
     case .work:
-      pageHeader("Connect ChatGPT and check your Web activity.")
+      pageHeader("Your ChatGPT connections.")
       addTelaControl()
       if installedServiceControlsAvailable() && serviceStates["codex"] == "Ready" && (profiles.isEmpty || settingUp || setupMessage != nil) {
         let setup = card("Sign in and connect ChatGPT")
@@ -695,12 +677,21 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         if settingUp { append(secondary("Complete setup in the login window. Choose Finish setup from its menu or close the window. Cancel setup leaves the profile disconnected."), to: setup) }
         if let setupMessage { append(secondary(setupMessage), to: setup) }
       }
-      let profileCard = card(profiles.count > 1 ? "ChatGPT profiles" : "ChatGPT")
-      append(secondary("Web models · Work on your computer"), to: profileCard)
-      if let error = workInventory.error { append(secondary(error), to: profileCard) }
-      else if profiles.isEmpty { append(secondary("No Work profiles found."), to: profileCard) }
-      for (index, profile) in profiles.enumerated() {
-        if index > 0 { divider(in: profileCard) }
+      if workInventory.error != nil {
+        let unavailable = card()
+        row("Connection status unavailable", control: actionButton("Refresh", action: #selector(refreshPage)), in: unavailable)
+      } else if profiles.isEmpty {
+        append(secondary("No ChatGPT profiles found."), to: card())
+      }
+      for profile in profiles {
+        let profileCard = card()
+        let account = profileAccounts[profile.slot]
+        let open = actionButton("Open app", action: #selector(openProfileButton(_:)))
+        open.tag = profile.slot
+        open.isEnabled = workInventory.error == nil && profile.connectionInProgress != true && (profile.connected || !operationInProgress)
+        row(profile.targetDisplayName, subtitle: account?.native.email, control: open, in: profileCard, emphasized: true)
+        divider(in: profileCard)
+
         let toggle = NSSwitch()
         toggle.controlSize = .small
         toggle.state = profile.connected ? .on : .off
@@ -708,82 +699,46 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         toggle.action = #selector(toggleProfile(_:))
         toggle.tag = profile.slot
         toggle.isEnabled = workInventory.error == nil && !operationInProgress && profile.connectionInProgress != true
-        toggle.setAccessibilityLabel("Use Web models in \(profile.targetDisplayName)")
+        toggle.setAccessibilityLabel("Connect \(profile.targetDisplayName) to Tela")
+        let nativeState = workInventory.error != nil ? "Status unavailable"
+          : profile.connected ? "Ready" : profile.connectionInProgress == true ? "Connecting…" : "Off"
+        row("Computer work", subtitle: nativeState, control: toggle, in: profileCard)
+
+        let web = TelaWebPresentation(profile: profile, account: account)
         let controls = NSStackView()
         controls.orientation = .horizontal
-        let open = actionButton("Open", action: #selector(openProfileButton(_:)))
-        open.tag = profile.slot
-        open.isEnabled = workInventory.error == nil && profile.connectionInProgress != true && (profile.connected || !operationInProgress)
+        controls.spacing = 8
         let localProgress = connectionProfileSlot == profile.slot ? profileProgress : nil
-        let presentation = TelaProfilePresentation(profile: profile, inventoryError: workInventory.error, localProgress: localProgress)
-        if presentation.busy {
+        let busy = TelaProfilePresentation(profile: profile, inventoryError: workInventory.error, localProgress: localProgress).busy
+        if busy {
           let progress = NSProgressIndicator()
           progress.style = .spinning
           progress.controlSize = .small
           progress.isIndeterminate = true
-          progress.setAccessibilityLabel("Updating \(profile.targetDisplayName)'s connection")
+          progress.setAccessibilityLabel("Checking Web connection")
           controls.addArrangedSubview(progress)
           progress.startAnimation(nil)
         }
-        controls.addArrangedSubview(open)
-        controls.addArrangedSubview(toggle)
-        let subtitle = presentation.label
-        row(profile.targetDisplayName, subtitle: subtitle, control: controls, in: profileCard)
-        if let capacity = delegationCapacity[profile.slot] {
-          let state = capacity.available
-            ? "Managed Web delegation: write \(capacity.writers.used)/\(capacity.writers.limit), read \(capacity.readers.used)/\(capacity.readers.limit), total \(capacity.total.used)/\(capacity.total.limit)"
-            : "Managed Web delegation unavailable: \(capacity.blockCode ?? "unknown")"
-          let detail = secondary(state)
-          detail.toolTip = capacity.messageEn
-          if !capacity.available { detail.textColor = .systemOrange }
-          append(detail, to: profileCard)
-        } else if profile.connected {
-          append(secondary("Managed Web delegation capacity: unavailable"), to: profileCard)
-        }
-        if let account = profileAccounts[profile.slot] {
-          let native = secondary("ChatGPT Work: \(account.native.label)")
-          native.isSelectable = true
-          native.toolTip = "Account reported by this profile's Native Work engine. The Desktop app's separate UI session is not inspected."
-          append(native, to: profileCard)
-          let web = secondary("Web browser: \(account.web.label)")
-          web.isSelectable = true
-          append(web, to: profileCard)
-          if account.comparison == "different" {
-            let warning = secondary("Different email addresses. Turn off Web, then sign in to its browser with your Work account.")
-            warning.textColor = .systemOrange
-            append(warning, to: profileCard)
+        if let title = web.buttonTitle, installedServiceControlsAvailable() {
+          let selector: Selector
+          switch web.action {
+          case .account: selector = #selector(openLoginSetup(_:))
+          case .reconnect: selector = #selector(reconnectWebButton(_:))
+          case .finish: selector = #selector(finishWebAccountButton(_:))
+          case .none: selector = #selector(refreshPage)
           }
-        } else {
-          append(secondary(profile.connected ? "Checking accounts…" : "Web models off"), to: profileCard)
+          let button = actionButton(title, action: selector)
+          button.tag = profile.slot
+          button.isEnabled = !operationInProgress && workInventory.error == nil
+          controls.addArrangedSubview(button)
         }
-        if profile.needsWebSignIn {
-          append(secondary("Native models are available. Sign in to ChatGPT in this profile’s Web browser, then close that window to restore Web models."), to: profileCard)
+        if controls.arrangedSubviews.isEmpty {
+          controls.widthAnchor.constraint(equalToConstant: 0).isActive = true
         }
-        if profile.needsWebReconnect {
-          let retry = actionButton("Reconnect Web", action: #selector(reconnectWebButton(_:)))
-          retry.tag = profile.slot
-          retry.isEnabled = !operationInProgress && workInventory.error == nil
-          profileCard.addArrangedSubview(retry)
-        }
-
+        row("Web models", subtitle: workInventory.error == nil ? (localProgress ?? web.status) : "Status unavailable",
+            control: controls, in: profileCard)
         if connectionProfileSlot == profile.slot, let message = profileFailure {
           append(secondary(message), to: profileCard)
-        }
-        if profile.accountManagementActive == true {
-          append(secondary("When sign-in is complete, choose Done to close the Web browser and check your connection."), to: profileCard)
-          let done = actionButton("Done — check Web connection", action: #selector(finishWebAccountButton(_:)))
-          done.tag = profile.slot
-          done.isEnabled = !operationInProgress && workInventory.error == nil
-          profileCard.addArrangedSubview(done)
-        } else if installedServiceControlsAvailable() {
-          let login = actionButton(profile.needsWebSignIn ? "Sign in to Web…" : profile.connected ? "Manage Web account…" : "Sign in / manage connection…",
-                                   action: #selector(openLoginSetup(_:)))
-          login.tag = profile.slot
-          login.isEnabled = !operationInProgress && workInventory.error == nil
-          login.toolTip = profile.connected
-            ? "Open the Web browser for this profile. Close it when finished; Tela checks the Web connection again. Native stays open."
-            : "Sign in to the selected Tela Web profile."
-          profileCard.addArrangedSubview(login)
         }
       }
       let preview = card("Web activity")
@@ -846,7 +801,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       let interact = actionButton("Interact…", action: #selector(interactBridgeSurface))
       interact.isEnabled = selectedBridgeSurface != nil
       actions.addArrangedSubview(interact)
-      append(secondary("Snapshots refresh on request. Open browser is for viewing, selection and copying. Interact allows approvals and login; changing chats can interrupt the task. Closing hides the window and resets viewing mode."), to: preview)
+      interact.toolTip = "Allow input in the browser. Changing chats can interrupt the task."
       preview.addArrangedSubview(actions)
       stack.addArrangedSubview(actionButton("Refresh status", action: #selector(refreshPage)))
     case .settings:
@@ -897,41 +852,17 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       row("Wait before approving", control: delayPicker, in: approvals)
       append(secondary("Restart your Work profile to apply changes. This interrupts any active turn."), to: approvals)
       if preferenceError { append(secondary("Couldn't read approval settings."), to: approvals) }
-      let connections = card("Connection details")
-      for (index, service) in ["gateway", "chat", "codex"].enumerated() {
-        if index > 0 { divider(in: connections) }
-        let titles = ["gateway": "Tela connection", "chat": "Chat", "codex": "Work / Codex"]
-        addStatus(titles[service]!, value: serviceStates[service] ?? "Checking…", to: connections)
-      }
-      divider(in: connections)
-      let localOnly = ingressStatus?.availability == "ready" && ingressStatus?.externalClientReachability == "not-observed"
-      addStatus("ChatGPT connector", value: localOnly ? "Local route ready" : ingressStatus?.availability.capitalized ?? "Checking…", to: connections)
-      if let ingressStatus, ingressStatus.availability != "ready" || localOnly {
-        append(secondary(ingressStatus.detail), to: connections)
-      }
       if installedServiceControlsAvailable() {
-        let advanced = card("Advanced · Background services")
-        append(secondary("For troubleshooting or turning off Tela. Profile switches manage your Web connections."), to: advanced)
-        let buttons = NSStackView()
-        buttons.orientation = .horizontal
-        buttons.spacing = 12
-        let start = actionButton("Start services", action: #selector(startServices))
-        let stop = actionButton("Stop services…", action: #selector(stopServices))
-        start.isEnabled = !operationInProgress
-        stop.isEnabled = !operationInProgress
-        buttons.addArrangedSubview(start)
-        buttons.addArrangedSubview(stop)
-        advanced.addArrangedSubview(buttons)
-        if changingServices { append(secondary("Updating background services…"), to: advanced) }
+        let background = card("Tela")
+        let running = serviceStates.values.contains("Ready")
+        let button = actionButton(running ? "Stop Tela…" : "Start Tela", action: running ? #selector(stopServices) : #selector(startServices))
+        button.isEnabled = !operationInProgress
+        row("Background activity", subtitle: changingServices ? "Updating…" : nil, control: button, in: background)
       }
-      let support = card("Help & updates")
-      row("Troubleshooting", subtitle: "View local logs to investigate a connection issue.",
-          control: actionButton("Open logs", action: #selector(openLogs)), in: support)
-      divider(in: support)
-      let maintain = actionButton("Maintain Tela…", action: #selector(openMaintenance))
+      let support = card()
+      let maintain = actionButton("Open…", action: #selector(openMaintenance))
       maintain.isEnabled = !operationInProgress && installedServiceControlsAvailable()
-      row("Maintenance", subtitle: launchingMaintenance ? "Opening maintenance…" : "Review updates, repairs, or removal in a separate window.",
-          control: maintain, in: support)
+      row("Updates & maintenance", subtitle: launchingMaintenance ? "Opening…" : nil, control: maintain, in: support)
       stack.addArrangedSubview(actionButton("Refresh details", action: #selector(refreshPage)))
     }
   }
@@ -1067,7 +998,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       let help = card("Setup needs attention")
       append(secondary("Couldn't verify the installation or existing settings. Your settings were preserved. Repair or update Tela before continuing."), to: help)
       help.addArrangedSubview(actionButton("Check again", action: #selector(refreshPage)))
-      help.addArrangedSubview(actionButton("Open logs", action: #selector(openLogs)))
       return
     }
     append(secondary("This preview needs a reachable HTTPS address before you sign in and connect ChatGPT."), to: stack)
@@ -1152,14 +1082,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     connectionProfileSlot = slot
     profileFailure = nil
     changingProfile = true
-    profileProgress = "Checking Web sign-in…"
+    profileProgress = "Checking account…"
     renderCurrentPage()
     Task {
       do {
         guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "TelaWork", code: 11) }
         _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/account-browser-close", method: "POST")
       } catch {
-        profileFailure = "Couldn't finish Web sign-in. Check this profile's connection status."
+        profileFailure = "Couldn’t verify the account. Try again."
       }
       profileProgress = nil
       changingProfile = false
@@ -1187,7 +1117,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
             guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "TelaWork", code: 11) }
             _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/account-browser", method: "POST")
           } catch {
-            profileFailure = "Finish active Web work or reconnect Web before managing this account."
+            profileFailure = "Couldn’t open the account window. Try again."
           }
           profileProgress = nil
           changingProfile = false
@@ -1531,7 +1461,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     connectionProfileSlot = slot
     changingProfile = true
     profileFailure = nil
-    profileProgress = "Reconnecting Web · Native stays available…"
+    profileProgress = "Connecting Web…"
     renderCurrentPage()
     Task {
       do {
@@ -1540,7 +1470,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         let updated = try JSONDecoder().decode(TelaWorkProfile.self, from: data)
         workInventory.loaded(profiles.filter { $0.slot != slot } + [updated])
       } catch {
-        profileFailure = "Web couldn't reconnect. Native is still available. Finish any active Web turn, then try again."
+        profileFailure = "Couldn’t connect. Try again later."
       }
       profileProgress = nil
       changingProfile = false
@@ -1699,7 +1629,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private func clearAccountDisplay() {
     accountRevision += 1
     profileAccounts.removeAll()
-    delegationCapacity.removeAll()
     accountRefreshPending = false
     accountTask?.cancel()
   }
@@ -1718,7 +1647,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       }
       let descriptor = try? readDescriptor("codex")
       var result: [Int: TelaAccountDisplay] = [:]
-      var capacity: [Int: ControlCenterDelegationCapacity] = [:]
       for profile in current {
         guard !Task.isCancelled else { return }
         do {
@@ -1731,16 +1659,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           result[profile.slot] = TelaAccountDisplay(contractVersion: 1, slot: profile.slot,
             native: .init(state: "unavailable", email: nil), web: .init(state: "unavailable", email: nil), comparison: "unavailable")
         }
-        if let descriptor,
-          let data = try? await request(descriptor, path: "v1/codex/profiles/\(profile.slot)/web-delegation-capacity"),
-          let value = try? JSONDecoder().decode(ControlCenterDelegationCapacity.self, from: data),
-          value.contractVersion == 1, value.profileSlot == profile.slot, value.coverage == "managed_jobs_only" {
-          capacity[profile.slot] = value
-        }
       }
       guard !Task.isCancelled, revision == accountRevision, selectedPage == .work, window?.isVisible == true else { return }
       profileAccounts = result
-      delegationCapacity = capacity
       renderCurrentPage()
     }
   }
@@ -1809,11 +1730,5 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       bridgeMessage = "The Web session is no longer available. Refresh the session list."
     }
     renderCurrentPage()
-  }
-
-  @objc private func openLogs() {
-    try? fileManager.createDirectory(at: logsURL, withIntermediateDirectories: true,
-                                     attributes: [.posixPermissions: 0o700])
-    NSWorkspace.shared.open(logsURL)
   }
 }
