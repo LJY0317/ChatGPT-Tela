@@ -11,6 +11,7 @@ import { prepareProfileOwnership } from "./profile-ownership";
 import { summarizeDiagnosticWorkload } from "./diagnostic-workload";
 import { summarizeWorkIncident } from "./work-incident";
 import { observeDesktopPerformance } from "./desktop-performance";
+import { diagnosePublicIngress } from "./public-ingress-diagnostics";
 import { summarizeRetentionCanary } from "./retention-canary";
 import { workTerminalArguments, runWorkTerminal, connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import { diagnoseDefaultDesktop, resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
@@ -738,7 +739,16 @@ async function manageIngress(
     throw new Error("ingress management requires configure --manage-tailscale-funnel");
   }
   if (subcommand === "status") {
-    console.log(JSON.stringify(await diagnoseConfiguredIngress(productPaths), null, 2));
+    const status = await diagnoseConfiguredIngress(productPaths);
+    // Explicit support probe only; never a startup, tool-admission or health gate.
+    if (flag("--public")) {
+      const transport = await diagnosePublicIngress(new URL(config.exposure.publicUrl),
+        option("--public-dns-url") ?? "https://dns.google/resolve");
+      status.publicTransport = transport;
+      if (transport.state === "unavailable") Object.assign(status, { state: "unavailable",
+        cause: "public-transport-unreachable", detail: "The explicit public-DNS transport probe failed; inspect publicTransport for its boundary" });
+    }
+    console.log(JSON.stringify(status, null, 2));
     return;
   }
   const manifest = await ensureOwnershipManifest({ path: productPaths.installManifest, productVersion: "0.0.0" });
@@ -1123,7 +1133,7 @@ async function main(): Promise<void> {
     + "  chat delete-openai-api-key\n"
     + "  chat disable-openai-agent\n"
     + "  approval [status|enable|disable]\n"
-    + "  ingress status\n"
+    + "  ingress status [--public] [--public-dns-url <DNS-JSON-URL>]\n"
     + "  ingress adopt-existing\n"
     + "  setup [--slot <n>]\n"
     + "  start [--slot <n>]\n"

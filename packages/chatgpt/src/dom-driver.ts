@@ -53,7 +53,7 @@ interface RawTurn {
   readonly text?: string;
   readonly failureDetail?: string;
   readonly publicProgress?: readonly string[];
-  readonly progressProbe?: { readonly unmappedVisibleProsePresent?: boolean; readonly linkedRegionCount?: number; readonly visibleLinkedRegionCount?: number; readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
+  readonly progressProbe?: { readonly answerBodyCount?: number; readonly visibleAnswerBodyCount?: number; readonly answerBodyOutsideProgress?: boolean; readonly answerBodyAnimated?: boolean; readonly answerProsePresent?: boolean; readonly answerBlockCount?: number; readonly unmappedVisibleProsePresent?: boolean; readonly linkedRegionCount?: number; readonly visibleLinkedRegionCount?: number; readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
 }
 
 interface RawSnapshot {
@@ -927,7 +927,16 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         bodyProof: answerBody ? { version: 1, value: answerMarkdown(answerBody, true) } : undefined,
         failureDetail: failure ? text(failure) : undefined,
         publicProgress,
-        progressProbe: { unmappedVisibleProsePresent, linkedRegionCount, visibleLinkedRegionCount, containerPresent: !!progressRoot, anchorCount: progressAnchors.length, titleCount: progressTitleCount, descriptionCount: progressDescriptionCount, containerVisible: !!progressRoot && progressVisible(progressRoot), markerCount: agentStarts.length, agentShellEligible: !!ownedAgentShell, shellSearchDepth, shellCandidateCount, visibleAnchorCount, controlCount, visibleControlCount, localLabelCount, visibleLabelCount,
+        progressProbe: {
+          // Prose may use the same renderer as a final answer. Observe that boundary
+          // without relabelling answer content as progress or recording its text.
+          answerBodyCount: Math.min(65, group.querySelectorAll('[data-markdown-text-style="assistant-message"]').length),
+          visibleAnswerBodyCount: Math.min(65, [...group.querySelectorAll('[data-markdown-text-style="assistant-message"]')].filter(progressVisible).length),
+          answerBodyOutsideProgress: !!answerBody && !progressRoot?.contains(answerBody),
+          answerBodyAnimated: !!answerBody?.hasAttribute('data-markdown-animated'),
+          answerProsePresent: !!answerBody && progressVisible(answerBody) && !!answerBody.textContent?.trim(),
+          answerBlockCount: Math.min(65, answerBody?.querySelectorAll('p,ul,ol,pre,table,blockquote').length ?? 0),
+          unmappedVisibleProsePresent, linkedRegionCount, visibleLinkedRegionCount, containerPresent: !!progressRoot, anchorCount: progressAnchors.length, titleCount: progressTitleCount, descriptionCount: progressDescriptionCount, containerVisible: !!progressRoot && progressVisible(progressRoot), markerCount: agentStarts.length, agentShellEligible: !!ownedAgentShell, shellSearchDepth, shellCandidateCount, visibleAnchorCount, controlCount, visibleControlCount, localLabelCount, visibleLabelCount,
           containerDisplay: progressStyle?.display === "none" ? "none" : progressStyle?.display === "contents" ? "contents" : "other",
           containerVisibilityHidden: progressStyle?.visibility === "hidden" || progressStyle?.visibility === "collapse",
           containerOpacityZero: progressStyle?.opacity === "0",
@@ -2093,6 +2102,12 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
             progress_visible_label_count: probe.visibleLabelCount,
             progress_description_count: probe.descriptionCount,
             progress_unmapped_visible_prose: probe.unmappedVisibleProsePresent === true,
+            assistant_body_count: probe.answerBodyCount ?? 0,
+            visible_assistant_body_count: probe.visibleAnswerBodyCount ?? 0,
+            assistant_body_outside_progress: probe.answerBodyOutsideProgress === true,
+            assistant_body_animated: probe.answerBodyAnimated === true,
+            assistant_body_prose_present: probe.answerProsePresent === true,
+            assistant_body_block_count: probe.answerBlockCount ?? 0,
             progress_linked_region_count: probe.linkedRegionCount ?? 0,
             progress_visible_linked_region_count: probe.visibleLinkedRegionCount ?? 0,
             progress_title_count: probe.titleCount,

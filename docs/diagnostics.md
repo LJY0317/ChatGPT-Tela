@@ -1115,6 +1115,20 @@ Existing Tailscale status reads also record self-online observation, health-warn
 peer/active-peer counts and exit-node selection. No peer identities, warning text, addresses
 or extra polling are retained. These local facts alone cannot prove public relay health.
 
+Run `chatgpt-tela ingress status --public` when a connector fails before ingress. This
+explicit diagnostic compares the existing local/schema report with public-DNS IPv4
+relay connections, preserving the original Host, TLS SNI and certificate validation.
+It reports DNS, TCP, TLS and HTTP boundaries per relay without returning addresses,
+response bodies or credentials. An HTTP response proves transport only; it does not
+prove MCP tool access or a cloud client's reachability. The default JSON DNS resolver
+is `https://dns.google/resolve`, which receives the endpoint hostname; override it with
+`--public-dns-url <DNS-JSON-URL>`. No background probe, restart or admission gate is added.
+
+Public progress extraction also records counts and visibility of assistant markdown
+bodies, whether the selected body lies outside the progress shell, animation presence
+and block count. These bounded, deduplicated facts expose prose excluded by the adapter
+without changing answer/progress classification or recording prose.
+
 ### Context efficiency receipts
 
 `web_retained_context_hot_probe` separates a cached-history miss from a surviving-page proof.
