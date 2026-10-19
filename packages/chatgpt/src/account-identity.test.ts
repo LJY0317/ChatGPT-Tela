@@ -57,6 +57,7 @@ test("ChatGPT account identity exports only SHA-256 fingerprints plus coarse acc
       expect(functionSource).toContain("userId");
       expect(functionSource).toContain("accountId");
       return {
+        state: "signed-in", reasonClass: "verified", httpStatus: 200,
         accountFingerprint: "a".repeat(64),
         containerFingerprint: "b".repeat(64),
         accountStructure: "workspace",
@@ -92,6 +93,7 @@ test("ChatGPT account identity rejects malformed renderer output", async () => {
   const page: BrowserPageAutomation = {
     async evaluate() {
       return {
+        state: "signed-in", reasonClass: "verified", httpStatus: 200,
         accountFingerprint: "raw-account-id",
         containerFingerprint: "also-raw",
         accountStructure: "personal",

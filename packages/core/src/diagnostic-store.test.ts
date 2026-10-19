@@ -150,7 +150,7 @@ test("private capture is off, expires without polling, and pairs are bounded", (
 test("ongoing private capture persists with the same retention and can be explicitly stopped", () => {
   const root=fixture();
   const enabled=setPrivateDiagnosticCapture(root,"until-disabled");
-  expect(enabled).toMatchObject({ enabled:true, mode:"until-disabled", minutes:null, privacy:"private-local-only", retention:{days:7,bytes:64*1024*1024,files:24} });
+  expect(enabled).toMatchObject({ enabled:true, mode:"until-disabled", minutes:null, privacy:"private-local-only", retention:{days:7,bytes:64*1024*1024,files:DIAGNOSTIC_LIMITS.privateFiles} });
   expect(privateDiagnosticCaptureEnabled(root)).toBe(true);
   for(let i=0;i<20;i++)writePrivateDiagnosticArtifact(root,{kind:"json",bytes:Buffer.from("private evidence"),operationFingerprint:fp("ongoing")});
   expect(readdirSync(join(root,"private")).length).toBeLessThanOrEqual(DIAGNOSTIC_LIMITS.privateFiles);

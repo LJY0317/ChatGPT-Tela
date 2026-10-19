@@ -83,8 +83,13 @@ function authEntryClass(name: string | undefined): string | undefined {
   return undefined;
 }
 
+const AUTH_CHANGE_CAUSES = new Set([
+  "inserted", "inserted-no-change-overwrite", "inserted-no-value-change-overwrite",
+  "explicit", "overwrite", "expired", "evicted", "expired-overwrite",
+]);
+
 function authRemovalCause(value: string): string {
-  return new Set(["explicit", "overwrite", "expired", "evicted", "expired-overwrite"]).has(value)
+  return AUTH_CHANGE_CAUSES.has(value)
     ? value.replaceAll("-", "_") : "unknown";
 }
 
@@ -92,9 +97,9 @@ function storageObservation(session: ElectronProfileSessionLike): {
   readonly state: "present" | "missing" | "unavailable";
   readonly fingerprint?: string;
 } {
-  const path = session.storagePath;
-  if (!path) return { state: "unavailable" };
   try {
+    const path = session.storagePath;
+    if (!path) return { state: "unavailable" };
     const stat = lstatSync(path);
     if (stat.isSymbolicLink() || !stat.isDirectory()) return { state: "unavailable" };
     return {
@@ -152,7 +157,12 @@ function retainSessionAuthDiagnostics(session: ElectronProfileSessionLike | unde
     }));
   };
   if (observer.refs === 1) {
-    session.cookies.on("changed", observer.listener);
+    try { session.cookies.on("changed", observer.listener); }
+    catch {
+      observer.refs--;
+      sessionAuthObservers.delete(session as object);
+      return { refreshStorage() {}, release() {} };
+    }
     observeStorage();
   }
   let released = false;
@@ -163,7 +173,8 @@ function retainSessionAuthDiagnostics(session: ElectronProfileSessionLike | unde
       released = true;
       current.refs--;
       if (current.refs === 0) {
-        current.session.cookies?.removeListener?.("changed", current.listener);
+        try { current.session.cookies?.removeListener?.("changed", current.listener); }
+        catch { /* Diagnostic teardown never blocks surface retirement. */ }
         sessionAuthObservers.delete(session as object);
       }
     },

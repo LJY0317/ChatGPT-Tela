@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { resolve, join } from "node:path";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { BROWSER_DOCUMENT_LIFETIME, BROWSER_INPUT_OWNERSHIP, BROWSER_INSPECTION_INPUT, BROWSER_PAGE_AUTOMATION, BROWSER_READ_ONLY_PREVIEW } from "@chatgpt-tela/browser-host";
 import type { BrowserWindowConstructorOptions } from "electron";
 import { createElectronBrowserHost, type ElectronBrowserWindowLike } from "./host";
@@ -47,6 +48,34 @@ class FailingLoadWindow extends FakeWindow {
 }
 
 describe("Electron browser host", () => {
+  test("shared auth observation never reads credential values and releases its single listener", async () => {
+    const listeners = new Set<(...args: any[]) => void>();
+    const session = { storagePath: null, cookies: {
+      on(_event: string, listener: (...args: any[]) => void) { listeners.add(listener); },
+      removeListener(_event: string, listener: (...args: any[]) => void) { listeners.delete(listener); },
+    } };
+    const rows: StructuralDiagnosticEvent[] = [];
+    const stop = observeDiagnosticEvents(row => rows.push(row));
+    const host = createElectronBrowserHost({ profileId: "auth-fixture", createWindow() {
+      const window = new FakeWindow(); Object.assign(window.webContents, { session }); return window;
+    } });
+    try {
+      const first = await host.acquire({ taskId: "first", epochId: "one" });
+      await host.acquire({ taskId: "second", epochId: "one" });
+      expect(listeners.size).toBe(1);
+      const entry = { domain: ".chatgpt.com", name: "private-session-name", secure: true, httpOnly: true,
+        expirationDate: Date.now() / 1000 + 100000,
+        get value(): string { throw new Error("credential value must never be read"); } };
+      for (const listener of listeners) listener({}, entry, "inserted-no-value-change-overwrite", false);
+      expect(rows.at(-1)).toMatchObject({ stage: "auth_entry_changed", removal_cause: "inserted_no_value_change_overwrite", entry_class: "session" });
+      expect(JSON.stringify(rows)).not.toContain("private-session-name");
+      expect(JSON.stringify(rows)).not.toContain("chatgpt.com");
+      await host.release(first.leaseId);
+      expect(listeners.size).toBe(1);
+      await host.close();
+      expect(listeners.size).toBe(0);
+    } finally { await host.close(); stop?.(); }
+  });
   test("document lifetime follows main-frame replacement and crash without treating SPA/subframes as replacement", async () => {
     const window = new FakeWindow();
     const host = createElectronBrowserHost({ profileId: "document-fixture", createWindow: () => window });

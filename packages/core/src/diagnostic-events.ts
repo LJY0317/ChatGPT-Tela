@@ -105,7 +105,8 @@ export function emitDiagnosticEvent(
       if (recent.length > 128) recent.shift();
       const root = configuredDiagnosticRoot();
       const authenticationBoundary = event === "chatgpt_tela_web_auth"
-        && ["auth_session_signed_out", "auth_entry_removed"].includes(stage);
+        && (stage === "auth_session_signed_out"
+          || (stage === "auth_entry_removed" && normalized.removal_cause !== "overwrite"));
       if (root && (authenticationBoundary || /(?:failed|error|timeout|crashed|unresponsive|rejected|anomaly)$/.test(stage))) {
         // Failure-triggered only. Never scan raw files, poll, capture payloads or block recovery.
         scheduleIncident(root, safe);

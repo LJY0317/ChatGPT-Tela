@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent } from "./diagnostic-events";
+import { listDiagnosticIncidents } from "./diagnostic-store";
 
 const originalDiagnosticFile = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
 
@@ -13,6 +14,18 @@ afterEach(() => {
 });
 
 describe("privacy-safe diagnostic events", () => {
+  test("ordinary auth renewal stays in events while destructive removal retains an incident", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-auth-incident-"));
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = join(root, "events.jsonl");
+    try {
+      emitDiagnosticEvent("chatgpt_tela_web_auth", "auth_entry_removed", { removal_cause: "overwrite", removed: true });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(listDiagnosticIncidents(join(root, "diagnostics"))).toHaveLength(0);
+      emitDiagnosticEvent("chatgpt_tela_web_auth", "auth_entry_removed", { removal_cause: "expired", removed: true });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(listDiagnosticIncidents(join(root, "diagnostics"))).toHaveLength(1);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("fingerprints correlate without returning the source value", () => {
     const value = "opaque-local-id";
     const fingerprint = diagnosticFingerprint(value);
