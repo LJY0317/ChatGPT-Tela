@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   transitionTurn,
   diagnosticFingerprint,
@@ -405,6 +406,25 @@ export class RuntimeTurnChannel {
     this.#move("tool-result-delivered");
     this.#toolEvidence(result.isError ? "native_tool_result_error" : "native_tool_result_received", pending,
       { error_result_reported: result.isError });
+  }
+
+  /** A bound compaction or reconnect may replay a result already received but not yet released. */
+  acceptNativeToolResultOrReplay(result: NativeToolResult): "received" | "replayed" {
+    const pending = this.#pendingTool;
+    if (!pending || pending.invocation.callId !== result.callId) {
+      throw new Error("native tool result does not match the outstanding call");
+    }
+    if (!pending.result) {
+      this.deliverNativeToolResult(result);
+      return "received";
+    }
+    if (pending.result.isError !== result.isError
+      || !isDeepStrictEqual(pending.result.content, result.content)) {
+      this.#toolEvidence("native_tool_result_replay_rejected", pending, { reason_class: "result_changed" });
+      throw new Error("replayed native tool result differs from the already received result");
+    }
+    this.#toolEvidence("native_tool_result_replay_verified", pending);
+    return "replayed";
   }
 
   /**

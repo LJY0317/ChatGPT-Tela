@@ -101,6 +101,21 @@ describe("Native Responses tool round", () => {
     })).toThrow("repeats");
   });
 
+  test("an exact result replay after compaction is idempotent but a changed result is rejected", async () => {
+    const channel = new RuntimeTurnChannel(binding());
+    channel.markSubmitted(); channel.markAccepted();
+    const waiting = channel.requestTool({ callId: "call-1", wireName: "github__search",
+      mode: "structured", arguments: {} });
+    const result = { input: [{ type: "function_call_output", call_id: "call-1", output: "ok" }] };
+    expect(acceptNativeResponsesToolResult(channel, result)).toBe("received");
+    expect(acceptNativeResponsesToolResult(channel, result)).toBe("replayed");
+    expect(() => acceptNativeResponsesToolResult(channel, { input: [
+      { type: "function_call_output", call_id: "call-1", output: "changed" },
+    ] })).toThrow("differs");
+    channel.releaseNativeToolResultToWeb("call-1");
+    expect((await waiting).content).toBe("ok");
+  });
+
   test("a canonically rebound tool_search result refreshes the same turn inventory", async () => {
     const discovery: NativeToolDescriptor = {
       wireName: "tool_search",

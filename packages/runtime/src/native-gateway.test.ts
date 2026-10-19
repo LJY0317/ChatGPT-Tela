@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 import { ActiveTurnRegistry } from "./registry";
 import { NativeResponsesGateway } from "./native-gateway";
+import { acceptNativeResponsesToolResult } from "./native-round";
 
 function request(turnId: string, input: unknown[] = []): unknown {
   return {
@@ -323,6 +324,36 @@ describe("Native Responses semantic gateway", () => {
     await expect(gateway.handle(followup)).rejects.toThrow("proven new input");
     await gateway.close();
     expect(launches).toBe(1);
+  });
+
+  test("a compaction-preverified result allows a later Native continuation without replaying its old output", async () => {
+    const turns = new ActiveTurnRegistry();
+    const gateway = new NativeResponsesGateway(source, turns, async registered => {
+      const channel = registered.channel;
+      channel.markSubmitted(); channel.markAccepted();
+      const waiting = channel.requestTool({ callId: "call-1", wireName: "exec_command",
+        mode: "structured", arguments: { cmd: "fixture" } });
+      let state = channel.state();
+      while (state.nativeResultReady !== true) state = await channel.waitForStateChange(state.revision);
+      channel.releaseNativeToolResultToWeb("call-1");
+      const result = await waiting;
+      channel.markWebContinuation();
+      channel.complete(`final:${String(result.content)}`);
+    });
+    try {
+      const first = await gateway.handle(request("turn-1"));
+      expect(first.type).toBe("tool-call");
+      gateway.commit(first);
+      const channel = turns.active("thread-1", "turn-1")!.channel;
+      expect(acceptNativeResponsesToolResult(channel, { input: [
+        { type: "function_call_output", call_id: "call-1", output: "compacted-ok" },
+      ] })).toBe("received");
+      const final = await gateway.handle(request("turn-1"));
+      expect(final.type).toBe("final");
+      if (final.type !== "final") throw Error("expected final");
+      expect(final.answer).toBe("final:compacted-ok");
+      gateway.commit(final);
+    } finally { await gateway.close(); }
   });
 
   test("stale Native turn identity is rejected before a Web turn is launched", async () => {

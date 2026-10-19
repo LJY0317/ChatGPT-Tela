@@ -816,11 +816,11 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       return;
     }
     // Count only outputs actually released to this Web turn, and reserve some
-    // framing/tool-call overhead. Neither Native compaction nor a checkpoint
+    // Count observed serialized data only. Reserve future output in admission, not settlement.
+    // Neither Native compaction nor a checkpoint
     // can subtract bytes already resident in the provider's conversation.
     const estimatedResidentTokens = entry.previousResidentTokens + entry.inputTokens
-      + Math.max(outputTokens, entry.outputReserveTokens)
-      + Math.ceil(toolBytes / 4) + rounds * 512;
+      + outputTokens + Math.ceil(toolBytes / 4);
     if (!Number.isSafeInteger(estimatedResidentTokens)) {
       clearRetainedContext(entry.threadId);
       return;

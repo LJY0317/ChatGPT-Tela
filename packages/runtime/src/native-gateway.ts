@@ -352,12 +352,31 @@ export class NativeResponsesGateway {
     } else if (!terminalPhase(registered.channel.phase)) {
       const outstanding = registered.channel.outstandingToolCallId;
       if (outstanding) {
-        const hasMatchingResult = extractNativeToolResults(body)
-          .some(result => result.callId === outstanding);
-        if (hasMatchingResult) {
+        const results = extractNativeToolResults(body);
+        const matchingResultCount = results.filter(result => result.callId === outstanding).length;
+        const resultReady = registered.channel.state().nativeResultReady === true;
+        withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId),
+          turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () =>
+          emitDiagnosticEvent("chatgpt_tela_work", "native_tool_followup_observed", {
+            operation_fingerprint: diagnosticFingerprint(outstanding),
+            matching_result_count: matchingResultCount, result_item_count: results.length,
+            result_received: resultReady,
+            native_delivery_committed: registered!.channel.outstandingNativeDelivery === "delivered",
+          }));
+        if (matchingResultCount > 0) {
           acceptBoundNativeRoundRequest(registered.channel, binding, body);
           if (lifetime) lifetime.requestHash = requestHash(body);
+        } else if (resultReady) {
+          registered.channel.refreshBinding(binding);
+          if (lifetime) lifetime.requestHash = requestHash(body);
         } else if (registered.channel.outstandingNativeDelivery === "delivered") {
+          withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId),
+            turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () =>
+            emitDiagnosticEvent("chatgpt_tela_work", "native_tool_followup_rejected", {
+              operation_fingerprint: diagnosticFingerprint(outstanding),
+              reason_class: "missing_result", result_received: false,
+              native_delivery_committed: true,
+            }));
           throw new Error("Native tool call was already delivered; the follow-up request must contain its result");
         }
         // An uncommitted queued call is intentionally left on the old binding so the exact same

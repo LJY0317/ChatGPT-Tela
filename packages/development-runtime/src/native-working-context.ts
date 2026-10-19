@@ -185,10 +185,11 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     .reduce((sum, item) => sum + tokens(item.content), 0);
   const prospectiveSeed = summaryTokens + pendingSuffixTokens + (selected ? currentInstructionsTokens : 0);
   const shouldAdvance = anchorIndex >= 0 && (
-    sealedTokens > input.policy.suffixTargetTokens
-    || (!selected && prospectiveSeed > input.policy.firstMessageTargetTokens)
+    (selected !== undefined && (sealedTokens > input.policy.suffixTargetTokens
+      || sealedTokens + summaryTokens >= input.policy.checkpointSourceTokens - input.policy.suffixTargetTokens))
+    || (!selected && (sealedTokens > input.policy.suffixTargetTokens || prospectiveSeed > input.policy.firstMessageTargetTokens))
     || (input.forceMaintenance === true && sealedTokens > 0
-      && prospectiveSeed > input.policy.firstMessageTargetTokens)
+      && prospectiveSeed > input.policy.checkpointSourceTokens)
   );
   if (!shouldAdvance || input.allowMaintenance === false
     || !input.cache || !input.producer || !input.visiblePrefix || !input.browserModel) {

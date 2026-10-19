@@ -28,13 +28,13 @@ export async function nextNativeResponsesToolCall(
 export function acceptNativeResponsesToolResult(
   channel: RuntimeTurnChannel,
   body: unknown,
-): void {
+): "received" | "replayed" {
   const outstanding = channel.outstandingToolCallId;
   if (!outstanding) throw new Error("turn has no outstanding Native tool call");
   const matches = extractNativeToolResults(body).filter(result => result.callId === outstanding);
   if (matches.length === 0) throw new Error("Native request does not contain the outstanding tool result");
   if (matches.length > 1) throw new Error("Native request repeats the outstanding tool result");
-  channel.deliverNativeToolResult(matches[0]!);
+  return channel.acceptNativeToolResultOrReplay(matches[0]!);
 }
 
 /**

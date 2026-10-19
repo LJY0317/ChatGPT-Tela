@@ -50,6 +50,8 @@ function digest(value: unknown): string {
 export function createNativeLocalCompactionRouter(input: NativeContinuitySources & {
   readonly checkpointCache?: ContextCheckpointCache;
   readonly source: CanonicalCurrentTurnSource;
+  /** Settle only an exact pending Native tool result before local history replacement. */
+  readonly settlePendingToolResult?: (threadId: string, turnId: string, body: unknown) => void;
   readonly summarize: (request: {
     readonly signal?: AbortSignal;
     readonly nativeTaskId: string;
@@ -87,6 +89,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
       phase = "binding";
       const { claim, evidence: activeOwner } = await bindNativeCompactionRequest(body, input.source);
       scope = diagnosticFingerprint(claim.threadId);
+      input.settlePendingToolResult?.(claim.threadId, claim.turnId, body);
       phase = "identity";
       const key = JSON.stringify([claim.threadId, claim.turnId]);
       const sourceDigest = digest({ source: nativeRequestContentSource(body), browserModel,

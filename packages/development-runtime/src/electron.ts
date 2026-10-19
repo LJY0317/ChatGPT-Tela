@@ -6,7 +6,7 @@ import {
   type BrowserHost,
   type BrowserSurfaceLease,
 } from "@chatgpt-tela/browser-host";
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   createElectronMainProcessBrowserHost,
   type ElectronMainRuntimeLike,
@@ -30,7 +30,8 @@ import {
   type WebContextCheckpointProvider,
 } from "@chatgpt-tela/chatgpt";
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
-import { runBrowserContextCheckpoint, type ActiveTurnRegistry } from "@chatgpt-tela/runtime";
+import { ActiveTurnRegistry, acceptNativeResponsesToolResult, runBrowserContextCheckpoint } from "@chatgpt-tela/runtime";
+import { extractNativeToolResults } from "@chatgpt-tela/codex";
 import type { ContextCheckpointCache } from "./context-cache";
 import {
   startDevelopmentRuntime,
@@ -253,8 +254,33 @@ export async function startElectronDevelopmentRuntime(
     return run;
   };
 
+  const turns = input.turns ?? new ActiveTurnRegistry();
   const localCompactionRouter = input.checkpointProvider ? createNativeLocalCompactionRouter({
     source: input.currentTurnSource,
+    settlePendingToolResult: (threadId, turnId, body) => {
+      const channel = turns.active(threadId, turnId)?.channel;
+      const callId = channel?.outstandingToolCallId;
+      const results = extractNativeToolResults(body);
+      const matches = callId ? results.filter(result => result.callId === callId) : [];
+      if (callId && channel) {
+        if (matches.length === 0 && channel.outstandingNativeDelivery === "delivered"
+          && channel.state().nativeResultReady !== true) {
+          emitDiagnosticEvent("chatgpt_tela_work", "native_compaction_result_missing", {
+            scope_fingerprint: diagnosticFingerprint(threadId), turn_fingerprint: diagnosticFingerprint(turnId),
+            operation_fingerprint: diagnosticFingerprint(callId), turn_phase: channel.phase,
+            native_delivery_committed: true, result_received: channel.state().nativeResultReady === true,
+          });
+          throw new Error("Native compaction omitted the delivered outstanding tool result");
+        }
+        if (matches.length) {
+          const state = acceptNativeResponsesToolResult(channel, body);
+          emitDiagnosticEvent("chatgpt_tela_work", "native_compaction_result_settled", {
+            scope_fingerprint: diagnosticFingerprint(threadId), turn_fingerprint: diagnosticFingerprint(turnId),
+            operation_fingerprint: diagnosticFingerprint(callId), state,
+          });
+        }
+      }
+    },
     ...(checkpointCache ? { checkpointCache } : {}),
     ...(input.context?.checkpointPreparationPolicy ? { checkpointPreparationPolicy: input.context.checkpointPreparationPolicy } : {}),
     ...(input.context?.visiblePrefix ? { visiblePrefix: input.context.visiblePrefix } : {}),
@@ -284,7 +310,7 @@ export async function startElectronDevelopmentRuntime(
   const runtime = await startDevelopmentRuntime({
     currentTurnSource: input.currentTurnSource,
     browserHost,
-    ...(input.turns ? { turns: input.turns } : {}),
+    turns,
     mcp: input.mcp,
     planWebTurn: input.planWebTurn ?? createNativeRequestDevelopmentWebTurnPlanner({
       ...(input.context?.visiblePrefix ? { visiblePrefix: input.context.visiblePrefix } : {}),
