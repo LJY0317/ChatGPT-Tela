@@ -1,7 +1,7 @@
 import { diagnosePublicIngress } from "@chatgpt-tela/tailscale-ingress";
 import { readProductConfig } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
-import { writeDiagnosticIncident } from "@chatgpt-tela/core";
+import { writeDiagnosticIncident, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { join } from "node:path";
 import {
   payloadRootForLauncherExecutable,
@@ -66,8 +66,19 @@ async function main(): Promise<void> {
     const paths = resolveProductPaths();
     const config = readProductConfig(join(paths.configRoot, "product-v1.json"));
     const result = await diagnosePublicIngress(new URL(config.exposure.publicUrl), args[4] ?? "https://dns.google/resolve");
+    const observedAt = new Date().toISOString();
+    const relays = Array.isArray(result.relays) ? result.relays : [];
+    const timeline: StructuralDiagnosticEvent[] = relays.map(row => ({ ts: observedAt, event: "chatgpt_tela_ingress",
+      stage: row.state === "unavailable" ? "public_relay_failed" : "public_relay_observed",
+      phase: String(row.stage), relay_index: Number(row.index), tcp_connected: Boolean(row.tcpConnected),
+      tls_connected: Boolean(row.tlsConnected), duration_ms: Number(row.durationMs),
+      ...(row.errorCode ? { failure_class: String(row.errorCode) } : {}),
+      ...(typeof row.httpStatus === "number" ? { http_status: row.httpStatus } : {}),
+    }));
+    timeline.push({ ts: observedAt, event: "chatgpt_tela_ingress", stage: "public_ingress_probe",
+      phase: String(result.stage ?? "http"), state: String(result.state), relay_count: relays.length });
     const ref = writeDiagnosticIncident(join(paths.logsRoot, "diagnostics"), {
-      stage: "public_ingress_probe", observedAt: new Date().toISOString(), report: result,
+      stage: "public_ingress_probe", observedAt, timeline,
     });
     process.stdout.write(`${JSON.stringify({ ...result, ref }, null, 2)}\n`);
     return;
