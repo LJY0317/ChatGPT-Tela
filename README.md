@@ -823,7 +823,7 @@ keeps Native available. Work shows **Web models** and **Account** separately. **
 signed-out profile's browser; **Verify…** opens it when authentication cannot be verified.
 Sign in and close the browser, or choose **Done**, to check and restore Web models. **Try again**
 is offered for a failed connection only after Web sign-in has been verified. Failed submissions are
-never automatically resent. Verified accounts offer **Manage…** in Work and the menu. Duplicate account rows and technical diagnostics are omitted.
+never automatically resent. Verified accounts offer **Manage…** in Work. The menu shows account actions only when attention is needed. Duplicate account rows and technical diagnostics are omitted.
 
 Existing non-empty ChatGPT drafts are preserved. Clear or finish the draft with `bun run cli setup` for the
 default account, or `bun run cli setup --slot <n>` for an extra account. Connector-probe cleanup uses a bounded

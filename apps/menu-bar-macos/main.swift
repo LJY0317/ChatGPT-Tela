@@ -574,7 +574,8 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         menu.addItem(item)
         addProfileOpen(profile.slot, name: profile.targetDisplayName, to: menu)
         let web = TelaWebPresentation(profile: profile)
-        if let title = web.buttonTitle {
+        if profile.webState != "ready" || profile.webModelsReady == false || profile.accountManagementActive == true,
+           let title = web.buttonTitle {
           let selector: Selector
           switch web.action {
           case .finish: selector = #selector(finishWebAccountProfile(_:))
