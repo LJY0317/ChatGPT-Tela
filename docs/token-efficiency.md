@@ -24,6 +24,10 @@ period. A rejected budget does not prove a send or authorize replay.
 
 Native local compaction already owns a summary operation. It selects existing working
 state without first producing an intermediate maintenance summary and summarizing again.
+Its source is the selected checkpoint plus the unsealed suffix, including any new
+instruction revisions. Do not reattach checkpoint-covered historical instructions to
+this summary source: Native restores its current initial context after compaction.
+Ordinary task transport still preserves exact instructions outside historical summaries.
 Preparation and the actual task answer are counted separately; a retained healthy task
 usually needs no preparation model call at all.
 
@@ -61,6 +65,11 @@ digests are published with the existing completed checkpoint, without another mo
 Legacy publications gain this proof only after exact same-task ancestor validation. Media
 prefixes are not shared across tasks. A large unmaintained cold import remains different
 from failed maintenance of a previously managed Web working set.
+
+This proves equivalence of the complete source prefix already present in the current
+canonical request, not a Native parent/child relationship or a public fork-point contract.
+It reuses derived prose only; it neither reads another branch's suffix nor transfers its
+execution, tool or physical-session ownership.
 
 If the complete cold source cannot fit one summary input, preserve it and return the
 explicit checkpoint/handoff recovery. Do not launch repeated fragment/merge requests,

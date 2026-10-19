@@ -14,7 +14,7 @@ import {
 import { boundedWebCheckpointSource } from "./web-checkpoint-source";
 import { CheckpointPreparationBudget, CheckpointPreparationBudgetExceeded } from "./checkpoint-preparation-budget";
 import { produceNativePrefixCheckpoint } from "./native-visible-prefix-checkpoint";
-import { nativeRequestPrefixSnapshot, nativeWorkingPhysicalContext, selectNativeWorkingCheckpoint } from "./native-working-context";
+import { nativeRequestPrefixSnapshot, nativeCompactionPhysicalContext, selectNativeWorkingCheckpoint } from "./native-working-context";
 import { webWorkingContextPolicy } from "./web-working-context-policy";
 import type { ContextCheckpointCache } from "./context-cache";
 
@@ -164,7 +164,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
                 preparation: { signal: watch.signal, onProgress: (_message: string) => {} } } : {}),
             });
             const physicalContext: WebPhysicalContext = bindNativePhysicalEvidence(projection,
-              nativeWorkingPhysicalContext(projection, maintained.checkpoint));
+              nativeCompactionPhysicalContext(projection, maintained.checkpoint));
             // Refuse an unprovable or oversized source before producing any model summary.
             operationPhase = "source_fit";
             const bounded = boundedWebCheckpointSource(physicalContext, projection.media, browserModel.effort);

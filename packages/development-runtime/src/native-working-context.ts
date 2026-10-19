@@ -57,7 +57,7 @@ export function exactCurrentInstructions(projection: NativeRequestContextProject
 
 export function withExactCurrentInstructions(context: WebPhysicalContext,
   projection: NativeRequestContextProjection): WebPhysicalContext {
-  if (context.mode !== "checkpoint-delta" && context.mode !== "full") return context;
+  if (context.mode !== "checkpoint-delta") return context;
   // A checkpoint may precede a later system/developer revision. The physical
   // suffix already includes that *same* exact revision, so injecting it again
   // duplicates authority and pays for the same instruction twice. Do not
@@ -85,8 +85,12 @@ export function withExactCurrentInstructions(context: WebPhysicalContext,
   });
 }
 
-/** Compaction and task transport use the same selected working set, not the full archive. */
-export function nativeWorkingPhysicalContext(projection: NativeRequestContextProjection,
+/** Native compaction summarizes the selected checkpoint and unsealed suffix.
+ * Covered instruction revisions stay sealed with the rest of their history. Native
+ * owns initial-context reinjection after history replacement; ordinary task transport
+ * separately uses withExactCurrentInstructions and must preserve its priority semantics.
+ */
+export function nativeCompactionPhysicalContext(projection: NativeRequestContextProjection,
   selected?: CachedContextCheckpoint): WebPhysicalContext {
   const index = selected
     ? projection.revisions.findIndex(item => item.revision.id === selected.checkpoint.revisionId)
@@ -100,7 +104,7 @@ export function nativeWorkingPhysicalContext(projection: NativeRequestContextPro
       revisionId: item.revision.id, kind: item.revision.kind, content: item.content })),
   ]);
   const transferTokens = segments.reduce((sum, item) => sum + tokens(item.content), 0);
-  const context: WebPhysicalContext = Object.freeze({
+  return Object.freeze({
     // A summarizer requires a complete source *working bundle* in one operation.
     // Its embedded checkpoint is explicitly lossy; this is not whole-archive coverage.
     mode: "full",
@@ -108,7 +112,6 @@ export function nativeWorkingPhysicalContext(projection: NativeRequestContextPro
     logicalTokens: projection.revisions.reduce((sum, item) => sum + item.revision.estimatedTokens, 0),
     transferTokens, segments,
   });
-  return selected ? withExactCurrentInstructions(context, projection) : context;
 }
 
 export interface WorkingCheckpointSources {

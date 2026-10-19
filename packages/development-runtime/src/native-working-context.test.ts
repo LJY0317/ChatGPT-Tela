@@ -10,7 +10,7 @@ import { NativeToolInventory, defineNativeTurnAuthority } from "@chatgpt-tela/co
 import { FileContextCheckpointCache } from "./context-cache";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 import { createNativeRequestDevelopmentWebTurnPlanner, projectNativeRequestContext } from "./native-request-planner";
-import { nativeWorkingPhysicalContext, withExactCurrentInstructions } from "./native-working-context";
+import { nativeCompactionPhysicalContext, nativeWorkingCheckpointScope, withExactCurrentInstructions } from "./native-working-context";
 
 test("checkpoint projection injects each exact current instruction revision only once", () => {
   const projection = projectNativeRequestContext("task", {
@@ -45,14 +45,13 @@ test("checkpoint projection injects each exact current instruction revision only
   expect(restored.transferTokens).toBe(physical.transferTokens + Math.ceil(Buffer.byteLength(projection.revisions[0]!.content) / 4));
   expect(withExactCurrentInstructions(restored, projection)).toBe(restored);
   // Native compaction uses a full working bundle, unlike ordinary checkpoint-delta transport.
-  const working = nativeWorkingPhysicalContext(projection, {
+  const working = nativeCompactionPhysicalContext(projection, {
     checkpoint: { id: "verified", revisionId: projection.revisions[2]!.revision.id,
       estimatedTokens: 10 }, content: "Previous work was completed",
   } as any);
   expect(working.segments.filter(segment => segment.type === "revision"
     && segment.revisionId === later.revision.id)).toHaveLength(1);
   expect(withExactCurrentInstructions(working, projection)).toBe(working);
-
 
   const conflicting = { ...physical, segments: [physical.segments[0]!,
     { ...physical.segments[1]!, content: "Altered developer authority" }, physical.segments[2]!] };
@@ -489,10 +488,9 @@ test("Native local compaction reuses the ordinary request's compatible working c
       checkpointCache: cache, visiblePrefix,
       summarize: async source => {
         summaries++;
-        expect(source.physicalContext.segments[0]).toMatchObject({
-          type: "revision", kind: "system", content: instructions,
-        });
-        expect(source.physicalContext.segments[1]).toMatchObject({ type: "checkpoint" });
+        expect(source.physicalContext.segments[0]).toMatchObject({ type: "checkpoint" });
+        expect(source.physicalContext.segments.some(segment => segment.type === "revision"
+          && segment.content === instructions)).toBe(false);
         expect(source.physicalContext.segments.at(-1)).toMatchObject({
           kind: "user", content: "Summarize the current task",
         });
@@ -529,4 +527,60 @@ test("Web model metadata is scoped to Web evidence, not inherited Native capacit
   expect((models as any[])[1].context_window).toBe(webWorkingContextPolicy("high").hard.contextWindowTokenLimit);
   expect((models as any[])[1].auto_compact_token_limit).toBe(webWorkingContextPolicy("high").hard.rolloverTokenLimit);
   expect((models as any[])[1]).not.toHaveProperty("max_output_tokens");
+});
+
+test("Native compaction leaves checkpoint-covered historical developer frames sealed", async () => {
+  const directory = root();
+  try {
+    const cache = new FileContextCheckpointCache({ directory: join(directory, "cache") });
+    const base = "Current Native base instruction";
+    const frame = "Repeated historical model transition ".repeat(700);
+    const input = [
+      { role: "user", content: "Original task" },
+      ...Array.from({ length: 18 }, (_, index) => ({ role: "developer", content: frame + index })),
+      { role: "assistant", content: "Completed original task" },
+      { role: "user", content: "Summarize the current task" },
+    ];
+    const projection = projectNativeRequestContext("task", { instructions: base, input });
+    const checkpoint = projection.revisions.at(-2)!;
+    await cache.put({ nativeTaskId: "task", revisionId: checkpoint.revision.id,
+      content: "Verified task checkpoint; original history remains available for readback",
+      estimatedTokens: 20,
+      scopeFingerprint: nativeWorkingCheckpointScope("bound-account", "task", {
+        familyKey: chatGptWebFamilyKey("Working Set Fixture"), effort: "high",
+      }),
+    });
+    let calls = 0;
+    const canonical = { threadId: "task", turnId: "compact", cwd: "/fixture",
+      workspaceRoots: ["/fixture"], sandbox: { kind: "native-enforced" as const },
+      proof: "app-server-active-turn" as const, environmentSourceTurnId: "compact" };
+    const router = createNativeLocalCompactionRouter({
+      source: { currentTurn: async () => canonical }, checkpointCache: cache,
+      visiblePrefix: { accountNamespace: "bound-account", read: async () => { throw new Error("Unexpected opaque history read"); }, journal: new FileNativeVisiblePrefixStageJournal({
+        directory: join(directory, "ledger"), initializationPath: join(directory, "init"),
+      }) },
+      summarize: async request => {
+        calls++;
+        expect(request.physicalContext.segments).toHaveLength(2);
+        expect(request.physicalContext.segments[0]?.type).toBe("checkpoint");
+        expect(request.physicalContext.segments[1]?.content).toBe("Summarize the current task");
+        expect(chatGptCheckpointInputTokens(request.physicalContext)).toBeLessThan(2_000);
+        return "Current continuation summary";
+      },
+    });
+    const response = await router(new Request("http://127.0.0.1/v1/responses", {
+      method: "POST", body: JSON.stringify({ model, reasoning: { effort: "high" }, instructions: base,
+        input, tools: [], client_metadata: { "x-codex-turn-metadata": JSON.stringify({
+          request_kind: "compaction", thread_id: "task", turn_id: "compact",
+        }) },
+      }),
+    }));
+    expect(response?.status).toBe(200);
+    expect(calls).toBe(1);
+    // Cold sources retain all instructions, rather than silently dropping material to fit.
+    const cold = nativeCompactionPhysicalContext(projection);
+    expect(chatGptCheckpointInputTokens(cold)).toBeGreaterThan(chatGptWebCheckpointSourceTokenLimit("high"));
+    expect(cold.segments.filter(segment => segment.type === "revision"
+      && (segment.kind === "developer" || segment.kind === "system"))).toHaveLength(19);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
