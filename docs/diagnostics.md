@@ -856,6 +856,10 @@ Native currently retries unknown streamed failure codes once despite `retryable=
 the next request receives the preserved HTTP 400 recovery and stops.
 Generic retired turns likewise use HTTP 400: Native maps 409 to a retryable unexpected-status error,
 regardless of a JSON `retryable=false` field. These terminal responses never restore execution authority.
+The initial gateway execution failure also returns HTTP 400 with `retryable=false`, preserving
+its original failure instead of provoking a reconnect that only reports a retired turn.
+After progress has started, the failure remains in the same SSE stream with `retryable=false`;
+Native may still retry an unknown streamed code once.
 A new Web turn alone cannot repair unsupported context; use Native until support is available.
 
 

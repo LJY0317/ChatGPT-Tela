@@ -511,7 +511,7 @@ describe("development runtime composition", () => {
         expect(first.status).toBe(200); await first.text();
         turnId = "turn-2";
         const second = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, request());
-        expect(second.status).toBe(409);
+        expect(second.status).toBe(400);
         expect(await second.text()).toContain("surviving physical surface");
         expect(provider.surfaceLeaseIds).toHaveLength(1);
         expect(failed).toBe(true);
@@ -549,7 +549,7 @@ describe("development runtime composition", () => {
     });
     try {
       const response = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, nativeRequest());
-      expect(response.status).toBe(409);
+      expect(response.status).toBe(400);
       expect(await response.text()).toContain("fixture document lost");
       expect(provider.surfaceLeaseIds).toHaveLength(phase === "before-submit" ? 0 : 1);
       expect(completed).toBe(false); expect(failed).toBe(true); expect(closed).toBe(1);
@@ -690,7 +690,7 @@ describe("development runtime composition", () => {
 
       const failedInput = [...compacted, message("assistant", "done:turn-5"),
         message("user", "Check the next file but do not commit on Web error.")];
-      await run("turn-6", "native-model-b", failedInput, 409);
+      await run("turn-6", "native-model-b", failedInput, 400);
       expect(observations[5]!.mode).toBe("retained-delta");
 
       await run("turn-7", "native-model-b", [...failedInput,
@@ -937,7 +937,7 @@ describe("development runtime composition", () => {
 
     try {
       const response = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, nativeRequest());
-      expect(response.status).toBe(409);
+      expect(response.status).toBe(400);
       expect(await response.text()).toContain("development Web turn timed out after 25ms");
       const events = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
       const timeout = events.find(event => event.stage === "web_turn_timeout");
@@ -1170,7 +1170,7 @@ test.each(['native_watch','context_plan'] as const)('preparation failure at %s i
   try {
     const request=nativeRequest([{role:'user',content:'synthetic private request'}]);
     const response=await post(runtime.responses.baseUrl,runtime.responses.runtimeToken,request);
-    expect(response.status).toBe(409);expect(await response.text()).toContain(error.message);
+    expect(response.status).toBe(400);expect(await response.text()).toContain(error.message);
     const replay=await post(runtime.responses.baseUrl,runtime.responses.runtimeToken,request);
     expect(replay.status).toBe(400);expect(await replay.text()).toContain('already retired');
     const raw=readFileSync(file,'utf8');const events=raw.trim().split('\n').map(line=>JSON.parse(line));
@@ -1205,7 +1205,7 @@ test("context planner stage is recorded only as a verified enum on failed prepar
   });
   try {
     const response=await post(runtime.responses.baseUrl,runtime.responses.runtimeToken,nativeRequest());
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(400);
     const rows=readFileSync(file,"utf8").trim().split("\n").map(line=>JSON.parse(line));
     const failure=rows.find(row=>row.stage==="web_preparation_failed");
     expect(structuralDiagnosticEvent(failure)).toMatchObject({
@@ -1300,7 +1300,7 @@ test("Native cancellation immediately after context planning releases its pendin
   });
   try {
     const first = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, request());
-    expect(first.status).toBe(409);
+    expect(first.status).toBe(400);
     expect(await first.text()).toContain("original Native turn retired after planning");
     expect(browserAcquisitions).toBe(0);
     expect(runtime.turns.active("thread-1", "turn-1")).toBeUndefined();

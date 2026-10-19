@@ -196,14 +196,17 @@ export async function handleNativeResponsesHttp(
       } }, { status: 400 });
     }
     const message = error instanceof Error ? error.message : String(error);
+    // Execution failures retire their Native turn. A reconnect cannot resume it;
+    // Native retries HTTP 409 and then replaces the original failure with retirement.
     return Response.json({
       error: {
-        type: "chatgpt_tela_runtime_error",
+        type: "invalid_request_error",
+        retryable: false,
         // Only this Tela-owned semantic failure may invalidate a Web catalog across HTTP.
         ...(record(error)?.code === "tela_web_model_unavailable" ? { code: "tela_web_model_unavailable" } : {}),
         message,
       },
-    }, { status: 409 });
+    }, { status: 400 });
   }
 
   return responseForOutcome({

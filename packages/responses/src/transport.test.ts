@@ -326,6 +326,7 @@ describe("Native Responses HTTP transport", () => {
     expect(response.status).toBe(200); fail();
     const text = await response.text();
     expect(text).toContain("response.failed"); expect(text).toContain("synthetic failure");
+    expect(text).toContain('"retryable":false');
     expect(text).not.toContain("response.completed"); expect(turns.size).toBe(0);
   });
   test("late streamed Native history failure preserves the nonretryable recovery contract without exposing private error text", async () => {
@@ -391,15 +392,22 @@ describe("Native Responses HTTP transport", () => {
       rmSync(folder, { recursive: true, force: true });
     }
   });
-  test("propagates the catalog invalidation code only for the declared semantic failure", async () => {
+  test("initial gateway failures are terminal and only the declared semantic failure invalidates the catalog", async () => {
     for (const code of ["tela_web_model_unavailable", "arbitrary-provider-code"]) {
+      let starts = 0;
       const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async () => {
+        starts++;
         throw Object.assign(new Error("fixture failure"), { code });
       });
       const response = await handleNativeResponsesHttp(post(body()), gateway);
-      expect(response.status).toBe(409);
+      expect(response.status).toBe(400);
       const failure = await response.json() as { error: { code?: string } };
+      expect(failure).toMatchObject({ error: { type: "invalid_request_error", retryable: false, message: "fixture failure" } });
       expect(failure.error.code).toBe(code === "tela_web_model_unavailable" ? code : undefined);
+      const replay = await handleNativeResponsesHttp(post(body()), gateway);
+      expect(replay.status).toBe(400);
+      expect(await replay.json()).toMatchObject({ error: { code: "tela_native_turn_already_retired", retryable: false } });
+      expect(starts).toBe(1);
     }
   });
   test("generic retirement uses terminal InvalidRequest and distinguishes a new turn from a new conversation", async () => {

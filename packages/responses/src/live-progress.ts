@@ -138,6 +138,7 @@ export class NativeProgressStream {
     this.#event("response.failed", { response: this.#envelope("failed", [], {
       ...(recovery ?? {
         code: "chatgpt_tela_runtime_error",
+        retryable: false,
         message: error instanceof Error ? error.message : String(error),
       }),
     }) });
