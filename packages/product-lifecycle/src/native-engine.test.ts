@@ -7,7 +7,9 @@ import { parsePackagedNativeEngine, parsePackagedProductManifest, PACKAGED_PRODU
 import { resolveProductPaths } from "./layout";
 import { ensureOwnershipManifest } from "./ownership-store";
 import { readOwnershipManifest } from "./ownership";
-import { PackagedPayloadManager } from "./packaged-payload";
+import { PackagedPayloadManager, observeInstalledPackagedPayload } from "./packaged-payload";
+import { assertPackagedLaunchAdmission } from "./packaged-launch-admission";
+import { packagedUpgradeJournalPath } from "./packaged-transition";
 import { applyUninstallPlan, FilesystemOwnershipObserver, planUninstall } from "./uninstall";
 
 function metadata(sha256: string) {
@@ -64,7 +66,7 @@ test("wrong bytes or platform never execute; version mismatch and escaping links
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("owned engine selection detects drift, and removal preserves the original engine and user data", async () => {
+test("owned engine selection survives committed upgrade restoration, detects drift and preserves user data", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-owned-engine-"));
   try {
     const home = join(root, "home"); mkdirSync(home);
@@ -89,6 +91,20 @@ test("owned engine selection detects drift, and removal preserves the original e
         owner: "product", path: paths.binaryRoot, dataClass: "binary" } } });
     await manager.install(ownership);
     const version = { readVersion: () => "codex-cli 0.159.0" };
+    const committed = readOwnershipManifest(paths.installManifest)!;
+    const binary = committed.resources.find(resource => resource.id === "product-binaries");
+    if (binary?.kind !== "directory") throw new Error("fixture binary ownership missing");
+    const observed = observeInstalledPackagedPayload(binary, committed);
+    if (observed.state !== "owned") throw new Error("fixture payload receipt missing");
+    const journalPath = packagedUpgradeJournalPath(paths);
+    writeFileSync(journalPath, JSON.stringify({ version: 1, stopEvidenceVersion: 1, pendingStop: null,
+      installId: committed.installId, fromVersion: "0.9.0", toVersion: "1.0.0",
+      sourcePayloadFingerprint: "a".repeat(64), targetPayloadFingerprint: observed.receipt.payloadFingerprint,
+      phase: "manifest-updated", resumeServices: ["chat", "codex", "gateway"],
+      quiescedServices: ["gateway", "codex", "chat"], resumedServices: ["chat"],
+    }));
+    // The actual launcher permits this checkpoint; engine selection must agree.
+    assertPackagedLaunchAdmission({ paths, ownership: committed, receipt: observed.receipt, service: "codex" });
     expect(resolveOwnedNativeEngine(pathOptions, version)?.localCompaction).toBe(true);
     const installed = join(paths.binaryRoot, "native-engine/codex");
     const installedHelper = join(paths.binaryRoot, "native-engine", nativeEngineHelperName(process.platform));
@@ -100,6 +116,7 @@ test("owned engine selection detects drift, and removal preserves the original e
     writeFileSync(installed, "foreign");
     expect(() => resolveOwnedNativeEngine(pathOptions, version)).toThrow("receipt");
     writeFileSync(installed, bytes);
+    rmSync(journalPath);
     const current = readOwnershipManifest(paths.installManifest)!;
     const observer = new FilesystemOwnershipObserver();
     const plan = await planUninstall({ manifest: current, observer, removeData: false });

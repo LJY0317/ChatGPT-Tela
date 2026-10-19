@@ -6,7 +6,6 @@ import { readOwnershipManifest } from "./ownership";
 import { resolveProductPaths, type ProductPathOptions } from "./layout";
 import { observeInstalledPackagedPayload } from "./packaged-payload";
 import { PACKAGED_PRODUCT_MANIFEST, readPackagedProductManifest, type PackagedNativeEngine } from "./packaged-manifest";
-import { packagedRepairJournalPath, packagedUpgradeJournalPath } from "./packaged-transition";
 
 /** Upstream Codex's install-context resolves this helper beside its executable. */
 export function nativeEngineHelperName(platform: NodeJS.Platform): string {
@@ -74,7 +73,6 @@ export function resolveOwnedNativeEngine(pathOptions?: ProductPathOptions, optio
   if (!existsSync(join(resource.path, PACKAGED_PRODUCT_MANIFEST))) return undefined;
   const manifest = readPackagedProductManifest(resource.path);
   if (!manifest.nativeEngine) return undefined;
-  if (existsSync(packagedRepairJournalPath(paths)) || existsSync(packagedUpgradeJournalPath(paths))) throw new Error("Native engine selection blocked during install transition");
   const observed = observeInstalledPackagedPayload(resource, ownership);
   if (observed.state !== "owned" || observed.receipt.productVersion !== manifest.productVersion
     || ownership.productVersion !== manifest.productVersion) throw new Error("Native engine installed receipt could not be re-proven");
