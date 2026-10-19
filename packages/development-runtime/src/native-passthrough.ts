@@ -1,4 +1,5 @@
 import { NativeConnectionTrace, nativeInterfaceShape } from "./native-connection-trace";
+import { decodeTelaCompactionSummary, telaCompactionSummaryText } from "@chatgpt-tela/codex";
 import { getDefaultAutoSelectFamily, getDefaultAutoSelectFamilyAttemptTimeout, isIP } from "node:net";
 import { getDefaultResultOrder } from "node:dns";
 import { capturePrivateDiagnosticValue, networkFailureDiagnostics, emitDiagnosticEvent } from "@chatgpt-tela/core";
@@ -57,6 +58,15 @@ export function scrubTelaResponsesArtifacts(value: unknown): { readonly value: u
   if (Array.isArray(root.input)) {
     next.input = root.input.flatMap(item => {
       const source = record(item);
+      if (source?.type === "compaction") {
+        const summary = decodeTelaCompactionSummary(source.encrypted_content);
+        if (summary !== undefined) {
+          changed = true;
+          return [{ type: "message", role: "user", content: [
+            { type: "input_text", text: telaCompactionSummaryText(summary) },
+          ] }];
+        }
+      }
       if (!source || !telaOwnedId(source.id)) return [item];
       // Browser-public progress has no first-party persisted reasoning state to look up.
       // Its display-only item must not become Native model input after a Web→Native switch.

@@ -1,4 +1,5 @@
 import { classifyWebPreparationFailure } from "./web-preparation-diagnostics";
+import { decodeTelaCompactionSummary, telaCompactionSummaryText } from "@chatgpt-tela/codex";
 import { CheckpointPreparationBudget, CheckpointPreparationBudgetExceeded } from "./checkpoint-preparation-budget";
 import { createHash } from "node:crypto";
 import {
@@ -603,6 +604,11 @@ export function projectNativeRequestContext(
         continue;
       }
       if (type === "compaction" || type === "compaction_summary" || type === "context_compaction") {
+        const summary = decodeTelaCompactionSummary(item.encrypted_content);
+        if (summary !== undefined) {
+          append("assistant", telaCompactionSummaryText(summary));
+          continue;
+        }
         if (visibleCompactionHistory !== undefined && type === "compaction"
           && typeof item.encrypted_content === "string" && item.encrypted_content.length > 0) continue;
         throw new Error("Native compaction content is opaque to the Tela Web provider; a readable Native summary is required");

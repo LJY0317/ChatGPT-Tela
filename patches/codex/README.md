@@ -35,7 +35,7 @@ updates quota/billing records. Two no-usage regression cases and 15 automatic co
 regressions pass; Real automatic Web summary/recall and unmodified official cold resume passed, and the follow-up is installed in the local macOS preview.
 The manifest distinguishes the current candidate patch from the installed preview patch.
 
-## Catalog refresh experiment (not installed)
+## Catalog refresh experiment
 
 `model-catalog-refresh.patch` adds the experimental Tela-owned RPC
 `tela/modelCatalog/refresh` to the same retained, provider-gated engine catalog.
@@ -53,8 +53,19 @@ the compaction patch followed by this patch. Build the CLI and its code-mode hel
 together with the exact upstream-pinned sandbox V8 archive/binding pair; ordinary
 upstream V8 download URLs do not publish that pair.
 
-This is a candidate extension, not an upstream API or an installed capability.
-Product source calls it only when the signed owned engine declares `model-catalog-refresh-v1`; the installed engine does not. Deployment requires a verified engine capability,
+This is a Tela extension, not an upstream API. Some installed previews advertise this
+capability; inspect the owned payload metadata rather than infer it from this patch file.
+Product source calls it only when the signed owned engine declares `model-catalog-refresh-v1`. Deployment requires a verified engine capability,
 one coalesced request per admitted Web catalog transition, actual engine transport
 proof, and picker acceptance. Never probe unsupported engines repeatedly, edit their
 cache, restart Native to force refresh, or fabricate Desktop notifications.
+
+## Necessity review
+
+The standard engine now has a verified synthetic transport path for Responses
+compaction-v2 and startup `model_catalog_json`; these functions do not intrinsically
+require this fork. The installed fork still supplies no-usage automatic-pressure
+estimation, whose equivalent standard behavior has not been verified. The refresh RPC
+also does not invalidate Desktop's picker cache. Keep existing preview compatibility
+while validating the standard path; do not expand the fork to repair proxy ownership
+or terminal-response replay. See [the responsibility review](../../docs/token-efficiency.md#standard-engine-and-optional-fork).

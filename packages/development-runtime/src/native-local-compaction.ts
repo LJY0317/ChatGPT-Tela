@@ -2,6 +2,7 @@ import { diagnosticDurationMs, diagnosticFingerprint, diagnosticFailureClass, em
 import { createHash, randomUUID } from "node:crypto";
 import {
   bindNativeCompactionRequest, historicalTurnAuthority,
+  MAX_TELA_COMPACTION_SUMMARY_BYTES,
   NativeHistoryBootstrapRequired, NativeBindingError, type NativeBindingReason, type CanonicalCurrentTurnSource,
 } from "@chatgpt-tela/codex";
 import { nativeCompactionSummaryResponse } from "@chatgpt-tela/responses";
@@ -46,7 +47,7 @@ function digest(value: unknown): string {
   })).digest("hex");
 }
 
-/** Only handles authenticated tool-free Native local compaction, never remote opaque compaction. */
+/** Shared summarization for Native text and standard Responses compaction-v2 transports. */
 export function createNativeLocalCompactionRouter(input: NativeContinuitySources & {
   readonly checkpointCache?: ContextCheckpointCache;
   readonly source: CanonicalCurrentTurnSource;
@@ -75,8 +76,17 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
     let metadata: RecordValue | undefined;
     try { metadata = typeof rawMetadata === "string" ? record(JSON.parse(rawMetadata)) : record(rawMetadata); }
     catch { return undefined; }
-    if (metadata?.request_kind !== "compaction"
-      || (Array.isArray(body.input) && body.input.some(value => record(value)?.type === "compaction_trigger"))) return undefined;
+    if (metadata?.request_kind !== "compaction") return undefined;
+    const remote = Array.isArray(body.input) && record(body.input.at(-1))?.type === "compaction_trigger";
+    if (remote) {
+      // Standard Codex v2 includes its tool declarations. They are not execution
+      // authority for a summary operation; the existing inert compaction binder
+      // and producer receive only original history plus the summary instruction.
+      body = { ...body, tools: [], input: [...(body.input as unknown[]).slice(0, -1)
+        .filter(item => record(item)?.type !== "additional_tools"), {
+        type: "message", role: "user", content: "Summarize this task for continuation. Preserve current work, decisions, constraints, unresolved failures and next steps. Historical details require original-source readback. Summarize only; do not execute tools.",
+      }] };
+    }
     let phase: CompactionPhase = "route";
     let state: "new" | "coalesced" | "cached" = "new";
     let operationId: string | undefined;
@@ -212,7 +222,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
             }
             if (watch?.signal.aborted) throw new CompactionFailure(operationPhase, "owner_cancelled");
             operationPhase = "summary_validation";
-            if (!summary.trim() || Buffer.byteLength(summary, "utf8") > 32 * 1024) throw new CompactionFailure(operationPhase, "invalid_summary");
+            if (!summary.trim() || Buffer.byteLength(summary, "utf8") > MAX_TELA_COMPACTION_SUMMARY_BYTES) throw new CompactionFailure(operationPhase, "invalid_summary");
           } catch (error) { primaryFailure = true; throw failure(error, operationPhase); }
           finally {
             try { await watch?.close(); }
@@ -242,11 +252,15 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
       return nativeCompactionSummaryResponse({
         summary, operationId: operation.id, model: body.model as string,
         stream: body.stream === true,
+        remote,
       });
     } catch (error) {
       const rejected = failure(error, phase);
       const budgetExceeded = rejected.reason === "preparation_budget_exceeded";
-      const status = rejected.reason === "readable_checkpoint_required" || budgetExceeded ? 422 : 400;
+      const requiresRecovery = rejected.reason === "readable_checkpoint_required" || budgetExceeded;
+      // The current input cannot recover by retrying. Standard remote compaction
+      // retries 422 responses; classify these terminal invalid requests as 400.
+      const status = 400;
       emitDiagnosticEvent("chatgpt_tela_work", "compaction_rejected", {
         phase: rejected.phase, reason_class: rejected.reason, status, state,
         kind: diagnosticFailureClass(rejected.cause),
@@ -254,14 +268,14 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
         ...(scope ? { scope_fingerprint: scope } : {}),
         ...(sourceMatches === undefined ? {} : { source_matches: sourceMatches, wire_matches: wireMatches! }),
       });
-      if (status === 422) {
+      if (requiresRecovery) {
         return Response.json({ error: {
           type: "invalid_request_error",
           code: budgetExceeded ? "tela_compaction_preparation_budget_exceeded" : "tela_compaction_requires_readable_checkpoint",
           message: budgetExceeded
             ? "Web compaction exceeds the configured preparation budget. Reuse a verified checkpoint or explicit handoff; Native history was not changed."
             : "Native readable history exceeds the bounded Web compaction input. A verified checkpoint or explicit handoff is needed; no historical evidence was removed.",
-        } }, { status: 422 });
+        } }, { status });
       }
       return Response.json({ error: { type: "invalid_request_error", code: "tela_local_compaction_rejected",
         message: "Web compaction could not verify the current conversation and its readable source. Native history was not changed by this request." } }, { status: 400 });

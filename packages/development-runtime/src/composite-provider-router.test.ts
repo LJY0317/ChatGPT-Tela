@@ -63,10 +63,7 @@ describe("default-profile composite provider router", () => {
       model: chatGptWebModelId(key),
       input: [{ type: "message", role: "user", content: "test" }, { type: "compaction_trigger" }],
     }));
-    expect(webCompactionV2?.status).toBe(400);
-    expect((await webCompactionV2?.json()).error).toMatchObject({
-      type: "invalid_request_error", code: "tela_web_compaction_unsupported",
-    });
+    expect(webCompactionV2).toBeUndefined();
     expect(await router.route(request("/v1/responses", {
       model: "native-model", input: [{ type: "compaction_trigger" }],
     }))).toBeDefined();

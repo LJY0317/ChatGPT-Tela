@@ -2,6 +2,21 @@ import { describe, expect, test } from "bun:test";
 import { forwardNativeCodexRequest, scrubTelaResponsesArtifacts } from "./native-passthrough";
 import { readFileSync } from "node:fs";
 import { withDiagnosticContext } from "@chatgpt-tela/core";
+import { encodeTelaCompactionSummary } from "@chatgpt-tela/codex";
+
+test("Web-to-Native switching translates only Tela summaries and preserves unknown opaque Native state", () => {
+  const native = { type: "compaction", encrypted_content: "opaque-native-state" };
+  const summary = { type: "compaction", encrypted_content: encodeTelaCompactionSummary("Keep this prior task state") };
+  const result = scrubTelaResponsesArtifacts({ input: [native, summary] });
+  expect(result.changed).toBe(true);
+  const input = (result.value as { input: any[] }).input;
+  expect(input[0]).toBe(native);
+  expect(input[1]).toMatchObject({ type: "message", role: "user", content: [{ type: "input_text",
+    text: expect.stringContaining("Keep this prior task state") }] });
+  expect(input[1].encrypted_content).toBeUndefined();
+  expect(() => scrubTelaResponsesArtifacts({ input: [{ type: "compaction", encrypted_content: "tela:summary:v1:not+canonical" }] }))
+    .toThrow();
+});
 
 describe("Native Codex passthrough", () => {
   test("preserves replayable Native reasoning and chunked successful SSE byte-for-byte", async () => {

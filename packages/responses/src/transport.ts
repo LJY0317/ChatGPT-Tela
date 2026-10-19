@@ -12,6 +12,7 @@ import { NativeProgressStream } from "./live-progress";
 import { nativeHistoryRecovery } from "./native-history-recovery";
 import { webContinuityRecovery } from "./web-continuity-recovery";
 import { nativeProjectionRecovery } from "./native-projection-recovery";
+import { encodeTelaCompactionSummary } from "@chatgpt-tela/codex";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -224,12 +225,28 @@ export function nativeCompactionSummaryResponse(input: {
   readonly operationId: string;
   readonly model: string;
   readonly stream: boolean;
+  readonly remote?: boolean;
 }): Response {
   if (!input.summary.trim() || !input.operationId.trim()) throw new Error("Native summary response is empty");
   const outcome: NativeGatewayOutcome = {
     type: "final", answer: input.summary, delivery: { capability: `compaction-${input.operationId}` },
   };
   const encoded = encodeNativeResponsesOutcome({ outcome, model: input.model });
+  if (input.remote) {
+    const item = { type: "compaction", id: encoded.outputItemId,
+      encrypted_content: encodeTelaCompactionSummary(input.summary) };
+    const response = { ...encoded.response, output: [item] };
+    if (!input.stream) return Response.json(response);
+    const events = [
+      { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
+      { type: "response.output_item.added", output_index: 0, item },
+      { type: "response.output_item.done", output_index: 0, item },
+      { type: "response.completed", response },
+    ];
+    const wire = events.map((event, sequence_number) =>
+      `event: ${event.type}\ndata: ${JSON.stringify({ ...event, sequence_number })}\n\n`).join("");
+    return new Response(wire + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+  }
   if (!input.stream) return Response.json(encoded.response);
   const plan = nativeResponsesSsePlan(outcome, encoded);
   return new Response(plan.frames.join(""), { headers: { "content-type": "text/event-stream" } });

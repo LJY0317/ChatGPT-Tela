@@ -29,27 +29,15 @@ async function requestModel(request: Request): Promise<string | undefined> {
   }
 }
 
-async function isRemoteCompactionV2(request: Request): Promise<boolean> {
-  if (request.method !== "POST") return false;
-  try {
-    const parsed = record(await request.clone().json());
-    const input = parsed?.input;
-    return Array.isArray(input) && record(input.at(-1))?.type === "compaction_trigger";
-  } catch {
-    return false;
-  }
-}
-
 function unavailableWebCompaction(): Response {
   emitDiagnosticEvent("chatgpt_tela_work", "web_remote_compaction_unavailable");
   return Response.json({
     error: {
       type: "invalid_request_error",
       code: "tela_web_compaction_unsupported",
-      message: "Web models cannot compact the Native conversation yet. Select a Native model to compact it, then switch back to Web. Native usage limits apply; this request did not change conversation history.",
+      message: "This legacy compaction endpoint is unsupported for Web models. Use an engine with Responses compaction-v2 or compact with a Native model. Native usage limits apply; this request did not change conversation history.",
     },
-  // This is a permanent capability mismatch, not a transient server failure. Native clients
-  // retry 5xx responses; rejecting with 400 avoids repeated identical compaction requests.
+  // A capability mismatch is an invalid request, not a transient server failure.
   }, { status: 400 });
 }
 
@@ -169,7 +157,6 @@ export function createDefaultProfileCompositeProviderRouter(input: {
       if (endpoint === "responses") {
         const model = await requestModel(request);
         if (model && parseChatGptWebModelId(model)) {
-          if (await isRemoteCompactionV2(request)) return unavailableWebCompaction();
           return undefined;
         }
         return native(request, endpoint);

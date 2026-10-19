@@ -104,11 +104,46 @@ residency separately. Counts and token estimates are not provider billing. Corre
 planner decisions with stage/settlement receipts; missing logs are not proof of failure.
 Raw source and provider evidence remain local opt-in with bounded retention.
 
-CodexGPTWeb comparison at source revision `9fe005eefb93913c138368b0972b8a0c476fcf54`:
-ordinary operation uses the single-message path with model-specific Native compaction
-metadata. Its experimental Bigger Context multiplier is 3; that is not a three-message
-limit. The experimental multipart compiler supports 2 or 6 parts. See
-[model catalog](https://github.com/miuuyy/codex-chatgpt-web/blob/9fe005eefb93913c138368b0972b8a0c476fcf54/src/model-catalog.ts),
-[usage planning](https://github.com/miuuyy/codex-chatgpt-web/blob/9fe005eefb93913c138368b0972b8a0c476fcf54/src/adapters/chatgpt-web/usage.ts)
-and [multipart definitions](https://github.com/miuuyy/codex-chatgpt-web/blob/9fe005eefb93913c138368b0972b8a0c476fcf54/src/adapters/chatgpt-web/prompt.ts).
-These are separate project choices, not evidence of ChatGPT's actual capacity or Tela defaults.
+## Standard engine and optional fork
+
+The engine executing Native tools is required by the current Desktop integration; a
+Tela-specific engine fork is a separate dependency. Prefer public Codex contracts:
+
+| Responsibility | Current evidence and decision |
+| --- | --- |
+| Web summary transport | Standard Responses compaction-v2 (`compaction_trigger`) now uses the existing selector, budget, journal and single summary producer. No separate compressor or engine patch is needed for this transport. |
+| Summary replay and Native switch | A bounded transparent Tela envelope is returned as one `compaction` item. Web reads its historical summary; Native forwarding translates only Tela envelopes to ordinary summary text. Unknown provider-encrypted states keep their existing source-recovery path. |
+| Startup model catalog | Standard `model_catalog_json` exposed a custom Web row through actual `model/list` in the isolated official-engine fixture. This does not prove Desktop picker rendering or live invalidation. |
+| Automatic pressure without usage | The official-engine fixture observed no automatic compaction after a large synthetic reply with `usage: null`; explicit compaction succeeded. The installed fork's local pressure estimate still has a purpose until an equivalent standard path is verified. Do not fabricate provider usage to trigger it. |
+| Live catalog refresh | A fork RPC refreshes an engine catalog but does not invalidate Desktop's picker cache. Retain capability-gated compatibility while verifying supported lifecycle behavior; do not add another refresh protocol. |
+
+The local text transport remains compatible with the installed preview. The legacy Web
+`/responses/compact` endpoint remains unsupported; standard compaction-v2 is supported.
+Terminal source/budget errors use HTTP 400 with their existing recovery codes: the
+standard engine retried 422 three times in the synthetic failure fixture, but made one
+request with 400 and then continued a new turn with the original history. The installed
+older local-compaction loop still retries 400; a status change alone does not repair it.
+No installed engine has been replaced by these source changes.
+
+`packages/development-runtime/src/fixtures/standard-engine-compaction.ts` runs a supplied
+engine through public paginated RPC with an isolated temporary home, a supplied public
+model catalog template, and synthetic model responses. It checks model-list seeding,
+compaction, subsequent Web planning and Native forwarding. Run it with `--engine`,
+`--catalog`, and optionally `--output`, `--scratch-root`, or `--auto-limit`.
+`--reject-compaction source-budget` or `--reject-compaction summary` checks terminal
+rejection, single summary admission and continued access to unchanged history.
+It makes no browser/model calls and does not validate real model quality, Desktop UI,
+provider billing, or production automatic pressure. A successful manual fallback is
+reported separately from the observed automatic-compaction count.
+
+[CodexGPTWeb compaction](https://github.com/miuuyy/codex-chatgpt-web/blob/cdfceafd51df9ab6f19818c145eac5a99c593a3d/src/responses/compaction.ts)
+and [Native forwarding](https://github.com/miuuyy/codex-chatgpt-web/blob/cdfceafd51df9ab6f19818c145eac5a99c593a3d/src/native-passthrough.ts)
+show the same useful contract boundary: standard remote compaction and provider-owned
+summary decoding. Its model usage estimates and experimental multipart policy are
+project choices, not proof of ChatGPT capacity or Tela billing. Tela does not adopt
+opaque-history omission or automatic fragment/merge recovery.
+
+[Codex Proxy](https://github.com/icebear0828/codex-proxy/tree/f824033a88e28d82f25db562e22758c383bfc177)
+uses a standard compact endpoint and an optional official app-server bridge, but relays
+API/account traffic rather than Tela's browser model session. Its account routing and
+failover machinery do not address these continuation defects and are not dependencies.

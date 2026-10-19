@@ -12,6 +12,8 @@ import { maybeProduceNativeHistoryCheckpoint } from './native-history-checkpoint
 import { FileNativeVisiblePrefixStageJournal } from './native-visible-prefix-journal';
 import { ActiveTurnRegistry, NativeResponsesGateway, settleNativeCompactionToolResult } from '@chatgpt-tela/runtime';
 import { handleNativeResponsesHttp } from '@chatgpt-tela/responses';
+import { bindNativeTurnRequest, decodeTelaCompactionSummary } from '@chatgpt-tela/codex';
+import { createNativeRequestDevelopmentWebTurnPlanner } from './native-request-planner';
 const canonical:CanonicalCurrentTurnEvidence={threadId:'thread',turnId:'turn',cwd:'/fixture',workspaceRoots:['/fixture'],sandbox:{kind:'native-enforced'},proof:'app-server-active-turn',environmentSourceTurnId:'turn'};
 function body(extra:any={}){return {model:chatGptWebModelId(chatGptWebFamilyKey('Fixture')),reasoning:{effort:'medium'},tools:[],input:[{type:'message',role:'user',content:'Observed old result'},{type:'message',role:'user',content:'Summarize the task'}],client_metadata:{'x-codex-turn-metadata':JSON.stringify({request_kind:'compaction',thread_id:'thread',turn_id:'turn'})},...extra}}
 function request(value:any){return new Request('http://127.0.0.1/v1/responses',{method:'POST',body:JSON.stringify(value)})}
@@ -53,7 +55,7 @@ test('oversized local compaction refuses to send the whole logical history to a 
  const data=body({input:[{type:'message',role:'user',content:'P'.repeat(405_000)},
    {type:'message',role:'user',content:'New exact request'}]});
  const result=await router(request(data));
- expect(result?.status).toBe(422);
+ expect(result?.status).toBe(400);
  expect((await result?.json()).error).toMatchObject({
   code:'tela_compaction_requires_readable_checkpoint',
  });
@@ -102,11 +104,46 @@ test('Native local compaction uses the same verified history checkpoint as an or
   expect(rawReads).toBe(0);
  }finally{rmSync(directory,{recursive:true,force:true});}
 });
-test('ordinary turns and opaque remote compaction never enter the local summarizer',async()=>{
+test('ordinary turns and Native model requests never enter the Web summarizer',async()=>{
  const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>{throw Error('must not bind')}},summarize:async()=>{throw Error('must not run')}});
  expect(await router(request(body({client_metadata:{'x-codex-turn-metadata':JSON.stringify({request_kind:'turn'})}})))).toBeUndefined();
- expect(await router(request(body({input:[{type:'compaction_trigger'}]})))).toBeUndefined();
  expect(await router(request(body({model:'native-fixture'})))).toBeUndefined();
+});
+test('standard remote compaction uses one inert summary and replays it without a historical bootstrap', async () => {
+ let summaries = 0, historyReads = 0;
+ const source = { currentTurn: async () => canonical };
+ const router = createNativeLocalCompactionRouter({ source,
+  summarize: async input => {
+   summaries++;
+   expect(input.physicalContext.segments[0]?.content).toBe('Original completed work');
+   expect(input.physicalContext.segments.at(-1)?.content).toContain('Summarize only; do not execute tools.');
+   return 'Verified prior work; next action remains pending.';
+  },
+ });
+ const input = body({ input: [{ role: 'user', content: 'Original completed work' },
+  { type: 'additional_tools', tools: [{ type: 'function', name: 'exec_command' }] }, { type: 'compaction_trigger' }],
+  tools: [{ type: 'function', name: 'exec_command', parameters: { type: 'object' } }] });
+ const compacted = await router(request(input));
+ expect(compacted?.status).toBe(200);
+ const output = (await compacted!.json()).output;
+ expect(output).toHaveLength(1);
+ expect(output[0].type).toBe('compaction');
+ expect(decodeTelaCompactionSummary(output[0].encrypted_content)).toBe('Verified prior work; next action remains pending.');
+ const streamed = await router(request({ ...input, stream: true }));
+ const frames = (await streamed!.text()).split('\n').filter(line => line.startsWith('data: {')).map(line => JSON.parse(line.slice(6)));
+ expect(frames.find(event => event.type === 'response.completed').response.output).toEqual(output);
+ expect(frames.filter(event => event.type === 'response.output_item.done')).toHaveLength(1);
+ expect(summaries).toBe(1);
+ const next = body({ input: [...output, { role: 'user', content: 'Continue the pending action' }],
+  client_metadata: { 'x-codex-turn-metadata': { request_kind: 'turn', thread_id: 'thread', turn_id: 'turn' } } });
+ const binding = await bindNativeTurnRequest(next, source);
+ const plan = await createNativeRequestDevelopmentWebTurnPlanner({ compactionHistory: async () => {
+  historyReads++; throw new Error('Own readable summaries must not bootstrap the original archive');
+ } })(new ActiveTurnRegistry().register(binding), next);
+ expect(plan.physicalContext.segments.some(segment => segment.content.includes('Verified prior work'))).toBe(true);
+ expect(plan.physicalContext.segments.at(-1)?.content).toBe('Continue the pending action');
+ expect(historyReads).toBe(0);
+ plan.settle?.({ status: 'failed' });
 });
 test('foreign or superseded authority and tool-bearing requests reject before summary delivery',async()=>{
  let calls=0;const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>({...canonical,turnId:'foreign'})},summarize:async()=>{calls++;return 'wrong'}});
@@ -266,8 +303,8 @@ test('compaction router settles one tool result and delivers a fast final after 
 test('oversized-source rejection remains stable across retries without another summary attempt',async()=>{
  let calls=0;const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical},summarize:async()=>{calls++;return 'must not run'}});
  const source=body({input:[{type:'message',role:'user',content:'P'.repeat(405_000)}]});
- expect((await router(request(source)))?.status).toBe(422);
- expect((await router(request({...source,stream:true})))?.status).toBe(422);expect(calls).toBe(0);
+ expect((await router(request(source)))?.status).toBe(400);
+ expect((await router(request({...source,stream:true})))?.status).toBe(400);expect(calls).toBe(0);
 });
 
 test('compaction diagnostics preserve original failure phase across metadata-only retries',async()=>{

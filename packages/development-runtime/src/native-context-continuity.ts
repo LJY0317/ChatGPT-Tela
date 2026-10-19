@@ -3,6 +3,7 @@ import { CheckpointPreparationBudget, type CheckpointPreparationPolicy } from ".
 import { createHash } from "node:crypto";
 import {
   NativeHistoryBootstrapRequired,
+  decodeTelaCompactionSummary,
   restoreNativeHistoricalImages,
   type NativeCompactionHistoryProjection,
   type NativeHistoricalImageCandidate,
@@ -83,7 +84,8 @@ function record(value: unknown): Record<string, unknown> | undefined {
 export function nativeOpaqueCompaction(value: unknown): NativeOpaqueCompaction {
   const input = record(value)?.input;
   const opaque = Array.isArray(input)
-    ? input.map(record).filter(item => item?.type === "compaction") : [];
+    ? input.map(record).filter(item => item?.type === "compaction"
+      && decodeTelaCompactionSummary(item.encrypted_content) === undefined) : [];
   return Object.freeze({
     count: opaque.length,
     ...(opaque.length === 1 ? {
