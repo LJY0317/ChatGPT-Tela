@@ -140,7 +140,7 @@ export async function startGatewayService(input: {
         }
       }
       if (request.method === "POST" && url.pathname === "/v1/shutdown") {
-        lifecycle.afterResponse(resolveShutdown);
+        void lifecycle.responseFinished.then(resolveShutdown);
         return Response.json({ status: "shutting-down" });
       }
       return new Response(null, { status: 404 });

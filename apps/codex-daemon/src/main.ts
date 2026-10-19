@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import {
-  restorableWorkProfiles,
+  restoreWorkProfiles,
   startCodexService,
   startCodexServiceHttpServer,
   createCodexWorkInspector,
@@ -8,6 +8,7 @@ import {
 import { WebDelegationStore } from "../../../packages/codex-service/src/web-delegation";
 import { approvalDelayMilliseconds, consumeSavedChatAcceptance, readProductPreferences, setWorkProfileConnection } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
+import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   removeServiceRuntimeDescriptor,
   writeServiceRuntimeDescriptor,
@@ -48,8 +49,10 @@ async function main(): Promise<void> {
     },
   });
   const delegationStore = new WebDelegationStore(join(paths.serviceState("codex"), "web-delegations"));
+  let restoring = true;
   const http = await startCodexServiceHttpServer({
     service,
+    startupComplete: () => !restoring,
     inspectWork: createCodexWorkInspector({ service, logsRoot: paths.logsRoot }),
     delegationCapacity: (slot, mode) => delegationStore.capacity(slot, mode),
   });
@@ -65,17 +68,9 @@ async function main(): Promise<void> {
   });
 
   // One startup attempt, no polling and no interruption of already-running apps.
-  const restoration = (async () => {
-    const identities = readProductPreferences().workProfileConnections ?? [];
-    if (identities.length === 0) return;
-    for (const slot of restorableWorkProfiles(await service.profiles(), identities)) {
-      if (lifecycle.signal.aborted) return;
-      // Recheck immediately before starting; the app may have opened during discovery.
-      if (!restorableWorkProfiles(await service.profiles(), identities).includes(slot)) continue;
-      try { await service.startProfile(slot, { requireStopped: true }); }
-      catch { console.error("Tela Work saved connection needs attention."); }
-    }
-  })().catch(() => console.error("Tela Work connection restoration needs attention."));
+  const restoration = restoreWorkProfiles(service, readProductPreferences().workProfileConnections ?? [], lifecycle.signal)
+    .catch(error => emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_failed", { failure_class: diagnosticFailureClass(error) }))
+    .finally(() => { restoring = false; });
 
   let stopping: Promise<void> | undefined;
   const stop = () => {

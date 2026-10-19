@@ -83,18 +83,12 @@ export async function startProcessOwnerControl(input: {
       let finish!: () => void;
       const delivered = new Promise<void>(resolve => { finish = resolve; });
       pendingResponses.add(delivered);
-      let settled = false;
       const responseFinished = () => {
-        if (settled) return;
-        settled = true;
-        request.signal.removeEventListener("abort", responseFinished);
         pendingResponses.delete(delivered);
         inFlight--;
         finish();
       };
-      lifecycle.afterResponse(responseFinished);
-      request.signal.addEventListener("abort", responseFinished, { once: true });
-      if (request.signal.aborted) responseFinished();
+      void lifecycle.responseFinished.then(responseFinished);
       try {
         const text = await request.text();
         if (!same(request.headers.get("x-tela-owner-request-signature") ?? "", signature(input.secret, text, "request"))) {

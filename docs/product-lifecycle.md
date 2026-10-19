@@ -316,6 +316,10 @@ service registration and restoring its process is separate from profile/Web read
 previously intended profiles, Native connection and Web model catalog after the signed transition.
 Saved connection intent never authorizes taking over an app the user opened independently.
 
+HTTP response settlement survives caller disconnects and late subscribers; completed shutdown cleanup
+must still release its service owner. Codex startup reports readiness after its single saved-profile
+restoration pass, recording per-profile results without conversation bodies or account identifiers.
+
 The journal records each quiesce/replacement/commit/resume boundary. A crash during binary replacement can
 therefore rebuild the target only inside the exact marker-owned binary root, while a restart failure after the
 version commit retries only outstanding service resumes. Ordinary source `start` and destructive uninstall

@@ -77,7 +77,7 @@ test("an acknowledged shutdown finishes its response before closing the owner", 
   const requested = new Promise<void>(resolve => { shutdown = resolve; });
   const server = await startWebHttpServer({ hostname: "127.0.0.1", maxRequestBodyBytes: 1024,
     async fetch(_request, lifecycle) {
-      lifecycle.afterResponse(shutdown);
+      void lifecycle.responseFinished.then(shutdown);
       return Response.json({ status: "shutting-down" });
     } });
   const closed = requested.then(() => server.stop());
@@ -144,4 +144,28 @@ test("a disconnected client cancels its request while a peer remains usable", as
     try { stream.close(); } catch { /* Already cancelled by the client. */ }
     await server.stop();
   }
+});
+
+test("cleanup registered after the caller disconnects still completes owner shutdown", async () => {
+  let entered!: () => void, finishCleanup!: () => void, completed!: () => void;
+  const handling = new Promise<void>(resolve => { entered = resolve; });
+  const cleanup = new Promise<void>(resolve => { finishCleanup = resolve; });
+  const done = new Promise<void>(resolve => { completed = resolve; });
+  const abort = new AbortController();
+  let finished: boolean | undefined;
+  const server = await startWebHttpServer({ hostname: "127.0.0.1", maxRequestBodyBytes: 1024,
+    async fetch(request, lifecycle) {
+      entered();
+      await new Promise<void>(resolve => request.signal.addEventListener("abort", () => resolve(), { once: true }));
+      await cleanup;
+      // Owner cleanup can finish after the requesting app has already exited.
+      void lifecycle.responseFinished.then(value => { finished = value; completed(); });
+      return Response.json({ status: "shutting-down" });
+    } });
+  try {
+    const request = fetch(`http://127.0.0.1:${server.port}/shutdown`, { signal: abort.signal });
+    await handling; abort.abort(); await request.catch(() => {});
+    finishCleanup(); await done;
+    expect(finished).toBe(false);
+  } finally { finishCleanup(); await server.stop(); }
 });

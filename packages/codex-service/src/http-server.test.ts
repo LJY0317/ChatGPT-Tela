@@ -57,6 +57,17 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("service readiness waits for its one startup restoration pass", async () => {
+    let complete=false;
+    const server=await startCodexServiceHttpServer({service:fixtureService(),startupComplete:()=>complete});
+    const client=new CodexServiceClient({version:1,service:'codex',instanceId:'codex-fixture',installId:'fixture',
+      pid:process.pid,endpoint:server.endpoint.href,bearerToken:server.bearerToken,startedAt:new Date().toISOString()});
+    try {
+      expect((await client.status()).state).toBe('degraded');
+      complete=true;expect((await client.status()).state).toBe('ready');
+    } finally {await server.close();}
+  });
+
   test("managed Web delegation capacity is an authenticated, content-free read", async () => {
     const service = fixtureService(), token = "c".repeat(48);
     let reads = 0;

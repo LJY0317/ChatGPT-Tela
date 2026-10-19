@@ -130,16 +130,14 @@ export async function startChatService(input: {
         if (stopping) return Response.json({ error: { type: "tela_chat_stopping", message: "Tela Chat is shutting down" } }, { status: 503 });
         activeCalls++;
         let released = false;
-        let workFinished = false, deliveryFinished = request.signal.aborted;
+        let workFinished = false, deliveryFinished = false;
         const release = () => {
           if (released || !workFinished || !deliveryFinished) return;
           released = true;
           activeCalls--;
-          request.signal.removeEventListener("abort", delivered);
         };
         const delivered = () => { deliveryFinished = true; release(); };
-        lifecycle.afterResponse(delivered);
-        request.signal.addEventListener("abort", delivered, { once: true });
+        void lifecycle.responseFinished.then(delivered);
         try {
           if (!input.tools) {
             return Response.json({ error: { type: "tela_chat_not_configured", message: "no locally approved workspace roots" } }, { status: 409 });
@@ -186,7 +184,7 @@ export async function startChatService(input: {
           return Response.json({ contractVersion: 1, service: "chat", instanceId, shutdown: "not-started",
             error: { type: "tela_chat_shutdown_blocked", message: "Finish active or unresolved Chat work before shutting down" } }, { status: 409 });
         }
-        lifecycle.afterResponse(resolveShutdown);
+        void lifecycle.responseFinished.then(resolveShutdown);
         return Response.json({ status: "shutting-down" });
       }
       return new Response(null, { status: 404 });

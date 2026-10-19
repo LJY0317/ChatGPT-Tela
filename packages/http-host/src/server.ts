@@ -16,8 +16,8 @@ export interface WebHttpServer {
 }
 
 export interface WebHttpResponseLifecycle {
-  /** Run only after the response has been handed to the transport, never on disconnect. */
-  afterResponse(callback: () => void): void;
+  /** Settles once, including for late subscribers: true on finish, false on disconnect. */
+  readonly responseFinished: Promise<boolean>;
 }
 
 function requestHeaders(input: IncomingHttpHeaders): Headers {
@@ -118,6 +118,10 @@ export async function startWebHttpServer(input: {
     ...(typeof incoming.headers["x-tela-diagnostic-scope"] === "string" ? { scope_fingerprint: incoming.headers["x-tela-diagnostic-scope"] } : {}),
   }, async () => {
     const startedAt = Date.now();
+    const responseFinished = new Promise<boolean>(resolve => {
+      outgoing.once("finish", () => resolve(true));
+      outgoing.once("close", () => resolve(outgoing.writableFinished));
+    });
     const origin = diagnosticContext();
     let writeCount = 0, writeBytes = 0, lastWriteAt = 0;
     const transportEvidence = () => ({ socket_write_count: writeCount, socket_write_bytes: writeBytes,
@@ -193,9 +197,7 @@ export async function startWebHttpServer(input: {
         signal: controller.signal,
         ...(requestBodyInit ? { body: requestBodyInit } : {}),
       });
-      const response = await input.fetch(request, {
-        afterResponse(callback) { outgoing.once("finish", callback); },
-      });
+      const response = await input.fetch(request, { responseFinished });
       emitDiagnosticEvent("chatgpt_tela_http", response.status >= 400 ? "http_response_error" : "http_response_ready", { status: response.status, duration_ms: diagnosticDurationMs(startedAt) });
       await writeResponse(response, outgoing, controller.signal, written);
     } catch (error) {

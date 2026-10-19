@@ -70,6 +70,7 @@ function contextAttachmentCanarySlot(pathname: string): number | undefined {
 export async function startCodexServiceHttpServer(input: {
   readonly service: CodexService;
   readonly bearerToken?: string;
+  readonly startupComplete?: () => boolean;
   readonly delegationCapacity?: (slot: number, mode: "read" | "write") => unknown;
   /** Optional, owner-verified structural inspection; not a Native turn mutation. */
   readonly inspectWork?: (slot: number, threadId: string, minutes: number) => Promise<unknown>;
@@ -88,7 +89,9 @@ export async function startCodexServiceHttpServer(input: {
       const url = new URL(request.url);
       try {
         if (request.method === "GET" && url.pathname === "/v1/status") {
-          return Response.json(input.service.serviceStatus());
+          const status = input.service.serviceStatus();
+          return Response.json(status.state === "ready" && input.startupComplete?.() === false
+            ? { ...status, state: "degraded", detail: "Restoring saved profile connections" } : status);
         }
         if (request.method === "GET" && url.pathname === "/v1/codex/profiles") {
           const profiles = await input.service.profiles();
@@ -334,7 +337,7 @@ export async function startCodexServiceHttpServer(input: {
           // Acknowledgement authorizes payload replacement. A refused child
           // cleanup must return failure while service/control ownership survives.
           await input.service.close();
-          lifecycle.afterResponse(resolveShutdown);
+          void lifecycle.responseFinished.then(resolveShutdown);
           return Response.json({ status: "shutting-down" });
         }
         return new Response(null, { status: 404 });
