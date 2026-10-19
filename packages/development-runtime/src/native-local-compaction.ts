@@ -89,7 +89,6 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
       phase = "binding";
       const { claim, evidence: activeOwner } = await bindNativeCompactionRequest(body, input.source);
       scope = diagnosticFingerprint(claim.threadId);
-      input.settlePendingToolResult?.(claim.threadId, claim.turnId, body);
       phase = "identity";
       const key = JSON.stringify([claim.threadId, claim.turnId]);
       const sourceDigest = digest({ source: nativeRequestContentSource(body), browserModel,
@@ -105,6 +104,9 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
         sourceMatches = operation.digest === sourceDigest; wireMatches = operation.wireDigest === wireDigest;
         if (!sourceMatches) throw new CompactionFailure(phase, "source_changed");
       }
+      // Never consume a Native tool result from a rejected changed-source retry.
+      // Settlement precedes summary execution but follows canonical source identity.
+      input.settlePendingToolResult?.(claim.threadId, claim.turnId, body);
       phase = "admission";
       if (!operation) {
         if (operations.size >= capacity) {

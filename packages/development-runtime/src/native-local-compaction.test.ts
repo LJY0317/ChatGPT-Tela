@@ -191,6 +191,18 @@ test('compaction retries preserve source identity across correlation metadata an
  const changed=body({instructions:'Different summary source instruction'});
  expect((await router(request(changed)))?.status).toBe(400);expect(calls).toBe(1);
 });
+test('changed-source retry cannot settle an outstanding Native tool result',async()=>{
+ let settled=0;
+ const router=createNativeLocalCompactionRouter({
+  source:{currentTurn:async()=>canonical},
+  settlePendingToolResult:()=>{settled++},
+  summarize:async()=> 'Stable summary',
+ });
+ expect((await router(request(body())))?.status).toBe(200);
+ expect(settled).toBe(1);
+ expect((await router(request(body({instructions:'changed history and source'}))))?.status).toBe(400);
+ expect(settled).toBe(1);
+});
 test('oversized-source rejection remains stable across retries without another summary attempt',async()=>{
  let calls=0;const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical},summarize:async()=>{calls++;return 'must not run'}});
  const source=body({input:[{type:'message',role:'user',content:'P'.repeat(405_000)}]});
