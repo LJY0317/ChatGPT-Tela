@@ -346,11 +346,14 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
     let closing = false;
     const inputReceipts = new Map<string, import("@chatgpt-tela/core").NativeInputReceipt>();
     let liveReceipt: NativeLiveTurnReceipt | undefined;
+    const presentation = { reasoning_delta_count: 0, reasoning_part_added_count: 0,
+      reasoning_completed_item_count: 0, message_completed_item_count: 0, execution_completed_item_count: 0 };
+
     const inputs = () => liveReceipt ? (this.#liveTurnProof?.inputs?.(liveReceipt) ?? []) : [...inputReceipts.values()];
     const terminate = (reason: string, error: unknown) => {
       if (closing || controller.signal.aborted) return;
       withDiagnosticContext(origin, () => emitDiagnosticEvent("chatgpt_tela_codex", "native_watch_terminated", {
-        reason_class: reason,
+        reason_class: reason, ...presentation, ui_observed: false,
       }));
       controller.abort(error);
     };
@@ -366,6 +369,26 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
       if (!rpc.subscribe) throw new Error("Native lifecycle notifications unavailable");
       unsubscribe = rpc.subscribe((method, params) => {
         const event = record(params);
+        if (event?.threadId === threadId && event.turnId === turnId && !closing && !controller.signal.aborted) {
+          if (method === "item/reasoning/summaryTextDelta") presentation.reasoning_delta_count++;
+          else if (method === "item/reasoning/summaryPartAdded") presentation.reasoning_part_added_count++;
+          else if (method === "item/completed") {
+            const item = record(event.item);
+            if (item?.type === "reasoning" || item?.type === "agentMessage") {
+              if (item.type === "reasoning") presentation.reasoning_completed_item_count++;
+              else presentation.message_completed_item_count++;
+              const summaries = Array.isArray(item.summary) ? item.summary : [];
+              withDiagnosticContext(origin, () => emitDiagnosticEvent("chatgpt_tela_codex", "native_public_item_observed", {
+                kind: item.type === "reasoning" ? "reasoning" : "agent_message", ...(typeof item.id === "string" ? { item_fingerprint: diagnosticFingerprint(item.id) } : {}),
+                phase: item.phase === "commentary" || item.phase === "final_answer" ? item.phase : "unspecified",
+                summary_count: summaries.length,
+                progress_characters: summaries.reduce((n: number, part: unknown) => n +
+                  (typeof part === "string" ? part.length : typeof record(part)?.text === "string" ? (record(part)!.text as string).length : 0), 0),
+                delivery: "native_notification", ui_observed: false,
+              }));
+            } else if (item?.type === "commandExecution") presentation.execution_completed_item_count++;
+          }
+        }
         if ((method === "item/started" || method === "item/completed")
           && event?.threadId === threadId && event.turnId === turnId) {
           const receipt = nativeInputReceipt(event.item);

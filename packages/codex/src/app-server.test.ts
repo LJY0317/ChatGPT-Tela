@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { diagnosticFingerprint, NativeLiveTurnRegistry, setPrivateDiagnosticCapture, withDiagnosticContext } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, observeDiagnosticEvents, NativeLiveTurnRegistry, setPrivateDiagnosticCapture, withDiagnosticContext } from "@chatgpt-tela/core";
 import {
   AppServerCurrentTurnSource,
   connectCodexAppServerWebSocket,
@@ -1026,6 +1026,27 @@ describe("Native turn termination observation", () => {
       input: (threadId: string, turnId: string, item: unknown) => notify("item/completed", { threadId, turnId, item }),
       disconnect: () => disconnect(), removed: () => removed };
   }
+  test("presentation evidence distinguishes Native reasoning, commentary and commands without copying content", async () => {
+    const rows: any[] = [];
+    const stop = observeDiagnosticEvents(row => rows.push(row));
+    try {
+      const f = fixture(), watch = await f.source.watchTurn("thread-1", "turn-1");
+      const item = { type: "reasoning", id: "private-id", summary: ["private prose", "두 번째"] };
+      f.input("foreign", "turn-1", item);
+      f.input("thread-1", "turn-1", item);
+      f.input("thread-1", "turn-1", { type: "agentMessage", id: "message-id", phase: "commentary", text: "private message" });
+      f.input("thread-1", "turn-1", { type: "commandExecution", command: "private command" });
+      f.emit("thread-1", "turn-1", "completed");
+      await watch.close();
+      const items = rows.filter(row => row.stage === "native_public_item_observed");
+      expect(items).toHaveLength(2);
+      expect(items[0]).toMatchObject({ kind: "reasoning", summary_count: 2, progress_characters: 17, ui_observed: false });
+      expect(items[1]).toMatchObject({ kind: "agent_message", phase: "commentary" });
+      expect(rows.at(-1)).toMatchObject({ stage: "native_watch_terminated", reasoning_completed_item_count: 1,
+        message_completed_item_count: 1, execution_completed_item_count: 1 });
+      expect(JSON.stringify(rows)).not.toMatch(/private prose|private message|private command|private-id|두 번째/);
+    } finally { stop?.(); }
+  });
   test("only exact Native terminal events revoke the watcher including successful completion", async () => {
     const f = fixture(); const watch = await f.source.watchTurn("thread-1", "turn-1");
     f.emit("thread-other", "turn-1", "interrupted");

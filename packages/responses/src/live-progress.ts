@@ -3,7 +3,7 @@ import { nativeHandoffRecovery } from "./native-handoff-recovery";
 import { randomBytes } from "node:crypto";
 import type { NativeGatewayOutcome, NativeResponsesGateway } from "@chatgpt-tela/runtime";
 import { encodeNativeResponsesOutcome, nativeResponsesSsePlan } from "./protocol";
-import { diagnosticContext, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
+import { diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import { nativeHistoryRecovery } from "./native-history-recovery";
 import { webContinuityRecovery } from "./web-continuity-recovery";
 import { nativeProjectionRecovery } from "./native-projection-recovery";
@@ -17,19 +17,27 @@ export class NativeProgressStream {
   readonly #itemId = `rs_tela_${randomBytes(18).toString("base64url")}`;
   readonly #frames: Array<{ text: string; commit?: () => void; progress?: {
     index: number; characters: number; context: ReturnType<typeof diagnosticContext>;
-  } }> = [];
+  }; completion?: "summary_part" | "reasoning_item" | "response" }> = [];
   readonly #summaries: string[] = [];
   readonly #diagnostics = diagnosticContext();
   #pulledFrames = 0;
   #pulledSummaries = 0;
   #diagnosticClosed = false;
+  #pulledSummaryParts = 0;
+  #pulledReasoningItems = 0;
+  #pulledCompletedResponses = 0;
   #chars = 0;
 
   #recordDelivery(reason: string): void {
     if (this.#diagnosticClosed) return;
     this.#diagnosticClosed = true;
     withDiagnosticContext(this.#diagnostics, () => emitDiagnosticEvent("chatgpt_tela_work", "public_progress_stream_closed", {
-      reason_class: reason, summary_count: this.#summaries.length, progress_characters: this.#chars,
+      reason_class: reason, response_fingerprint: diagnosticFingerprint(this.#responseId),
+      reasoning_item_fingerprint: diagnosticFingerprint(this.#itemId),
+      completed_summary_part_count: this.#pulledSummaryParts,
+      completed_reasoning_item_count: this.#pulledReasoningItems,
+      completed_response_count: this.#pulledCompletedResponses,
+      delivery: "http_body_consumer", ui_observed: false, summary_count: this.#summaries.length, progress_characters: this.#chars,
       pulled_frame_count: this.#pulledFrames, pulled_summary_count: this.#pulledSummaries,
       queued_frame_count: this.#frames.length, producer_ended: this.#ended,
     }));
@@ -49,7 +57,9 @@ export class NativeProgressStream {
   #event(name: string, fields: Record<string, unknown>): void {
     if (this.signal.signal.aborted) return;
     this.#frames.push({ text: `event: ${name}\ndata: ${JSON.stringify({ type: name,
-      sequence_number: this.#sequence++, ...fields })}\n\n` });
+      sequence_number: this.#sequence++, ...fields })}\n\n`,
+      ...(name === "response.reasoning_summary_part.done" ? { completion: "summary_part" as const }
+        : name === "response.output_item.done" ? { completion: "reasoning_item" as const } : {}) });
     this.#wake?.();
   }
 
@@ -84,7 +94,7 @@ export class NativeProgressStream {
     this.#event("response.reasoning_summary_text.done", { ...identity, text: summary });
     this.#event("response.reasoning_summary_part.done", { ...identity, part: { type: "summary_text", text: summary } });
     emitDiagnosticEvent("chatgpt_tela_work", "public_progress_sse_queued", {
-      summary_index: index, progress_characters: summary.length, queued_frame_count: this.#frames.length,
+      summary_index: index, reasoning_item_fingerprint: diagnosticFingerprint(this.#itemId), progress_characters: summary.length, queued_frame_count: this.#frames.length,
     });
     this.#ready();
     return true;
@@ -99,6 +109,7 @@ export class NativeProgressStream {
       responseId: this.#responseId, precedingOutput: [reasoning] });
     const plan = nativeResponsesSsePlan(outcome, encoded, { sequenceStart: this.#sequence, includeCreated: false });
     plan.frames.forEach((text, index) => this.#frames.push({ text,
+      ...(text.startsWith("event: response.completed\n") ? { completion: "response" as const } : {}),
       ...(index === plan.commitAfterFrame ? { commit: () => gateway.commit(outcome) } : {}) }));
     emitDiagnosticEvent("chatgpt_tela_work", "public_progress_producer_ended", {
       summary_count: this.#summaries.length, progress_characters: this.#chars,
@@ -163,6 +174,9 @@ export class NativeProgressStream {
         if (frame) {
           controller.enqueue(encoder.encode(frame.text));
           this.#pulledFrames++;
+          if (frame.completion === "summary_part") this.#pulledSummaryParts++;
+          else if (frame.completion === "reasoning_item") this.#pulledReasoningItems++;
+          else if (frame.completion === "response") this.#pulledCompletedResponses++;
           if (frame.progress) this.#pulledSummaries++;
           if (frame.progress) withDiagnosticContext(frame.progress.context, () =>
             emitDiagnosticEvent("chatgpt_tela_work", "public_progress_sse_pulled", {

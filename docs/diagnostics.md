@@ -1077,6 +1077,11 @@ proof that the Desktop UI rendered it. Existing turn summaries retain these stag
 Queued and pulled events retain the turn correlation and summary index without prose;
 pulled means the HTTP body consumer requested that text frame, not a Desktop rendering receipt.
 Turn summaries project these counts under `progress` and keep host display unobserved.
+Stream closure also distinguishes pulled text deltas from completed summary parts, reasoning
+items and response envelopes. Response/item fingerprints correlate these stages without text.
+`native_public_item_observed` records exact watched-turn reasoning summary counts/characters
+and agent-message phase; watcher termination aggregates reasoning, message and command counts.
+Native notification observation still does not prove UI rendering or persisted-history writes.
 
 Missing public progress uses the existing opt-in anomaly capture. Its structural census now
 includes up to eight latest keyed-turn shell ancestors (geometry, clipping, control/status
@@ -1127,7 +1132,10 @@ saves the structural report as a bounded incident for later inspection. For mana
 Tailscale, it samples `peerapi_ingress` immediately before and after the relay probe.
 The report distinguishes an unavailable counter and a counter reset from a zero delta.
 These shared-daemon counters do not identify individual requests. They are diagnostic
-observations, with no service restart or background sampling.
+observations, with no service restart or background sampling. The same explicit probe snapshots
+backend state, online/health/ingress-peer counts, enabled Funnel count and a route fingerprint.
+Status/route inspection failures are recorded independently and never prevent the relay probe.
+No status bodies, peer identities, route targets or health prose enter the structural report.
 
 Public progress extraction also records counts and visibility of assistant markdown
 bodies, whether the selected body lies outside the progress shell, animation presence

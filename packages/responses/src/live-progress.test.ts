@@ -4,7 +4,7 @@ import { NativeProgressStream } from "./live-progress";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { diagnosticFingerprint, readDiagnosticTail, withDiagnosticContext } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, observeDiagnosticEvents, readDiagnosticTail, withDiagnosticContext } from "@chatgpt-tela/core";
 
 test("progress diagnostics distinguish queued text from HTTP pulls without retaining prose", async () => {
   const root=mkdtempSync(join(tmpdir(),"tela-progress-delivery-"));
@@ -52,4 +52,29 @@ test("cancelling a waiting stream settles its reader and removes its active idle
   const pending = reader.read(); await reader.cancel();
   expect((await pending).done).toBe(true); expect(stream.signal.signal.aborted).toBe(true);
   expect((await reader.read()).done).toBe(true);
+});
+
+ test("completion diagnostics distinguish a delivered delta from completed history-bearing frames", async () => {
+  const rows: any[] = [];
+  const stop = observeDiagnosticEvents(row => rows.push(row));
+  try {
+    const stream = new NativeProgressStream("fixture", 0);
+    stream.progress("first private summary"); stream.progress("second private summary");
+    stream.finish({ type: "final", answer: "answer", delivery: { capability: "fixture" } },
+      { commit() {} } as unknown as NativeResponsesGateway);
+    const wire = await stream.response().text();
+    const closed = rows.find(row => row.stage === "public_progress_stream_closed");
+    expect(closed).toMatchObject({ reason_class: "drained", summary_count: 2, pulled_summary_count: 2,
+      completed_summary_part_count: 2, completed_reasoning_item_count: 1, completed_response_count: 1,
+      delivery: "http_body_consumer", ui_observed: false });
+    expect(wire).toContain('"summary_index":1');
+    expect(JSON.stringify(rows)).not.toContain("private summary");
+    const cancelled = new NativeProgressStream("fixture", 0);
+    cancelled.progress("delta only");
+    const reader = cancelled.response().body!.getReader();
+    for (let i = 0; i < 4; i++) await reader.read();
+    await reader.cancel();
+    expect(rows.at(-1)).toMatchObject({ reason_class: "consumer_cancelled", pulled_summary_count: 1,
+      completed_summary_part_count: 0, completed_reasoning_item_count: 0, completed_response_count: 0 });
+  } finally { stop?.(); }
 });
