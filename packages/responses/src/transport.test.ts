@@ -587,8 +587,9 @@ describe("Native Responses HTTP transport", () => {
     expect(launches).toBe(1);
 
     const missing = await handleNativeResponsesHttp(post(body()), gateway);
-    expect(missing.status).toBe(409);
-    expect(await missing.text()).toContain("follow-up request must contain its result");
+    expect(missing.status).toBe(400);
+    expect((await missing.json() as { error: { code: string; retryable: boolean } }).error)
+      .toMatchObject({ code: "tela_native_tool_result_missing", retryable: false });
 
     const followup = body([
       { type: "function_call_output", call_id: "call-1", output: "ok" },

@@ -377,7 +377,9 @@ export class NativeResponsesGateway {
               reason_class: "missing_result", result_received: false,
               native_delivery_committed: true,
             }));
-          throw new Error("Native tool call was already delivered; the follow-up request must contain its result");
+          throw Object.assign(new Error("Native tool call was already delivered; the follow-up request must contain its result"), {
+            code: "tela_native_tool_result_missing", retryable: false,
+          });
         }
         // An uncommitted queued call is intentionally left on the old binding so the exact same
         // output can be replayed after a transport failure. It is not a new Native round yet.

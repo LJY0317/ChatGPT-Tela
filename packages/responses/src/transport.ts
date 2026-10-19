@@ -187,6 +187,14 @@ export async function handleNativeResponsesHttp(
         message: "This completed response cycle has no proven new input. Do not retry it; continue with a new authorized turn and verified context.",
       } }, { status: 400 });
     }
+    if (record(error)?.code === "tela_native_tool_result_missing") {
+      // A repeat cannot supply the missing output; return a terminal client error
+      // rather than triggering Native's automatic retry of HTTP 409.
+      return Response.json({ error: {
+        type: "invalid_request_error", code: "tela_native_tool_result_missing", retryable: false,
+        message: "The delivered Native tool call has no matching result in this continuation. Reconcile the original tool outcome before continuing.",
+      } }, { status: 400 });
+    }
     const message = error instanceof Error ? error.message : String(error);
     return Response.json({
       error: {
