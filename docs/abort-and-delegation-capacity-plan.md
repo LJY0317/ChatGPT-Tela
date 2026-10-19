@@ -1,3 +1,5 @@
+> Historical design notes. The implemented three-task, per-worktree writer policy and continuation contract are documented in [Web delegation](web-delegation.md). Older reader/writer limits below are superseded.
+
 # Turn interruption attribution and Web delegation capacity plan
 
 Status: design and implementation plan; no new attribution or concurrency scheduler is claimed by this document.

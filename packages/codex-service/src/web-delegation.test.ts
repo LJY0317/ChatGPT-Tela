@@ -2,40 +2,49 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { runWebDelegation, WebDelegationStore, reconcileWebDelegation } from "./web-delegation";
 
-async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write" } = {}) {
+async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write"; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
   const calls: Array<{ method: string; params: unknown }> = [];
+  let currentTurnId = turnId;
   let notify: (method: string, params: unknown) => void = () => {};
+  let disconnected: () => void = () => {};
   let observedOwners = 0;
   const rpc: CodexAppServerRpc = {
-    subscribe(callback) { notify = callback; return () => {}; },
-    async close() {},
+    subscribe(callback, onDisconnected) { notify = callback; disconnected = onDisconnected; return () => {}; },
+    async close() { if (options.closeFails) throw Error("connection already closed"); },
     async request(method, params) {
       calls.push({ method, params });
       if (method === "model/list") return { data: [{ model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", displayName: "6 (Web)", supportedReasoningEfforts: [{ reasoningEffort: "xhigh" }] }] };
       if (method === "thread/start") return { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", approvalPolicy: "never", sandbox: { type: options.mode === "write" ? "workspaceWrite" : "readOnly" }, thread: { id: threadId, cwd: root, historyMode: "paginated", ephemeral: false } };
       if (method === "turn/start") {
+        if (calls.filter(call => call.method === "turn/start").length > 1) currentTurnId = randomUUID();
         if (options.uncertain) throw Error("lost acknowledgement");
-        if (options.silent) return { turn: { id: turnId } };
+        if (options.silent) { if (options.disconnect) queueMicrotask(() => disconnected()); return { turn: { id: currentTurnId } }; }
         // Synchronously complete BEFORE turn/start's ACK, exercising the real notification race.
-        notify("item/completed", { threadId: options.foreignFinal ? randomUUID() : threadId, turnId, item: { id: "final", type: "agentMessage", ...(options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified design" } });
-        notify("item/completed", { threadId, turnId, item: { id: "read", type: "commandExecution",
+        notify("item/completed", { threadId: options.foreignFinal ? randomUUID() : threadId, turnId: currentTurnId, item: { id: "final", type: "agentMessage", ...(options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified design" } });
+        notify("item/completed", { threadId, turnId: currentTurnId, item: { id: "read", type: "commandExecution",
           status: options.failedTool ? "failed" : "completed",
           aggregatedOutput: options.enormousOutput ? "x".repeat(140 * 1024) : "fixture-result-not-in-journal" } });
-        if (options.collaboration) notify("item/completed", { threadId, turnId, item: { id: "collab", type: "collabAgentToolCall" } });
-        notify("turn/completed", { threadId, turn: { id: turnId, status: "completed" } });
-        return { turn: { id: turnId } };
+        if (options.collaboration) notify("item/completed", { threadId, turnId: currentTurnId, item: { id: "collab", type: "collabAgentToolCall" } });
+        notify("turn/completed", { threadId, turn: { id: currentTurnId, status: options.failedTurn ? "failed" : "completed" } });
+        return { turn: { id: currentTurnId } };
       }
-      if (method === "thread/turns/list") return { data: [{ id: turnId, status: "completed", items: [
+      if (method === "thread/turns/list") {
+        const cursor = (params as { cursor?: string }).cursor;
+        if (options.manualTurn && !cursor) return { data: [{ id: randomUUID(), status: "completed", items: [] }], nextCursor: "older" };
+        return { data: [{ id: currentTurnId, status: "completed", items: [
         { id: "final", type: "agentMessage", ...(options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified recovered design" },
         ...(options.summaryToolResult ? [{ id: "read", type: "commandExecution",
           status: "completed", aggregatedOutput: "fixture-summary-result" }] : []),
-      ] }] };
+      ] }], nextCursor: null };
+      }
       throw Error("Unexpected operation");
     },
   };
@@ -49,7 +58,7 @@ async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; f
       };
     },
   };
-  return { root, store, calls, id, run: () => runWebDelegation(adapters, { id, slot: 1, cwd: root, prompt: "Read this fixture and design only", mode: options.mode ?? "read", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, store, calls, id, continue: (parentJobId: string, prompt = "Follow up") => runWebDelegation(adapters, { id: randomUUID(), slot: 1, cwd: root, prompt, mode: "write", parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot: 1, cwd: root, prompt: "Read this fixture and design only", mode: options.mode ?? "read", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 test("new read-only durable Web job buffers ACK race, returns exact final and never loads a source conversation", async () => {
@@ -80,7 +89,7 @@ test("a write Web delegation requests and proves workspace-only Native sandbox",
       approvalPolicy: "never",
     });
     expect(f.store.capacity(1, "write", f.root)).toMatchObject({ available: true,
-      writers: { used: 0, limit: 1 } });
+      total: { used: 0, limit: 3 } });
   } finally { f.cleanup(); }
 });
 test("uncertain send is journaled and never replayed", async () => {
@@ -110,12 +119,36 @@ test("an acknowledged job with lost completion events is recovered from its exac
     const recovered = await f.reconcile();
     expect(recovered).toMatchObject({ state: "completed", answer: "verified recovered design" });
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
-    expect(f.calls.find(call => call.method === "thread/turns/list")?.params).toMatchObject({ limit: 1, itemsView: "summary" });
+    expect(f.calls.find(call => call.method === "thread/turns/list")?.params).toMatchObject({ limit: 8, itemsView: "summary" });
     const { answer, ...olderObserver } = recovered;
     f.store.save({ ...olderObserver, state: "uncertain" });
     expect(f.store.get(f.id)?.answer).toBe("verified recovered design");
   } finally { f.cleanup(); }
 });
+test("recovered final remains deliverable when closing its RPC fails", async () => {
+  const f = await fixture({ silent: true, closeFails: true });
+  try {
+    await expect(f.run()).rejects.toThrow();
+    const recovered = await f.reconcile();
+    expect(recovered).toMatchObject({ state: "completed", answer: "verified recovered design" });
+    expect(f.store.capacity(1)).toMatchObject({ available: true, total: { used: 0 } });
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
+test("connection loss after acknowledged turn keeps the lease until exact recovery", async () => {
+  const f = await fixture({ silent: true, disconnect: true });
+  try {
+    await expect(f.run()).rejects.toThrow("connection lost");
+    expect(f.store.get(f.id)).toMatchObject({ state: "uncertain", failure: "transport_or_ack" });
+    expect(f.store.capacity(1)).toMatchObject({ available: true, total: { used: 1, limit: 3 } });
+    expect(f.store.capacity(1)).toMatchObject({ total: { used: 1 }, uncertain: 1 });
+    expect(await f.reconcile()).toMatchObject({ state: "completed", answer: "verified recovered design" });
+    expect(f.store.capacity(1)).toMatchObject({ total: { used: 0 }, available: true });
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
 test("one unphased assistant message from a completed turn is delivered, live or recovered", async () => {
   for (const silent of [false, true]) {
     const f = await fixture({ finalPhase: null, silent, answer: "Finished." });
@@ -182,11 +215,11 @@ test("failed and oversized Native tool items never become completed-result evide
   }
 });
 
-test("profile reader capacity refuses a concurrent job before any model request and releases on terminal final", async () => {
+test("three concurrent tasks admit before the fourth and release on a proven final", async () => {
   const f = await fixture({ silent: true });
   try {
     const initial = f.store.capacity(1);
-    expect(initial.readers).toMatchObject({ used: 0, limit: 2 });
+    expect(initial.total).toMatchObject({ used: 0, limit: 3 });
     const active = f.run();
     // Fixture responds synchronously to turn/start. Wait for its acknowledged journal state.
     for (let i = 0; i < 100 && f.store.get(f.id)?.state !== "running"; i++) await Bun.sleep(1);
@@ -195,13 +228,14 @@ test("profile reader capacity refuses a concurrent job before any model request 
     const another = { ...first, id: secondId, state: "reserved" as const };
     f.store.reserve(another);
     expect(f.store.capacity(1)).toMatchObject({
-      readers: { used: 2, limit: 2 }, available: false, blockCode: "CAPACITY_READER_PROFILE",
+      total: { used: 2, limit: 3 }, available: true,
     });
-    expect(() => f.store.reserve({ ...another, id: randomUUID() })).toThrow("읽기");
+    f.store.reserve({ ...another, id: randomUUID() });
+    expect(() => f.store.reserve({ ...another, id: randomUUID() })).toThrow("실행 한도");
     await expect(active).rejects.toThrow();
     expect(f.store.capacity(1).available).toBe(false);
     expect(await f.reconcile()).toMatchObject({ state: "completed" });
-    expect(f.store.capacity(1)).toMatchObject({ readers: { used: 1, limit: 2, uncertain: 0 } });
+    expect(f.store.capacity(1)).toMatchObject({ total: { used: 2, limit: 3 } });
   } finally { f.cleanup(); }
 });
 
@@ -222,7 +256,37 @@ test("a durable final receipt survives a late stale snapshot and keeps its answe
   } finally { f.cleanup(); }
 });
 
-test("temporary per-profile policy reserves one writer and two readers with checkout exclusivity", async () => {
+test("legacy completed records without final evidence do not block free profile slots", async () => {
+  const f = await fixture();
+  try {
+    const completed = await f.run();
+    const legacy = { ...completed, id: randomUUID(), finalEvidence: undefined };
+    writeFileSync(join(f.root, `${legacy.id}.json`), JSON.stringify(legacy));
+    expect(f.store.get(legacy.id)?.finalEvidence).toBeUndefined();
+    expect(f.store.capacity(1)).toMatchObject({ available: true, total: { used: 0 } });
+  } finally { f.cleanup(); }
+});
+
+test("full profile rejects a fourth job before any model or provider request", async () => {
+  const f = await fixture();
+  try {
+    const base = { id: randomUUID(), slot: 1, mode: "read" as const, cwd: f.root,
+      createdAt: Date.now(), promptHash: "a".repeat(64),
+      owner: { slot: 1, accountFingerprint: "a".repeat(64), sessionFingerprint: "b".repeat(64), routeFingerprint: "c".repeat(64) },
+      session: { slot: 1, runtimeProcessId: 10, responsesRouteFingerprint: "c".repeat(64), terminalEndpoint: "ws://127.0.0.1:1234" },
+      state: "reserved" as const };
+    f.store.reserve(base);
+    f.store.reserve({ ...base, id: randomUUID() });
+    f.store.reserve({ ...base, id: randomUUID(), mode: "write" as const });
+    await expect(f.run()).rejects.toMatchObject({ code: "CAPACITY_TOTAL_PROFILE" });
+    expect(f.calls).toHaveLength(0);
+    expect(f.store.get(f.id)).toBeUndefined();
+    expect(f.store.capacity(1)).toMatchObject({ total: { used: 3, limit: 3 },
+      available: false, blockCode: "CAPACITY_TOTAL_PROFILE" });
+  } finally { f.cleanup(); }
+});
+
+test("three total slots retain same checkout writer exclusivity", async () => {
   const f = await fixture();
   try {
     const template = { id: f.id, slot: 1, mode: "read" as const, cwd: f.root, createdAt: Date.now(),
@@ -235,12 +299,122 @@ test("temporary per-profile policy reserves one writer and two readers with chec
     const writer = { ...template, id: randomUUID(), mode: "write" as const };
     f.store.reserve(writer);
     expect(f.store.capacity(1, "read")).toMatchObject({
-      readers: { used: 2, limit: 2 }, writers: { used: 1, limit: 1 },
-      total: { used: 3, limit: 3 }, available: false, blockCode: "CAPACITY_TOTAL_PROFILE",
+            total: { used: 3, limit: 3 }, available: false, blockCode: "CAPACITY_TOTAL_PROFILE",
     });
     expect(() => f.store.reserve({ ...writer, id: randomUUID() })).toThrow();
     expect(f.store.capacity(2, "write", f.root)).toMatchObject({
       available: false, blockCode: "CAPACITY_WRITER_CHECKOUT",
     });
+  } finally { f.cleanup(); }
+});
+
+
+test("continuation appends a new turn to the same Native thread without creating another thread", async () => {
+  const f = await fixture({ mode: "write" });
+  try {
+    const original = await f.run();
+    const followup = await f.continue(original.id, "Please implement the next change");
+    expect(followup).toMatchObject({ state: "completed", parentJobId: original.id, threadId: original.threadId });
+    expect(followup.turnId).not.toBe(original.turnId);
+    expect(f.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(2);
+    expect(f.calls.filter(call => call.method === "thread/turns/list")).toHaveLength(1);
+    expect(f.store.get(original.id)?.answer).toBe("verified design");
+    expect(f.store.get(followup.id)?.answer).toBe("verified design");
+    const third = await f.continue(followup.id, "One more follow-up");
+    expect(third).toMatchObject({ parentJobId: followup.id, threadId: original.threadId, state: "completed" });
+    expect(f.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(3);
+  } finally { f.cleanup(); }
+});
+
+test("recovery identifies the delegated turn after a direct user message", async () => {
+  const f = await fixture({ silent: true, manualTurn: true });
+  try {
+    await expect(f.run()).rejects.toThrow();
+    const recovered = await f.reconcile();
+    expect(recovered).toMatchObject({ state: "completed", answer: "verified recovered design" });
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
+test("direct user turn after delegation permits continuation in the same thread", async () => {
+  const f = await fixture({ mode: "write", manualTurn: true });
+  try {
+    const original = await f.run();
+    const next = await f.continue(original.id);
+    expect(next.threadId).toBe(original.threadId);
+    expect(next.state).toBe("completed");
+    expect(f.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
+test("a read-only legacy job cannot silently upgrade its Native thread on continuation", async () => {
+  const f = await fixture();
+  try {
+    const original = await f.run();
+    await expect(f.continue(original.id)).rejects.toThrow("workspace-write");
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
+test("three different checkouts can hold write work while one checkout rejects a second writer", async () => {
+  const f = await fixture();
+  const roots = [0, 1, 2].map(i => realpathSync(mkdtempSync(join(tmpdir(), `tela-wt-${i}-`))));
+  try {
+    const original = await f.run();
+    const base = { ...original, id: randomUUID(), state: "reserved" as const, mode: "write" as const };
+    for (const root of roots) f.store.reserve({ ...base, id: randomUUID(), cwd: root });
+    expect(f.store.capacity(1)).toMatchObject({ total: { used: 3, limit: 3 }, available: false, blockCode: "CAPACITY_TOTAL_PROFILE" });
+    expect(f.store.capacity(2, "write", roots[0])).toMatchObject({ available: false, blockCode: "CAPACITY_WRITER_CHECKOUT" });
+  } finally { f.cleanup(); roots.forEach(root => rmSync(root, { recursive: true, force: true })); }
+});
+
+
+test("failed Native turn releases its task lease; completed turn without final reports result unavailable", async () => {
+  for (const options of [{ failedTurn: true }, { finalPhase: "commentary" }]) {
+    const f = await fixture(options);
+    try {
+      await expect(f.run()).rejects.toThrow();
+      expect(f.store.get(f.id)).toMatchObject({ state: "failed",
+        failure: options.failedTurn ? "turn_failed" : "result_unavailable" });
+      expect(f.store.capacity(1)).toMatchObject({ available: true, total: { used: 0, limit: 3 } });
+    } finally { f.cleanup(); }
+  }
+});
+
+test("Git root normalizes subdirectory aliases to the same physical writer lease", async () => {
+  const f = await fixture();
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "tela-git-checkout-")));
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    const first = join(repo, "a"), second = join(repo, "b");
+    mkdirSync(first); mkdirSync(second);
+    const completed = await f.run();
+    const reservation = { ...completed, id: randomUUID(), cwd: first,
+      state: "reserved" as const, mode: "write" as const };
+    f.store.reserve(reservation);
+    expect(f.store.capacity(2, "write", second)).toMatchObject({ available: false,
+      blockCode: "CAPACITY_WRITER_CHECKOUT" });
+    expect(() => f.store.reserve({ ...reservation, id: randomUUID(), slot: 2, cwd: second }))
+      .toThrow("작업 디렉터리");
+  } finally { f.cleanup(); rmSync(repo, { recursive: true, force: true }); }
+});
+
+test("a legacy writer checkout lease is released after exact terminal evidence", async () => {
+  const f = await fixture();
+  try {
+    const result = await f.run();
+    const id = randomUUID();
+    const { finalEvidence: _evidence, answer: _answer, ...withoutAnswer } = result;
+    const old = { ...withoutAnswer, id, mode: "write" as const, state: "running" as const };
+    writeFileSync(join(f.root, `${id}.json`), JSON.stringify(old));
+    writeFileSync(join(f.root, "writer-1.lease"), id);
+    const oldHash = createHash("sha256").update(f.root).digest("hex");
+    const oldLease = join(f.root, `writer-checkout-${oldHash}.lease`);
+    writeFileSync(oldLease, id);
+    expect(f.store.capacity(2, "write", f.root).blockCode).toBe("CAPACITY_WRITER_CHECKOUT");
+    f.store.save({ ...old, state: "failed", failure: "turn_failed" });
+    expect(f.store.capacity(2, "write", f.root).available).toBe(true);
   } finally { f.cleanup(); }
 });

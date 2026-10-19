@@ -75,12 +75,12 @@ describe("Tela Codex private HTTP server", () => {
       service, bearerToken: token,
       delegationCapacity: slot => {
         reads++;
-        return { contractVersion: 1, profileSlot: slot, source: "managed_delegation_journal",
+        return { contractVersion: 2, profileSlot: slot, source: "managed_delegation_journal",
           observedAt: new Date().toISOString(), coverage: "managed_jobs_only",
-          policy: "temporary_1_writer_2_readers_v1", requestedMode: "read",
-          readers: { used: 2, limit: 2, uncertain: 0 }, writers: { used: 1, limit: 1, uncertain: 0 },
+          policy: "three_tasks_one_writer_per_checkout_v2",
+          uncertain: 0,
           total: { used: 3, limit: 3 }, records: { retained: 3, limit: 64 },
-          available: false, blockCode: "CAPACITY_READER_PROFILE",
+          available: false, blockCode: "CAPACITY_TOTAL_PROFILE",
           messageKo: "읽기 위임 한도 도달", messageEn: "Read delegation limit reached",
           nextAction: "wait_for_active_job" };
       },
@@ -93,7 +93,7 @@ describe("Tela Codex private HTTP server", () => {
       expect((await fetch(url)).status).toBe(401);
       expect((await fetch(url, { headers: { authorization: `Bearer ${token}`,
         origin: "https://chatgpt.com" } })).status).toBe(403);
-      expect((await client.webDelegationCapacity(2)).blockCode).toBe("CAPACITY_READER_PROFILE");
+      expect((await client.webDelegationCapacity(2)).blockCode).toBe("CAPACITY_TOTAL_PROFILE");
       expect(reads).toBe(1);
       await expect(client.webDelegationCapacity(0)).rejects.toThrow("invalid profile slot");
     } finally { await client.close(); await server.close(); }

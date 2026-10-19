@@ -1271,12 +1271,26 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       if (files.length) {
         if (!driver.attachFiles) throw new Error("ChatGPT surface lacks a verified media upload adapter");
+        const imageCount = files.filter(file => file.mimeType.startsWith("image/")).length;
         emitDiagnosticEvent("chatgpt_tela_work", "web_media_upload_started", {
           file_count: files.length,
+          image_count: imageCount,
+          other_file_count: files.length - imageCount,
           evidence_count: upload.statistics.logicalReferences,
           total_bytes: files.reduce((sum, file) => sum + file.bytes.byteLength, 0),
         });
-        await driver.attachFiles(composer.key, files, signal);
+        try {
+          await driver.attachFiles(composer.key, files, signal);
+        } catch (error) {
+          emitDiagnosticEvent("chatgpt_tela_work", "web_media_upload_failed", {
+            phase: "attach_files",
+            image_count: imageCount,
+            other_file_count: files.length - imageCount,
+            aborted: signal?.aborted === true,
+            error_kind: error instanceof Error ? error.name : "unknown",
+          });
+          throw error;
+        }
         filled = await driver.observe(signal);
         const verified = filled.composers.find(c => c.key === composer.key);
         const send = visibleSends(filled, composer.key);
@@ -1290,6 +1304,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         }
         emitDiagnosticEvent("chatgpt_tela_work", "web_media_composer_accepted", {
           file_count: files.length,
+          image_count: imageCount,
           evidence_count: upload.statistics.logicalReferences,
           // Composer observation is not a server receipt or proof of content understanding.
           proof_scope: "composer_attachment_surface_only",

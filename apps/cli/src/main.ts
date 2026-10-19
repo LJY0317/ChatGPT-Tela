@@ -1111,6 +1111,7 @@ async function main(): Promise<void> {
     + "  web-delegate catalog [--slot N]\n"
     + "  web-delegate capacity [--slot N] [--mode read|write] (local managed-job admission)\n"
     + "  web-delegate start --cwd <workspace> --prompt-file <file> [--slot N] [--mode read|write] [--job UUID]\n"
+    + "  web-delegate continue --job UUID --prompt-file <file>\n"
     + "  web-delegate <status|result|reconcile> --job UUID\n"
     + "  configure --public-mcp-url <https-url> --allow-unauthenticated-public-mcp [--multi-profile-launcher <path>] [--mcp-abi stable|unified-development] [--manage-tailscale-funnel] [--tailscale-cli <path-or-name>]\n"
     + "  paths\n"

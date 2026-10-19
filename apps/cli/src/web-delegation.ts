@@ -32,13 +32,15 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
       const answer = verifiedWebDelegationAnswer(record);
       if (!answer) throw Error("No verified final result; inspect job status");
       console.log(answer);
-    } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure }, null, 2));
+    } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure }, null, 2));
     return;
   }
-  if (subcommand !== "start" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|capacity|start|status|result|reconcile>");
+  if (subcommand !== "start" && subcommand !== "continue" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|capacity|start|continue|status|result|reconcile>");
   const selectedJob = subcommand === "reconcile" ? store.get(option("--job")) : undefined;
   if (subcommand === "reconcile" && !selectedJob) throw Error("Web job was not found");
-  const slot = selectedJob?.slot ?? profileSlotFromArguments(args);
+  const continuation = subcommand === "continue" ? store.get(option("--job")) : undefined;
+  if (subcommand === "continue" && !continuation) throw Error("Web job was not found");
+  const slot = selectedJob?.slot ?? continuation?.slot ?? profileSlotFromArguments(args);
   const install = readOwnershipManifest(paths.installManifest);
   if (!install) throw Error("Tela is not installed");
   const service = await new LocalServiceSupervisor({ installId: install.installId }).current({
@@ -79,20 +81,20 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     finally { await rpc.close(); }
     return;
   }
-  const cwd = realpathSync(option("--cwd"));
+  const cwd = realpathSync(continuation?.cwd ?? option("--cwd"));
   if (!lstatSync(cwd).isDirectory()) throw Error("Web job requires an existing workspace");
   const promptPath = option("--prompt-file"), stat = lstatSync(promptPath);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 24 * 1024) throw Error("Web job prompt must be a bounded regular file");
   const prompt = readFileSync(promptPath, "utf8");
-  const id = args.includes("--job") ? option("--job") : randomUUID();
-  const mode = args.includes("--mode") ? option("--mode") : "read";
+  const id = continuation ? randomUUID() : args.includes("--job") ? option("--job") : randomUUID();
+  const mode = continuation ? "write" : args.includes("--mode") ? option("--mode") : "write";
   if (mode !== "read" && mode !== "write") throw Error("--mode must be read or write");
   try {
     const result = await runWebDelegation({
       store, owner,
       connect: endpoint => connectCodexAppServerWebSocket(endpoint, { signal: AbortSignal.timeout(10_000) }),
       changed: record => console.log(JSON.stringify({ jobId: record.id, state: record.state, selection: record.selection, toolItems: record.toolItems ?? 0 })),
-    }, { id, slot, cwd, prompt, mode, signal: AbortSignal.timeout(20 * 60 * 1000) });
+    }, { id, slot, cwd, prompt, mode, ...(continuation ? { parentJobId: continuation.id } : {}), signal: AbortSignal.timeout(20 * 60 * 1000) });
     const answer = verifiedWebDelegationAnswer(result);
     if (answer) console.log(JSON.stringify({ event: "result", jobId: result.id, state: result.state,
       finalEvidence: result.finalEvidence, taskOutcome: result.taskOutcome, answer }));
