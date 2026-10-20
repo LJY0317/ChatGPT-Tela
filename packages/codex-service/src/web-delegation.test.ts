@@ -537,3 +537,38 @@ test("a legacy writer checkout lease is released after exact terminal evidence",
     expect(f.store.capacity(2, "write", f.root).available).toBe(true);
   } finally { f.cleanup(); }
 });
+
+
+test("profile limits 1 to 5 share admission, preserve running leases after shrink, and keep writer exclusivity", async () => {
+  const f = await fixture();
+  try {
+    let limit = 5;
+    const store = new WebDelegationStore(f.root, () => limit);
+    const result = await f.run();
+    const { answer: _answer, finalEvidence: _evidence, ...base } = result;
+    for (let index = 0; index < 4; index++) {
+      store.reserve({ ...base, id: randomUUID(), state: "reserved", mode: "read" });
+    }
+    expect(store.capacity(1)).toMatchObject({ total: { used: 4, limit: 5 }, available: true });
+    store.reserve({ ...base, id: randomUUID(), state: "reserved", mode: "write" });
+    expect(store.capacity(2, "write", f.root).blockCode).toBe("CAPACITY_WRITER_CHECKOUT");
+    limit = 1;
+    expect(store.capacity(1)).toMatchObject({ total: { used: 5, limit: 1 }, blockCode: "CAPACITY_TOTAL_PROFILE" });
+    expect(() => store.reserve({ ...base, id: randomUUID(), state: "reserved" })).toThrow();
+    expect(store.capacity(2).total.limit).toBe(1);
+  } finally { f.cleanup(); }
+});
+
+test("explicit retirement removes only a proven terminal job and retains active records", async () => {
+  const f = await fixture();
+  try {
+    const terminal = await f.run();
+    const { answer: _answer, finalEvidence: _evidence, ...base } = terminal;
+    const active = { ...base, id: randomUUID(), state: "reserved" as const };
+    f.store.reserve(active);
+    expect(() => f.store.retire(active.id)).toThrow("terminal");
+    f.store.retire(terminal.id);
+    expect(f.store.get(terminal.id)).toBeUndefined();
+    expect(f.store.get(active.id)?.state).toBe("reserved");
+  } finally { f.cleanup(); }
+});

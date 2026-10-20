@@ -2,14 +2,14 @@
 export type WebDelegationMode = "read" | "write";
 export type WebDelegationBlockCode = "CAPACITY_WRITER_CHECKOUT" | "CAPACITY_THREAD_ACTIVE" | "CAPACITY_TOTAL_PROFILE" | "CAPACITY_STORAGE_RECORDS" | "UNCERTAIN_RESERVATION";
 export interface CodexWebDelegationCapacityContract {
-  readonly contractVersion: 2;
+  readonly contractVersion: 3;
   readonly source: "managed_delegation_journal";
   readonly observedAt: string;
   readonly profileSlot: number;
-  readonly policy: "three_tasks_one_writer_per_checkout_v2";
+  readonly policy: "configurable_tasks_one_writer_per_checkout_v3";
   readonly coverage: "managed_jobs_only";
   readonly uncertain: number;
-  readonly total: { readonly used: number; readonly limit: 3 };
+  readonly total: { readonly used: number; readonly limit: number };
   readonly records: { readonly retained: number; readonly limit: 64 };
   readonly available: boolean;
   readonly blockCode?: WebDelegationBlockCode;
@@ -31,12 +31,13 @@ export function parseCodexWebDelegationCapacityContract(value: unknown): CodexWe
   const reasons: readonly string[] = ["CAPACITY_WRITER_CHECKOUT", "CAPACITY_THREAD_ACTIVE", "CAPACITY_TOTAL_PROFILE", "CAPACITY_STORAGE_RECORDS", "UNCERTAIN_RESERVATION"];
   const actions: readonly string[] = ["start_if_profile_ready", "wait_for_active_job",
     "inspect_and_reconcile_exact_job", "review_owned_finished_records"];
-  if (row?.contractVersion !== 2 || row.source !== "managed_delegation_journal"
-    || row.coverage !== "managed_jobs_only" || row.policy !== "three_tasks_one_writer_per_checkout_v2"
+  if (row?.contractVersion !== 3 || row.source !== "managed_delegation_journal"
+    || row.coverage !== "managed_jobs_only" || row.policy !== "configurable_tasks_one_writer_per_checkout_v3"
     || !Number.isSafeInteger(row.profileSlot) || (row.profileSlot as number) < 1 || (row.profileSlot as number) > 99
     || typeof row.observedAt !== "string" || !Number.isFinite(Date.parse(row.observedAt))
     || !whole(row.uncertain) || (row.uncertain as number) > 64
-    || !total || !whole(total.used) || total.limit !== 3 || (total.used as number) > 3
+    || !total || !whole(total.used) || (total.used as number) > 8
+    || !whole(total.limit) || (total.limit as number) < 1 || (total.limit as number) > 5
     || !records || !whole(records.retained) || records.limit !== 64
     || typeof row.available !== "boolean"
     || row.blockCode !== undefined && !reasons.includes(row.blockCode as string)

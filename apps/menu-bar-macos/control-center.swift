@@ -35,6 +35,19 @@ private struct ControlCenterProfilesEnvelope: Decodable {
   let profiles: [ControlCenterProfileStatus]
 }
 
+private struct ControlCenterDelegationCapacity: Decodable {
+  let contractVersion: Int
+  let profileSlot: Int
+  let source: String
+  let coverage: String
+  let total: Total
+  struct Total: Decodable { let used: Int; let limit: Int }
+  func valid(for slot: Int) -> Bool {
+    contractVersion == 3 && profileSlot == slot && source == "managed_delegation_journal"
+      && coverage == "managed_jobs_only" && (0...8).contains(total.used) && (1...5).contains(total.limit)
+  }
+}
+
 private struct ControlCenterBridgeSurface: Decodable { let id: String; let label: String }
 private struct ControlCenterApprovalWait: Decodable {
   let phase: String
@@ -254,6 +267,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var operationInProgress: Bool { changingProfile || changingServices || changingChatFolders || savingConfiguration || settingUp || launchingMaintenance }
   private var approvalAutomation = "off"
   private var approvalDelay = "instant"
+  private var delegationLimits: [String: Int] = [:]
+  private var delegationCapacity: [Int: ControlCenterDelegationCapacity] = [:]
   private var bridgeImage: NSImage?
   private var bridgeMessage = "No preview requested yet."
   private var selectedPreviewSlot: Int?
@@ -702,6 +717,17 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         toggle.setAccessibilityLabel("Connect \(profile.targetDisplayName) to Tela")
         let modelsState = workInventory.error != nil ? "Status unavailable" : profile.webModelsStatus
         row("Web models", subtitle: modelsState, control: toggle, in: profileCard)
+        let delegationHelp = "Runs managed tasks in separate ChatGPT conversations. In the source checkout, use bun run cli web-delegate start --cwd PROJECT --prompt-file TASK. Direct Native conversations are excluded."
+        let help = NSButton(title: "?", target: nil, action: nil)
+        help.bezelStyle = .helpButton
+        help.toolTip = delegationHelp
+        help.setAccessibilityLabel("Web delegations help")
+        help.setAccessibilityHelp(delegationHelp)
+        let usage = delegationCapacity[profile.slot].map { "\($0.total.used) of \($0.total.limit) slots in use" } ?? "Usage unavailable"
+        let summary = NSStackView(views: [help, secondary(usage)])
+        summary.orientation = .horizontal
+        summary.spacing = 8
+        row("Web delegations", control: summary, in: profileCard)
 
         let web = TelaWebPresentation(profile: profile, account: account)
         let controls = NSStackView()
@@ -805,6 +831,21 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       stack.addArrangedSubview(actionButton("Refresh status", action: #selector(refreshPage)))
     case .settings:
       pageHeader("Make Tela work the way you want.")
+      let delegations = card("Web delegations")
+      for profile in profiles {
+        let picker = NSPopUpButton()
+        for count in 1...5 {
+          picker.addItem(withTitle: String(count))
+          picker.lastItem?.representedObject = count
+        }
+        picker.selectItem(at: (delegationLimits[String(profile.slot)] ?? 3) - 1)
+        picker.tag = profile.slot
+        picker.target = self
+        picker.action = #selector(setDelegationLimit(_:))
+        picker.isEnabled = !preferenceError
+        row(profiles.count == 1 ? "Concurrent tasks" : "\(profile.targetDisplayName) · Concurrent tasks",
+            control: picker, in: delegations)
+      }
       let folders = card("Chat · Local folders")
       append(secondary("Choose folders ChatGPT may read and edit through Tela Chat. Your files remain yours."), to: folders)
       if !chatFoldersAvailable { append(secondary("Folder settings unavailable. Refresh details or update Tela."), to: folders) }
@@ -1244,6 +1285,22 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     }
   }
 
+  @objc private func setDelegationLimit(_ sender: NSPopUpButton) {
+    guard let limit = sender.selectedItem?.representedObject as? Int, (1...5).contains(limit) else { return }
+    do {
+      var preferences = try TelaPreferencesStore.read(at: preferencesURL)
+      var limits = preferences.webDelegationLimits ?? [:]
+      limits[String(sender.tag)] = limit
+      preferences.webDelegationLimits = limits
+      try TelaPreferencesStore.write(preferences, at: preferencesURL)
+      delegationLimits = limits
+      onPreferencesChanged?()
+    } catch {
+      sender.selectItem(at: (delegationLimits[String(sender.tag)] ?? 3) - 1)
+      NSSound.beep()
+    }
+  }
+
   @objc private func toggleApproval(_ sender: NSSwitch) {
     do {
       var preferences = try TelaPreferencesStore.read(at: preferencesURL)
@@ -1590,10 +1647,19 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     serviceStates = ["gateway": await gateway, "chat": await chat, "codex": await codex]
     ingressStatus = await ingress
     await loadProfiles()
+    delegationCapacity = [:]
+    if selectedPage == .work, let descriptor = try? readDescriptor("codex") {
+      for profile in profiles {
+        if let data = try? await request(descriptor, path: "v1/codex/profiles/\(profile.slot)/web-delegation-capacity"),
+           let value = try? JSONDecoder().decode(ControlCenterDelegationCapacity.self, from: data),
+           value.valid(for: profile.slot) { delegationCapacity[profile.slot] = value }
+      }
+    }
     refreshProfileAccounts()
     if let preferences = try? TelaPreferencesStore.read(at: preferencesURL) {
       approvalAutomation = preferences.approvalAutomation
       approvalDelay = preferences.approvalDelay ?? "instant"
+      delegationLimits = preferences.webDelegationLimits ?? [:]
       preferenceError = false
     } else {
       preferenceError = true

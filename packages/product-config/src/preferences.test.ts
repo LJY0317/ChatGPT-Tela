@@ -14,6 +14,7 @@ import {
   clearSavedChatAcceptance,
   consumeSavedChatAcceptance,
   savedChatAcceptanceSlot,
+  webDelegationLimit, setWebDelegationLimit,
 } from "./preferences";
 
 describe("product preferences", () => {
@@ -122,4 +123,20 @@ test("malformed acceptance leases fail closed without broadening preferences", (
       version: 1, approvalAutomation: "off", savedChatAcceptance,
     })).toThrow("lease");
   }
+});
+
+
+test("profile-specific Web delegation limits persist independently, default to three, and reject invalid values", () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-delegation-limits-"));
+  const path = join(root, "preferences-v1.json");
+  try {
+    expect(webDelegationLimit(readProductPreferences(path), 1)).toBe(3);
+    setWebDelegationLimit(1, 5, path);
+    setWebDelegationLimit(2, 1, path);
+    expect(webDelegationLimit(readProductPreferences(path), 1)).toBe(5);
+    expect(webDelegationLimit(readProductPreferences(path), 2)).toBe(1);
+    expect(webDelegationLimit(readProductPreferences(path), 3)).toBe(3);
+    expect(() => setWebDelegationLimit(2, 6, path)).toThrow("1 to 5");
+    expect(() => parseProductPreferences({ version: 1, approvalAutomation: "off", webDelegationLimits: { 1: 0 } })).toThrow("limits");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

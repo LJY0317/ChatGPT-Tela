@@ -30,6 +30,8 @@ export interface ProductPreferences {
   readonly approvalDelay?: ProductApprovalDelayPreset;
   /** Target identities chosen by the user; never evidence of live route ownership. */
   readonly workProfileConnections?: readonly string[];
+  /** Independent managed Web delegation admission limits, indexed by profile slot. */
+  readonly webDelegationLimits?: Readonly<Record<string, number>>;
   /** Explicit owner-only acceptance window; never enables saved Web chats by default. */
   readonly savedChatAcceptance?: { readonly slot: number; readonly expiresAt: number };
 }
@@ -49,7 +51,7 @@ export function parseProductPreferences(value: unknown): ProductPreferences {
     throw new Error("ChatGPT Tela preferences must be a JSON object");
   }
   const item = value as Record<string, unknown>;
-  const extra = Object.keys(item).filter(key => !["version", "approvalAutomation", "approvalDelay", "workProfileConnections", "savedChatAcceptance"].includes(key));
+  const extra = Object.keys(item).filter(key => !["version", "approvalAutomation", "approvalDelay", "workProfileConnections", "webDelegationLimits", "savedChatAcceptance"].includes(key));
   if (extra.length > 0) throw new Error(`ChatGPT Tela preferences contain unknown fields: ${extra.join(", ")}`);
   if (item.version !== 1) throw new Error("unsupported ChatGPT Tela preferences version");
   const storedApprovalAutomation = item.approvalAutomation ?? "off";
@@ -70,6 +72,14 @@ export function parseProductPreferences(value: unknown): ProductPreferences {
     || new Set(connections).size !== connections.length)) {
     throw new Error("ChatGPT Tela Work connection identities are invalid");
   }
+  const limits = item.webDelegationLimits;
+  if (limits !== undefined && (!limits || typeof limits !== "object" || Array.isArray(limits)
+    || Object.entries(limits).length > 99
+    || Object.entries(limits).some(([slot, limit]) =>
+      !/^[1-9][0-9]?$/.test(slot) || Number(slot) > 99
+      || !Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > 5))) {
+    throw new Error("ChatGPT Tela Web delegation limits are invalid");
+  }
   const acceptance = item.savedChatAcceptance;
   if (acceptance !== undefined && (!acceptance || typeof acceptance !== "object" || Array.isArray(acceptance)
     || Object.keys(acceptance).some(key => key !== "slot" && key !== "expiresAt")
@@ -85,11 +95,25 @@ export function parseProductPreferences(value: unknown): ProductPreferences {
     approvalAutomation,
     approvalDelay: approvalDelay as ProductApprovalDelayPreset,
     ...(connections === undefined ? {} : { workProfileConnections: Object.freeze([...connections as string[]]) }),
+    ...(limits === undefined ? {} : { webDelegationLimits: Object.freeze({ ...limits as Record<string, number> }) }),
     ...(acceptance === undefined ? {} : { savedChatAcceptance: Object.freeze({
       slot: (acceptance as { slot: number }).slot,
       expiresAt: (acceptance as { expiresAt: number }).expiresAt,
     }) }),
   });
+}
+
+export function webDelegationLimit(preferences: ProductPreferences, slot: number): number {
+  if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw Error("Invalid Web delegation profile slot");
+  return preferences.webDelegationLimits?.[String(slot)] ?? 3;
+}
+
+export function setWebDelegationLimit(slot: number, limit: number, path = resolveProductPreferencesPath()): void {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5) throw Error("Web delegation limit must be 1 to 5");
+  const preferences = readProductPreferences(path);
+  webDelegationLimit(preferences, slot);
+  const limits = { ...preferences.webDelegationLimits, [String(slot)]: limit };
+  writeProductPreferences({ ...preferences, webDelegationLimits: limits }, path);
 }
 
 export function resolveProductPreferencesPath(options: ProductPathOptions = {}): string {

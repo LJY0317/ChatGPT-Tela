@@ -11,8 +11,9 @@ import { selectDelegationWebModel, type DelegationWebModel } from "./web-delegat
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RESULT_BYTES = 512 * 1024;
 const MAX_RETAINED_JOBS = 64;
-// Three profile task leases plus one exclusive lease per physical checkout.
-const TOTAL_PER_PROFILE = 3;
+// Reserve the full supported range, even when the configured limit decreases.
+// Leases above the new limit continue to count until their exact terminal proof.
+const MAX_PROFILE_TASKS = 5;
 export type WebDelegationCapacity = CodexWebDelegationCapacityContract;
 export type { WebDelegationBlockCode };
 export class WebDelegationCapacityError extends Error {
@@ -122,7 +123,7 @@ function checkoutRoot(cwd: string): string {
 /** Private user data, outside repositories/logs/releases. Hard capacity bounds retention without deleting results. */
 export class WebDelegationStore {
   readonly fingerprintKey: Uint8Array;
-  constructor(readonly root: string) {
+  constructor(readonly root: string, readonly limitForProfile: (slot: number) => number = () => 3) {
     mkdirSync(root, { recursive: true, mode: 0o700 });
     if (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink()) throw Error("Unsafe Web job store");
     chmodSync(root, 0o700);
@@ -138,7 +139,14 @@ export class WebDelegationStore {
   #path(id: string) { if (!UUID.test(id)) throw Error("Invalid Web job ID"); return join(this.root, `${id}.json`); }
   #permits(slot: number): string[] {
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw Error("Invalid Web profile slot");
-    return [1, 2, 3].map(index => join(this.root, `task-${slot}-${index}.lease`));
+    return Array.from({ length: MAX_PROFILE_TASKS }, (_, index) =>
+      join(this.root, `task-${slot}-${index + 1}.lease`));
+  }
+  #limit(slot: number): number {
+    this.#permits(slot);
+    const limit = this.limitForProfile(slot);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_PROFILE_TASKS) throw Error("Invalid Web delegation limit");
+    return limit;
   }
   #legacyPermits(slot: number): string[] {
     return [join(this.root, `writer-${slot}.lease`), join(this.root, `reader-${slot}.lease`), join(this.root, `reader-${slot}-2.lease`)];
@@ -175,6 +183,7 @@ export class WebDelegationStore {
     for (const path of paths) if (this.#leaseOwner(path) === record.id) unlinkSync(path);
   }
   capacity(slot: number, _mode: WebDelegationMode = "write", cwd?: string): WebDelegationCapacity {
+    const limit = this.#limit(slot);
     const modern = this.#permits(slot).map(path => this.#leaseOwner(path));
     const legacy = this.#legacyPermits(slot).map(path => this.#leaseOwner(path));
     const all = [...modern, ...legacy], retained = this.#retained();
@@ -196,26 +205,26 @@ export class WebDelegationStore {
     });
     const blockCode: WebDelegationBlockCode | undefined = retained.length >= MAX_RETAINED_JOBS ? "CAPACITY_STORAGE_RECORDS"
       : unsafeLease ? "UNCERTAIN_RESERVATION"
-        : used >= TOTAL_PER_PROFILE ? "CAPACITY_TOTAL_PROFILE"
+        : used >= limit ? "CAPACITY_TOTAL_PROFILE"
           : _mode === "write" && (checkoutLegacyConflict || checkout !== "free")
             ? checkout === "unknown" ? "UNCERTAIN_RESERVATION" : "CAPACITY_WRITER_CHECKOUT" : undefined;
-    const statusKo = `프로필 ${slot}: 동시 작업 ${used}/3`;
-    const statusEn = `Profile ${slot}: concurrent jobs ${used}/3`;
-    const reasonKo = blockCode === "CAPACITY_STORAGE_RECORDS" ? `보관 기록 ${retained.length}/64개로 가득 찼습니다. 완료 기록을 검토하세요.`
+    const statusKo = `프로필 ${slot}: 동시 작업 ${used}/${limit}`;
+    const statusEn = `Profile ${slot}: concurrent jobs ${used}/${limit}`;
+    const reasonKo = blockCode === "CAPACITY_STORAGE_RECORDS" ? `보관 기록 ${retained.length}/64개로 가득 찼습니다. 완료 기록을 확인하고 개별 회수하세요.`
       : blockCode === "UNCERTAIN_RESERVATION" ? "기존 작업의 종료가 불확실합니다. 해당 작업을 조회·복구하세요."
         : blockCode === "CAPACITY_WRITER_CHECKOUT" ? "이 작업 디렉터리에서 다른 쓰기 위임이 진행 중입니다."
           : blockCode ? "실행 한도에 도달했습니다. 진행 중인 작업이 끝난 후 다시 시도하세요."
             : "관리되는 슬롯이 사용 가능합니다. 실제 계정 준비 상태는 별도로 확인됩니다.";
-    const reasonEn = blockCode === "CAPACITY_STORAGE_RECORDS" ? `Retained records ${retained.length}/64 full; review finished jobs.`
+    const reasonEn = blockCode === "CAPACITY_STORAGE_RECORDS" ? `Retained records ${retained.length}/64 full; retire reviewed finished jobs individually.`
       : blockCode === "UNCERTAIN_RESERVATION" ? "An earlier job is unresolved; inspect and reconcile it."
         : blockCode === "CAPACITY_WRITER_CHECKOUT" ? "Another write delegation holds this checkout."
           : blockCode ? "Concurrency limit reached; retry after active work finishes."
             : "Managed slot available; account readiness is checked separately.";
-    return { contractVersion: 2, source: "managed_delegation_journal", observedAt: new Date().toISOString(), profileSlot: slot,
+    return { contractVersion: 3, source: "managed_delegation_journal", observedAt: new Date().toISOString(), profileSlot: slot,
       coverage: "managed_jobs_only",
-      policy: "three_tasks_one_writer_per_checkout_v2",
+      policy: "configurable_tasks_one_writer_per_checkout_v3",
       uncertain: unknown,
-      total: { used, limit: TOTAL_PER_PROFILE },
+      total: { used, limit },
       records: { retained: retained.length, limit: MAX_RETAINED_JOBS }, available: !blockCode, ...(blockCode ? { blockCode } : {}),
       messageKo: `${statusKo}. ${reasonKo}`, messageEn: `${statusEn}. ${reasonEn}`,
       nextAction: blockCode === "CAPACITY_STORAGE_RECORDS" ? "review_owned_finished_records"
@@ -275,7 +284,7 @@ export class WebDelegationStore {
       }
       admissionStage = "profile";
       let admitted = false;
-      for (const lease of this.#permits(record.slot)) {
+      for (const lease of this.#permits(record.slot).slice(0, available.total.limit)) {
         try {
           const fd = openSync(lease, "wx", 0o600);
           claimed.push(lease);
@@ -322,6 +331,20 @@ export class WebDelegationStore {
     const settled = this.get(record.id)!;
     this.#release(settled);
     return settled;
+  }
+  /** Explicit, exact-job retirement only. Native conversations are never modified. */
+  retire(id: string): void {
+    const record = this.get(id);
+    if (!record || !this.#terminal(record)) throw Error("Only proven terminal Web jobs can be retired");
+    this.#release(record);
+    if (readdirSync(this.root).some(name => name.endsWith(".lease")
+      && this.#leaseOwner(join(this.root, name)) === id)) {
+      throw Error("Web job still holds a reservation");
+    }
+    const path = this.#path(id);
+    const files = [path, `${path}.completed`, `${path}.failed`];
+    for (const file of files) this.#read(file, id);
+    for (const file of files) if (existsSync(file)) unlinkSync(file);
   }
 }
 

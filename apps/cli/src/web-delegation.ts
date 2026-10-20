@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readProductPreferences, webDelegationLimit } from "@chatgpt-tela/product-config";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
@@ -18,7 +19,8 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     if (indexes.length !== 1 || !args[indexes[0]! + 1] || args[indexes[0]! + 1]!.startsWith("--")) throw Error(`${name} requires one value`);
     return args[indexes[0]! + 1]!;
   };
-  const store = new WebDelegationStore(join(paths.serviceState("codex"), "web-delegations"));
+  const store = new WebDelegationStore(join(paths.serviceState("codex"), "web-delegations"),
+    slot => webDelegationLimit(readProductPreferences(), slot));
   if (subcommand === "capacity") {
     const mode = args.includes("--mode") ? option("--mode") : "read";
     if (mode !== "read" && mode !== "write") throw Error("--mode must be read or write");
@@ -35,7 +37,12 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure }, null, 2));
     return;
   }
-  if (subcommand !== "start" && subcommand !== "continue" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|capacity|start|continue|status|result|reconcile>");
+  if (subcommand === "retire") {
+    store.retire(option("--job"));
+    console.log(JSON.stringify({ status: "retired" }));
+    return;
+  }
+  if (subcommand !== "start" && subcommand !== "continue" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|capacity|start|continue|status|result|reconcile|retire>");
   const selectedJob = subcommand === "reconcile" ? store.get(option("--job")) : undefined;
   if (subcommand === "reconcile" && !selectedJob) throw Error("Web job was not found");
   const continuation = subcommand === "continue" ? store.get(option("--job")) : undefined;

@@ -75,9 +75,9 @@ describe("Tela Codex private HTTP server", () => {
       service, bearerToken: token,
       delegationCapacity: slot => {
         reads++;
-        return { contractVersion: 2, profileSlot: slot, source: "managed_delegation_journal",
+        return { contractVersion: 3, profileSlot: slot, source: "managed_delegation_journal",
           observedAt: new Date().toISOString(), coverage: "managed_jobs_only",
-          policy: "three_tasks_one_writer_per_checkout_v2",
+          policy: "configurable_tasks_one_writer_per_checkout_v3",
           uncertain: 0,
           total: { used: 3, limit: 3 }, records: { retained: 3, limit: 64 },
           available: false, blockCode: "CAPACITY_TOTAL_PROFILE",

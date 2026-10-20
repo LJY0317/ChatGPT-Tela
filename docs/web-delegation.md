@@ -56,9 +56,11 @@ Actual browser selection and readback reuse the normal Web model routing impleme
 
 ## Admission and capacity
 
+Control Center Work shows one managed-job occupancy row per detected profile, with a native hover help button. Settings offers an independent 1–5 concurrent-tasks picker for each detected profile; changes affect new admission without cancelling work. Counts exclude direct Native RPC conversations (including the original analysis conversation) that never entered the managed journal. Unavailable observations display as unavailable, not zero.
+
 The source CLI now supports `web-delegate capacity [--slot N]`, which reads the
 owned local delegation journal without invoking a model or opening a browser.
-`start` acquires one cross-process task permit (three per profile) and a
+`start` acquires one cross-process task permit (configurable 1–5 per profile (default 3)) and a
 checkout writer permit before connecting to the provider. Each new task defaults
 to workspace-write authority so a read-heavy analysis can proceed to code changes
 within the same Native conversation. These are local managed-job limits, not Web
@@ -69,7 +71,7 @@ Read-only tasks may share a checkout with its writer when the profile has a
 free task permit. Writer checkout contention applies only to new writers;
 same-thread continuation exclusivity is enforced separately.
 Legacy read-only jobs and their lease files remain readable and count against the
-three total permits until terminal recovery. An old read-only thread cannot be
+configured total permits until terminal recovery. An old read-only thread cannot be
 silently upgraded to write authority. There is no queue.
 
 `continue --job UUID --prompt-file ...` requires a verified completed write-capable
@@ -102,12 +104,12 @@ protection.
 regardless of the optional legacy `--mode` input.
 The authenticated Codex service exposes the same managed-job capacity snapshot
 at `GET /v1/codex/profiles/:slot/web-delegation-capacity`; the macOS Control
-Center Work page shows this status on demand. This reports **local CLI-managed
+Center Work page fetches this status on demand. This reports **local CLI-managed
 delegations only**, not the availability of an arbitrary ChatGPT Web turn.
 
 An admission refusal emits a machine-readable JSON object with
 `status=admission_refused`, `code`, verified local `capacity`, and a
-`nextAction`. `CAPACITY_TOTAL_PROFILE` means all three managed tasks are reserved;
+`nextAction`. `CAPACITY_TOTAL_PROFILE` means all configured managed tasks are reserved;
 `CAPACITY_WRITER_CHECKOUT` means the selected worktree has another writer; `UNCERTAIN_RESERVATION` means ownership is unresolved;
 `CAPACITY_STORAGE_RECORDS` means the separate 64-record retention ceiling
 has been reached. These are distinct from account quotas or other profiles'
@@ -125,7 +127,7 @@ timeouts or stale in-flight snapshots.
 Job records and results are private product data under the Codex service state directory, with
 restricted filesystem permissions. A hard capacity of 64 records bounds storage; it does not
 silently discard results. Do not put these records, prompts, keys or results in a repository or
-release. This source version does not yet provide a complete removal lifecycle. Source fixtures and a profile-1 live same-thread continuation verify final-answer delivery and completion after attaching the fresh connection. Both-profile acceptance remains a separate check.
+release. An operator can explicitly retire a reviewed, proven terminal job with `bun run cli web-delegate retire --job UUID`; this removes only that local job receipt (and ends job-ID-based result/continuation), not its Native conversation. Uncertain/active jobs cannot be retired. No automatic deletion or bulk migration is performed; an existing 64/64 journal needs reviewed retirement before new admission. Full automatic retention is not implemented. Source fixtures and a profile-1 live same-thread continuation verify final-answer delivery and completion after attaching the fresh connection. Both-profile acceptance remains a separate check.
 
 Continuations inherit their parent's profile and read-only or workspace-write mode.
 They cannot promote an existing read-only thread to writing. Historical job

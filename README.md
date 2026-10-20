@@ -33,6 +33,10 @@ ignored. Credentials, browser profiles, Tailscale state, MCP secrets, and machin
 stay outside Git. Running the live source runtime still requires the explicit development setup documented
 below and should not be confused with an installer-supported release.
 
+## Separate managed Web delegations
+
+The source checkout supports `bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt` against an already running, signed-in Tela Work profile. Use `bun run cli web-delegate capacity --slot 1` to inspect managed-job occupancy, `result --job UUID` to retrieve a proven answer, and `retire --job UUID` only after reviewing a terminal result. Control Center Work displays this managed-only count; Settings selects independent per-profile concurrency limits from 1 to 5 (default 3). Direct Native conversations are outside this journal. See [Web delegation details](docs/web-delegation.md) for prerequisites, capacity and retention limits.
+
 ## Product goals
 
 The product treats the following as explicit design principles:
