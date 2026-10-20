@@ -185,6 +185,10 @@ private final class TelaActionButton: NSButton {
   }
 }
 
+private final class SessionSidebarStack: NSStackView {
+  override var isFlipped: Bool { true }
+}
+
 private final class DelegationHelpButton: NSButton {
   var onHoverChanged: ((Bool) -> Void)?
   private var tracking: NSTrackingArea?
@@ -311,6 +315,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var selectedBridgeSurface: String?
   private var previewRevision = 0
   private var preferenceError = false
+  private let delegationHelpText = "Web delegations run tasks in separate ChatGPT conversations. This usage counts tasks managed by Tela; your other chats are not included."
   private var delegationHelpPopover: NSPopover?
   private var delegationHelpCloseWork: DispatchWorkItem?
 
@@ -634,7 +639,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       popover = existing
     } else {
       let controller = NSViewController()
-      let message = label("Runs managed tasks in separate ChatGPT conversations. In the source checkout, use bun run cli web-delegate start --cwd PROJECT --prompt-file TASK. Direct Native conversations are excluded.")
+      let message = label(delegationHelpText)
       message.preferredMaxLayoutWidth = 260
       message.translatesAutoresizingMaskIntoConstraints = false
       controller.view = NSView()
@@ -822,10 +827,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         toggle.setAccessibilityLabel("Connect \(profile.targetDisplayName) to Tela")
         let modelsState = workInventory.error != nil ? "Status unavailable" : profile.webModelsStatus
         row("Web models", subtitle: modelsState, control: toggle, in: profileCard)
-        let delegationHelp = "Runs managed tasks in separate ChatGPT conversations. In the source checkout, use bun run cli web-delegate start --cwd PROJECT --prompt-file TASK. Direct Native conversations are excluded."
         let help = DelegationHelpButton(title: "?", target: self, action: #selector(showDelegationHelp(_:)))
         help.bezelStyle = .helpButton
-        help.font = .systemFont(ofSize: max(9, NSFont.smallSystemFontSize - 1), weight: .regular)
+        help.controlSize = .small
+        help.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         help.setButtonType(.momentaryPushIn)
         help.onHoverChanged = { [weak self, weak help] inside in
           guard let self, let help else { return }
@@ -833,7 +838,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           else { self.scheduleDelegationHelpClose() }
         }
         help.setAccessibilityLabel("Web delegations help")
-        help.setAccessibilityHelp(delegationHelp)
+        help.setAccessibilityHelp(delegationHelpText)
         let usage = delegationCapacity[profile.slot].map { "\($0.total.used) of \($0.total.limit) slots in use" } ?? "Usage unavailable"
 
         let web = TelaWebPresentation(profile: profile, account: account)
@@ -881,7 +886,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       activityLayout.alignment = .top
       activityLayout.distribution = .fill
       activityLayout.spacing = 12
-      let sessionList = NSStackView()
+      let sessionList = SessionSidebarStack()
       sessionList.orientation = .vertical
       sessionList.alignment = .leading
       sessionList.distribution = .fill
@@ -905,6 +910,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       previewPane.spacing = 10
       activityLayout.addArrangedSubview(previewPane)
       sessionScroll.widthAnchor.constraint(equalToConstant: 168).isActive = true
+      sessionScroll.heightAnchor.constraint(equalTo: activityLayout.heightAnchor).isActive = true
+      sessionDivider.heightAnchor.constraint(equalTo: activityLayout.heightAnchor).isActive = true
+      previewPane.heightAnchor.constraint(equalTo: activityLayout.heightAnchor).isActive = true
       sessionList.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
       sessionDivider.widthAnchor.constraint(equalToConstant: 1).isActive = true
       previewPane.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
@@ -915,18 +923,18 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         if profiles.count > 1 {
           let heading = secondary(profile.targetDisplayName)
           sessionList.addArrangedSubview(heading)
-          heading.widthAnchor.constraint(equalTo: sessionScroll.widthAnchor).isActive = true
+          heading.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
         }
         let surfaces = bridgeSurfaces[profile.slot] ?? []
         if let message = surfaceMessages[profile.slot] {
           let status = secondary(message); sessionList.addArrangedSubview(status)
-          status.widthAnchor.constraint(equalTo: sessionScroll.widthAnchor).isActive = true
+          status.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
         } else if bridgeSurfaces[profile.slot] == nil {
           let status = secondary("Loading…"); sessionList.addArrangedSubview(status)
-          status.widthAnchor.constraint(equalTo: sessionScroll.widthAnchor).isActive = true
+          status.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
         } else if surfaces.isEmpty {
           let status = secondary("No active Web sessions"); sessionList.addArrangedSubview(status)
-          status.widthAnchor.constraint(equalTo: sessionScroll.widthAnchor).isActive = true
+          status.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
         }
         for surface in surfaces {
           let selected = selectedPreviewSlot == profile.slot && selectedBridgeSurface == surface.id
@@ -941,19 +949,20 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           button.toolTip = surface.label
           button.setAccessibilityLabel(surface.label)
           sessionList.addArrangedSubview(button)
-          button.widthAnchor.constraint(equalTo: sessionScroll.widthAnchor).isActive = true
+          button.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
         }
       }
       if runningProfiles.isEmpty {
         let status = secondary("No active Web sessions"); sessionList.addArrangedSubview(status)
-        status.widthAnchor.constraint(equalTo: sessionScroll.widthAnchor).isActive = true
+        status.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
       }
       if let bridgeImage {
         let imageView = NSImageView(image: bridgeImage)
         imageView.imageScaling = .scaleProportionallyUpOrDown
         previewPane.addArrangedSubview(imageView)
         imageView.widthAnchor.constraint(equalTo: previewPane.widthAnchor).isActive = true
-        imageView.heightAnchor.constraint(lessThanOrEqualToConstant: 245).isActive = true
+        imageView.setContentHuggingPriority(.defaultLow, for: .vertical)
+        imageView.heightAnchor.constraint(greaterThanOrEqualToConstant: 170).isActive = true
         append(secondary(bridgeMessage), to: previewPane)
       } else {
         let empty = NSStackView()
