@@ -33,6 +33,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     if (subcommand === "result") {
       const answer = verifiedWebDelegationAnswer(record);
       if (!answer) throw Error("No verified final result; inspect job status");
+      store.collect(record.id);
       console.log(answer);
     } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure }, null, 2));
     return;
@@ -89,6 +90,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
       connect: endpoint => connectCodexAppServerWebSocket(endpoint, { signal: AbortSignal.timeout(10_000) }),
     }, selectedJob!.id, AbortSignal.timeout(30_000));
     const answer = verifiedWebDelegationAnswer(record);
+    if (answer) store.collect(record.id);
     console.log(JSON.stringify({ jobId: record.id, state: record.state, toolItems: record.toolItems ?? 0,
       resultAvailable: Boolean(answer), ...(answer ? { finalEvidence: record.finalEvidence, answer } : {}) }));
     return;
@@ -119,8 +121,11 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
       changed: record => console.log(JSON.stringify({ jobId: record.id, state: record.state, selection: record.selection, toolItems: record.toolItems ?? 0 })),
     }, { id, slot, cwd, prompt, mode, ...(continuation ? { parentJobId: continuation.id } : {}), signal: AbortSignal.timeout(20 * 60 * 1000) });
     const answer = verifiedWebDelegationAnswer(result);
-    if (answer) console.log(JSON.stringify({ event: "result", jobId: result.id, state: result.state,
-      finalEvidence: result.finalEvidence, taskOutcome: result.taskOutcome, answer }));
+    if (answer) {
+      store.collect(result.id);
+      console.log(JSON.stringify({ event: "result", jobId: result.id, state: result.state,
+        finalEvidence: result.finalEvidence, taskOutcome: result.taskOutcome, answer }));
+    }
   } catch (error) {
     if (error instanceof WebDelegationCapacityError) {
       console.error(JSON.stringify({ status: "admission_refused", code: error.code, capacity: error.capacity }));

@@ -231,3 +231,28 @@ Both tests used a Native read-only sandbox with approval policy
 distinct Web approval cards remains **source-tested and deployed, but
 not live multi-card accepted**. Do not report it as proven from these
 round-trip results.
+
+## Managed conversation retention
+
+The Codex daemon archives managed Web-delegation conversations 24 hours after
+an explicit result retrieval, or seven days after real Native activity when no
+result was retrieved. A subsequent managed continuation starts its own clock.
+The daemon deletes its own automatically archived conversations seven days later.
+Result receipts and local workspace files remain intact. Status reads do not
+extend either period. These rules cover journal-owned `web-delegate` threads;
+chats created directly by another Native client are not discovered or adopted.
+
+Retention uses the Native `thread/list`, `thread/turns/list`, `thread/queue/list`,
+`thread/archive`, `thread/read` and `thread/delete` contracts. Active turns and
+queued work are protected. Observed manual archive/restore, an outside-journal
+continuation, or changes while archived relinquish automatic management.
+Missing conversations are reconciled without recreating them. Unknown mutation
+outcomes relinquish management rather than repeating a potentially completed
+operation. Transient manual changes entirely between observations cannot be
+reconstructed from the public metadata.
+
+One next-expiry timer runs in the existing daemon. Journal writes, profile
+reconnection and daemon startup trigger another pass; there is no polling or
+new service. If a due thread is active or its profile unavailable, it is checked
+again on one of those events. A stopped daemon performs no cleanup and catches
+up after restart. Browser-window retirement is a separate lifecycle.

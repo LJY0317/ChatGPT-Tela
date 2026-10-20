@@ -5,6 +5,9 @@ import {
   startCodexServiceHttpServer,
   createCodexWorkInspector,
 } from "@chatgpt-tela/codex-service";
+import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
+import { createLocalNativeAccountProof, type TrustedNativeProfileSession } from "../../../packages/codex-service/src/cross-profile-account-proof";
+import { startWebDelegationRetention } from "../../../packages/codex-service/src/web-delegation-retention";
 import { WebDelegationStore } from "../../../packages/codex-service/src/web-delegation";
 import { approvalDelayMilliseconds, consumeSavedChatAcceptance, readProductPreferences, setWorkProfileConnection, webDelegationLimit } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
@@ -28,6 +31,7 @@ async function main(): Promise<void> {
   const paths = resolveProductPaths();
   const descriptorPath = join(paths.serviceRuntime("codex"), "descriptor.json");
   const lifecycle = new AbortController();
+  let retention: ReturnType<typeof startWebDelegationRetention> | undefined;
   const service = await startCodexService({
     signal: lifecycle.signal,
     config: multiProfileLauncher
@@ -35,7 +39,7 @@ async function main(): Promise<void> {
       : {},
     profileRuntimeCommand: [runtimeExecutable, runtimeEntrypoint],
     environment: process.env,
-    onProfileConnectionChanged: setWorkProfileConnection,
+    onProfileConnectionChanged: (...args) => { setWorkProfileConnection(...args); retention?.wake(); },
     profileRuntimeEnvironment: slot => {
       const preferences = readProductPreferences();
       return {
@@ -71,13 +75,29 @@ async function main(): Promise<void> {
   // One startup attempt, no polling and no interruption of already-running apps.
   const restoration = restoreWorkProfiles(service, readProductPreferences().workProfileConnections ?? [], lifecycle.signal)
     .catch(error => emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_failed", { failure_class: diagnosticFailureClass(error) }))
-    .finally(() => { restoring = false; });
+    .finally(() => { restoring = false; retention?.wake(); });
+
+  const ownedSession = async (slot: number): Promise<TrustedNativeProfileSession> => {
+    const profile = (await service.profiles()).find(row => row.slot === slot);
+    if (!profile || profile.controlState !== "running" || profile.targetSessionState !== "ready"
+      || !profile.childProcessId || !profile.responsesRouteFingerprint) throw Error("Web cleanup profile unavailable");
+    const terminal = await service.terminalSession(slot);
+    return { slot, runtimeProcessId: profile.childProcessId,
+      responsesRouteFingerprint: profile.responsesRouteFingerprint, terminalEndpoint: terminal.endpoint };
+  };
+  const proof = createLocalNativeAccountProof({ resolveOwnedSession: ownedSession, fingerprintKey: delegationStore.fingerprintKey });
+  retention = startWebDelegationRetention({
+    store: delegationStore,
+    owner: async slot => ({ binding: await proof(slot), session: await ownedSession(slot) }),
+    connect: endpoint => connectCodexAppServerWebSocket(endpoint, { signal: lifecycle.signal }),
+  }, lifecycle.signal);
 
   let stopping: Promise<void> | undefined;
   const stop = () => {
     lifecycle.abort();
     if (!stopping) {
       stopping = (async () => {
+        await retention?.close();
         const results = await Promise.allSettled([http.close(), restoration.then(() => service.close())]);
         const failures = results
           .filter((result): result is PromiseRejectedResult => result.status === "rejected")

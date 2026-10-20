@@ -248,6 +248,27 @@ export class WebDelegationStore {
     // when the exact Native turn remains failed. Late observers cannot erase it.
     return this.#read(`${path}.completed`, id) ?? this.#read(`${path}.failed`, id) ?? this.#read(path, id);
   }
+  /** Only Tela-created journal entries are eligible; never discover personal threads. */
+  records(): WebDelegationRecord[] {
+    return this.#retained().filter(name => UUID.test(name.slice(0, -5)))
+      .map(name => this.get(name.slice(0, -5))!).filter(Boolean);
+  }
+  collectedAt(id: string): number | undefined {
+    const path = `${this.#path(id)}.collected`;
+    if (!existsSync(path)) return undefined;
+    const value = Number(readFileSync(path, "utf8"));
+    if (!Number.isFinite(value) || value < 0) throw Error("Invalid Web result collection time");
+    return value;
+  }
+  /** First explicit result retrieval is durable; repeated reads do not extend retention. */
+  collect(id: string, now = Date.now()): void {
+    const record = this.get(id);
+    if (!record || !verifiedWebDelegationAnswer(record)) throw Error("No verified Web result to collect");
+    try {
+      const fd = openSync(`${this.#path(id)}.collected`, "wx", 0o600);
+      try { writeFileSync(fd, String(now)); fsyncSync(fd); } finally { closeSync(fd); }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  }
   reserve(record: WebDelegationRecord): void {
     const mode = record.mode ?? "read";
     if (record.parentJobId && !record.threadId) throw Error("Continuation requires its exact Native thread");
@@ -365,7 +386,7 @@ function sameOwner(record: WebDelegationRecord, current: Awaited<ReturnType<WebD
 /** Across a runtime restart, only a freshly proved matching login may read
  * the original exact Native thread. A session fingerprint is a live socket
  * binding, not a durable account identity. Submission still uses sameOwner. */
-function sameAccountOwner(record: WebDelegationRecord, current: Awaited<ReturnType<WebDelegationAdapters["owner"]>>) {
+export function sameAccountOwner(record: WebDelegationRecord, current: Awaited<ReturnType<WebDelegationAdapters["owner"]>>) {
   return /^[a-f0-9]{64}$/.test(record.owner.accountFingerprint)
     && record.owner.slot === record.slot && record.session.slot === record.slot
     && current.binding.slot === record.slot && current.session.slot === record.slot
