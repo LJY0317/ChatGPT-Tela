@@ -126,7 +126,8 @@ function parseHandoff(turn: Record<string, unknown>, threadId: string, currentTu
   const answer = record([...turn.items].reverse().find(item =>
     record(item)?.type === "agentMessage"));
   if (!answer || !checkId(answer.id) || typeof answer.text !== "string"
-    || (answer.phase !== undefined && answer.phase !== null && answer.phase !== "finalAnswer")) {
+    || (answer.phase !== undefined && answer.phase !== null
+      && answer.phase !== "final_answer" && answer.phase !== "finalAnswer")) {
     throw new Error("Native explicitly requested handoff has no verified final answer");
   }
   if (Buffer.byteLength(answer.text, "utf8") > MAX_HANDOFF_BYTES) {

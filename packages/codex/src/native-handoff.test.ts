@@ -16,6 +16,7 @@ const json = JSON.stringify({
 function source(options: {
   readonly prompt?: string;
   readonly answer?: string;
+  readonly phase?: string;
   readonly current?: string;
   readonly priorId?: string;
   readonly priorStatus?: string;
@@ -51,7 +52,7 @@ function source(options: {
               { type: "text", text: options.prompt ?? NATIVE_WEB_HANDOFF_PROMPT },
             ] },
             ...(options.priorExtras ?? []),
-            { type: "agentMessage", id: "answer", phase: "finalAnswer",
+            { type: "agentMessage", id: "answer", phase: options.phase ?? "finalAnswer",
               text: options.answer ?? (options.overlarge ? "x".repeat(140_000) : json) },
           ],
         }],
@@ -65,6 +66,13 @@ function source(options: {
 }
 
 describe("explicit Native-owned Web handoff, read-only public contract", () => {
+  test("indexed Native final_answer handoff is accepted while commentary is rejected", async () => {
+    const final = source({ phase: "final_answer" });
+    expect((await final.reader.latest("thread-one", "web-turn"))?.summary)
+      .toBe("Verified work: two bounded tasks completed; next inspect remaining actions.");
+    await expect(source({ phase: "commentary" }).reader.latest("thread-one", "web-turn"))
+      .rejects.toThrow("no verified final answer");
+  });
   test("an active Native thread changing its newest turn during public handoff proof cannot authorize stale Web context", async () => {
     const digest = createHash("sha256").update(json).digest("hex");
     const folder = mkdtempSync(join(tmpdir(), "tela-handoff-head-change-"));
