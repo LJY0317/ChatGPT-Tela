@@ -41,6 +41,7 @@ export function retainRendererNetworkDiagnostics(
         emitDiagnosticEvent("chatgpt_tela_browser", httpStatus === undefined ? "renderer_request_failed" : "renderer_http_failed", {
           network_request_fingerprint: diagnosticFingerprint(JSON.stringify([details.webContentsId ?? null, details.id])),
           domain_class: originClass, origin_fingerprint: diagnosticFingerprint(url.origin),
+          route_fingerprint: diagnosticFingerprint(url.pathname),
           route_class: originClass !== "other" && /^\/(?:backend-api|api|public-api)(?:\/|$)/.test(url.pathname) ? "provider_api" : "other",
           resource_class: details.resourceType.toLowerCase(),
           method_class: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].includes(details.method) ? details.method.toLowerCase() : "other",

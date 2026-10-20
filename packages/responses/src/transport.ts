@@ -1,5 +1,4 @@
-import { webContextFitRecovery } from "./web-context-fit-recovery";
-import { nativeHandoffRecovery } from "./native-handoff-recovery";
+import { nativeFailure } from "./native-failure";
 import type {
   NativeGatewayOutcome,
   NativeResponsesGateway,
@@ -9,9 +8,6 @@ import {
   nativeResponsesSsePlan,
 } from "./protocol";
 import { NativeProgressStream } from "./live-progress";
-import { nativeHistoryRecovery } from "./native-history-recovery";
-import { webContinuityRecovery } from "./web-continuity-recovery";
-import { nativeProjectionRecovery } from "./native-projection-recovery";
 import { encodeTelaCompactionSummary } from "@chatgpt-tela/codex";
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -139,75 +135,9 @@ export async function handleNativeResponsesHttp(
       progress.signal.abort();
     } else outcome = await pending;
   } catch (error) {
-    const fitRecovery = webContextFitRecovery(error);
-    if (fitRecovery) return Response.json({ error: fitRecovery }, { status: 400 });
-    const handoffRecovery = nativeHandoffRecovery(error);
-    if (handoffRecovery) return Response.json({ error: handoffRecovery }, { status: 400 });
-    const projectionRecovery = nativeProjectionRecovery(error);
-    if (projectionRecovery) return Response.json({ error: projectionRecovery }, { status: 400 });
-    // A bounded Native-history bootstrap is a recoverable *context* limit,
-    // not a transient network outage. Do not turn it into an opaque 409 or
-    // replay the already-retired Native turn. No private exception payloads
-    // or historical text are returned to the caller.
-    const continuityRecovery = webContinuityRecovery(error);
-    if (continuityRecovery) return Response.json({ error: continuityRecovery }, { status: 400 });
-    const historyRecovery = nativeHistoryRecovery(error);
-    if (historyRecovery) {
-      // Keep the HTTP and already-started SSE recovery decisions identical;
-      // neither transport may repeat a private Native exception. Native retries
-      // UnexpectedStatus (including 422) despite retryable:false; InvalidRequest
-      // is terminal and leaves the same typed user recovery available.
-      return Response.json({
-        error: {
-          ...historyRecovery,
-        },
-      }, { status: 400 });
-    }
-    if (record(error)?.code === "tela_native_turn_already_retired") {
-      // Native retries UnexpectedStatus (409) but treats InvalidRequest (400) as terminal.
-      return Response.json({
-        error: {
-          type: "invalid_request_error",
-          code: "tela_native_turn_already_retired",
-          retryable: false,
-          message: "This Native turn is already retired. Repeating it cannot resume the interrupted operation. Continue with a new, explicitly authorized Native turn, reusing verified context and reconciling any uncertain operation first.",
-          recovery: {
-            kind: "authorized_native_continuation",
-            requires_user_action: true,
-            requires_new_native_turn: true,
-            requires_new_conversation: false,
-            reuse_verified_context_first: true,
-            prior_execution_settled: "unknown",
-          },
-        },
-      }, { status: 400 });
-    }
-    if (record(error)?.code === "tela_native_response_cycle_conflict") {
-      return Response.json({ error: { type: "invalid_request_error",
-        code: "tela_native_response_cycle_conflict", retryable: false,
-        message: "This completed response cycle has no proven new input. Do not retry it; continue with a new authorized turn and verified context.",
-      } }, { status: 400 });
-    }
-    if (record(error)?.code === "tela_native_tool_result_missing") {
-      // A repeat cannot supply the missing output; return a terminal client error
-      // rather than triggering Native's automatic retry of HTTP 409.
-      return Response.json({ error: {
-        type: "invalid_request_error", code: "tela_native_tool_result_missing", retryable: false,
-        message: "The delivered Native tool call has no matching result in this continuation. Reconcile the original tool outcome before continuing.",
-      } }, { status: 400 });
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    // Execution failures retire their Native turn. A reconnect cannot resume it;
-    // Native retries HTTP 409 and then replaces the original failure with retirement.
-    return Response.json({
-      error: {
-        type: "invalid_request_error",
-        retryable: false,
-        // Only this Tela-owned semantic failure may invalidate a Web catalog across HTTP.
-        ...(record(error)?.code === "tela_web_model_unavailable" ? { code: "tela_web_model_unavailable" } : {}),
-        message,
-      },
-    }, { status: 400 });
+    // A late SSE failure already committed HTTP 200; a subsequent replay
+    // returns the same public cause as a terminal HTTP 400 without re-execution.
+    return Response.json({ error: nativeFailure(error).error }, { status: 400 });
   }
 
   return responseForOutcome({

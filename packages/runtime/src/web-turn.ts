@@ -1,4 +1,4 @@
-import { WebContextFitFailed, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
+import { WebProviderResponseFailed, WebContextFitFailed, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { capturePrivateDiagnosticValue, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
@@ -267,7 +267,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
         return event.answer;
       }
 
-      throw new Error(`Web turn failed: ${event.detail}`);
+      throw new WebProviderResponseFailed(event.detail);
       }
     } finally {
       // Cancels only this turn's outstanding provider observation, not the

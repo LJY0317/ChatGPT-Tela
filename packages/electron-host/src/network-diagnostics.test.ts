@@ -30,13 +30,18 @@ test("shared renderer network observation records failure boundaries without URL
       failed!({ ...request, error: "net::ERR_CONNECTION_RESET" });
     });
     expect(rows.at(-1)).toMatchObject({ stage: "renderer_request_failed", domain_class: "chatgpt",
-      route_class: "provider_api", failure_class: "err_connection_reset", surface_correlated: true,
+      route_class: "provider_api", route_fingerprint: diagnosticFingerprint("/backend-api/private-conversation"), failure_class: "err_connection_reset", surface_correlated: true,
       surface_fingerprint: diagnosticFingerprint("second") });
     expect(rows.at(-1)).not.toHaveProperty("request_fingerprint");
     completed!({ ...request, statusCode: 429 });
     expect(rows.at(-1)).toMatchObject({ stage: "renderer_http_failed", http_status: 429 });
     completed!({ ...request, statusCode: 503 });
     expect(rows.at(-1)).toMatchObject({ http_status: 503 });
+    const route = rows.at(-1)!.route_fingerprint;
+    completed!({ ...request, url: "https://chatgpt.com/backend-api/private-conversation?token=different-secret", statusCode: 429 });
+    expect(rows.at(-1)!.route_fingerprint).toBe(route);
+    completed!({ ...request, url: "https://chatgpt.com/backend-api/other-request", statusCode: 429 });
+    expect(rows.at(-1)!.route_fingerprint).not.toBe(route);
     const count = rows.length;
     completed!({ ...request, statusCode: 200 });
     failed!({ ...request, resourceType: "image", error: "net::ERR_ABORTED" });

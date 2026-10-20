@@ -39,6 +39,7 @@ async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean
   let nativeStops = 0;
   let browserStops = 0;
   let creations = 0;
+  const surfaceObserverOwners: Set<() => void>[] = [];
   let nativeRequests = 0;
   let webGenerations = 0;
   let dispatchCalls = 0;
@@ -112,6 +113,8 @@ async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean
         if (fail === "generation") throw new ChatGptWebModelUnavailableError();
         registered.channel.markSubmitted(); registered.channel.markAccepted(); registered.channel.complete("mock Web reply");
       });
+      const surfaceObservers = new Set<() => void>();
+      surfaceObserverOwners.push(surfaceObservers);
       const responses = await startLocalResponsesServer({ gateway, ...options.responses });
       lastBrowserResponses = responses;
       return {
@@ -122,7 +125,7 @@ async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean
         } },
         async stop() { browserStops++; input.onBrowserStopped?.(); await responses.stop(); await gateway.close(); },
         bridgeSurfaces: () => ({ revision: 0, surfaces: [] }),
-        onBridgeSurfacesChanged: () => () => {},
+        onBridgeSurfacesChanged(listener: () => void) { surfaceObservers.add(listener); return () => { surfaceObservers.delete(listener); }; },
         async prepareChatGptWebSession(preparation: import("./profile-control").ChatGptWebPreparationOptions) {
           if (fail === "login") throw new ChatGptWebLoginRequiredError();
           preparation.onProfile({ capabilities: { observed: new Set(["composer", "send"]) }, account: { accountFingerprint: fail === "account" ? "b".repeat(64) : "a".repeat(64), accountStructure: "personal", containerFingerprint: "fixture" } });
@@ -182,7 +185,7 @@ async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean
   try { runtime = await startNativeFirstProductProfileRuntime(config, options); }
   catch (error) { rmSync(root, { recursive: true, force: true }); throw error; }
   return {
-    runtime, gate, order, generationGate, generationStarted,
+    runtime, gate, order, generationGate, generationStarted, surfaceObserverOwners,
     async breakTransport() { await lastBrowserResponses?.stop(); },
     get nativeStops() { return nativeStops; }, get browserStops() { return browserStops; },
     get creations() { return creations; }, get nativeRequests() { return nativeRequests; }, get webGenerations() { return webGenerations; },
@@ -580,16 +583,16 @@ test("one in-process dispatch failure preserves admission and does not replay un
   } finally { await f.cleanup(); }
 });
 
-test("failed Web preparation permits explicit browser-only reconnect without replay", async () => {
+test("one failed Web generation preserves admission and permits explicit browser-only reconnect without replay", async () => {
   const f = await fixture({ fail: "generation" });
   try {
     await f.runtime.prepareWeb();
     const response = await f.post(model);
     expect(response.status).not.toBe(200);
     expect(await response.text()).toContain("tela_web_model_unavailable");
-    expect(f.runtime.webState).toBe("failed");
-    expect(f.runtime.webModelIds).toEqual([]);
-    expect((await f.catalog()).models.some((row: { slug: string }) => row.slug === model)).toBe(false);
+    expect(f.runtime.webState).toBe("ready");
+    expect(f.runtime.webModelIds).toEqual([model]);
+    expect((await f.catalog()).models.some((row: { slug: string }) => row.slug === model)).toBe(true);
     expect(f.webGenerations).toBe(1);
     expect((await f.post("native-fixture")).status).toBe(200);
     f.fix();
@@ -816,4 +819,25 @@ test("signed-out Web exposes login-required while Native keeps working, then own
     expect(f.runtime.webModelIds).toEqual([model]);
     expect(f.nativeStops).toBe(0);
   } finally { await f.cleanup(); }
+});
+
+
+test("metadata subscriptions survive replacement of the Web runtime without retaining its old host", async () => {
+  const f = await fixture();
+  let notifications = 0;
+  const detach = f.runtime.onBridgeSurfacesChanged(() => { notifications++; });
+  try {
+    await f.runtime.waitForWeb();
+    const before = f.runtime.bridgeSurfaces().revision;
+    expect(f.surfaceObserverOwners[0]?.size).toBe(1);
+    await f.runtime.reconnectWeb();
+    expect(f.surfaceObserverOwners[0]?.size).toBe(0);
+    expect(f.surfaceObserverOwners[1]?.size).toBe(1);
+    expect(f.runtime.bridgeSurfaces().revision).toBeGreaterThan(before);
+    expect(notifications).toBeGreaterThan(0);
+    const current = f.runtime.bridgeSurfaces().revision;
+    for (const notify of f.surfaceObserverOwners[1]!) notify();
+    expect(f.runtime.bridgeSurfaces().revision).toBe(current + 1);
+  } finally { detach(); await f.cleanup(); }
+  expect(f.surfaceObserverOwners[1]?.size).toBe(0);
 });

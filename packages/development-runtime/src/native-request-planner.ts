@@ -80,6 +80,9 @@ export interface NativeRequestContextProjection {
   readonly protectedRevisionIds: readonly string[];
   /** Verified Native Goal state, allowing its developer-only continuation suffix. */
   readonly currentGoalStatus?: string;
+  readonly currentGoalObservationId?: string;
+  /** Last canonical input revision before the ephemeral current Goal observation. */
+  readonly inputAnchorId: string;
   /** Ephemeral exact-request bytes, never checkpoint authority or a persisted context cache. */
   readonly media: readonly WebTurnMedia[];
 }
@@ -328,7 +331,10 @@ function retainedDelta(
       // committed answer boundary. Rebuild from canonical history.
       if (assistantIndex >= 0) return miss("ambiguous_answer_boundary");
       assistantIndex = index;
-    } else if (assistantIndex >= 0) {
+    } else if (assistantIndex >= 0 && !(
+      kind === "tool-result" && index === projection.revisions.length - 1
+      && projection.revisions[index]!.revision.id === projection.currentGoalObservationId
+    )) {
       // A later tool event after a purported final answer is not proven to
       // exist on the retained physical Web page.
       return miss("events_after_answer");
@@ -485,6 +491,8 @@ export function projectNativeRequestContext(
   if (currentNativeGoal && currentNativeGoalState) {
     throw new Error("Native goal observation is contradictory");
   }
+  /* The current Goal observation is appended after canonical input below. */
+  const appendCurrentGoal = (): void => {
   if (currentNativeGoal) {
     if (currentNativeGoal.threadId !== taskId) throw new Error("Native current goal belongs to a different thread");
     // Goal text is ordinary Native-owned task data, not a high-priority system
@@ -511,6 +519,7 @@ export function projectNativeRequestContext(
     }));
     protectedRevisionIds.push(projected.at(-1)!.revision.id);
   }
+  };
 
   if (typeof body.input === "string") {
     append("user", body.input);
@@ -629,6 +638,10 @@ export function projectNativeRequestContext(
   } else if (body.input !== undefined) {
     throw new Error("Native request input must be a string or array");
   }
+  const inputAnchorId = projected.at(-1)?.revision.id;
+  appendCurrentGoal();
+  const currentGoalObservationId = currentNativeGoal || currentNativeGoalState
+    ? projected.at(-1)?.revision.id : undefined;
 
   // Native can prepare/replace original image input before constructing its
   // Responses body. Public turn/start ingress retained the exact bytes before
@@ -681,6 +694,8 @@ export function projectNativeRequestContext(
     revisions,
     lineage,
     headId: revisions.at(-1)!.revision.id,
+    inputAnchorId: inputAnchorId ?? revisions.at(-1)!.revision.id,
+    ...(currentGoalObservationId ? { currentGoalObservationId } : {}),
     protectedRevisionIds: Object.freeze(protectedRevisionIds),
     ...(currentNativeGoal ? { currentGoalStatus: currentNativeGoal.status } : {}),
     media: Object.freeze(projectedMedia),
@@ -1044,7 +1059,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         }),
         settle: settleOwnedContext({
           threadId, pending, webEpochId: committed.webEpochId,
-          inputHeadRevisionId: projection.headId, routeIdentity: currentRouteIdentity,
+          inputHeadRevisionId: projection.inputAnchorId, routeIdentity: currentRouteIdentity,
           previousResidentTokens: committed.estimatedResidentTokens,
           oversizedFreshSeed: committed.oversizedFreshSeed,
           inputTokens: physicalContext.transferTokens + 1_024,
@@ -1307,7 +1322,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       }),
       settle: settleOwnedContext({
         threadId, pending, webEpochId: epochId,
-        inputHeadRevisionId: projection.headId, routeIdentity: currentRouteIdentity,
+        inputHeadRevisionId: projection.inputAnchorId, routeIdentity: currentRouteIdentity,
         previousResidentTokens: 0,
         oversizedFreshSeed: !!physicalLimits && physicalContext.transferTokens >= physicalLimits.rolloverTokenLimit,
         inputTokens: physicalContext.transferTokens + 1_024,

@@ -37,12 +37,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure }, null, 2));
     return;
   }
-  if (subcommand === "retire") {
-    store.retire(option("--job"));
-    console.log(JSON.stringify({ status: "retired" }));
-    return;
-  }
-  if (subcommand !== "start" && subcommand !== "continue" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|capacity|start|continue|status|result|reconcile|retire>");
+  if (subcommand !== "start" && subcommand !== "continue" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|capacity|start|continue|status|result|reconcile>");
   const selectedJob = subcommand === "reconcile" ? store.get(option("--job")) : undefined;
   if (subcommand === "reconcile" && !selectedJob) throw Error("Web job was not found");
   const continuation = subcommand === "continue" ? store.get(option("--job")) : undefined;

@@ -1,12 +1,8 @@
-import { webContextFitRecovery } from "./web-context-fit-recovery";
-import { nativeHandoffRecovery } from "./native-handoff-recovery";
+import { nativeFailure } from "./native-failure";
 import { randomBytes } from "node:crypto";
 import type { NativeGatewayOutcome, NativeResponsesGateway } from "@chatgpt-tela/runtime";
 import { encodeNativeResponsesOutcome, nativeResponsesSsePlan } from "./protocol";
 import { diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
-import { nativeHistoryRecovery } from "./native-history-recovery";
-import { webContinuityRecovery } from "./web-continuity-recovery";
-import { nativeProjectionRecovery } from "./native-projection-recovery";
 
 /** A request-local, bounded presentation stream. Only pulled outcome frames commit execution. */
 export class NativeProgressStream {
@@ -17,7 +13,7 @@ export class NativeProgressStream {
   readonly #itemId = `rs_tela_${randomBytes(18).toString("base64url")}`;
   readonly #frames: Array<{ text: string; commit?: () => void; progress?: {
     index: number; characters: number; context: ReturnType<typeof diagnosticContext>;
-  }; completion?: "summary_part" | "reasoning_item" | "response" }> = [];
+  }; completion?: "summary_part" | "reasoning_item" | "response" | "failure" }> = [];
   readonly #summaries: string[] = [];
   readonly #diagnostics = diagnosticContext();
   #pulledFrames = 0;
@@ -26,6 +22,7 @@ export class NativeProgressStream {
   #pulledSummaryParts = 0;
   #pulledReasoningItems = 0;
   #pulledCompletedResponses = 0;
+  #pulledFailedResponses = 0;
   #chars = 0;
 
   #recordDelivery(reason: string): void {
@@ -37,6 +34,7 @@ export class NativeProgressStream {
       completed_summary_part_count: this.#pulledSummaryParts,
       completed_reasoning_item_count: this.#pulledReasoningItems,
       completed_response_count: this.#pulledCompletedResponses,
+      failed_response_count: this.#pulledFailedResponses,
       delivery: "http_body_consumer", ui_observed: false, summary_count: this.#summaries.length, progress_characters: this.#chars,
       pulled_frame_count: this.#pulledFrames, pulled_summary_count: this.#pulledSummaries,
       queued_frame_count: this.#frames.length, producer_ended: this.#ended,
@@ -59,7 +57,8 @@ export class NativeProgressStream {
     this.#frames.push({ text: `event: ${name}\ndata: ${JSON.stringify({ type: name,
       sequence_number: this.#sequence++, ...fields })}\n\n`,
       ...(name === "response.reasoning_summary_part.done" ? { completion: "summary_part" as const }
-        : name === "response.output_item.done" ? { completion: "reasoning_item" as const } : {}) });
+        : name === "response.output_item.done" ? { completion: "reasoning_item" as const }
+        : name === "response.failed" ? { completion: "failure" as const } : {}) });
     this.#wake?.();
   }
 
@@ -121,27 +120,11 @@ export class NativeProgressStream {
 
   fail(error: unknown): void {
     if (this.#ended || this.signal.signal.aborted) return;
-    const projectionRecovery = nativeProjectionRecovery(error);
-    const handoffRecovery = nativeHandoffRecovery(error);
-    const fitRecovery = webContextFitRecovery(error);
-    const recovery = fitRecovery ?? handoffRecovery ?? projectionRecovery ?? webContinuityRecovery(error) ?? nativeHistoryRecovery(error);
-    if (recovery) {
-      // HTTP status is already committed as 200 once an SSE progress frame
-      // leaves. Preserve typed nonretryable recovery in response.failed.
-      // The exception itself may contain private Native history or tool text.
-      emitDiagnosticEvent("chatgpt_tela_work", "native_context_recovery_streamed", {
-        reason_class: fitRecovery ? "physical_context_fit_failed" : recovery.code === "tela_web_observation_unproven" ? "web_observation_unproven" : recovery.code === "tela_native_context_checkpoint_required" ? "source_exceeds_web_budget" : recovery.code === "tela_web_submission_unproven" ? "web_submission_unproven" : recovery.code === "tela_web_retained_context_unproven" ? "retained_context_unproven" : handoffRecovery ? "handoff_proof_unavailable" : projectionRecovery ? "request_projection_unsupported" : recovery.recovery.kind === "continue_on_native"
-          ? "history_mode_unindexed" : "history_bootstrap_required",
-        transport_phase: "sse_after_progress",
-      });
-    }
-    this.#event("response.failed", { response: this.#envelope("failed", [], {
-      ...(recovery ?? {
-        code: "chatgpt_tela_runtime_error",
-        retryable: false,
-        message: error instanceof Error ? error.message : String(error),
-      }),
-    }) });
+    const failure = nativeFailure(error);
+    if (failure.recoveryReason) emitDiagnosticEvent("chatgpt_tela_work", "native_context_recovery_streamed", {
+      reason_class: failure.recoveryReason, transport_phase: "sse_after_progress",
+    });
+    this.#event("response.failed", { response: this.#envelope("failed", [], { code: "chatgpt_tela_runtime_error", ...failure.error }) });
     this.#frames.push({ text: "data: [DONE]\n\n" });
     this.#ended = true;
     this.#wake?.();
@@ -178,6 +161,7 @@ export class NativeProgressStream {
           if (frame.completion === "summary_part") this.#pulledSummaryParts++;
           else if (frame.completion === "reasoning_item") this.#pulledReasoningItems++;
           else if (frame.completion === "response") this.#pulledCompletedResponses++;
+          else if (frame.completion === "failure") this.#pulledFailedResponses++;
           if (frame.progress) this.#pulledSummaries++;
           if (frame.progress) withDiagnosticContext(frame.progress.context, () =>
             emitDiagnosticEvent("chatgpt_tela_work", "public_progress_sse_pulled", {

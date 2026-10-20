@@ -1286,17 +1286,17 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private func revealSelectedBridge(interactive: Bool) {
     guard let id = selectedBridgeSurface, let slot = selectedPreviewSlot else { return }
     Task {
+      let message: String
       do {
         guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "TelaWork", code: 5) }
         _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/bridge-reveal", method: "POST", body: ["surfaceId": id, "interactive": interactive])
-        guard selectedBridgeSurface == id, selectedPreviewSlot == slot else { return }
-        bridgeMessage = interactive ? "Browser interaction enabled for this session. Closing its window returns to viewing mode." : "Browser opened for viewing. Choose Interact for approvals or login."
-        renderCurrentPage()
+        message = interactive ? "Browser interaction enabled. Close its window to return to viewing." : "Browser opened for viewing. Choose Interact for approvals or login."
       } catch {
-        bridgeMessage = "This Web session is no longer available. Refresh the session list."
-        bridgeImage = nil; selectedBridgeSurface = nil
-        renderCurrentPage()
+        message = "Couldn't open this Web session. Refresh to check its availability."
       }
+      guard selectedBridgeSurface == id, selectedPreviewSlot == slot else { return }
+      bridgeMessage = message
+      renderCurrentPage()
     }
   }
 
@@ -1773,7 +1773,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     }
     let slots = visible ? Set(profiles.filter { $0.controlState == "running" }.map { $0.slot }) : []
     let owners = Dictionary(uniqueKeysWithValues: profiles.map {
-      ($0.slot, "\($0.targetId ?? ""):\($0.desktopProcessId ?? 0)")
+      ($0.slot, "\($0.targetId ?? ""):\($0.childProcessId ?? $0.desktopProcessId ?? 0)")
     })
     for slot in Array(surfaceWatches.keys) where !slots.contains(slot) || surfaceOwners[slot] != owners[slot] {
       surfaceWatches.removeValue(forKey: slot)?.cancel()

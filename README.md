@@ -35,7 +35,7 @@ below and should not be confused with an installer-supported release.
 
 ## Separate managed Web delegations
 
-The source checkout supports `bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt` against an already running, signed-in Tela Work profile. Use `bun run cli web-delegate capacity --slot 1` to inspect managed-job occupancy, `result --job UUID` to retrieve a proven answer, and `retire --job UUID` only after reviewing a terminal result. Control Center Work displays this managed-only count; Settings selects independent per-profile concurrency limits from 1 to 5 (default 3). Direct Native conversations are outside this journal. See [Web delegation details](docs/web-delegation.md) for prerequisites, capacity and retention limits.
+The source checkout supports `bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt` against an already running, signed-in Tela Work profile. Use `bun run cli web-delegate capacity --slot 1` to inspect managed-job occupancy, `result --job UUID` to retrieve a proven answer. Control Center Work displays this managed-only count; Settings selects independent per-profile concurrency limits from 1 to 5 (default 3). Direct Native conversations are outside this journal. See [Web delegation details](docs/web-delegation.md) for prerequisites, capacity and result retention.
 
 ## Product goals
 
@@ -988,6 +988,8 @@ open the computer/cloud menu and check the selected execution location. **In the
 official cloud model service, which Tela does not extend, even when that chat can access local files.
 A ready Tela connection does not establish Web model availability in cloud chats. Existing cloud
 chats and their history remain under the official service's ownership.
+
+Work shows an expanded Web session list, grouped by profile only when multiple profiles are detected. Session creation, closure and title changes update this list while Work is visible; metadata updates never capture the page. Select a session for an on-demand snapshot. Hiding Work cancels the list subscriptions.
 
 The Work browser snapshot is intentionally **observation-only**. It never reveals/focuses the hidden Electron window
 and never sends mouse, keyboard, DOM, navigation, Stop, or other page actions. While exactly one Work/Codex

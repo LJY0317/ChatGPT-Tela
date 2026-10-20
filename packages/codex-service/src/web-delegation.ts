@@ -10,9 +10,9 @@ import { selectDelegationWebModel, type DelegationWebModel } from "./web-delegat
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RESULT_BYTES = 512 * 1024;
-const MAX_RETAINED_JOBS = 64;
-// Reserve the full supported range, even when the configured limit decreases.
-// Leases above the new limit continue to count until their exact terminal proof.
+// A reporting threshold, never an admission bound on retained results.
+const RECORD_REVIEW_THRESHOLD = 64;
+// Reserve the full supported range; lowering a limit never revokes an active lease.
 const MAX_PROFILE_TASKS = 5;
 export type WebDelegationCapacity = CodexWebDelegationCapacityContract;
 export type { WebDelegationBlockCode };
@@ -109,9 +109,13 @@ export interface WebDelegationRecord {
   readonly checkoutRoot?: string;
   readonly failure?: "owner_changed" | "transport_or_ack" | "turn_failed" | "result_unavailable";
 }
-/** One final-answer contract shared by live result, recovery and CLI delivery. */
+/** A proven final can be retrieved even when the Native turn itself failed.
+ * Failure remains failure; only completed jobs may authorize continuations. */
 export function verifiedWebDelegationAnswer(record: WebDelegationRecord): string | undefined {
-  return record.state === "completed" && record.finalEvidence && record.answer?.trim()
+  const deliverable = record.state === "completed"
+    || record.state === "failed" && record.failure === "turn_failed"
+      && record.finalEvidence === "explicit-final-phase";
+  return deliverable && record.finalEvidence && record.answer?.trim()
     ? record.answer : undefined;
 }
 
@@ -120,7 +124,7 @@ function checkoutRoot(cwd: string): string {
   try { return realpathSync(execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()); }
   catch { try { return realpathSync(cwd); } catch { return cwd; } }
 }
-/** Private user data, outside repositories/logs/releases. Hard capacity bounds retention without deleting results. */
+/** Private user data, outside repositories/logs/releases. Execution capacity is lease-based. */
 export class WebDelegationStore {
   readonly fingerprintKey: Uint8Array;
   constructor(readonly root: string, readonly limitForProfile: (slot: number) => number = () => 3) {
@@ -203,20 +207,17 @@ export class WebDelegationStore {
       if (checkoutRoot(job.cwd) !== checkoutRoot(cwd)) return false;
       return this.#legacyPermits(job.slot).some(path => this.#leaseOwner(path) === id);
     });
-    const blockCode: WebDelegationBlockCode | undefined = retained.length >= MAX_RETAINED_JOBS ? "CAPACITY_STORAGE_RECORDS"
-      : unsafeLease ? "UNCERTAIN_RESERVATION"
+    const blockCode: WebDelegationBlockCode | undefined = unsafeLease ? "UNCERTAIN_RESERVATION"
         : used >= limit ? "CAPACITY_TOTAL_PROFILE"
           : _mode === "write" && (checkoutLegacyConflict || checkout !== "free")
             ? checkout === "unknown" ? "UNCERTAIN_RESERVATION" : "CAPACITY_WRITER_CHECKOUT" : undefined;
     const statusKo = `프로필 ${slot}: 동시 작업 ${used}/${limit}`;
     const statusEn = `Profile ${slot}: concurrent jobs ${used}/${limit}`;
-    const reasonKo = blockCode === "CAPACITY_STORAGE_RECORDS" ? `보관 기록 ${retained.length}/64개로 가득 찼습니다. 완료 기록을 확인하고 개별 회수하세요.`
-      : blockCode === "UNCERTAIN_RESERVATION" ? "기존 작업의 종료가 불확실합니다. 해당 작업을 조회·복구하세요."
+    const reasonKo = blockCode === "UNCERTAIN_RESERVATION" ? "기존 작업의 종료가 불확실합니다. 해당 작업을 조회·복구하세요."
         : blockCode === "CAPACITY_WRITER_CHECKOUT" ? "이 작업 디렉터리에서 다른 쓰기 위임이 진행 중입니다."
           : blockCode ? "실행 한도에 도달했습니다. 진행 중인 작업이 끝난 후 다시 시도하세요."
             : "관리되는 슬롯이 사용 가능합니다. 실제 계정 준비 상태는 별도로 확인됩니다.";
-    const reasonEn = blockCode === "CAPACITY_STORAGE_RECORDS" ? `Retained records ${retained.length}/64 full; retire reviewed finished jobs individually.`
-      : blockCode === "UNCERTAIN_RESERVATION" ? "An earlier job is unresolved; inspect and reconcile it."
+    const reasonEn = blockCode === "UNCERTAIN_RESERVATION" ? "An earlier job is unresolved; inspect and reconcile it."
         : blockCode === "CAPACITY_WRITER_CHECKOUT" ? "Another write delegation holds this checkout."
           : blockCode ? "Concurrency limit reached; retry after active work finishes."
             : "Managed slot available; account readiness is checked separately.";
@@ -225,10 +226,12 @@ export class WebDelegationStore {
       policy: "configurable_tasks_one_writer_per_checkout_v3",
       uncertain: unknown,
       total: { used, limit },
-      records: { retained: retained.length, limit: MAX_RETAINED_JOBS }, available: !blockCode, ...(blockCode ? { blockCode } : {}),
+      // Keep the historical 'limit' field for v2 clients, but explicitly mark
+      // it advisory. Neither record count nor age releases or denies a lease.
+      records: { retained: retained.length, limit: RECORD_REVIEW_THRESHOLD, admissionBound: false },
+      available: !blockCode, ...(blockCode ? { blockCode } : {}),
       messageKo: `${statusKo}. ${reasonKo}`, messageEn: `${statusEn}. ${reasonEn}`,
-      nextAction: blockCode === "CAPACITY_STORAGE_RECORDS" ? "review_owned_finished_records"
-        : blockCode === "UNCERTAIN_RESERVATION" ? "inspect_and_reconcile_exact_job"
+      nextAction: blockCode === "UNCERTAIN_RESERVATION" ? "inspect_and_reconcile_exact_job"
           : blockCode ? "wait_for_active_job" : "start_if_profile_ready" };
   }
   #read(path: string, id: string): WebDelegationRecord | undefined {
@@ -241,9 +244,8 @@ export class WebDelegationStore {
   }
   get(id: string): WebDelegationRecord | undefined {
     const path = this.#path(id);
-    // Immutable terminal receipts win over late observer updates. A final can
-    // supersede a previously observed failure, but an old timeout cannot erase
-    // a proven answer. No separate result inbox or replay path is introduced.
+    // A proven final receipt wins over an earlier failure receipt, including
+    // when the exact Native turn remains failed. Late observers cannot erase it.
     return this.#read(`${path}.completed`, id) ?? this.#read(`${path}.failed`, id) ?? this.#read(path, id);
   }
   reserve(record: WebDelegationRecord): void {
@@ -311,7 +313,11 @@ export class WebDelegationStore {
   save(record: WebDelegationRecord): WebDelegationRecord {
     const current = this.get(record.id);
     if (!current) throw Error("Web job was not reserved");
-    if (verifiedWebDelegationAnswer(current) || this.#terminal(current) && !verifiedWebDelegationAnswer(record)) {
+    const upgradedFailedFinal = current.state === "failed" && current.failure === "turn_failed"
+      && !verifiedWebDelegationAnswer(current) && record.state === "failed"
+      && record.failure === "turn_failed" && record.turnId === current.turnId
+      && record.threadId === current.threadId && Boolean(verifiedWebDelegationAnswer(record));
+    if (verifiedWebDelegationAnswer(current) || this.#terminal(current) && !upgradedFailedFinal) {
       this.#release(current);
       return current;
     }
@@ -323,6 +329,8 @@ export class WebDelegationStore {
         // link() publishes a *complete* terminal record once, atomically and
         // without replacing another process's receipt. The base snapshot can
         // still change, but get() always prefers the immutable terminal proof.
+        // The historical .completed suffix denotes a final-bearing receipt;
+        // the record's state remains authoritative for failed Native turns.
         const terminal = `${path}.${verifiedWebDelegationAnswer(record) ? "completed" : "failed"}`;
         try { linkSync(temporary, terminal); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
@@ -332,24 +340,17 @@ export class WebDelegationStore {
     this.#release(settled);
     return settled;
   }
-  /** Explicit, exact-job retirement only. Native conversations are never modified. */
-  retire(id: string): void {
-    const record = this.get(id);
-    if (!record || !this.#terminal(record)) throw Error("Only proven terminal Web jobs can be retired");
-    this.#release(record);
-    if (readdirSync(this.root).some(name => name.endsWith(".lease")
-      && this.#leaseOwner(join(this.root, name)) === id)) {
-      throw Error("Web job still holds a reservation");
-    }
-    const path = this.#path(id);
-    const files = [path, `${path}.completed`, `${path}.failed`];
-    for (const file of files) this.#read(file, id);
-    for (const file of files) if (existsSync(file)) unlinkSync(file);
-  }
+
 }
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+function indexedMessages(items: readonly unknown[]): { text: string; phase?: string }[] {
+  return items.map(object)
+    .filter(item => item?.type === "agentMessage" && typeof item.text === "string")
+    .map(item => ({ text: item!.text as string,
+      ...(typeof item!.phase === "string" ? { phase: item!.phase } : {}) }));
 }
 export interface WebDelegationAdapters {
   owner(slot: number): Promise<{ binding: LocalProfileBinding; session: TrustedNativeProfileSession }>;
@@ -425,7 +426,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
   if (mode !== "read" && mode !== "write") throw Error("Invalid Web delegation mode");
   const owner = await adapters.owner(input.slot);
   const parent = input.parentJobId ? adapters.store.get(input.parentJobId) : undefined;
-  if (input.parentJobId && (!parent || !verifiedWebDelegationAnswer(parent)
+  if (input.parentJobId && (!parent || parent.state !== "completed" || !verifiedWebDelegationAnswer(parent)
     || !parent.threadId || !parent.turnId || parent.slot !== input.slot
     || parent.cwd !== input.cwd || (parent.mode ?? "read") !== mode || !sameAccountOwner(parent, owner))) {
     throw Error("Continuation requires a completed, owned Web job with the same sandbox mode in this checkout");
@@ -493,7 +494,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     void done.catch(() => {});
     const messages = new Map<string, { text: string; phase?: string }>();
     const pending: Array<[string, Record<string, unknown>]> = [];
-    let toolItems = 0, turnId: string | undefined, eventCount = 0;
+    let toolItems = 0, turnId: string | undefined, eventCount = 0, reportedStatus: string | undefined;
     const resultItems = new Set<string>();
     const accept = (method: string, event: Record<string, unknown>) => {
       if (event.threadId !== record!.threadId) return;
@@ -518,6 +519,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       if (method === "turn/completed") {
         const turn = object(event.turn);
         if (turn?.id !== turnId) return;
+        reportedStatus = typeof turn.status === "string" ? turn.status : undefined;
         if (turn.status === "completed") resolveDone(); else rejectDone(Error("Web job turn failed"));
       }
     };
@@ -544,9 +546,30 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       update({ turnId, state: "running" });
       for (const [method, event] of pending) accept(method, event);
       pending.length = 0;
-      await done;
+      try { await done; }
+      catch (error) {
+        if (reportedStatus === "failed" && error instanceof Error && error.message === "Web job turn failed") {
+          const final = completedAnswer([...messages.values()]);
+          if (final?.finalEvidence === "explicit-final-phase") {
+            record = { ...record!, ...final, taskOutcome: "unassessed",
+              toolItems, toolItemCoverage: "live-events", toolResultItems: resultItems.size, toolResultCoverage: "live-events" };
+          }
+        }
+        throw error;
+      }
       await prove();
-      const completed = completedAnswer([...messages.values()]);
+      let completed = completedAnswer([...messages.values()]);
+      if (!completed) {
+        // Missing live item notifications do not prove that a completed turn
+        // lacked a final. Read the exact indexed turn before releasing its lease.
+        const turn = await findDelegatedTurn(rpc, record.threadId!, turnId!, input.signal);
+        await prove();
+        if (turn?.status !== "completed" || !Array.isArray(turn.items) || turn.items.length > 120) {
+          throw Error("Web job indexed completion is not proven");
+        }
+        completed = completedAnswer(indexedMessages(turn.items));
+      }
+      if (completed && Buffer.byteLength(completed.answer) > MAX_RESULT_BYTES) completed = undefined;
       if (!completed) throw Error("Web job completed without a proven final answer");
       update({ state: "completed", taskOutcome: "unassessed", ...completed,
         toolItems, toolItemCoverage: "live-events", toolResultItems: resultItems.size, toolResultCoverage: "live-events" });
@@ -591,22 +614,27 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
       record = adapters.store.save({ ...prior, turnId: turn.id as string, state: "running" });
     }
     if (turn.status === "inProgress") return record;
-    if (turn.status === "failed" || turn.status === "interrupted") {
-      return adapters.store.save({ ...record, state: "failed", failure: "turn_failed" });
+    if (turn.status !== "completed" && turn.status !== "failed" && turn.status !== "interrupted") {
+      throw Error("Web job completion is not proven");
     }
-    if (turn.status !== "completed" || !Array.isArray(turn.items) || turn.items.length > 120) throw Error("Web job completion is not proven");
-    const items = turn.items.map(object);
-    const messages = items.filter(item => item?.type === "agentMessage" && typeof item.text === "string");
-    const completed = completedAnswer(messages.filter((item): item is Record<string, unknown> =>
-      item !== undefined).map(item => ({
-      text: item.text as string, ...(typeof item.phase === "string" ? { phase: item.phase } : {}),
-    })));
-    if (!completed || Buffer.byteLength(completed.answer) > MAX_RESULT_BYTES) throw Error("Web final answer is not bounded and proven");
-    return adapters.store.save({ ...record, state: "completed", taskOutcome: "unassessed", ...completed,
+    const items = Array.isArray(turn.items) && turn.items.length <= 120 ? turn.items.map(object) : undefined;
+    if (turn.status === "completed" && !items) throw Error("Web job completion is not proven");
+    const completed = items ? completedAnswer(indexedMessages(items)) : undefined;
+    const final = completed && Buffer.byteLength(completed.answer) <= MAX_RESULT_BYTES ? completed : undefined;
+    const observations = items ? {
       toolItems: Math.max(record.toolItems ?? 0, items.filter(item => typeof item?.type === "string" && TOOL_ITEM_TYPES.has(item.type)).length),
       toolItemCoverage: record.toolItemCoverage ?? "history-summary",
       toolResultItems: Math.max(record.toolResultItems ?? 0, items.filter(item => hasNativeToolResult(item, false)).length),
       toolResultCoverage: record.toolResultCoverage ?? "history-summary",
-    });
+    } as const : {};
+    if (turn.status === "failed" || turn.status === "interrupted") {
+      return adapters.store.save({ ...record, ...observations, state: "failed", failure: "turn_failed",
+        ...(turn.status === "failed" && final?.finalEvidence === "explicit-final-phase"
+          ? { ...final, taskOutcome: "unassessed" as const } : {}) });
+    }
+    // Both live and recovery paths release the permit only after the exact
+    // completed turn's bounded indexed items prove no deliverable final.
+    if (!final) return adapters.store.save({ ...record, ...observations, state: "failed", failure: "result_unavailable" });
+    return adapters.store.save({ ...record, ...observations, state: "completed", taskOutcome: "unassessed", ...final });
   } finally { try { await rpc.close(); } catch { /* Preserve a proven recovery result. */ } }
 }

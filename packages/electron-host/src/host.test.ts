@@ -450,3 +450,19 @@ test("renderer stall records whether a human hit-test was pending, without any p
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+
+test("title metadata is current during Electron title events and detaches on release", async () => {
+  const window = new FakeWindow();
+  const host = createElectronBrowserHost({ profileId: "title-fixture", createWindow: () => window });
+  const labels: string[] = [];
+  const detach = host.onSurfacesChanged(() => { labels.push(host.listSurfaces()[0]?.label ?? "ended"); });
+  const lease = await host.acquire({ taskId: "title", epochId: "one" });
+  window.webContents.emit("page-title-updated", {}, "An updated title");
+  window.webContents.emit("page-title-updated", {}, "An updated title");
+  expect(labels).toEqual(["Web session 1", "An updated title"]);
+  await host.release(lease.leaseId);
+  expect(window.webContents.listeners.get("page-title-updated")?.size).toBe(0);
+  expect(labels.at(-1)).toBe("ended");
+  detach(); await host.close();
+});

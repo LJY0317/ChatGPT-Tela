@@ -35,6 +35,7 @@ struct TelaWorkProfile: Decodable, Equatable {
   let controlState: String
   var targetId: String? = nil
   var desktopProcessId: Int? = nil
+  var childProcessId: Int? = nil
   var connectionInProgress: Bool? = nil
   var webModelsReady: Bool? = nil
   var webState: String? = nil

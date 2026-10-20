@@ -1273,7 +1273,13 @@ introduced. A connect syscall refines an otherwise ambiguous ETIMEDOUT phase.
 
 Public progress stream diagnostics include rejection reasons, producer completion,
 queued/pulled frame and summary counts, and drained versus consumer-cancelled closure.
-These establish the local HTTP consumption boundary, not a desktop UI render receipt.
+These establish the local HTTP consumption boundary, not a desktop UI render receipt. Failure-frame consumption is counted
+separately from successful completion. Provider-declared failures retain a fixed
+`tela_web_provider_response_failed` classification across HTTP, progressed SSE and
+retired replays; the original provider prose stays in opt-in private evidence.
+Renderer failure records also include a query-free path fingerprint, allowing
+repeated API routes to be distinguished without storing the URL or its query.
+This does not identify a request as the answer stream or establish why it failed.
 
 ### Native outgoing connection trace
 
