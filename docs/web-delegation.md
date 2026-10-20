@@ -31,7 +31,11 @@ a proven final result. A completed execution is reported separately from
 requested-task success (`taskOutcome: unassessed` until an explicit outcome contract exists). An explicit
 final failure/partial/blockage report must not be counted as task success. Older records without final
 evidence cannot be returned as verified results. It never sends the prompt again. Lost creation/submission acknowledgements
-without an exact turn identity remain uncertain and require inspection.
+without an exact turn identity remain uncertain and require inspection. For a
+fresh dedicated thread with exactly one indexed turn, reconciliation can recover
+a lost first-turn acknowledgement when its single user text hashes to the
+persisted submitted prompt. Ambiguous history, a continuation, or any input
+mismatch preserves uncertainty and never resubmits a request.
 
 Tool counts describe observed supported Native items, including collaboration calls. Their coverage
 is reported as live events, limited history summary, or unverified for older records. Zero is never
@@ -61,6 +65,11 @@ within the same Native conversation. These are local managed-job limits, not Web
 provider quotas. The physical Git worktree root is the writer identity even when
 callers choose different subdirectories. Multiple tasks may write concurrently in
 different worktrees; only one may hold writer ownership within a worktree.
+Read-only tasks can share a checkout with its active writer, subject to the
+profile's three-task limit. Another writer is still excluded.
+Read-only tasks may share a checkout with its writer when the profile has a
+free task permit. Writer checkout contention applies only to new writers;
+same-thread continuation exclusivity is enforced separately.
 Legacy read-only jobs and their lease files remain readable and count against the
 three total permits until terminal recovery. An old read-only thread cannot be
 silently upgraded to write authority. There is no queue.
@@ -73,8 +82,12 @@ job and immutable result stay intact. The returned child ID is used for status,
 result, reconcile, and another continuation. It does not create a new agent,
 thread, or duplicate the finished turn. Native/Web session reuse depends on the
 same owner and active terminal endpoint; mismatched identity fails closed.
-Reconstructing an expired or changed session is not supported; no history is
-silently re-injected, so the injection cost is zero for accepted continuations.
+After a runtime replacement, the current session must prove the same persisted
+account and profile, and the exact parent turn must still be completed in the
+current owner's bounded indexed history. Recovery reads the exact delegated turn
+through the newly proven endpoint and rechecks account and session stability;
+it never silently injects history or resubmits the old prompt. A changed login,
+missing original thread, or ambiguous result remains unresolved.
 Recreating it would require a new explicit task and a separately measured context
 budget. An acknowledgement loss remains uncertain and must be reconciled before
 any continuation.
@@ -113,6 +126,16 @@ Job records and results are private product data under the Codex service state d
 restricted filesystem permissions. A hard capacity of 64 records bounds storage; it does not
 silently discard results. Do not put these records, prompts, keys or results in a repository or
 release. This source version does not yet provide a complete removal lifecycle. Successful continuation is covered by source fixtures; a live model continuation has not been exercised in this change.
+
+Continuations inherit their parent's profile and read-only or workspace-write mode.
+They cannot promote an existing read-only thread to writing. Historical job
+records without a corresponding lease remain available for exact recovery but
+do not consume admission capacity or fence independent jobs. Held or unknown
+leases still retain their reservation pending exact resolution.
+An active continuation holds an exclusive permit for its Native thread, even
+when both tasks are read-only. A second continuation is refused until the first
+is proven terminal. Setup failures before `turn/start` release their permits;
+after a submission attempt, uncertain acknowledgements remain reserved.
 
 ## Browser and permissions
 

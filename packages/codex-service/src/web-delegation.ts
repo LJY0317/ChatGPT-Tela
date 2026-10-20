@@ -149,6 +149,10 @@ export class WebDelegationStore {
   #legacyCheckoutPermit(cwd: string): string {
     return join(this.root, `writer-checkout-${createHash("sha256").update(cwd).digest("hex")}.lease`);
   }
+  #threadPermit(threadId: string): string {
+    if (!UUID.test(threadId)) throw Error("Invalid continuation thread ID");
+    return join(this.root, `continuation-thread-${threadId}.lease`);
+  }
   #retained(): string[] { return readdirSync(this.root).filter(name => name.endsWith(".json")); }
   #leaseOwner(path: string): "free" | "unknown" | string {
     if (!existsSync(path)) return "free";
@@ -166,24 +170,19 @@ export class WebDelegationStore {
     const saved = this.get(record.id);
     if (!saved || !this.#terminal(saved) || saved.slot !== record.slot) return;
     const paths = [...this.#permits(record.slot), ...this.#legacyPermits(record.slot),
-      ...(record.mode === "write" ? [this.#checkoutPermit(record.checkoutRoot ?? record.cwd), this.#legacyCheckoutPermit(record.cwd)] : [])];
+      ...(record.mode === "write" ? [this.#checkoutPermit(record.checkoutRoot ?? record.cwd), this.#legacyCheckoutPermit(record.cwd)] : []),
+      ...(record.parentJobId && record.threadId ? [this.#threadPermit(record.threadId)] : [])];
     for (const path of paths) if (this.#leaseOwner(path) === record.id) unlinkSync(path);
   }
   capacity(slot: number, _mode: WebDelegationMode = "write", cwd?: string): WebDelegationCapacity {
     const modern = this.#permits(slot).map(path => this.#leaseOwner(path));
     const legacy = this.#legacyPermits(slot).map(path => this.#leaseOwner(path));
     const all = [...modern, ...legacy], retained = this.#retained();
-    const held = new Set(all.filter(id => id !== "free" && id !== "unknown"));
     const unknown = all.filter(id => id === "unknown" || id !== "free" && (!this.get(id) || this.get(id)?.state === "uncertain")).length;
     const unsafeLease = all.some(id => id === "unknown" || id !== "free" && !this.get(id));
     const used = all.filter(id => id !== "free").length;
-    const liveRecords = retained.slice(0, MAX_RETAINED_JOBS + 1).flatMap(name => {
-      const id = name.slice(0, -5);
-      if (!UUID.test(id)) return [];
-      const job = this.get(id);
-      return job?.slot === slot && job.state !== "completed" && !this.#terminal(job) ? [job] : [];
-    });
-    const orphaned = liveRecords.some(job => !held.has(job.id));
+    // A journal entry without a lease has no admitted capacity claim. Keep
+    // the record for exact recovery, but do not fence unrelated new jobs.
     const checkout = cwd ? this.#leaseOwner(this.#checkoutPermit(cwd)) : "free";
     // Old writer lease names were hashed from the provided cwd, not the Git root.
     // Preserve their ownership across policy upgrades and subdirectory aliases.
@@ -196,9 +195,10 @@ export class WebDelegationStore {
       return this.#legacyPermits(job.slot).some(path => this.#leaseOwner(path) === id);
     });
     const blockCode: WebDelegationBlockCode | undefined = retained.length >= MAX_RETAINED_JOBS ? "CAPACITY_STORAGE_RECORDS"
-      : orphaned || unsafeLease ? "UNCERTAIN_RESERVATION"
+      : unsafeLease ? "UNCERTAIN_RESERVATION"
         : used >= TOTAL_PER_PROFILE ? "CAPACITY_TOTAL_PROFILE"
-          : checkoutLegacyConflict || checkout !== "free" ? checkout === "unknown" ? "UNCERTAIN_RESERVATION" : "CAPACITY_WRITER_CHECKOUT" : undefined;
+          : _mode === "write" && (checkoutLegacyConflict || checkout !== "free")
+            ? checkout === "unknown" ? "UNCERTAIN_RESERVATION" : "CAPACITY_WRITER_CHECKOUT" : undefined;
     const statusKo = `프로필 ${slot}: 동시 작업 ${used}/3`;
     const statusEn = `Profile ${slot}: concurrent jobs ${used}/3`;
     const reasonKo = blockCode === "CAPACITY_STORAGE_RECORDS" ? `보관 기록 ${retained.length}/64개로 가득 찼습니다. 완료 기록을 검토하세요.`
@@ -239,9 +239,12 @@ export class WebDelegationStore {
   }
   reserve(record: WebDelegationRecord): void {
     const mode = record.mode ?? "read";
+    if (record.parentJobId && !record.threadId) throw Error("Continuation requires its exact Native thread");
+    const threadLease = record.parentJobId ? this.#threadPermit(record.threadId!) : undefined;
     // Exact terminal journal proofs can release stale permits after a crash.
     for (const lease of [...this.#permits(record.slot), ...this.#legacyPermits(record.slot),
-      ...(mode === "write" ? [this.#checkoutPermit(record.cwd), this.#legacyCheckoutPermit(record.cwd)] : [])]) {
+      ...(mode === "write" ? [this.#checkoutPermit(record.cwd), this.#legacyCheckoutPermit(record.cwd)] : []),
+      ...(threadLease ? [threadLease] : [])]) {
       const owner = this.#leaseOwner(lease);
       if (owner !== "free" && owner !== "unknown") {
         const previous = this.get(owner);
@@ -255,13 +258,22 @@ export class WebDelegationStore {
     // Exclusive creation is the admission boundary. An unresolved partial
     // reservation stays fenced rather than allowing an extra model send.
     const claimed: string[] = [];
+    let admissionStage: "thread" | "checkout" | "profile" = "profile";
     try {
+      if (threadLease) {
+        admissionStage = "thread";
+        const fd = openSync(threadLease, "wx", 0o600);
+        claimed.push(threadLease);
+        try { writeFileSync(fd, record.id); fsyncSync(fd); } finally { closeSync(fd); }
+      }
       if (mode === "write") {
+        admissionStage = "checkout";
         const checkout = this.#checkoutPermit(record.cwd);
         const fd = openSync(checkout, "wx", 0o600);
         claimed.push(checkout);
         try { writeFileSync(fd, record.id); fsyncSync(fd); } finally { closeSync(fd); }
       }
+      admissionStage = "profile";
       let admitted = false;
       for (const lease of this.#permits(record.slot)) {
         try {
@@ -281,7 +293,7 @@ export class WebDelegationStore {
       const capacity = this.capacity(record.slot, mode, record.cwd);
       if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new WebDelegationCapacityError({
         ...capacity, available: false,
-        blockCode: capacity.blockCode ?? "CAPACITY_TOTAL_PROFILE",
+        blockCode: capacity.blockCode ?? (admissionStage === "thread" ? "CAPACITY_THREAD_ACTIVE" : "CAPACITY_TOTAL_PROFILE"),
         nextAction: "wait_for_active_job",
       });
       throw error;
@@ -326,6 +338,16 @@ function sameOwner(record: WebDelegationRecord, current: Awaited<ReturnType<WebD
   return JSON.stringify(record.owner) === JSON.stringify(current.binding)
     && JSON.stringify(record.session) === JSON.stringify(current.session);
 }
+/** Across a runtime restart, only a freshly proved matching login may read
+ * the original exact Native thread. A session fingerprint is a live socket
+ * binding, not a durable account identity. Submission still uses sameOwner. */
+function sameAccountOwner(record: WebDelegationRecord, current: Awaited<ReturnType<WebDelegationAdapters["owner"]>>) {
+  return /^[a-f0-9]{64}$/.test(record.owner.accountFingerprint)
+    && record.owner.slot === record.slot && record.session.slot === record.slot
+    && current.binding.slot === record.slot && current.session.slot === record.slot
+    && current.binding.accountFingerprint === record.owner.accountFingerprint
+    && current.binding.routeFingerprint === current.session.responsesRouteFingerprint;
+}
 
 async function findDelegatedTurn(rpc: CodexAppServerRpc, threadId: string, turnId: string, signal: AbortSignal) {
   let cursor: string | undefined;
@@ -346,6 +368,29 @@ async function findDelegatedTurn(rpc: CodexAppServerRpc, threadId: string, turnI
   throw Error("Web job turn history exceeded recovery bound");
 }
 
+/** Only a newly-created one-turn thread can identify an unacknowledged first
+ * send without a returned turn ID. A continuation or multiple candidate turns
+ * remains uncertain; neither case is ever re-submitted. */
+async function findUnacknowledgedFirstTurn(
+  rpc: CodexAppServerRpc, record: WebDelegationRecord, signal: AbortSignal,
+): Promise<Record<string, unknown> | undefined> {
+  if (!record.threadId || record.parentJobId) return undefined;
+  const response = object(await rpc.request("thread/turns/list", {
+    threadId: record.threadId, limit: 2, sortDirection: "desc", itemsView: "summary",
+  }, signal));
+  const rows = response?.data;
+  if (!Array.isArray(rows) || rows.length !== 1 || response?.nextCursor != null) return undefined;
+  const turn = object(rows[0]);
+  if (!turn || typeof turn.id !== "string" || !UUID.test(turn.id)
+    || !Array.isArray(turn.items) || turn.items.length > 120) return undefined;
+  const user = turn.items.map(object).filter(item => item?.type === "userMessage");
+  if (user.length !== 1 || !Array.isArray(user[0]?.content) || user[0].content.length !== 1) return undefined;
+  const part = object(user[0].content[0]);
+  if (part?.type !== "text" || typeof part.text !== "string"
+    || createHash("sha256").update(part.text).digest("hex") !== record.promptHash) return undefined;
+  return turn;
+}
+
 /** A NEW durable Native-owned thread with an explicit sandbox, routed to Web.
  * Never resumes a personal thread or silently elevates read-only delegation. */
 export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
@@ -359,18 +404,19 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
   const parent = input.parentJobId ? adapters.store.get(input.parentJobId) : undefined;
   if (input.parentJobId && (!parent || !verifiedWebDelegationAnswer(parent)
     || !parent.threadId || !parent.turnId || parent.slot !== input.slot
-    || parent.cwd !== input.cwd || parent.mode !== "write" || !sameOwner(parent, owner))) {
-    throw Error("Continuation requires a completed, owned workspace-write Web job in this checkout");
+    || parent.cwd !== input.cwd || (parent.mode ?? "read") !== mode || !sameAccountOwner(parent, owner))) {
+    throw Error("Continuation requires a completed, owned Web job with the same sandbox mode in this checkout");
   }
   let rpc: CodexAppServerRpc | undefined;
   let record: WebDelegationRecord | undefined;
   let reserved = false;
+  let turnSubmissionAttempted = false;
   let unsubscribe: (() => void) | undefined;
   try {
     record = { id: input.id, slot: input.slot, cwd: input.cwd, createdAt: Date.now(),
       promptHash: createHash("sha256").update(input.prompt).digest("hex"), owner: owner.binding,
       session: owner.session, mode, state: "reserved", checkoutRoot: checkoutRoot(input.cwd),
-      ...(parent ? { parentJobId: parent.id } : {}) };
+      ...(parent ? { parentJobId: parent.id, threadId: parent.threadId } : {}) };
     // Admission is persistent and atomic before connecting to a model/provider.
     adapters.store.reserve(record);
     reserved = true;
@@ -394,6 +440,10 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       const latest = Array.isArray(response?.data) ? object(response.data[0]) : undefined;
       if (!latest || latest.status !== "completed") {
         throw Error("Continuation thread has an unsettled last turn");
+      }
+      if (!sameOwner(parent, owner)) {
+        const priorTurn = await findDelegatedTurn(rpc, parent.threadId!, parent.turnId!, input.signal);
+        if (priorTurn?.status !== "completed") throw Error("Original Web turn is not proven on the current owner session");
       }
       update({ threadId: parent.threadId!, state: "created" });
     } else {
@@ -456,6 +506,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       const sandboxPolicy = mode === "write"
         ? { type: "workspaceWrite", writableRoots: [input.cwd], networkAccess: false }
         : { type: "readOnly" };
+      turnSubmissionAttempted = true;
       const response = object(await rpc.request("turn/start", {
         threadId: record.threadId, model: selection.model, effort: selection.effort,
         input: [{ type: "text", text: input.prompt, textElements: [] }],
@@ -479,7 +530,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     if (record && reserved) {
       const turnFailed = error instanceof Error && error.message === "Web job turn failed";
       const resultUnavailable = error instanceof Error && error.message === "Web job completed without a proven final answer";
-      const state = turnFailed || resultUnavailable || record.state === "reserved" || record.state === "created" ? "failed" : "uncertain";
+      const state = turnFailed || resultUnavailable || !turnSubmissionAttempted ? "failed" : "uncertain";
       record = { ...record, state, failure: turnFailed ? "turn_failed" : resultUnavailable ? "result_unavailable" : "transport_or_ack" };
       record = adapters.store.save(record); adapters.changed?.(record);
     }
@@ -489,16 +540,30 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
 
 /** Explicit, bounded recovery of this job only. Never resumes/replays a turn or reads personal history. */
 export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id: string, signal: AbortSignal): Promise<WebDelegationRecord> {
-  const record = adapters.store.get(id);
+  let record = adapters.store.get(id);
   if (!record) throw Error("Web job was not found");
   if (verifiedWebDelegationAnswer(record)) return record;
-  if (!record.threadId || !record.turnId) throw Error("No acknowledged Web turn; do not retry an uncertain submission");
-  if (!sameOwner(record, await adapters.owner(record.slot))) throw Error("Web job owner changed");
-  const rpc = await adapters.connect(record.session.terminalEndpoint);
+  if (!record.threadId) throw Error("No acknowledged Web thread; do not retry an uncertain submission");
+  if (!record.turnId && (record.parentJobId || record.state !== "uncertain")) {
+    throw Error("No acknowledged Web turn; do not retry an uncertain submission");
+  }
+  const current = await adapters.owner(record.slot);
+  if (!sameAccountOwner(record, current)) throw Error("Web job owner changed");
+  const rpc = await adapters.connect(current.session.terminalEndpoint);
   try {
-    const turn = await findDelegatedTurn(rpc, record.threadId, record.turnId, signal);
-    if (!turn) throw Error("Web job turn is not in bounded history");
-    if (!sameOwner(record, await adapters.owner(record.slot))) throw Error("Web job owner changed during recovery");
+    const turn = record.turnId
+      ? await findDelegatedTurn(rpc, record.threadId, record.turnId, signal)
+      : await findUnacknowledgedFirstTurn(rpc, record, signal);
+    if (!turn) throw Error(record.turnId ? "Web job turn is not in bounded history"
+      : "Unacknowledged Web turn cannot be uniquely proven from its exact input");
+    const after = await adapters.owner(record.slot);
+    if (!sameAccountOwner(record, after) || JSON.stringify(current) !== JSON.stringify(after)) {
+      throw Error("Web job owner changed during recovery");
+    }
+    if (!record.turnId) {
+      const { failure: _failure, ...prior } = record;
+      record = adapters.store.save({ ...prior, turnId: turn.id as string, state: "running" });
+    }
     if (turn.status === "inProgress") return record;
     if (turn.status === "failed" || turn.status === "interrupted") {
       return adapters.store.save({ ...record, state: "failed", failure: "turn_failed" });

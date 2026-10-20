@@ -40,6 +40,10 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   if (subcommand === "reconcile" && !selectedJob) throw Error("Web job was not found");
   const continuation = subcommand === "continue" ? store.get(option("--job")) : undefined;
   if (subcommand === "continue" && !continuation) throw Error("Web job was not found");
+  if ((selectedJob || continuation) && args.includes("--slot")
+    && profileSlotFromArguments(args) !== (selectedJob ?? continuation)!.slot) {
+    throw Error("Existing Web job belongs to a different profile; its owner cannot be changed");
+  }
   const slot = selectedJob?.slot ?? continuation?.slot ?? profileSlotFromArguments(args);
   const install = readOwnershipManifest(paths.installManifest);
   if (!install) throw Error("Tela is not installed");
@@ -87,7 +91,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 24 * 1024) throw Error("Web job prompt must be a bounded regular file");
   const prompt = readFileSync(promptPath, "utf8");
   const id = continuation ? randomUUID() : args.includes("--job") ? option("--job") : randomUUID();
-  const mode = continuation ? "write" : args.includes("--mode") ? option("--mode") : "write";
+  const mode = continuation ? continuation.mode ?? "read" : args.includes("--mode") ? option("--mode") : "write";
   if (mode !== "read" && mode !== "write") throw Error("--mode must be read or write");
   try {
     const result = await runWebDelegation({
