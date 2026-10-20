@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { diagnosticFingerprint, observeDiagnosticEvents, withDiagnosticContext, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { retainRendererNetworkDiagnostics } from "./network-diagnostics";
 
-test("shared renderer network observation records failure boundaries without URLs, credentials or stale Native ownership", () => {
+test("shared renderer network observation records provider POST completion and failure boundaries without URLs, credentials or stale Native ownership", () => {
   let failed: ((details: any) => void) | null = null;
   let completed: ((details: any) => void) | null = null;
   let registrations = 0;
@@ -44,8 +44,14 @@ test("shared renderer network observation records failure boundaries without URL
     expect(rows.at(-1)!.route_fingerprint).not.toBe(route);
     const count = rows.length;
     completed!({ ...request, statusCode: 200 });
+    expect(rows.at(-1)).toMatchObject({ stage: "renderer_api_request_completed", http_status: 200,
+      method_class: "post", surface_fingerprint: diagnosticFingerprint("second") });
+    expect(rows.at(-1)).not.toHaveProperty("request_fingerprint");
+    completed!({ ...request, method: "GET", statusCode: 200 });
+    completed!({ ...request, url: "https://chatgpt.com/static-resource", statusCode: 200 });
+    completed!({ ...request, webContentsId: 99, statusCode: 200 });
     failed!({ ...request, resourceType: "image", error: "net::ERR_ABORTED" });
-    expect(rows).toHaveLength(count);
+    expect(rows).toHaveLength(count + 1);
     const text = JSON.stringify(rows);
     for (const value of ["secret", "private-conversation", "chatgpt.com", "old-request", "unrelated-request"])
       expect(text).not.toContain(value);

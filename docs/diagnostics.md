@@ -16,7 +16,9 @@ separate incident-count cap. Raw private capture remains opt-in, local and separ
 
 ## Browser request and provider failures
 
-The renderer records only failed XHR/fetch or WebSocket requests and HTTP responses >=400.
+The renderer records failed XHR/fetch or WebSocket requests and HTTP responses >=400.
+Owned provider-API POST completions also record status as `renderer_api_request_completed`;
+HTTP completion does not prove JavaScript consumption or semantic stream completion.
 `renderer_request_failed` carries the normalized Chromium failure class;
 `renderer_http_failed` carries status. Domain/route/resource/method classes and one-way
 origin/request fingerprints correlate them without URLs, headers, cookies or payloads.
@@ -26,7 +28,8 @@ Native turn. JavaScript-only/provider failures may have no corresponding network
 
 `web_provider_failure_observed` records the keyed turn, error marker class and body/progress
 presence without error prose. Failure detection is independent of answer rendering; authored
-content and progress-owned alerts are excluded. A visible generic alert outside those regions
+content, progress and approval-owned alerts are excluded. Candidate counts distinguish all,
+eligible and approval-owned alerts, alongside composer Stop visibility. A visible generic alert outside those regions
 is terminal only when generation has stopped, even if an earlier answer or progress shell remains mounted. This proves a
 provider UI failure, not its network cause or the outcome of an earlier tool operation.
 

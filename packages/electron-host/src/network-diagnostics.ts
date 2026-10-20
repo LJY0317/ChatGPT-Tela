@@ -25,12 +25,18 @@ export function retainRendererNetworkDiagnostics(
     try {
       if (details.resourceType !== "xhr" && details.resourceType !== "webSocket") return;
       const httpStatus = "statusCode" in details ? details.statusCode : undefined;
-      if (httpStatus !== undefined && httpStatus < 400) return;
+      if (httpStatus !== undefined && httpStatus < 400 && details.method !== "POST") return;
       const url = new URL(details.url);
       const originClass = url.hostname === "chatgpt.com" || url.hostname.endsWith(".chatgpt.com") ? "chatgpt"
         : url.hostname === "openai.com" || url.hostname.endsWith(".openai.com") ? "openai" : "other";
       const target = details.webContentsId === undefined ? undefined : [...entry.owners.values()]
         .find(item => item.webContentsId === details.webContentsId);
+      const providerApi = originClass !== "other" && /^\/(?:backend-api|api|public-api)(?:\/|$)/.test(url.pathname);
+      const completedProviderPost = httpStatus !== undefined && httpStatus < 400;
+      // A provider POST may finish at HTTP level while the page later reports
+      // delivery failure. Observe that boundary without reading headers/body or
+      // claiming that a model response or its event stream completed correctly.
+      if (completedProviderPost && (!target || !providerApi)) return;
       const context = target?.origin ?? owner.origin;
       // A persistent surface can outlive its creating Native turn. Correlate the
       // renderer and time, never attribute later requests to that original turn.
@@ -38,11 +44,11 @@ export function retainRendererNetworkDiagnostics(
         ["profile_fingerprint", "partition_fingerprint", "storage_fingerprint"].includes(key)
         || (key === "surface_fingerprint" && !!target)));
       withDiagnosticContext(rendererContext, () => {
-        emitDiagnosticEvent("chatgpt_tela_browser", httpStatus === undefined ? "renderer_request_failed" : "renderer_http_failed", {
+        emitDiagnosticEvent("chatgpt_tela_browser", httpStatus === undefined ? "renderer_request_failed" : completedProviderPost ? "renderer_api_request_completed" : "renderer_http_failed", {
           network_request_fingerprint: diagnosticFingerprint(JSON.stringify([details.webContentsId ?? null, details.id])),
           domain_class: originClass, origin_fingerprint: diagnosticFingerprint(url.origin),
           route_fingerprint: diagnosticFingerprint(url.pathname),
-          route_class: originClass !== "other" && /^\/(?:backend-api|api|public-api)(?:\/|$)/.test(url.pathname) ? "provider_api" : "other",
+          route_class: providerApi ? "provider_api" : "other",
           resource_class: details.resourceType.toLowerCase(),
           method_class: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].includes(details.method) ? details.method.toLowerCase() : "other",
           surface_correlated: !!target,
