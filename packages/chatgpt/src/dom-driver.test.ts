@@ -261,6 +261,7 @@ class FixtureElement {
   contains(element: unknown) { return element === this; }
   constructor(readonly attributes: Record<string, string> = {}, readonly selectors: Record<string, FixtureElement[]> = {}) {}
   getAttribute(name: string) { return this.attributes[name] ?? null; }
+  hasAttribute(name: string) { return this.getAttribute(name) !== null; }
   querySelectorAll(selector: string): FixtureElement[] {
     return [...new Set(selector.split(/,\s*/).flatMap(part => this.selectors[part] ?? []))];
   }
@@ -570,6 +571,39 @@ describe("current ChatGPT DOM surface driver", () => {
     expect((await driver.observe()).turns[0]!.bodyProof).not.toEqual(before.bodyProof);
   });
 
+  test("retained body digest ignores paragraph wrapping while detecting code and link edits", async () => {
+    const prose = { nodeType: 3, textContent: "An unchanged answer." };
+    const code = new FixtureElement({ 'data-fixture-tag': 'CODE' });
+    Object.assign(code, { classList: [] });
+    code.childNodes = [{ nodeType: 3, textContent: 'return `ok`;' }];
+    code.textContent = 'return `ok`;';
+    const pre = new FixtureElement({ 'data-fixture-tag': 'PRE' });
+    pre.childNodes = [code];
+    pre.querySelector = (selector: string) => selector === 'code' ? code : null;
+    const link = new FixtureElement({ 'data-fixture-tag': 'A', href: 'https://example.com/original' });
+    link.childNodes = [{ nodeType: 3, textContent: 'Reference' }];
+    const paragraph = new FixtureElement({ 'data-fixture-tag': 'P' });
+    paragraph.childNodes = [prose];
+    const body = new FixtureElement(); body.childNodes = [paragraph, pre, link];
+    const group = new FixtureElement({ 'data-turn-key': 'retained' }, {
+      '[data-markdown-text-style="assistant-message"]': [body],
+      'button[data-testid="copy-turn-action-button"]': [new FixtureElement()],
+    });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
+    const before = (await driver.observe()).turns[0]!.bodyProof?.digest;
+    const wrapper = new FixtureElement({ 'data-fixture-tag': 'DIV' });
+    wrapper.childNodes = [{ nodeType: 3, textContent: "An unchanged\nanswer." }];
+    body.childNodes = [wrapper, pre, link];
+    expect((await driver.observe()).turns[0]!.bodyProof?.digest).toBe(before);
+    code.childNodes = [{ nodeType: 3, textContent: 'return `changed`;' }];
+    code.textContent = 'return `changed`;';
+    expect((await driver.observe()).turns[0]!.bodyProof?.digest).not.toBe(before);
+    code.childNodes = [{ nodeType: 3, textContent: 'return `ok`;' }];
+    code.textContent = 'return `ok`;';
+    link.attributes.href = 'https://example.com/different';
+    expect((await driver.observe()).turns[0]!.bodyProof?.digest).not.toBe(before);
+  });
+
   test("logical document/turn identity survives optimistic-key replacement and an unrendered user", async () => {
     const anchor = new FixtureElement({ 'data-content-search-turn-key': 'synthetic-logical-turn' });
     const user = new FixtureElement(); user.innerText = 'synthetic request';
@@ -618,9 +652,10 @@ describe("current ChatGPT DOM surface driver", () => {
     const label = new FixtureElement({ id: 'public-label' }); label.innerText = "Checking the source";
     const button = new FixtureElement({ 'aria-expanded': 'false', 'aria-labelledby': variant === "foreign-label" ? 'outside' : 'public-label' });
     const description = new FixtureElement(); description.childNodes = [{ nodeType: 3, textContent: 'Reading the submitted context.' }];
+    const authored = new FixtureElement({ 'data-content-search-unit-key': 'final:assistant' });
     const shell = new FixtureElement({}, { 'button[aria-expanded][aria-labelledby]': [button], '[id]': [label],
-      ...(variant === 'answer-in-shell' ? { '[data-user-message-bubble], [data-content-search-unit-key], [data-message-author-role], [data-turn-key]': [new FixtureElement({ 'data-content-search-unit-key': 'final:assistant' })] } : {}) });
-    shell.childNodes = [button, label, description];
+      ...(variant === 'answer-in-shell' ? { '[data-content-search-unit-key]': [authored] } : {}) });
+    shell.childNodes = [button, label, description, ...(variant === 'answer-in-shell' ? [authored] : [])];
     const marker = Object.assign(new FixtureElement(), { parentElement: shell });
     const group = new FixtureElement({ 'data-turn-key': 'synthetic-agent' }, {
       '[data-chatgpt-agent-turn-start]': variant === 'duplicate-marker' ? [marker, new FixtureElement()] : [marker],
@@ -1525,20 +1560,36 @@ describe("current ChatGPT DOM surface driver", () => {
   });
 
   test("assistant answer extraction prioritizes message body over the accessibility role heading", async () => {
-    const page = new FakePage();
-    const driver = new ChatGptDomSurfaceDriver(page);
-    await driver.observe();
+    const heading = new FixtureElement({ 'data-conversation-role': 'assistant' });
+    heading.textContent = 'Assistant label';
+    const statusBody = new FixtureElement({ 'data-markdown-text-style': 'assistant-message' });
+    statusBody.textContent = 'Still thinking';
+    const status = new FixtureElement();
+    status.contains = element => element === status || element === statusBody;
+    const answerBody = new FixtureElement({ 'data-markdown-text-style': 'assistant-message' });
+    answerBody.textContent = 'Exact final response.';
+    const group = new FixtureElement({ 'data-turn-key': 'owned' }, {
+      '[data-markdown-text-style="assistant-message"]': [statusBody, answerBody],
+      '[data-streaming-response-status]': [status],
+      '[data-conversation-role="assistant"]': [heading],
+      'button[data-testid="copy-turn-action-button"]': [new FixtureElement()],
+    });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(
+      new FixtureElement({}, { '[data-turn-key]': [group] }),
+    ));
+    const before = (await driver.observe()).turns[0]!;
+    expect(before).toMatchObject({ phase: 'complete', text: 'Exact final response.',
+      plainBodyText: 'Exact final response.' });
+    expect(before.bodyProof?.digest).toBeDefined();
 
-    expect(page.lastObserveSource).toContain(
-      "group.querySelector('[data-markdown-text-style=\"assistant-message\"]')",
-    );
-    expect(page.lastObserveSource).toContain(
-      "|| group.querySelector('[data-message-author-role=\"assistant\"] .markdown')",
-    );
-    expect(page.lastObserveSource).toContain("|| assistant");
-    expect(page.lastObserveSource).not.toContain(
-      "[data-markdown-text-style=\"assistant-message\"], [data-message-author-role=\"assistant\"] .markdown, [data-conversation-role=\"assistant\"]",
-    );
+    statusBody.textContent = 'Different progress';
+    heading.textContent = 'Changed accessibility label';
+    const restyled = (await driver.observe()).turns[0]!;
+    expect(restyled.text).toBe(before.text);
+    expect(restyled.bodyProof).toEqual(before.bodyProof);
+
+    answerBody.textContent = 'Different final response.';
+    expect((await driver.observe()).turns[0]!.bodyProof).not.toEqual(before.bodyProof);
   });
 
   test("keeps a turn streaming while the current composer still exposes Stop", async () => {

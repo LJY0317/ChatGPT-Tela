@@ -71,3 +71,68 @@ export function assistantMarkdown(root: HTMLElement, includePresentationHidden =
   if (!root.childNodes?.length) return (root.innerText || root.textContent || "").replace(/\r\n?/g, "\n").trim();
   return children(root).replace(/\r\n?/g, "\n").trim();
 }
+
+/** Stable owned-answer identity, independent of Markdown presentation and block reflow.
+ * Fenced code contents, link destinations, list ordering and author words remain significant.
+ * Kept in the renderer alongside assistantMarkdown; neither uses layout-derived innerText.
+ */
+export function assistantSemanticBody(root: HTMLElement): string {
+  const parts: Array<[string, string]> = [];
+  const append = (kind: string, value: string) => {
+    const last = parts[parts.length - 1];
+    if (kind === "text" && last?.[0] === "text") last[1] += value;
+    else parts.push([kind, value]);
+  };
+  const walk = (node: Node): void => {
+    if (node.nodeType === 3) { append("text", node.textContent ?? ""); return; }
+    if (!(node instanceof HTMLElement)) return;
+    const tag = node.tagName.toLowerCase();
+    if (["script", "style", "button", "svg", "nav"].includes(tag)) return;
+    if (tag === "pre") {
+      append("code-block", (node.querySelector("code") ?? node).textContent?.replace(/\r\n?/g, "\n") ?? "");
+      return;
+    }
+    // Inline code wrappers add Markdown ticks without changing literal author words.
+    if (tag === "code") { append("text", node.textContent ?? ""); return; }
+    if (tag === "a") {
+      const href = node.getAttribute("href");
+      let destination = "";
+      if (href) {
+        try {
+          const url = new URL(href, document.baseURI);
+          if (["https:", "http:", "mailto:"].includes(url.protocol)) destination = url.href;
+        } catch { /* A non-link remains author text. */ }
+      }
+      if (destination) append("link-start", destination);
+      Array.from(node.childNodes).forEach(walk);
+      if (destination) append("link-end", "");
+      return;
+    }
+    if (tag === "br") { append("text", " "); return; }
+    const block = ["p", "div", "section", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6"].includes(tag);
+    if (block) append("text", " ");
+    if (tag === "li") append("item-start", "");
+    if (tag === "ol") append("ordered-start", node.getAttribute("start") ?? "1");
+    if (tag === "ul") append("unordered-start", "");
+    if (tag === "tr") append("row-start", "");
+    if (tag === "td" || tag === "th") append("cell-start", "");
+    Array.from(node.childNodes).forEach(walk);
+    if (block) append("text", " ");
+    if (tag === "li" || tag === "ol" || tag === "ul" || tag === "tr" || tag === "td" || tag === "th") append(`${tag}-end`, "");
+  };
+  if (root.childNodes?.length) Array.from(root.childNodes).forEach(walk);
+  else append("text", root.textContent ?? "");
+  // Only prose spacing is normalized; code and structural boundaries stay exact.
+  const normalized = parts.map(([kind, value]) => [kind, kind === "text" ? value.replace(/\s+/g, " ") : value]);
+  // Merge text split by arbitrary presentation wrappers before final trimming.
+  const compact: Array<[string, string]> = [];
+  for (const [kind, value] of normalized) {
+    const last = compact[compact.length - 1];
+    if (kind === "text" && last?.[0] === "text") last[1] += value;
+    else compact.push([kind!, value!]);
+  }
+  for (const part of compact) if (part[0] === "text") part[1] = part[1].replace(/\s+/g, " ");
+  if (compact[0]?.[0] === "text") compact[0][1] = compact[0][1].trimStart();
+  if (compact.at(-1)?.[0] === "text") compact[compact.length - 1]![1] = compact.at(-1)![1].trimEnd();
+  return JSON.stringify(compact.filter(([kind, value]) => kind !== "text" || value.length > 0));
+}

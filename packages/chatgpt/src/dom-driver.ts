@@ -6,7 +6,7 @@ import { setTimeout as waitForDelay } from "node:timers/promises";
 import type { BrowserPageAutomation } from "@chatgpt-tela/browser-host";
 import { configuredDiagnosticRoot, privateDiagnosticCaptureEnabled, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { decideChatGptApproval, type ChatGptApprovalAutomationMode } from "./approval-policy";
-import { assistantMarkdown } from "./answer-markdown";
+import { assistantMarkdown, assistantSemanticBody } from "./answer-markdown";
 import { userPayload } from "./user-payload";
 import {
   ChatGptConnectorCatalogUnavailableError,
@@ -635,6 +635,7 @@ const OBSERVE_EXPECTED_ATTACHMENT_IDENTITY = String.raw`function (argument) {
 
 const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
   const answerMarkdown = ${assistantMarkdown.toString()};
+  const answerSemanticBody = ${assistantSemanticBody.toString()};
   const requestPayload = ${userPayload.toString()};
   const visible = element => {
     if (!(element instanceof HTMLElement)) return false;
@@ -923,7 +924,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         plainBodyText: answerBody ? answerBody.textContent : complete ? (answer || assistant).textContent : undefined,
         // Reuse the delivered answer serializer. A separate DOM-attribute codec made
         // decorative icon hydration invalidate unchanged answers.
-        bodyProof: answerBody ? { version: 1, value: answerMarkdown(answerBody, true) } : undefined,
+        bodyProof: answerBody ? { version: 1, value: answerSemanticBody(answerBody) } : undefined,
         failureDetail: failure ? text(failure) : undefined,
         publicProgress,
         progressProbe: {
