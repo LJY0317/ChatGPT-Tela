@@ -3,19 +3,20 @@
 ## Explicit ownership handoff for Native-created threads
 
 Direct Native RPC conversations are outside the managed Web delegation journal by default.
-The coordinator can explicitly call `linkNativeThreadForRetention` with compact,
-trusted creation evidence: slot, canonical checkout path, creation timestamp,
-original authenticated account fingerprint, and exact thread/turn IDs.
-The coordinator must derive this evidence from its original Native creation
-acknowledgements and account proof; identifiers copied from a readable personal
-thread are not sufficient. No build verification report or external receipt file
+The coordinator can explicitly call `linkNativeThreadForRetention` with compact
+ownership evidence: slot, canonical checkout path, creation timestamp,
+authenticated account fingerprint, and exact thread/turn IDs. Use original creation
+authority, or an explicit user request to adopt existing delegated threads with
+their coordinator acknowledgements and current account proof. Readability alone
+never opts personal threads in, and current proof must not be presented as historical proof.
+No build verification report or external receipt file
 is required. The link rechecks the authenticated account and exact public
 `thread/read` (including paginated history) and indexed turn metadata, then adds one `linked` journal
 entry without acquiring a work permit or sending a model request. Duplicate
 thread links are refused. Existing retention lifecycle reads the same journal.
 
 For live acceptance, the Native coordinator must first read the original
-creation evidence and account/profile ownership proof, confirm the target thread
+delegation evidence and account/profile ownership proof, confirm the target thread
 is deliberately opted in, then inspect its current `thread/read`, both
 `thread/list` archive partitions, last indexed turn and `thread/queue/list`.
 Only then may it deliberately invoke the link on a non-production fixture or
@@ -25,9 +26,9 @@ then verify manual restore exclusion. Test delete only with an isolated
 disposable thread; never use existing user conversations as delete fixtures.
 Re-read the journal and Native metadata after daemon restart to verify resume.
 The existing retention receipts (`archived`, `excluded`, `deleted`) distinguish
-performed effects from mere due dates. Indexed metadata cannot authenticate
-the historical creation evidence by itself; that provenance remains the
-coordinator's explicit responsibility.
+performed effects from mere due dates. Linking keeps the existing retention policy;
+it does not backdate result collection. Missing collection timestamps follow the
+uncollected policy and are never replaced by answer times or file modification times.
 
 The source CLI can run a bounded, workspace-write-capable task on a connected Tela Work profile without
 changing the model of an existing conversation or exporting its history. The Native engine creates

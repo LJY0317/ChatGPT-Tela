@@ -115,7 +115,8 @@ export interface WebDelegationRecord {
   readonly failure?: "owner_changed" | "transport_or_ack" | "turn_failed" | "result_unavailable";
 }
 
-/** Trusted coordinator's compact evidence of an explicitly managed Native creation. */
+/** Trusted coordinator evidence for its creation or an explicit user adoption of
+ * an existing delegated thread under the currently authenticated account. */
 export interface NativeThreadOwnershipEvidence {
   readonly slot: number;
   readonly cwd: string;
@@ -464,7 +465,7 @@ async function findUnacknowledgedFirstTurn(
   return turn;
 }
 
-/** Explicit coordinator adoption, after exact creation ACK and account proof. */
+/** Explicit coordinator adoption, with acknowledged delegation IDs and account proof. */
 export async function linkNativeThreadForRetention(adapters: WebDelegationAdapters, evidence: NativeThreadOwnershipEvidence, signal: AbortSignal): Promise<WebDelegationRecord> {
   if (!Number.isSafeInteger(evidence.slot) || evidence.slot < 1 || evidence.slot > 99
     || typeof evidence.cwd !== "string" || !isAbsolute(evidence.cwd)
