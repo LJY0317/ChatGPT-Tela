@@ -103,6 +103,11 @@ Goal accounting (`tokensUsed`, elapsed time and update timestamps) stays in Nati
 state, outside canonical Web context identity. Only operative status, objective and
 budget belong to the projected Goal observation. Otherwise every accounting update
 rewrites the conversation ancestry and forces another summary and fresh Web page.
+Place the latest Goal observation after canonical Native input and bind retained
+completion to the last canonical input revision. A changed objective, status or
+budget then updates the current protected tool-result without rewriting older
+history or invalidating the prior Web answer witness. This change affects new
+projections; previously persisted checkpoints still require exact ancestor proof.
 An active Goal can continue through a Native developer message without a new user
 message; preserve that role and send only the verified retained suffix.
 

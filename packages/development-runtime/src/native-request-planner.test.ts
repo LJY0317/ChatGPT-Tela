@@ -445,10 +445,12 @@ describe("Native request development Web planner", () => {
     expect(second.physicalContext.mode).toBe("retained-delta");
     expect(second.webEpochId).toBe(first.webEpochId);
     expect(second.retainedSurfaceLeaseId).toBe("owned-page");
-    expect(second.physicalContext.segments).toHaveLength(1);
+    expect(second.physicalContext.segments).toHaveLength(2);
     expect(second.physicalContext.segments[0]).toMatchObject({ kind: "developer",
       content: "Audit the active Goal and continue its remaining work" });
-    expect(second.physicalContext.activeRequestRevisionId).toBe(second.physicalContext.headRevisionId);
+    expect(second.physicalContext.segments[1]).toMatchObject({ kind: "tool-result",
+      content: expect.stringContaining('"objective":"Finish the assigned implementation"') });
+    expect(second.physicalContext.activeRequestRevisionId).not.toBe(second.physicalContext.headRevisionId);
     expect(second.physicalContext.transferTokens).toBeLessThan(100);
     second.settle?.({ status: "failed" });
     const original = projectNativeRequestContext("thread-1", { input: input.slice(0, 1) },
@@ -456,6 +458,36 @@ describe("Native request development Web planner", () => {
     const changed = projectNativeRequestContext("thread-1", { input: input.slice(0, 1) },
       undefined, [], undefined, undefined, { ...goal, objective: "A different authorized objective" });
     expect(changed.headId).not.toBe(original.headId);
+    expect(changed.inputAnchorId).toBe(original.inputAnchorId);
+    expect(changed.revisions[0]?.revision.id).toBe(original.revisions[0]?.revision.id);
+  });
+
+  test("operative Goal changes retain a settled Web page and its canonical input prefix", async () => {
+    const baseGoal = { threadId: "thread-1", objective: "First objective", status: "active",
+      tokenBudget: 20_000, tokensUsed: 0, timeUsedSeconds: 0, updatedAt: 1 };
+    const withGoal = (turnId: string, goal: typeof baseGoal) => {
+      const source = binding(turnId);
+      return new ActiveTurnRegistry().register({ ...source, canonicalEvidence: {
+        ...source.canonicalEvidence, nativeGoal: goal,
+      } });
+    };
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const input: any[] = [{ role: "user", content: "Perform work" }];
+    const first = await planner(withGoal("turn-1", baseGoal), { input });
+    first.settle?.({ status: "completed", documentGeneration: 1,
+      surfaceLeaseId: "owned-page", answer: "First part completed" });
+    input.push({ role: "assistant", content: "First part completed" },
+      { role: "developer", content: "Continue with revised Goal" });
+    const next = await planner(withGoal("turn-2", { ...baseGoal,
+      objective: "Second objective", tokenBudget: 30_000 }), { input });
+    expect(next.physicalContext.mode).toBe("retained-delta");
+    expect(next.webEpochId).toBe(first.webEpochId);
+    expect(next.retainedSurfaceLeaseId).toBe("owned-page");
+    expect(next.physicalContext.segments.map(segment => segment.content)).toEqual([
+      "Continue with revised Goal",
+      expect.stringContaining('"objective":"Second objective"'),
+    ]);
+    next.settle?.({ status: "failed" });
   });
 
   test("Native current Goal has explicit protected provenance even when historical tool budget is exhausted",()=>{
