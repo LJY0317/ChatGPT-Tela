@@ -726,22 +726,32 @@ async function cachedCheckpoints(
 function checkpointSourceContext(
   projection: NativeRequestContextProjection,
   anchor: ProjectedNativeRevision,
+  previous?: CachedContextCheckpoint,
 ): WebPhysicalContext {
   const anchorIndex = projection.revisions.findIndex(item => item.revision.id === anchor.revision.id);
   if (anchorIndex < 0) throw new Error("checkpoint anchor is not on the active Native path");
-  const source = projection.revisions.slice(0, anchorIndex + 1);
-  const logicalTokens = source.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
+  const previousIndex = previous ? projection.revisions.findIndex(item =>
+    item.revision.id === previous.checkpoint.revisionId) : -1;
+  if (previous && (previousIndex < 0 || previousIndex >= anchorIndex)) {
+    throw new Error("Working checkpoint is not an ancestor of the new anchor");
+  }
+  const source = projection.revisions.slice(previousIndex + 1, anchorIndex + 1);
+  const logicalTokens = projection.revisions.slice(0, anchorIndex + 1)
+    .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
   return bindNativePhysicalEvidence(projection, Object.freeze({
     headRevisionId: anchor.revision.id,
     mode: "full" as const,
     logicalTokens,
-    transferTokens: logicalTokens,
-    segments: Object.freeze(source.map(item => Object.freeze({
+    transferTokens: source.reduce((sum, item) => sum + item.revision.estimatedTokens, 0)
+      + (previous?.checkpoint.estimatedTokens ?? 0),
+    segments: Object.freeze([...(previous ? [{ type: "checkpoint" as const,
+      checkpointId: previous.checkpoint.id, sourceRevisionId: previous.checkpoint.revisionId,
+      content: previous.content }] : []), ...source.map(item => Object.freeze({
       type: "revision" as const,
       revisionId: item.revision.id,
       kind: item.revision.kind,
       content: item.content,
-    }))),
+    }))]),
   }));
 }
 
@@ -1098,7 +1108,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         && (scoped ? candidate.scopeFingerprint === scoped : candidate.scopeFingerprint === undefined)
       ));
       if (!existingAtAnchor) {
-        const checkpointPhysicalContext = checkpointSourceContext(projection, anchor);
+        const checkpointPhysicalContext = checkpointSourceContext(projection, anchor, selected);
         const checkpointMedia = includedMedia(projection, checkpointPhysicalContext);
         const bounded = boundedWebCheckpointSource(
           checkpointPhysicalContext, checkpointMedia,

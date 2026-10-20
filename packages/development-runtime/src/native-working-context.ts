@@ -271,8 +271,12 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
   // The steady-state maintenance operation is ONE fitted summary input. A large
   // previously unmaintained/cold source follows the existing explicit recovery path.
   if (chatGptCheckpointInputTokens(physical) > input.policy.checkpointSourceTokens) {
-    if (selected) throw new NativeHistoryBootstrapRequired("source_budget");
-    return Object.freeze({ produced: false, reused: false, pendingSuffixTokens });
+    // An oversized *optional* maintenance source must not reject a request
+    // which can still use its retained Web page or an earlier checkpoint.
+    // The ordinary physical fit decides whether that request is executable.
+    // Preserve the last proven summary rather than retrying this source.
+    return Object.freeze({ ...(selected ? { checkpoint: selected } : {}),
+      produced: false, reused: selected !== undefined, pendingSuffixTokens });
   }
   input.signal?.throwIfAborted();
   const previousCalls = input.preparationBudget.modelCalls;
