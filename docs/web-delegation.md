@@ -20,6 +20,19 @@ bun run cli web-delegate reconcile --job UUID
 bun run cli web-delegate result --job UUID
 ```
 
+`status` includes the last observed public Native reasoning **summary** in
+`progress`, when available. It retains only the newest summary (up to 2,048
+characters), its observation time, and whether it came from live notifications
+or indexed history. `observedAt` is the read time, not proof the task recently
+advanced; a retained summary is not proof that its described condition is still
+visible. No raw reasoning is read. Explicit `reconcile` can recover an available
+summary from the exact running turn without replaying its request. Missing
+summary evidence remains unknown, and elapsed time never implies blockage.
+Terminal settlement clears this presentation. Profile-level browser approval
+inspection remains separate because its selected surface is not attributable
+to a particular delegated Native turn.
+
+
 `start` prints a job ID early and observes completion through the existing event connection.
 The caller can finish its own model turn instead of repeatedly asking whether the worker is done.
 Waiting in this process does not invoke a language model. The Web worker still uses inference while

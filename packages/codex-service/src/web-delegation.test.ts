@@ -6,12 +6,14 @@ import { randomUUID, createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
-import { runWebDelegation, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer } from "./web-delegation";
+import { runWebDelegation, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
+import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
-async function fixture(options: { slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write"; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean; ambiguousFirstTurn?: boolean } = {}) {
+async function fixture(options: { slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write"; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const slot = options.slot ?? 1;
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
+  const changes: WebDelegationRecord[] = [];
   const calls: Array<{ method: string; params: unknown }> = [];
   let currentTurnId = turnId;
   let notify: (method: string, params: unknown) => void = () => {};
@@ -29,6 +31,12 @@ async function fixture(options: { slot?: number; uncertain?: boolean; changedOwn
       if (method === "turn/start") {
         if (calls.filter(call => call.method === "turn/start").length > 1) currentTurnId = randomUUID();
         if (options.uncertain) throw Error("lost acknowledgement");
+        if (options.publicProgress) {
+          notify("item/reasoning/summaryPartAdded", { threadId, turnId: currentTurnId, itemId: "reasoning", summaryIndex: 0 });
+          notify("item/reasoning/summaryTextDelta", { threadId, turnId: currentTurnId, itemId: "reasoning", summaryIndex: 0, delta: "Approval needed in the Web browser." });
+          notify("item/reasoning/summaryTextDelta", { threadId: randomUUID(), turnId: currentTurnId, itemId: "foreign", summaryIndex: 0, delta: "foreign-thread" });
+          notify("item/reasoning/summaryTextDelta", { threadId, turnId: randomUUID(), itemId: "foreign", summaryIndex: 0, delta: "foreign-turn" });
+        }
         if (options.silent) { if (options.disconnect) queueMicrotask(() => disconnected()); return { turn: { id: currentTurnId } }; }
         if (!attached) return { turn: { id: currentTurnId } };
         // Synchronously complete BEFORE turn/start's ACK, exercising the real notification race.
@@ -50,7 +58,8 @@ async function fixture(options: { slot?: number; uncertain?: boolean; changedOwn
           ] },
           ...(options.ambiguousFirstTurn ? [{ id: randomUUID(), status: "completed", items: [] }] : []),
         ], nextCursor: null };
-        return { data: [{ id: currentTurnId, status: options.failedTurn ? "failed" : "completed", items: [
+        return { data: [{ id: currentTurnId, status: options.indexedProgress ? "inProgress" : options.failedTurn ? "failed" : "completed", items: [
+        ...(options.indexedProgress ? [{ id: "reasoning", type: "reasoning", summary: ["Earlier public summary", "Approval needed" + "x".repeat(5000)], rawContent: "hidden-reasoning-must-not-be-read" }] : []),
         { id: "final", type: "agentMessage", ...(options.foreignFinal ? { phase: "commentary" } : options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified recovered design" },
         ...(options.summaryToolResult ? [{ id: "read", type: "commandExecution",
           status: "completed", aggregatedOutput: "fixture-summary-result" }] : []),
@@ -60,7 +69,7 @@ async function fixture(options: { slot?: number; uncertain?: boolean; changedOwn
     },
   };
   const adapters = {
-    store, connect: async () => { attached = false; return rpc; },
+    store, changed: (record: WebDelegationRecord) => changes.push(record), connect: async () => { attached = false; return rpc; },
     owner: async () => {
       observedOwners++;
       return {
@@ -69,7 +78,7 @@ async function fixture(options: { slot?: number; uncertain?: boolean; changedOwn
       };
     },
   };
-  return { root, store, calls, id, continue: (parentJobId: string, prompt = "Follow up", mode: "read" | "write" = options.mode ?? "read") => runWebDelegation(adapters, { id: randomUUID(), slot, cwd: root, prompt, mode, parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", mode: options.mode ?? "read", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, store, calls, changes, id, continue: (parentJobId: string, prompt = "Follow up", mode: "read" | "write" = options.mode ?? "read") => runWebDelegation(adapters, { id: randomUUID(), slot, cwd: root, prompt, mode, parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", mode: options.mode ?? "read", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 test("new read-only durable Web job buffers ACK race, returns exact final and never loads a source conversation", async () => {
@@ -656,5 +665,60 @@ test("profile limits 1 to 5 share admission, preserve running leases after shrin
     expect(store.capacity(1)).toMatchObject({ total: { used: 5, limit: 1 }, blockCode: "CAPACITY_TOTAL_PROFILE" });
     expect(() => store.reserve({ ...base, id: randomUUID(), state: "reserved" })).toThrow();
     expect(store.capacity(2).total.limit).toBe(1);
+  } finally { f.cleanup(); }
+});
+
+
+test("public approval progress survives the ACK race, excludes foreign turns, and clears on completion", async () => {
+  const f = await fixture({ publicProgress: true });
+  try {
+    const result = await f.run();
+    const observed = f.changes.filter(record => record.progress).map(record => record.progress!);
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toMatchObject({ summary: "Approval needed in the Web browser.", source: "native-public-summary" });
+    expect(observed[0]!.observedAt).toBeGreaterThan(0);
+    expect(result.progress).toBeUndefined();
+    expect(f.store.get(f.id)!.progress).toBeUndefined();
+  } finally { f.cleanup(); }
+});
+
+test("explicit reconcile observes only bounded indexed public summaries without replaying a running turn", async () => {
+  const f = await fixture({ silent: true, disconnect: true, indexedProgress: true });
+  try {
+    await expect(f.run()).rejects.toThrow("connection lost");
+    const result = await f.reconcile();
+    expect(result.progress?.summary.startsWith("Approval needed")).toBe(true);
+    expect(result.progress?.summary).toHaveLength(2048);
+    expect(result.progress?.source).toBe("native-indexed-summary");
+    expect(JSON.stringify(result)).not.toContain("hidden-reasoning-must-not-be-read");
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+    expect(result.state).toBe("uncertain");
+  } finally { f.cleanup(); }
+});
+
+test("public progress replaces the previous summary, bounds deltas, and never reads raw reasoning", () => {
+  const projection = new WebDelegationProgressProjection();
+  const first = { itemId: "public-reasoning", summaryIndex: 0 };
+  const second = { ...first, summaryIndex: 1 };
+  expect(projection.observe("item/reasoning/summaryTextDelta", { ...first, delta: "Approval needed" }, 1)?.summary).toBe("Approval needed");
+  expect(projection.observe("item/reasoning/summaryPartAdded", second, 2)).toBeUndefined();
+  expect(projection.observe("item/reasoning/summaryTextDelta", { ...second, delta: "Task resumed" }, 3)?.summary).toBe("Task resumed");
+  expect(projection.observe("item/reasoning/summaryTextDelta", { ...first, delta: "stale" }, 4)).toBeUndefined();
+  expect(projection.observe("item/reasoning/summaryTextDelta", { ...second, delta: "x".repeat(9000) }, 5)?.summary).toHaveLength(2048);
+  expect(projection.observe("item/reasoning/summaryTextDelta", { ...second, delta: "overflow" }, 6)).toBeUndefined();
+  expect(indexedWebDelegationProgress([{ type: "reasoning", summary: [], get rawContent() { throw Error("private reasoning read"); } }], 7)).toBeUndefined();
+  expect(projection.observe("item/started", { item: { type: "reasoning", summary: [] } }, 8)).toBeUndefined();
+  expect(projection.observe("item/completed", { item: { type: "reasoning", summary: ["Task has resumed"] } }, 9)).toEqual({
+    summary: "Task has resumed", observedAt: 9, source: "native-public-summary",
+  });
+});
+
+test("failed Native turns clear approval presentation instead of preserving an apparent current blocker", async () => {
+  const f = await fixture({ publicProgress: true, failedTurn: true });
+  try {
+    await expect(f.run()).rejects.toThrow("Web job turn failed");
+    expect(f.changes.some(record => record.progress?.summary.startsWith("Approval needed"))).toBe(true);
+    expect(f.store.get(f.id)).toMatchObject({ state: "failed" });
+    expect(f.store.get(f.id)?.progress).toBeUndefined();
   } finally { f.cleanup(); }
 });

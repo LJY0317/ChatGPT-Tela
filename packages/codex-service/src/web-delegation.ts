@@ -7,6 +7,7 @@ import type { CodexWebDelegationCapacityContract, WebDelegationBlockCode, WebDel
 import type { LocalProfileBinding } from "./cross-profile-thread-relay";
 import type { TrustedNativeProfileSession } from "./cross-profile-account-proof";
 import { selectDelegationWebModel, type DelegationWebModel } from "./web-delegation-model";
+import { indexedWebDelegationProgress, WebDelegationProgressProjection, type WebDelegationProgress } from "./web-delegation-progress";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RESULT_BYTES = 512 * 1024;
@@ -95,6 +96,8 @@ export interface WebDelegationRecord {
   readonly state: WebDelegationState;
   readonly threadId?: string;
   readonly turnId?: string;
+  /** Last observed public summary, not proof of liveness or a blocked classification. */
+  readonly progress?: WebDelegationProgress;
   /** Model execution completion does not attest requested-task success. */
   readonly taskOutcome?: "unassessed";
   readonly finalEvidence?: WebFinalEvidence;
@@ -332,6 +335,7 @@ export class WebDelegationStore {
     }
   }
   save(record: WebDelegationRecord): WebDelegationRecord {
+    if (this.#terminal(record)) { const { progress: _progress, ...settled } = record; record = settled; }
     const current = this.get(record.id);
     if (!current) throw Error("Web job was not reserved");
     const upgradedFailedFinal = current.state === "failed" && current.failure === "turn_failed"
@@ -517,13 +521,19 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     const pending: Array<[string, Record<string, unknown>]> = [];
     let toolItems = 0, turnId: string | undefined, eventCount = 0, reportedStatus: string | undefined;
     const resultItems = new Set<string>();
+    const progressProjection = new WebDelegationProgressProjection();
     const accept = (method: string, event: Record<string, unknown>) => {
       if (event.threadId !== record!.threadId) return;
       if (++eventCount > 10_000) { rejectDone(Error("Web job event bound exceeded")); return; }
       if (!turnId) {
         if (pending.length >= 256) { rejectDone(Error("Web job ACK event bound exceeded")); return; }
-        if (method === "item/completed" || method === "turn/completed") pending.push([method, event]);
+        if (method === "item/started" || method === "item/completed" || method === "turn/completed" || method === "item/reasoning/summaryPartAdded"
+          || method === "item/reasoning/summaryTextDelta") pending.push([method, event]);
         return;
+      }
+      if (event.turnId === turnId) {
+        const progress = progressProjection.observe(method, event, Date.now());
+        if (progress) update({ progress });
       }
       if (method === "item/completed" && event.turnId === turnId) {
         const item = object(event.item);
@@ -634,7 +644,15 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
       const { failure: _failure, ...prior } = record;
       record = adapters.store.save({ ...prior, turnId: turn.id as string, state: "running" });
     }
-    if (turn.status === "inProgress") return record;
+    if (turn.status === "inProgress") {
+      const progress = Array.isArray(turn.items) && turn.items.length <= 120
+        ? indexedWebDelegationProgress(turn.items, Date.now()) : undefined;
+      if (progress) {
+        record = adapters.store.save({ ...record, progress });
+        adapters.changed?.(record);
+      }
+      return record;
+    }
     if (turn.status !== "completed" && turn.status !== "failed" && turn.status !== "interrupted") {
       throw Error("Web job completion is not proven");
     }
