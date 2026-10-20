@@ -92,6 +92,9 @@ test("cycle failure evidence separates prior final, new message and canonical in
       if (scenario === "input_witness_mismatch") inputs.push(nativeInputReceipt({
         type: "userMessage", id: "PRIVATE ID", content: [{ type: "text", text: "PRIVATE FOLLOWUP" }],
       })!);
+      if (scenario === "input_witness_mismatch") for (let index = 0; index < 12; index++) inputs.push(nativeInputReceipt({
+        type: "userMessage", id: `PRIVATE EXTRA ID ${index}`, content: [{ type: "text", text: `PRIVATE OTHER ${index}` }],
+      })!);
       const messages = [
         ...(scenario === "prior_final_missing" ? [] : [{ role: "assistant", content: "PRIVATE ANSWER" }]),
         ...(scenario === "new_input_missing" ? [] : [{ role: "user", content: "PRIVATE FOLLOWUP" }]),
@@ -107,15 +110,18 @@ test("cycle failure evidence separates prior final, new message and canonical in
     });
     const rejected = rows.find(row => row.stage === "native_cycle_proof_rejected")!;
     if (scenario !== "prior_final_missing") expect(rejected.prior_final_fingerprint).toBe(diagnosticFingerprint(nativeTextHash("PRIVATE ANSWER")));
-    expect(typeof rejected.request_input_fingerprints).toBe("string");
-    if (scenario === "new_input_missing") expect(rejected.request_input_fingerprints).toBe("[]");
+    const evidence = rows.filter(row => row.stage === "native_cycle_input_evidence");
+    if (scenario === "new_input_missing") expect(evidence).toEqual([]);
     if (scenario === "input_witness_missing") {
-      expect(JSON.parse(rejected.request_input_fingerprints)).toEqual([{index:0,content_fingerprint:diagnosticFingerprint(nativeTextHash("PRIVATE FOLLOWUP"))}]);
-      expect(rejected.input_witnesses).toBe("[]");
+      expect(evidence).toEqual([expect.objectContaining({ kind: "request", index: 0,
+        body_fingerprint: diagnosticFingerprint(nativeTextHash("PRIVATE FOLLOWUP")) })]);
     }
     if (scenario === "input_witness_mismatch") {
-      expect(JSON.parse(rejected.input_witnesses)).toEqual([{item_fingerprint:diagnosticFingerprint("PRIVATE ID"),
-        content_fingerprint:diagnosticFingerprint(nativeTextHash("PRIVATE FOLLOWUP")),consumed:false,matching_request_indices:[0]}]);
+      expect(evidence.filter(row => row.kind === "request")).toHaveLength(2);
+      expect(evidence.filter(row => row.kind === "witness")).toHaveLength(13);
+      expect(evidence).toContainEqual(expect.objectContaining({ kind: "witness", index: 0,
+        item_fingerprint: diagnosticFingerprint("PRIVATE ID"),
+        body_fingerprint: diagnosticFingerprint(nativeTextHash("PRIVATE FOLLOWUP")), consumed: false, matched: true }));
     }
     expect(JSON.stringify(rows)).not.toContain("PRIVATE");
   }

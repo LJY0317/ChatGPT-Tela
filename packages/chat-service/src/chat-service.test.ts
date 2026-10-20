@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { startChatService } from "./index";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
 import { createChatToolRuntime } from "./tools";
 
 
@@ -195,4 +196,41 @@ test("unknown caller capability names cannot leak private input into structural 
   expect(events.map(row=>row.capability)).toEqual(['unknown','unknown']);
   expect(JSON.stringify(events)).not.toMatch(/PRIVATE_|some\/user/);
  }finally{stop?.();await service.close();rmSync(f.base,{recursive:true,force:true})}
+});
+
+
+test.each([false, true])("failed patch headers and exact errors use existing opt-in capture only: %s", async enabled => {
+  const f = shutdownFixture();
+  const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  const log = join(f.base, "events.jsonl");
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = log;
+  if (enabled) setPrivateDiagnosticCapture(join(f.base, "diagnostics"), 1);
+  const workspace = f.tools.workspaces.open(f.root);
+  const header = `*** Add File: ${join(f.root, "private-path.txt")}`;
+  const secretBody = "source-hunk-must-not-enter-failure-capture";
+  const service = await startChatService({ bearerToken: f.token, tools: f.tools });
+  try {
+    const response = await fetch(new URL("v1/call", service.endpoint), {
+      method: "POST", headers: { authorization: `Bearer ${f.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ capability: "apply_patch", arguments: { workspace_id: workspace.id,
+        patch: `*** Begin Patch\n${header}\n+${secretBody}\n*** End Patch` } }),
+    });
+    expect(response.status).toBe(409);
+    expect(readFileSync(log, "utf8")).not.toContain("private-path.txt");
+    expect(readFileSync(log, "utf8")).not.toContain(secretBody);
+    const directory = join(f.base, "diagnostics", "private");
+    const files = enabled ? readdirSync(directory).filter(name => name.endsWith(".json") && !name.endsWith(".meta.json")) : [];
+    expect(files).toHaveLength(enabled ? 1 : 0);
+    if (enabled) {
+      const captured = JSON.parse(readFileSync(join(directory, files[0]!), "utf8"));
+      expect(captured.value.patchHeaders).toEqual([header]);
+      expect(captured.value.error).toBe("workspace-relative path must not be absolute");
+      expect(JSON.stringify(captured)).not.toContain(secretBody);
+    }
+  } finally {
+    await service.close();
+    if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+    rmSync(f.base, { recursive: true, force: true });
+  }
 });

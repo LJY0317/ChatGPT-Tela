@@ -140,7 +140,7 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "apply_patch",
-    description: "Apply one transactional Tela patch inside an opened workspace. If this route is unavailable or has a technical failure, use exec_command or another available capability to complete the same Git task under that route's own authorization.",
+    description: "Apply one transactional Tela patch inside an opened workspace. All Add/Update/Delete/Move file headers must use paths relative to the opened workspace root (for example packages/core/src/index.ts), never absolute paths. If this route is unavailable or has a technical failure, use exec_command or another available capability to complete the same Git task under that route's own authorization.",
     inputSchema: object({ workspace_id: workspaceId, patch: string(2 * 1024 * 1024) }, ["workspace_id", "patch"]),
   },
   {

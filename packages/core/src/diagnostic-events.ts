@@ -26,17 +26,29 @@ export function observeDiagnosticEvents(observer: (event: StructuralDiagnosticEv
   observers.add(observer);
   return () => { observers.delete(observer); };
 }
-const pendingIncidents = new Map<string, { root: string; stage: string; observedAt: string; firstObservedAt: string; timeline: StructuralDiagnosticEvent[]; occurrences: number; failure: StructuralDiagnosticEvent }>();
+const pendingIncidents = new Map<string, { root: string; stage: string; observedAt: string; firstObservedAt: string; timeline: StructuralDiagnosticEvent[]; occurrences: number; failure: StructuralDiagnosticEvent; bytes: number }>();
+let pendingIncidentBytes = 0;
 function scheduleIncident(root: string, event: StructuralDiagnosticEvent) {
   const key = `${root}\n${diagnosticFailureIncidentRef(event)}`;
   const previous = pendingIncidents.get(key);
-  if (previous) { previous.observedAt = event.ts; previous.timeline = recent.slice(-64); previous.occurrences++; return; }
-  if (pendingIncidents.size >= 32) return;
-  pendingIncidents.set(key, { root, stage: event.stage, observedAt: event.ts, firstObservedAt: event.ts, timeline: recent.slice(-64), occurrences: 1, failure: event });
-  // One deferred write for matching failures in a burst. Other failure kinds remain separate.
+  const record = { root, stage: event.stage, observedAt: event.ts,
+    firstObservedAt: previous?.firstObservedAt ?? event.ts, timeline: recent.slice(-64),
+    occurrences: (previous?.occurrences ?? 0) + 1, failure: event };
+  const bytes = Buffer.byteLength(JSON.stringify(record));
+  if (pendingIncidentBytes - (previous?.bytes ?? 0) + bytes > DIAGNOSTIC_LIMITS.incidentBytes) {
+    emitDiagnosticEvent("chatgpt_tela_diagnostics", "incident_capture_omitted", { reason_class: "byte_budget", requested_bytes: bytes });
+    return;
+  }
+  pendingIncidentBytes += bytes - (previous?.bytes ?? 0);
+  pendingIncidents.set(key, { ...record, bytes });
+  if (previous) return;
+  // One deferred write per failure identity, bounded by bytes rather than count.
   setImmediate(() => {
     const incident = pendingIncidents.get(key); pendingIncidents.delete(key);
-    if (incident) try { const { root: target, ...record } = incident; writeDiagnosticIncident(target, record); } catch { /* Best effort. */ }
+    if (incident) {
+      pendingIncidentBytes -= incident.bytes;
+      try { const { root: target, bytes: _bytes, ...record } = incident; writeDiagnosticIncident(target, record); } catch { /* Best effort. */ }
+    }
   });
 }
 

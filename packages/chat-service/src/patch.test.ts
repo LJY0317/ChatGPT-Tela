@@ -52,6 +52,18 @@ describe("Tela Chat patch tool", () => {
     }
   });
 
+  test("patch headers use the opened workspace root, and an absolute-path error leaves files unchanged", () => {
+    const f = fixture();
+    try {
+      const patch = (path: string) => `*** Begin Patch\n*** Add File: ${path}\n+content\n*** End Patch`;
+      expect(() => f.tool.apply({ workspaceId: f.workspace.id, patch: patch(join(f.root, "new.txt")) }))
+        .toThrow("workspace-relative path must not be absolute");
+      expect(f.tool.apply({ workspaceId: f.workspace.id, patch: patch("new.txt") }).files)
+        .toEqual([{ path: "new.txt", operation: "add" }]);
+      expect(readFileSync(join(f.root, "new.txt"), "utf8")).toBe("content\n");
+    } finally { rmSync(f.base, { recursive: true, force: true }); }
+  });
+
   test("validates every hunk before mutating earlier files", () => {
     const f = fixture();
     try {

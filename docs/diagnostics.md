@@ -39,6 +39,10 @@ available, a workspace fingerprint; never the command, patch, input or path.
 It is **not** evidence that the operation was accepted, executed or committed.
 Use existing process operation/status and workspace diff evidence for those
 claims. Its absence alone proves nothing when diagnostic transport or retention is unknown.
+Failed `apply_patch` calls additionally retain the exact error and file-action
+headers only in existing opt-in private failure capture. The full patch is not
+copied; exception text can still contain source fragments and remains private. This distinguishes workspace-relative path errors from hunk failures
+without placing paths or source text in the ordinary diagnostic log.
 
 ## Native-to-Web preparation triage
 
@@ -623,9 +627,9 @@ semantic revisions, adding observations, or logging each streamed update. They d
 
 - Structural events rotate current plus three predecessors. Default file budget: 4 MiB; three active service streams retain about 48 MiB in total.
 - An analysis reads at most 24 sources, 4 MiB per source, 4096 events per source, 128 timeline events.
-- Canonical incidents: at most 256 / 16 MiB / 30 days; individual envelope at most 128 KiB.
-- Private artifacts and metadata: at most 256 files / 64 MiB / 7 days; payload at most 8 MiB.
-  DOM text is capped at one million characters; private JSON at 256 KiB with depth/member/string caps.
+- Canonical incidents: 16 MiB / 30 days, without a count cap; individual envelope at most 128 KiB.
+- Private artifacts and metadata: 64 MiB / 7 days, without a file-count cap; payload at most 8 MiB.
+  DOM text is capped at one million characters; private JSON at 256 KiB with depth/string limits and explicit oversize omission receipts.
 - Failure bursts coalesce into one deferred incident flush; inventory snapshots are change-only,
   bounded to 256 scopes and expire on subsequent calls. No idle sampler, screenshot loop or cleanup timer.
 - Ownership markers restrict pruning to Tela-owned evidence. Foreign files and symlinks are not removed.
@@ -1234,7 +1238,7 @@ pass per incident write. Old incident and artifact metadata remain readable.
 Private browser captures and failure details group by their operation fingerprint
 and expire together, including paired metadata. High-volume tool trace JSON remains
 individually disposable and cannot enlarge a browser-evidence bundle. Byte and age
-limits are primary; 256 incident/file limits also bound directory size. Pruning is
+limits alone govern persistent incident/artifact retention. Pruning is
 on write/inspection, with no idle housekeeping. Ownership rules and explicit private
 capture consent remain unchanged.
 
@@ -1295,3 +1299,19 @@ also retains ordered lookup/attempt/timeout/TCP/TLS events and address fingerpri
 contains no request headers or bodies and uses existing private retention. This can test
 whether 250-ms address attempts expire before an otherwise usable route connects, while
 leaving remote packet loss/filtering causes unproven without corresponding evidence.
+
+
+Diagnostic source reads use a 96 MiB total scan budget and a 4 MiB tail per
+file, without a source-count or event-count cutoff. Byte truncation and unread
+sources are reported in coverage; compact presentation views remain projections
+of the retained evidence. Bursts of distinct failures also use the existing incident byte budget instead of a 32-incident cutoff. Private artifacts use byte/age retention, prioritizing
+failure evidence and renderer evidence over routine tool trace traffic. JSON
+member/array counts are not clipped; existing byte, string-length, depth and
+redaction limits remain. An oversized private JSON capture emits a structural
+`private_capture_omitted` receipt instead of silently disappearing.
+
+Rejected Native cycles record request and witness fingerprints as separate
+`native_cycle_input_evidence` scalar rows. No nested JSON string can cause the
+original failure event to exceed the safe scalar-field limit. Chat capability
+start/completion/failure events retain the same request, workspace and optional
+operation fingerprints; process receipts remain the authority for command exit.

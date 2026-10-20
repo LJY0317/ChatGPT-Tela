@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { diagnosticFingerprint, emitDiagnosticEvent } from "./diagnostic-events";
@@ -66,10 +66,10 @@ test("planner substages survive canonical filtering and reject arbitrary strings
 test("incident selection preserves early approval evidence despite later unrelated event pressure", () => {
   const root = fixture(), file = join(root,"events.jsonl"), at = Date.parse("2026-10-05T00:00:00Z");
   const selected = event("approval_wait_transition",{phase:"input_received",operation_fingerprint:fp("owned")});
-  writeFileSync(file,[selected,...Array.from({length:DIAGNOSTIC_LIMITS.events+5},()=>event("tool_started",{},"2026-10-05T01:00:00Z"))].map(row=>JSON.stringify(row)).join("\n")+"\n");
-  expect(readDiagnosticTail(file).events.some(row=>row.phase==="input_received")).toBe(false);
+  writeFileSync(file,[selected,...Array.from({length:4101},()=>event("tool_started",{},"2026-10-05T01:00:00Z"))].map(row=>JSON.stringify(row)).join("\n")+"\n");
+  expect(readDiagnosticTail(file).events.some(row=>row.phase==="input_received")).toBe(true);
   const read=readDiagnosticSources([file],{fromMs:at-1000,toMs:at+1000});
-  expect(read.events).toEqual([selected]);expect(read.coverage[0]).toMatchObject({windowSelected:true,outsideWindowRows:DIAGNOSTIC_LIMITS.events+5,eventLimitReached:false,truncated:false});
+  expect(read.events).toEqual([selected]);expect(read.coverage[0]).toMatchObject({windowSelected:true,outsideWindowRows:4101,eventLimitReached:false,truncated:false});
 });
 test("coverage records malformed and oversized evidence without leaking skipped content",()=>{
   const root=fixture(),file=join(root,"events.jsonl");
@@ -142,7 +142,7 @@ test("private capture is off, expires without polling, and pairs are bounded", (
   const root=fixture(); const capture=()=>writePrivateDiagnosticArtifact(root,{kind:"html",bytes:Buffer.from("private conversation"),operationFingerprint:fp("op")});
   expect(privateDiagnosticCaptureEnabled(root)).toBe(false); expect(capture()).toBeUndefined();
   setPrivateDiagnosticCapture(root,1); for (let i=0;i<20;i++) capture();
-  expect(readdirSync(join(root,"private")).length).toBeLessThanOrEqual(DIAGNOSTIC_LIMITS.privateFiles);
+  expect(readdirSync(join(root,"private"))).toHaveLength(40);
   const ref=writeDiagnosticIncident(root,{stage:"approval_card_anomaly",observedAt:new Date().toISOString(),timeline:[event("approval_card_anomaly",{operation_fingerprint:fp("op")})]});
   const incident=JSON.stringify(readDiagnosticIncident(root,ref)); expect(incident).toContain("privateArtifacts"); expect(incident).not.toContain("private conversation");
   writeFileSync(join(root,"capture-policy.json"),JSON.stringify({owner:"chatgpt-tela-diagnostics-v1",enabledUntil:Date.now()-1})); expect(capture()).toBeUndefined();
@@ -150,10 +150,10 @@ test("private capture is off, expires without polling, and pairs are bounded", (
 test("ongoing private capture persists with the same retention and can be explicitly stopped", () => {
   const root=fixture();
   const enabled=setPrivateDiagnosticCapture(root,"until-disabled");
-  expect(enabled).toMatchObject({ enabled:true, mode:"until-disabled", minutes:null, privacy:"private-local-only", retention:{days:7,bytes:64*1024*1024,files:DIAGNOSTIC_LIMITS.privateFiles} });
+  expect(enabled).toMatchObject({ enabled:true, mode:"until-disabled", minutes:null, privacy:"private-local-only", retention:{days:7,bytes:64*1024*1024} });
   expect(privateDiagnosticCaptureEnabled(root)).toBe(true);
   for(let i=0;i<20;i++)writePrivateDiagnosticArtifact(root,{kind:"json",bytes:Buffer.from("private evidence"),operationFingerprint:fp("ongoing")});
-  expect(readdirSync(join(root,"private")).length).toBeLessThanOrEqual(DIAGNOSTIC_LIMITS.privateFiles);
+  expect(readdirSync(join(root,"private"))).toHaveLength(40);
   setPrivateDiagnosticCapture(root,0);
   expect(privateDiagnosticCaptureEnabled(root)).toBe(false);
   expect(writePrivateDiagnosticArtifact(root,{kind:"json",bytes:Buffer.from("stopped"),operationFingerprint:fp("ongoing")})).toBeUndefined();
@@ -161,10 +161,10 @@ test("ongoing private capture persists with the same retention and can be explic
 test("tool JSON churn cannot evict renderer evidence within the existing retention budget", () => {
   const root=fixture(); setPrivateDiagnosticCapture(root,"until-disabled");
   const browser=writePrivateDiagnosticArtifact(root,{kind:"html",bytes:Buffer.from("local renderer evidence"),operationFingerprint:fp("browser")});
-  for(let i=0;i<DIAGNOSTIC_LIMITS.privateFiles*2;i++) writePrivateDiagnosticArtifact(root,{kind:"json",bytes:Buffer.from("tool traffic"),operationFingerprint:fp("tool")});
+  for(let i=0;i<300;i++) writePrivateDiagnosticArtifact(root,{kind:"json",bytes:Buffer.from("tool traffic"),operationFingerprint:fp("tool")});
   const names=readdirSync(join(root,"private"));
   expect(names).toContain(`${browser}.html`); expect(names).toContain(`${browser}.meta.json`);
-  expect(names.length).toBeLessThanOrEqual(DIAGNOSTIC_LIMITS.privateFiles);
+  expect(names).toHaveLength(602);
 });
 test("ongoing capture refuses malformed or foreign policy and symlink policy files", () => {
   const root=fixture();setPrivateDiagnosticCapture(root,"until-disabled");
@@ -221,4 +221,47 @@ test("model selection proof keeps only pseudonymous identity and finite effort c
   expect(row).toMatchObject({provider_kind:"web",effort:"xhigh",family_readback_proven:true,effort_readback_proven:true});
   expect(row.family_fingerprint).toBe(fp("private-model-label"));expect(JSON.stringify(row)).not.toContain("private-model-label");
   expect(event("web_model_selected",{effort:"private_value"}).effort).toBeUndefined();
+});
+
+
+test("byte-bounded source reads preserve early evidence across more than 24 files", () => {
+  const root = fixture();
+  const paths = Array.from({ length: 30 }, (_, index) => {
+    const file = join(root, `source-${index}.jsonl`);
+    writeFileSync(file, JSON.stringify(event("tool_started", { index })) + "\n");
+    return file;
+  });
+  const read = readDiagnosticSources(paths);
+  expect(read.events).toHaveLength(30);
+  expect(read.coverage).toHaveLength(30);
+  expect(read.byteLimitReached).toBe(false);
+});
+
+
+test("private retention still expires old artifacts and enforces the total byte budget", () => {
+  const root = fixture(); setPrivateDiagnosticCapture(root, "until-disabled");
+  const old = writePrivateDiagnosticArtifact(root, { kind: "html", bytes: Buffer.from("old evidence"), operationFingerprint: fp("old") });
+  const expired = new Date(Date.now() - 8 * 86400000);
+  for (const suffix of [".html", ".meta.json"]) utimesSync(join(root, "private", `${old}${suffix}`), expired, expired);
+  const bytes = Buffer.alloc(DIAGNOSTIC_LIMITS.privateFileBytes, 1);
+  for (let n = 0; n < 9; n++) writePrivateDiagnosticArtifact(root, { kind: "json", bytes, operationFingerprint: fp(`size-${n}`) });
+  const names = readdirSync(join(root, "private"));
+  expect(names).not.toContain(`${old}.html`);
+  const retainedBytes = names.reduce((sum, name) => sum + readFileSync(join(root, "private", name)).length, 0);
+  expect(retainedBytes).toBeLessThanOrEqual(DIAGNOSTIC_LIMITS.privateBytes);
+});
+
+
+test("a burst of more than 32 distinct failures keeps every canonical incident within the byte budget", async () => {
+  const root = fixture(), before = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = join(root, "events.jsonl");
+  try {
+    for (let index = 0; index < 40; index++) withDiagnosticContext({ scope_fingerprint: fp(`burst-${index}`) }, () =>
+      emitDiagnosticEvent("chatgpt_tela_work", "burst_failed", { reason_class: "input_rejected" }));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(listDiagnosticIncidents(join(root, "diagnostics"))).toHaveLength(40);
+  } finally {
+    if (before === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = before;
+  }
 });

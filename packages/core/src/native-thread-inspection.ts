@@ -97,7 +97,7 @@ export async function inspectNativeThread(input: {
   const coverage = {
     sourcesRead: logs.coverage.filter(item => item.state === "read").length,
     sourcesUnavailable: logs.coverage.filter(item => item.state !== "read").length,
-    limited: logs.sourceLimitReached || logs.coverage.some(item =>
+    limited: logs.byteLimitReached || logs.sourceLimitReached || logs.coverage.some(item =>
       item.truncated || item.eventLimitReached),
     eventsMatched: correlated.length,
   };
@@ -237,7 +237,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
     coverage: {
       sourcesRead: logs.coverage.filter(item => item.state === "read").length,
       sourcesUnavailable: logs.coverage.filter(item => item.state !== "read").length,
-      limited: logs.sourceLimitReached || logs.coverage.some(item => item.truncated || item.eventLimitReached),
+      limited: logs.byteLimitReached || logs.sourceLimitReached || logs.coverage.some(item => item.truncated || item.eventLimitReached),
       eventsMatched: events.length,
     },
     lastObservedAt: observedUntil,

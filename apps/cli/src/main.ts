@@ -192,7 +192,7 @@ function diagnosticsSummary(productPaths: ReturnType<typeof resolveProductPaths>
     retention: {
       detailed: { bytes: DIAGNOSTIC_LIMITS.logBytes, segmentBytes: DIAGNOSTIC_LIMITS.logFileBytes },
       incidents: { bytes: DIAGNOSTIC_LIMITS.incidentBytes, days: DIAGNOSTIC_LIMITS.incidentAgeMs / 86400000 },
-      private: { bytes: DIAGNOSTIC_LIMITS.privateBytes, files: DIAGNOSTIC_LIMITS.privateFiles, days: DIAGNOSTIC_LIMITS.privateAgeMs / 86400000 },
+      private: { bytes: DIAGNOSTIC_LIMITS.privateBytes, days: DIAGNOSTIC_LIMITS.privateAgeMs / 86400000 },
     },
     discovery: { guide: "logs/diagnostics/START-HERE.md", index: "logs/diagnostics/INDEX.json",
       commands: ["diagnostics list", "diagnostics inspect --ref <ref>", "diagnostics record --at <ISO> --symptom <kind>", "diagnostics activity"],

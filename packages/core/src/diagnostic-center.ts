@@ -46,7 +46,7 @@ export function diagnosticCenter(root: string, paths: readonly string[], command
     return { ...report,view,selection:{turnLimit:limit,turnsOmitted:report.turns.length-selected.length},
       turns:view==="full"?selected:selected.map(t=>({scopeFingerprint:t.scopeFingerprint,turnFingerprint:t.turnFingerprint,
         outcome:t.outcome,completionEvidence:t.completionEvidence,summary:t.summary,cycleReceipts:t.cycleReceipts.slice(-1)})),
-      sourceCoverage: source.coverage, archivedCycleEvents:archived.length, sourceLimitReached: source.sourceLimitReached, excludedTestEvents: source.excludedTestEvents };
+      sourceCoverage: source.coverage, archivedCycleEvents:archived.length, sourceLimitReached: source.sourceLimitReached, byteLimitReached: source.byteLimitReached, excludedTestEvents: source.excludedTestEvents };
   }
   if (command === "capture") {
     const mode = option("--mode"), minutes = option("--minutes");
@@ -72,6 +72,6 @@ export function diagnosticCenter(root: string, paths: readonly string[], command
     ...(recovered ? { recoveredAtMs: Date.parse(recovered) } : {}),
     ...(output ? { outputStartedAtMs: Date.parse(output) } : {}),
   });
-  const result = { ...analysis, sourceCoverage: source.coverage, sourceLimitReached: source.sourceLimitReached, excludedTestEvents: source.excludedTestEvents };
+  const result = { ...analysis, sourceCoverage: source.coverage, sourceLimitReached: source.sourceLimitReached, byteLimitReached: source.byteLimitReached, excludedTestEvents: source.excludedTestEvents };
   return command === "record" ? { ...result, ref: writeDiagnosticIncident(root, result) } : result;
 }

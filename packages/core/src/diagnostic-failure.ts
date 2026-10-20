@@ -53,6 +53,12 @@ function directFailureClass(error: unknown): DiagnosticFailureClass {
       || message.includes("process operation belongs to another workspace")) return "request_conflict";
     if (message.includes("process operation request identity is unavailable")
       || message.includes("unresolved execution")) return "owner_unavailable";
+    if (message.startsWith("could not find hunk context:") || message.startsWith("patch contains multiple actions")) return "request_conflict";
+    if (message.startsWith("patch target does not exist:") || message.startsWith("workspace path does not exist:")) return "not_found";
+    if (message.startsWith("workspace-relative path") || message === "path escapes the workspace"
+      || message === "path resolves outside the workspace" || message.startsWith("patch is missing")
+      || message.startsWith("unexpected patch line:") || message.startsWith("invalid patch hunk line")
+      || message.startsWith("updated file hunk is missing")) return "input_rejected";
     if (message.includes("command is empty or too large")
       || message.includes("yieldTime must be an integer")) return "input_rejected";
   } catch {

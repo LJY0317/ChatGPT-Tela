@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { diagnosticDurationMs, diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { capturePrivateDiagnosticValue, diagnosticFingerprint, diagnosticDurationMs, diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { startWebHttpServer, type WebHttpServer } from "@chatgpt-tela/http-host";
 import type { ServiceStatus } from "@chatgpt-tela/service-protocol";
 import { chatCapabilityCatalog } from "./capability-contracts";
@@ -154,20 +154,37 @@ export async function startChatService(input: {
           }
           const diagnosticCapability = input.tools.capabilities.includes(record.capability as TelaChatCapability)
             ? record.capability : "unknown";
+          const args = record.arguments as { workspace_id?: unknown; operation_id?: unknown } | null;
+          const correlation = {
+            ...(typeof args?.workspace_id === "string" && args.workspace_id.length <= 512
+              ? { workspace_fingerprint: diagnosticFingerprint(args.workspace_id) } : {}),
+            ...(typeof args?.operation_id === "string" && args.operation_id.length <= 64
+              ? { operation_fingerprint: diagnosticFingerprint(args.operation_id) } : {}),
+          };
           const startedAt = Date.now();
-          emitDiagnosticEvent("chatgpt_tela_chat", "capability_call_start", {
+          emitDiagnosticEvent("chatgpt_tela_chat", "capability_call_start", { ...correlation,
             capability: diagnosticCapability,
           });
           try {
             const result = await input.tools.call(record.capability as TelaChatCapability, record.arguments ?? {});
-            emitDiagnosticEvent("chatgpt_tela_chat", "capability_call_complete", {
+            emitDiagnosticEvent("chatgpt_tela_chat", "capability_call_complete", { ...correlation,
               capability: diagnosticCapability,
               duration_ms: diagnosticDurationMs(startedAt),
               ...resultDiagnosticFields(result),
             });
             return Response.json({ contractVersion: 1, service: "chat", capability: record.capability, result });
           } catch (error) {
-            emitDiagnosticEvent("chatgpt_tela_chat", "capability_call_failed", {
+            if (diagnosticCapability === "apply_patch") {
+              const args = record.arguments as { patch?: unknown; workspace_id?: unknown } | null;
+              // Only the existing opt-in private capture retains error/path
+              // details. Preserve action headers and the exception, not the whole patch.
+              capturePrivateDiagnosticValue("web_execution_failure", {
+                capability: "apply_patch", error: error instanceof Error ? error.message : String(error),
+                patchHeaders: typeof args?.patch === "string" ? args.patch.split("\n")
+                  .filter(line => /^\*\*\* (?:Add File|Update File|Delete File|Move to): /.test(line)) : [],
+              });
+            }
+            emitDiagnosticEvent("chatgpt_tela_chat", "capability_call_failed", { ...correlation,
               capability: diagnosticCapability,
               duration_ms: diagnosticDurationMs(startedAt),
               ...diagnosticFailureFields(error), phase: "capability",

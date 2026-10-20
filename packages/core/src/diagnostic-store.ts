@@ -5,10 +5,10 @@ import { dirname, join, resolve } from "node:path";
 
 const LOG_FILE_BYTES = 4 * 1024 * 1024;
 const LOG_TOTAL_BYTES = 32 * 1024 * 1024;
-export const DIAGNOSTIC_LIMITS = Object.freeze({ tailBytes: 4 * 1024 * 1024, sources: 24, events: 4096, timeline: 128,
+export const DIAGNOSTIC_LIMITS = Object.freeze({ tailBytes: 4 * 1024 * 1024, scanBytes: 96 * 1024 * 1024, timeline: 128,
   logFileBytes: LOG_FILE_BYTES, logBytes: LOG_TOTAL_BYTES, logSegments: Math.ceil(LOG_TOTAL_BYTES / LOG_FILE_BYTES),
   incidentBytes: 16 * 1024 * 1024, incidentAgeMs: 30 * 86400000,
-  privateFiles: 256, privateBytes: 64 * 1024 * 1024, privateFileBytes: 8 * 1024 * 1024, privateAgeMs: 7 * 86400000 });
+  privateBytes: 64 * 1024 * 1024, privateFileBytes: 8 * 1024 * 1024, privateAgeMs: 7 * 86400000 });
 export interface StructuralDiagnosticEvent { readonly ts: string; readonly event: string; readonly stage: string; readonly [key: string]: string | number | boolean; }
 const SAFE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const FORBIDDEN = /(prompt|path|url|uri|secret|email|content|command|output|argument|authorization|cookie|raw_|token|workspace_id|account_id|user_id|session_id|turn_id|thread_id)/i;
@@ -34,7 +34,7 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
   if (typeof row.ts !== "string" || !Number.isFinite(Date.parse(row.ts)) || typeof row.event !== "string" || !row.event.startsWith("chatgpt_tela_") || !SAFE_NAME.test(row.event)
     || typeof row.stage !== "string" || !SAFE_NAME.test(row.stage)) return;
   const safe: Record<string, string | number | boolean> = { ts: new Date(row.ts).toISOString(), event: row.event, stage: row.stage };
-  for (const [key, field] of Object.entries(row).slice(0, 64)) {
+  for (const [key, field] of Object.entries(row)) {
     if (["ts", "event", "stage"].includes(key) || !SAFE_NAME.test(key) || FORBIDDEN.test(key)) continue;
     if (key === "estimate_kind") {
       if (field === "conservative_upper_bound") safe[key] = field;
@@ -102,15 +102,21 @@ export function readDiagnosticTail(path: string, maxBytes = DIAGNOSTIC_LIMITS.ta
     }
     return { state: "read" as const, invalidTimestampRows, malformedRows, oversizedRows, outsideWindowRows,
       windowSelected: Boolean(window), bytesRead: used, fileBytes: stat.size, truncated: stat.size > bytes,
-      events: events.slice(-DIAGNOSTIC_LIMITS.events), eventLimitReached: events.length > DIAGNOSTIC_LIMITS.events };
+      events, eventLimitReached: false };
   } catch { return { state: "unavailable" as const, invalidTimestampRows: 0, malformedRows: 0, oversizedRows: 0,
     outsideWindowRows: 0, windowSelected: Boolean(window), bytesRead: 0, fileBytes: 0, truncated: false, events: [] as StructuralDiagnosticEvent[], eventLimitReached: false }; }
   finally { if (fd !== undefined) closeSync(fd); }
 }
 
 export function readDiagnosticSources(paths: readonly string[], window?: DiagnosticWindow) {
-  const selected = [...new Set(paths)].slice(0, DIAGNOSTIC_LIMITS.sources);
-  const sources = selected.map((path, index) => { const { events, ...coverage } = readDiagnosticTail(path, DIAGNOSTIC_LIMITS.tailBytes, window); return { index, coverage, events }; });
+  const selected = [...new Set(paths)];
+  let remaining = DIAGNOSTIC_LIMITS.scanBytes;
+  const sources = selected.flatMap((path, index) => {
+    if (!remaining) return [];
+    const { events, ...coverage } = readDiagnosticTail(path, Math.min(remaining, DIAGNOSTIC_LIMITS.tailBytes), window);
+    remaining -= coverage.bytesRead;
+    return [{ index, coverage, events }];
+  });
   const excluded = new Set<string>();
   for (const parent of new Set(selected.map(path=>dirname(path)))) {
     try {
@@ -127,7 +133,7 @@ export function readDiagnosticSources(paths: readonly string[], window?: Diagnos
     if(event.environment==="test" || excluded.has(String(event.instance_fingerprint))) { excludedTestEvents++;return false; }
     const key = JSON.stringify(event); if (seen.has(key)) return false; seen.add(key); return true;
   });
-  return { events, excludedTestEvents, coverage: sources.map(({ index, coverage }) => ({ source: index, ...coverage })), sourceLimitReached: new Set(paths).size > selected.length };
+  return { events, excludedTestEvents, coverage: sources.map(({ index, coverage }) => ({ source: index, ...coverage })), sourceLimitReached: false, byteLimitReached: sources.length < selected.length };
 }
 
 export const HOST_SYMPTOMS = ["stream-failure", "connection-interrupted", "response-stalled", "additional-review", "response-recovered", "approval-stalled", "tool-review-blocked", "missing-models", "startup-stalled", "ui-anomaly", "unknown"] as const;
@@ -232,8 +238,13 @@ function ownedRoot(root: string) {
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; writeFileSync(marker, JSON.stringify({ owner: OWNER, schemaVersion: 1 })+"\n", { flag: "wx", mode: 0o600 }); }
   directory(join(root, "incidents")); directory(join(root, "private"));
   const guide = join(root, "START-HERE.md");
-  const guideText = `# Tela diagnostics\n\nFirst run \`chatgpt-tela diagnostics list\`. Canonical incidents live in incidents/; INDEX.json is a rebuildable discovery index. Use \`diagnostics inspect --ref <incident>\` before raw events. \`diagnostics record --at <ISO-time> --symptom <kind>\` captures a bounded cross-service timeline. Private HTML/screenshots require explicit \`diagnostics capture --minutes 15\` or \`--mode until-disabled\`; stop with \`--minutes 0\`. Private capture stays local, retains at most 7 days/64 MiB/${DIAGNOSTIC_LIMITS.privateFiles} files, and must never be uploaded, returned through model tools or committed. Absence of evidence is not success. No background sampler runs.\n`;
+  const guideText = `# Tela diagnostics\n\nFirst run \`chatgpt-tela diagnostics list\`. Canonical incidents live in incidents/; INDEX.json is a rebuildable discovery index. Use \`diagnostics inspect --ref <incident>\` before raw events. \`diagnostics record --at <ISO-time> --symptom <kind>\` captures a bounded cross-service timeline. Private HTML/screenshots require explicit \`diagnostics capture --minutes 15\` or \`--mode until-disabled\`; stop with \`--minutes 0\`. Private capture stays local, retains at most 7 days/64 MiB with no file-count limit, and must never be uploaded, returned through model tools or committed. Absence of evidence is not success. No background sampler runs.\n`;
   if (!readdirSync(root).includes("START-HERE.md")) writeFileSync(guide, guideText, { flag: "wx", mode: 0o600 });
+  else if (lstatSync(guide).isFile() && !lstatSync(guide).isSymbolicLink()) {
+    const previous = readFileSync(guide, "utf8");
+    const updated = previous.replace("7 days/64 MiB/256 files", "7 days/64 MiB with no file-count limit");
+    if (updated !== previous) writeFileSync(guide, updated, { mode: 0o600 });
+  }
 }
 function files(root: string, type: "incidents" | "private") {
   const path = join(root, type); if (!lstatSync(path).isDirectory() || lstatSync(path).isSymbolicLink()) throw new Error("unsafe diagnostics directory");
@@ -253,9 +264,8 @@ function files(root: string, type: "incidents" | "private") {
   }).sort((a,b) => b.time - a.time);
 }
 function prune(root: string, type: "incidents" | "private", now = Date.now(), entries = files(root, type)) {
-  let bytes = 0; let count = 0;
+  let bytes = 0;
   const kept = new Set<string>();
-  const maxCount = type === "incidents" ? Number.POSITIVE_INFINITY : DIAGNOSTIC_LIMITS.privateFiles;
   const maxBytes = type === "incidents" ? DIAGNOSTIC_LIMITS.incidentBytes : DIAGNOSTIC_LIMITS.privateBytes;
   const age = type === "incidents" ? DIAGNOSTIC_LIMITS.incidentAgeMs : DIAGNOSTIC_LIMITS.privateAgeMs;
   const groups = new Map<string, ReturnType<typeof files>>();
@@ -268,14 +278,15 @@ function prune(root: string, type: "incidents" | "private", now = Date.now(), en
   // Tool request/result JSON can churn many times during one browser turn. Keep
   // scarce renderer evidence ahead of that traffic, within the same age/size cap.
   const retained = [...groups.values()].sort((a, b) => {
-    const browser = (group: typeof a) => group.some(item => /\.(?:html|jpg)$/.test(item.name)) ? 1 : 0;
-    return browser(b) - browser(a);
+    const priority = (group: typeof a) => group.some(item => item.proof.evidenceClass === "failure") ? 2
+      : group.some(item => /\.(?:html|jpg)$/.test(item.name)) ? 1 : 0;
+    return priority(b) - priority(a);
   });
   for (const group of retained) {
     const groupBytes = group.reduce((sum,item) => sum+item.bytes,0);
-    if (now-Math.min(...group.map(item=>item.time)) > age || count+group.length > maxCount || bytes+groupBytes > maxBytes) {
+    if (now-Math.min(...group.map(item=>item.time)) > age || bytes+groupBytes > maxBytes) {
       for (const item of group) rmSync(join(root,type,item.name), { force: true });
-    } else { bytes += groupBytes; count+=group.length; for (const item of group) kept.add(item.name); }
+    } else { bytes += groupBytes; for (const item of group) kept.add(item.name); }
   }
   return kept;
 }
@@ -363,7 +374,7 @@ export function setPrivateDiagnosticCapture(root: string, duration: number | "un
     enabledUntil: typeof duration === "number" && duration > 0 ? Date.now()+duration*60000 : 0 });
   return { enabled: mode !== "off", mode, minutes: typeof duration === "number" ? duration : null,
     privacy: "private-local-only", stop: "diagnostics capture --minutes 0",
-    retention: { days: DIAGNOSTIC_LIMITS.privateAgeMs / 86400000, bytes: DIAGNOSTIC_LIMITS.privateBytes, files: DIAGNOSTIC_LIMITS.privateFiles },
+    retention: { days: DIAGNOSTIC_LIMITS.privateAgeMs / 86400000, bytes: DIAGNOSTIC_LIMITS.privateBytes },
     next: mode === "until-disabled" ? "Capture remains enabled until explicitly disabled; retention stays bounded. No background sampler runs."
       : "Capture expires without a timer or restart. No background sampler runs." };
 }

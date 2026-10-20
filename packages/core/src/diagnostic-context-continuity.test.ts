@@ -71,7 +71,7 @@ test("reports omit unclassified private payloads, exclude test origins and expos
   const report = summarizeContextContinuity({ events: [row, event("web_turn_plan", { environment: "test", turn_fingerprint: turn2 })], atMs: 5000 });
   expect(report.turns).toHaveLength(1); expect(JSON.stringify(report)).not.toContain("PRIVATE");
   expect(report.turns[0].plans[0].mode).toBe("unknown");
-  expect(summarizeContextContinuity({ events: Array.from({ length: 4097 }, () => event("unrelated")), atMs: 100000 }).evidenceLimits.eventLimitReached).toBe(true);
+  expect(summarizeContextContinuity({ events: Array.from({ length: 4097 }, () => event("unrelated")), atMs: 100000 }).evidenceLimits.eventLimitReached).toBe(false);
   expect(() => summarizeContextContinuity({ events: [], atMs: 5000, scope: "private account" })).toThrow();
 });
 

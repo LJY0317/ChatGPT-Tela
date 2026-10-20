@@ -9,7 +9,7 @@ const count = (v: unknown): number | undefined => typeof v === "number" && Numbe
 /** On-demand, bounded evidence projection. Never reads history, private artifacts, or sends a model call. */
 export function summarizeContextContinuity(input: { events: readonly StructuralDiagnosticEvent[]; scope?: string; atMs: number }) {
   if (!Number.isFinite(input.atMs) || (input.scope !== undefined && !FP.test(input.scope))) throw Error("invalid context report selection");
-  const rows = input.events.slice(-4096).flatMap(row => {
+  const rows = input.events.flatMap(row => {
     const safe = structuralDiagnosticEvent(row); return safe && safe.environment !== "test" && Date.parse(safe.ts) <= input.atMs ? [safe] : [];
   }).sort((a, b) => a.ts.localeCompare(b.ts));
   const requests = new Map<string, Set<string>>();
@@ -170,7 +170,7 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
   }
   return { contractVersion: 2, privacy: "structural-only", generatedAt: new Date(input.atMs).toISOString(),
     tokenAccounting: "local_estimates_only", semanticRecall: "not_evaluated", turns: [...turns.values()],
-    evidenceLimits: { eventLimitReached: input.events.length > 4096, turnLimitReached: omittedTurns > 0, planLimitReached, disconnectLimitReached, unattributedEvents,
+    evidenceLimits: { eventLimitReached: false, turnLimitReached: omittedTurns > 0, planLimitReached, disconnectLimitReached, unattributedEvents,
       ambiguousRequests: [...requests.values()].filter(v => v.size > 1).length, ambiguousOperations:[...operations.values()].filter(v=>v.size>1).length,unattributedOperationEvents,conflictingLinks },
     limitations: ["Fingerprints correlate evidence, not authenticated account identity.",
       "Missing, clipped or rotated evidence is unknown, not success or context loss.",

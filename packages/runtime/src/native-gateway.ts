@@ -248,7 +248,7 @@ export class NativeResponsesGateway {
       if (!fresh.length || newMessages.length !== fresh.length || newMessages.some(message => !fresh.some(input => input.textHash === message.hash))) {
         // Failure-triggered structural evidence distinguishes an absent final anchor,
         // no new user message, and an absent/mismatched canonical input witness.
-        withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId), turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () =>
+        withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId), turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () => {
           emitDiagnosticEvent("chatgpt_tela_work", "native_cycle_proof_rejected", {
             reason_class: finalIndex < 0 ? "prior_final_missing" : !newMessages.length ? "new_input_missing"
               : !fresh.length ? "input_witness_missing" : "input_witness_mismatch",
@@ -259,18 +259,18 @@ export class NativeResponsesGateway {
             unconsumed_input_count: inputs.filter(input => !lifetime!.consumedInputs.has(input.id)).length,
             exact_request_replay: lifetime!.requestHash === requestHash(body),
             ...(finalIndex >= 0 ? { prior_final_fingerprint: diagnosticFingerprint(messages[finalIndex]!.hash) } : {}),
-            request_input_fingerprints: JSON.stringify(newMessages.map((message, index) => ({
-              index, content_fingerprint: diagnosticFingerprint(message.hash),
-            }))),
-            input_witnesses: JSON.stringify(inputs.filter(input => !lifetime!.consumedInputs.has(input.id)
-              || newMessages.some(message => message.hash === input.textHash)).map(input => ({
-                item_fingerprint: diagnosticFingerprint(input.id),
-                content_fingerprint: diagnosticFingerprint(input.textHash),
-                consumed: lifetime!.consumedInputs.has(input.id),
-                matching_request_indices: newMessages.flatMap((message, index) =>
-                  message.hash === input.textHash ? [index] : []),
-              }))),
+          });
+          // Flat scalar rows survive the safe emitter/readback contract. Never
+          // serialize arrays into a string that can discard the whole failure.
+          newMessages.forEach((message, index) => emitDiagnosticEvent("chatgpt_tela_work", "native_cycle_input_evidence", {
+            kind: "request", index, body_fingerprint: diagnosticFingerprint(message.hash),
           }));
+          inputs.forEach((input, index) => emitDiagnosticEvent("chatgpt_tela_work", "native_cycle_input_evidence", {
+            kind: "witness", index, item_fingerprint: diagnosticFingerprint(input.id),
+            body_fingerprint: diagnosticFingerprint(input.textHash), consumed: lifetime!.consumedInputs.has(input.id),
+            matched: newMessages.some(message => message.hash === input.textHash),
+          }));
+        });
         this.#rejectCycle(identity, "missing_input_proof", "Native response cycle continuation lacks proven new input and prior final delivery");
       }
       // A final answer may reach Native before browser/context settlement. Never overlap planners.
