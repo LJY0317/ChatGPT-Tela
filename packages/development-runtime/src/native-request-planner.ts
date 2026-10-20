@@ -1259,8 +1259,18 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     const authority = boundContext.segments.filter(segment => segment.type !== "checkpoint").filter(segment => segment.kind === "system" || segment.kind === "developer");
     const authorityByContent = new Map(authority.map(segment => [createHash("sha256").update(segment.content).digest("hex"), Buffer.byteLength(segment.content, "utf8")]));
     const authorityUniqueBytes = [...authorityByContent.values()].reduce((sum, bytes) => sum + bytes, 0);
+    const seedRevisions = new Set<string>();
+    let repeatedRevisionBytes = 0;
+    for (const segment of boundContext.segments) {
+      const identity = segment.type === "checkpoint" ? `checkpoint:${segment.checkpointId}` : `revision:${segment.revisionId}`;
+      if (seedRevisions.has(identity)) repeatedRevisionBytes += Buffer.byteLength(segment.content, "utf8");
+      seedRevisions.add(identity);
+    }
     emitDiagnosticEvent("chatgpt_tela_codex", "native_seed_authority_observed", {
       segment_count: authority.length, unique_segment_count: authorityByContent.size,
+      seed_revision_count: boundContext.segments.length, seed_unique_revision_count: seedRevisions.size,
+      seed_repeated_revision_count: boundContext.segments.length - seedRevisions.size,
+      seed_repeated_revision_bytes: repeatedRevisionBytes,
       authority_bytes: seedBytes.authority, unique_authority_bytes: authorityUniqueBytes,
       duplicate_authority_bytes: seedBytes.authority - authorityUniqueBytes,
       largest_segment_bytes: [...authorityByContent.values()].reduce((largest, bytes) => Math.max(largest, bytes), 0),

@@ -972,6 +972,8 @@ describe("Native request development Web planner", () => {
       const event=log.trim().split('\n').map(line=>JSON.parse(line)).find(row=>row.stage==='native_seed_authority_observed');
       expect(event).toMatchObject({segment_count:2,unique_segment_count:1,authority_bytes:content.length*2,
         duplicate_authority_bytes:content.length,system_bytes:content.length,developer_bytes:content.length});
+      expect(event).toMatchObject({seed_revision_count:3,seed_unique_revision_count:3,
+        seed_repeated_revision_count:0,seed_repeated_revision_bytes:0});
       expect(log).not.toContain('PRIVATE_AUTHORITY');
       expect(result.physicalContext.segments.filter(segment=>segment.content===content)).toHaveLength(2);
       result.settle?.({status:'failed'});
