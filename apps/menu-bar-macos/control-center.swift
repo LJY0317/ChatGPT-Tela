@@ -48,7 +48,13 @@ private struct ControlCenterDelegationCapacity: Decodable {
   }
 }
 
-private struct ControlCenterBridgeSurface: Decodable { let id: String; let label: String }
+private struct ControlCenterBridgeSurface: Decodable, Equatable { let id: String; let label: String }
+private struct ControlCenterBridgeInventory: Decodable {
+  let contractVersion: Int
+  let slot: Int
+  let revision: Int
+  let surfaces: [ControlCenterBridgeSurface]
+}
 private struct ControlCenterApprovalWait: Decodable {
   let phase: String
   let elapsedMs: Int
@@ -198,6 +204,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       profileAccounts.removeAll()
       if !refreshing { refreshProfileAccounts() }
     }
+    updateSurfaceWatches()
     if !refreshing && (selectedPage == .work || selectedPage == .home) { renderCurrentPage() }
   }
   private let fileManager = FileManager.default
@@ -272,7 +279,12 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var bridgeImage: NSImage?
   private var bridgeMessage = "No preview requested yet."
   private var selectedPreviewSlot: Int?
-  private var bridgeSurfaces: [ControlCenterBridgeSurface] = []
+  private var bridgeSurfaces: [Int: [ControlCenterBridgeSurface]] = [:]
+  private var surfaceWatches: [Int: Task<Void, Never>] = [:]
+  private var surfaceWatchIDs: [Int: UUID] = [:]
+  private var surfaceEndpoint: String?
+  private var surfaceOwners: [Int: String] = [:]
+  private var surfaceMessages: [Int: String] = [:]
   private var selectedBridgeSurface: String?
   private var previewRevision = 0
   private var preferenceError = false
@@ -295,6 +307,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     window.makeKeyAndOrderFront(nil)
     window.orderFrontRegardless()
     onWindowStateChanged?("window_shown")
+    updateSurfaceWatches()
     Task { await refreshCurrentPage() }
   }
 
@@ -307,7 +320,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
   func windowDidBecomeKey(_ notification: Notification) { onWindowStateChanged?("window_key") }
   func windowDidResignKey(_ notification: Notification) { onWindowStateChanged?("window_not_key") }
-  func windowDidChangeOcclusionState(_ notification: Notification) { onWindowStateChanged?("window_visibility_changed") }
+  func windowDidChangeOcclusionState(_ notification: Notification) {
+    onWindowStateChanged?("window_visibility_changed")
+    updateSurfaceWatches()
+  }
 
   func showFirstUseIfNeeded() async {
     await loadBootstrapStatus()
@@ -317,6 +333,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   func windowShouldClose(_ sender: NSWindow) -> Bool {
     // The control center is a view over the background product. Closing it must not stop Tela.
     sender.orderOut(nil)
+    updateSurfaceWatches()
     clearAccountDisplay()
     return false
   }
@@ -768,31 +785,28 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       }
       let preview = card("Web activity")
       let runningProfiles = profiles.filter { $0.controlState == "running" }
-      if runningProfiles.count > 1 {
-        let picker = NSPopUpButton()
-        for profile in runningProfiles {
-          picker.addItem(withTitle: profile.targetDisplayName)
-          picker.lastItem?.representedObject = profile.slot
+      for profile in runningProfiles {
+        if profiles.count > 1 { append(secondary(profile.targetDisplayName), to: preview) }
+        let surfaces = bridgeSurfaces[profile.slot] ?? []
+        if let message = surfaceMessages[profile.slot] { append(secondary(message), to: preview) }
+        else if bridgeSurfaces[profile.slot] == nil { append(secondary("Loading…"), to: preview) }
+        else if surfaces.isEmpty { append(secondary("No active Web sessions"), to: preview) }
+        for surface in surfaces {
+          let selected = selectedPreviewSlot == profile.slot && selectedBridgeSurface == surface.id
+          let button = NSButton(title: surface.label, target: self, action: #selector(selectBridgeSurface(_:)))
+          button.setButtonType(.pushOnPushOff)
+          button.bezelStyle = .recessed
+          button.state = selected ? .on : .off
+          button.alignment = .left
+          button.lineBreakMode = .byTruncatingTail
+          button.tag = profile.slot
+          button.identifier = NSUserInterfaceItemIdentifier(surface.id)
+          button.toolTip = surface.label
+          button.setAccessibilityLabel(surface.label)
+          append(button, to: preview)
         }
-        if let selectedPreviewSlot,
-           let index = runningProfiles.firstIndex(where: { $0.slot == selectedPreviewSlot }) {
-          picker.selectItem(at: index)
-        }
-        picker.target = self
-        picker.action = #selector(selectPreviewProfile(_:))
-        row("Profile", control: picker, in: preview)
       }
-      if !bridgeSurfaces.isEmpty {
-        let picker = NSPopUpButton()
-        picker.addItem(withTitle: "Choose Web session…")
-        for (index, surface) in bridgeSurfaces.enumerated() {
-          picker.addItem(withTitle: "\(index + 1). \(surface.label)")
-          picker.lastItem?.representedObject = surface.id
-        }
-        if let selectedBridgeSurface, let index = bridgeSurfaces.firstIndex(where: { $0.id == selectedBridgeSurface }) { picker.selectItem(at: index + 1) }
-        picker.target = self; picker.action = #selector(selectBridgeSurface(_:))
-        row("Web session", control: picker, in: preview)
-      }
+      if runningProfiles.isEmpty { append(secondary("No active Web sessions"), to: preview) }
       if let bridgeImage {
         let imageView = NSImageView(image: bridgeImage)
         imageView.imageScaling = .scaleProportionallyUpOrDown
@@ -819,7 +833,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       actions.distribution = .fill
       actions.orientation = .horizontal
       actions.spacing = 12
-      actions.addArrangedSubview(actionButton("View snapshot", action: #selector(refreshBridgePreview)))
+      let snapshot = actionButton("View snapshot", action: #selector(refreshBridgePreview))
+      snapshot.isEnabled = selectedBridgeSurface != nil
+      actions.addArrangedSubview(snapshot)
       let show = actionButton("Open browser", action: #selector(revealBridgeSurface))
       show.isEnabled = selectedBridgeSurface != nil
       actions.addArrangedSubview(show)
@@ -1243,6 +1259,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     guard let raw = sender.identifier?.rawValue,
           let page = ControlCenterPage(rawValue: raw) else { return }
     selectedPage = page
+    updateSurfaceWatches()
     if page != .work { clearAccountDisplay() }
     updateNavigation()
     renderCurrentPage()
@@ -1250,18 +1267,16 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     Task { await refreshCurrentPage() }
   }
 
-  @objc private func refreshPage() { Task { await refreshCurrentPage() } }
+  @objc private func refreshPage() {
+    for task in surfaceWatches.values { task.cancel() }
+    surfaceWatches.removeAll(); surfaceWatchIDs.removeAll()
+    Task { await refreshCurrentPage() }
+  }
   @objc private func refreshBridgePreview() { Task { await loadBridgePreview() } }
 
-  @objc private func selectPreviewProfile(_ sender: NSPopUpButton) {
-    selectedPreviewSlot = sender.selectedItem?.representedObject as? Int
-    bridgeSurfaces = []; selectedBridgeSurface = nil
-    bridgeImage = nil
-    Task { await loadBridgePreview() }
-  }
-
-  @objc private func selectBridgeSurface(_ sender: NSPopUpButton) {
-    selectedBridgeSurface = sender.selectedItem?.representedObject as? String
+  @objc private func selectBridgeSurface(_ sender: NSButton) {
+    selectedPreviewSlot = sender.tag
+    selectedBridgeSurface = sender.identifier?.rawValue
     bridgeImage = nil
     Task { await loadBridgePreview() }
   }
@@ -1279,7 +1294,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         renderCurrentPage()
       } catch {
         bridgeMessage = "This Web session is no longer available. Refresh the session list."
-        bridgeImage = nil; selectedBridgeSurface = nil; bridgeSurfaces = []
+        bridgeImage = nil; selectedBridgeSurface = nil
         renderCurrentPage()
       }
     }
@@ -1606,7 +1621,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     request.httpMethod = method
     if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     request.setValue("Bearer \(descriptor.bearerToken)", forHTTPHeaderField: "Authorization")
-    request.timeoutInterval = TelaRequestBudget.seconds(path: path, method: method)
+    // Metadata waits for a surface lifecycle event; Task cancellation owns its lifetime.
+    request.timeoutInterval = path.contains("/bridge-surfaces?since=") ? TimeInterval(Int32.max)
+      : TelaRequestBudget.seconds(path: path, method: method)
     let (data, response) = try await URLSession.shared.data(for: request)
     guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
       throw NSError(domain: "ChatGPTTelaControlCenter", code: 4)
@@ -1647,6 +1664,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     serviceStates = ["gateway": await gateway, "chat": await chat, "codex": await codex]
     ingressStatus = await ingress
     await loadProfiles()
+    updateSurfaceWatches()
     delegationCapacity = [:]
     if selectedPage == .work, let descriptor = try? readDescriptor("codex") {
       for profile in profiles {
@@ -1743,6 +1761,85 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     } catch { return nil }
   }
 
+  private func updateSurfaceWatches() {
+    let visible = selectedPage == .work && window?.isVisible == true
+      && window?.occlusionState.contains(.visible) == true
+    let descriptor = try? readDescriptor("codex")
+    let endpoint = descriptor.map { $0.endpoint + $0.bearerToken }
+    if endpoint != surfaceEndpoint {
+      for task in surfaceWatches.values { task.cancel() }
+      surfaceWatches.removeAll(); surfaceWatchIDs.removeAll()
+      surfaceEndpoint = endpoint
+    }
+    let slots = visible ? Set(profiles.filter { $0.controlState == "running" }.map { $0.slot }) : []
+    let owners = Dictionary(uniqueKeysWithValues: profiles.map {
+      ($0.slot, "\($0.targetId ?? ""):\($0.desktopProcessId ?? 0)")
+    })
+    for slot in Array(surfaceWatches.keys) where !slots.contains(slot) || surfaceOwners[slot] != owners[slot] {
+      surfaceWatches.removeValue(forKey: slot)?.cancel()
+      surfaceWatchIDs.removeValue(forKey: slot)
+      if surfaceOwners[slot] != owners[slot] {
+        bridgeSurfaces.removeValue(forKey: slot)
+        if selectedPreviewSlot == slot { clearBridgeSelection() }
+      }
+    }
+    surfaceOwners = owners
+    for slot in Array(bridgeSurfaces.keys) where !profiles.contains(where: { $0.slot == slot && $0.controlState == "running" }) {
+      bridgeSurfaces.removeValue(forKey: slot)
+      if selectedPreviewSlot == slot { clearBridgeSelection() }
+    }
+    guard let descriptor else { return }
+    for slot in slots where surfaceWatches[slot] == nil {
+      let watchID = UUID()
+      surfaceWatchIDs[slot] = watchID
+      surfaceMessages[slot] = bridgeSurfaces[slot] == nil ? "Loading…" : nil
+      surfaceWatches[slot] = Task { [weak self] in
+        guard let self else { return }
+        defer {
+          if self.surfaceWatchIDs[slot] == watchID {
+            self.surfaceWatches.removeValue(forKey: slot)
+            self.surfaceWatchIDs.removeValue(forKey: slot)
+          }
+        }
+        var revision: Int?
+        do {
+          while !Task.isCancelled {
+            let suffix = revision.map { "?since=\($0)" } ?? ""
+            let data = try await self.request(descriptor, path: "v1/codex/profiles/\(slot)/bridge-surfaces" + suffix)
+            try Task.checkCancellation()
+            let value = try JSONDecoder().decode(ControlCenterBridgeInventory.self, from: data)
+            guard value.contractVersion == 1, value.slot == slot else { return }
+            revision = value.revision
+            let wasUnavailable = self.surfaceMessages.removeValue(forKey: slot) != nil
+            if self.bridgeSurfaces[slot] != value.surfaces {
+              self.bridgeSurfaces[slot] = value.surfaces
+              if self.selectedPreviewSlot == slot,
+                 !value.surfaces.contains(where: { $0.id == self.selectedBridgeSurface }) {
+                self.clearBridgeSelection()
+              }
+              self.renderCurrentPage()
+            } else if wasUnavailable { self.renderCurrentPage() }
+          }
+        } catch {
+          if !Task.isCancelled, self.surfaceWatchIDs[slot] == watchID {
+            self.surfaceMessages[slot] = "Sessions unavailable"
+            self.renderCurrentPage()
+          }
+          // Preserve the list on transport failure. Explicit refresh or a new visibility
+          // lifecycle restarts observation; never spin or infer that sessions ended.
+        }
+      }
+    }
+  }
+
+  private func clearBridgeSelection() {
+    previewRevision += 1
+    selectedBridgeSurface = nil
+    selectedPreviewSlot = nil
+    bridgeImage = nil
+    bridgeMessage = "Choose a Web session"
+  }
+
   private func loadBridgePreview() async {
     previewLoads += 1
     renderCurrentPage()
@@ -1750,32 +1847,27 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     previewRevision += 1
     let revision = previewRevision
     bridgeImage = nil
-    guard let profile = profiles.first(where: { $0.controlState == "running" && $0.slot == selectedPreviewSlot })
-      ?? profiles.first(where: { $0.controlState == "running" }) else {
-      bridgeMessage = "No Tela-owned running profile. A preview is available only while Tela owns the Work/Codex profile."
-      renderCurrentPage()
+    guard let slot = selectedPreviewSlot, let selection = selectedBridgeSurface,
+          profiles.contains(where: { $0.controlState == "running" && $0.slot == slot }) else {
+      bridgeMessage = "Choose a Web session"
       return
     }
     do {
       guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "ChatGPTTelaControlCenter", code: 5) }
-      selectedPreviewSlot = profile.slot
-      let selection = selectedBridgeSurface
-      let suffix = selection.map { "?surfaceId=" + $0 } ?? ""
-      let data = try await request(descriptor, path: "v1/codex/profiles/\(profile.slot)/bridge-preview" + suffix)
-      guard revision == previewRevision else { return }
+      let suffix = "?surfaceId=" + selection
+      let data = try await request(descriptor, path: "v1/codex/profiles/\(slot)/bridge-preview" + suffix)
+      guard revision == previewRevision, selectedPreviewSlot == slot, selectedBridgeSurface == selection else { return }
       let preview = try JSONDecoder().decode(ControlCenterBridgePreview.self, from: data)
-      guard preview.contractVersion == 1, preview.slot == profile.slot else { throw NSError(domain: "ChatGPTTelaControlCenter", code: 6) }
-      bridgeSurfaces = preview.surfaces ?? []
-      selectedBridgeSurface = preview.selectedSurfaceId
+      guard preview.contractVersion == 1, preview.slot == slot else { throw NSError(domain: "ChatGPTTelaControlCenter", code: 6) }
       if preview.previewAvailable,
          preview.imageMimeType == "image/jpeg",
          let encoded = preview.imageBase64,
          let imageData = Data(base64Encoded: encoded),
          let image = NSImage(data: imageData) {
         bridgeImage = image
-        bridgeMessage = "Profile \(profile.slot) · selected Web session · snapshot only"
+        bridgeMessage = "Snapshot"
       } else if preview.activeSurfaceCount == 0 {
-        bridgeMessage = "Profile \(profile.slot) is running, but no Work/Codex browser surface is active right now."
+        bridgeMessage = "This Web session has ended."
       } else {
         bridgeMessage = "Choose a Web session to view its snapshot or open its browser."
       }
@@ -1790,8 +1882,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           : "\nApproval observation failed; do not assume the card was cleared."
       }
     } catch {
-      guard revision == previewRevision else { return }
-      bridgeSurfaces = []; selectedBridgeSurface = nil
+      guard revision == previewRevision, selectedPreviewSlot == slot, selectedBridgeSurface == selection else { return }
       bridgeMessage = "The Web session is no longer available. Refresh the session list."
     }
     renderCurrentPage()

@@ -39,6 +39,8 @@ export interface NativeFirstProfileRuntime {
   /** Browser/account/connector admission, NOT Desktop picker visibility or freshness. */
   readonly webState: NativeFirstWebState;
   readonly webRuntime: ElectronDevelopmentRuntime | undefined;
+  bridgeSurfaces(): ReturnType<ElectronDevelopmentRuntime["bridgeSurfaces"]>;
+  onBridgeSurfacesChanged(listener: () => void): () => void;
   readonly webModelIds: readonly string[];
   /** Exact owner-managed account browser currently suspends Web admission. */
   readonly accountManagementActive: boolean;
@@ -205,6 +207,13 @@ export async function startNativeFirstProductProfileRuntime(
   const nativeEngine = options.nativeStarter ? options.nativeEngine : resolveOwnedNativeEngine();
   let state: NativeFirstWebState = "preparing";
   let browser: ElectronDevelopmentRuntime | undefined;
+  let surfaceRevision = 0;
+  const surfaceListeners = new Set<() => void>();
+  let detachSurfaces: (() => void) | undefined;
+  const surfacesChanged = () => {
+    surfaceRevision++;
+    for (const listener of surfaceListeners) listener();
+  };
   let admitted: readonly ChatGptWebModelFamily[] = [];
   let displayed = readWebModelDisplayCache(config.browserProfile);
   let preparation: Promise<void> | undefined;
@@ -226,6 +235,9 @@ export async function startNativeFirstProductProfileRuntime(
   const isClosed = () => state === "closed";
   const setState = (next: NativeFirstWebState) => {
     state = next;
+    detachSurfaces?.();
+    detachSurfaces = next === "ready" ? browser?.onBridgeSurfacesChanged(surfacesChanged) : undefined;
+    surfacesChanged();
     emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_admission_state", { state: next });
     options.onWebState?.(next);
   };
@@ -494,6 +506,12 @@ export async function startNativeFirstProductProfileRuntime(
     config, responses, internalMcp: mcp, routedTarget: target.routedTarget,
     get webState() { return state; },
     get webRuntime() { return state === "ready" ? browser : undefined; },
+    bridgeSurfaces: () => ({ revision: surfaceRevision,
+      surfaces: state === "ready" ? browser?.bridgeSurfaces().surfaces ?? [] : [] }),
+    onBridgeSurfacesChanged(listener) {
+      surfaceListeners.add(listener);
+      return () => { surfaceListeners.delete(listener); };
+    },
     get webModelIds() { return Object.freeze(admitted.map(family => chatGptWebModelId(family.key))); },
     get accountManagementActive() { return accountBrowserBlocked; },
     async waitForWeb() { await preparation?.catch(() => {}); },

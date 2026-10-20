@@ -126,6 +126,7 @@ export interface CodexService {
   inspectAccountBrowserHistoryUi?(slot: number): Promise<CodexHistoryUiContract>;
   runSavedDeleteAcceptance?(slot: number): Promise<CodexSavedDeleteAcceptanceContract>;
   recoverSyntheticSavedChat?(slot: number): Promise<CodexSyntheticRecoveryContract>;
+  bridgeSurfaces(slot: number, since?: number, signal?: AbortSignal): Promise<{ contractVersion: 1; slot: number; revision: number; surfaces: readonly { id: string; label: string }[] }>;
   bridgePreview(slot: number, surfaceId?: string): Promise<CodexBridgePreviewContract>;
   accountCheck?(slot: number): Promise<CodexAccountCheckContract>;
   accountDisplay?(slot: number): Promise<CodexAccountDisplayContract>;
@@ -766,6 +767,25 @@ export async function startCodexService(input: {
     },
     async accountDisplay(slotValue: number) {
       return readProfileAccount(slotValue, "v1/account-display", parseCodexAccountDisplayContract);
+    },
+    async bridgeSurfaces(slotValue: number, since?: number, signal?: AbortSignal) {
+      const slot = slotNumber(slotValue);
+      const profile = owned.get(slot);
+      if (!profile || profile.stopping || profile.child.exitCode !== null || profile.child.signalCode !== null) {
+        throw new Error("profile browser surfaces unavailable");
+      }
+      const url = new URL("v1/bridge-surfaces", profile.bridgePreviewUrl);
+      if (since !== undefined) url.searchParams.set("since", String(since));
+      const response = await fetch(url, { headers: { authorization: `Bearer ${profile.uiToken}` }, ...(signal ? { signal } : {}) });
+      if (!response.ok) throw new Error("profile browser surfaces unavailable");
+      const result = await response.json() as { contractVersion: number; slot: number; revision: number; surfaces: { id: string; label: string }[] };
+      if (result.contractVersion !== 1 || result.slot !== slot || !Number.isSafeInteger(result.revision)
+        || result.revision < 0 || !Array.isArray(result.surfaces)
+        || result.surfaces.some(row => !/^surface_[A-Za-z0-9_-]{32}$/.test(row.id) || typeof row.label !== "string" || row.label.length > 200)
+        || new Set(result.surfaces.map(row => row.id)).size !== result.surfaces.length) {
+        throw new Error("invalid browser surface inventory");
+      }
+      return { contractVersion: 1 as const, slot, revision: result.revision, surfaces: result.surfaces };
     },
     async bridgePreview(slotValue: number, surfaceId?: string) {
       const slot = slotNumber(slotValue);

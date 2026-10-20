@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createBrowserSurfaceCapability } from "./index";
-import { ControlledBrowserHost, type BrowserSurfaceController } from "./controlled";
+import { ControlledBrowserHost, safeSurfaceLabel, type BrowserSurfaceController } from "./controlled";
 
 describe("controlled browser host", () => {
   test("reserves ownership before asynchronous controller creation", async () => {
@@ -124,4 +124,29 @@ test("explicit surface selection never falls back to a different live generation
   await expect(host.revealSurface(b.leaseId)).rejects.toThrow("no longer owned");
   expect(host.selectedCapability(a.leaseId, preview)?.value).toBe("A");
   await host.close();
+});
+
+
+test("surface inventory follows lease and title events without observing the page", async () => {
+  let title = "$chatgpt-tela <chatgpt_tela_transport_contract> private context";
+  let titleChanged: (() => void) | undefined;
+  let notifications = 0;
+  const host = new ControlledBrowserHost(async () => ({
+    displayName: () => title,
+    onLabelChange(listener) { titleChanged = listener; return () => { titleChanged = undefined; }; },
+    async navigate() {}, async reveal() {}, async hide() {}, async close() {},
+  }));
+  const detach = host.onSurfacesChanged(() => { notifications++; });
+  const lease = await host.acquire({ taskId: "inventory", epochId: "one" });
+  expect(host.listSurfaces()).toEqual([{ id: lease.leaseId, label: "Web session 1" }]);
+  title = "A useful task"; titleChanged!();
+  expect(host.listSurfaces()[0]?.label).toBe(title);
+  expect(host.surfaceRevision).toBe(2);
+  await host.release(lease.leaseId);
+  expect(titleChanged).toBeUndefined();
+  expect(host.listSurfaces()).toEqual([]);
+  expect(notifications).toBe(3);
+  detach(); await host.close();
+  expect(notifications).toBe(3);
+  expect(safeSurfaceLabel("Act as the model backend for private task", 1)).toBe("Web session 2");
 });

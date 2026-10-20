@@ -84,6 +84,8 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
    * Multiple surfaces require explicit selection of a currently owned lease.
    */
   revealBridgeSurface(id: string, interactive?: boolean): Promise<void>;
+  bridgeSurfaces(): { readonly revision: number; readonly surfaces: readonly { readonly id: string; readonly label: string }[] };
+  onBridgeSurfacesChanged(listener: () => void): () => void;
   observeBridgePreview(id?: string): Promise<{
     readonly activeSurfaceCount: number;
     readonly surfaces?: readonly { readonly id: string; readonly label: string }[];
@@ -177,7 +179,7 @@ function webSurfacePurpose(input: { taskId: string; epochId: string }):
 
 function countedWebSurfaceHost(
   physical: Awaited<ReturnType<typeof createElectronMainProcessBrowserHost>>,
-): BrowserHost & Pick<typeof physical, "selectedCapability" | "selectedSurfaceLease" | "listSurfaces" | "revealSurface"> {
+): BrowserHost & Pick<typeof physical, "selectedCapability" | "selectedSurfaceLease" | "listSurfaces" | "revealSurface" | "surfaceRevision" | "onSurfacesChanged"> {
   let total = 0;
   const perPurpose = new Map<ReturnType<typeof webSurfacePurpose>, number>();
   return Object.freeze({
@@ -203,6 +205,8 @@ function countedWebSurfaceHost(
     selectedCapability: physical.selectedCapability.bind(physical),
     selectedSurfaceLease: physical.selectedSurfaceLease.bind(physical),
     listSurfaces: () => physical.listSurfaces(),
+    get surfaceRevision() { return physical.surfaceRevision; },
+    onSurfacesChanged: (listener: () => void) => physical.onSurfacesChanged(listener),
     revealSurface: (leaseId: string) => physical.revealSurface(leaseId),
   });
 }
@@ -432,6 +436,8 @@ export async function startElectronDevelopmentRuntime(
       controls.setInteractive(interactive);
       await browserHost.revealSurface(id);
     },
+    bridgeSurfaces: () => ({ revision: browserHost.surfaceRevision, surfaces: browserHost.listSurfaces() }),
+    onBridgeSurfacesChanged: (listener: () => void) => browserHost.onSurfacesChanged(listener),
     async observeBridgePreview(id?: string) {
       const surfaces = browserHost.listSurfaces();
       const selected = id ?? (surfaces.length === 1 ? surfaces[0]!.id : undefined);

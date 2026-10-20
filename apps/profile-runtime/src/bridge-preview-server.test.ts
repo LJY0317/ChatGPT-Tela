@@ -426,3 +426,42 @@ test("selected preview and explicit reveal preserve exact ownership and authenti
     expect(modes).toEqual([false,true]);
   } finally { await server.close(); }
 });
+
+
+test("metadata subscription waits for events, cancels cleanly and never captures a preview", async () => {
+  const token = "m".repeat(48);
+  let revision = 0, captures = 0;
+  const listeners = new Set<() => void>();
+  const subscribed = () => new Promise<void>(resolve => {
+    onSubscribe = resolve;
+  });
+  let onSubscribe: (() => void) | undefined;
+  const server = await startProfileBridgePreviewServer({ slot: 1, bearerToken: token,
+    surfaces: () => ({ revision, surfaces: [] }),
+    onSurfacesChanged(listener) { listeners.add(listener); onSubscribe?.(); return () => { listeners.delete(listener); }; },
+    async observe() { captures++; return { activeSurfaceCount: 0 }; },
+  });
+  const headers = { authorization: `Bearer ${token}` };
+  const url = new URL("v1/bridge-surfaces", server.endpoint);
+  try {
+    expect((await fetch(url)).status).toBe(401);
+    expect(await (await fetch(url, { headers })).json()).toEqual({ contractVersion: 1, slot: 1, revision: 0, surfaces: [] });
+    url.searchParams.set("since", "0");
+    const ready = subscribed();
+    const response = fetch(url, { headers });
+    await ready;
+    expect(listeners.size).toBe(1);
+    revision++; for (const listener of listeners) listener();
+    expect((await (await response).json()).revision).toBe(1);
+    expect(listeners.size).toBe(0);
+    url.searchParams.set("since", "1");
+    const controller = new AbortController(), waiting = subscribed();
+    const cancelled = fetch(url, { headers, signal: controller.signal }).catch(() => undefined);
+    await waiting;
+    controller.abort(); await cancelled;
+    // Server shutdown aborts any remaining request and must detach its observer.
+    await server.close();
+    expect(listeners.size).toBe(0);
+    expect(captures).toBe(0);
+  } finally { await server.close(); }
+});

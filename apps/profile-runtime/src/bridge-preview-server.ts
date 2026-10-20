@@ -41,6 +41,8 @@ export async function startProfileBridgePreviewServer(input: {
   readonly runSavedDeleteAcceptance?: () => Promise<Omit<CodexSavedDeleteAcceptanceContract, "slot">>;
   readonly recoverSyntheticSavedChat?: () => Promise<Omit<CodexSyntheticRecoveryContract, "slot">>;
   readonly reveal?: (id: string, interactive?: boolean) => Promise<void>;
+  readonly surfaces?: () => { readonly revision: number; readonly surfaces: readonly { readonly id: string; readonly label: string }[] };
+  readonly onSurfacesChanged?: (listener: () => void) => () => void;
   readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable"; readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed"; readonly approvalWait?: CodexApprovalWaitContract }>;
   readonly probeModelSelection?: () => Promise<{
     readonly familyCount: number;
@@ -193,6 +195,28 @@ export async function startProfileBridgePreviewServer(input: {
         if (body.interactive !== undefined && typeof body.interactive !== "boolean") return new Response(null, { status: 400 });
         try { await input.reveal(body.surfaceId, body.interactive === true); return new Response(null, { status: 204 }); }
         catch { return Response.json({ error: { message: "Selected Web session has ended. Refresh the session list." } }, { status: 409 }); }
+      }
+      if (request.method === "GET" && url.pathname === "/v1/bridge-surfaces" && input.surfaces) {
+        const since = url.searchParams.get("since");
+        if (since !== null && /^\d+$/.test(since) && input.onSurfacesChanged && Number(since) === input.surfaces().revision) {
+          await new Promise<void>(resolve => {
+            let finished = false;
+            let unsubscribe = () => {};
+            const done = () => {
+              if (finished) return;
+              finished = true;
+              unsubscribe();
+              request.signal.removeEventListener("abort", done);
+              resolve();
+            };
+            unsubscribe = input.onSurfacesChanged!(done);
+            request.signal.addEventListener("abort", done, { once: true });
+            if (request.signal.aborted || input.surfaces!().revision !== Number(since)) done();
+          });
+        }
+        if (request.signal.aborted) return new Response(null, { status: 499 });
+        return Response.json({ contractVersion: 1, slot: input.slot, ...input.surfaces() },
+          { headers: { "cache-control": "no-store" } });
       }
       if (request.method !== "GET" || url.pathname !== "/v1/bridge-preview") return new Response(null, { status: 404 });
       const observed = await input.observe(url.searchParams.get("surfaceId") ?? undefined);

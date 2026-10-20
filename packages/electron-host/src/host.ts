@@ -398,8 +398,21 @@ export function createElectronBrowserHost(input: {
       && typeof window.removeListener === "function";
     if (observesUserClose) window.on!("close", hideOnClose);
 
+    const labelListeners = new Set<() => void>();
+    let currentTitle = window.getTitle?.() || "";
+    const titleChanged = (...args: unknown[]) => {
+      const title = args[1];
+      if (typeof title !== "string" || title === currentTitle) return;
+      currentTitle = title;
+      for (const listener of labelListeners) listener();
+    };
+    emitter.on?.("page-title-updated", titleChanged);
     return {
-      displayName: () => window.getTitle?.() || "",
+      onLabelChange(listener: () => void) {
+        labelListeners.add(listener);
+        return () => { labelListeners.delete(listener); };
+      },
+      displayName: () => currentTitle,
       async navigate(url: string) {
         if (closed || window.isDestroyed()) throw new Error("Electron browser surface is closed");
         await window.loadURL(supportedNavigation(url).href);
@@ -418,6 +431,8 @@ export function createElectronBrowserHost(input: {
       async close() {
         if (closed) return;
         closed = true;
+        emitter.removeListener?.("page-title-updated", titleChanged);
+        labelListeners.clear();
         window.removeListener?.("close", hideOnClose);
         hideListeners.clear();
         documentController.abort(new Error("owned browser document is closed"));

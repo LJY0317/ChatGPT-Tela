@@ -121,6 +121,8 @@ async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean
           return responses.handleRequest(request);
         } },
         async stop() { browserStops++; input.onBrowserStopped?.(); await responses.stop(); await gateway.close(); },
+        bridgeSurfaces: () => ({ revision: 0, surfaces: [] }),
+        onBridgeSurfacesChanged: () => () => {},
         async prepareChatGptWebSession(preparation: import("./profile-control").ChatGptWebPreparationOptions) {
           if (fail === "login") throw new ChatGptWebLoginRequiredError();
           preparation.onProfile({ capabilities: { observed: new Set(["composer", "send"]) }, account: { accountFingerprint: fail === "account" ? "b".repeat(64) : "a".repeat(64), accountStructure: "personal", containerFingerprint: "fixture" } });

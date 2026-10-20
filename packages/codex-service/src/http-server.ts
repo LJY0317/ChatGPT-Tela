@@ -196,6 +196,16 @@ export async function startCodexServiceHttpServer(input: {
           if (receipt.slot !== slot) throw Error("Synthetic saved cleanup receipt from different profile");
           return Response.json(receipt, { headers: { "cache-control": "no-store" } });
         }
+        const surfacesMatch = request.method === "GET"
+          ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/bridge-surfaces$/.exec(url.pathname) : null;
+        if (surfacesMatch) {
+          const sinceValue = url.searchParams.get("since");
+          if (sinceValue !== null && !/^\d+$/.test(sinceValue)) return error(400, "invalid surface revision");
+          const since = sinceValue === null ? undefined : Number(sinceValue);
+          if (since !== undefined && !Number.isSafeInteger(since)) return error(400, "invalid surface revision");
+          return Response.json(await input.service.bridgeSurfaces(Number(surfacesMatch[1]), since, request.signal),
+            { headers: { "cache-control": "no-store" } });
+        }
         const bridgeSlot = request.method === "GET" ? previewSlot(url.pathname) : undefined;
         if (bridgeSlot !== undefined) {
           return Response.json(await input.service.bridgePreview(bridgeSlot, url.searchParams.get("surfaceId") ?? undefined), {

@@ -7,6 +7,7 @@ import type {
 
 export interface BrowserSurfaceController {
   displayName?(): string;
+  onLabelChange?(listener: () => void): () => void;
   navigate(url: string): Promise<void>;
   reveal(): Promise<void>;
   hide(): Promise<void>;
@@ -23,6 +24,7 @@ interface OwnedSurface {
   readonly lease: BrowserSurfaceLease;
   readonly key: string;
   readonly controller: BrowserSurfaceController;
+  readonly detachLabel?: () => void;
 }
 
 function surfaceKey(taskId: string, epochId: string): string {
@@ -38,11 +40,20 @@ function leaseId(): string {
  * One task/epoch pair owns one live surface; release closes it, and host shutdown closes every
  * remaining surface exactly once. The injected controller factory is where platform UI lives.
  */
+/** Never display injected Native transport text as a conversation title. */
+export function safeSurfaceLabel(title: string | undefined, index: number): string {
+  const value = title?.trim() ?? "";
+  return !value || /\$chatgpt-tela|chatgpt_tela_transport_contract|Act as the model backend/i.test(value)
+    ? `Web session ${index + 1}` : value.slice(0, 200);
+}
+
 export class ControlledBrowserHost implements BrowserHost {
   readonly #factory: BrowserSurfaceControllerFactory;
   readonly #surfaces = new Map<string, OwnedSurface>();
   readonly #leaseByKey = new Map<string, string>();
   readonly #creating = new Map<string, Promise<BrowserSurfaceController>>();
+  #listeners = new Set<() => void>();
+  #revision = 0;
   #closed = false;
   #closing: Promise<void> | undefined;
 
@@ -80,8 +91,10 @@ export class ControlledBrowserHost implements BrowserHost {
       hide: () => controller.hide(),
       capability: <T>(capability: BrowserSurfaceCapability<T>) => controller.capability?.(capability),
     });
-    this.#surfaces.set(id, { key, controller, lease });
+    const detachLabel = controller.onLabelChange?.(() => this.#changed());
+    this.#surfaces.set(id, { key, controller, lease, ...(detachLabel ? { detachLabel } : {}) });
     this.#leaseByKey.set(key, id);
+    this.#changed();
     return lease;
   }
 
@@ -90,6 +103,8 @@ export class ControlledBrowserHost implements BrowserHost {
     if (!owned) throw new Error("browser surface lease is unknown or already released");
     this.#surfaces.delete(id);
     this.#leaseByKey.delete(owned.key);
+    owned.detachLabel?.();
+    this.#changed();
     await owned.controller.close();
   }
 
@@ -99,6 +114,9 @@ export class ControlledBrowserHost implements BrowserHost {
     const surfaces = [...this.#surfaces.entries()];
     this.#surfaces.clear();
     this.#leaseByKey.clear();
+    for (const [, surface] of surfaces) surface.detachLabel?.();
+    this.#changed();
+    this.#listeners.clear();
     const creations = [...this.#creating.values()];
     this.#closing = (async () => {
       const results = await Promise.allSettled([
@@ -119,10 +137,20 @@ export class ControlledBrowserHost implements BrowserHost {
     return this.#surfaces.size;
   }
 
+  get surfaceRevision(): number { return this.#revision; }
+  onSurfacesChanged(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => { this.#listeners.delete(listener); };
+  }
+  #changed(): void {
+    this.#revision++;
+    for (const listener of this.#listeners) listener();
+  }
+
   /** Disposable leases select a view; they never grant task authority. */
   listSurfaces(): readonly { readonly id: string; readonly label: string }[] {
     return [...this.#surfaces].map(([id, surface], index) => Object.freeze({
-      id, label: surface.controller.displayName?.().trim().slice(0, 200) || `Web session ${index + 1}`,
+      id, label: safeSurfaceLabel(surface.controller.displayName?.(), index),
     }));
   }
 

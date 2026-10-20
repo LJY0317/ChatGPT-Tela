@@ -23,6 +23,7 @@ function fixtureService(): CodexService {
     async reconnectWeb() { throw new Error("not used"); },
     async stopProfile() { throw new Error("not used"); },
     async terminalSession(slot) { return { contractVersion: 1, slot, endpoint: "ws://127.0.0.1:1234/" }; },
+    async bridgeSurfaces(slot) { return { contractVersion: 1, slot, revision: 0, surfaces: [] }; },
     async bridgePreview(slot) {
       return {
         contractVersion: 1,
