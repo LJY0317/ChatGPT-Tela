@@ -9,7 +9,8 @@ import {
   resolvePackagedServiceLaunch,
   runPackagedServiceLauncher,
 } from "./runtime";
-import { runPackagedLifecycleCommand } from "./lifecycle";
+import { parsePackagedLifecycleCommand, runPackagedLifecycleCommand } from "./lifecycle";
+import { LIFECYCLE_WORKER_ENV, runIndependentLifecycleProcess } from "./lifecycle-process";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { runPackagedWorkCommand } from "./work";
 import { readConfigurationInput, runPackagedBootstrapCommand } from "./bootstrap";
@@ -118,6 +119,15 @@ async function main(): Promise<void> {
     return;
   }
   if (args[0] === "install" || args[0] === "repair" || args[0] === "upgrade" || args[0] === "cancel-upgrade") {
+    if (parsePackagedLifecycleCommand(args).mode === "apply" && process.env[LIFECYCLE_WORKER_ENV] !== "1") {
+      const result = await runIndependentLifecycleProcess({ executable: process.execPath,
+        arguments: args.includes("--payload") ? args : [...args, "--payload", payloadRootForLauncherExecutable()],
+      });
+      process.stdout.write(result.stdout);
+      process.stderr.write(result.stderr);
+      process.exitCode = result.code;
+      return;
+    }
     const result = await runPackagedLifecycleCommand(args, {
       defaultPayloadRoot: payloadRootForLauncherExecutable(),
     });
