@@ -2,7 +2,7 @@ import {expect,test} from "bun:test";
 import {mkdtempSync,readFileSync,rmSync} from "node:fs";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
-import {diagnosticFingerprint, nativeInputReceipt} from "@chatgpt-tela/core";
+import {diagnosticFingerprint, nativeInputReceipt, nativeTextHash} from "@chatgpt-tela/core";
 import type {CanonicalCurrentTurnSource} from "@chatgpt-tela/codex";
 import {NativeResponsesGateway} from "./native-gateway";
 import {ActiveTurnRegistry} from "./registry";
@@ -105,6 +105,18 @@ test("cycle failure evidence separates prior final, new message and canonical in
       reason_class: scenario, prior_final_present: scenario !== "prior_final_missing",
       fresh_input_count: scenario === "input_witness_mismatch" ? 1 : 0,
     });
+    const rejected = rows.find(row => row.stage === "native_cycle_proof_rejected")!;
+    if (scenario !== "prior_final_missing") expect(rejected.prior_final_fingerprint).toBe(diagnosticFingerprint(nativeTextHash("PRIVATE ANSWER")));
+    expect(typeof rejected.request_input_fingerprints).toBe("string");
+    if (scenario === "new_input_missing") expect(rejected.request_input_fingerprints).toBe("[]");
+    if (scenario === "input_witness_missing") {
+      expect(JSON.parse(rejected.request_input_fingerprints)).toEqual([{index:0,content_fingerprint:diagnosticFingerprint(nativeTextHash("PRIVATE FOLLOWUP"))}]);
+      expect(rejected.input_witnesses).toBe("[]");
+    }
+    if (scenario === "input_witness_mismatch") {
+      expect(JSON.parse(rejected.input_witnesses)).toEqual([{item_fingerprint:diagnosticFingerprint("PRIVATE ID"),
+        content_fingerprint:diagnosticFingerprint(nativeTextHash("PRIVATE FOLLOWUP")),consumed:false,matching_request_indices:[0]}]);
+    }
     expect(JSON.stringify(rows)).not.toContain("PRIVATE");
   }
 });

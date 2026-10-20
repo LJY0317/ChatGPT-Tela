@@ -258,6 +258,18 @@ export class NativeResponsesGateway {
             fresh_input_count: fresh.length,
             unconsumed_input_count: inputs.filter(input => !lifetime!.consumedInputs.has(input.id)).length,
             exact_request_replay: lifetime!.requestHash === requestHash(body),
+            ...(finalIndex >= 0 ? { prior_final_fingerprint: diagnosticFingerprint(messages[finalIndex]!.hash) } : {}),
+            request_input_fingerprints: JSON.stringify(newMessages.map((message, index) => ({
+              index, content_fingerprint: diagnosticFingerprint(message.hash),
+            }))),
+            input_witnesses: JSON.stringify(inputs.filter(input => !lifetime!.consumedInputs.has(input.id)
+              || newMessages.some(message => message.hash === input.textHash)).map(input => ({
+                item_fingerprint: diagnosticFingerprint(input.id),
+                content_fingerprint: diagnosticFingerprint(input.textHash),
+                consumed: lifetime!.consumedInputs.has(input.id),
+                matching_request_indices: newMessages.flatMap((message, index) =>
+                  message.hash === input.textHash ? [index] : []),
+              }))),
           }));
         this.#rejectCycle(identity, "missing_input_proof", "Native response cycle continuation lacks proven new input and prior final delivery");
       }
