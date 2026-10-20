@@ -53,7 +53,7 @@ interface RawTurn {
   readonly text?: string;
   readonly failureDetail?: string;
   readonly publicProgress?: readonly string[];
-  readonly progressProbe?: { readonly failureCandidateCount?: number; readonly failureSource?: "alert" | "provider_marker" | "none"; readonly answerBodyCount?: number; readonly visibleAnswerBodyCount?: number; readonly answerBodyOutsideProgress?: boolean; readonly answerBodyAnimated?: boolean; readonly answerProsePresent?: boolean; readonly answerBlockCount?: number; readonly unmappedVisibleProsePresent?: boolean; readonly linkedRegionCount?: number; readonly visibleLinkedRegionCount?: number; readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
+  readonly progressProbe?: { readonly failureCandidateCount?: number; readonly failureEligibleCount?: number; readonly failureApprovalCount?: number; readonly failureStopVisible?: boolean; readonly failureSource?: "alert" | "provider_marker" | "none"; readonly answerBodyCount?: number; readonly visibleAnswerBodyCount?: number; readonly answerBodyOutsideProgress?: boolean; readonly answerBodyAnimated?: boolean; readonly answerProsePresent?: boolean; readonly answerBlockCount?: number; readonly unmappedVisibleProsePresent?: boolean; readonly linkedRegionCount?: number; readonly visibleLinkedRegionCount?: number; readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
 }
 
 interface RawSnapshot {
@@ -95,6 +95,8 @@ interface ApprovalDomObservation {
   readonly proofKey: string | null;
 }
 
+const APPROVAL_SURFACE_SELECTOR = '[data-testid="tool-approval-card"], [data-codex-approval-surface="true"]';
+
 const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare) {
   const visible = element => element instanceof HTMLElement
     && getComputedStyle(element).display !== "none"
@@ -110,7 +112,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   const isAllowButton = label => ['Allow', 'Allow once', 'Allow for this conversation'].includes(label)
     || /^Allow(?: once| .* for this conversation)?$/.test(label);
   const discover = (includeWrappers = false) => {
-    const marked = [...document.querySelectorAll('[data-testid="tool-approval-card"], [data-codex-approval-surface="true"]')].filter(visible);
+    const marked = [...document.querySelectorAll('${APPROVAL_SURFACE_SELECTOR}')].filter(visible);
     const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].filter(card => visible(card)
       && [...card.querySelectorAll('button,[role="button"]')].some(button =>
         visible(button) && isAllowButton(normalize(button.getAttribute('aria-label') || button.textContent || button.innerText))));
@@ -903,12 +905,14 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
       && !node.closest('[data-user-message-bubble], [data-message-author-role="user"], [data-markdown-text-style="assistant-message"], [data-conversation-role="user"]')
       && progressVisible(node) && visibleDescription(node, undefined).trim().length > 0);
     const assistantBody = answerBody || group.querySelector('[data-conversation-role="assistant"]');
-    // Provider failures are independent of answer rendering. Exclude authored
-    // content and progress-owned warnings, rather than requiring those roots to vanish.
+    // Accessibility alerts belong to their UI owner; an approval announcement
+    // is not a provider failure. Keep independent errors outside those roots.
     const errorCandidates = [...group.querySelectorAll('[data-message-error], [data-testid="message-error"], [role="alert"]')];
-    const failure = errorCandidates.find(node => progressVisible(node)
-      && (node.getAttribute('role') !== 'alert' || !stopVisible)
-      && !user?.contains(node) && !answerBody?.contains(node) && !progressRoot?.contains(node));
+    const approvalRoots = [...group.querySelectorAll('${APPROVAL_SURFACE_SELECTOR}')];
+    const nonFailureRoots = [user, answerBody, progressRoot, ...approvalRoots].filter(Boolean);
+    const providerErrors = errorCandidates.filter(node => !nonFailureRoots.some(root => root.contains(node)));
+    const failure = providerErrors.find(node => progressVisible(node)
+      && (node.getAttribute('role') !== 'alert' || !stopVisible));
     if (assistantBody || progressRoot || failure) {
       const complete = !!assistantBody && [...group.querySelectorAll('button[data-testid="copy-turn-action-button"], .turn-action-controls button')]
         .some(visible);
@@ -933,6 +937,9 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         publicProgress,
         progressProbe: {
           failureCandidateCount: Math.min(65, errorCandidates.length),
+          failureEligibleCount: Math.min(65, providerErrors.length),
+          failureApprovalCount: Math.min(65, errorCandidates.filter(node => approvalRoots.some(root => root.contains(node))).length),
+          failureStopVisible: stopVisible,
           failureSource: failure ? failure.getAttribute('role') === 'alert' ? 'alert' : 'provider_marker' : 'none',
           // Prose may use the same renderer as a final answer. Observe that boundary
           // without relabelling answer content as progress or recording its text.
@@ -2087,6 +2094,9 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
           if (settled.phase === "failed") emitDiagnosticEvent("chatgpt_tela_work", "web_provider_failure_observed", {
             turn_fingerprint: diagnosticFingerprint(settled.key),
             failure_class: probe.failureSource ?? "none", error_candidate_count: probe.failureCandidateCount ?? 0,
+            eligible_error_candidate_count: probe.failureEligibleCount ?? 0,
+            approval_error_candidate_count: probe.failureApprovalCount ?? 0,
+            stop_visible: probe.failureStopVisible ?? false,
             answer_body_present: (probe.answerBodyCount ?? 0) > 0,
             progress_present: probe.containerPresent, progress_visible: probe.containerVisible,
           });
@@ -2094,6 +2104,9 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
             assistant_phase: settled.phase ?? "unknown",
             failure_class: probe.failureSource ?? "none",
             provider_error_candidate_count: probe.failureCandidateCount ?? 0,
+            eligible_error_candidate_count: probe.failureEligibleCount ?? 0,
+            approval_error_candidate_count: probe.failureApprovalCount ?? 0,
+            stop_visible: probe.failureStopVisible ?? false,
             progress_container_present: probe.containerPresent,
             progress_container_visible: probe.containerVisible,
             progress_container_display: probe.containerDisplay,

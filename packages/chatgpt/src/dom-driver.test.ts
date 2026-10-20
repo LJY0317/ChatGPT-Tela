@@ -873,10 +873,13 @@ describe("current ChatGPT DOM surface driver", () => {
     expect((await driver.observe()).turns.map(row => row.role)).toEqual(["user"]);
   });
 
-  test.each(["provider", "provider-with-body", "provider-with-progress", "user-content", "assistant-content", "hidden", "progress", "active-progress"])(
+  test.each(["provider", "provider-with-body", "provider-with-progress", "user-content", "assistant-content", "hidden", "progress", "active-progress", "approval-card", "approval-and-provider"])(
     "a failed fetch alert without an assistant body is scoped to its own provider turn (%s)", async variant => {
       const alert = new FixtureElement({ role: "alert", ...(variant === "hidden" ? { "data-fixture-display": "none" } : {}) });
-      alert.innerText = "Failed to fetch";
+      alert.innerText = variant.startsWith("approval") ? "Allow ChatGPT to use ChatGPT Tela?" : "Failed to fetch";
+      const approval = new FixtureElement({ "data-codex-approval-surface": "true" });
+      approval.contains = node => node === approval || node === alert;
+      const providerAlert = new FixtureElement({ role: "alert" }); providerAlert.innerText = "Failed to fetch";
       const user = new FixtureElement();
       if (variant === "user-content") user.contains = node => node === user || node === alert;
       const progress = new FixtureElement();
@@ -884,9 +887,10 @@ describe("current ChatGPT DOM surface driver", () => {
       const body = new FixtureElement();
       if (variant === "assistant-content") body.contains = node => node === body || node === alert;
       const group = new FixtureElement({ "data-turn-key": "failed-fetch" }, {
-        '[data-user-message-bubble]': [user], '[role="alert"]': [alert],
-        ...(["progress", "provider-with-progress"].includes(variant) ? { '[data-streaming-response-status]': [progress] } : {}),
-        ...(["assistant-content", "provider-with-body"].includes(variant) ? { '[data-markdown-text-style="assistant-message"]': [body] } : {}),
+        '[data-user-message-bubble]': [user], '[role="alert"]': variant === "approval-and-provider" ? [alert, providerAlert] : [alert],
+        ...(variant.startsWith("approval") ? { '[data-codex-approval-surface="true"]': [approval] } : {}),
+        ...(["progress", "provider-with-progress", "approval-card", "approval-and-provider"].includes(variant) ? { '[data-streaming-response-status]': [progress] } : {}),
+        ...(["assistant-content", "provider-with-body", "approval-card", "approval-and-provider"].includes(variant) ? { '[data-markdown-text-style="assistant-message"]': [body] } : {}),
       });
       const form = new FixtureElement({}, { '[data-testid="stop-button"]': [new FixtureElement()] });
       const composer = new FixtureElement({ contenteditable: "true" }, { form: [form] });
@@ -896,7 +900,7 @@ describe("current ChatGPT DOM surface driver", () => {
       })));
       const observation = await driver.observe();
       const assistant = observation.turns.find(turn => turn.role === "assistant");
-      if (variant.startsWith("provider")) {
+      if (variant.startsWith("provider") || variant === "approval-and-provider") {
         expect(assistant).toMatchObject({ parentUserTurnKey: "user:failed-fetch", phase: "failed", failureDetail: "Failed to fetch" });
       } else {
         expect(assistant?.phase).not.toBe("failed");
