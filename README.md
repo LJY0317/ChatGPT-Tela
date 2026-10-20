@@ -37,6 +37,8 @@ below and should not be confused with an installer-supported release.
 
 The source checkout supports `bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt` against an already running, signed-in Tela Work profile. Use `bun run cli web-delegate capacity --slot 1` to inspect managed-job occupancy, `result --job UUID` to retrieve a proven answer. Control Center Work displays this managed-only count; Settings selects independent per-profile concurrency limits from 1 to 5 (default 3). Direct Native conversations are outside this journal. See [Web delegation details](docs/web-delegation.md) for prerequisites, capacity and result retention. Managed conversations archive 24 hours after result retrieval, or after seven idle days when uncollected; Tela deletes its own automatic archives seven days later. Active/queued work and observed manual restores are protected; local result receipts remain.
 
+Continue a finished job in the same conversation with `web-delegate continue --job UUID --prompt-file /path/to/followup.txt`; `status` and `reconcile` inspect an existing job without resending it. Native queue, steering and Goal controls are separate. Web workers cannot complete Native Goals themselves, and external Goal completion does not yet guarantee that no automatic follow-up starts. See the delegation details for current limits.
+
 ## Product goals
 
 The product treats the following as explicit design principles:

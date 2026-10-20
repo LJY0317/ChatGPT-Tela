@@ -49,6 +49,19 @@ bun run cli web-delegate reconcile --job UUID
 bun run cli web-delegate result --job UUID
 ```
 
+These commands operate on journal-owned Web jobs. `continue` requires a proven
+completed eligible parent and starts a new turn in the same thread; it does not
+enqueue work or steer a running generation. The Native conversation's own queue
+and steering operate under its separate Native authority. A Web worker can
+report the result, but it has read-only Goal access and no Goal-mutation
+capability. The Native coordinator can request Goal completion through the
+public API, but that API has no scheduler fence or turn compare-and-set, so a
+successful completion response does not guarantee that an automatic follow-up
+turn will not start. Live acceptance observed a follow-up turn start in the same
+second as Goal completion; the coordinator had to interrupt it. Post-completion
+quiescence is therefore not accepted. The Codex connector inventory remains
+scoped to one exact active Native turn, with tools discovered at runtime.
+
 `status` includes the last observed public Native reasoning **summary** in
 `progress`, when available. It retains only the newest summary (up to 2,048
 characters), its observation time, and whether it came from live notifications
