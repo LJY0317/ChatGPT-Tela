@@ -1780,7 +1780,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         }
       }
       let preparationFailure: string | undefined;
-      if (observedApproval?.cardCount === 1 && observedApproval.cardFingerprint
+      if (observedApproval?.cardCount && observedApproval.cardFingerprint
         && !tracked.approvalObservation.wasDispatched(observedApproval.cardFingerprint)
         && assistant?.phase !== "failed" && driver.processApprovalCard
         && approvalChoice?.action !== "none" && approvalChoice !== undefined) {

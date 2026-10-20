@@ -25,7 +25,6 @@ export function decideChatGptApproval(
 ): ChatGptApprovalDecision {
   if (mode === "off") return Object.freeze({ action: "none", reason: "disabled" });
   if (observed.cardCount === 0) return Object.freeze({ action: "none", reason: "absent" });
-  if (observed.cardCount !== 1) return Object.freeze({ action: "none", reason: "ambiguous" });
   if ((observed.denyCount ?? 0) > 1) return Object.freeze({ action: "none", reason: "ambiguous" });
   if ((observed.denyCount ?? 0) !== 1) return Object.freeze({ action: "none", reason: "unrecognized" });
 

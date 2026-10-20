@@ -2200,7 +2200,7 @@ describe("ChatGPT semantic provider", () => {
     }
   });
 
-  test("processes an approval card before the assistant message is rendered", async () => {
+  test.each([1, 3])("processes a pending approval before the assistant renders, card count %s", async cardCount => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     driver.approveRecognizedCard = true;
     const surface = await leaseFor(driver);
@@ -2211,7 +2211,7 @@ describe("ChatGPT semantic provider", () => {
       driver.queued.push(acceptedSnapshot(driver));
       const submitted = await pending;
       if (submitted.state !== "proven") throw new Error("fixture submit failed");
-      driver.queued.push({ ...driver.current, revision: "approval-without-assistant", approval: recognizedApproval });
+      driver.queued.push({ ...driver.current, revision: "approval-without-assistant", approval: { ...recognizedApproval, cardCount } });
       driver.queued.push({ ...driver.current, revision: "after-approval", turns: [
         ...driver.current.turns, {key:"assistant-approved",role:"assistant",parentUserTurnKey:"user-turn-1",phase:"complete",text:"done"},
       ] });

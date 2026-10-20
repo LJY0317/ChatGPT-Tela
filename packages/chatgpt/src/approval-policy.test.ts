@@ -54,10 +54,9 @@ describe("ChatGPT approval automation policy", () => {
     });
   });
 
-  test("unknown, multiple or ambiguous cards fail closed", () => {
+  test("card count does not block an individually resolved approval", () => {
     expect(decideChatGptApproval("full_access", { ...observed, cardCount: 2 })).toEqual({
-      action: "none",
-      reason: "ambiguous",
+      action: "approve_once", preferredChoice: "allow_once",
     });
     expect(decideChatGptApproval("full_access", { ...observed, cardCount: 0 })).toEqual({
       action: "none",

@@ -105,21 +105,33 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     && element.getClientRects().length > 0;
   const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
   const decideApproval = (${decideChatGptApproval.toString()});
+  const accessibleText = node => {
+    if (node instanceof HTMLElement && node.getAttribute("aria-hidden") === "true") return "";
+    if (!node.childNodes?.length) return node.textContent || node.innerText || "";
+    return [...node.childNodes].map(accessibleText).join("");
+  };
   const registryKey = Symbol.for("chatgpt-tela.approval-observations.v1");
   const registry = globalThis[registryKey] ||= { cards: new WeakMap(), prefix: crypto.randomUUID(), next: 0, receipt: null };
   // Candidate discovery: marked provider cards and accessible dialogs with Allow/Deny controls.
-  // Prefer the innermost card if provider wrappers overlap; distinct cards stay ambiguous.
+  // Prefer innermost provider cards; each pending card uses the same approval path.
   const isAllowButton = label => ['Allow', 'Allow once', 'Allow for this conversation'].includes(label)
     || /^Allow(?: once| .* for this conversation)?$/.test(label);
-  const discover = (includeWrappers = false) => {
+  const discover = () => {
     const marked = [...document.querySelectorAll('${APPROVAL_SURFACE_SELECTOR}')].filter(visible);
     const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].filter(card => visible(card)
       && [...card.querySelectorAll('button,[role="button"]')].some(button =>
         visible(button) && isAllowButton(normalize(button.getAttribute('aria-label') || button.textContent || button.innerText))));
     const candidates = [...new Set([...marked, ...dialogs])];
-    return includeWrappers ? candidates : candidates.filter(card => !candidates.some(other => other !== card && card.contains(other)));
+    const distinct = candidates.filter(card => !candidates.some(other => other !== card && card.contains(other)));
+    return distinct.filter(card => !registry.cards.get(card)?.inputReceived
+      && [...card.querySelectorAll('button,[role="button"]')].some(button => visible(button)
+        && !button.disabled && button.getAttribute('aria-disabled') !== 'true' && !button.closest('[inert]')
+        && (isAllowButton(normalize(button.getAttribute('aria-label') || accessibleText(button)))
+          || ['Deny', 'Always allow', 'Approval options'].includes(normalize(button.getAttribute('aria-label') || accessibleText(button))))));
   };
   const cards = discover();
+  const card = prepare?.cardKey
+    ? cards.find(candidate => registry.cards.get(candidate)?.cardKey === prepare.cardKey) : cards[0];
   const diagnose = (${approvalDiagnosticProbe.toString()});
   let diagnosticTarget = null, diagnosticHit = null, diagnosticHitTested = false;
   const result = {
@@ -145,9 +157,9 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     receipt: registry.receipt || null,
   };
   const finish = () => {
-    if (prepare?.diagnostics && cards.length) {
+    if (prepare?.diagnostics && card) {
       try {
-        result.diagnostics = diagnose(cards[0], diagnosticTarget, diagnosticHit);
+        result.diagnostics = diagnose(card, diagnosticTarget, diagnosticHit);
         result.diagnostics.controls.hit_test_observed = diagnosticHitTested;
       }
       catch { result.diagnosticUnavailable = true; }
@@ -159,10 +171,13 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   // options may render in a portal outside the card: only an accessible, uniquely
   // linked, currently expanded menu can preserve the accepted input witness.
   registry.manualInputTarget = node => {
-    const current = discover();
-    if (current.length !== 1) return false;
-    const card = current[0], observed = registry.cards.get(card);
     const control = node?.closest?.('[role="menuitem"]') || node?.closest?.('button,[role="button"]');
+    const menu = control?.closest('[role="menu"]');
+    const card = discover().find(candidate => candidate.contains(control)
+      || menu && [...candidate.querySelectorAll('button,[role="button"]')].some(button =>
+        menu.getAttribute('id') && button.getAttribute('aria-controls') === menu.getAttribute('id')
+        || button.getAttribute('id') && menu.getAttribute('aria-labelledby') === button.getAttribute('id')));
+    const observed = card && registry.cards.get(card);
     if (!observed || observed.text !== card.textContent || !control || !visible(control)
       || control.disabled || control.getAttribute('aria-disabled') === 'true'
       || control.closest('[inert]')) return false;
@@ -180,7 +195,6 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     if (!isConsentChoice
       || (control.getAttribute('role') !== 'menuitem'
         && control.tagName !== 'BUTTON' && control.getAttribute('role') !== 'button')) return false;
-    const menu = control.closest('[role="menu"]');
     const menus = [...document.querySelectorAll('[role="menu"]')].filter(visible);
     if (!menu || menus.length !== 1 || menus[0] !== menu || !menu.contains(control)) return false;
     const disclosures = [...card.querySelectorAll('button,[role="button"]')].filter(button =>
@@ -194,7 +208,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     return !!(menuId && disclosure.getAttribute('aria-controls') === menuId
       || disclosureId && menu.getAttribute('aria-labelledby') === disclosureId);
   };
-  if (cards.length !== 1) return finish();
+  if (!card) return finish();
   const point = element => {
     const bounds = element.getBoundingClientRect();
     if (!Number.isFinite(bounds.left) || !Number.isFinite(bounds.top)
@@ -207,15 +221,10 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   let allowConversationButton = null;
   // Use the control's accessible label, not visual shortcut decorations. A keyboard hint
   // is presentation, whereas an unknown decision remains an unknown decision.
-  const accessibleText = node => {
-    if (node instanceof HTMLElement && node.getAttribute("aria-hidden") === "true") return "";
-    if (!node.childNodes?.length) return node.textContent || node.innerText || "";
-    return [...node.childNodes].map(accessibleText).join("");
-  };
   let optionsDisclosure = null;
   const isConversationChoice = label => label === "Allow for this conversation"
     || /^Allow .* for this conversation$/.test(label);
-  for (const button of cards[0].querySelectorAll('button,[role="button"]')) {
+  for (const button of card.querySelectorAll('button,[role="button"]')) {
     if (!visible(button)) continue;
     const label = normalize(button.getAttribute("aria-label") || accessibleText(button));
     // These explicitly identified disclosure controls do not grant or deny authority.
@@ -292,8 +301,8 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   }
   // Raw card text and element references remain in the renderer. Only a disposable identity
   // crosses the boundary, so a delay cannot silently approve a replaced or changed request.
-  const text = cards[0].textContent;
-  let prior = registry.cards.get(cards[0]);
+  const text = card.textContent;
+  let prior = registry.cards.get(card);
   if (!prior || prior.text !== text || prior.button !== allowOnceButton || prior.allowButton !== allowButton
     || prior.conversationButton !== allowConversationButton) {
     const key = registry.prefix + ":" + (++registry.next);
@@ -301,7 +310,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       conversationButton: allowConversationButton, proofKey: key });
     else prior = { text, button: allowOnceButton, allowButton, conversationButton: allowConversationButton,
       cardKey: key, proofKey: key, inputReceived: false };
-    registry.cards.set(cards[0], prior);
+    registry.cards.set(card, prior);
   }
   result.cardKey = prior.cardKey;
   result.proofKey = prior.proofKey;
@@ -324,7 +333,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       : prepare.choice === 'allow' ? allowButton : allowOnceButton;
     diagnosticTarget = selected;
     const eligible = observation => openingOptions
-      ? observation.cardCount === 1
+      ? observation.cardCount > 0
         && observation.optionsDisclosureCount === 1 && !observation.optionsExpanded
       : decideApproval('full_access', observation).preferredChoice === prepare.choice;
     if (prepare.cardKey !== prior.cardKey || prepare.proofKey !== prior.proofKey
@@ -336,7 +345,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     // Instant scroll plus synchronous geometry/hit testing flushes current layout.
     // Frame callbacks may stop in hidden windows and must never gate approval.
     // This preparation performs no input; dispatch remains on the host boundary.
-    const after = await inspectApproval();
+    const after = await inspectApproval({ cardKey: prepare.cardKey });
     if (after.cardKey !== prepare.cardKey || after.proofKey !== prepare.proofKey
       || !eligible(after) || !selected.isConnected || !visible(selected) || selected.disabled
       || selected.getAttribute("aria-disabled") === "true" || selected.closest('[inert]')) return finish();
@@ -354,7 +363,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
         kind: !hit ? "none" : hit === document.documentElement || hit === document.body ? "document"
           : hit.closest('dialog,[role="dialog"],[aria-modal="true"]') ? "dialog"
           : hit.closest('button,a,input,select,textarea,[role="button"]') ? "control" : "other",
-        inCard: !!hit && cards[0].contains(hit),
+        inCard: !!hit && card.contains(hit),
         pointerEventsNone: getComputedStyle(selected).pointerEvents === "none",
         inert: !!selected.closest('[inert]'),
         documentHidden: document.visibilityState === "hidden",
@@ -2029,12 +2038,13 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
 
   #recordApprovalProbe(observed: ApprovalDomObservation, phase: string): void {
     const probe = observed.diagnostics;
-    const state = fingerprint(JSON.stringify([observed.cardKey, observed.proofKey, observed.targetState, probe,
+    const state = fingerprint(JSON.stringify([observed.cardKey, observed.proofKey, observed.cardCount, observed.targetState, probe,
       observed.diagnosticUnavailable]));
     if (this.#approvalProbeStates.get(phase) !== state) {
       this.#approvalProbeStates.set(phase, state);
       this.#diagnostic("approval_structure_observed", {
         phase, state: observed.targetState ?? "unprepared", probe_available: !!probe,
+        pending_card_count: observed.cardCount, controls_inspected: !!observed.cardKey,
         ...(observed.cardKey ? { card_fingerprint: diagnosticFingerprint(observed.cardKey) } : {}),
         ...(observed.proofKey ? { proof_fingerprint: diagnosticFingerprint(observed.proofKey) } : {}),
         allow_conversation_count: observed.allowConversationCount ?? 0,
@@ -2148,7 +2158,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
         alwaysAllowCount: card.alwaysAllowCount,
         unknownCount: card.unknownCount,
         revisionFingerprint: fingerprint(JSON.stringify([card.cardKey, card.proofKey])),
-        ...(card.cardCount === 1 && card.cardKey ? { cardFingerprint: diagnosticFingerprint(card.cardKey) } : {}),
+        ...(card.cardKey ? { cardFingerprint: diagnosticFingerprint(card.cardKey) } : {}),
         inputReceived: card.inputReceived === true,
       }) : undefined;
       const captureRoot = configuredDiagnosticRoot();
@@ -2299,7 +2309,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     // A conversation-only option may be hidden under an explicit card-local
     // disclosure. Open that one menu at most once per exact card, then re-prove
     // the unchanged card and its freshly linked choices before any approval.
-    if (mode !== "off" && observed.cardCount === 1
+    if (mode !== "off" && observed.cardCount > 0
       && observed.allowConversationCount === 0 && observed.optionsDisclosureCount === 1
       && !observed.optionsExpanded && observed.optionsPoint
       && observed.cardKey && observed.proofKey) {

@@ -606,7 +606,12 @@ results/errors are returned unchanged. Existing local rotation/incidents apply.
 
 For an **owned Tela Web** approval card, the adapter uses structural card and control observations only;
 it does not classify card text or warning language. `approval_wait_transition` retains its distinct
-pending / dispatch / input-received / cleared phases. Card text is not copied into model progress or logs.
+pending / dispatch / input-received / cleared phases. Pending cards are processed individually through
+that same path; their document-wide count is not an approval limit. Settled card shells and
+cards which received trusted input do not prevent the next card from being processed.
+`approval_structure_observed` includes `pending_card_count`, the selected card fingerprint and
+`controls_inspected`, so uninspected controls are not mistaken for an observed absence.
+Card text is not copied into model progress or logs.
 Platform-owned ChatGPT tool approval UI outside the attached Web browser is **not** observable through this adapter;
 user-supplied screenshots or official platform status are separate evidence.
 
