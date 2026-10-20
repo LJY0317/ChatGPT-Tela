@@ -590,3 +590,14 @@ test("unproven handoff never releases the exact Native result or submits twice",
   expect(released).toBe(false);expect(submits).toBe(1);expect(String(channel.phase)).toBe("indeterminate-after-acceptance");
  }
 });
+
+
+test("provider failed event retains its owned classification and still releases the surface", async () => {
+  const events = new EventQueue();
+  events.push({ kind: "failed", providerTurnId: "web-turn-1", detail: "Error in message stream" });
+  const released: string[] = [];
+  await expect(runBrowserTurn({ browserHost: browserHost(released), provider: provider(events),
+    channel: new RuntimeTurnChannel(binding()), nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext }))
+    .rejects.toMatchObject({ code: "tela_web_provider_response_failed", message: "Web turn failed: Error in message stream" });
+  expect(released).toEqual(["surface-1"]);
+});

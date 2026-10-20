@@ -28,6 +28,7 @@ export function webExecutionFailureFields(error: unknown, signal?: AbortSignal) 
     const retainedReason = webRetainedContextFailureReason(value);
     if (retainedReason) return retainedReason;
     if (!(value instanceof Error)) return "non_error";
+    if ((value as Error & {code?: unknown}).code === "tela_web_provider_response_failed") return "provider_response_failed";
     if ((value as Error & {code?: unknown}).code === "native_web_handoff_unproven") return "handoff_proof_unavailable";
     if (Object.hasOwn(exact, value.message)) return exact[value.message]!;
     if (value.name === "AbortError") return "aborted";

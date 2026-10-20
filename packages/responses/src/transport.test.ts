@@ -1,3 +1,4 @@
+import { WebProviderResponseFailed, observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { WebSubmissionUnproven, WEB_SUBMISSION_PROOF_REASONS } from "@chatgpt-tela/core";
 import { describe, expect, test } from "bun:test";
 import { WebObservationUnproven } from "@chatgpt-tela/core";
@@ -794,4 +795,49 @@ test('fit failures preserve identical terminal cause over HTTP, progressed SSE a
    expect(replay.status).toBe(400);expect((await replay.json() as any).error).toEqual(error);expect(launches).toBe(1);
   }
  }
+});
+
+
+test("provider-declared failure has the same safe cause before progress, after progress and on replay", async () => {
+  for (const withProgress of [false, true]) {
+    let sends = 0, fail!: () => void;
+    const diagnostics: StructuralDiagnosticEvent[] = [];
+    const stop = observeDiagnosticEvents(event => diagnostics.push(event));
+    const registry = new ActiveTurnRegistry();
+    const gateway = new NativeResponsesGateway(source, registry, async turn => {
+      sends++; turn.channel.markSubmitted(); turn.channel.markAccepted();
+      if (withProgress) {
+        turn.channel.publishProgress("Checking existing changes");
+        await new Promise<void>(resolve => { fail = resolve; });
+      }
+      throw new WebProviderResponseFailed("Error in message stream PRIVATE provider text");
+    });
+    try {
+      const response = await handleNativeResponsesHttp(post(body()), gateway);
+      let original: any;
+      if (withProgress) {
+        expect(response.status).toBe(200); fail();
+        const wire = await response.text();
+        const frames = wire.split("\n").filter(line => line.startsWith("data: {"))
+          .map(line => JSON.parse(line.slice(6)));
+        expect(frames.filter(frame => frame.type === "response.failed")).toHaveLength(1);
+        expect(frames.some(frame => frame.type === "response.completed")).toBe(false);
+        original = frames.find(frame => frame.type === "response.failed").response.error;
+        expect(diagnostics.find(event => event.stage === "public_progress_stream_closed"))
+          .toMatchObject({ failed_response_count: 1, completed_response_count: 0 });
+      } else {
+        expect(response.status).toBe(400); original = (await response.json() as any).error;
+      }
+      expect(original).toMatchObject({ type: "invalid_request_error", code: "tela_web_provider_response_failed",
+        retryable: false, recovery: { requires_new_conversation: false, requires_new_native_turn: true,
+          prior_execution_settled: "unknown" } });
+      expect(JSON.stringify(original)).not.toContain("PRIVATE");
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const replay = await handleNativeResponsesHttp(post(body()), gateway);
+        expect(replay.status).toBe(400);
+        expect((await replay.json() as any).error).toEqual(original);
+      }
+      expect(sends).toBe(1); expect(registry.size).toBe(0);
+    } finally { stop?.(); await gateway.close(); }
+  }
 });
