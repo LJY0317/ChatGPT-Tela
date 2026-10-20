@@ -14,6 +14,22 @@ Provider-side revocation reasons and storage changes made outside the observed E
 Service JSONL is bounded to 32 MiB per service; incident records are bounded by 16 MiB and 30 days without a
 separate incident-count cap. Raw private capture remains opt-in, local and separately bounded.
 
+## Browser request and provider failures
+
+The renderer records only failed XHR/fetch or WebSocket requests and HTTP responses >=400.
+`renderer_request_failed` carries the normalized Chromium failure class;
+`renderer_http_failed` carries status. Domain/route/resource/method classes and one-way
+origin/request fingerprints correlate them without URLs, headers, cookies or payloads.
+A shared session listener is released with the last surface; no probes or retries are added.
+Renderer correlation does not attribute a persistent page's later failures to its creating
+Native turn. JavaScript-only/provider failures may have no corresponding network event.
+
+`web_provider_failure_observed` records the keyed turn, error marker class and body/progress
+presence without error prose. Failure detection is independent of answer rendering; authored
+content and progress-owned alerts are excluded. A visible generic alert outside those regions
+is terminal only when generation has stopped, even if an earlier answer or progress shell remains mounted. This proves a
+provider UI failure, not its network cause or the outcome of an earlier tool operation.
+
 ## Tela Chat ingress boundary
 
 `chat_capability_dispatch_received` is emitted only after a supported effectful

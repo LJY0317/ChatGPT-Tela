@@ -53,7 +53,7 @@ interface RawTurn {
   readonly text?: string;
   readonly failureDetail?: string;
   readonly publicProgress?: readonly string[];
-  readonly progressProbe?: { readonly answerBodyCount?: number; readonly visibleAnswerBodyCount?: number; readonly answerBodyOutsideProgress?: boolean; readonly answerBodyAnimated?: boolean; readonly answerProsePresent?: boolean; readonly answerBlockCount?: number; readonly unmappedVisibleProsePresent?: boolean; readonly linkedRegionCount?: number; readonly visibleLinkedRegionCount?: number; readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
+  readonly progressProbe?: { readonly failureCandidateCount?: number; readonly failureSource?: "alert" | "provider_marker" | "none"; readonly answerBodyCount?: number; readonly visibleAnswerBodyCount?: number; readonly answerBodyOutsideProgress?: boolean; readonly answerBodyAnimated?: boolean; readonly answerProsePresent?: boolean; readonly answerBlockCount?: number; readonly unmappedVisibleProsePresent?: boolean; readonly linkedRegionCount?: number; readonly visibleLinkedRegionCount?: number; readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
 }
 
 interface RawSnapshot {
@@ -903,17 +903,16 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
       && !node.closest('[data-user-message-bubble], [data-message-author-role="user"], [data-markdown-text-style="assistant-message"], [data-conversation-role="user"]')
       && progressVisible(node) && visibleDescription(node, undefined).trim().length > 0);
     const assistantBody = answerBody || group.querySelector('[data-conversation-role="assistant"]');
-    // Fetch failures can replace the whole response with an alert, without
-    // creating an assistant body. Scope that terminal UI to this keyed turn;
-    // authored content and warnings beside ongoing progress are not failures.
-    const failure = group.querySelector('[data-message-error], [data-testid="message-error"]')
-      || (!assistantBody && !progressRoot ? [...group.querySelectorAll('[role="alert"]')]
-        .find(node => progressVisible(node) && !user?.contains(node)) : undefined);
-    const assistant = assistantBody || progressRoot || failure;
-    if (assistant) {
+    // Provider failures are independent of answer rendering. Exclude authored
+    // content and progress-owned warnings, rather than requiring those roots to vanish.
+    const errorCandidates = [...group.querySelectorAll('[data-message-error], [data-testid="message-error"], [role="alert"]')];
+    const failure = errorCandidates.find(node => progressVisible(node)
+      && (node.getAttribute('role') !== 'alert' || !stopVisible)
+      && !user?.contains(node) && !answerBody?.contains(node) && !progressRoot?.contains(node));
+    if (assistantBody || progressRoot || failure) {
       const complete = !!assistantBody && [...group.querySelectorAll('button[data-testid="copy-turn-action-button"], .turn-action-controls button')]
         .some(visible);
-      const answer = answerBody || assistant;
+      const answer = answerBody || (complete ? assistantBody : undefined);
       turns.push({
         key: "assistant:" + rawKey,
         role: "assistant",
@@ -924,15 +923,17 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         phase: failure ? "failed" : stopVisible ? "streaming" : complete ? "complete" : "thinking",
         // Body content and completion authority are independent. Historical action controls
         // can disappear during a new turn without changing the committed answer body.
-        text: answerBody ? answerMarkdown(answerBody) : complete ? answerMarkdown(answer || assistant) : undefined,
+        text: answer ? answerMarkdown(answer) : undefined,
         // Machine protocols consume literal DOM text, never layout-derived innerText.
-        plainBodyText: answerBody ? answerBody.textContent : complete ? (answer || assistant).textContent : undefined,
+        plainBodyText: answer?.textContent,
         // Reuse the delivered answer serializer. A separate DOM-attribute codec made
         // decorative icon hydration invalidate unchanged answers.
         bodyProof: answerBody ? { version: 1, value: answerSemanticBody(answerBody) } : undefined,
         failureDetail: failure ? text(failure) : undefined,
         publicProgress,
         progressProbe: {
+          failureCandidateCount: Math.min(65, errorCandidates.length),
+          failureSource: failure ? failure.getAttribute('role') === 'alert' ? 'alert' : 'provider_marker' : 'none',
           // Prose may use the same renderer as a final answer. Observe that boundary
           // without relabelling answer content as progress or recording its text.
           answerBodyCount: Math.min(65, group.querySelectorAll('[data-markdown-text-style="assistant-message"]').length),
@@ -2083,8 +2084,16 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
         if (!this.#progressProbeStates.has(signature) && this.#progressProbeStates.size < 32) {
           this.#progressProbeStates.add(signature);
           const probe = settled.progressProbe;
+          if (settled.phase === "failed") emitDiagnosticEvent("chatgpt_tela_work", "web_provider_failure_observed", {
+            turn_fingerprint: diagnosticFingerprint(settled.key),
+            failure_class: probe.failureSource ?? "none", error_candidate_count: probe.failureCandidateCount ?? 0,
+            answer_body_present: (probe.answerBodyCount ?? 0) > 0,
+            progress_present: probe.containerPresent, progress_visible: probe.containerVisible,
+          });
           emitDiagnosticEvent("chatgpt_tela_work", "web_public_progress_extraction", {
             assistant_phase: settled.phase ?? "unknown",
+            failure_class: probe.failureSource ?? "none",
+            provider_error_candidate_count: probe.failureCandidateCount ?? 0,
             progress_container_present: probe.containerPresent,
             progress_container_visible: probe.containerVisible,
             progress_container_display: probe.containerDisplay,

@@ -16,13 +16,13 @@ export interface DiagnosticContext {
 const context = new AsyncLocalStorage<DiagnosticContext>();
 export const DIAGNOSTIC_INSTANCE = createHash("sha256").update(randomUUID()).digest("hex").slice(0, 24);
 export function diagnosticContext(): DiagnosticContext { return context.getStore() ?? {}; }
-export function withDiagnosticContext<T>(fields: DiagnosticContext, action: () => T): T {
+export function withDiagnosticContext<T>(fields: DiagnosticContext, action: () => T, inherit = true): T {
   const safe: Record<string, string> = {};
   for (const [key, value] of Object.entries(fields)) {
     if (["request_fingerprint", "operation_fingerprint", "scope_fingerprint", "profile_fingerprint", "storage_fingerprint", "partition_fingerprint", "rpc_fingerprint", "parent_fingerprint", "turn_fingerprint", "surface_fingerprint"].includes(key)
       && typeof value === "string" && /^[a-f0-9]{24}$/.test(value)) safe[key] = value;
   }
-  return context.run({ ...diagnosticContext(), ...safe }, action);
+  return context.run(inherit ? { ...diagnosticContext(), ...safe } : safe, action);
 }
 /** Counts bytes only; content is never returned to a diagnostic sink. */
 export function diagnosticSerializedBytes(value: unknown): number | undefined {

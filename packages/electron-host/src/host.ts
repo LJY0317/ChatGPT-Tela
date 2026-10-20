@@ -10,11 +10,12 @@ import {
   type BrowserHost,
   type BrowserSurfaceCapability,
 } from "@chatgpt-tela/browser-host";
-import type { BrowserWindowConstructorOptions } from "electron";
+import type { BrowserWindowConstructorOptions, WebRequest } from "electron";
 import { lstatSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { ElectronWebContentsPageAutomation, type ElectronWebContentsLike } from "./page-automation";
 import { InspectionInput } from "./inspection-input";
+import { retainRendererNetworkDiagnostics } from "./network-diagnostics";
 import { electronProfileIdentity } from "./profile";
 
 export interface ElectronBrowserWindowLike {
@@ -43,6 +44,7 @@ interface ElectronAuthCookieLike {
 }
 
 interface ElectronProfileSessionLike {
+  readonly webRequest?: Pick<WebRequest, "onCompleted" | "onErrorOccurred">;
   readonly storagePath?: string | null;
   readonly cookies?: {
     on?(event: "changed", listener: (event: unknown, cookie: ElectronAuthCookieLike, cause: string, removed: boolean) => void): void;
@@ -271,6 +273,9 @@ export function createElectronBrowserHost(input: {
       surface_fingerprint: diagnosticFingerprint(JSON.stringify([input.profileId, taskId, epochId])) };
     const browserSession = (window.webContents as unknown as { readonly session?: ElectronProfileSessionLike }).session;
     const sessionAuthDiagnostics = retainSessionAuthDiagnostics(browserSession, origin);
+    const releaseNetworkDiagnostics = retainRendererNetworkDiagnostics(browserSession, {
+      webContentsId: (window.webContents as typeof window.webContents & { readonly id?: number }).id, origin,
+    });
     const emitter = window.webContents as typeof window.webContents & {
       on?: (event: string, listener: (...args: unknown[]) => void) => void;
       removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
@@ -366,6 +371,7 @@ export function createElectronBrowserHost(input: {
       inspection.dispose();
       detachDiagnostics();
       sessionAuthDiagnostics.release();
+      releaseNetworkDiagnostics();
       if (!window.isDestroyed()) window.destroy();
       throw error;
     }
@@ -419,6 +425,7 @@ export function createElectronBrowserHost(input: {
         inspection.dispose();
         detachDiagnostics();
         sessionAuthDiagnostics.release();
+        releaseNetworkDiagnostics();
         if (!window.isDestroyed()) window.destroy();
       },
       capability<T>(capability: BrowserSurfaceCapability<T>): T | undefined {
