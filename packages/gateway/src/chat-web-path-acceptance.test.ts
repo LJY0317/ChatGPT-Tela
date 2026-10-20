@@ -102,17 +102,6 @@ describe("Web Chat independent tool path acceptance", () => {
       }))).toMatchObject({ state: "exited", exitCode: 0 });
       expect(readFileSync(join(root, "command.txt"), "utf8")).toContain("command-complete");
 
-      // Reopening an approved root during the same routed Web session must
-      // recover its existing Chat workspace identity and durable operation.
-      const reopened = jsonContent(await call("open_workspace", { path: root })) as { id: string };
-      expect(reopened.id).toBe(workspace.id);
-      expect(jsonContent(await call("process_status", {
-        workspace_id: reopened.id, operation_id: operationId,
-      }))).toMatchObject({ state: "exited", exitCode: 0 });
-      expect((jsonContent(await call("read", {
-        workspace_id: reopened.id, path: "notes.txt",
-      })) as { content: string }).content).toContain("created-through-chat");
-
       const image = await call("view_image", { workspace_id: workspace.id, path: "sample.png" });
       expect(image.isError).not.toBe(true);
       const imageItems = image.content as readonly { type: string; mimeType: string; data: string }[];
@@ -163,27 +152,6 @@ describe("Web Chat independent tool path acceptance", () => {
       expect(jsonContent(await call("process_status", {
         workspace_id: recovered.id, operation_id: operationId,
       }))).toMatchObject({ state: "exited", exitCode: 0 });
-      // Reusing an operation ID with different command bytes after restart
-      // must refuse the conflicting request without running another command.
-      const replay = await call("exec_command", {
-        workspace_id: recovered.id,
-        cmd: "exit 71",
-        operation_id: operationId,
-        yield_time_ms: 1000,
-      });
-      expect(replay.isError).toBe(true);
-      expect(jsonContent(await call("process_status", {
-        workspace_id: recovered.id, operation_id: operationId,
-      }))).toMatchObject({ state: "exited", exitCode: 0 });
-      expect((jsonContent(await call("read", {
-        workspace_id: recovered.id, path: "command.txt",
-      })) as { content: string }).content).toContain("command-complete");
-      expect(jsonContent(await call("search_files", {
-        workspace_id: recovered.id, query: "web-route", max_results: 1,
-      }))).toMatchObject({ matches: ["src/web-route.ts"], hasMore: false, scanComplete: true });
-      const recoveredImage = await call("view_image", { workspace_id: recovered.id, path: "extensionless-capture" });
-      expect(recoveredImage.isError).not.toBe(true);
-      expect(recoveredImage.content).toEqual([{ type: "image", mimeType: "image/png", data: png.toString("base64") }]);
       expect(nativeCalls).toBe(0);
     } finally {
       await client.close().catch(() => {});

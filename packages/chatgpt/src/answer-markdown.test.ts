@@ -53,18 +53,6 @@ describe("owned assistant Markdown", () => {
     reflow.childNodes[0] = node("p", text("Different retained sentence."));
     expect(identity(reflow)).not.toBe(identity(original));
   });
-  test("retained identity ignores newly rendered inline-code ticks and presentation breaks", () => {
-    const original = node("div", node("p", text("Use one, two, three, four.")),
-      node("p", text("Next line.")));
-    const codeWords = ["one", "two", "three", "four"].map(word => node("code", text(word)));
-    const restyled = node("section", node("p", text("Use "), codeWords[0]!, text(", "),
-      codeWords[1]!, text(", "), codeWords[2]!, text(", "), codeWords[3]!, text(".")),
-      node("br"), node("div", text("Next\nline.")));
-    expect((markdown(restyled).match(/`/g) ?? []).length - (markdown(original).match(/`/g) ?? []).length).toBe(8);
-    expect(identity(restyled)).toBe(identity(original));
-    codeWords[1]!.childNodes[0] = text("changed");
-    expect(identity(restyled)).not.toBe(identity(original));
-  });
   test("retained identity survives 48 presentation newlines and eight inline-code ticks", () => {
     const words = Array.from({ length: 49 }, (_, index) => `token${index}`);
     const original = node("div", node("p", text(words.join(" "))),

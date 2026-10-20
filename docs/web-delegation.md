@@ -65,8 +65,6 @@ within the same Native conversation. These are local managed-job limits, not Web
 provider quotas. The physical Git worktree root is the writer identity even when
 callers choose different subdirectories. Multiple tasks may write concurrently in
 different worktrees; only one may hold writer ownership within a worktree.
-Read-only tasks can share a checkout with its active writer, subject to the
-profile's three-task limit. Another writer is still excluded.
 Read-only tasks may share a checkout with its writer when the profile has a
 free task permit. Writer checkout contention applies only to new writers;
 same-thread continuation exclusivity is enforced separately.
