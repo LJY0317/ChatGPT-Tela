@@ -16,7 +16,7 @@ export function assistantMarkdown(root: HTMLElement, includePresentationHidden =
       const style = getComputedStyle(node);
       if (style.display === "none" || style.visibility === "hidden") return "";
     }
-    if (tag === "pre") {
+    if (tag === "pre" || node.getAttribute("data-code-block") !== null) {
       const code = node.querySelector("code") ?? node;
       const value = (code.textContent ?? "").replace(/\r\n?/g, "\n");
       const language = Array.from(code.classList).map(item => /^language-([\w+-]+)$/.exec(item)?.[1]).find(Boolean) ?? "";
@@ -88,14 +88,10 @@ export function assistantSemanticBody(root: HTMLElement): string {
     if (!(node instanceof HTMLElement)) return;
     const tag = node.tagName.toLowerCase();
     if (["script", "style", "button", "svg", "nav"].includes(tag)) return;
-    if (tag === "pre") {
-      append("code-block", (node.querySelector("code") ?? node).textContent?.replace(/\r\n?/g, "\n") ?? "");
-      return;
-    }
     // Presentation wrappers around words are harmless; literal code spacing is not.
-    if (tag === "code") {
-      const value = node.textContent ?? "";
-      append(/ {2}|[^\S ]|^ | $/.test(value) ? "inline-code" : "text", value);
+    if (tag === "pre" || tag === "code" || node.getAttribute("data-code-block") !== null) {
+      const value = ((node.querySelector("code") ?? node).textContent ?? "").replace(/\r\n?/g, "\n");
+      append(tag !== "code" || / {2}|[^\S ]|^ | $/.test(value) ? "code" : "text", value);
       return;
     }
     if (tag === "a") {

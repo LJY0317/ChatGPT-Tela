@@ -64,6 +64,24 @@ describe("owned assistant Markdown", () => {
     const list = (items: string[]) => identity(node("ol", ...items.map(item => node("li", text(item)))));
     expect(list(["first", "second"])).not.toBe(list(["second", "first"]));
   });
+  test("owned code ignores widget language controls and inline/block reflow, preserving author text and literal changes", () => {
+    const code = "const result = render(input);\nreturn result; // unchanged";
+    const widget = (language: string, value: string, block = true) => node("div", new Element("div", [
+      node("div", text(language), node("button", text("Copy"))),
+      block ? node("pre", node("code", text(value))) : node("code", text(value)),
+    ], { "data-code-block": "" }));
+    const before = widget("XML", code, false);
+    const after = widget("HTML", code);
+    expect(identity(after)).toBe(identity(before));
+    expect(identity(after)).toBe(identity(node("div", node("code", text(code)))));
+    expect(markdown(after)).not.toMatch(/HTML|Copy/);
+    expect(markdown(after)).toContain(code);
+    expect(identity(widget("HTML", code.replace("input", "other")))).not.toBe(identity(before));
+    expect(identity(widget("HTML", code.replace("const result", "const  result")))).not.toBe(identity(before));
+    // An unmarked authored caption stays significant, even beside a code block.
+    const caption = (value: string) => node("div", node("p", text(value)), widget("HTML", code));
+    expect(identity(caption("Original caption"))).not.toBe(identity(caption("Changed caption")));
+  });
   test("retained identity survives 48 presentation newlines and eight inline-code ticks", () => {
     const words = Array.from({ length: 49 }, (_, index) => `token${index}`);
     const original = node("div", node("p", text(words.join(" "))),
