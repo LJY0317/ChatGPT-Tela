@@ -1,6 +1,6 @@
 import { WebCheckpointResponseRejected, type CheckpointResponseRejection as CompletedResponseRejection } from "./checkpoint-settlement";
 import { createHash, randomUUID, randomBytes } from "node:crypto";
-import { emitDiagnosticEvent, webObservationFailureReason, diagnosticFailureClass } from "@chatgpt-tela/core";
+import { capturePrivateDiagnosticValue, emitDiagnosticEvent, webObservationFailureReason, diagnosticFailureClass } from "@chatgpt-tela/core";
 import type { BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import {
   requireProven,
@@ -171,6 +171,14 @@ export class ChatGptContextCheckpointProvider implements WebContextCheckpointPro
         let parsed: unknown;
         try { parsed = JSON.parse(event.plainAnswer); } catch (error) {
           const position = error instanceof SyntaxError ? /position (\d+)/.exec(error.message) : null;
+          // Only the existing opt-in private diagnostics may retain either body. Both are
+          // renderer-derived representations; neither proves the model's original wire text.
+          capturePrivateDiagnosticValue("web_execution_failure", {
+            checkpointPhase: "json_parse_failed",
+            plainDomText: event.plainAnswer,
+            formattedMarkdown: event.answer,
+            jsonErrorOffset: position ? Number(position[1]) : -1,
+          });
           emitDiagnosticEvent("chatgpt_tela_work", "checkpoint_json_parse_failed", {
             body_characters: event.plainAnswer.length,
             body_bytes: Buffer.byteLength(event.plainAnswer, "utf8"),

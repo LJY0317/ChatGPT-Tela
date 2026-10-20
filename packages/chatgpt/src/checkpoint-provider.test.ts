@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import { expect, test } from 'bun:test';
-import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
+import {mkdtempSync, readFileSync, readdirSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import type { BrowserSurfaceLease } from '@chatgpt-tela/browser-host';
 import type { WebContextCheckpointRequest, WebTurnRequest, WebContextAttachmentPreloadRequest } from './index';
 import { ChatGptContextCheckpointProvider, chatGptCheckpointInputTokens } from './checkpoint-provider';
 import { serializeChatGptContextAttachment } from './context-attachment';
-import { decodeNativeInlineEvidence, nativeEvidenceRef } from '@chatgpt-tela/core';
+import { decodeNativeInlineEvidence, nativeEvidenceRef, setPrivateDiagnosticCapture, withDiagnosticContext } from '@chatgpt-tela/core';
 import { webEvidenceFilename } from './turn-media';
 import { formatWebPhysicalContext } from './semantic-provider';
 import { assistantMarkdown } from './answer-markdown';
@@ -266,5 +266,40 @@ test('checkpoint rejection diagnostics distinguish validation causes without sav
   } finally {
     if(previous===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;
     rmSync(root,{recursive:true,force:true});
+  }
+});
+
+test.each([false, true])('invalid checkpoint JSON captures both renderer representations only with existing opt-in=%s', async enabled => {
+  const root = mkdtempSync(join(tmpdir(), 'tela-checkpoint-private-'));
+  const file = join(root, 'events.jsonl');
+  const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  if (enabled) setPrivateDiagnosticCapture(join(root, 'diagnostics'), 1);
+  const malformed = '{"summary":"synthetic\\qbad"}';
+  const formatted = '```json\n' + malformed + '\n```';
+  const f = fixture(value => value, () => ({answer: formatted, plainAnswer: malformed}));
+  try {
+    await expect(withDiagnosticContext({ operation_fingerprint: 'a'.repeat(24) }, () =>
+      f.provider.createContextCheckpoint(surface, source))).rejects.toThrow('exact JSON');
+    expect(f.submits()).toBe(1);
+    const rows = readFileSync(file, 'utf8');
+    expect(rows).toContain('checkpoint_json_parse_failed');
+    expect(rows).not.toContain(malformed);
+    expect(rows).not.toContain(formatted);
+    const directory = join(root, 'diagnostics', 'private');
+    const files = enabled ? readdirSync(directory).filter(name => name.endsWith('.json') && !name.endsWith('.meta.json')) : [];
+    expect(files).toHaveLength(enabled ? 1 : 0);
+    if (enabled) {
+      const record = JSON.parse(readFileSync(join(directory, files[0]!), 'utf8'));
+      expect(record.phase).toBe('web_execution_failure');
+      expect(record.context.operation_fingerprint).toBe('a'.repeat(24));
+      expect(record.value).toMatchObject({ checkpointPhase: 'json_parse_failed', plainDomText: malformed,
+        formattedMarkdown: formatted });
+      expect(record.value.jsonErrorOffset).toBe(-1); // Runtime-dependent SyntaxError wording.
+    }
+  } finally {
+    if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+    rmSync(root, {recursive: true, force: true});
   }
 });
