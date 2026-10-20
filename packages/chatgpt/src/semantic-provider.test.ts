@@ -1,3 +1,4 @@
+import { formatWebPhysicalContext } from "./semantic-provider";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -1013,6 +1014,18 @@ describe("ChatGPT semantic provider", () => {
     } finally {
       await surface.host.close();
     }
+  });
+
+  test("Goal-only routing metadata keeps Native work tools outside the Tela Chat contract", () => {
+    const payload = formatWebPhysicalContext(request().physicalContext, undefined, undefined, [], {
+      defaultProfileSlot: 2, nativeGoalControl: "opaque-goal-only-control",
+    });
+    expect(payload).toContain('"nativeGoalControl":"opaque-goal-only-control"');
+    expect(payload).toContain("goal_control_inventory");
+    expect(payload).toContain("goal_control_call");
+    expect(payload).toContain("verify its full objective");
+    expect(payload).not.toContain('"toolBridge"');
+    expect(payload).not.toContain('"turnCapability"');
   });
 
   test("Tela Chat selects the connector without exposing a Native turn capability", async () => {

@@ -87,3 +87,20 @@ describe("dynamic Tela Chat backend", () => {
     }
   });
 });
+
+test("Tela Chat Goal calls forward only original Goal tools without a second state engine", async () => {
+  const calls: unknown[] = [];
+  const bridge = {
+    inventory: () => [
+      { wireName: "functions.update_goal", name: "update_goal", namespace: "functions", kind: "function" as const, description: "Native Goal", observedFrom: ["Native"] },
+      { wireName: "exec_command", name: "exec_command", kind: "function" as const, description: "Work", observedFrom: ["Native"] },
+    ],
+    async invoke(capability: string, invocation: unknown) { calls.push({ capability, invocation }); return { callId: "complete", content: { status: "complete" }, isError: false }; },
+  };
+  const backend = new DynamicChatBackend(() => undefined, bridge);
+  expect(await backend.call("goal_control_inventory", { goal_control: "scoped-control" })).toMatchObject([{ name: "update_goal" }]);
+  await expect(backend.call("goal_control_call", { goal_control: "scoped-control", call_id: "work", wire_name: "exec_command", arguments: {} })).rejects.toThrow("advertised Native Goal tool");
+  expect(calls).toHaveLength(0);
+  expect(await backend.call("goal_control_call", { goal_control: "scoped-control", call_id: "complete", wire_name: "functions.update_goal", arguments: { status: "complete" } })).toMatchObject({ isError: false, content: { status: "complete" } });
+  expect(calls).toEqual([{ capability: "scoped-control", invocation: { callId: "complete", wireName: "functions.update_goal", mode: "structured", arguments: { status: "complete" } } }]);
+});

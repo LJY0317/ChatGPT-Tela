@@ -1,4 +1,4 @@
-import { diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, emitDiagnosticEvent, isNativeGoalTool } from "@chatgpt-tela/core";
 import type {
   NativeToolCatalogEntry,
   NativeToolInvocation,
@@ -23,8 +23,9 @@ export class McpTurnBridge implements TurnBridgeBackend {
   constructor(readonly turns: TurnCapabilityResolver) {}
 
   inventory(capability: string, query = ""): readonly NativeToolCatalogEntry[] {
-    const channel = this.turns.resolve(capability);
-    const tools = channel.binding.tools.search(query);
+    const goalControl = this.turns.resolveGoalControl?.(capability);
+    const channel = goalControl ?? this.turns.resolve(capability);
+    const tools = channel.binding.tools.search(query).filter(tool => !goalControl || isNativeGoalTool(tool));
     emitDiagnosticEvent("chatgpt_tela_work", "native_tool_inventory_queried", {
       scope_fingerprint: diagnosticFingerprint(channel.binding.authority.threadId),
       turn_fingerprint: diagnosticFingerprint(channel.binding.authority.turnId),
@@ -34,6 +35,11 @@ export class McpTurnBridge implements TurnBridgeBackend {
   }
 
   invoke(capability: string, invocation: NativeToolInvocation): Promise<NativeToolResult> {
-    return this.turns.resolve(capability).requestTool(invocation);
+    const goalControl = this.turns.resolveGoalControl?.(capability);
+    if (goalControl) {
+      const tool = goalControl.binding.tools.exact(invocation.wireName);
+      if (!tool || !isNativeGoalTool(tool)) throw Error("Goal control cannot invoke Native work tools");
+    }
+    return (goalControl ?? this.turns.resolve(capability)).requestTool(invocation);
   }
 }

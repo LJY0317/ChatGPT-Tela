@@ -1,3 +1,4 @@
+import { isNativeGoalTool } from "@chatgpt-tela/core";
 import { WebProviderResponseFailed } from "@chatgpt-tela/core";
 import { WebContextFitFailed, webContextFitFailureReason, type WebContextFitReason } from "@chatgpt-tela/core";
 import { WebObservationUnproven, webObservationFailureReason, type WebObservationReason } from "@chatgpt-tela/core";
@@ -11,6 +12,7 @@ import { RuntimeTurnChannel } from "./turn-channel";
 
 export interface TurnCapabilityResolver {
   resolve(token: string): RuntimeTurnChannel;
+  resolveGoalControl?(token: string): RuntimeTurnChannel | undefined;
 }
 
 export interface RegisteredTurn {
@@ -56,6 +58,7 @@ export function turnCapabilityRoute(token: string): string | undefined {
  */
 export class ActiveTurnRegistry {
   readonly #byCapability = new Map<string, RuntimeTurnChannel>();
+  readonly #goalControls = new Map<string, string>();
   readonly #nativeCallIdsByTurn = new Map<string, Set<string>>();
   readonly #capabilityByTurn = new Map<string, string>();
   // A fixed recovery classification only; never retain raw exceptions or request content.
@@ -113,6 +116,25 @@ export class ActiveTurnRegistry {
     return channel;
   }
 
+  /** A separate bearer can reach only existing Goal controls on this response cycle. */
+  goalControl(token: string): string | undefined {
+    const channel = this.resolve(token);
+    if (!channel.binding.tools.list().some(isNativeGoalTool)) return undefined;
+    for (const [control, owner] of this.#goalControls) if (owner === token) return control;
+    const control = capability(this.#routeId);
+    this.#goalControls.set(control, token);
+    return control;
+  }
+
+  resolveGoalControl(token: string): RuntimeTurnChannel | undefined {
+    const owner = this.#goalControls.get(token);
+    return owner === undefined ? undefined : this.resolve(owner);
+  }
+
+  #releaseGoalControls(owner: string): void {
+    for (const [control, token] of this.#goalControls) if (token === owner) this.#goalControls.delete(control);
+  }
+
   refresh(binding: NativeTurnBinding): RegisteredTurn {
     const token = this.#capabilityByTurn.get(turnKey(binding));
     if (!token) throw new Error("native turn has no active runtime owner to refresh");
@@ -130,6 +152,7 @@ export class ActiveTurnRegistry {
     const nextToken = capability(this.#routeId);
     const channel = new RuntimeTurnChannel(binding, this.#nativeCallIdsByTurn.get(turnKey(binding))!);
     previous.releaseProgress();
+    this.#releaseGoalControls(token);
     this.#byCapability.delete(token);
     this.#byCapability.set(nextToken, channel);
     this.#capabilityByTurn.set(turnKey(binding), nextToken);
@@ -140,6 +163,7 @@ export class ActiveTurnRegistry {
     const channel = this.resolve(token);
     const key = turnKey(channel.binding);
     channel.releaseProgress();
+    this.#releaseGoalControls(token);
     this.#byCapability.delete(token);
     this.#capabilityByTurn.delete(key);
     this.#nativeCallIdsByTurn.delete(key);
@@ -165,6 +189,7 @@ export class ActiveTurnRegistry {
   cancelAll(reason: unknown = new Error("runtime stopped")): void {
     const active = [...this.#byCapability.entries()];
     this.#byCapability.clear();
+    this.#goalControls.clear();
     this.#capabilityByTurn.clear();
     this.#nativeCallIdsByTurn.clear();
     for (const [token, channel] of active) {

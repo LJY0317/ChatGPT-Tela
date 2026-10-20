@@ -60,17 +60,21 @@ bun run cli web-delegate result --job UUID
 These commands operate on journal-owned Web jobs. `continue` requires a proven
 completed eligible parent and starts a new turn in the same thread; it does not
 enqueue work or steer a running generation. The Native conversation's own queue
-and steering operate under its separate Native authority. A Web worker can
-report the result, but it has read-only Goal access and no Goal-mutation
-capability. Reuse the original Native Goal controls when exposing this missing
-connection; task-specific shell/RPC completion helpers are not a supported worker
-workflow. The Native coordinator can request Goal completion through the
-public API, but that API has no scheduler fence or turn compare-and-set, so a
-successful completion response does not guarantee that an automatic follow-up
-turn will not start. Live acceptance observed a follow-up turn start in the same
-second as Goal completion; the coordinator had to interrupt it. Post-completion
-quiescence is therefore not accepted. The Codex connector inventory remains
-scoped to one exact active Native turn, with tools discovered at runtime.
+and steering operate under its separate Native authority. When the current harness
+advertises its original Goal tools, the Web task receives a separate Goal-only
+control capability. Discover `goal_control_inventory` through Tela Chat and use
+`goal_control_call` with the returned Native schema. This uses the original Native
+tool execution/result path; it creates no Goal store or scheduler and cannot invoke
+Native work tools. The capability expires with the response cycle. When no original
+Goal tool is advertised, no completion capability is supplied: report that limit
+instead of creating a shell/RPC completion helper.
+
+Completion requires the full objective's evidence before the original Goal update
+call, followed by a final answer. Same-turn completion and post-completion quiescence
+still need live acceptance. The external coordinator API has no scheduler fence or
+turn compare-and-set; prior acceptance observed a successor start in the same second
+as external completion, so an external ACK alone is insufficient.
+
 
 `status` includes the last observed public Native reasoning **summary** in
 `progress`, when available. It retains only the newest summary (up to 2,048
