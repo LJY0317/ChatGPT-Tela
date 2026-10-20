@@ -11,6 +11,7 @@ import type { ElectronDevelopmentRuntime } from "./electron";
 import type { ElectronProfileSetupRuntime } from "./profile-setup";
 import { writeWebModelDisplayCache } from "./web-model-display-cache";
 import { startNativeFirstProductProfileRuntime, type NativeFirstProfileOptions, type NativeFirstProfileRuntime } from "./native-first-profile";
+import { FileContextCheckpointCache } from "./context-cache";
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 
 function deferred<T>() {
@@ -22,7 +23,7 @@ const family = { key: chatGptWebFamilyKey("Fixture Web"), label: "Fixture Web", 
 const model = chatGptWebModelId(family.key);
 const metadata = { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "thread-1", turn_id: "turn-1" } };
 
-async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean; holdCreation?: boolean; fail?: "login" | "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly context?: import("./electron").ElectronDevelopmentRuntimeOptions["context"] }) => void } = {}) {
+async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean; holdCreation?: boolean; fail?: "login" | "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly context?: import("./electron").ElectronDevelopmentRuntimeOptions["context"] }) => void; connectNativeNotifications?: NativeFirstProfileOptions["connectNativeNotifications"] } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-native-first-"));
   const config = loadProductProfileRuntimeConfig({
     CHATGPT_TELA_PROFILE_ROOT: root, CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "1", CHATGPT_TELA_PRODUCT_ROUTE_ID: "fixture123",
@@ -60,6 +61,7 @@ async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean
     sandbox: { kind: "read-only" as const, network: "restricted" as const }, proof: "turn-context" as const, environmentSourceTurnId: currentTurnId,
   }; }, ...(!input.noLifecycle ? { async watchTurn() { return { signal: nativeOwner.signal, async close() {} }; } } : {}) };
   const options: NativeFirstProfileOptions = {
+    ...(input.connectNativeNotifications ? { connectNativeNotifications: input.connectNativeNotifications } : {}),
     ...(input.accountBrowserFallback ? { accountBrowserStarter: async () => ({
       async openProfileSetupSurface() {
         accountBrowserOpens++;
@@ -185,7 +187,7 @@ async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean
   try { runtime = await startNativeFirstProductProfileRuntime(config, options); }
   catch (error) { rmSync(root, { recursive: true, force: true }); throw error; }
   return {
-    runtime, gate, order, generationGate, generationStarted, surfaceObserverOwners,
+    runtime, config, gate, order, generationGate, generationStarted, surfaceObserverOwners,
     async breakTransport() { await lastBrowserResponses?.stop(); },
     get nativeStops() { return nativeStops; }, get browserStops() { return browserStops; },
     get creations() { return creations; }, get nativeRequests() { return nativeRequests; }, get webGenerations() { return webGenerations; },
@@ -840,4 +842,48 @@ test("metadata subscriptions survive replacement of the Web runtime without reta
     expect(f.runtime.bridgeSurfaces().revision).toBe(current + 1);
   } finally { detach(); await f.cleanup(); }
   expect(f.surfaceObserverOwners[1]?.size).toBe(0);
+});
+
+test("Native deletion observer clears only confirmed threads in its account and shuts down", async () => {
+  const subscribed = deferred<void>();
+  let notify: (method: string, params: unknown) => void = () => {};
+  let disconnected: () => void = () => {};
+  let closed = 0;
+  const connectNativeNotifications = (async () => ({
+    subscribe(next: typeof notify, gone: typeof disconnected) {
+      notify = next; disconnected = gone; subscribed.resolve();
+      return () => { notify = () => {}; };
+    },
+    async close() { closed++; },
+  })) as unknown as NativeFirstProfileOptions["connectNativeNotifications"];
+  const f = await fixture({ connectNativeNotifications });
+  const store = (kind: string, account: string) => new FileContextCheckpointCache({
+    directory: join(f.config.browserProfile.userDataDir, kind, account.repeat(64)),
+  });
+  const owned = [store("context-checkpoints", "a"), store("native-history-checkpoints", "a")];
+  const other = [store("context-checkpoints", "b"), store("native-history-checkpoints", "b")];
+  try {
+    await f.runtime.waitForWeb();
+    await subscribed.promise;
+    for (const cache of [...owned, ...other]) {
+      for (const id of ["deleted", "kept"]) {
+        await cache.put({ nativeTaskId: id, revisionId: "r1", content: "fixture", estimatedTokens: 1 });
+      }
+    }
+    notify("thread/archived", { threadId: "deleted" });
+    notify("thread/unarchived", { threadId: "deleted" });
+    for (const cache of owned) expect(await cache.list("deleted")).toHaveLength(1);
+    notify("thread/deleted", { threadId: "deleted" });
+    await f.runtime.invalidateWebAccount();
+    await f.runtime.stop(); // joins the pending deletion, including the second cache
+    for (const cache of owned) {
+      expect(await cache.list("deleted")).toEqual([]);
+      expect(await cache.list("kept")).toHaveLength(1);
+    }
+    for (const cache of other) expect(await cache.list("deleted")).toHaveLength(1);
+    expect(closed).toBe(1);
+    disconnected();
+    await f.runtime.stop();
+    expect(closed).toBe(1);
+  } finally { await f.cleanup(); }
 });
