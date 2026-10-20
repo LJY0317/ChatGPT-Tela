@@ -78,7 +78,9 @@ that thread. It reserves a new child job ID and starts a **new turn in the same
 Native thread**, with only the new prompt sent as input. The original completed
 job and immutable result stay intact. The returned child ID is used for status,
 result, reconcile, and another continuation. It does not create a new agent,
-thread, or duplicate the finished turn. Native/Web session reuse depends on the
+thread, or duplicate the finished turn. A fresh RPC connection attaches with
+`thread/resume` and `excludeTurns: true` before submitting the continuation so
+the final-answer and turn-completion events reach the caller. Native/Web session reuse depends on the
 same owner and active terminal endpoint; mismatched identity fails closed.
 After a runtime replacement, the current session must prove the same persisted
 account and profile, and the exact parent turn must still be completed in the
@@ -123,7 +125,7 @@ timeouts or stale in-flight snapshots.
 Job records and results are private product data under the Codex service state directory, with
 restricted filesystem permissions. A hard capacity of 64 records bounds storage; it does not
 silently discard results. Do not put these records, prompts, keys or results in a repository or
-release. This source version does not yet provide a complete removal lifecycle. Successful continuation is covered by source fixtures; a live model continuation has not been exercised in this change.
+release. This source version does not yet provide a complete removal lifecycle. Source fixtures and a profile-1 live same-thread continuation verify final-answer delivery and completion after attaching the fresh connection. Both-profile acceptance remains a separate check.
 
 Continuations inherit their parent's profile and read-only or workspace-write mode.
 They cannot promote an existing read-only thread to writing. Historical job

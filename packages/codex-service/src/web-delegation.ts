@@ -445,6 +445,9 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
         const priorTurn = await findDelegatedTurn(rpc, parent.threadId!, parent.turnId!, input.signal);
         if (priorTurn?.status !== "completed") throw Error("Original Web turn is not proven on the current owner session");
       }
+      // Each delegation opens a fresh connection. Attach it to this indexed
+      // thread so turn/start's completion notifications reach this observer.
+      await rpc.request("thread/resume", { threadId: parent.threadId, excludeTurns: true }, input.signal);
       update({ threadId: parent.threadId!, state: "created" });
     } else {
       const started = object(await rpc.request("thread/start", {

@@ -16,17 +16,20 @@ async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; f
   let notify: (method: string, params: unknown) => void = () => {};
   let disconnected: () => void = () => {};
   let observedOwners = 0;
+  let attached = false;
   const rpc: CodexAppServerRpc = {
     subscribe(callback, onDisconnected) { notify = callback; disconnected = onDisconnected; return () => {}; },
     async close() { if (options.closeFails) throw Error("connection already closed"); },
     async request(method, params) {
       calls.push({ method, params });
       if (method === "model/list") return { data: [{ model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", displayName: "6 (Web)", supportedReasoningEfforts: [{ reasoningEffort: "xhigh" }] }] };
-      if (method === "thread/start") return { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", approvalPolicy: "never", sandbox: { type: options.mode === "write" ? "workspaceWrite" : "readOnly" }, thread: { id: threadId, cwd: root, historyMode: "paginated", ephemeral: false } };
+      if (method === "thread/resume") { attached = true; return { thread: { id: threadId } }; }
+      if (method === "thread/start") { attached = true; return { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", approvalPolicy: "never", sandbox: { type: options.mode === "write" ? "workspaceWrite" : "readOnly" }, thread: { id: threadId, cwd: root, historyMode: "paginated", ephemeral: false } }; }
       if (method === "turn/start") {
         if (calls.filter(call => call.method === "turn/start").length > 1) currentTurnId = randomUUID();
         if (options.uncertain) throw Error("lost acknowledgement");
         if (options.silent) { if (options.disconnect) queueMicrotask(() => disconnected()); return { turn: { id: currentTurnId } }; }
+        if (!attached) return { turn: { id: currentTurnId } };
         // Synchronously complete BEFORE turn/start's ACK, exercising the real notification race.
         notify("item/completed", { threadId: options.foreignFinal ? randomUUID() : threadId, turnId: currentTurnId, item: { id: "final", type: "agentMessage", ...(options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified design" } });
         notify("item/completed", { threadId, turnId: currentTurnId, item: { id: "read", type: "commandExecution",
@@ -56,7 +59,7 @@ async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; f
     },
   };
   const adapters = {
-    store, connect: async () => rpc,
+    store, connect: async () => { attached = false; return rpc; },
     owner: async () => {
       observedOwners++;
       return {
@@ -402,6 +405,9 @@ test("continuation appends a new turn to the same Native thread without creating
     expect(f.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(2);
     expect(f.calls.filter(call => call.method === "thread/turns/list")).toHaveLength(1);
+    expect(f.calls.filter(call => call.method === "thread/resume")).toEqual([{
+      method: "thread/resume", params: { threadId: original.threadId, excludeTurns: true },
+    }]);
     expect(f.store.get(original.id)?.answer).toBe("verified design");
     expect(f.store.get(followup.id)?.answer).toBe("verified design");
     const third = await f.continue(followup.id, "One more follow-up");
