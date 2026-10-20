@@ -2,7 +2,7 @@ import { watch, existsSync, readFileSync, writeFileSync, renameSync, unlinkSync 
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { sameAccountOwner, type WebDelegationAdapters, type WebDelegationRecord } from "./web-delegation";
+import { sameAccountOwner, webDelegationRetentionPath, type WebDelegationAdapters, type WebDelegationRecord } from "./web-delegation";
 
 const DAY = 86_400_000;
 interface Retention {
@@ -17,7 +17,7 @@ function object(value: unknown): Record<string, any> | undefined {
 function statePath(adapters: WebDelegationAdapters, record: WebDelegationRecord): string {
   // Thread IDs originate from acknowledged Native creation, not user-selected filenames.
   if (!/^[a-f0-9-]{36}$/i.test(record.threadId!)) throw Error("Invalid managed thread ID");
-  return join(adapters.store.root, `thread-${record.slot}-${record.owner.accountFingerprint}-${record.threadId}.retention`);
+  return webDelegationRetentionPath(adapters.store.root, { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! });
 }
 function load(path: string): Retention | undefined {
   if (!existsSync(path)) return undefined;
@@ -39,6 +39,7 @@ function save(path: string, value: Retention): void {
 export async function settleWebDelegationRetention(adapters: WebDelegationAdapters, input: {
   now?: number; signal: AbortSignal;
 }): Promise<number | undefined> {
+  adapters.store.finishDeletedThreads();
   const now = input.now ?? Date.now();
   const groups = new Map<string, WebDelegationRecord[]>();
   for (const record of adapters.store.records()) {
@@ -86,7 +87,11 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           } while (cursor);
         }
         const present = listed.get(record.threadId!);
-        if (!present) { save(path, { state: "deleted" }); continue; }
+        if (!present) {
+          save(path, { state: "deleted" });
+          adapters.store.removeDeletedThread({ slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! });
+          continue;
+        }
         const updatedAt = present.thread.updatedAt;
         if (!Number.isFinite(updatedAt)) throw Error("Native thread activity time unavailable");
         if (present.archived !== (retained?.state === "archived")
@@ -131,8 +136,11 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
         } catch (error) {
           // Unknown mutation outcomes are not permission to repeat a request.
           // Keep the Native conversation and relinquish automatic management.
-          save(path, { state: "excluded" });
+          if (load(path)?.state !== "deleted") save(path, { state: "excluded" });
           throw error;
+        }
+        if (retained?.state === "archived") {
+          adapters.store.removeDeletedThread({ slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! });
         }
       } finally { await rpc.close(); }
     } catch (error) {

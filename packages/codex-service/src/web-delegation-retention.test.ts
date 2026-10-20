@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, realpathSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -79,7 +79,10 @@ test("first result collection starts 24h clock, repeated reads do not extend it,
     await f.run(f.origin + 32 * DAY); expect(f.native.exists).toBe(false);
     expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(1);
     expect(f.calls.filter(c => c.method === "thread/delete")).toHaveLength(1);
-    expect(readFileSync(join(f.root, `${f.record.id}.json.completed`), "utf8")).toBe(immutable);
+    expect(immutable).toContain("result");
+    expect(f.store.get(f.record.id)).toBeUndefined();
+    expect(f.store.records()).toHaveLength(0);
+    expect(existsSync(join(f.root, `${f.record.id}.json.completed`))).toBe(false);
   } finally { f.cleanup(); }
 });
 test("uncollected results use seven actual idle days, polling never resets activity", async () => {
@@ -149,4 +152,78 @@ test("daemon lifecycle starts due maintenance without polling and closes its wat
     await retention.close();
     expect(f.native.archived).toBe(true);
   } finally { abort.abort(); f.cleanup(); }
+});
+
+test("confirmed deletion removes only matching thread jobs and survives interrupted cleanup", async () => {
+  const f = fixture();
+  try {
+    const other = { ...f.record, id: randomUUID(), threadId: randomUUID(), turnId: randomUUID() };
+    f.store.reserve(other);
+    f.store.save({ ...other, state: "completed", answer: "other", finalEvidence: "explicit-final-phase" });
+    f.store.collect(f.record.id, f.origin);
+    const base = join(f.root, `${f.record.id}.json`);
+    const receipt = join(f.root, `${f.record.id}.json.completed`);
+    // A prior cleanup was interrupted after terminal artifacts were removed.
+    const key = { slot: f.record.slot, accountFingerprint: f.record.owner.accountFingerprint, threadId: f.record.threadId! };
+    const retention = join(f.root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`);
+    writeFileSync(retention, JSON.stringify({ state: "deleted" }));
+    writeFileSync(base, JSON.stringify({ ...f.record, state: "completed", answer: "result", finalEvidence: "explicit-final-phase" }));
+    rmSync(receipt);
+    expect(existsSync(base)).toBe(true);
+    expect(f.store.removeDeletedThread(key).jobs).toBe(1);
+    expect(existsSync(base)).toBe(false);
+    expect(existsSync(retention)).toBe(false);
+    expect(existsSync(join(f.root, `${f.record.id}.json.collected`))).toBe(false);
+    expect(f.store.get(f.record.id)).toBeUndefined();
+    expect(f.store.get(other.id)?.answer).toBe("other");
+    expect(f.store.records()).toHaveLength(1);
+    expect(f.store.removeDeletedThread(key).jobs).toBe(0);
+  } finally { f.cleanup(); }
+});
+
+test("a deletion receipt rejects late result collection and observer save", () => {
+  const f = fixture();
+  try {
+    const key = { slot: f.record.slot, accountFingerprint: f.record.owner.accountFingerprint, threadId: f.record.threadId! };
+    const retention = join(f.root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`);
+    writeFileSync(retention, JSON.stringify({ state: "deleted" }));
+    expect(() => f.store.collect(f.record.id)).toThrow("No verified Web result");
+    expect(() => f.store.save({ ...f.record, state: "running" })).toThrow("not reserved");
+    expect(existsSync(join(f.root, `${f.record.id}.json.collected`))).toBe(false);
+    f.store.removeDeletedThread(key);
+    expect(() => f.store.save({ ...f.record, state: "running" })).toThrow("not reserved");
+  } finally { f.cleanup(); }
+});
+
+test("confirmed deletion settles unresolved jobs and releases only their leases", () => {
+  const f = fixture();
+  try {
+    const pending = { ...f.record, id: randomUUID(), threadId: f.record.threadId!, turnId: randomUUID(), state: "running" as const };
+    f.store.reserve(pending);
+    const separate = { ...f.record, id: randomUUID(), threadId: randomUUID(), turnId: randomUUID(), state: "running" as const };
+    f.store.reserve(separate);
+    const key = { slot: f.record.slot, accountFingerprint: f.record.owner.accountFingerprint, threadId: f.record.threadId! };
+    writeFileSync(join(f.root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`), JSON.stringify({ state: "deleted" }));
+    expect(f.store.get(pending.id)).toBeUndefined();
+    expect(f.store.records().map(job => job.id)).toEqual([separate.id]);
+    f.store.finishDeletedThreads();
+    expect(f.store.get(pending.id)).toBeUndefined();
+    expect(f.store.get(separate.id)?.state).toBe("running");
+    expect(f.store.capacity(2, "read", f.root).total.used).toBe(1);
+    expect(f.store.get(f.record.id)).toBeUndefined();
+  } finally { f.cleanup(); }
+});
+
+test("cleanup uses the authoritative terminal receipt when a base snapshot predates thread creation", () => {
+  const f = fixture();
+  try {
+    const base = join(f.root, `${f.record.id}.json`);
+    writeFileSync(base, JSON.stringify({ ...f.record, state: "creating", threadId: undefined, turnId: undefined }));
+    const key = { slot: f.record.slot, accountFingerprint: f.record.owner.accountFingerprint, threadId: f.record.threadId! };
+    writeFileSync(join(f.root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`), JSON.stringify({ state: "deleted" }));
+    f.store.finishDeletedThreads();
+    expect(f.store.get(f.record.id)).toBeUndefined();
+    expect(existsSync(base)).toBe(false);
+    expect(existsSync(`${base}.completed`)).toBe(false);
+  } finally { f.cleanup(); }
 });

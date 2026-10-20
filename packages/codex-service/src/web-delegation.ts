@@ -115,6 +115,27 @@ export interface WebDelegationRecord {
   readonly failure?: "owner_changed" | "transport_or_ack" | "turn_failed" | "result_unavailable";
 }
 
+export type WebDelegationRetentionState = "archived" | "excluded" | "deleted";
+export interface WebDelegationRetentionReceipt {
+  readonly state: WebDelegationRetentionState;
+  readonly archivedAt?: number;
+  /** Native metadata after our archive, used to detect subsequent manual changes. */
+  readonly updatedAt?: number;
+}
+export interface WebDelegationThreadKey {
+  readonly slot: number;
+  readonly accountFingerprint: string;
+  readonly threadId: string;
+}
+
+export function webDelegationRetentionPath(root: string, key: WebDelegationThreadKey): string {
+  if (!Number.isSafeInteger(key.slot) || key.slot < 1 || key.slot > 99
+    || !/^[a-f0-9]{64}$/.test(key.accountFingerprint) || !UUID.test(key.threadId)) {
+    throw Error("Invalid managed thread identity");
+  }
+  return join(root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`);
+}
+
 /** Trusted coordinator evidence for its creation or an explicit user adoption of
  * an existing delegated thread under the currently authenticated account. */
 export interface NativeThreadOwnershipEvidence {
@@ -263,12 +284,67 @@ export class WebDelegationStore {
     const path = this.#path(id);
     // A proven final receipt wins over an earlier failure receipt, including
     // when the exact Native turn remains failed. Late observers cannot erase it.
-    return this.#read(`${path}.completed`, id) ?? this.#read(`${path}.failed`, id) ?? this.#read(path, id);
+    const record = this.#read(`${path}.completed`, id) ?? this.#read(`${path}.failed`, id) ?? this.#read(path, id);
+    return record && !this.#deleted(record) ? record : undefined;
   }
-  /** Only Tela-created journal entries are eligible; never discover personal threads. */
+  /** Only managed entries are eligible; deleted threads are hidden during cleanup. */
   records(): WebDelegationRecord[] {
     return this.#retained().filter(name => UUID.test(name.slice(0, -5)))
-      .map(name => this.get(name.slice(0, -5))!).filter(Boolean);
+      .map(name => this.get(name.slice(0, -5))!).filter(Boolean)
+      .filter(record => !record.threadId || this.threadRetention(record)?.state !== "deleted");
+  }
+  threadRetention(record: WebDelegationRecord): WebDelegationRetentionReceipt | undefined {
+    if (!record.threadId) return undefined;
+    const path = webDelegationRetentionPath(this.root, {
+      slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId,
+    });
+    if (!existsSync(path)) return undefined;
+    const value = JSON.parse(readFileSync(path, "utf8")) as WebDelegationRetentionReceipt;
+    if (!["archived", "excluded", "deleted"].includes(value.state)
+      || value.state === "archived" && (!Number.isFinite(value.archivedAt) || !Number.isFinite(value.updatedAt))) {
+      throw Error("Invalid Web thread retention receipt");
+    }
+    return value;
+  }
+  /** Called after a confirmed Native deletion. Receipt and terminal artifacts go before base files. */
+  removeDeletedThread(key: WebDelegationThreadKey): { jobs: number; files: number } {
+    const records = this.#retained().filter(name => UUID.test(name.slice(0, -5)))
+      .map(name => {
+        const id = name.slice(0, -5), path = this.#path(id);
+        return this.#read(`${path}.completed`, id) ?? this.#read(`${path}.failed`, id) ?? this.#read(path, id);
+      }).filter((record): record is WebDelegationRecord => Boolean(record))
+      .filter(record => record.slot === key.slot
+        && record.owner.accountFingerprint === key.accountFingerprint && record.threadId === key.threadId);
+    for (const record of records) {
+      const paths = [...this.#permits(record.slot), ...this.#legacyPermits(record.slot),
+        ...(record.mode === "write" ? [this.#checkoutPermit(record.checkoutRoot ?? record.cwd), this.#legacyCheckoutPermit(record.cwd)] : []),
+        ...(record.parentJobId && record.threadId ? [this.#threadPermit(record.threadId)] : [])];
+      for (const path of paths) if (this.#leaseOwner(path) === record.id) unlinkSync(path);
+    }
+    let files = 0;
+    const remove = (path: string) => {
+      if (existsSync(path)) { unlinkSync(path); files++; }
+    };
+    for (const record of records) {
+      const base = this.#path(record.id);
+      for (const suffix of [".completed", ".failed", ".collected"]) remove(base + suffix);
+    }
+    for (const record of records) remove(this.#path(record.id));
+    remove(webDelegationRetentionPath(this.root, key));
+    return { jobs: records.length, files };
+  }
+  /** Resume interrupted deletion before scanning managed jobs for new work. */
+  finishDeletedThreads(): void {
+    for (const name of readdirSync(this.root)) {
+      const match = /^thread-([1-9][0-9]?)-([a-f0-9]{64})-([0-9a-f-]{36})\.retention$/i.exec(name);
+      if (!match || !UUID.test(match[3]!)) continue;
+      const key = { slot: Number(match[1]), accountFingerprint: match[2]!, threadId: match[3]! };
+      const receipt = this.threadRetention({ threadId: key.threadId, slot: key.slot, owner: { accountFingerprint: key.accountFingerprint } } as WebDelegationRecord);
+      if (receipt?.state === "deleted") this.removeDeletedThread(key);
+    }
+  }
+  #deleted(record: WebDelegationRecord): boolean {
+    return Boolean(record.threadId && this.threadRetention(record)?.state === "deleted");
   }
   collectedAt(id: string): number | undefined {
     const path = `${this.#path(id)}.collected`;
@@ -280,6 +356,7 @@ export class WebDelegationStore {
   /** First explicit result retrieval is durable; repeated reads do not extend retention. */
   collect(id: string, now = Date.now()): void {
     const record = this.get(id);
+    if (record && this.#deleted(record)) throw Error("Web job was deleted");
     if (!record || !verifiedWebDelegationAnswer(record)) throw Error("No verified Web result to collect");
     try {
       const fd = openSync(`${this.#path(id)}.collected`, "wx", 0o600);
@@ -294,10 +371,12 @@ export class WebDelegationStore {
       || this.records().some(existing => existing.slot === record.slot && existing.threadId === record.threadId)) {
       throw Error("Invalid or already managed Native thread link");
     }
+    if (this.#deleted(record)) throw Error("Web thread was deleted");
     const fd = openSync(this.#path(record.id), "wx", 0o600);
     try { writeFileSync(fd, JSON.stringify(record)); fsyncSync(fd); } finally { closeSync(fd); }
   }
   reserve(record: WebDelegationRecord): void {
+    if (record.threadId && this.#deleted(record)) throw Error("Web thread was deleted");
     const mode = record.mode ?? "read";
     if (record.parentJobId && !record.threadId) throw Error("Continuation requires its exact Native thread");
     const threadLease = record.parentJobId ? this.#threadPermit(record.threadId!) : undefined;
@@ -362,7 +441,7 @@ export class WebDelegationStore {
   save(record: WebDelegationRecord): WebDelegationRecord {
     if (this.#terminal(record)) { const { progress: _progress, ...settled } = record; record = settled; }
     const current = this.get(record.id);
-    if (!current) throw Error("Web job was not reserved");
+    if (!current || this.#deleted(current)) throw Error("Web job was not reserved");
     const upgradedFailedFinal = current.state === "failed" && current.failure === "turn_failed"
       && !verifiedWebDelegationAnswer(current) && record.state === "failed"
       && record.failure === "turn_failed" && record.turnId === current.turnId
@@ -371,10 +450,12 @@ export class WebDelegationStore {
       this.#release(current);
       return current;
     }
+    if (this.#deleted(record)) throw Error("Web job was deleted");
     const path = this.#path(record.id), temporary = `${path}.${randomUUID()}.tmp`;
     const fd = openSync(temporary, "wx", 0o600);
     try {
       try { writeFileSync(fd, JSON.stringify(record)); fsyncSync(fd); } finally { closeSync(fd); }
+      if (!existsSync(path) || this.#deleted(record)) throw Error("Web job was deleted");
       if (this.#terminal(record)) {
         // link() publishes a *complete* terminal record once, atomically and
         // without replacing another process's receipt. The base snapshot can
