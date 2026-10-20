@@ -31,11 +31,12 @@ new runtimes, schedulers or queues. This list records product requirements, not 
   Reuse Native events and Queue instead of a second recovery scheduler, repeated model polling or blind
   resubmission. Coalesce the same failure; preserve existing chats and keep private evidence local. Verify
   coordinator wake-up through the supported host contract before promising unattended recovery.
-- **Recognizable delegation names.** Give Tela-created conversations a short task name such as
-  `[Web] Review context reuse` through Native `thread/name/set`. Keep stable thread IDs as identity,
-  preserve user renames, and do not rename personal conversations. Verify sidebar synchronization and
-  later continuation; naming must not create another chat or gate task execution. This does not rename
-  the separate provider-side temporary browser conversation.
+- **Recognizable delegation names — next dispatch.** Once a Tela-created conversation receives its
+  generated title, prefix it once with `[Tela Agent]` through Native `thread/name/set`, for example
+  `[Tela Agent] Review context reuse`. Reuse title-change notifications; avoid polling and duplicate
+  prefixes. Preserve user renames and stable thread IDs; do not rename personal conversations or add
+  retention dates to titles. Verify sidebar synchronization and later continuation. Naming must not gate
+  execution, create another chat, or rename the provider-side temporary browser conversation.
 
 ## Desktop lifecycle and presentation
 
