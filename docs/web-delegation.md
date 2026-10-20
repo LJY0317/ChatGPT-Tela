@@ -70,10 +70,12 @@ Goal tool is advertised, no completion capability is supplied: report that limit
 instead of creating a shell/RPC completion helper.
 
 Completion requires the full objective's evidence before the original Goal update
-call, followed by a final answer. Same-turn completion and post-completion quiescence
-still need live acceptance. The external coordinator API has no scheduler fence or
-turn compare-and-set; prior acceptance observed a successor start in the same second
-as external completion, so an external ACK alone is insufficient.
+call, followed by a final answer. An isolated installed acceptance verified an actual
+file read, the original completion result, normal Native turn completion and no
+successor turn. This does not guarantee every delegated task reaches its objective.
+The external coordinator API has no scheduler fence or turn compare-and-set; prior
+acceptance observed a successor start in the same second as external completion,
+so an external ACK alone is insufficient.
 
 
 `status` includes the last observed public Native reasoning **summary** in
