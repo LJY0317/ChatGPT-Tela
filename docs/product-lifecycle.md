@@ -256,7 +256,13 @@ macOS, reads the same standard product paths, and calls only authenticated loopb
 macOS install blueprint registers `com.openai.chatgpt-tela.menu-bar` as a product-owned LaunchAgent with its
 own definition fingerprint and marker. It is `RunAtLoad` in the Aqua session but is never treated as
 Gateway/Chat/Codex authority; uninstall removes it only when the exact definition/marker/manifest ownership is
-still proven.
+still proven. Upgrade and payload repair refresh this UI after the recorded background services have
+restored. The UI acknowledges its version and launcher parent only after creating its status item;
+the updater waits for that file-change event, rather than equating a wrapper PID with UI startup.
+Its launch is admitted at that final checkpoint, and a failed launch leaves the existing journal
+resumable without stopping the restored services again. A pre-replacement cancellation keeps the original
+UI alongside its restored source payload. Both direct apply and maintenance apply run in the existing
+independent worker so replacing the caller's menu bar cannot terminate the installation.
 
 Payload symlinks are not a general escape hatch. They are permitted only as relative links whose lexical and
 resolved targets remain inside the same payload root. Their raw target text is included in the fingerprint and

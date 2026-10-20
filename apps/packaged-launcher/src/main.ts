@@ -59,6 +59,19 @@ function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat"
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  const lifecycleApply = ["install", "repair", "upgrade", "cancel-upgrade"].includes(args[0] ?? "")
+    && parsePackagedLifecycleCommand(args).mode === "apply";
+  if ((lifecycleApply || args[0] === "maintenance" && args[1] === "apply")
+    && process.env[LIFECYCLE_WORKER_ENV] !== "1") {
+    const result = await runIndependentLifecycleProcess({ executable: process.execPath,
+      arguments: lifecycleApply && !args.includes("--payload")
+        ? [...args, "--payload", payloadRootForLauncherExecutable()] : args,
+    });
+    process.stdout.write(result.stdout);
+    process.stderr.write(result.stderr);
+    process.exitCode = result.code;
+    return;
+  }
   if (args[0] === "ingress") {
     if (args[1] !== "status" || args[2] !== "--public"
       || !(args.length === 3 || args.length === 5 && args[3] === "--public-dns-url")) {
@@ -119,15 +132,6 @@ async function main(): Promise<void> {
     return;
   }
   if (args[0] === "install" || args[0] === "repair" || args[0] === "upgrade" || args[0] === "cancel-upgrade") {
-    if (parsePackagedLifecycleCommand(args).mode === "apply" && process.env[LIFECYCLE_WORKER_ENV] !== "1") {
-      const result = await runIndependentLifecycleProcess({ executable: process.execPath,
-        arguments: args.includes("--payload") ? args : [...args, "--payload", payloadRootForLauncherExecutable()],
-      });
-      process.stdout.write(result.stdout);
-      process.stderr.write(result.stderr);
-      process.exitCode = result.code;
-      return;
-    }
     const result = await runPackagedLifecycleCommand(args, {
       defaultPayloadRoot: payloadRootForLauncherExecutable(),
     });

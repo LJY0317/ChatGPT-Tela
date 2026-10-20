@@ -13,6 +13,7 @@ import {
   resolveProductPaths,
   assertChatProcessStoreCompatible,
   assertPackagedLaunchAdmission,
+  packagedMenuBarReadyPath,
   type PackagedProductManifest,
   type ProductPathOptions,
   type TelaServiceId,
@@ -107,6 +108,7 @@ export function verifyInstalledPackage(input: {
   readonly launcherExecutablePath?: string;
   readonly pathOptions?: ProductPathOptions;
   readonly service?: TelaServiceId;
+  readonly menuBar?: boolean;
 }) {
   const payloadRoot = realpathSync(resolve(input.payloadRoot));
   const manifest = readPackagedProductManifest(payloadRoot);
@@ -127,7 +129,7 @@ export function verifyInstalledPackage(input: {
   if (observed.state !== "owned" || observed.receipt.productVersion !== manifest.productVersion) {
     throw new Error("packaged launcher payload ownership/receipt could not be re-proven");
   }
-  assertPackagedLaunchAdmission({ paths, ownership, receipt: observed.receipt, ...(input.service ? { service: input.service } : {}) });
+  assertPackagedLaunchAdmission({ paths, ownership, receipt: observed.receipt, ...(input.service ? { service: input.service } : {}), ...(input.menuBar ? { menuBar: true } : {}) });
   return { payloadRoot, manifest, paths, ownership };
 }
 
@@ -171,7 +173,7 @@ export function resolvePackagedMenuBarLaunch(input: {
   if (process.platform !== "darwin" && input.pathOptions?.platform !== "darwin") {
     throw new Error("packaged ChatGPT Tela menu bar is available only on macOS");
   }
-  const { payloadRoot, manifest } = verifyInstalledPackage(input);
+  const { payloadRoot, manifest, paths } = verifyInstalledPackage({ ...input, menuBar: true });
   if (!manifest.menuBar) throw new Error("installed package does not declare the macOS menu bar layout");
   return Object.freeze({
     payloadRoot,
@@ -179,6 +181,8 @@ export function resolvePackagedMenuBarLaunch(input: {
     arguments: Object.freeze([]),
     environment: Object.freeze({
       CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE: regularPayloadFile(payloadRoot, manifest.launcher!.executable, "packaged launcher executable"),
+      CHATGPT_TELA_MENU_BAR_READY_FILE: packagedMenuBarReadyPath(paths),
+      CHATGPT_TELA_PRODUCT_VERSION: manifest.productVersion,
     }),
   });
 }

@@ -551,8 +551,9 @@ Background service buttons use the same verified installed launcher as `chatgpt-
 replaced registrations are preserved. Stopping services can close connected ChatGPT profiles.
 
 Updates use the **new extracted package's** upgrade plan/apply commands. Saved connections, configuration and
-browser login state retain the same install identity. Quit and reopen the menu bar afterward. Stopped saved
-profiles can reconnect at service startup; already-running ordinary ChatGPT apps remain under user control.
+browser login state retain the same install identity. The update restores background services and relaunches
+the installed menu bar with the new UI. Stopped saved profiles can reconnect at service startup;
+already-running ordinary ChatGPT apps remain under user control.
 
 Removal uses a separately extracted launcher's uninstall dry-run/apply. The default keeps saved data and its
 ownership manifest for reinstall. `--remove-data` removes only proven Tela-owned data. Dirty worktrees,
@@ -929,6 +930,8 @@ The delay applies only after an eligible card is observed. Tela rechecks that sa
 waiting and uses its current button position. An absent card does not delay normal responses; a changed,
 disabled, or previously activated card is never clicked automatically.
 
+Remaining desktop and delegation requirements are tracked in [the product roadmap](docs/roadmap.md).
+
 ### macOS menu bar
 
 The macOS source tree includes a lightweight AppKit menu-bar control surface:
@@ -941,8 +944,8 @@ bun run menu-bar
 New source builds share an OS-managed instance lock so concurrent launches create only one menu icon.
 The development starter also avoids launching beside an existing installed menu bar. The lock releases
 on exit or crash without polling. These source changes require a later package to update the installed
-binary. After a package upgrade, quit and reopen the menu bar to load its updated UI;
-the current upgrade operation restarts the background services but does not restart an already-running menu bar.
+binary. Package upgrades and repairs refresh the installed menu bar through its owned macOS registration.
+**Quit Tela Menu** closes only the UI; background services, browser sessions and delegated work continue.
 
 The menu exposes a Tela connection switch for each detected ChatGPT profile; single-profile
 installs show one switch. The switch reflects verified live connection state, not service availability.

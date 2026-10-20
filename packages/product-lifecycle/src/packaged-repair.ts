@@ -1,3 +1,4 @@
+import { refreshPackagedMenuBar } from "./packaged-menu-bar";
 import { withPackagedTransitionOwner } from "./transition-owner";
 import {
   chmodSync,
@@ -405,6 +406,8 @@ async function applyPackagedRepairOwned(input: {
         throw new Error(`packaged repair service verification failed: ${service.service}`);
       }
     }
+    await refreshPackagedMenuBar({ blueprint: current.blueprint, manifest: readOwnershipManifest(current.blueprint.paths.installManifest)!,
+      ...(input.runner ? { runner: input.runner } : {}) });
     return resultFrom(input.plan, payloadOutcome, serviceOutcomes);
   }
 
@@ -489,6 +492,8 @@ async function applyPackagedRepairOwned(input: {
       journal = updateJournal(journalPath, journal, { resumedServices: Object.freeze([...resumed]) });
     }
   }
+  await refreshPackagedMenuBar({ blueprint: current.blueprint, manifest: readOwnershipManifest(current.blueprint.paths.installManifest)!,
+    ...(input.runner ? { runner: input.runner } : {}) });
   rmSync(journalPath, { force: false });
   return resultFrom(input.plan, "repaired", serviceOutcomes, journal.resumedServices);
 }

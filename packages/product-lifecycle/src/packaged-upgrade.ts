@@ -1,3 +1,4 @@
+import { refreshPackagedMenuBar } from "./packaged-menu-bar";
 import { retainPackagedRecoveryArtifact, reviewPackagedRecoveryArtifact } from "./recovery-artifact";
 import { withPackagedTransitionOwner } from "./transition-owner";
 import { PackagedServiceShutdownNotStartedError } from "./service-shutdown";
@@ -415,6 +416,7 @@ async function applyPackagedUpgradeOwned(input: {
     }
   }
 
+  await refreshPackagedMenuBar({ blueprint, manifest, ...(input.runner ? { runner: input.runner } : {}) });
   rmSync(journalPath, { force: false });
   return Object.freeze({
     fromVersion: input.plan.fromVersion,

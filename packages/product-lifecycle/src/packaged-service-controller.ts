@@ -16,7 +16,7 @@ import {
   type ServiceRegistrationCommandRunner,
 } from "./service-registration";
 import type { TelaServiceId } from "./layout";
-import { PackagedServiceShutdownNotStartedError } from "./service-shutdown";
+import { PACKAGED_TRANSITION_TIMEOUT_MS, PackagedServiceShutdownNotStartedError } from "./service-shutdown";
 
 export interface PackagedServiceControlIdentity {
   readonly platform: PackagedInstallBlueprint["platform"];
@@ -25,7 +25,7 @@ export interface PackagedServiceControlIdentity {
 
 // Normal Desktop quit plus owned child cleanup can exceed ten seconds.
 // Keep one bounded lifecycle budget for the platform transition.
-const DEFAULT_TRANSITION_TIMEOUT_MS = 60_000;
+const DEFAULT_TRANSITION_TIMEOUT_MS = PACKAGED_TRANSITION_TIMEOUT_MS;
 const POLL_INTERVAL_MS = 50;
 
 function sleep(ms: number): Promise<void> {

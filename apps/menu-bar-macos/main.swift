@@ -217,6 +217,21 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     }
     Task { await refreshNow() }
     Task { await controlCenter.showFirstUseIfNeeded() }
+    // Only the installed launcher supplies this acknowledgement destination.
+    if let path = ProcessInfo.processInfo.environment["CHATGPT_TELA_MENU_BAR_READY_FILE"],
+       let version = ProcessInfo.processInfo.environment["CHATGPT_TELA_PRODUCT_VERSION"] {
+      do {
+        let url = URL(fileURLWithPath: path)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                               attributes: [.posixPermissions: 0o700])
+        let ready: [String: Any] = ["pid": Int(getpid()), "parentPid": Int(getppid()), "productVersion": version]
+        try JSONSerialization.data(withJSONObject: ready).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+      } catch {
+        fputs("Tela menu bar could not acknowledge startup.\n", stderr)
+        NSApp.terminate(nil)
+      }
+    }
   }
 
   private func updateConnectionProgress(_ message: String?) {
@@ -287,6 +302,12 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
 
   func applicationWillTerminate(_ notification: Notification) {
     NSWorkspace.shared.notificationCenter.removeObserver(self)
+    if let path = ProcessInfo.processInfo.environment["CHATGPT_TELA_MENU_BAR_READY_FILE"],
+       let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+       let ready = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+       ready["pid"] as? Int == Int(getpid()) {
+      try? FileManager.default.removeItem(atPath: path)
+    }
   }
 
   @objc private func workspaceChanged(_ notification: Notification) {
