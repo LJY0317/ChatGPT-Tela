@@ -873,6 +873,30 @@ describe("current ChatGPT DOM surface driver", () => {
     expect((await driver.observe()).turns.map(row => row.role)).toEqual(["user"]);
   });
 
+  test.each(["provider", "user-content", "hidden", "progress"])(
+    "a failed fetch alert without an assistant body is scoped to its own provider turn (%s)", async variant => {
+      const alert = new FixtureElement(variant === "hidden" ? { "data-fixture-display": "none" } : {});
+      alert.innerText = "Failed to fetch";
+      const user = new FixtureElement();
+      if (variant === "user-content") user.contains = node => node === user || node === alert;
+      const progress = new FixtureElement();
+      const group = new FixtureElement({ "data-turn-key": "failed-fetch" }, {
+        '[data-user-message-bubble]': [user], '[role="alert"]': [alert],
+        ...(variant === "progress" ? { '[data-streaming-response-status]': [progress] } : {}),
+      });
+      const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, {
+        '[data-turn-key]': [group],
+      })));
+      const observation = await driver.observe();
+      const assistant = observation.turns.find(turn => turn.role === "assistant");
+      if (variant === "provider") {
+        expect(assistant).toMatchObject({ parentUserTurnKey: "user:failed-fetch", phase: "failed", failureDetail: "Failed to fetch" });
+      } else {
+        expect(assistant?.phase).not.toBe("failed");
+      }
+    },
+  );
+
   test("retained assistant body survives hidden action controls during a follow-up", async () => {
     const body = new FixtureElement(); body.innerText = "synthetic committed answer";
     const copy = new FixtureElement();

@@ -903,11 +903,16 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
       && !node.closest('[data-user-message-bubble], [data-message-author-role="user"], [data-markdown-text-style="assistant-message"], [data-conversation-role="user"]')
       && progressVisible(node) && visibleDescription(node, undefined).trim().length > 0);
     const assistantBody = answerBody || group.querySelector('[data-conversation-role="assistant"]');
-    const assistant = assistantBody || progressRoot;
+    // Fetch failures can replace the whole response with an alert, without
+    // creating an assistant body. Scope that terminal UI to this keyed turn;
+    // authored content and warnings beside ongoing progress are not failures.
+    const failure = group.querySelector('[data-message-error], [data-testid="message-error"]')
+      || (!assistantBody && !progressRoot ? [...group.querySelectorAll('[role="alert"]')]
+        .find(node => progressVisible(node) && !user?.contains(node)) : undefined);
+    const assistant = assistantBody || progressRoot || failure;
     if (assistant) {
       const complete = !!assistantBody && [...group.querySelectorAll('button[data-testid="copy-turn-action-button"], .turn-action-controls button')]
         .some(visible);
-      const failure = group.querySelector('[data-message-error], [data-testid="message-error"]');
       const answer = answerBody || assistant;
       turns.push({
         key: "assistant:" + rawKey,
