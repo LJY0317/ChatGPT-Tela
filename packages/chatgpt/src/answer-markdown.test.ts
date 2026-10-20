@@ -82,6 +82,12 @@ describe("owned assistant Markdown", () => {
     (restyled.childNodes[0] as Element).childNodes[0] = text(words.join(" \n").replace("token24", "changed"));
     expect(identity(restyled)).not.toBe(identity(original));
   });
+  test("retained identity preserves meaningful whitespace inside inline code", () => {
+    const literal = (value: string) => identity(node("div", node("code", text(value))));
+    expect(literal('"a  b"')).not.toBe(literal('"a b"'));
+    expect(literal("a\tb")).not.toBe(literal("a b"));
+    expect(literal(" a")).not.toBe(literal("a"));
+  });
   test("preserves inline styles and escapes literal syntax without exporting controls", () => {
     const hidden = node("p", text("secret UI")); hidden.hidden = true;
     const root = node("div", node("h2", text("Result")), node("p", node("strong", text("bold")), text(" "),

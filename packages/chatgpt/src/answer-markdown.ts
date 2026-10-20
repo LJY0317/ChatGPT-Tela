@@ -92,8 +92,12 @@ export function assistantSemanticBody(root: HTMLElement): string {
       append("code-block", (node.querySelector("code") ?? node).textContent?.replace(/\r\n?/g, "\n") ?? "");
       return;
     }
-    // Inline code wrappers add Markdown ticks without changing literal author words.
-    if (tag === "code") { append("text", node.textContent ?? ""); return; }
+    // Presentation wrappers around words are harmless; literal code spacing is not.
+    if (tag === "code") {
+      const value = node.textContent ?? "";
+      append(/ {2}|[^\S ]|^ | $/.test(value) ? "inline-code" : "text", value);
+      return;
+    }
     if (tag === "a") {
       const href = node.getAttribute("href");
       let destination = "";
