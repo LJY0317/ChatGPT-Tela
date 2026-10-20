@@ -992,11 +992,9 @@ chats and their history remain under the official service's ownership.
 Work shows an expanded Web session list, grouped by profile only when multiple profiles are detected. Session creation, closure and title changes update this list while Work is visible; metadata updates never capture the page. Select a session for an on-demand snapshot. Hiding Work cancels the list subscriptions.
 
 The Work browser snapshot is intentionally **observation-only**. It never reveals/focuses the hidden Electron window
-and never sends mouse, keyboard, DOM, navigation, Stop, or other page actions. While exactly one Work/Codex
-browser surface is active, Electron captures that already-rendered surface and the private Codex service relays
-a bounded JPEG snapshot to the Control Center. With zero or multiple surfaces the preview is withheld instead
-of guessing which work belongs to the user. The preview is on-demand rather than idle polling, so inspecting
-Tela cannot perturb the Native/Web turn it is observing.
+or sends page actions. An explicit session selection captures that rendered surface and the private Codex service
+relays a bounded JPEG to Control Center. An ended selection is cleared without choosing another session.
+Snapshots are on-demand rather than idle polling; Open browser reveals the selected view and Interact enables input.
 
 Settings reports **ChatGPT connector** health separately from Tela connection/Chat/Work process
 health. For managed Tailscale Funnel, Tela distinguishes a stopped/unreachable Tailscale backend, sign-in or
