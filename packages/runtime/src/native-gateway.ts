@@ -50,23 +50,28 @@ function requestHash(body: unknown): string {
   return createHash("sha256").update(JSON.stringify(body)).digest("hex");
 }
 
-function requestMessages(body: unknown): readonly { role: string; hash: string }[] {
+function requestMessages(body: unknown): readonly { role: string; hash: string; sourceIndex: number; contentKind: string; precededByCompaction: boolean }[] {
   const input = (body as { input?: unknown }).input;
   if (!Array.isArray(input)) return [];
-  return input.flatMap(raw => {
+  return input.flatMap((raw, sourceIndex) => {
     if (!raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>;
     if (item.type !== undefined && item.type !== "message") return [];
     if (item.role !== "user" && item.role !== "assistant") return [];
+    const evidence = {
+      sourceIndex,
+      contentKind: typeof item.content === "string" ? "string" : Array.isArray(item.content) ? "parts" : "unsupported",
+      precededByCompaction: (input[sourceIndex - 1] as { type?: unknown } | undefined)?.type === "context_compaction",
+    };
     let text: string;
     if (typeof item.content === "string") text = item.content;
     else if (Array.isArray(item.content)) {
       const parts = item.content as Record<string, unknown>[];
       if (parts.some(part => !part || typeof part.text !== "string"
-        || !["input_text", "output_text", "text"].includes(String(part.type)))) return [{ role: item.role, hash: "unproven" }];
+        || !["input_text", "output_text", "text"].includes(String(part.type)))) return [{ role: item.role, hash: "unproven", ...evidence }];
       text = parts.map(part => part.text).join("\n");
-    } else return [{ role: item.role, hash: "unproven" }];
-    return [{ role: item.role, hash: nativeTextHash(text) }];
+    } else return [{ role: item.role, hash: "unproven", ...evidence }];
+    return [{ role: item.role, hash: nativeTextHash(text), ...evidence }];
   });
 }
 
@@ -263,7 +268,9 @@ export class NativeResponsesGateway {
           // Flat scalar rows survive the safe emitter/readback contract. Never
           // serialize arrays into a string that can discard the whole failure.
           newMessages.forEach((message, index) => emitDiagnosticEvent("chatgpt_tela_work", "native_cycle_input_evidence", {
-            kind: "request", index, body_fingerprint: diagnosticFingerprint(message.hash),
+            kind: "request", index, source_index: message.sourceIndex, body_kind: message.contentKind,
+            preceded_by_compaction: message.precededByCompaction,
+            body_fingerprint: diagnosticFingerprint(message.hash),
           }));
           inputs.forEach((input, index) => emitDiagnosticEvent("chatgpt_tela_work", "native_cycle_input_evidence", {
             kind: "witness", index, item_fingerprint: diagnosticFingerprint(input.id),

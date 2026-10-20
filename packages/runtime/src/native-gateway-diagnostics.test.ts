@@ -98,7 +98,7 @@ test("cycle failure evidence separates prior final, new message and canonical in
       const messages = [
         ...(scenario === "prior_final_missing" ? [] : [{ role: "assistant", content: "PRIVATE ANSWER" }]),
         ...(scenario === "new_input_missing" ? [] : [{ role: "user", content: "PRIVATE FOLLOWUP" }]),
-        ...(scenario === "input_witness_mismatch" ? [{ role: "user", content: "PRIVATE UNPROVEN" }] : []),
+        ...(scenario === "input_witness_mismatch" ? [{ type: "context_compaction" }, { role: "user", content: "PRIVATE UNPROVEN" }] : []),
       ];
       await expect(gateway.handle({ ...request(), input: messages })).rejects.toMatchObject({ code: "tela_native_response_cycle_conflict" });
       expect(launches).toBe(1);
@@ -118,6 +118,10 @@ test("cycle failure evidence separates prior final, new message and canonical in
     }
     if (scenario === "input_witness_mismatch") {
       expect(evidence.filter(row => row.kind === "request")).toHaveLength(2);
+      expect(evidence).toContainEqual(expect.objectContaining({ kind: "request", index: 0,
+        source_index: 1, body_kind: "string", preceded_by_compaction: false }));
+      expect(evidence).toContainEqual(expect.objectContaining({ kind: "request", index: 1,
+        source_index: 3, body_kind: "string", preceded_by_compaction: true }));
       expect(evidence.filter(row => row.kind === "witness")).toHaveLength(13);
       expect(evidence).toContainEqual(expect.objectContaining({ kind: "witness", index: 0,
         item_fingerprint: diagnosticFingerprint("PRIVATE ID"),
