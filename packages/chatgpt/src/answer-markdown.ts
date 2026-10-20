@@ -127,16 +127,15 @@ export function assistantSemanticBody(root: HTMLElement): string {
   if (root.childNodes?.length) Array.from(root.childNodes).forEach(walk);
   else append("text", root.textContent ?? "");
   // Only prose spacing is normalized; code and structural boundaries stay exact.
-  const normalized = parts.map(([kind, value]) => [kind, kind === "text" ? value.replace(/\s+/g, " ") : value]);
-  // Merge text split by arbitrary presentation wrappers before final trimming.
-  const compact: Array<[string, string]> = [];
-  for (const [kind, value] of normalized) {
-    const last = compact[compact.length - 1];
-    if (kind === "text" && last?.[0] === "text") last[1] += value;
-    else compact.push([kind!, value!]);
+  // Normalize prose once, trimming block-wrapper padding at list-item and cell edges.
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]!;
+    if (part[0] !== "text") continue;
+    part[1] = part[1].replace(/\s+/g, " ");
+    const previous = parts[i - 1]?.[0];
+    const next = parts[i + 1]?.[0];
+    if (i === 0 || previous === "item-start" || previous === "cell-start") part[1] = part[1].trimStart();
+    if (i === parts.length - 1 || next === "li-end" || next === "td-end" || next === "th-end") part[1] = part[1].trimEnd();
   }
-  for (const part of compact) if (part[0] === "text") part[1] = part[1].replace(/\s+/g, " ");
-  if (compact[0]?.[0] === "text") compact[0][1] = compact[0][1].trimStart();
-  if (compact.at(-1)?.[0] === "text") compact[compact.length - 1]![1] = compact.at(-1)![1].trimEnd();
-  return JSON.stringify(compact.filter(([kind, value]) => kind !== "text" || value.length > 0));
+  return JSON.stringify(parts.filter(([kind, value]) => kind !== "text" || value.length > 0));
 }

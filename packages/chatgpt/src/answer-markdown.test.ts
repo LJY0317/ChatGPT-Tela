@@ -53,6 +53,17 @@ describe("owned assistant Markdown", () => {
     reflow.childNodes[0] = node("p", text("Different retained sentence."));
     expect(identity(reflow)).not.toBe(identity(original));
   });
+  test("retained identity ignores paragraph wrappers in list items and table cells but preserves list order", () => {
+    const directList = node("ul", node("li", text("word")));
+    const wrappedList = node("ul", node("li", node("p", text("word"))));
+    const directCell = node("table", node("tr", node("td", text("word"))));
+    const wrappedCell = node("table", node("tr", node("td", node("p", text("word")))));
+    expect([identity(wrappedList), identity(wrappedCell)]).toEqual([
+      identity(directList), identity(directCell),
+    ]);
+    const list = (items: string[]) => identity(node("ol", ...items.map(item => node("li", text(item)))));
+    expect(list(["first", "second"])).not.toBe(list(["second", "first"]));
+  });
   test("retained identity survives 48 presentation newlines and eight inline-code ticks", () => {
     const words = Array.from({ length: 49 }, (_, index) => `token${index}`);
     const original = node("div", node("p", text(words.join(" "))),
