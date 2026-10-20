@@ -424,6 +424,40 @@ describe("Native request development Web planner", () => {
     })).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
   });
 
+  test("Goal accounting updates preserve retained ancestry and automatic developer continuations", async () => {
+    const goal = { threadId: "thread-1", objective: "Finish the assigned implementation", status: "active",
+      tokenBudget: 20_000, tokensUsed: 0, timeUsedSeconds: 0, updatedAt: 1 };
+    const withGoal = (turnId: string, progress: number) => {
+      const source = binding(turnId);
+      return new ActiveTurnRegistry().register({ ...source, canonicalEvidence: {
+        ...source.canonicalEvidence, nativeGoal: { ...goal, tokensUsed: progress,
+          timeUsedSeconds: progress, updatedAt: progress + 1 },
+      } });
+    };
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const input: any[] = [{ role: "user", content: "Implement the assigned fix" }];
+    const first = await planner(withGoal("turn-1", 0), { input });
+    first.settle?.({ status: "completed", documentGeneration: 1,
+      surfaceLeaseId: "owned-page", answer: "The first part is implemented" });
+    input.push({ role: "assistant", content: "The first part is implemented" },
+      { role: "developer", content: "Audit the active Goal and continue its remaining work" });
+    const second = await planner(withGoal("turn-2", 100), { input });
+    expect(second.physicalContext.mode).toBe("retained-delta");
+    expect(second.webEpochId).toBe(first.webEpochId);
+    expect(second.retainedSurfaceLeaseId).toBe("owned-page");
+    expect(second.physicalContext.segments).toHaveLength(1);
+    expect(second.physicalContext.segments[0]).toMatchObject({ kind: "developer",
+      content: "Audit the active Goal and continue its remaining work" });
+    expect(second.physicalContext.activeRequestRevisionId).toBe(second.physicalContext.headRevisionId);
+    expect(second.physicalContext.transferTokens).toBeLessThan(100);
+    second.settle?.({ status: "failed" });
+    const original = projectNativeRequestContext("thread-1", { input: input.slice(0, 1) },
+      undefined, [], undefined, undefined, goal);
+    const changed = projectNativeRequestContext("thread-1", { input: input.slice(0, 1) },
+      undefined, [], undefined, undefined, { ...goal, objective: "A different authorized objective" });
+    expect(changed.headId).not.toBe(original.headId);
+  });
+
   test("Native current Goal has explicit protected provenance even when historical tool budget is exhausted",()=>{
     const goal={
       threadId:"thread-1",objective:"Native goal must remain exact across Web model switches",

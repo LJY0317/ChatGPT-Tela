@@ -78,6 +78,8 @@ export interface NativeRequestContextProjection {
   readonly headId: string;
   /** Source-bound Native state (continuity and current Goal) is exact, not disposable provider prose. */
   readonly protectedRevisionIds: readonly string[];
+  /** Verified Native Goal state, allowing its developer-only continuation suffix. */
+  readonly currentGoalStatus?: string;
   /** Ephemeral exact-request bytes, never checkpoint authority or a persisted context cache. */
   readonly media: readonly WebTurnMedia[];
 }
@@ -316,7 +318,8 @@ function retainedDelta(
   let assistantIndex = -1;
   for (let index = inputHeadIndex + 1; index < projection.revisions.length; index += 1) {
     const kind = projection.revisions[index]!.revision.kind;
-    if (kind === "user" || kind === "steering") break;
+    if (kind === "user" || kind === "steering"
+      || (kind === "developer" && assistantIndex >= 0 && projection.currentGoalStatus === "active")) break;
     if (kind === "assistant") {
       // Attributed agent data and source-bound summaries cannot witness our final,
       // even if their serialized text happens to equal its answer fingerprint.
@@ -339,6 +342,7 @@ function retainedDelta(
   if (delta.length === 0) return miss("empty_suffix");
   const activeRequest = [...delta].reverse().find(item => (
     item.revision.kind === "user" || item.revision.kind === "steering"
+      || (item.revision.kind === "developer" && projection.currentGoalStatus === "active")
   ));
   if (!activeRequest) return miss("active_request_missing");
   const transferTokens = delta.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
@@ -485,16 +489,15 @@ export function projectNativeRequestContext(
     if (currentNativeGoal.threadId !== taskId) throw new Error("Native current goal belongs to a different thread");
     // Goal text is ordinary Native-owned task data, not a high-priority system
     // instruction or an independent scheduler. Versioned tool-result revision
-    // participates in retained-delta / compaction and changes only with state.
+    // participates in retained-delta / compaction and changes only with operative
+    // state. Accounting counters stay Native-owned: changing them on every turn
+    // must not rewrite every following revision and invalidate the retained page.
     append("tool-result", stableJson({
       type: "native-thread-goal-observation",
       authority: "Native public thread/goal/get (read-only)",
       status: currentNativeGoal.status,
       objective: currentNativeGoal.objective,
       tokenBudget: currentNativeGoal.tokenBudget,
-      tokensUsed: currentNativeGoal.tokensUsed,
-      timeUsedSeconds: currentNativeGoal.timeUsedSeconds,
-      updatedAt: currentNativeGoal.updatedAt,
     }));
     protectedRevisionIds.push(projected.at(-1)!.revision.id);
   } else if (currentNativeGoalState) {
@@ -679,6 +682,7 @@ export function projectNativeRequestContext(
     lineage,
     headId: revisions.at(-1)!.revision.id,
     protectedRevisionIds: Object.freeze(protectedRevisionIds),
+    ...(currentNativeGoal ? { currentGoalStatus: currentNativeGoal.status } : {}),
     media: Object.freeze(projectedMedia),
   });
 }
