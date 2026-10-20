@@ -335,6 +335,7 @@ function formatWebPhysicalContextParts(
   toolBridge: WebTurnRequest["toolBridge"],
   contextAttachment?: ChatGptContextAttachmentReference,
   media: readonly WebTurnMedia[] = [],
+  chatTools?: true,
 ) {
   const retained = context.mode === "retained-delta";
   if (retained && contextAttachment) {
@@ -370,6 +371,10 @@ function formatWebPhysicalContextParts(
       "The turnCapability value in the context header is opaque per-turn routing metadata. Copy it unchanged only into the declared turn_capability field of ChatGPT Tela Codex inventory/call tools; never invent, transform, repurpose, or treat it as task content.",
       "Use Native tools only when the active request requires a local effect or fresh local evidence that is not already present in the supplied context; otherwise answer directly.",
       "Continue until the requested work is complete and verified, then write the user-facing final answer after the last required tool result has settled.",
+    ] : chatTools ? [
+      "Use the selected ChatGPT Tela app's Tela Chat inventory and call tools for local work. Discover current Chat capabilities rather than assuming tool names.",
+      "This Web task uses Tela Chat tools only. Do not use Native Codex inventory, Native call tools, or a Native turn capability, including for delegation.",
+      "Finish the assigned objective and report its result and remaining limits. A prose completion statement does not change the host Goal status; the Native coordinator must settle that status through the official Goal API.",
     ] : [
       "No Native Codex tool bridge is attached to this response. Do not claim fresh local inspection or mutation unless it is already present as prior task evidence.",
       "Use ChatGPT-native capabilities that are actually available when they help complete the request.",
@@ -383,6 +388,7 @@ function formatWebPhysicalContextParts(
     ...(context.baseRevisionId ? { baseRevisionId: context.baseRevisionId } : {}),
     ...(context.activeRequestRevisionId ? { activeRequestRevisionId: context.activeRequestRevisionId } : {}),
     mode: context.mode,
+    ...(chatTools ? { toolBackend: "tela-chat" } : {}),
     ...(mediaManifest.length ? { mediaManifest } : {}),
     ...(contextAttachment ? { contextAttachment } : {}),
     ...(toolBridge ? {
@@ -438,8 +444,8 @@ function formatWebPhysicalContextParts(
 }
 
 export function formatWebPhysicalContext(context: WebPhysicalContext, toolBridge: WebTurnRequest["toolBridge"],
-  contextAttachment?: ChatGptContextAttachmentReference, media: readonly WebTurnMedia[] = []): string {
-  return formatWebPhysicalContextParts(context,toolBridge,contextAttachment,media).text;
+  contextAttachment?: ChatGptContextAttachmentReference, media: readonly WebTurnMedia[] = [], chatTools?: true): string {
+  return formatWebPhysicalContextParts(context,toolBridge,contextAttachment,media,chatTools).text;
 }
 
 
@@ -1089,7 +1095,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     request: WebTurnRequest,
     signal?: AbortSignal,
   ): Promise<SemanticObservation<WebTurnHandle>> {
-    if (request.inertSourceAttachment && (request.toolBridge || request.contextAttachment || request.physicalContext.mode === "retained-delta")) {
+    if (request.chatTools && request.toolBridge) throw Error("Web tools must select one backend");
+    const usesConnector = !!(request.chatTools || request.toolBridge);
+    if (request.inertSourceAttachment && (usesConnector || request.contextAttachment || request.physicalContext.mode === "retained-delta")) {
       throw Error("inert source requires an isolated tool-free non-preloaded submission");
     }
     const sourceUpload = request.inertSourceAttachment
@@ -1109,10 +1117,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     }
     const connectorName = this.#connectorName;
     const expectedConnectorFingerprint = connectorName ? fingerprint(connectorName) : undefined;
-    if (!request.toolBridge && composer.connectorFingerprints.length !== 0) {
+    if (!usesConnector && composer.connectorFingerprints.length !== 0) {
       throw new Error("tool-free ChatGPT semantic submit refuses a selected connector");
     }
-    if (request.toolBridge && !connectorName) {
+    if (usesConnector && !connectorName) {
       throw new Error("ChatGPT tool bridge requires an explicit connector identity");
     }
     let cleanupAttempted = false;
@@ -1145,7 +1153,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const upload = prepareWebTurnMedia(request.physicalContext, request.media ?? []);
     const files = [...(sourceUpload ? [sourceUpload.file] : []), ...upload.files];
     if (new Set(files.map(file => file.name)).size !== files.length) throw Error("source and media attachments have duplicate names");
-    const formatted = formatWebPhysicalContextParts(request.physicalContext, request.toolBridge, request.contextAttachment, request.media);
+    const formatted = formatWebPhysicalContextParts(request.physicalContext, request.toolBridge, request.contextAttachment, request.media, request.chatTools);
     const text = formatted.text;
     emitDiagnosticEvent("chatgpt_tela_work", "browser_message_prepared", {
       context_mode: request.physicalContext.mode,
@@ -1186,7 +1194,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       ? AbortSignal.any([signal, inputBaseline!.signal]) : inputBaseline!.signal;
     try {
       let preparedBaseline = baseline;
-      if (request.toolBridge) {
+      if (usesConnector) {
         const selected = composer.connectorFingerprints;
         if (selected.length > 1) throw new Error("ChatGPT composer has multiple selected connectors");
         if (selected.length === 1 && selected[0] !== expectedConnectorFingerprint) {
@@ -1211,7 +1219,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       baselineTurnKeys = new Set(preparedBaseline.turns.map(turn => turn.key));
       preSubmitUserLineageKeys = baselineUserLineageKeys(preparedBaseline);
 
-      if (request.toolBridge) {
+      if (usesConnector) {
         await driver.appendComposerText(composer.key, ` ${text}`, signal);
       } else {
         await driver.replaceComposerText(composer.key, text, signal);
@@ -1228,7 +1236,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         const exactReadback = filledComposer?.key === composer.key
           && filledComposer.textFingerprint === expectedFingerprint
           && filledComposer.textLength === text.length;
-        const connectorPreserved = !request.toolBridge
+        const connectorPreserved = !usesConnector
           || (filledComposer?.connectorFingerprints.length === 1
             && filledComposer.connectorFingerprints[0] === expectedConnectorFingerprint);
         if (filledComposer?.key === composer.key && filledComposer.textLength > 0 && !exactReadback) {
@@ -1297,7 +1305,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         if (!verified || verified.textLength !== text.length
           || verified.textFingerprint !== expectedFingerprint
           || verified.attachmentNames.length === 0
-          || (request.toolBridge && (verified.connectorFingerprints.length !== 1
+          || (usesConnector && (verified.connectorFingerprints.length !== 1
             || verified.connectorFingerprints[0] !== expectedConnectorFingerprint))
           || send.length !== 1 || !send[0]!.enabled || send[0]!.key !== sendAfterFill.key) {
           throw new Error("ChatGPT Web media upload lost exact composer, connector, or send ownership");
@@ -1322,6 +1330,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       const bridgeComposer = filled.composers.find(item => item.key === composer.key);
       emitDiagnosticEvent("chatgpt_tela_work", "web_tool_bridge_prepared", {
         bridge_attached: !!request.toolBridge,
+        tool_backend: request.chatTools ? "tela-chat" : request.toolBridge ? "legacy-native" : "none",
         connector_count: bridgeComposer?.connectorFingerprints.length ?? 0,
         expected_connector_present: !!expectedConnectorFingerprint && bridgeComposer?.connectorFingerprints.includes(expectedConnectorFingerprint) === true,
         context_header_attached: !!request.toolBridge,

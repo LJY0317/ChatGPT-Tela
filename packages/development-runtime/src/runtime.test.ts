@@ -474,6 +474,7 @@ describe("development runtime composition", () => {
       // Web route carries no exact Native turn bearer to either submission.
       expect(submitted).toHaveLength(2);
       expect(submitted.map(request => Object.hasOwn(request, "toolBridge"))).toEqual([false, false]);
+      expect(submitted.map(request => request.chatTools)).toEqual([true, true]);
       expect(submitted.map(request => request.physicalContext.mode)).toEqual(["full", "retained-delta"]);
       expect(submitted[0]!.webEpochId).toBe(submitted[1]!.webEpochId);
       expect(provider.surfaceLeaseIds).toHaveLength(2);

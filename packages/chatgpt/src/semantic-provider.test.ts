@@ -1015,6 +1015,27 @@ describe("ChatGPT semantic provider", () => {
     }
   });
 
+  test("Tela Chat selects the connector without exposing a Native turn capability", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ connectorName: "ChatGPT Tela Development" });
+    try {
+      const submitting = provider.submitTurn(surface.lease, { ...request(), chatTools: true });
+      while (!driver.current.revision.includes(":appended")) await Promise.resolve();
+      const payload = driver.appendedTexts[0]!;
+      expect(payload).toContain('"toolBackend":"tela-chat"');
+      expect(payload).toContain("Tela Chat tools only");
+      expect(payload).not.toContain("turnCapability");
+      expect(payload).not.toContain("No Native Codex tool bridge");
+      driver.queued.push(acceptedSnapshot(driver));
+      expect((await submitting).state).toBe("proven");
+      expect(driver.connectorSelections).toEqual(["ChatGPT Tela Development"]);
+      expect(driver.activated).toEqual(["send-main"]);
+    } finally {
+      await surface.host.close();
+    }
+  });
+
   test("connector preflight proves exact selection without submitting and restores the empty composer", async () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     const surface = await leaseFor(driver);

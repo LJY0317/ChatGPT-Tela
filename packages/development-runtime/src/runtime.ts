@@ -257,7 +257,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
               ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
               ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
               ...(plan.media ? { media: plan.media } : {}),
-              ...(toolBridge ? { toolBridge } : {}),
+              ...(toolBridge ? { toolBridge } : { chatTools: true as const }),
             });
           } catch (error) {
             rejectedBeforeAcquisition = true;
@@ -327,7 +327,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
             ...(plan.media ? { media: plan.media } : {}),
             ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
-            ...(toolBridge ? { toolBridge } : {}),
+            ...(toolBridge ? { toolBridge } : { chatTools: true as const }),
             ...(plan.browserModel ? {
               prepareForSubmit: (surface, signal) => selectChatGptWebModel(
                 surface,
