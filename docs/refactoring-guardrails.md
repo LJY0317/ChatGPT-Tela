@@ -20,6 +20,8 @@ This tracked review contract applies to material Tela patches, refactors and bra
 
 Before/after review must report: (a) reproducible behavior and affected workflows; (b) `git diff --stat` and `--numstat`, including any new state machine, dependency, retry or duplicate logic; (c) typecheck, focused tests and full regressions where cross-cutting; (d) ownership, physical release, durable journal, retired-owner and successor recovery where relevant; (e) counted cold, retained, repeat, append, edit and recovery model calls, reused receipts, transfer estimates and useful final delivery; and (f) latency, CPU or idle cost where the change affects these. Mark unmeasured values as unknown, not improved.
 
+Missing optional `build/` verification reports are not a blocker: use current official operation status, Git state and actual artifacts as the available evidence, without regenerating already settled reports. Preserve identifiers for running or uncertain operations (including operation, thread and turn identity) until their ownership and outcome are settled.
+
 Favor **deletion-first, destructive refactoring** over additive hardening. Before adding any guard, fallback, state, adapter or test, remove superseded ones; retain a test only when it exercises a distinct, reachable behavior or regression not already covered. Keep operation identity and actual effect verification while allowing alternate routes to continue failed tasks. Do not treat presentation-format differences or optional diagnostic failures as task failures. Do not impose an arbitrary line ceiling: necessary fixes can grow code, while unexplained growth needs concrete justification. Passing tests alone does not establish Web-model task success or cost parity.
 
 
