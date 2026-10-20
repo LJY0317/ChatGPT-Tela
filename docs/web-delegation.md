@@ -62,7 +62,9 @@ completed eligible parent and starts a new turn in the same thread; it does not
 enqueue work or steer a running generation. The Native conversation's own queue
 and steering operate under its separate Native authority. A Web worker can
 report the result, but it has read-only Goal access and no Goal-mutation
-capability. The Native coordinator can request Goal completion through the
+capability. Reuse the original Native Goal controls when exposing this missing
+connection; task-specific shell/RPC completion helpers are not a supported worker
+workflow. The Native coordinator can request Goal completion through the
 public API, but that API has no scheduler fence or turn compare-and-set, so a
 successful completion response does not guarantee that an automatic follow-up
 turn will not start. Live acceptance observed a follow-up turn start in the same

@@ -22,9 +22,11 @@ new runtimes, schedulers or queues. This list records product requirements, not 
   Preserve profile ownership, existing chats and canonical context deltas. Availability is not evidence of
   reliable end-to-end delivery. Keep Native controls with the Native coordinator and Web work with Tela
   Chat. Do not duplicate a platform feature merely to advertise it.
-- **Goal completion boundary.** External Native Goal completion can race automatic successor startup.
-  Same-turn completion or a supported scheduler fence is still required for a strict no-successor promise;
-  prose completion and a successful external completion RPC are insufficient.
+- **Native Goal completion.** Reuse the original Native Goal controls through existing tool routing.
+  The current Tela Chat-only Web route exposes Goal state read-only, so worker-driven completion is
+  an integration gap. Do not substitute per-task shell/RPC completion scripts or a second Goal engine.
+  Retire isolated test adapters after acceptance; retain only bounded result evidence. External completion
+  can race successor startup, so verify same-turn completion and quiescence before claiming support.
 - **Automatic failure follow-through.** A delegation failure should wake its owning coordinator with the
   exact job/turn, failure boundary and existing local incident reference. Reconcile uncertain effects first,
   then analyze and repair verified causes within the authorized task, or report the specific missing evidence.
