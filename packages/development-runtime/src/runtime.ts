@@ -483,6 +483,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
         : {}),
     });
   } catch (error) {
+    browserEpochs.dispose();
     abortController.abort(error);
     turns.cancelAll(error);
     await gateway.close();
@@ -503,6 +504,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
       if (stopping) return stopping;
       stopping = (async () => {
         const reason = new Error("ChatGPT Tela development runtime stopped");
+        browserEpochs.dispose();
         await responses.stop();
         abortController.abort(reason);
         turns.cancelAll(reason);

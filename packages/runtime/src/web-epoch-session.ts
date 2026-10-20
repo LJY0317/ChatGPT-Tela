@@ -6,7 +6,10 @@ interface RetainedEpoch {
   busy: boolean;
   retiring?: boolean;
   lastCompleted: number;
+  idleSince?: number;
 }
+
+const IDLE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Own one physical browser conversation per Native task/Web epoch.
@@ -22,10 +25,14 @@ export class RetainedBrowserEpochRegistry {
   readonly #maxIdleEpochs: number | undefined;
   readonly #onRetire: ((taskId: string, surfaceLeaseId: string) => void) | undefined;
   #completed = 0;
+  #timer: ReturnType<typeof setTimeout> | undefined;
+  #disposed = false;
+  readonly #now: () => number;
 
   constructor(browserHost: BrowserHost, options: {
     readonly maxIdleEpochs?: number;
     readonly onRetire?: (taskId: string, surfaceLeaseId: string) => void;
+    readonly now?: () => number;
   } = {}) {
     if (options.maxIdleEpochs !== undefined
       && (!Number.isSafeInteger(options.maxIdleEpochs) || options.maxIdleEpochs < 1)) {
@@ -34,12 +41,51 @@ export class RetainedBrowserEpochRegistry {
     this.#browserHost = browserHost;
     this.#maxIdleEpochs = options.maxIdleEpochs;
     this.#onRetire = options.onRetire;
+    this.#now = options.now ?? Date.now;
+  }
+
+  /** One next-expiry timer, owned by the runtime lifecycle. */
+  #schedule(): void {
+    if (this.#timer) clearTimeout(this.#timer);
+    this.#timer = undefined;
+    if (this.#disposed) return;
+    const expiry = [...this.#byTask.entries()]
+      .filter(([task, entry]) => !entry.busy && !entry.retiring && !this.#acquiring.has(task) && entry.idleSince !== undefined)
+      .reduce((first, [, entry]) => Math.min(first, entry.idleSince! + IDLE_RETENTION_MS), Infinity);
+    if (expiry === Infinity) return;
+    this.#timer = setTimeout(() => {
+      this.#timer = undefined;
+      void this.retireExpired().catch(() => {});
+    }, Math.max(1, Math.min(expiry - this.#now(), 2_147_483_647)));
+    this.#timer.unref?.();
+  }
+
+  /** Also callable directly for deterministic, clock-controlled verification. */
+  async retireExpired(): Promise<void> {
+    if (this.#disposed) return;
+    try {
+      for (const [task, entry] of this.#byTask) {
+        if (this.#disposed) break;
+        if (entry.idleSince === undefined || entry.busy || entry.retiring || this.#acquiring.has(task)
+          || this.#now() - entry.idleSince < IDLE_RETENTION_MS) continue;
+        await this.#release(task, entry);
+      }
+    } finally {
+      this.#schedule();
+    }
+  }
+
+  dispose(): void {
+    this.#disposed = true;
+    if (this.#timer) clearTimeout(this.#timer);
+    this.#timer = undefined;
   }
 
   async acquire(taskId: string, epochId: string): Promise<{
     readonly surface: BrowserSurfaceLease;
     readonly reused: boolean;
   }> {
+    if (this.#disposed) throw new Error("retained browser registry is disposed");
     if (!taskId.trim() || !epochId.trim()) throw new Error("retained browser task/epoch ids must be non-empty");
     const current = this.#byTask.get(taskId);
     if (current?.retiring) throw new Error("prior Web surface retirement is unresolved");
@@ -50,6 +96,8 @@ export class RetainedBrowserEpochRegistry {
     try {
       if (current && current.epochId === epochId) {
         current.busy = true;
+        delete current.idleSince;
+        this.#schedule();
         return Object.freeze({ surface: current.surface, reused: true });
       }
       if (current) {
@@ -60,6 +108,7 @@ export class RetainedBrowserEpochRegistry {
       return Object.freeze({ surface, reused: false });
     } finally {
       this.#acquiring.delete(taskId);
+      this.#schedule();
     }
   }
 
@@ -72,6 +121,8 @@ export class RetainedBrowserEpochRegistry {
     commit?.();
     current.busy = false;
     current.lastCompleted = ++this.#completed;
+    current.idleSince = this.#now();
+    this.#schedule();
     if (this.#maxIdleEpochs === undefined) return;
     const idle = [...this.#byTask.entries()].filter(([task, entry]) => !entry.busy && !this.#acquiring.has(task))
       .sort(([, left], [, right]) => left.lastCompleted - right.lastCompleted);
@@ -100,9 +151,11 @@ export class RetainedBrowserEpochRegistry {
   async #release(taskId: string, current: RetainedEpoch): Promise<void> {
     if (current.retiring) throw new Error("prior Web surface retirement is unresolved");
     current.retiring = true;
+    this.#schedule();
     this.#onRetire?.(taskId, current.surface.leaseId);
     await this.#browserHost.release(current.surface.leaseId);
     if (this.#byTask.get(taskId) === current) this.#byTask.delete(taskId);
+    this.#schedule();
   }
 
   get size(): number {
