@@ -54,7 +54,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     const path = statePath(adapters, record), retained = load(path);
     if (retained?.state === "deleted" || retained?.state === "excluded") continue;
     const collected = adapters.store.collectedAt(record.id);
-    const due = retained?.archivedAt !== undefined ? retained.archivedAt + 7 * DAY
+    const due = retained?.archivedAt !== undefined ? retained.archivedAt + 30 * DAY
       : collected !== undefined ? collected + DAY : record.createdAt + 7 * DAY;
     if (due > now) { next = Math.min(next, due); continue; }
     try {
@@ -126,7 +126,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
             const archivedUpdatedAt = object(read?.thread)?.updatedAt;
             if (!Number.isFinite(archivedUpdatedAt)) throw Error("Archived thread receipt unavailable");
             save(path, { state: "archived", archivedAt: now, updatedAt: archivedUpdatedAt });
-            next = Math.min(next, now + 7 * DAY);
+            next = Math.min(next, now + 30 * DAY);
           }
         } catch (error) {
           // Unknown mutation outcomes are not permission to repeat a request.

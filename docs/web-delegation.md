@@ -293,7 +293,7 @@ round-trip results.
 The Codex daemon archives managed Web-delegation conversations 24 hours after
 an explicit result retrieval, or seven days after real Native activity when no
 result was retrieved. A subsequent managed continuation starts its own clock.
-The daemon deletes its own automatically archived conversations seven days later.
+The daemon deletes its own automatically archived conversations 30 days later.
 Result receipts and local workspace files remain intact. Status reads do not
 extend either period. These rules cover journal-owned `web-delegate` threads;
 chats created directly by another Native client are not discovered or adopted.

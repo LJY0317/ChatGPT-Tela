@@ -64,7 +64,7 @@ function fixture() {
   return { root, store, record, native, calls, origin, adapters, run, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
-test("first result collection starts 24h clock, repeated reads do not extend it, auto archive deletes seven days later", async () => {
+test("first result collection starts 24h clock, repeated reads do not extend it, auto archive deletes thirty days later", async () => {
   const f = fixture();
   try {
     f.store.collect(f.record.id, f.origin + DAY);
@@ -72,9 +72,11 @@ test("first result collection starts 24h clock, repeated reads do not extend it,
     expect(f.store.collectedAt(f.record.id)).toBe(f.origin + DAY);
     const immutable = readFileSync(join(f.root, `${f.record.id}.json.completed`), "utf8");
     await f.run(f.origin + 2 * DAY - 1); expect(f.calls).toHaveLength(0);
-    await f.run(f.origin + 2 * DAY); expect(f.native.archived).toBe(true);
-    await f.run(f.origin + 9 * DAY - 1); expect(f.native.exists).toBe(true);
-    await f.run(f.origin + 9 * DAY); expect(f.native.exists).toBe(false);
+    expect(await f.run(f.origin + 2 * DAY)).toBe(f.origin + 32 * DAY); expect(f.native.archived).toBe(true);
+    expect(await f.run(f.origin + 9 * DAY)).toBe(f.origin + 32 * DAY);
+    expect(f.native.exists).toBe(true);
+    await f.run(f.origin + 32 * DAY - 1); expect(f.native.exists).toBe(true);
+    await f.run(f.origin + 32 * DAY); expect(f.native.exists).toBe(false);
     expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(1);
     expect(f.calls.filter(c => c.method === "thread/delete")).toHaveLength(1);
     expect(readFileSync(join(f.root, `${f.record.id}.json.completed`), "utf8")).toBe(immutable);
@@ -110,8 +112,8 @@ test("manual archive, restore, activity and delete relinquish automatic ownershi
       if (action === "activity") f.native.updatedAt++;
       if (action === "delete") f.native.exists = false;
       if (action === "direct-turn") f.native.tailId = randomUUID();
-      await f.run(f.origin + 14 * DAY);
-      await f.run(f.origin + 30 * DAY);
+      await f.run(f.origin + 37 * DAY);
+      await f.run(f.origin + 40 * DAY);
       expect(f.calls.filter(c => c.method === "thread/delete")).toHaveLength(0);
       expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(action === "restore" || action === "activity" ? 1 : 0);
     } finally { f.cleanup(); }
@@ -123,7 +125,7 @@ test("an unknown mutation outcome is never retried; another account cannot act o
     f.native.accountChanged = true; await f.run(f.origin + 8 * DAY); expect(f.calls).toHaveLength(0);
     f.native.accountChanged = false; f.native.failArchive = true;
     await f.run(f.origin + 8 * DAY);
-    await f.run(f.origin + 30 * DAY);
+    await f.run(f.origin + 40 * DAY);
     expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(1);
     expect(f.calls.filter(c => c.method === "thread/delete")).toHaveLength(0);
   } finally { f.cleanup(); }
