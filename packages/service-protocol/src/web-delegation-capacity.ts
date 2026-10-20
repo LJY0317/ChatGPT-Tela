@@ -10,7 +10,8 @@ export interface CodexWebDelegationCapacityContract {
   readonly coverage: "managed_jobs_only";
   readonly uncertain: number;
   readonly total: { readonly used: number; readonly limit: 3 };
-  readonly records: { readonly retained: number; readonly limit: 64 };
+  /** `limit` is the legacy record review threshold, not an admission ceiling. */
+  readonly records: { readonly retained: number; readonly limit: 64; readonly admissionBound?: false };
   readonly available: boolean;
   readonly blockCode?: WebDelegationBlockCode;
   readonly messageKo: string;
@@ -38,6 +39,7 @@ export function parseCodexWebDelegationCapacityContract(value: unknown): CodexWe
     || !whole(row.uncertain) || (row.uncertain as number) > 64
     || !total || !whole(total.used) || total.limit !== 3 || (total.used as number) > 3
     || !records || !whole(records.retained) || records.limit !== 64
+    || records.admissionBound !== undefined && records.admissionBound !== false
     || typeof row.available !== "boolean"
     || row.blockCode !== undefined && !reasons.includes(row.blockCode as string)
     || row.available !== (row.blockCode === undefined)

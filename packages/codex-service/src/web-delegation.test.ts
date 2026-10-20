@@ -1,15 +1,16 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID, createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
-import { runWebDelegation, WebDelegationStore, reconcileWebDelegation } from "./web-delegation";
+import { runWebDelegation, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer } from "./web-delegation";
 
-async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write"; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean; ambiguousFirstTurn?: boolean } = {}) {
+async function fixture(options: { slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write"; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean; ambiguousFirstTurn?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
+  const slot = options.slot ?? 1;
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
   const calls: Array<{ method: string; params: unknown }> = [];
   let currentTurnId = turnId;
@@ -49,8 +50,8 @@ async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; f
           ] },
           ...(options.ambiguousFirstTurn ? [{ id: randomUUID(), status: "completed", items: [] }] : []),
         ], nextCursor: null };
-        return { data: [{ id: currentTurnId, status: "completed", items: [
-        { id: "final", type: "agentMessage", ...(options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified recovered design" },
+        return { data: [{ id: currentTurnId, status: options.failedTurn ? "failed" : "completed", items: [
+        { id: "final", type: "agentMessage", ...(options.foreignFinal ? { phase: "commentary" } : options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified recovered design" },
         ...(options.summaryToolResult ? [{ id: "read", type: "commandExecution",
           status: "completed", aggregatedOutput: "fixture-summary-result" }] : []),
       ] }], nextCursor: null };
@@ -63,12 +64,12 @@ async function fixture(options: { uncertain?: boolean; changedOwner?: boolean; f
     owner: async () => {
       observedOwners++;
       return {
-        binding: { slot: 1, accountFingerprint: options.changedOwner && observedOwners > 1 ? "b".repeat(64) : "a".repeat(64), sessionFingerprint: "b".repeat(64), routeFingerprint: "c".repeat(64) },
-        session: { slot: 1, runtimeProcessId: 10, responsesRouteFingerprint: "c".repeat(64), terminalEndpoint: "ws://127.0.0.1:1234" },
+        binding: { slot, accountFingerprint: options.changedOwner && observedOwners > 1 ? "b".repeat(64) : "a".repeat(64), sessionFingerprint: "b".repeat(64), routeFingerprint: "c".repeat(64) },
+        session: { slot, runtimeProcessId: 10, responsesRouteFingerprint: "c".repeat(64), terminalEndpoint: "ws://127.0.0.1:1234" },
       };
     },
   };
-  return { root, store, calls, id, continue: (parentJobId: string, prompt = "Follow up", mode: "read" | "write" = options.mode ?? "read") => runWebDelegation(adapters, { id: randomUUID(), slot: 1, cwd: root, prompt, mode, parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot: 1, cwd: root, prompt: "Read this fixture and design only", mode: options.mode ?? "read", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, store, calls, id, continue: (parentJobId: string, prompt = "Follow up", mode: "read" | "write" = options.mode ?? "read") => runWebDelegation(adapters, { id: randomUUID(), slot, cwd: root, prompt, mode, parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", mode: options.mode ?? "read", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 test("new read-only durable Web job buffers ACK race, returns exact final and never loads a source conversation", async () => {
@@ -240,7 +241,8 @@ test("a commentary message does not become a final just because the turn complet
   try {
     await expect(f.run()).rejects.toThrow("proven final answer");
     expect(f.store.get(f.id)?.answer).toBeUndefined();
-    await expect(f.reconcile()).rejects.toThrow("bounded and proven");
+    expect(await f.reconcile()).toMatchObject({ state: "failed", failure: "result_unavailable" });
+    expect(f.store.capacity(1).total.used).toBe(0);
   } finally { f.cleanup(); }
 });
 test("an explicit final blockage report is an execution result with task success unassessed", async () => {
@@ -337,6 +339,58 @@ test("legacy completed records without final evidence do not block free profile 
     writeFileSync(join(f.root, `${legacy.id}.json`), JSON.stringify(legacy));
     expect(f.store.get(legacy.id)?.finalEvidence).toBeUndefined();
     expect(f.store.capacity(1)).toMatchObject({ available: true, total: { used: 0 } });
+  } finally { f.cleanup(); }
+});
+
+test("65+ retained receipts do not deny profile 2 admission, recovery or same-thread continuation", async () => {
+  const f = await fixture({ slot: 2, mode: "write" });
+  try {
+    const savedIds: string[] = [];
+    for (let i = 0; i < 65; i++) {
+      const id = randomUUID();
+      savedIds.push(id);
+      writeFileSync(join(f.root, `${id}.json`), JSON.stringify({
+        id, slot: 2, mode: "write", cwd: f.root, createdAt: Date.now(),
+        promptHash: "a".repeat(64), state: "completed", finalEvidence: "explicit-final-phase",
+        answer: `historical final ${i}`, threadId: randomUUID(), turnId: randomUUID(),
+        owner: { slot: 2, accountFingerprint: "a".repeat(64), sessionFingerprint: "b".repeat(64), routeFingerprint: "c".repeat(64) },
+        session: { slot: 2, runtimeProcessId: 10, responsesRouteFingerprint: "c".repeat(64), terminalEndpoint: "ws://127.0.0.1:1234" },
+      }));
+    }
+    const firstPath = join(f.root, `${savedIds[0]}.json`);
+    const firstBytes = readFileSync(firstPath);
+    expect(f.store.capacity(2, "write", f.root)).toMatchObject({
+      available: true, total: { used: 0, limit: 3 },
+      records: { retained: 65, limit: 64, admissionBound: false },
+      nextAction: "start_if_profile_ready",
+    });
+
+    const original = await f.run();
+    expect(original).toMatchObject({ state: "completed", slot: 2, answer: "verified design" });
+    const continued = await f.continue(original.id);
+    expect(continued).toMatchObject({ state: "completed", slot: 2,
+      threadId: original.threadId, parentJobId: original.id, answer: "verified design" });
+    expect(f.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
+    expect(f.calls.filter(call => call.method === "thread/resume")).toHaveLength(1);
+    expect(f.store.capacity(2, "write", f.root)).toMatchObject({
+      available: true, total: { used: 0, limit: 3 },
+      records: { retained: 67, limit: 64, admissionBound: false },
+    });
+    expect(f.store.get(savedIds[0]!)?.answer).toBe("historical final 0");
+    expect(readFileSync(firstPath)).toEqual(firstBytes);
+    expect(new WebDelegationStore(f.root).get(continued.id)?.answer).toBe("verified design");
+  } finally { f.cleanup(); }
+});
+
+test("profile 2 lost-first-turn ACK is recovered without replay or leaking a lease", async () => {
+  const f = await fixture({ slot: 2, uncertain: true });
+  try {
+    await expect(f.run()).rejects.toThrow("lost acknowledgement");
+    expect(f.store.get(f.id)).toMatchObject({ slot: 2, state: "uncertain" });
+    expect(f.store.capacity(2).total.used).toBe(1);
+    expect(await f.reconcile()).toMatchObject({ slot: 2, state: "completed", answer: "Recovered after lost ACK" });
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+    expect(f.store.capacity(2)).toMatchObject({ available: true, total: { used: 0, limit: 3 } });
   } finally { f.cleanup(); }
 });
 
@@ -500,6 +554,52 @@ test("failed Native turn releases its task lease; completed turn without final r
       expect(f.store.capacity(1)).toMatchObject({ available: true, total: { used: 0, limit: 3 } });
     } finally { f.cleanup(); }
   }
+});
+
+test("failed Native turn preserves an explicit final for result retrieval without success or continuation", async () => {
+  for (const silent of [false, true]) {
+    const f = await fixture({ slot: 2, failedTurn: true, silent, answer: "An error occurred after the final response." });
+    try {
+      if (silent) await expect(f.run()).rejects.toThrow();
+      else await expect(f.run()).rejects.toThrow("turn failed");
+      const record = silent ? await f.reconcile() : f.store.get(f.id)!;
+      expect(record).toMatchObject({ state: "failed", failure: "turn_failed", slot: 2,
+        finalEvidence: "explicit-final-phase", taskOutcome: "unassessed" });
+      expect(verifiedWebDelegationAnswer(record)).toBe("An error occurred after the final response.");
+      expect(new WebDelegationStore(f.root).get(f.id)?.state).toBe("failed");
+      expect(f.store.capacity(2).total.used).toBe(0);
+      await expect(f.continue(f.id)).rejects.toThrow("Continuation requires a completed");
+      expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+    } finally { f.cleanup(); }
+  }
+});
+
+test("reconciliation of a completed Native turn without a final settles result_unavailable", async () => {
+  const f = await fixture({ silent: true, finalPhase: "commentary" });
+  try {
+    await expect(f.run()).rejects.toThrow();
+    expect(f.store.capacity(1).total.used).toBe(1);
+    const result = await f.reconcile();
+    expect(result).toMatchObject({ state: "failed", failure: "result_unavailable" });
+    expect(verifiedWebDelegationAnswer(result)).toBeUndefined();
+    expect(f.store.capacity(1).total.used).toBe(0);
+    expect(await f.reconcile()).toMatchObject({ state: "failed", failure: "result_unavailable" });
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
+test("an earlier failed receipt can acquire an exact verified failed-turn final without losing failure", async () => {
+  const f = await fixture({ silent: true, failedTurn: true });
+  try {
+    await expect(f.run()).rejects.toThrow();
+    const early = f.store.save({ ...f.store.get(f.id)!, state: "failed", failure: "turn_failed" });
+    expect(verifiedWebDelegationAnswer(early)).toBeUndefined();
+    const recovered = await f.reconcile();
+    expect(recovered).toMatchObject({ state: "failed", failure: "turn_failed",
+      finalEvidence: "explicit-final-phase", answer: "verified recovered design" });
+    expect(new WebDelegationStore(f.root).get(f.id)?.answer).toBe("verified recovered design");
+    expect(f.store.capacity(1).total.used).toBe(0);
+  } finally { f.cleanup(); }
 });
 
 test("Git root normalizes subdirectory aliases to the same physical writer lease", async () => {

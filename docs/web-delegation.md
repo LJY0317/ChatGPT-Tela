@@ -109,8 +109,8 @@ An admission refusal emits a machine-readable JSON object with
 `status=admission_refused`, `code`, verified local `capacity`, and a
 `nextAction`. `CAPACITY_TOTAL_PROFILE` means all three managed tasks are reserved;
 `CAPACITY_WRITER_CHECKOUT` means the selected worktree has another writer; `UNCERTAIN_RESERVATION` means ownership is unresolved;
-`CAPACITY_STORAGE_RECORDS` means the separate 64-record retention ceiling
-has been reached. These are distinct from account quotas or other profiles'
+`CAPACITY_STORAGE_RECORDS` is a legacy refusal code; current admission ignores
+the retained-record count. These are distinct from account quotas or other profiles'
 unmanaged activity. No time-based release, stale-process inference or blind
 resend is allowed. An exact terminal journal completion frees its permit;
 lost ACKs retain it until the exact job is reconciled. A source-level regression test verifies that connection loss after an acknowledged turn retains the reservation until exact recovery confirms the final answer, without resending the model request. Live disconnect acceptance remains outstanding. The capacity snapshot
@@ -122,10 +122,25 @@ the saved answer when proven, and `result` prints it without rerunning a model.
 Immutable terminal receipts protect completed answers against late observer
 timeouts or stale in-flight snapshots.
 
+A Native turn can fail after emitting an explicit `final_answer`. Its Web job
+remains `failed/turn_failed`, while `result` and `reconcile` may deliver that
+verified final for diagnosis; the answer does not prove task success or permit
+continuation. For a completed turn with no final in live notifications, the
+exact indexed turn is read before settling `failed/result_unavailable` and
+releasing its lease. Recovery applies the same terminal rule without replaying
+the input. Missing or untrusted history remains uncertain and retains its
+reservation.
+
 Job records and results are private product data under the Codex service state directory, with
-restricted filesystem permissions. A hard capacity of 64 records bounds storage; it does not
-silently discard results. Do not put these records, prompts, keys or results in a repository or
-release. This source version does not yet provide a complete removal lifecycle. Source fixtures and a profile-1 live same-thread continuation verify final-answer delivery and completion after attaching the fresh connection. Both-profile acceptance remains a separate check.
+restricted filesystem permissions. Finished receipts and unresolved recovery journals remain
+available for exact readback, even beyond the legacy 64-record review threshold. The capacity
+response retains `records.limit=64` for v2 clients but sets `records.admissionBound=false`:
+the threshold is advisory, and only owned active leases determine new job admission. No
+automatic record expiry, deletion, or pruning is performed. Storage errors remain ordinary
+filesystem failures, independent of capacity refusals. Do not put records, prompts, keys or
+results in a repository or release. A complete user-reviewed removal lifecycle remains future work.
+Source fixtures and a profile-1 live same-thread continuation verify final-answer delivery and
+completion after attaching the fresh connection. Both-profile acceptance remains a separate check.
 
 Continuations inherit their parent's profile and read-only or workspace-write mode.
 They cannot promote an existing read-only thread to writing. Historical job
