@@ -189,6 +189,61 @@ private final class SessionSidebarStack: NSStackView {
   override var isFlipped: Bool { true }
 }
 
+// AppKit supplies the hover timing; the popover keeps click-to-show help stable.
+private final class DelegationHelpButton: NSButton, NSViewToolTipOwner {
+  var helpText = ""
+  private var tracking: NSTrackingArea?
+  private var popover: NSPopover?
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let tracking { removeTrackingArea(tracking) }
+    let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+    addTrackingArea(area)
+    tracking = area
+    removeAllToolTips()
+    addToolTip(bounds, owner: self, userData: nil)
+  }
+
+  func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData: UnsafeMutableRawPointer?) -> String {
+    showHelp(self)
+    return ""
+  }
+
+  @objc func showHelp(_ sender: Any?) {
+    if popover?.isShown == true { return }
+    let message = NSTextField(wrappingLabelWithString: helpText)
+    message.font = .systemFont(ofSize: TelaStyle.bodySize)
+    message.translatesAutoresizingMaskIntoConstraints = false
+    let controller = NSViewController()
+    controller.view = NSView()
+    controller.view.addSubview(message)
+    NSLayoutConstraint.activate([
+      message.leadingAnchor.constraint(equalTo: controller.view.leadingAnchor, constant: TelaStyle.cardInset),
+      message.trailingAnchor.constraint(equalTo: controller.view.trailingAnchor, constant: -TelaStyle.cardInset),
+      message.topAnchor.constraint(equalTo: controller.view.topAnchor, constant: TelaStyle.cardVerticalInset),
+      message.bottomAnchor.constraint(equalTo: controller.view.bottomAnchor, constant: -TelaStyle.cardVerticalInset),
+      message.widthAnchor.constraint(equalToConstant: 260),
+    ])
+    let help = NSPopover()
+    help.behavior = .applicationDefined
+    help.contentViewController = controller
+    popover = help
+    help.show(relativeTo: bounds, of: self, preferredEdge: .maxY)
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    super.mouseExited(with: event)
+    popover?.close()
+    popover = nil
+  }
+
+  override func viewWillMove(toWindow newWindow: NSWindow?) {
+    if newWindow == nil { popover?.close(); popover = nil }
+    super.viewWillMove(toWindow: newWindow)
+  }
+}
+
 private final class FlippedDocumentView: NSView {
   override var isFlipped: Bool { true }
 }
@@ -582,7 +637,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     height.isActive = true
   }
 
-  private func delegationRow(usage: String, help: NSButton, in stack: NSStackView) {
+  private func delegationRow(usage: String, help: DelegationHelpButton, in stack: NSStackView) {
     let rowView = NSView()
     let title = label("Web delegations")
     let value = secondary(usage)
@@ -759,12 +814,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         toggle.setAccessibilityLabel("Connect \(profile.targetDisplayName) to Tela")
         let modelsState = workInventory.error != nil ? "Status unavailable" : profile.webModelsStatus
         row("Web models", subtitle: modelsState, control: toggle, in: profileCard)
-        let help = NSButton(title: "?", target: nil, action: nil)
+        let help = DelegationHelpButton(title: "?", target: nil, action: nil)
+        help.target = help
+        help.action = #selector(DelegationHelpButton.showHelp(_:))
         help.bezelStyle = .helpButton
         help.controlSize = .small
         help.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         help.setButtonType(.momentaryPushIn)
-        help.toolTip = delegationHelpText
+        help.helpText = delegationHelpText
         help.setAccessibilityLabel("Web delegations help")
         help.setAccessibilityHelp(delegationHelpText)
         let usage = delegationCapacity[profile.slot].map { "\($0.total.used) of \($0.total.limit) slots in use" } ?? "Usage unavailable"
@@ -850,7 +907,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       for profile in runningProfiles {
         if profiles.count > 1 {
           let heading = label(profile.targetDisplayName)
-          heading.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+          heading.font = .systemFont(ofSize: TelaStyle.bodySize, weight: .semibold)
           sessionList.addArrangedSubview(heading)
           heading.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
         }
@@ -863,7 +920,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           status.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
         } else if surfaces.isEmpty {
           let status = secondary("No active Web sessions")
-          status.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
           sessionList.addArrangedSubview(status)
           status.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
         }
@@ -891,17 +947,24 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         let status = secondary("No active Web sessions"); sessionList.addArrangedSubview(status)
         status.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
       }
+      let previewContent = NSView()
+      append(previewContent, to: previewPane)
+      previewContent.setContentHuggingPriority(.defaultLow, for: .vertical)
+      previewContent.heightAnchor.constraint(greaterThanOrEqualToConstant: 170).isActive = true
       if let bridgeImage {
         let imageView = NSImageView(image: bridgeImage)
         imageView.imageScaling = .scaleProportionallyUpOrDown
-        previewPane.addArrangedSubview(imageView)
-        imageView.widthAnchor.constraint(equalTo: previewPane.widthAnchor).isActive = true
-        imageView.setContentHuggingPriority(.defaultLow, for: .vertical)
-        imageView.heightAnchor.constraint(greaterThanOrEqualToConstant: 170).isActive = true
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        previewContent.addSubview(imageView)
+        NSLayoutConstraint.activate([
+          imageView.leadingAnchor.constraint(equalTo: previewContent.leadingAnchor),
+          imageView.trailingAnchor.constraint(equalTo: previewContent.trailingAnchor),
+          imageView.topAnchor.constraint(equalTo: previewContent.topAnchor),
+          imageView.bottomAnchor.constraint(equalTo: previewContent.bottomAnchor),
+        ])
         append(secondary(bridgeMessage), to: previewPane)
       } else {
         let empty = NSStackView()
-        empty.distribution = .fill
         empty.orientation = .vertical
         empty.alignment = .centerX
         empty.spacing = 10
@@ -911,9 +974,15 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         icon.heightAnchor.constraint(equalToConstant: 26).isActive = true
         let message = secondary(bridgeMessage == "No preview requested yet." ? "No snapshot yet" : bridgeMessage)
         message.alignment = .center
-        append(message, to: empty)
-        append(empty, to: previewPane)
-        empty.heightAnchor.constraint(greaterThanOrEqualToConstant: 170).isActive = true
+        empty.addArrangedSubview(message)
+        empty.translatesAutoresizingMaskIntoConstraints = false
+        previewContent.addSubview(empty)
+        NSLayoutConstraint.activate([
+          empty.centerXAnchor.constraint(equalTo: previewContent.centerXAnchor),
+          empty.centerYAnchor.constraint(equalTo: previewContent.centerYAnchor),
+          empty.leadingAnchor.constraint(greaterThanOrEqualTo: previewContent.leadingAnchor),
+          empty.trailingAnchor.constraint(lessThanOrEqualTo: previewContent.trailingAnchor),
+        ])
       }
       let actions = NSStackView()
       actions.distribution = .fill
@@ -930,24 +999,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       actions.addArrangedSubview(interact)
       interact.toolTip = "Allow input in the browser. Changing chats can interrupt the task."
       previewPane.addArrangedSubview(actions)
+      actions.bottomAnchor.constraint(equalTo: previewPane.bottomAnchor).isActive = true
       stack.addArrangedSubview(actionButton("Refresh status", action: #selector(refreshPage)))
     case .settings:
       pageHeader("Make Tela work the way you want.")
-      let delegations = card("Web delegations")
-      for profile in profiles {
-        let picker = NSPopUpButton()
-        for count in 1...5 {
-          picker.addItem(withTitle: String(count))
-          picker.lastItem?.representedObject = count
-        }
-        picker.selectItem(at: (delegationLimits[String(profile.slot)] ?? 3) - 1)
-        picker.tag = profile.slot
-        picker.target = self
-        picker.action = #selector(setDelegationLimit(_:))
-        picker.isEnabled = !preferenceError
-        row(profiles.count == 1 ? "Concurrent tasks" : "\(profile.targetDisplayName) · Concurrent tasks",
-            control: picker, in: delegations)
-      }
       let folders = card("Chat · Local folders")
       append(secondary("Choose folders ChatGPT may read and edit through Tela Chat. Your files remain yours."), to: folders)
       if !chatFoldersAvailable { append(secondary("Folder settings unavailable. Refresh details or update Tela."), to: folders) }
@@ -994,6 +1049,21 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       row("Wait before approving", control: delayPicker, in: approvals)
       append(secondary("Restart your Work profile to apply changes. This interrupts any active turn."), to: approvals)
       if preferenceError { append(secondary("Couldn't read approval settings."), to: approvals) }
+      let delegations = card("Web delegations")
+      for profile in profiles {
+        let picker = NSPopUpButton()
+        for count in 1...5 {
+          picker.addItem(withTitle: String(count))
+          picker.lastItem?.representedObject = count
+        }
+        picker.selectItem(at: (delegationLimits[String(profile.slot)] ?? 3) - 1)
+        picker.tag = profile.slot
+        picker.target = self
+        picker.action = #selector(setDelegationLimit(_:))
+        picker.isEnabled = !preferenceError
+        row(profiles.count == 1 ? "Concurrent tasks" : "\(profile.targetDisplayName) · Concurrent tasks",
+            control: picker, in: delegations)
+      }
       if installedServiceControlsAvailable() {
         let background = card("Tela")
         let running = serviceStates.values.contains("Ready")
