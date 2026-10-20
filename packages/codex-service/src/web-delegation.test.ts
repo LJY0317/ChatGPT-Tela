@@ -9,7 +9,7 @@ import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { runWebDelegation, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
-async function fixture(options: { slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write"; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
+async function fixture(options: { titleEvents?: string[]; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write"; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const slot = options.slot ?? 1;
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
@@ -28,6 +28,7 @@ async function fixture(options: { slot?: number; uncertain?: boolean; changedOwn
       if (method === "model/list") return { data: [{ model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", displayName: "6 (Web)", supportedReasoningEfforts: [{ reasoningEffort: "xhigh" }] }] };
       if (method === "thread/resume") { attached = true; return { thread: { id: threadId } }; }
       if (method === "thread/start") { attached = true; return { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", approvalPolicy: "never", sandbox: { type: options.mode === "write" ? "workspaceWrite" : "readOnly" }, thread: { id: threadId, cwd: root, historyMode: "paginated", ephemeral: false } }; }
+      if (method === "thread/name/set") return {};
       if (method === "turn/start") {
         if (calls.filter(call => call.method === "turn/start").length > 1) currentTurnId = randomUUID();
         if (options.uncertain) throw Error("lost acknowledgement");
@@ -39,6 +40,7 @@ async function fixture(options: { slot?: number; uncertain?: boolean; changedOwn
         }
         if (options.silent) { if (options.disconnect) queueMicrotask(() => disconnected()); return { turn: { id: currentTurnId } }; }
         if (!attached) return { turn: { id: currentTurnId } };
+        for (const threadName of options.titleEvents ?? []) notify("thread/name/updated", { threadId, threadName });
         // Synchronously complete BEFORE turn/start's ACK, exercising the real notification race.
         notify("item/completed", { threadId: options.foreignFinal ? randomUUID() : threadId, turnId: currentTurnId, item: { id: "final", type: "agentMessage", ...(options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified design" } });
         notify("item/completed", { threadId, turnId: currentTurnId, item: { id: "read", type: "commandExecution",
@@ -94,6 +96,17 @@ test("new read-only durable Web job buffers ACK race, returns exact final and ne
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
     expect(new WebDelegationStore(f.root).get(f.id)?.answer).toBe("verified design");
     expect(JSON.stringify(new WebDelegationStore(f.root).get(f.id))).not.toContain("fixture-result-not-in-journal");
+  } finally { f.cleanup(); }
+});
+test("initial delegated title gets one prefix; continuation and subsequent changes keep their title", async () => {
+  const f = await fixture({ titleEvents: ["Review context", "Personal rename"] });
+  try {
+    const first = await f.run();
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toEqual([{
+      method: "thread/name/set", params: { threadId: first.threadId, name: "[Tela Agent] Review context" },
+    }]);
+    await f.continue(first.id);
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(1);
   } finally { f.cleanup(); }
 });
 test("a write Web delegation requests and proves workspace-only Native sandbox", async () => {

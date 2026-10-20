@@ -11,6 +11,7 @@ import { indexedWebDelegationProgress, WebDelegationProgressProjection, type Web
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RESULT_BYTES = 512 * 1024;
+const DELEGATED_TITLE_PREFIX = "[Tela Agent] ";
 // A reporting threshold, never an admission bound on retained results.
 const RECORD_REVIEW_THRESHOLD = 64;
 // Reserve the full supported range; lowering a limit never revokes an active lease.
@@ -575,10 +576,22 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     const messages = new Map<string, { text: string; phase?: string }>();
     const pending: Array<[string, Record<string, unknown>]> = [];
     let toolItems = 0, turnId: string | undefined, eventCount = 0, reportedStatus: string | undefined;
+    let titleHandled = Boolean(parent);
     const resultItems = new Set<string>();
     const progressProjection = new WebDelegationProgressProjection();
     const accept = (method: string, event: Record<string, unknown>) => {
       if (event.threadId !== record!.threadId) return;
+      if (method === "thread/name/updated" && !titleHandled && typeof event.threadName === "string"
+        && event.threadName.trim()) {
+        titleHandled = true;
+        if (!event.threadName.startsWith(DELEGATED_TITLE_PREFIX)) {
+          // Best effort, once per new managed thread. Naming never delays the turn.
+          void rpc!.request("thread/name/set", {
+            threadId: record!.threadId, name: DELEGATED_TITLE_PREFIX + event.threadName,
+          }).catch(() => {});
+        }
+        return;
+      }
       if (++eventCount > 10_000) { rejectDone(Error("Web job event bound exceeded")); return; }
       if (!turnId) {
         if (pending.length >= 256) { rejectDone(Error("Web job ACK event bound exceeded")); return; }
