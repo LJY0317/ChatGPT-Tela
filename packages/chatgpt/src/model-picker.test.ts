@@ -11,6 +11,11 @@ import {
 } from "./model-picker";
 import { BROWSER_PAGE_AUTOMATION, type BrowserPageAutomation, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 
+function pickerSurface(page: BrowserPageAutomation): BrowserSurfaceLease {
+  return { leaseId: "fixture-picker-lease", taskId: "fixture-picker-task", epochId: "fixture-picker-epoch",
+    capability: (key: unknown) => key === BROWSER_PAGE_AUTOMATION ? page : undefined } as BrowserSurfaceLease;
+}
+
 describe("ChatGPT Web model route identity", () => {
   test("a dismissed menu that reopens simple does not falsely prove advanced preference", async () => {
     let opened = true, advanced = false, pointerActivations = 0;
@@ -33,7 +38,7 @@ describe("ChatGPT Web model route identity", () => {
       async typeFocusedEditable() {}, async clearFocusedEditable() {},
       async mutationRevision() { return 0; }, async waitForDomMutation() { return 1; },
     };
-    const surface = { capability: (capability: unknown) => capability === BROWSER_PAGE_AUTOMATION ? page : undefined } as BrowserSurfaceLease;
+    const surface = pickerSurface(page);
     await selectChatGptWebModel(surface, { familyKey: chatGptWebFamilyKey("Fixture"), effort: "low" });
     expect(pointerActivations).toBe(1);
     expect(opened).toBe(false);
@@ -60,7 +65,7 @@ describe("ChatGPT Web model route identity", () => {
       async typeFocusedEditable() {}, async clearFocusedEditable() {},
       async mutationRevision() { return 0; }, async waitForDomMutation() { return 1; },
     };
-    const surface = { capability: (capability: unknown) => capability === BROWSER_PAGE_AUTOMATION ? page : undefined } as BrowserSurfaceLease;
+    const surface = pickerSurface(page);
     await expect(selectChatGptWebModel(surface, { familyKey: chatGptWebFamilyKey("Old fixture family"), effort: "low" }))
       .rejects.toMatchObject({ code: "tela_web_model_unavailable" });
     expect(activations).toBe(0);
@@ -93,7 +98,7 @@ describe("ChatGPT Web model route identity", () => {
       async typeFocusedEditable() {}, async clearFocusedEditable() {},
       async mutationRevision() { return 0; }, async waitForDomMutation() { return 1; },
     };
-    const surface = { capability: (capability: unknown) => capability === BROWSER_PAGE_AUTOMATION ? page : undefined } as BrowserSurfaceLease;
+    const surface = pickerSurface(page);
     await selectChatGptWebModel(surface, { familyKey: chatGptWebFamilyKey("Fixture"), effort: "low" });
     expect(advancedActivations).toBe(1);
     expect(opened).toBe(false);
@@ -130,7 +135,7 @@ describe("ChatGPT Web model route identity", () => {
       async typeFocusedEditable() {}, async clearFocusedEditable() {},
       async mutationRevision() { return 0; }, async waitForDomMutation() { return 1; },
     };
-    const surface = { capability: (capability: unknown) => capability === BROWSER_PAGE_AUTOMATION ? page : undefined } as BrowserSurfaceLease;
+    const surface = pickerSurface(page);
     await selectChatGptWebModel(surface, { familyKey: chatGptWebFamilyKey("Fixture"), effort: "low" });
     expect(advancedActivations).toBe(1);
     expect(pointerActivations).toBe(1);
@@ -175,7 +180,7 @@ test("Power effort without geometry still requires exact semantic activation and
     async typeFocusedEditable() {}, async clearFocusedEditable() {},
     async mutationRevision() { return 0; }, async waitForDomMutation() { return 1; },
   };
-  const surface = { capability: (key: unknown) => key === BROWSER_PAGE_AUTOMATION ? page : undefined } as BrowserSurfaceLease;
+  const surface = pickerSurface(page);
   await selectChatGptWebModel(surface, { familyKey: chatGptWebFamilyKey("Fixture"), effort: "medium" });
   expect(value).toBe(1);
   expect(effortClicks).toBe(1);
@@ -218,7 +223,7 @@ test("duplicate visible composers cannot select even a unique model control", as
     async typeFocusedEditable() {}, async clearFocusedEditable() {},
     async mutationRevision() { return 0; }, async waitForDomMutation() { return 1; },
   };
-  const surface = { capability: (key: unknown) => key === BROWSER_PAGE_AUTOMATION ? page : undefined } as BrowserSurfaceLease;
+  const surface = pickerSurface(page);
   await expect(selectChatGptWebModel(surface, { familyKey: chatGptWebFamilyKey("Fixture"), effort: "low" }, controller.signal))
     .rejects.toThrow("composer-observation-stopped");
   expect(observedComposerCount).toBe(2);
@@ -263,8 +268,65 @@ for (const scenario of [
       async typeFocusedEditable() {}, async clearFocusedEditable() {},
       async mutationRevision() { return 0; }, async waitForDomMutation() { return 1; },
     };
-    const surface = { capability: (key: unknown) => key === BROWSER_PAGE_AUTOMATION ? page : undefined } as BrowserSurfaceLease;
+    const surface = pickerSurface(page);
     await expect(selectChatGptWebModel(surface, { familyKey: chatGptWebFamilyKey("Fixture"), effort: "low" })).rejects.toThrow();
     expect(activationOk).toBe(scenario.expected); expect(clicks).toBe(scenario.expected ? 1 : 0);
+  });
+}
+
+// Exercise the actual renderer observation, rather than returning a fabricated snapshot.
+for (const scenario of [
+  { name: "open menu with transparent presentation", open: true, rendered: true, expected: 1 },
+  { name: "closed retained menu", open: false, rendered: true, expected: 0 },
+  { name: "open control without rendered menu", open: true, rendered: false, expected: 0 },
+]) {
+  test(`picker uses owned open state: ${scenario.name}`, async () => {
+    let observation: { menuCount: number; controlOpen: boolean } | undefined;
+    let activations = 0;
+    class Element {
+      isConnected = true;
+      constructor(readonly kind: string) {}
+      getClientRects() { return this.kind === "menu" && !scenario.rendered ? [] : [{}]; }
+      getBoundingClientRect() { return { left: 0, top: 0, width: 10, height: 10 }; }
+      getAttribute(name: string) {
+        if (this.kind !== "control") return null;
+        if (name === "aria-controls") return "fixture-menu";
+        if (name === "aria-expanded") return String(scenario.open);
+        return null;
+      }
+      closest() { return form; }
+      querySelector() { return null; }
+      querySelectorAll() { return this.kind === "form" ? [control] : []; }
+      contains(element: unknown) { return element === this; }
+    }
+    const composer = new Element("composer"), form = new Element("form");
+    const control = new Element("control"), menu = new Element("menu");
+    const page: BrowserPageAutomation = {
+      async evaluate(source) {
+        if (source.includes("chatgpt-tela-model-picker-activate-v1")) { activations++; throw Error("unexpected activation"); }
+        observation = runInNewContext(`(${source})()`, {
+          HTMLElement: Element,
+          getComputedStyle: (element: Element) => ({
+            display: element.kind === "menu" && !scenario.rendered ? "none" : "block",
+            visibility: "visible", opacity: element.kind === "menu" ? "0" : "1",
+          }),
+          document: {
+            querySelectorAll: (selector: string) => selector.includes("prompt-textarea") ? [composer]
+              : selector.includes("button[") ? [control] : [],
+            getElementById: () => menu, elementFromPoint: () => control,
+            hasFocus: () => false, hidden: true, readyState: "complete", activeElement: control,
+          },
+        });
+        throw Error("fixture observation complete");
+      },
+      async pressKey() { activations++; }, async pointerClick() { activations++; },
+      async typeFocusedEditable() {}, async clearFocusedEditable() {},
+      async mutationRevision() { return 0; }, async waitForDomMutation() { return 1; },
+    };
+    const surface = pickerSurface(page);
+    await expect(selectChatGptWebModel(surface, { familyKey: chatGptWebFamilyKey("Fixture"), effort: "low" }))
+      .rejects.toThrow("fixture observation complete");
+    expect(observation).toMatchObject({ menuCount: scenario.expected, controlOpen: scenario.open });
+    expect(activations).toBe(0);
   });
 }

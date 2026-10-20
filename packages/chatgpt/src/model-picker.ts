@@ -127,6 +127,7 @@ const OBSERVE_MODEL_PICKER = String.raw`function () {
   const form = composer?.closest("form[data-chatgpt-composer], form");
   const controls = form ? [...form.querySelectorAll(${JSON.stringify(CHATGPT_MODEL_CONTROL_SELECTOR)})].filter(visible) : [];
   const control = controls.length === 1 ? controls[0] : undefined;
+  const controlOpen = Boolean(control && (control.getAttribute("aria-expanded") === "true" || control.getAttribute("data-state") === "open"));
   let menu;
   if (control) {
     const ownedId = control.getAttribute("aria-controls");
@@ -140,7 +141,9 @@ const OBSERVE_MODEL_PICKER = String.raw`function () {
     ));
     if (candidates.length === 1) menu = candidates[0];
   }
-  const menuCount = menu && visible(menu) ? 1 : 0;
+  // The owned control proves open/closed state. Presentation opacity can lag on
+  // background Electron surfaces even while family rows and effort controls exist.
+  const menuCount = menu && controlOpen && menu.getClientRects().length > 0 ? 1 : 0;
   const powerView = menu?.querySelector('[data-model-picker-view]');
   const rawView = powerView?.getAttribute('data-model-picker-view');
   const view = rawView === "simple" || rawView === "advanced" ? rawView : (menu ? "legacy" : undefined);
@@ -219,7 +222,7 @@ const OBSERVE_MODEL_PICKER = String.raw`function () {
       formButtonCount: form ? [...form.querySelectorAll('button')].filter(visible).length : 0,
     },
     controlCount: controls.length,
-    controlOpen: Boolean(control && (control.getAttribute("aria-expanded") === "true" || control.getAttribute("data-state") === "open")),
+    controlOpen,
     controlPoint: point(control),
     menuCount,
     view,

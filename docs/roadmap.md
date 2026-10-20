@@ -51,6 +51,8 @@ new runtimes, schedulers or queues. This list records product requirements, not 
 
 ## Remaining acceptance
 
+Validate model selection on background Web surfaces without toggling an already-open menu again.
+
 Use isolated owned tasks for archive/delete/manual-restore acceptance, current failure evidence for
 checkpoint/stream recovery, and actual effects for media delivery. Preserve active work and uncertain
 results. Track unsupported contracts explicitly instead of endlessly repeating historical failures.
