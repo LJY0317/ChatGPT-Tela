@@ -40,6 +40,14 @@ export interface ChatTextSearchResult {
   readonly scanComplete: boolean;
 }
 
+export interface ChatFilenameSearchResult {
+  readonly path: string;
+  readonly matches: readonly string[];
+  readonly entriesScanned: number;
+  readonly hasMore: boolean;
+  readonly scanComplete: boolean;
+}
+
 function portableRelative(root: string, absolute: string): string {
   const value = relative(root, absolute).split(sep).join("/");
   return value || ".";
@@ -59,6 +67,67 @@ function boundedPreview(line: string): string {
 
 export class ChatExplorationTools {
   constructor(readonly workspaces: ChatWorkspaceRegistry) {}
+
+  searchFiles(input: {
+    readonly workspaceId: string;
+    readonly query: string;
+    readonly path?: string;
+    readonly caseSensitive?: boolean;
+    readonly maxResults?: number;
+  }): ChatFilenameSearchResult {
+    const workspace = this.workspaces.get(input.workspaceId);
+    if (!input.query || input.query.includes("\u0000")) throw new Error("filename query is invalid");
+    const maxResults = input.maxResults ?? 50;
+    if (!Number.isSafeInteger(maxResults) || maxResults < 1 || maxResults > MAX_SEARCH_RESULTS) {
+      throw new Error(`max_results must be an integer from 1 to ${MAX_SEARCH_RESULTS}`);
+    }
+    const start = input.path === undefined || input.path === "."
+      ? workspace.root : resolveExistingWorkspacePath(workspace.root, input.path);
+    const kind = lstatSync(start);
+    if (!kind.isFile() && !kind.isDirectory()) throw new Error("search path is not a regular file or directory");
+    const query = input.caseSensitive ? input.query : input.query.toLocaleLowerCase();
+    const matches: string[] = [];
+    const directories = kind.isDirectory() ? [start] : [];
+    let entriesScanned = 0;
+    let directoriesScanned = 0;
+    let scanComplete = true;
+    let hasMore = false;
+    const match = (absolute: string) => {
+      const name = absolute.split(sep).at(-1) ?? "";
+      if ((input.caseSensitive ? name : name.toLocaleLowerCase()).includes(query)) {
+        if (matches.length === maxResults) { hasMore = true; scanComplete = false; }
+        else matches.push(portableRelative(workspace.root, absolute));
+      }
+    };
+    if (kind.isFile()) { entriesScanned++; match(start); }
+    while (directories.length && !hasMore) {
+      if (directoriesScanned >= MAX_SEARCH_DIRECTORIES || entriesScanned >= MAX_SEARCH_FILES) {
+        scanComplete = false;
+        break;
+      }
+      const directory = directories.shift()!;
+      directoriesScanned++;
+      let entries: Dirent[];
+      try { entries = readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)); }
+      catch { scanComplete = false; continue; }
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) continue;
+        const absolute = resolve(directory, entry.name);
+        if (entry.isDirectory()) {
+          if (!SKIPPED_SEARCH_DIRECTORIES.has(entry.name)) directories.push(absolute);
+        } else if (entry.isFile()) {
+          entriesScanned++;
+          match(absolute);
+          if (hasMore || entriesScanned >= MAX_SEARCH_FILES) {
+            scanComplete = false;
+            break;
+          }
+        }
+      }
+    }
+    return Object.freeze({ path: portableRelative(workspace.root, start),
+      matches: Object.freeze(matches), entriesScanned, hasMore, scanComplete });
+  }
 
   listDirectory(input: {
     readonly workspaceId: string;

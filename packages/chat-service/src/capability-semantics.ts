@@ -17,7 +17,7 @@ export const CHAT_CAPABILITY_SEMANTICS: Readonly<Record<TelaChatCapability, Chat
   export_file: descriptor("service_state", "workspace", "inspect_before_repeat", "bounded_result"),
   open_file_import: descriptor("service_state", "workspace", "inspect_before_repeat", "user_confirmation"),
   import_file: descriptor("workspace_write", "workspace", "inspect_before_repeat", "workspace_diff"),
-  list_directory: read, search_text: read, list_skills: read, read_skill: read, read: read, read_many: read,
+  list_directory: read, search_text: read, search_files: read, list_skills: read, read_skill: read, read: read, view_image: read, read_many: read,
   apply_patch: descriptor("workspace_write", "workspace", "inspect_before_repeat", "workspace_diff"),
   // A workspace selects cwd, not a sandbox for arbitrary shell effects.
   exec_command: descriptor("arbitrary_execution", "workspace", "same_operation_id", "process_status"),

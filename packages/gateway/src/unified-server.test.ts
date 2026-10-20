@@ -53,6 +53,10 @@ describe("unified ChatGPT Tela development MCP", () => {
     const client = new Client({ name: "tela-unified-test", version: "0.0.0" }, { capabilities: {} });
     try {
       await client.connect(transport as unknown as Transport);
+      const instructions = client.getInstructions() ?? "";
+      expect(instructions).toContain("Web workspace work through Tela Chat");
+      expect(instructions).toContain("exact active Native Codex turns through Codex");
+      expect(instructions).toContain("must never switch the request to the other backend");
       const listed = await client.listTools();
       const expected = [
         ...UNIFIED_CHAT_TOOL_DEFINITIONS.map(tool => tool.name),

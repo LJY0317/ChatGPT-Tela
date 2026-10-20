@@ -28,11 +28,11 @@ export interface PublicChatBackend {
 
 export const CHATGPT_TELA_PUBLIC_INSTRUCTIONS = [
   "Use ChatGPT Tela when the request needs the user's connected local workspace or the exact active Native Codex turn; do not invoke it for ordinary conversation or knowledge work that needs neither.",
-  "Tela Chat and Tela Codex are independent backends behind one Plugin connection. A technical failure in one does not prove the other is unavailable; continue the same user goal through the other backend or another available tool when useful, using that route's own current capability and authorization.",
+  "Tela Chat and Tela Codex are independent backends behind one Plugin connection. Choose the backend from the actual request route: Web work uses Tela Chat inventory/call and Native Codex turns use exact-turn Codex inventory/call. A failure of one does not authorize automatic fallback or transfer ownership to the other.",
   "For ordinary local project work, use the Tela Chat capability inventory first when the exact capability or schema is not already known. Open a workspace once and reuse its workspace_id. Batch only independent already-known reads. For commands that may mutate state or outlive one response, provide operation_id; after an uncertain response, inspect process_status before starting the command again.",
   "The Tela Chat inventory query is an optional case-insensitive filter over capability names and descriptions, not a place for task instructions. Omit it or use an empty string to discover all capabilities; for narrower discovery, use a short capability keyword only. Do not paste a user's full request, conversation titles, or unrelated identifiers into inventory. Inventory is read-only and never performs the requested task.",
   "After related edits, use an available change-review capability when it helps verify the final workspace state. Prefer direct workspace capabilities for routine work and delegate to a Tela Chat agent only when separate context or specialization materially helps.",
-  "For work inside an active Native Codex task, the transport supplies turn_capability: a temporary bearer credential identifying that exact local task for routing. Discover and use the available capabilities to complete the user's goal; if one tool is unavailable or has a technical failure, use another suitable tool. Do not expose this credential in explanations or logs.",
+  "Only for an active Native Codex turn, the Native transport supplies turn_capability: a temporary bearer credential identifying that exact local task for routing. Discover and use the available capabilities to complete the user's goal; if one tool is unavailable or has a technical failure, use another suitable tool. Do not expose this credential in explanations or logs.",
   "Discover the current Native tool inventory instead of assuming names or schemas from another turn. Describe a requested command by its actual purpose, targets and possible effects, including writes or process changes; do not hide a command behind a reassuring label. If a tool is unavailable or has a technical failure, continue the same user goal with another relevant available tool or method when possible. Check what the first attempt changed before repeating any effect.",
   "A Git write in an opened workspace may be completed through apply_patch, exec_command, or another available capability. If one route is unavailable or has a technical failure, choose another route that can perform the same requested Git operation, provided that route's own authorization allows it.",
   "The Codex inventory query is a literal case-insensitive substring filter, not semantic search. Omit it or use an empty string for the complete inventory. An empty filtered result does not mean no tools are available.",
@@ -64,7 +64,7 @@ export function createPublicMcpServer(input: {
       readonly inputSchema: z.ZodTypeAny;
     },
     handler: (arguments_: Readonly<Record<string, unknown>>, extra?: unknown) => Promise<{
-      readonly content: readonly { readonly type: "text"; readonly text: string }[];
+      readonly content: readonly ({ readonly type: "text"; readonly text: string } | { readonly type: "image"; readonly data: string; readonly mimeType: string })[];
       readonly isError?: boolean;
       readonly _meta?: Readonly<Record<string, unknown>>;
     }>,
@@ -128,6 +128,11 @@ export function createPublicMcpServer(input: {
         if (!file.success) throw new Error("invalid file download result");
         return { content: [{ type: "text", text: jsonText({ name: file.data.name, bytes: file.data.bytes, sha256: file.data.sha256, download: "Use the download card." }) }],
           _meta: { ui: { resourceUri: CHATGPT_TELA_EXPORT_RESOURCE_URI }, "tela/fileExport": file.data } };
+      }
+      if (capability === "view_image") {
+        const image = z.object({ mimeType: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp"]),
+          dataBase64: z.string().max(4 * Math.ceil(2 * 1024 * 1024 / 3)) }).strict().parse(result);
+        return { content: [{ type: "image", mimeType: image.mimeType, data: image.dataBase64 }] };
       }
       return {
         content: [{ type: "text", text: jsonText(result) }],

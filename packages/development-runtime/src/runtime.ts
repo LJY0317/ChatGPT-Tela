@@ -65,6 +65,8 @@ export interface DevelopmentWebTurnPlan {
   };
   readonly physicalLimits?: ChatGptWebPhysicalLimits;
   readonly diagnostics?: Readonly<Record<string, string | number | boolean>>;
+  /** Disabled compatibility path for isolated historical Native tool roundtrips. */
+  readonly legacyNativeToolBridge?: boolean;
   /**
    * Planner-owned transactional settlement. Implementations may advance retained-context state only
    * after a completed Web answer bound to its physical surface. Failed/ambiguous turns invalidate
@@ -240,11 +242,13 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
         let rejectedBeforeAcquisition = false;
         try {
           signal.throwIfAborted();
-          const toolBridge = {
+          // Web requests use the independent Tela Chat connector. The Native
+          // tool bridge is retained only for explicitly requested legacy fixtures.
+          const toolBridge = plan.legacyNativeToolBridge === true ? {
             protocol: "mcp" as const,
             contract: webMcpContract,
             turnCapability: turn.capability,
-          };
+          } : undefined;
           // A deterministic size refusal must not retire a reusable Web page,
           // open a fresh Temporary Chat, or spend a model turn on preload.
           try {
@@ -253,7 +257,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
               ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
               ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
               ...(plan.media ? { media: plan.media } : {}),
-              toolBridge,
+              ...(toolBridge ? { toolBridge } : {}),
             });
           } catch (error) {
             rejectedBeforeAcquisition = true;
@@ -323,7 +327,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
             ...(plan.media ? { media: plan.media } : {}),
             ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
-            toolBridge,
+            ...(toolBridge ? { toolBridge } : {}),
             ...(plan.browserModel ? {
               prepareForSubmit: (surface, signal) => selectChatGptWebModel(
                 surface,

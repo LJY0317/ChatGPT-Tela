@@ -80,6 +80,23 @@ function positive(value: number | undefined, fallback: number, maximum: number, 
 export class ChatFileTools {
   constructor(readonly workspaces: ChatWorkspaceRegistry) {}
 
+  viewImage(input: { readonly workspaceId: string; readonly path: string }) {
+    const workspace = this.workspaces.get(input.workspaceId);
+    const absolute = resolveExistingWorkspacePath(workspace.root, input.path);
+    const stat = statSync(absolute);
+    if (!stat.isFile()) throw new Error("image target is not a regular file");
+    if (stat.size > MAX_FILE_BYTES) throw new Error(`image target exceeds ${MAX_FILE_BYTES} bytes`);
+    const bytes = readFileSync(absolute);
+    // Screenshots and generated artifacts often have no extension. Classify by
+    // their actual byte signature, never by a user-controlled path suffix.
+    const mimeType = bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")) ? "image/png"
+      : bytes.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex")) ? "image/jpeg"
+      : (bytes.toString("ascii", 0, 6) === "GIF87a" || bytes.toString("ascii", 0, 6) === "GIF89a") ? "image/gif"
+      : bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP" ? "image/webp" : undefined;
+    if (!mimeType) throw new Error("image format is unsupported or does not match file contents");
+    return Object.freeze({ mimeType, dataBase64: bytes.toString("base64") });
+  }
+
   read(input: {
     readonly workspaceId: string;
     readonly path: string;

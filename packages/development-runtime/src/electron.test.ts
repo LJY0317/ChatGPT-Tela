@@ -417,7 +417,7 @@ describe("Electron development runtime composition", () => {
       expect(provider.submitted?.physicalContext.segments[0]).toMatchObject({
         type: "revision", kind: "system", content: "I".repeat(80),
       });
-      expect(provider.submitted?.toolBridge).toBeDefined();
+      expect(provider.submitted?.toolBridge).toBeUndefined();
       expect(await cache.list("thread-1")).toHaveLength(1);
       expect(windows).toHaveLength(2);
       expect(windows[0]?.destroyed).toBe(true); // one-purpose checkpoint surface

@@ -144,9 +144,11 @@ test("readable original Legacy turn keeps one owner through Web progress, authen
       async navigate() {}, async reveal() {}, async hide() {}, async close() { surfaceClosures++; },
     })),
     provider, mcp: { kind: "external", abi: "stable" },
-    planWebTurn: createNativeRequestDevelopmentWebTurnPlanner({
-      compactionHistory: async () => { throw Error("Readable current context must not page Legacy history"); },
-    }),
+    async planWebTurn(turn, request, preparation) {
+      return { ...await createNativeRequestDevelopmentWebTurnPlanner({
+        compactionHistory: async () => { throw Error("Readable current context must not page Legacy history"); },
+      })(turn, request, preparation), legacyNativeToolBridge: true };
+    },
   });
   const bridge = await startCodexBridgeMcpHttpServer({ turns: runtime.turns });
   try {
@@ -263,9 +265,11 @@ test("losing the original Native ACK while its Web tool is pending revokes the w
       async navigate() {}, async reveal() {}, async hide() {}, async close() {},
     })),
     provider, mcp: { kind: "external", abi: "stable" },
-    planWebTurn: createNativeRequestDevelopmentWebTurnPlanner({
-      compactionHistory: async () => { throw Error("Legacy paging must remain disabled"); },
-    }),
+    async planWebTurn(turn, request, preparation) {
+      return { ...await createNativeRequestDevelopmentWebTurnPlanner({
+        compactionHistory: async () => { throw Error("Legacy paging must remain disabled"); },
+      })(turn, request, preparation), legacyNativeToolBridge: true };
+    },
   });
   const bridge = await startCodexBridgeMcpHttpServer({ turns: runtime.turns });
   try {

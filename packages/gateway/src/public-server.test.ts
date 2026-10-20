@@ -137,6 +137,10 @@ describe("ChatGPT Tela frozen ABI", () => {
       expect(chatCall._meta).toBeUndefined();
       expect(chatCalls).toEqual([{ capability: "future_chat_capability_2099", arguments_: { future: true } }]);
 
+      const imageCall = await client.callTool({ name: CHATGPT_TELA_CHAT_CAPABILITY_CALL,
+        arguments: { capability: "view_image", arguments: { workspace_id: "fixture", path: "sample.png" } } });
+      expect(imageCall.isError).toBe(true); // Fixture backend supplies no image receipt.
+
       const reviewCall = await client.callTool({
         name: CHATGPT_TELA_CHAT_CAPABILITY_CALL,
         arguments: { capability: "show_changes", arguments: { workspace_id: "chatws_fixture" } },

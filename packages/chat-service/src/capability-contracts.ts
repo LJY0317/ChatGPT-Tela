@@ -89,6 +89,17 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
     }, ["workspace_id", "query"]),
   },
   {
+    capability: "search_files",
+    description: "Find files by a literal filename substring inside an opened workspace without reading file contents or running shell commands. Skips dependency/build trees and symlinks; scanComplete=false marks partial results.",
+    inputSchema: object({
+      workspace_id: workspaceId,
+      query: string(4 * 1024),
+      path,
+      case_sensitive: boolean,
+      max_results: integer(1, 200),
+    }, ["workspace_id", "query"]),
+  },
+  {
     capability: "list_skills",
     description: "List standard model-invocable skills available from the opened project's .agents/skills and the user's standard ~/.agents/skills roots. Project skills override same-named global skills, including disable-model-invocation. Duplicate names within one root are rejected.",
     inputSchema: object({ workspace_id: workspaceId, query: string(2_048) }, ["workspace_id"]),
@@ -108,6 +119,11 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
     capability: "read",
     description: "Read a bounded line range from one file inside an opened Tela Chat workspace.",
     inputSchema: object({ workspace_id: workspaceId, path, offset: integer(1), limit: integer(1, 400) }, ["workspace_id", "path"]),
+  },
+  {
+    capability: "view_image",
+    description: "View a PNG, JPEG, GIF or WebP image in the opened workspace (up to 2 MiB). Returns the image to the model as image content, without storing a copy or starting a helper.",
+    inputSchema: object({ workspace_id: workspaceId, path }, ["workspace_id", "path"]),
   },
   {
     capability: "read_many",

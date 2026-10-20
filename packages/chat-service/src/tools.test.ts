@@ -203,6 +203,44 @@ describe("Tela Chat first vertical slice", () => {
     }
   });
 
+  test("filename search finds bounded workspace paths without inspecting file contents or following links", async () => {
+    const f = fixture();
+    try {
+      mkdirSync(join(f.root, "src"));
+      mkdirSync(join(f.root, "node_modules", "ignored"), { recursive: true });
+      writeFileSync(join(f.root, "src", "Account.ts"), Buffer.from([0, 1, 2]));
+      writeFileSync(join(f.root, "src", "account.test.ts"), "plain");
+      writeFileSync(join(f.root, "node_modules", "ignored", "account.ts"), "ignored");
+      const workspace = await f.runtime.call("open_workspace", { path: f.root }) as { id: string };
+      const found = await f.runtime.call("search_files", { workspace_id: workspace.id, query: "account" }) as {
+        matches: readonly string[]; scanComplete: boolean; entriesScanned: number;
+      };
+      expect(found.matches).toEqual(["src/account.test.ts", "src/Account.ts"]);
+      expect(found.scanComplete).toBe(true);
+      expect(found.entriesScanned).toBeGreaterThanOrEqual(3);
+      const exact = await f.runtime.call("search_files", { workspace_id: workspace.id,
+        query: "Account", case_sensitive: true, max_results: 1 }) as {
+          matches: readonly string[]; hasMore: boolean; scanComplete: boolean;
+        };
+      expect(exact.matches).toEqual(["src/Account.ts"]);
+      expect(exact.hasMore).toBe(false);
+      expect(exact.scanComplete).toBe(true);
+      expect((await f.runtime.call("search_files", { workspace_id: workspace.id,
+        query: "Account", case_sensitive: true, path: "src" }) as { matches: readonly string[] }).matches)
+        .toEqual(["src/Account.ts"]);
+      const bounded = await f.runtime.call("search_files", { workspace_id: workspace.id,
+        query: "account", max_results: 1 }) as { matches: readonly string[]; hasMore: boolean; scanComplete: boolean };
+      expect(bounded.matches).toEqual(["src/account.test.ts"]);
+      expect(bounded.hasMore).toBe(true);
+      expect(bounded.scanComplete).toBe(false);
+      await expect(f.runtime.call("search_files", { workspace_id: "other", query: "Account" })).rejects.toThrow();
+      await expect(f.runtime.call("search_files", { workspace_id: workspace.id, query: "Account", path: "../" })).rejects.toThrow();
+    } finally {
+      await f.runtime.close();
+      removeFixture(f.base);
+    }
+  });
+
   test("read_many reports each path separately without erasing a valid neighbor or exposing host paths",async()=>{
     const f=fixture();
     try{
@@ -350,4 +388,37 @@ describe("Tela Chat first vertical slice", () => {
       removeFixture(base);
     }
   });
+});
+
+
+test("view_image returns actual workspace image bytes and refuses a mislabeled file", async () => {
+  const f = fixture();
+  try {
+    const workspace = await f.runtime.call("open_workspace", { path: f.root }) as { id: string };
+    const png = Buffer.from("89504e470d0a1a0a0000000049454e44ae426082", "hex");
+    writeFileSync(join(f.root, "sample.png"), png);
+    const image = await f.runtime.call("view_image", { workspace_id: workspace.id, path: "sample.png" }) as { mimeType: string; dataBase64: string };
+    expect(image.mimeType).toBe("image/png");
+    expect(Buffer.from(image.dataBase64, "base64")).toEqual(png);
+    writeFileSync(join(f.root, "capture"), png);
+    expect(await f.runtime.call("view_image", { workspace_id: workspace.id, path: "capture" }))
+      .toMatchObject({ mimeType: "image/png", dataBase64: png.toString("base64") });
+    writeFileSync(join(f.root, "image.jpg"), png);
+    expect(await f.runtime.call("view_image", { workspace_id: workspace.id, path: "image.jpg" }))
+      .toMatchObject({ mimeType: "image/png" });
+    for (const [filename, bytes, mimeType] of [
+      ["picture", Buffer.from("ffd8ffe000", "hex"), "image/jpeg"],
+      ["animation", Buffer.from("GIF89a000000", "ascii"), "image/gif"],
+      ["web-capture", Buffer.from("RIFF0000WEBP", "ascii"), "image/webp"],
+    ] as const) {
+      writeFileSync(join(f.root, filename), bytes);
+      expect(await f.runtime.call("view_image", { workspace_id: workspace.id, path: filename }))
+        .toMatchObject({ mimeType });
+    }
+    writeFileSync(join(f.root, "wrong.png"), "not an image");
+    await expect(f.runtime.call("view_image", { workspace_id: workspace.id, path: "wrong.png" })).rejects.toThrow("unsupported");
+  } finally {
+    await f.runtime.close();
+    removeFixture(f.base);
+  }
 });

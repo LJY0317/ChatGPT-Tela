@@ -58,9 +58,11 @@ export const TELA_CHAT_BASE_CAPABILITIES = Object.freeze([
   "open_workspace",
   "list_directory",
   "search_text",
+  "search_files",
   "list_skills",
   "read_skill",
   "read",
+  "view_image",
   "read_many",
   "apply_patch",
   "exec_command",
@@ -340,6 +342,14 @@ export function createChatToolRuntime(input: {
               : (() => { throw new Error("case_sensitive must be a boolean"); })()),
             ...(optionalInteger(args.max_results, "max_results") === undefined ? {} : { maxResults: optionalInteger(args.max_results, "max_results")! }),
           });
+        case "search_files":
+          return exploration.searchFiles({
+            workspaceId: text(args.workspace_id, "workspace_id"),
+            query: multilineText(args.query, "query", 4 * 1024),
+            ...(optionalText(args.path, "path") === undefined ? {} : { path: optionalText(args.path, "path")! }),
+            ...(optionalBoolean(args.case_sensitive, "case_sensitive") === undefined ? {} : { caseSensitive: optionalBoolean(args.case_sensitive, "case_sensitive")! }),
+            ...(optionalInteger(args.max_results, "max_results") === undefined ? {} : { maxResults: optionalInteger(args.max_results, "max_results")! }),
+          });
         case "list_skills":
           return skills.list(
             text(args.workspace_id, "workspace_id"),
@@ -357,6 +367,8 @@ export function createChatToolRuntime(input: {
           return files.read({ workspaceId: text(args.workspace_id, "workspace_id"), path: text(args.path, "path"),
             ...(optionalInteger(args.offset, "offset") === undefined ? {} : { offset: optionalInteger(args.offset, "offset")! }),
             ...(optionalInteger(args.limit, "limit") === undefined ? {} : { limit: optionalInteger(args.limit, "limit")! }) });
+        case "view_image":
+          return files.viewImage({ workspaceId: text(args.workspace_id, "workspace_id"), path: text(args.path, "path") });
         case "read_many": {
           if (!Array.isArray(args.reads)) throw new Error("reads must be an array");
           return files.readMany({ workspaceId: text(args.workspace_id, "workspace_id"), reads: args.reads.map((entry, index) => {

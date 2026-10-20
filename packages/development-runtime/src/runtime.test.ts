@@ -411,6 +411,12 @@ describe("development runtime composition", () => {
       };
     });
     const provider = new RetainedFinalProvider();
+    const submitted: WebTurnRequest[] = [];
+    const submit = provider.submitTurn.bind(provider);
+    provider.submitTurn = async (surface, request) => {
+      submitted.push(request);
+      return submit(surface, request);
+    };
     let committedSurface: string | undefined;
     const runtime = await startDevelopmentRuntime({
       currentTurnSource: sequentialSource,
@@ -464,6 +470,12 @@ describe("development runtime composition", () => {
       expect(await second.text()).toContain("done:turn-2");
 
       expect(browserCreations).toBe(1);
+      // Even when the Native request advertises a command tool, the default
+      // Web route carries no exact Native turn bearer to either submission.
+      expect(submitted).toHaveLength(2);
+      expect(submitted.map(request => Object.hasOwn(request, "toolBridge"))).toEqual([false, false]);
+      expect(submitted.map(request => request.physicalContext.mode)).toEqual(["full", "retained-delta"]);
+      expect(submitted[0]!.webEpochId).toBe(submitted[1]!.webEpochId);
       expect(provider.surfaceLeaseIds).toHaveLength(2);
       expect(new Set(provider.surfaceLeaseIds).size).toBe(1);
       expect(browserEvents).toEqual([]);
@@ -726,6 +738,7 @@ describe("development runtime composition", () => {
       planWebTurn(turn) {
         return {
           nativeTaskId: turn.channel.binding.authority.threadId,
+          legacyNativeToolBridge: true,
           webEpochId: "epoch-1",
           physicalContext: {
             headRevisionId: "revision-1",
@@ -786,6 +799,7 @@ describe("development runtime composition", () => {
       planWebTurn(turn) {
         return {
           nativeTaskId: turn.channel.binding.authority.threadId,
+          legacyNativeToolBridge: true,
           webEpochId: "epoch-stable",
           physicalContext: {
             headRevisionId: "revision-stable",
@@ -835,6 +849,7 @@ describe("development runtime composition", () => {
       planWebTurn(turn) {
         return {
           nativeTaskId: turn.channel.binding.authority.threadId,
+          legacyNativeToolBridge: true,
           webEpochId: "epoch-stable-external",
           physicalContext: {
             headRevisionId: "revision-stable-external",
@@ -1289,7 +1304,7 @@ test("Native cancellation immediately after context planning releases its pendin
       const result = await actualPlanner(turn, request, preparation);
       planned += 1;
       if (planned === 1) firstOwner.abort(new Error("original Native turn retired after planning"));
-      return result;
+      return { ...result, legacyNativeToolBridge: true };
     },
   });
   const request = () => ({
@@ -1326,6 +1341,7 @@ test("same Native turn continuation runs two settled Web cycles through the real
   const originalSubmit = provider.submitTurn.bind(provider);
   provider.submitTurn = async (surface, request) => { submitted.push(request); return originalSubmit(surface, request); };
   let acquisitions = 0;
+  const retainedPlanner = createNativeRequestDevelopmentWebTurnPlanner();
   const runtime = await startDevelopmentRuntime({
     currentTurnSource: { ...source, async watchTurn() { return { signal: owner.signal, inputs: () => inputs, async close() {} }; } },
     browserHost: new ControlledBrowserHost(async () => {
@@ -1333,7 +1349,9 @@ test("same Native turn continuation runs two settled Web cycles through the real
       return { async navigate() {}, async reveal() {}, async hide() {}, async close() {},
         capability(capability) { return capability === BROWSER_DOCUMENT_LIFETIME ? { current: () => ({ generation: 1, signal: new AbortController().signal }) } as never : undefined; } };
     }), provider, mcp: { kind: "external", abi: "stable" },
-    planWebTurn: createNativeRequestDevelopmentWebTurnPlanner(),
+    async planWebTurn(turn, request, preparation) {
+      return { ...await retainedPlanner(turn, request, preparation), legacyNativeToolBridge: true };
+    },
   });
   try {
     const first = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, nativeRequest([{ role: "user", content: "initial" }]));
