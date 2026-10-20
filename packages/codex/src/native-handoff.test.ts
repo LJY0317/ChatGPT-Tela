@@ -66,12 +66,11 @@ function source(options: {
 }
 
 describe("explicit Native-owned Web handoff, read-only public contract", () => {
-  test("indexed Native final_answer handoff is accepted while commentary is rejected", async () => {
-    const final = source({ phase: "final_answer" });
-    expect((await final.reader.latest("thread-one", "web-turn"))?.summary)
-      .toBe("Verified work: two bounded tasks completed; next inspect remaining actions.");
-    await expect(source({ phase: "commentary" }).reader.latest("thread-one", "web-turn"))
-      .rejects.toThrow("no verified final answer");
+  test("a completed single JSON handoff does not depend on the display phase", async () => {
+    for (const phase of ["final_answer", "finalAnswer", "commentary"]) {
+      expect((await source({ phase }).reader.latest("thread-one", "web-turn"))?.summary)
+        .toBe("Verified work: two bounded tasks completed; next inspect remaining actions.");
+    }
   });
   test("an active Native thread changing its newest turn during public handoff proof cannot authorize stale Web context", async () => {
     const digest = createHash("sha256").update(json).digest("hex");

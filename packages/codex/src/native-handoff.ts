@@ -123,11 +123,10 @@ function parseHandoff(turn: Record<string, unknown>, threadId: string, currentTu
     || items[items.length - 1]?.type !== "agentMessage") {
     rejectVisibleHandoffActivity("source_turn");
   }
-  const answer = record([...turn.items].reverse().find(item =>
-    record(item)?.type === "agentMessage"));
-  if (!answer || !checkId(answer.id) || typeof answer.text !== "string"
-    || (answer.phase !== undefined && answer.phase !== null
-      && answer.phase !== "final_answer" && answer.phase !== "finalAnswer")) {
+  // The completed turn has exactly one assistant answer, last in the turn.
+  // Its explicit JSON contract proves the handoff; display phase is not authority.
+  const answer = items.at(-1);
+  if (!answer || !checkId(answer.id) || typeof answer.text !== "string") {
     throw new Error("Native explicitly requested handoff has no verified final answer");
   }
   if (Buffer.byteLength(answer.text, "utf8") > MAX_HANDOFF_BYTES) {
