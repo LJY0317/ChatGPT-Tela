@@ -1,12 +1,32 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
-import { WebDelegationStore, type WebDelegationRecord } from "./web-delegation";
+import { WebDelegationStore, linkNativeThreadForRetention, type WebDelegationRecord } from "./web-delegation";
 import { settleWebDelegationRetention, startWebDelegationRetention } from "./web-delegation-retention";
 const DAY = 86_400_000;
+test("exact Native creation ACK links once without sending or reserving a task", async () => {
+  const f = fixture();
+  try {
+    const threadId = randomUUID(), turnId = randomUUID(), cwd = realpathSync(f.root);
+    const receipt = { slot: 2, cwd, createdAt: f.origin,
+      accountFingerprint: f.record.owner.accountFingerprint, threadId, turnId };
+    const rpc = { async close() {}, async request(method: string) {
+      if (method === "thread/read") return { thread: { id: threadId, cwd, historyMode: "paginated" } };
+      if (method === "thread/turns/list") return { data: [{ id: turnId, status: "completed" }], nextCursor: null };
+      throw Error(`Unexpected mutation ${method}`);
+    } };
+    const adapters = { ...f.adapters, connect: async () => rpc as any };
+    const linked = await linkNativeThreadForRetention(adapters, receipt, new AbortController().signal);
+    expect(f.store.get(linked.id)?.origin).toBe("native-thread-link");
+    expect(f.store.get(linked.id)?.state).toBe("linked");
+    expect(f.store.capacity(2, "read", f.root).total.used).toBe(0);
+    await expect(linkNativeThreadForRetention(adapters, receipt, new AbortController().signal)).rejects.toThrow("already managed");
+    await expect(linkNativeThreadForRetention(adapters, { ...receipt, accountFingerprint: "f".repeat(64) }, new AbortController().signal)).rejects.toThrow("owner mismatch");
+  } finally { f.cleanup(); }
+});
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "tela-retention-")), store = new WebDelegationStore(root);
   const origin = 1_700_000_000_000;

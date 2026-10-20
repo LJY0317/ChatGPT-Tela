@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, renameSync, linkSync, writeFileSync, fsyncSync, realpathSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import type { CodexWebDelegationCapacityContract, WebDelegationBlockCode, WebDelegationMode } from "@chatgpt-tela/service-protocol";
@@ -81,7 +81,7 @@ function hasNativeToolResult(item: Record<string, unknown> | undefined, complete
     || ["failed", "error", "interrupted"].includes(String(item.status))) return false;
   return RESULT_FIELDS.some(key => Object.hasOwn(item, key) && boundedResultPresent(item[key]));
 }
-export type WebDelegationState = "reserved" | "creating" | "created" | "submitting" | "running" | "completed" | "failed" | "uncertain";
+export type WebDelegationState = "reserved" | "creating" | "created" | "submitting" | "running" | "completed" | "failed" | "uncertain" | "linked";
 export interface WebDelegationRecord {
   readonly id: string;
   readonly slot: number;
@@ -89,7 +89,7 @@ export interface WebDelegationRecord {
   readonly mode?: WebDelegationMode;
   readonly cwd: string;
   readonly createdAt: number;
-  readonly promptHash: string;
+  readonly promptHash?: string;
   readonly owner: LocalProfileBinding;
   readonly session: TrustedNativeProfileSession;
   readonly selection?: DelegationWebModel;
@@ -110,8 +110,21 @@ export interface WebDelegationRecord {
   readonly toolResultCoverage?: "live-events" | "history-summary";
   readonly parentJobId?: string;
   readonly checkoutRoot?: string;
+  /** Explicit link to a separately created Native thread, never inferred from history. */
+  readonly origin?: "native-thread-link";
   readonly failure?: "owner_changed" | "transport_or_ack" | "turn_failed" | "result_unavailable";
 }
+
+/** Trusted coordinator's compact evidence of an explicitly managed Native creation. */
+export interface NativeThreadOwnershipEvidence {
+  readonly slot: number;
+  readonly cwd: string;
+  readonly createdAt: number;
+  readonly accountFingerprint: string;
+  readonly threadId: string;
+  readonly turnId: string;
+}
+
 /** A proven final can be retrieved even when the Native turn itself failed.
  * Failure remains failure; only completed jobs may authorize continuations. */
 export function verifiedWebDelegationAnswer(record: WebDelegationRecord): string | undefined {
@@ -242,7 +255,7 @@ export class WebDelegationStore {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > MAX_RESULT_BYTES + 32 * 1024) throw Error("Invalid Web job record");
     const value = JSON.parse(readFileSync(path, "utf8")) as WebDelegationRecord;
-    if (value.id !== id || !UUID.test(value.id) || !["reserved", "creating", "created", "submitting", "running", "completed", "failed", "uncertain"].includes(value.state)) throw Error("Invalid Web job record");
+    if (value.id !== id || !UUID.test(value.id) || !["reserved", "creating", "created", "submitting", "running", "completed", "failed", "uncertain", "linked"].includes(value.state)) throw Error("Invalid Web job record");
     return value;
   }
   get(id: string): WebDelegationRecord | undefined {
@@ -271,6 +284,17 @@ export class WebDelegationStore {
       const fd = openSync(`${this.#path(id)}.collected`, "wx", 0o600);
       try { writeFileSync(fd, String(now)); fsyncSync(fd); } finally { closeSync(fd); }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  }
+  /** An explicitly linked thread has no task permit and cannot submit a model turn. */
+  link(record: WebDelegationRecord): void {
+    if (record.state !== "linked" || record.origin !== "native-thread-link"
+      || !UUID.test(record.id) || !record.threadId || !UUID.test(record.threadId)
+      || !record.turnId || !UUID.test(record.turnId)
+      || this.records().some(existing => existing.slot === record.slot && existing.threadId === record.threadId)) {
+      throw Error("Invalid or already managed Native thread link");
+    }
+    const fd = openSync(this.#path(record.id), "wx", 0o600);
+    try { writeFileSync(fd, JSON.stringify(record)); fsyncSync(fd); } finally { closeSync(fd); }
   }
   reserve(record: WebDelegationRecord): void {
     const mode = record.mode ?? "read";
@@ -438,6 +462,36 @@ async function findUnacknowledgedFirstTurn(
   if (part?.type !== "text" || typeof part.text !== "string"
     || createHash("sha256").update(part.text).digest("hex") !== record.promptHash) return undefined;
   return turn;
+}
+
+/** Explicit coordinator adoption, after exact creation ACK and account proof. */
+export async function linkNativeThreadForRetention(adapters: WebDelegationAdapters, evidence: NativeThreadOwnershipEvidence, signal: AbortSignal): Promise<WebDelegationRecord> {
+  if (!Number.isSafeInteger(evidence.slot) || evidence.slot < 1 || evidence.slot > 99
+    || typeof evidence.cwd !== "string" || !isAbsolute(evidence.cwd)
+    || !Number.isSafeInteger(evidence.createdAt) || evidence.createdAt <= 0
+    || !/^[a-f0-9]{64}$/.test(evidence.accountFingerprint)
+    || !UUID.test(evidence.threadId) || !UUID.test(evidence.turnId)
+    || realpathSync(evidence.cwd) !== evidence.cwd || !lstatSync(evidence.cwd).isDirectory())
+    throw Error("Native link creation evidence invalid");
+  const current = await adapters.owner(evidence.slot);
+  const record: WebDelegationRecord = {
+    id: randomUUID(), slot: evidence.slot, cwd: evidence.cwd, createdAt: evidence.createdAt,
+    state: "linked", owner: { ...current.binding, accountFingerprint: evidence.accountFingerprint },
+    session: current.session, threadId: evidence.threadId, turnId: evidence.turnId,
+    origin: "native-thread-link",
+  };
+  if (!sameAccountOwner(record, current)) throw Error("Native link account owner mismatch");
+  const rpc = await adapters.connect(current.session.terminalEndpoint);
+  try {
+    const response = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }, signal));
+    const thread = object(response?.thread);
+    if (!thread || thread.id !== record.threadId || thread.cwd !== evidence.cwd || thread.historyMode !== "paginated") throw Error("Native link thread mismatch");
+    if (!await findDelegatedTurn(rpc, record.threadId!, record.turnId!, signal)) throw Error("Native link turn not indexed");
+    if (!sameAccountOwner(record, await adapters.owner(evidence.slot))) throw Error("Native link owner changed");
+    adapters.store.link(record);
+    adapters.changed?.(record);
+    return record;
+  } finally { await rpc.close(); }
 }
 
 /** A NEW durable Native-owned thread with an explicit sandbox, routed to Web.
