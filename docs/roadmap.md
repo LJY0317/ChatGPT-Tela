@@ -25,6 +25,17 @@ new runtimes, schedulers or queues. This list records product requirements, not 
 - **Goal completion boundary.** External Native Goal completion can race automatic successor startup.
   Same-turn completion or a supported scheduler fence is still required for a strict no-successor promise;
   prose completion and a successful external completion RPC are insufficient.
+- **Automatic failure follow-through.** A delegation failure should wake its owning coordinator with the
+  exact job/turn, failure boundary and existing local incident reference. Reconcile uncertain effects first,
+  then analyze and repair verified causes within the authorized task, or report the specific missing evidence.
+  Reuse Native events and Queue instead of a second recovery scheduler, repeated model polling or blind
+  resubmission. Coalesce the same failure; preserve existing chats and keep private evidence local. Verify
+  coordinator wake-up through the supported host contract before promising unattended recovery.
+- **Recognizable delegation names.** Give Tela-created conversations a short task name such as
+  `[Web] Review context reuse` through Native `thread/name/set`. Keep stable thread IDs as identity,
+  preserve user renames, and do not rename personal conversations. Verify sidebar synchronization and
+  later continuation; naming must not create another chat or gate task execution. This does not rename
+  the separate provider-side temporary browser conversation.
 
 ## Desktop lifecycle and presentation
 
