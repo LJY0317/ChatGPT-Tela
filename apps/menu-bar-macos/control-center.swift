@@ -189,29 +189,6 @@ private final class SessionSidebarStack: NSStackView {
   override var isFlipped: Bool { true }
 }
 
-private final class DelegationHelpButton: NSButton {
-  var onHoverChanged: ((Bool) -> Void)?
-  private var tracking: NSTrackingArea?
-
-  override func updateTrackingAreas() {
-    if let tracking { removeTrackingArea(tracking) }
-    let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
-    addTrackingArea(area)
-    tracking = area
-    super.updateTrackingAreas()
-  }
-
-  override func mouseEntered(with event: NSEvent) {
-    super.mouseEntered(with: event)
-    onHoverChanged?(true)
-  }
-
-  override func mouseExited(with event: NSEvent) {
-    super.mouseExited(with: event)
-    onHoverChanged?(false)
-  }
-}
-
 private final class FlippedDocumentView: NSView {
   override var isFlipped: Bool { true }
 }
@@ -316,9 +293,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var previewRevision = 0
   private var preferenceError = false
   private let delegationHelpText = "Web delegations run tasks in separate ChatGPT conversations. This usage counts tasks managed by Tela; your other chats are not included."
-  private var delegationHelpPopover: NSPopover?
-  private var delegationHelpCloseWork: DispatchWorkItem?
-  private var delegationHelpOpenWork: DispatchWorkItem?
 
   private var supportRoot: URL {
     home.appendingPathComponent("Library/Application Support/ChatGPT Tela", isDirectory: true)
@@ -608,7 +582,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     height.isActive = true
   }
 
-  private func delegationRow(usage: String, help: DelegationHelpButton, in stack: NSStackView) {
+  private func delegationRow(usage: String, help: NSButton, in stack: NSStackView) {
     let rowView = NSView()
     let title = label("Web delegations")
     let value = secondary(usage)
@@ -626,64 +600,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       help.centerYAnchor.constraint(equalTo: rowView.centerYAnchor),
       rowView.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
     ])
-  }
-
-  @objc private func showDelegationHelp(_ sender: DelegationHelpButton) {
-    showDelegationHelpPopover(for: sender)
-  }
-
-  private func showDelegationHelpPopover(for button: DelegationHelpButton) {
-    delegationHelpOpenWork?.cancel()
-    delegationHelpOpenWork = nil
-    delegationHelpCloseWork?.cancel()
-    delegationHelpCloseWork = nil
-    let popover: NSPopover
-    if let existing = delegationHelpPopover {
-      popover = existing
-    } else {
-      let controller = NSViewController()
-      let message = label(delegationHelpText)
-      message.preferredMaxLayoutWidth = 260
-      message.translatesAutoresizingMaskIntoConstraints = false
-      controller.view = NSView()
-      controller.view.addSubview(message)
-      NSLayoutConstraint.activate([
-        message.leadingAnchor.constraint(equalTo: controller.view.leadingAnchor, constant: 14),
-        message.trailingAnchor.constraint(equalTo: controller.view.trailingAnchor, constant: -14),
-        message.topAnchor.constraint(equalTo: controller.view.topAnchor, constant: 12),
-        message.bottomAnchor.constraint(equalTo: controller.view.bottomAnchor, constant: -12),
-        controller.view.widthAnchor.constraint(equalToConstant: 288),
-      ])
-      popover = NSPopover()
-      popover.behavior = .applicationDefined
-      popover.contentViewController = controller
-      delegationHelpPopover = popover
-    }
-    if !popover.isShown { popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY) }
-  }
-
-  private func scheduleDelegationHelpOpen(for button: DelegationHelpButton) {
-    delegationHelpCloseWork?.cancel()
-    delegationHelpOpenWork?.cancel()
-    let work = DispatchWorkItem { [weak self, weak button] in
-      guard let self, let button else { return }
-      self.showDelegationHelpPopover(for: button)
-    }
-    delegationHelpOpenWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
-  }
-
-  private func scheduleDelegationHelpClose() {
-    delegationHelpOpenWork?.cancel()
-    delegationHelpOpenWork = nil
-    delegationHelpCloseWork?.cancel()
-    let work = DispatchWorkItem { [weak self] in
-      guard let self else { return }
-      self.delegationHelpPopover?.close()
-      self.delegationHelpPopover = nil
-    }
-    delegationHelpCloseWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
   }
 
   private func divider(in stack: NSStackView) {
@@ -843,16 +759,12 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         toggle.setAccessibilityLabel("Connect \(profile.targetDisplayName) to Tela")
         let modelsState = workInventory.error != nil ? "Status unavailable" : profile.webModelsStatus
         row("Web models", subtitle: modelsState, control: toggle, in: profileCard)
-        let help = DelegationHelpButton(title: "?", target: self, action: #selector(showDelegationHelp(_:)))
+        let help = NSButton(title: "?", target: nil, action: nil)
         help.bezelStyle = .helpButton
         help.controlSize = .small
         help.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         help.setButtonType(.momentaryPushIn)
-        help.onHoverChanged = { [weak self, weak help] inside in
-          guard let self, let help else { return }
-          if inside { self.scheduleDelegationHelpOpen(for: help) }
-          else { self.scheduleDelegationHelpClose() }
-        }
+        help.toolTip = delegationHelpText
         help.setAccessibilityLabel("Web delegations help")
         help.setAccessibilityHelp(delegationHelpText)
         let usage = delegationCapacity[profile.slot].map { "\($0.total.used) of \($0.total.limit) slots in use" } ?? "Usage unavailable"
