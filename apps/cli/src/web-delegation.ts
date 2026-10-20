@@ -8,7 +8,7 @@ import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
 import { createLocalNativeAccountProof, type TrustedNativeProfileSession } from "../../../packages/codex-service/src/cross-profile-account-proof";
 import { WebDelegationStore, WebDelegationCapacityError, verifiedWebDelegationAnswer, runWebDelegation, reconcileWebDelegation } from "../../../packages/codex-service/src/web-delegation";
 import { selectDelegationWebModel } from "../../../packages/codex-service/src/web-delegation-model";
-import { profileSlotFromArguments } from "./profile-selection";
+import { profileSlotFromArguments, delegationProfileSlot } from "./profile-selection";
 
 /** On-demand source CLI first. No new daemon, poller, paid API provider or product lifecycle mutation. */
 export async function runWebDelegationCommand(args: readonly string[], paths: ReturnType<typeof resolveProductPaths>): Promise<void> {
@@ -44,7 +44,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     && profileSlotFromArguments(args) !== (selectedJob ?? continuation)!.slot) {
     throw Error("Existing Web job belongs to a different profile; its owner cannot be changed");
   }
-  const slot = selectedJob?.slot ?? continuation?.slot ?? profileSlotFromArguments(args);
+  let slot = selectedJob?.slot ?? continuation?.slot ?? profileSlotFromArguments(args);
   const install = readOwnershipManifest(paths.installManifest);
   if (!install) throw Error("Tela is not installed");
   const service = await new LocalServiceSupervisor({ installId: install.installId }).current({
@@ -52,6 +52,23 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   });
   if (!service) throw Error("Tela Work is not running");
   const client = new CodexServiceClient(descriptorForService(service.descriptor, "codex"));
+  if (!selectedJob && !continuation) {
+    slot = await delegationProfileSlot(args, { findCallerProfile: async threadId => {
+      const profiles = (await client.profiles()).filter(profile => profile.targetSessionState === "ready");
+      const matches = await Promise.all(profiles.map(async profile => {
+        let rpc: Awaited<ReturnType<typeof connectCodexAppServerWebSocket>> | undefined;
+        try {
+          const terminal = await client.terminalSession(profile.slot);
+          rpc = await connectCodexAppServerWebSocket(terminal.endpoint);
+          const result = await rpc.request("thread/read", { threadId, includeTurns: false }) as { thread?: { id?: string } };
+          return result.thread?.id === threadId ? profile.slot : undefined;
+        } catch { return undefined; }
+        finally { await rpc?.close(); }
+      }));
+      const found = matches.filter(value => value !== undefined);
+      return found.length === 1 ? found[0] : undefined;
+    } });
+  }
   const session = async (selected: number): Promise<TrustedNativeProfileSession> => {
     const profile = (await client.profiles()).find(row => row.slot === selected);
     if (!profile || profile.controlState !== "running" || profile.targetSessionState !== "ready"

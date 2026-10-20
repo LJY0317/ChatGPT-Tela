@@ -145,6 +145,7 @@ export type DevelopmentMcpRuntime =
     };
 
 export interface DevelopmentRuntimeOptions {
+  readonly profileSlot?: number;
   readonly currentTurnSource: CanonicalCurrentTurnSource;
   readonly browserHost: BrowserHost;
   readonly turns?: ActiveTurnRegistry;
@@ -257,7 +258,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
               ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
               ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
               ...(plan.media ? { media: plan.media } : {}),
-              ...(toolBridge ? { toolBridge } : { chatTools: true as const }),
+              ...(toolBridge ? { toolBridge } : { chatTools: { ...(input.profileSlot !== undefined ? { defaultProfileSlot: input.profileSlot } : {}) } }),
             });
           } catch (error) {
             rejectedBeforeAcquisition = true;
@@ -327,7 +328,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
             ...(plan.media ? { media: plan.media } : {}),
             ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
-            ...(toolBridge ? { toolBridge } : { chatTools: true as const }),
+            ...(toolBridge ? { toolBridge } : { chatTools: { ...(input.profileSlot !== undefined ? { defaultProfileSlot: input.profileSlot } : {}) } }),
             ...(plan.browserModel ? {
               prepareForSubmit: (surface, signal) => selectChatGptWebModel(
                 surface,

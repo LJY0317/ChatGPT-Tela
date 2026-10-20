@@ -378,6 +378,7 @@ export async function startProductProfileRuntime(
     }
     startupStage("browser_runtime_starting");
     runtime = await startElectronDevelopmentRuntime({
+      profileSlot: config.slot,
       profileId: config.browserProfile.profileId,
       chatGptUrl: CHATGPT_TEMPORARY_CHAT_URL,
       connectorName: publicIdentity.connectorName,

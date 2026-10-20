@@ -8,7 +8,7 @@ provider performs inference. This is not an independent Tela Chat worker or an A
 ## Source CLI
 
 These commands require an already installed, owned Tela Work runtime and a matching signed-in Web
-profile. They do not start, update or restart services. The default profile is used unless specified.
+profile. They do not start, update or restart services. New delegations default to the calling profile when its runtime hint or exact Native thread identifies one; otherwise the single-profile default is 1. Explicit `--slot N` selects another profile. A continuation retains its existing job profile.
 
 ```sh
 bun run cli web-delegate catalog

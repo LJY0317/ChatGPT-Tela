@@ -17,3 +17,18 @@ export function profileSlotFromArguments(
   }
   return value;
 }
+
+/** A caller hint selects a default, never an authorization boundary. Explicit
+ * --slot wins; existing jobs retain their recorded thread/profile separately. */
+export async function delegationProfileSlot(arguments_: readonly string[], input: {
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+  readonly findCallerProfile?: (threadId: string) => Promise<number | undefined>;
+} = {}): Promise<number> {
+  if (arguments_.includes("--slot")) return profileSlotFromArguments(arguments_);
+  const environment = input.environment ?? process.env;
+  const hint = Number(environment.CHATGPT_TELA_PRODUCT_PROFILE_SLOT);
+  if (Number.isSafeInteger(hint) && hint >= 1 && hint <= 99) return hint;
+  const caller = environment.CODEX_THREAD_ID && input.findCallerProfile
+    ? await input.findCallerProfile(environment.CODEX_THREAD_ID) : undefined;
+  return caller ?? DEFAULT_PROFILE_SLOT;
+}

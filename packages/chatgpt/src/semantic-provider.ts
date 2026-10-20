@@ -335,7 +335,7 @@ function formatWebPhysicalContextParts(
   toolBridge: WebTurnRequest["toolBridge"],
   contextAttachment?: ChatGptContextAttachmentReference,
   media: readonly WebTurnMedia[] = [],
-  chatTools?: true,
+  chatTools?: WebTurnRequest["chatTools"],
 ) {
   const retained = context.mode === "retained-delta";
   if (retained && contextAttachment) {
@@ -373,6 +373,9 @@ function formatWebPhysicalContextParts(
       "Continue until the requested work is complete and verified, then write the user-facing final answer after the last required tool result has settled.",
     ] : chatTools ? [
       "Use the selected ChatGPT Tela app's Tela Chat inventory and call tools for local work. Discover current Chat capabilities rather than assuming tool names.",
+      ...(chatTools.defaultProfileSlot !== undefined ? [
+        `New Web delegations default to profile ${chatTools.defaultProfileSlot}. Pass --slot ${chatTools.defaultProfileSlot} to the delegation CLI unless the user explicitly selects another profile. Existing jobs keep their recorded profile. This is a default, not a restriction on an explicit new delegation.`,
+      ] : []),
       "This Web task uses Tela Chat tools only. Do not use Native Codex inventory, Native call tools, or a Native turn capability, including for delegation.",
       "Finish the assigned objective and report its result and remaining limits. A prose completion statement does not change the host Goal status; the Native coordinator must settle that status through the official Goal API.",
     ] : [
@@ -388,7 +391,7 @@ function formatWebPhysicalContextParts(
     ...(context.baseRevisionId ? { baseRevisionId: context.baseRevisionId } : {}),
     ...(context.activeRequestRevisionId ? { activeRequestRevisionId: context.activeRequestRevisionId } : {}),
     mode: context.mode,
-    ...(chatTools ? { toolBackend: "tela-chat" } : {}),
+    ...(chatTools ? { toolBackend: "tela-chat", ...(chatTools.defaultProfileSlot !== undefined ? { defaultDelegationProfileSlot: chatTools.defaultProfileSlot } : {}) } : {}),
     ...(mediaManifest.length ? { mediaManifest } : {}),
     ...(contextAttachment ? { contextAttachment } : {}),
     ...(toolBridge ? {
@@ -444,7 +447,7 @@ function formatWebPhysicalContextParts(
 }
 
 export function formatWebPhysicalContext(context: WebPhysicalContext, toolBridge: WebTurnRequest["toolBridge"],
-  contextAttachment?: ChatGptContextAttachmentReference, media: readonly WebTurnMedia[] = [], chatTools?: true): string {
+  contextAttachment?: ChatGptContextAttachmentReference, media: readonly WebTurnMedia[] = [], chatTools?: WebTurnRequest["chatTools"]): string {
   return formatWebPhysicalContextParts(context,toolBridge,contextAttachment,media,chatTools).text;
 }
 

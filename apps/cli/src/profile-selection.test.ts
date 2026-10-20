@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_PROFILE_SLOT, profileSlotFromArguments } from "./profile-selection";
+import { DEFAULT_PROFILE_SLOT, profileSlotFromArguments, delegationProfileSlot } from "./profile-selection";
 
 describe("single-profile-first CLI selection", () => {
   test("ordinary setup/start/stop default to the one normal profile", () => {
@@ -20,4 +20,15 @@ describe("single-profile-first CLI selection", () => {
     expect(() => profileSlotFromArguments(["start", "--slot", "2", "--slot", "3"]))
       .toThrow("only once");
   });
+});
+
+
+test("delegation defaults follow the caller while explicit cross-profile selection wins", async () => {
+  let reads = 0;
+  const input = { environment: { CODEX_THREAD_ID: "caller" }, findCallerProfile: async () => { reads++; return 2; } };
+  expect(await delegationProfileSlot(["start"], input)).toBe(2);
+  expect(await delegationProfileSlot(["start", "--slot", "1"], input)).toBe(1);
+  expect(reads).toBe(1);
+  expect(await delegationProfileSlot(["start"], { environment: { CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "2" } })).toBe(2);
+  expect(await delegationProfileSlot(["start"], { environment: {} })).toBe(1);
 });

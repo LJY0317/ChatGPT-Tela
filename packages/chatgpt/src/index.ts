@@ -79,7 +79,7 @@ export interface WebTurnRequest {
   readonly inertSourceAttachment?: { readonly attachment: ChatGptContextAttachment; readonly receipt: string };
   readonly media?: readonly import("./turn-media").WebTurnMedia[];
   /** Independent Tela Chat tools; never grants a Native turn capability. */
-  readonly chatTools?: true;
+  readonly chatTools?: { readonly defaultProfileSlot?: number };
   readonly toolBridge?: WebToolBridgeContext;
 }
 

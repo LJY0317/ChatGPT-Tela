@@ -101,6 +101,7 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
 }
 
 export interface ElectronDevelopmentRuntimeOptions {
+  readonly profileSlot?: number;
   readonly profileId: string;
   readonly connectorName?: string;
   readonly currentTurnSource: CanonicalCurrentTurnSource;
@@ -285,6 +286,7 @@ export async function startElectronDevelopmentRuntime(
   }) : undefined;
 
   const runtime = await startDevelopmentRuntime({
+    ...(input.profileSlot !== undefined ? { profileSlot: input.profileSlot } : {}),
     currentTurnSource: input.currentTurnSource,
     browserHost,
     turns,

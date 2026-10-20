@@ -10,6 +10,7 @@ import {
   type WebConversationProvider,
   type WebPhysicalContext,
   type WebTurnMedia,
+  type WebTurnRequest,
   type WebToolBridgeContext,
   type WebTurnEvent,
   type WebTurnHandle,
@@ -27,7 +28,7 @@ export interface BrowserTurnRunInput {
   readonly contextAttachment?: ChatGptContextAttachment;
   readonly media?: readonly WebTurnMedia[];
   readonly physicalLimits?: ChatGptWebPhysicalLimits;
-  readonly chatTools?: true;
+  readonly chatTools?: WebTurnRequest["chatTools"];
   readonly toolBridge?: WebToolBridgeContext;
   /** Non-submit surface preparation that must finish immediately before provider submission. */
   readonly prepareForSubmit?: (
