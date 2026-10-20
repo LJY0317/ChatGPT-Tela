@@ -34,11 +34,20 @@ new runtimes, schedulers or queues. This list records product requirements, not 
 - Provide a normal macOS application entry point discoverable in Applications/Spotlight. Reopening should
   reveal the existing menu UI or start it once, without restarting browser sessions or background work.
   Keep menu-only quit distinct from stopping services and manage installation/removal ownership.
+  Verify standard computer-use discovery, accessibility and interaction with the packaged app; the
+  current standalone executable could not be selected by the available app-control adapter.
 - Improve Control Center profile rows, compact contextual help and the Web-session sidebar/preview.
   Keep previews on demand and retain existing session selection and browser interaction boundaries.
 - Assess preserving compatible temporary Web conversations across update/restart without a resident
   bridge or a second ownership engine. If the platform cannot restore a temporary chat, state that limit;
   retain checkpoints and minimize cold-resume context. Keep the existing bounded idle lifecycle.
+
+## Tool coverage
+
+- Compare task tools in projects such as Chat on Steroids and DevSpace against Tela's current inventory.
+  Adopt useful missing capabilities, including on-demand computer use, through existing platform contracts
+  where possible. Avoid duplicate tools and idle browser bridges; expose capabilities through concise,
+  discoverable schemas rather than personal instructions.
 
 ## Remaining acceptance
 

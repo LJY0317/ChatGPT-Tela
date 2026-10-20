@@ -318,6 +318,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private let delegationHelpText = "Web delegations run tasks in separate ChatGPT conversations. This usage counts tasks managed by Tela; your other chats are not included."
   private var delegationHelpPopover: NSPopover?
   private var delegationHelpCloseWork: DispatchWorkItem?
+  private var delegationHelpOpenWork: DispatchWorkItem?
 
   private var supportRoot: URL {
     home.appendingPathComponent("Library/Application Support/ChatGPT Tela", isDirectory: true)
@@ -632,6 +633,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func showDelegationHelpPopover(for button: DelegationHelpButton) {
+    delegationHelpOpenWork?.cancel()
+    delegationHelpOpenWork = nil
     delegationHelpCloseWork?.cancel()
     delegationHelpCloseWork = nil
     let popover: NSPopover
@@ -659,7 +662,20 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     if !popover.isShown { popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY) }
   }
 
+  private func scheduleDelegationHelpOpen(for button: DelegationHelpButton) {
+    delegationHelpCloseWork?.cancel()
+    delegationHelpOpenWork?.cancel()
+    let work = DispatchWorkItem { [weak self, weak button] in
+      guard let self, let button else { return }
+      self.showDelegationHelpPopover(for: button)
+    }
+    delegationHelpOpenWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
+  }
+
   private func scheduleDelegationHelpClose() {
+    delegationHelpOpenWork?.cancel()
+    delegationHelpOpenWork = nil
     delegationHelpCloseWork?.cancel()
     let work = DispatchWorkItem { [weak self] in
       guard let self else { return }
@@ -834,7 +850,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         help.setButtonType(.momentaryPushIn)
         help.onHoverChanged = { [weak self, weak help] inside in
           guard let self, let help else { return }
-          if inside { self.showDelegationHelpPopover(for: help) }
+          if inside { self.scheduleDelegationHelpOpen(for: help) }
           else { self.scheduleDelegationHelpClose() }
         }
         help.setAccessibilityLabel("Web delegations help")
@@ -909,7 +925,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       previewPane.distribution = .fill
       previewPane.spacing = 10
       activityLayout.addArrangedSubview(previewPane)
-      sessionScroll.widthAnchor.constraint(equalToConstant: 168).isActive = true
+      var sessionSidebarWidth: CGFloat = 100
       sessionScroll.heightAnchor.constraint(equalTo: activityLayout.heightAnchor).isActive = true
       sessionDivider.heightAnchor.constraint(equalTo: activityLayout.heightAnchor).isActive = true
       previewPane.heightAnchor.constraint(equalTo: activityLayout.heightAnchor).isActive = true
@@ -921,7 +937,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       activityLayout.widthAnchor.constraint(equalTo: preview.widthAnchor).isActive = true
       for profile in runningProfiles {
         if profiles.count > 1 {
-          let heading = secondary(profile.targetDisplayName)
+          let heading = label(profile.targetDisplayName)
+          heading.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
           sessionList.addArrangedSubview(heading)
           heading.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
         }
@@ -933,7 +950,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           let status = secondary("Loading…"); sessionList.addArrangedSubview(status)
           status.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
         } else if surfaces.isEmpty {
-          let status = secondary("No active Web sessions"); sessionList.addArrangedSubview(status)
+          let status = secondary("No active Web sessions")
+          status.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+          sessionList.addArrangedSubview(status)
           status.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
         }
         for surface in surfaces {
@@ -949,9 +968,13 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           button.toolTip = surface.label
           button.setAccessibilityLabel(surface.label)
           sessionList.addArrangedSubview(button)
-          button.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
+          sessionSidebarWidth = max(sessionSidebarWidth, button.fittingSize.width)
+        }
+        if let last = sessionList.arrangedSubviews.last {
+          sessionList.setCustomSpacing(18, after: last)
         }
       }
+      sessionScroll.widthAnchor.constraint(equalToConstant: sessionSidebarWidth).isActive = true
       if runningProfiles.isEmpty {
         let status = secondary("No active Web sessions"); sessionList.addArrangedSubview(status)
         status.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
