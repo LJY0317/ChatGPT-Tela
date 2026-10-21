@@ -2520,6 +2520,35 @@ describe("ChatGPT semantic provider", () => {
 });
 
 
+test("owned stream Retry continues the accepted turn without another composer submission", async () => {
+  class RetryDriver extends FixtureDriver {
+    retries = 0;
+    async retryFailedResponse(key: string) {
+      expect(key).toBe("assistant"); this.retries++;
+      this.current = { ...this.current, revision: "retrying", turns: this.current.turns.map(turn =>
+        turn.role === "assistant" ? { ...turn, phase: "thinking" } : turn) };
+      return true;
+    }
+  }
+  const driver = new RetryDriver(fixture("ready-new-chat"));
+  const surface = await leaseFor(driver); const provider = new ChatGptSemanticProvider();
+  try {
+    const submitting = provider.submitTurn(surface.lease, request());
+    while (driver.current.revision === "r1") await Promise.resolve();
+    driver.queued.push(acceptedSnapshot(driver)); const submitted = await submitting;
+    if (submitted.state !== "proven") throw Error("expected fixture submit");
+    const sends = driver.activated.length;
+    const assistant = { key: "assistant", role: "assistant" as const, parentUserTurnKey: "user-turn-1" };
+    driver.queued.push({ ...driver.current, revision: "failed", turns: [...driver.current.turns,
+      { ...assistant, phase: "failed", failureDetail: "Error in message stream Retry" }] });
+    driver.queued.push({ ...driver.current, revision: "done", turns: [...driver.current.turns,
+      { ...assistant, phase: "complete", text: "Recovered answer" }] });
+    const result = await provider.waitForTurnEvent(surface.lease, submitted.value);
+    expect(result.state === "proven" && result.value.kind).toBe("completed");
+    expect(driver.retries).toBe(1); expect(driver.activated.length).toBe(sends);
+  } finally { await surface.host.close(); }
+});
+
 test("failed assistant supersedes a cached post-tool final even with a pending approval",async()=>{
  const driver=new FixtureDriver(fixture("ready-new-chat"));const surface=await leaseFor(driver);
  const provider=new ChatGptSemanticProvider({approvalAutomationMode:"off"});

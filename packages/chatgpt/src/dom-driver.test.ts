@@ -279,7 +279,7 @@ class RendererFixturePage extends FakePage {
     ?.querySelectorAll("button").find(b => b.textContent.startsWith("Allow once"));
   constructor(readonly document: FixtureElement) { super(); }
   override async evaluate<Argument, Result>(source: string, argument: Argument): Promise<Result> {
-    if (source.includes("return { url: location.href, composers, sendControls, turns }") || source.includes("const cards =")) {
+    if (source.includes("return { url: location.href, composers, sendControls, turns }") || source.includes("const cards =") || source.includes("function retryFailedResponse")) {
       return runInNewContext(`(${source})(argument)`, Object.assign(this.rendererState, {
         argument, innerWidth: 800, innerHeight: 600, requestAnimationFrame: (callback: () => void) => this.animationFrame(callback),
         document: Object.assign(this.document, { documentElement: this.document, elementFromPoint: this.hitTest, baseURI: "https://chatgpt.com/" }), URL, HTMLElement: FixtureElement, HTMLButtonElement: FixtureElement,
@@ -688,6 +688,21 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(result.turns[0]?.publicProgress).toEqual(["Checking records\n\nReading the current execution record."]);
     expect(result.turns[0]?.publicProgress?.join()).not.toMatch(/HIDDEN_CONTENT|CONTROL_CONTENT|FINAL_CONTENT/);
   });
+  test.each(["owned", "foreign", "authored"])("stream Retry clicks only the owned error control once (%s)", async mode => {
+    const button = new FixtureElement({ "data-fixture-tag": "BUTTON" }); button.textContent = "Retry";
+    const alert = new FixtureElement({ role: "alert" }, { button: [button] }); alert.textContent = "Error in message stream Retry";
+    const group = new FixtureElement({ "data-turn-key": "owned" }, { '[role="alert"]': [alert],
+      ...(mode === "authored" ? { '[data-markdown-text-style="assistant-message"]': [alert] } : {}) });
+    const page = new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] }));
+    let clicks = 0;
+    page.pointerClick = async () => { clicks++; };
+    const driver = new ChatGptDomSurfaceDriver(page);
+    const key = mode === "foreign" ? "assistant:another" : "assistant:owned";
+    expect(await driver.retryFailedResponse(key)).toBe(mode === "owned");
+    expect(await driver.retryFailedResponse(key)).toBe(false);
+    expect(clicks).toBe(mode === "owned" ? 1 : 0);
+  });
+
   test("failure diagnostics survive more than 32 progress transitions and deduplicate unchanged reads", async () => {
     const page = new FakePage();
     const driver = new ChatGptDomSurfaceDriver(page);

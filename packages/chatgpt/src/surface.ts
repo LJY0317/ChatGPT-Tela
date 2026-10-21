@@ -123,6 +123,8 @@ export interface ChatGptSurfaceDriver {
   ): Promise<{ readonly status: "none"; readonly reason: string }
     | { readonly status: "dispatched"; readonly reason: "allow" | "allow_once" | "allow_conversation";
         readonly cardFingerprint: string; readonly revisionFingerprint?: string }>;
+  /** Activate the owned failed response's public Retry control, without resubmitting a Native turn. */
+  retryFailedResponse?(assistantKey: string, signal?: AbortSignal): Promise<boolean>;
   /** Stop only the exact owned assistant through the provider's public Stop affordance.
    * Absence of generation controls is not proof of successful remote task completion. */
   stopGeneration?(

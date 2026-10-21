@@ -37,6 +37,11 @@ content, progress and approval-owned alerts are excluded. Candidate counts disti
 eligible and approval-owned alerts, alongside composer Stop visibility. A visible generic alert outside those regions
 is terminal only when generation has stopped, even if an earlier answer or progress shell remains mounted. This proves a
 provider UI failure, not its network cause or the outcome of an earlier tool operation.
+For an owned failed response with an `Error in message stream` alert and a unique Retry
+button, the existing browser automation clicks that button once and continues observing
+the accepted turn. It does not resubmit the composer or start another Native turn.
+`response_retry_activated` records dispatch; recovery is proven only by later completion.
+Other failures, absent controls and already-activated buttons keep the terminal failure path.
 Progress probes retain only the last structural signature, so unchanged reads are omitted
 without suppressing failures after an arbitrary number of earlier transitions.
 Fresh-seed authority events expose ordered source indices, fingerprints, byte counts and

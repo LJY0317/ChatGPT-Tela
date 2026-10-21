@@ -1754,6 +1754,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         };
       }
       const assistant = assistants[0];
+      if (assistant?.phase === "failed" && driver.retryFailedResponse
+        && await waitOwned(signal, () => driver.retryFailedResponse!(assistant.key, signal))) continue;
       const waitState = JSON.stringify([assistant?.phase ?? "absent", snapshot.approval ?? null]);
       this.#observeApproval(surface, tracked, snapshot, assistant);
       const observedApproval = snapshot.approval;
