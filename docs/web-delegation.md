@@ -55,9 +55,9 @@ profile. They do not start, update or restart services. New delegations default 
 
 ```sh
 bun run cli web-delegate catalog
-bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt [--mode read|write]
+bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt
 bun run cli web-delegate continue --job UUID --prompt-file /path/to/followup.txt
-bun run cli web-delegate capacity [--slot N] [--mode read|write]
+bun run cli web-delegate capacity [--slot N]
 bun run cli web-delegate status --job UUID
 bun run cli web-delegate reconcile --job UUID
 bun run cli web-delegate result --job UUID
@@ -147,14 +147,12 @@ within the same Native conversation. These are local managed-job limits, not Web
 provider quotas. The physical Git worktree root is the writer identity even when
 callers choose different subdirectories. Multiple tasks may write concurrently in
 different worktrees; only one may hold writer ownership within a worktree.
-Read-only tasks may share a checkout with its writer when the profile has a
-free task permit. Writer checkout contention applies only to new writers;
-same-thread continuation exclusivity is enforced separately.
-Legacy read-only jobs and their lease files remain readable and count against the
-configured total permits until terminal recovery. An old read-only thread cannot be
-silently upgraded to write authority. There is no queue.
+All new tasks reserve the checkout writer permit, even for analysis-only prompts.
+The task instruction controls whether files are changed. Historical read-only
+jobs and their legacy leases remain readable and protected until exact terminal
+recovery. There is no queue.
 
-`continue --job UUID --prompt-file ...` requires a verified completed write-capable
+`continue --job UUID --prompt-file ...` requires a verified completed
 job, its exact owner/profile/checkout, and the latest completed Native turn on
 that thread. It reserves a new child job ID and starts a **new turn in the same
 Native thread**, with only the new prompt sent as input. The original completed
@@ -181,7 +179,7 @@ permits were checked on 2026-10-19 (Asia/Seoul). This verifies that specific
 write path, not confinement against hostile writes or production checkout
 protection.
 `web-delegate capacity [--slot N]` reports the same total-task occupancy
-regardless of the optional legacy `--mode` input.
+without a mode selector.
 The authenticated Codex service exposes the same managed-job capacity snapshot
 at `GET /v1/codex/profiles/:slot/web-delegation-capacity`; the macOS Control
 Center Work page fetches this status on demand. This reports **local CLI-managed
@@ -224,13 +222,14 @@ results in a repository or release. A complete user-reviewed removal lifecycle r
 Source fixtures and a profile-1 live same-thread continuation verify final-answer delivery and
 completion after attaching the fresh connection. Both-profile acceptance remains a separate check.
 
-Continuations inherit their parent's profile and read-only or workspace-write mode.
-They cannot promote an existing read-only thread to writing. Historical job
+Continuations retain their parent's profile, account, checkout, and thread identity.
+Each new turn requests workspace-write authority independently of the historical
+record's optional `mode` field. Historical job
 records without a corresponding lease remain available for exact recovery but
 do not consume admission capacity or fence independent jobs. Held or unknown
 leases still retain their reservation pending exact resolution.
 An active continuation holds an exclusive permit for its Native thread, even
-when both tasks are read-only. A second continuation is refused until the first
+regardless of the historical task mode. A second continuation is refused until the first
 is proven terminal. Setup failures before `turn/start` release their permits;
 after a submission attempt, uncertain acknowledgements remain reserved.
 

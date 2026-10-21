@@ -1,5 +1,4 @@
 /** Local managed-job admission snapshot, not a claim about the Web provider's quota. */
-export type WebDelegationMode = "read" | "write";
 export type WebDelegationBlockCode = "CAPACITY_WRITER_CHECKOUT" | "CAPACITY_THREAD_ACTIVE" | "CAPACITY_TOTAL_PROFILE" | "CAPACITY_STORAGE_RECORDS" | "UNCERTAIN_RESERVATION";
 export interface CodexWebDelegationCapacityContract {
   readonly contractVersion: 3;

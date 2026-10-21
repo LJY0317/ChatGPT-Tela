@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync, realpathSync, existsSync, writeFileSync, lstatSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, realpathSync, existsSync, writeFileSync, lstatSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -22,7 +22,7 @@ test("exact Native creation ACK links once without sending or reserving a task",
     const linked = await linkNativeThreadForRetention(adapters, receipt, new AbortController().signal);
     expect(f.store.get(linked.id)?.origin).toBe("native-thread-link");
     expect(f.store.get(linked.id)?.state).toBe("linked");
-    expect(f.store.capacity(2, "read", f.root).total.used).toBe(0);
+    expect(f.store.capacity(2, f.root).total.used).toBe(0);
     await expect(linkNativeThreadForRetention(adapters, receipt, new AbortController().signal)).rejects.toThrow("already managed");
     await expect(linkNativeThreadForRetention(adapters, { ...receipt, accountFingerprint: "f".repeat(64) }, new AbortController().signal)).rejects.toThrow("owner mismatch");
   } finally { f.cleanup(); }
@@ -280,7 +280,9 @@ test("confirmed deletion settles unresolved jobs and releases only their leases"
     const pending = { ...f.record, id: randomUUID(), threadId: f.record.threadId!, turnId: randomUUID(), state: "running" as const };
     f.store.reserve(pending);
     const separate = { ...f.record, id: randomUUID(), threadId: randomUUID(), turnId: randomUUID(), state: "running" as const };
-    f.store.reserve(separate);
+    const otherCwd = join(f.root, "other-checkout");
+    mkdirSync(otherCwd);
+    f.store.reserve({ ...separate, cwd: otherCwd });
     const key = { slot: f.record.slot, accountFingerprint: f.record.owner.accountFingerprint, threadId: f.record.threadId! };
     writeFileSync(join(f.root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`), JSON.stringify({ state: "deleted" }));
     expect(f.store.get(pending.id)).toBeUndefined();
@@ -289,7 +291,7 @@ test("confirmed deletion settles unresolved jobs and releases only their leases"
     await f.run(f.origin + 40 * DAY);
     expect(f.store.get(pending.id)).toBeUndefined();
     expect(f.store.get(separate.id)?.state).toBe("running");
-    expect(f.store.capacity(2, "read", f.root).total.used).toBe(1);
+    expect(f.store.capacity(2, f.root).total.used).toBe(1);
     expect(f.store.get(f.record.id)).toBeUndefined();
   } finally { f.cleanup(); }
 });

@@ -4,7 +4,7 @@ import { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./ch
 export { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
 export { parseCodexWorkInspectionContract } from "./work-inspection";
 export { parseCodexWebDelegationCapacityContract, type CodexWebDelegationCapacityContract,
-  type WebDelegationBlockCode, type WebDelegationMode } from "./web-delegation-capacity";
+  type WebDelegationBlockCode } from "./web-delegation-capacity";
 export { parseCodexApprovalWait, type CodexApprovalWaitContract } from "./approval-review";
 import { parseCodexApprovalWait, type CodexApprovalWaitContract } from "./approval-review";
 import type {

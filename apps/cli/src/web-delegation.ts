@@ -47,10 +47,9 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     return { binding: await binding(selected), session: await session(selected) };
   };
   const adapters = { store, owner, connect: (endpoint: string) => connectCodexAppServerWebSocket(endpoint, { signal: AbortSignal.timeout(10_000) }) };
+  if (args.includes("--mode")) throw Error("--mode has been removed; each new task uses workspace-write authority");
   if (subcommand === "capacity") {
-    const mode = args.includes("--mode") ? option("--mode") : "read";
-    if (mode !== "read" && mode !== "write") throw Error("--mode must be read or write");
-    console.log(JSON.stringify(store.capacity(profileSlotFromArguments(args), mode), null, 2));
+    console.log(JSON.stringify(store.capacity(profileSlotFromArguments(args)), null, 2));
     return;
   }
   if (subcommand === "status" || subcommand === "result") {
@@ -114,13 +113,11 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 24 * 1024) throw Error("Web job prompt must be a bounded regular file");
   const prompt = readFileSync(promptPath, "utf8");
   const id = continuation ? randomUUID() : args.includes("--job") ? option("--job") : randomUUID();
-  const mode = continuation ? continuation.mode ?? "read" : args.includes("--mode") ? option("--mode") : "write";
-  if (mode !== "read" && mode !== "write") throw Error("--mode must be read or write");
   try {
     const result = await runWebDelegation({
       ...adapters,
       changed: record => console.log(JSON.stringify({ jobId: record.id, state: record.state, selection: record.selection, toolItems: record.toolItems ?? 0 })),
-    }, { id, slot, cwd, prompt, mode, ...(continuation ? { parentJobId: continuation.id } : {}), signal: AbortSignal.timeout(20 * 60 * 1000) });
+    }, { id, slot, cwd, prompt, ...(continuation ? { parentJobId: continuation.id } : {}), signal: AbortSignal.timeout(20 * 60 * 1000) });
     await inspectWebDelegationResult(adapters, result.id);
     const answer = verifiedWebDelegationAnswer(result);
     if (answer) {

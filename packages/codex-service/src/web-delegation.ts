@@ -3,7 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, openSync, closeSync, readF
 import { isAbsolute, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
-import type { CodexWebDelegationCapacityContract, WebDelegationBlockCode, WebDelegationMode } from "@chatgpt-tela/service-protocol";
+import type { CodexWebDelegationCapacityContract, WebDelegationBlockCode } from "@chatgpt-tela/service-protocol";
 import type { LocalProfileBinding } from "./cross-profile-thread-relay";
 import type { TrustedNativeProfileSession } from "./cross-profile-account-proof";
 import { selectDelegationWebModel, webDelegationTurnSettings, type DelegationWebModel } from "./web-delegation-model";
@@ -90,7 +90,7 @@ export interface WebDelegationRecord {
   readonly id: string;
   readonly slot: number;
   /** Older read-only records omitted this field. */
-  readonly mode?: WebDelegationMode;
+  readonly mode?: "read" | "write"; // Historical journal metadata only.
   readonly cwd: string;
   readonly createdAt: number;
   readonly promptHash?: string;
@@ -229,11 +229,11 @@ export class WebDelegationStore {
     const saved = this.get(record.id);
     if (!saved || !this.#terminal(saved) || saved.slot !== record.slot) return;
     const paths = [...this.#permits(record.slot), ...this.#legacyPermits(record.slot),
-      ...(record.mode === "write" ? [this.#checkoutPermit(record.checkoutRoot ?? record.cwd), this.#legacyCheckoutPermit(record.cwd)] : []),
+      this.#checkoutPermit(record.checkoutRoot ?? record.cwd), this.#legacyCheckoutPermit(record.cwd),
       ...(record.parentJobId && record.threadId ? [this.#threadPermit(record.threadId)] : [])];
     for (const path of paths) if (this.#leaseOwner(path) === record.id) unlinkSync(path);
   }
-  capacity(slot: number, _mode: WebDelegationMode = "write", cwd?: string): WebDelegationCapacity {
+  capacity(slot: number, cwd?: string): WebDelegationCapacity {
     const limit = this.#limit(slot);
     const modern = this.#permits(slot).map(path => this.#leaseOwner(path));
     const legacy = this.#legacyPermits(slot).map(path => this.#leaseOwner(path));
@@ -250,13 +250,13 @@ export class WebDelegationStore {
       const id = name.slice(0, -5);
       if (!UUID.test(id)) return false;
       const job = this.get(id);
-      if (!job || job.mode !== "write" || this.#terminal(job) || job.state === "completed") return false;
+      if (!job || this.#terminal(job) || job.state === "completed") return false;
       if (checkoutRoot(job.cwd) !== checkoutRoot(cwd)) return false;
       return this.#legacyPermits(job.slot).some(path => this.#leaseOwner(path) === id);
     });
     const blockCode: WebDelegationBlockCode | undefined = unsafeLease ? "UNCERTAIN_RESERVATION"
         : used >= limit ? "CAPACITY_TOTAL_PROFILE"
-          : _mode === "write" && (checkoutLegacyConflict || checkout !== "free")
+          : (checkoutLegacyConflict || checkout !== "free")
             ? checkout === "unknown" ? "UNCERTAIN_RESERVATION" : "CAPACITY_WRITER_CHECKOUT" : undefined;
     const statusKo = `프로필 ${slot}: 동시 작업 ${used}/${limit}`;
     const statusEn = `Profile ${slot}: concurrent jobs ${used}/${limit}`;
@@ -319,7 +319,7 @@ export class WebDelegationStore {
     const records = this.recordsForThread(key);
     for (const record of records) {
       const paths = [...this.#permits(record.slot), ...this.#legacyPermits(record.slot),
-        ...(record.mode === "write" ? [this.#checkoutPermit(record.checkoutRoot ?? record.cwd), this.#legacyCheckoutPermit(record.cwd)] : []),
+        this.#checkoutPermit(record.checkoutRoot ?? record.cwd), this.#legacyCheckoutPermit(record.cwd),
         ...(record.parentJobId && record.threadId ? [this.#threadPermit(record.threadId)] : [])];
       for (const path of paths) if (this.#leaseOwner(path) === record.id) unlinkSync(path);
     }
@@ -470,12 +470,11 @@ export class WebDelegationStore {
   }
   reserve(record: WebDelegationRecord): void {
     if (record.threadId && this.#deleted(record)) throw Error("Web thread was deleted");
-    const mode = record.mode ?? "read";
     if (record.parentJobId && !record.threadId) throw Error("Continuation requires its exact Native thread");
     const threadLease = record.parentJobId ? this.#threadPermit(record.threadId!) : undefined;
     // Exact terminal journal proofs can release stale permits after a crash.
     for (const lease of [...this.#permits(record.slot), ...this.#legacyPermits(record.slot),
-      ...(mode === "write" ? [this.#checkoutPermit(record.cwd), this.#legacyCheckoutPermit(record.cwd)] : []),
+      this.#checkoutPermit(record.cwd), this.#legacyCheckoutPermit(record.cwd),
       ...(threadLease ? [threadLease] : [])]) {
       const owner = this.#leaseOwner(lease);
       if (owner !== "free" && owner !== "unknown") {
@@ -483,7 +482,7 @@ export class WebDelegationStore {
         if (previous) this.#release(previous);
       }
     }
-    const available = this.capacity(record.slot, mode, record.cwd);
+    const available = this.capacity(record.slot, record.cwd);
     if (!available.available) throw new WebDelegationCapacityError(available);
     const path = this.#path(record.id), fd = openSync(path, "wx", 0o600);
     try { writeFileSync(fd, JSON.stringify(record)); fsyncSync(fd); } finally { closeSync(fd); }
@@ -498,13 +497,11 @@ export class WebDelegationStore {
         claimed.push(threadLease);
         try { writeFileSync(fd, record.id); fsyncSync(fd); } finally { closeSync(fd); }
       }
-      if (mode === "write") {
-        admissionStage = "checkout";
-        const checkout = this.#checkoutPermit(record.cwd);
-        const fd = openSync(checkout, "wx", 0o600);
-        claimed.push(checkout);
-        try { writeFileSync(fd, record.id); fsyncSync(fd); } finally { closeSync(fd); }
-      }
+      admissionStage = "checkout";
+      const checkout = this.#checkoutPermit(record.cwd);
+      const checkoutFd = openSync(checkout, "wx", 0o600);
+      claimed.push(checkout);
+      try { writeFileSync(checkoutFd, record.id); fsyncSync(checkoutFd); } finally { closeSync(checkoutFd); }
       admissionStage = "profile";
       let admitted = false;
       for (const lease of this.#permits(record.slot).slice(0, available.total.limit)) {
@@ -522,7 +519,7 @@ export class WebDelegationStore {
     } catch (error) {
       for (const lease of claimed) if (this.#leaseOwner(lease) === record.id) unlinkSync(lease);
       unlinkSync(path);
-      const capacity = this.capacity(record.slot, mode, record.cwd);
+      const capacity = this.capacity(record.slot, record.cwd);
       if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new WebDelegationCapacityError({
         ...capacity, available: false,
         blockCode: capacity.blockCode ?? (admissionStage === "thread" ? "CAPACITY_THREAD_ACTIVE" : "CAPACITY_TOTAL_PROFILE"),
@@ -703,20 +700,18 @@ export async function linkNativeThreadForRetention(adapters: WebDelegationAdapte
 }
 
 /** A NEW durable Native-owned thread with an explicit sandbox, routed to Web.
- * Never resumes a personal thread or silently elevates read-only delegation. */
+ * Only an explicitly owned completed thread is eligible for continuation. */
 export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
-  id: string; slot: number; cwd: string; prompt: string; signal: AbortSignal; mode?: WebDelegationMode; parentJobId?: string;
+  id: string; slot: number; cwd: string; prompt: string; signal: AbortSignal; parentJobId?: string;
 }): Promise<WebDelegationRecord> {
   if (!UUID.test(input.id) || !input.prompt.trim() || Buffer.byteLength(input.prompt) > 24 * 1024) throw Error("Invalid bounded Web delegation");
   if (realpathSync(input.cwd) !== input.cwd || !lstatSync(input.cwd).isDirectory()) throw Error("Web delegation requires an exact workspace");
-  const mode = input.mode ?? "write";
-  if (mode !== "read" && mode !== "write") throw Error("Invalid Web delegation mode");
   const owner = await adapters.owner(input.slot);
   const parent = input.parentJobId ? adapters.store.get(input.parentJobId) : undefined;
   if (input.parentJobId && (!parent || parent.state !== "completed" || !verifiedWebDelegationAnswer(parent)
     || !parent.threadId || !parent.turnId || parent.slot !== input.slot
-    || parent.cwd !== input.cwd || (parent.mode ?? "read") !== mode || !sameAccountOwner(parent, owner))) {
-    throw Error("Continuation requires a completed, owned Web job with the same sandbox mode in this checkout");
+    || parent.cwd !== input.cwd || !sameAccountOwner(parent, owner))) {
+    throw Error("Continuation requires a completed, owned Web job in this checkout");
   }
   let rpc: CodexAppServerRpc | undefined;
   let record: WebDelegationRecord | undefined;
@@ -726,7 +721,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
   try {
     record = { id: input.id, slot: input.slot, cwd: input.cwd, createdAt: Date.now(),
       promptHash: createHash("sha256").update(input.prompt).digest("hex"), owner: owner.binding,
-      session: owner.session, mode, state: "reserved", checkoutRoot: checkoutRoot(input.cwd),
+      session: owner.session, state: "reserved", checkoutRoot: checkoutRoot(input.cwd),
       ...(parent ? { parentJobId: parent.id, threadId: parent.threadId } : {}) };
     // Admission is persistent and atomic before connecting to a model/provider.
     adapters.store.reserve(record);
@@ -742,7 +737,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     const prove = async () => { if (!sameOwner(record!, await adapters.owner(input.slot))) throw Error("Web job owner changed"); };
     await prove();
     update({ state: "creating" });
-    const sandbox = mode === "write" ? "workspace-write" : "read-only";
+    const sandbox = "workspace-write";
     if (parent) {
       // Direct user turns may follow the parent. The current tail must be settled.
       const response = object(await rpc.request("thread/turns/list", {
@@ -771,7 +766,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       const reportedSandbox = object(started?.sandbox)?.type;
       if (thread.cwd !== input.cwd || thread.ephemeral === true || thread.historyMode !== "paginated"
         || started?.model !== selection.model || started.approvalPolicy !== "never"
-        || reportedSandbox !== (mode === "write" ? "workspaceWrite" : "readOnly")) {
+        || reportedSandbox !== "workspaceWrite") {
         throw Error("New Web job model or requested sandbox authority was not proven");
       }
     }
@@ -833,9 +828,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     try {
       input.signal.throwIfAborted();
       update({ state: "submitting" });
-      const sandboxPolicy = mode === "write"
-        ? { type: "workspaceWrite", writableRoots: [input.cwd], networkAccess: false }
-        : { type: "readOnly" };
+      const sandboxPolicy = { type: "workspaceWrite", writableRoots: [input.cwd], networkAccess: false };
       turnSubmissionAttempted = true;
       const response = object(await rpc.request("turn/start", {
         threadId: record.threadId, ...webDelegationTurnSettings(selection),
