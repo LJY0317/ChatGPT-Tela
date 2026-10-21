@@ -8,6 +8,7 @@ import type { LocalProfileBinding } from "./cross-profile-thread-relay";
 import type { TrustedNativeProfileSession } from "./cross-profile-account-proof";
 import { selectDelegationWebModel, type DelegationWebModel } from "./web-delegation-model";
 import { indexedWebDelegationProgress, WebDelegationProgressProjection, type WebDelegationProgress } from "./web-delegation-progress";
+import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RESULT_BYTES = 512 * 1024;
@@ -654,6 +655,14 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
         || reportedSandbox !== (mode === "write" ? "workspaceWrite" : "readOnly")) {
         throw Error("New Web job model or requested sandbox authority was not proven");
       }
+      const title = (typeof thread.name === "string" && thread.name.trim() || input.prompt.trim()).split(/\r?\n/, 1)[0]!;
+      if (!title.startsWith(DELEGATED_TITLE_PREFIX)) {
+        try {
+          await rpc.request("thread/name/set", { threadId: thread.id, name: DELEGATED_TITLE_PREFIX + title }, input.signal);
+        } catch (error) {
+          emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { failure_class: diagnosticFailureClass(error) });
+        }
+      }
     }
     await prove();
     let resolveDone!: () => void, rejectDone!: (error: Error) => void;
@@ -662,22 +671,10 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     const messages = new Map<string, { text: string; phase?: string }>();
     const pending: Array<[string, Record<string, unknown>]> = [];
     let toolItems = 0, turnId: string | undefined, eventCount = 0, reportedStatus: string | undefined;
-    let titleHandled = Boolean(parent);
     const resultItems = new Set<string>();
     const progressProjection = new WebDelegationProgressProjection();
     const accept = (method: string, event: Record<string, unknown>) => {
       if (event.threadId !== record!.threadId) return;
-      if (method === "thread/name/updated" && !titleHandled && typeof event.threadName === "string"
-        && event.threadName.trim()) {
-        titleHandled = true;
-        if (!event.threadName.startsWith(DELEGATED_TITLE_PREFIX)) {
-          // Best effort, once per new managed thread. Naming never delays the turn.
-          void rpc!.request("thread/name/set", {
-            threadId: record!.threadId, name: DELEGATED_TITLE_PREFIX + event.threadName,
-          }).catch(() => {});
-        }
-        return;
-      }
       if (++eventCount > 10_000) { rejectDone(Error("Web job event bound exceeded")); return; }
       if (!turnId) {
         if (pending.length >= 256) { rejectDone(Error("Web job ACK event bound exceeded")); return; }
