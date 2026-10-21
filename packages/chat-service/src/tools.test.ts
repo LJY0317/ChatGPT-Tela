@@ -146,14 +146,16 @@ describe("Tela Chat first vertical slice", () => {
       writeFileSync(join(f.root, "node_modules", "ignored", "AGENTS.md"), "dependency rules\n");
 
       const opened = await f.runtime.call("open_workspace", { path: f.root }) as {
-        instructions: readonly { path: string; content: string }[];
+        instructions: readonly { path: string; content: string; source: string; scope: string }[];
         availableInstructionFiles: readonly string[];
         instructionScanComplete: boolean;
+        globalInstructionStatus: string;
       };
-      expect(opened.instructions).toEqual([
-        { path: "AGENTS.md", content: "root agent rules\n" },
-        { path: "CLAUDE.md", content: "root claude rules\n" },
+      expect(opened.instructions.filter(instruction => instruction.source === "workspace")).toEqual([
+        { path: "AGENTS.md", content: "root agent rules\n", source: "workspace", scope: "project" },
+        { path: "CLAUDE.md", content: "root claude rules\n", source: "workspace", scope: "project" },
       ]);
+      expect(opened.instructions.some(instruction => instruction.path === "~/.codex/AGENTS.md" && instruction.source === "global" && instruction.scope === "user")).toBe(opened.globalInstructionStatus === "loaded");
       expect(opened.availableInstructionFiles).toEqual([
         "packages/AGENTS.md",
         "packages/app/CLAUDE.MD",

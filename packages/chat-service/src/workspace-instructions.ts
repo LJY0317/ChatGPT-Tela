@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { relative, resolve, sep } from "node:path";
 import { resolveExistingWorkspacePath } from "./paths";
 
@@ -13,12 +14,15 @@ const MAX_SCAN_DEPTH = 16;
 export interface ChatLoadedInstruction {
   readonly path: string;
   readonly content: string;
+  readonly source: "global" | "workspace";
+  readonly scope: "user" | "project";
 }
 
 export interface ChatWorkspaceInstructionContext {
   readonly instructions: readonly ChatLoadedInstruction[];
   readonly availableInstructionFiles: readonly string[];
   readonly instructionScanComplete: boolean;
+  readonly globalInstructionStatus: "loaded" | "oversized" | "missing";
 }
 
 function portableRelative(root: string, absolute: string): string {
@@ -40,19 +44,48 @@ function readInstruction(root: string, path: string): { readonly bytes: number; 
  * before work under that subtree. Directory traversal is deterministic and bounded so opening a workspace
  * cannot become an unbounded repository crawl.
  */
-export function discoverWorkspaceInstructions(root: string): ChatWorkspaceInstructionContext {
+export function discoverWorkspaceInstructions(root: string, options: { readonly codexHome?: string } = {}): ChatWorkspaceInstructionContext {
   const loaded: ChatLoadedInstruction[] = [];
   const available = new Set<string>();
   let loadedBytes = 0;
   let scanComplete = true;
+  let globalInstructionStatus: ChatWorkspaceInstructionContext["globalInstructionStatus"] = "missing";
+
+  // Standalone Chat has no Native instruction-revision channel. Read only the
+  // conventional user Codex home file; workspace roots do not authorize arbitrary
+  // reads elsewhere on the filesystem. Re-resolve it on each explicit discovery.
+  const globalHome = resolve(options.codexHome ?? resolve(homedir(), ".codex"));
+  const globalInstructionPath = resolve(globalHome, "AGENTS.md");
+  try {
+    const fileStat = lstatSync(globalInstructionPath);
+    if (!fileStat.isFile() || fileStat.isSymbolicLink()) throw new Error("global Codex instructions must be a regular file");
+    if (fileStat.size > MAX_ROOT_INSTRUCTION_BYTES) {
+      globalInstructionStatus = "oversized";
+    } else {
+      const bytes = readFileSync(globalInstructionPath);
+      if (bytes.includes(0)) throw new Error("global Codex instructions appear to be binary");
+      const instruction = { bytes: bytes.byteLength, content: bytes.toString("utf8") };
+      loaded.push(Object.freeze({ path: "~/.codex/AGENTS.md", content: instruction.content, source: "global", scope: "user" }));
+      loadedBytes += instruction.bytes;
+      globalInstructionStatus = "loaded";
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      // Missing global instructions are normal; an existing unreadable or invalid
+      // file should be surfaced rather than silently treated as absent.
+      throw error;
+    }
+  }
 
   const rootEntries = readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
   for (const entry of rootEntries) {
     if (!INSTRUCTION_NAMES.has(entry.name) || entry.isDirectory()) continue;
+    const stat = lstatSync(resolve(root, entry.name));
+    if (!stat.isFile() || stat.isSymbolicLink()) continue;
     const instruction = readInstruction(root, entry.name);
     if (instruction.bytes <= MAX_ROOT_INSTRUCTION_BYTES
       && loadedBytes + instruction.bytes <= MAX_TOTAL_ROOT_INSTRUCTION_BYTES) {
-      loaded.push(Object.freeze({ path: entry.name, content: instruction.content }));
+      loaded.push(Object.freeze({ path: entry.name, content: instruction.content, source: "workspace", scope: "project" }));
       loadedBytes += instruction.bytes;
     } else {
       available.add(entry.name);
@@ -92,7 +125,9 @@ export function discoverWorkspaceInstructions(root: string): ChatWorkspaceInstru
       if (!INSTRUCTION_NAMES.has(entry.name)) continue;
       const path = portableRelative(root, resolve(current.absolute, entry.name));
       try {
-        readInstruction(root, path);
+        const absolute = resolve(current.absolute, entry.name);
+        const stat = lstatSync(absolute);
+        if (!stat.isFile() || stat.isSymbolicLink()) continue;
         available.add(path);
       } catch {
         // An instruction-shaped path that cannot be proven inside the workspace is not safe to advertise.
@@ -109,5 +144,6 @@ export function discoverWorkspaceInstructions(root: string): ChatWorkspaceInstru
     instructions: Object.freeze(loaded),
     availableInstructionFiles: Object.freeze([...available].sort()),
     instructionScanComplete: scanComplete,
+    globalInstructionStatus,
   });
 }
