@@ -424,15 +424,13 @@ const PREPARE_RESPONSE_RETRY = String.raw`function retryFailedResponse(assistant
   const excluded = [...group.querySelectorAll('[data-user-message-bubble], [data-markdown-text-style="assistant-message"], [data-streaming-response-status], ${APPROVAL_SURFACE_SELECTOR}')];
   const errors = [...group.querySelectorAll('[role="alert"], [data-message-error], [data-testid="message-error"]')]
     .filter(node => visible(node) && !excluded.some(root => root.contains(node))
-      && /^Error in message stream\b/i.test(node.textContent.trim()));
+      && node.textContent.trim().toLowerCase().startsWith('error in message stream'));
   const buttons = errors.flatMap(node => [...node.querySelectorAll('button')])
     .filter(node => visible(node) && !node.disabled && /^Retry$/i.test(node.textContent.trim()));
-  const activated = globalThis[Symbol.for('chatgpt-tela.response-retry.v1')] ||= new WeakSet();
-  if (buttons.length !== 1 || activated.has(buttons[0])) return null;
+  if (buttons.length !== 1) return null;
   const button = buttons[0];
   button.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
   const rect = button.getBoundingClientRect();
-  activated.add(button);
   return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 }`;
 

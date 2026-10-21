@@ -729,9 +729,9 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(result.turns[0]?.publicProgress).toEqual(["Checking records\n\nReading the current execution record."]);
     expect(result.turns[0]?.publicProgress?.join()).not.toMatch(/HIDDEN_CONTENT|CONTROL_CONTENT|FINAL_CONTENT/);
   });
-  test.each(["owned", "foreign", "authored", "click-failed", "anchored"])("stream Retry clicks only the owned error control once (%s)", async mode => {
+  test.each(["owned", "foreign", "authored", "click-failed", "anchored"])("stream Retry selects only the owned error control (%s)", async mode => {
     const button = new FixtureElement({ "data-fixture-tag": "BUTTON" }); button.textContent = "Retry";
-    const alert = new FixtureElement({ role: "alert" }, { button: [button] }); alert.textContent = "Error in message stream Retry";
+    const alert = new FixtureElement({ role: "alert" }, { button: [button] }); alert.textContent = "Error in message streamRetry";
     const group = new FixtureElement({ "data-turn-key": "owned" }, { '[role="alert"]': [alert],
       ...(mode === "anchored" ? { '[data-content-search-turn-key]': [new FixtureElement({ 'data-content-search-turn-key': 'stable-turn' })] } : {}),
       ...(mode === "authored" ? { '[data-markdown-text-style="assistant-message"]': [alert] } : {}) });
@@ -747,9 +747,9 @@ describe("current ChatGPT DOM surface driver", () => {
     try {
       if (mode === "click-failed") await expect(driver.retryFailedResponse(key)).rejects.toThrow("synthetic dispatch failure");
       else expect(await driver.retryFailedResponse(key)).toBe(mode === "owned" || mode === "anchored");
-      expect(await driver.retryFailedResponse(key)).toBe(false);
-      expect(clicks).toBe(mode === "owned" || mode === "anchored" || mode === "click-failed" ? 1 : 0);
-      expect(rows.some(row => row.stage === "response_retry_dispatch_started")).toBe(clicks === 1);
+      if (mode !== "click-failed") expect(await driver.retryFailedResponse(key)).toBe(mode === "owned" || mode === "anchored");
+      expect(clicks).toBe(mode === "owned" || mode === "anchored" ? 2 : mode === "click-failed" ? 1 : 0);
+      expect(rows.some(row => row.stage === "response_retry_dispatch_started")).toBe(clicks > 0);
       expect(rows.some(row => row.stage === "response_retry_activated")).toBe(mode === "owned" || mode === "anchored");
     } finally { stop?.(); }
   });
