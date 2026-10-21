@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { diagnosticFingerprint, emitDiagnosticEvent, isNativeGoalTool } from "@chatgpt-tela/core";
 import type {
   NativeToolCatalogEntry,
@@ -39,6 +40,11 @@ export class McpTurnBridge implements TurnBridgeBackend {
     if (goalControl) {
       const tool = goalControl.binding.tools.exact(invocation.wireName);
       if (!tool || !isNativeGoalTool(tool)) throw Error("Goal control cannot invoke Native work tools");
+      // Caller correlation is local; Native call IDs also live in historical requests.
+      const callId = "goal_" + createHash("sha256").update(JSON.stringify([
+        goalControl.binding.authority.threadId, goalControl.binding.authority.turnId, invocation.callId,
+      ])).digest("hex").slice(0, 56);
+      return goalControl.requestTool({ ...invocation, callId }).then(result => ({ ...result, callId: invocation.callId }));
     }
     return (goalControl ?? this.turns.resolve(capability)).requestTool(invocation);
   }

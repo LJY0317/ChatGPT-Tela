@@ -65,7 +65,10 @@ advertises its original Goal tools, the Web task receives a separate Goal-only
 control capability. Discover `goal_control_inventory` through Tela Chat and use
 `goal_control_call` with the returned Native schema. This uses the original Native
 tool execution/result path; it creates no Goal store or scheduler and cannot invoke
-Native work tools. The capability expires with the response cycle. When no original
+Native work tools. Goal caller IDs are scoped to the Native thread and turn before
+execution, so a later turn can reuse a caller label without matching an older result.
+The returned result retains the caller's original ID; duplicate-call checks within
+one turn are unchanged. The capability expires with the response cycle. When no original
 Goal tool is advertised, no completion capability is supplied: report that limit
 instead of creating a shell/RPC completion helper.
 

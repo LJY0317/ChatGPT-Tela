@@ -12,7 +12,7 @@ import {
 } from "@chatgpt-tela/runtime";
 import { McpTurnBridge } from "./turn-bridge";
 
-function binding(additional: readonly NativeToolDescriptor[] = []): NativeTurnBinding {
+function binding(additional: readonly NativeToolDescriptor[] = [], turnId = "turn-1"): NativeTurnBinding {
   const tools = [{
     wireName: "exec_command",
     name: "exec_command",
@@ -23,28 +23,28 @@ function binding(additional: readonly NativeToolDescriptor[] = []): NativeTurnBi
   return {
     claim: {
       threadId: "thread-1",
-      turnId: "turn-1",
+      turnId,
       requestKind: "turn",
       toolObservations: [{ source: "fixture", tools }],
     },
     authority: defineNativeTurnAuthority({
       threadId: "thread-1",
-      turnId: "turn-1",
+      turnId,
       cwd: "/workspace",
       workspaceRoots: ["/workspace"],
       sandbox: { kind: "read-only", network: "restricted" },
     }),
-    tools: NativeToolInventory.fromObservations("thread-1", "turn-1", [
+    tools: NativeToolInventory.fromObservations("thread-1", turnId, [
       { source: "fixture", tools },
     ]),
     canonicalEvidence: {
       threadId: "thread-1",
-      turnId: "turn-1",
+      turnId,
       cwd: "/workspace",
       workspaceRoots: ["/workspace"],
       sandbox: { kind: "read-only", network: "restricted" },
       proof: "turn-context",
-      environmentSourceTurnId: "turn-1",
+      environmentSourceTurnId: turnId,
     },
   };
 }
@@ -108,12 +108,11 @@ test("Goal-only capability reuses Native tool delivery and expires with its resp
     .toThrow("cannot invoke Native work tools");
   registered.channel.markSubmitted(); registered.channel.markAccepted();
   const result = bridge.invoke(control, { callId: "native-complete", wireName: "update_goal", mode: "structured", arguments: { status: "complete" } });
-  expect(await nextNativeResponsesToolCall(registered.channel)).toMatchObject({
-    type: "function_call", name: "update_goal", arguments: JSON.stringify({ status: "complete" }),
-  });
-  acceptNativeResponsesToolResult(registered.channel, { input: [{ type: "function_call_output", call_id: "native-complete", output: "native-goal-result" }] });
-  registered.channel.releaseNativeToolResultToWeb("native-complete");
-  expect(await result).toMatchObject({ content: "native-goal-result", isError: false });
+  const nativeCall = await nextNativeResponsesToolCall(registered.channel);
+  expect(nativeCall).toMatchObject({ type: "function_call", name: "update_goal", arguments: JSON.stringify({ status: "complete" }) });
+  acceptNativeResponsesToolResult(registered.channel, { input: [{ type: "function_call_output", call_id: nativeCall.call_id, output: "native-goal-result" }] });
+  registered.channel.releaseNativeToolResultToWeb(nativeCall.call_id);
+  expect(await result).toMatchObject({ callId: "native-complete", content: "native-goal-result", isError: false });
   registered.channel.markWebContinuation();
   registered.channel.complete("finished");
   const next = turns.nextCycle(registered.capability, bound);
@@ -126,4 +125,24 @@ test("Goal-only capability reuses Native tool delivery and expires with its resp
 test("turns without original Goal controls do not advertise a completion capability", () => {
   const turns = new ActiveTurnRegistry(), registered = turns.register(binding());
   expect(turns.goalControl(registered.capability)).toBeUndefined();
+});
+
+ test("repeated Goal caller IDs in later turns cannot collide with historical Native results", async () => {
+  const turns = new ActiveTurnRegistry(), bridge = new McpTurnBridge(turns);
+  let previousId: string | undefined;
+  for (const turnId of ["first-turn", "second-turn"]) {
+    const registered = turns.register(binding([{ wireName: "get_goal", name: "get_goal", kind: "function", description: "Read goal" }], turnId));
+    registered.channel.markSubmitted(); registered.channel.markAccepted();
+    const waiting = bridge.invoke(turns.goalControl(registered.capability)!, { callId: "goal-1", wireName: "get_goal", mode: "structured", arguments: {} });
+    const nativeCall = await nextNativeResponsesToolCall(registered.channel);
+    expect(nativeCall.call_id).not.toBe(previousId);
+    acceptNativeResponsesToolResult(registered.channel, { input: [
+      ...(previousId ? [{ type: "function_call_output", call_id: previousId, output: "historical" }] : []),
+      { type: "function_call_output", call_id: nativeCall.call_id, output: "current" },
+    ] });
+    registered.channel.releaseNativeToolResultToWeb(nativeCall.call_id);
+    expect(await waiting).toMatchObject({ callId: "goal-1", content: "current" });
+    registered.channel.markWebContinuation(); registered.channel.complete("done");
+    turns.retire(registered.capability); previousId = nativeCall.call_id;
+  }
 });
