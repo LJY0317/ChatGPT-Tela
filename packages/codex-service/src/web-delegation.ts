@@ -776,6 +776,15 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       }
     }
     await prove();
+    // A Goal or queued continuation can start a turn without passing through our
+    // turn/start arguments. Persist the same effective preset before submitting
+    // any work on this owned delegation thread.
+    await rpc.request("thread/settings/update", {
+      threadId: record.threadId,
+      model: selection.model,
+      effort: selection.effort,
+      ...webDelegationTurnSettings(selection),
+    }, input.signal);
     let resolveDone!: () => void, rejectDone!: (error: Error) => void;
     const done = new Promise<void>((resolve, reject) => { resolveDone = resolve; rejectDone = reject; });
     void done.catch(() => {});

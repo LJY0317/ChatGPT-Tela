@@ -23,6 +23,7 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
   let currentTitle: string | null = null;
   let modeModel = "native-fixture";
   const executionModels: string[] = [];
+  const queuedExecutionModels: string[] = [];
   const rpc: CodexAppServerRpc = {
     subscribe(callback, onDisconnected) { notify = callback; disconnected = onDisconnected; return () => {}; },
     async close() { if (options.closeFails) throw Error("connection already closed"); },
@@ -30,6 +31,13 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
       calls.push({ method, params });
       if (method === "model/list") return { data: [{ model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", displayName: "6 (Web)", supportedReasoningEfforts: [{ reasoningEffort: "xhigh" }] }] };
       if (method === "thread/resume") { attached = true; return { thread: { id: threadId } }; }
+      if (method === "thread/settings/update") {
+        const settings = params as { collaborationMode?: { settings: { model: string } } };
+        modeModel = settings.collaborationMode?.settings.model ?? modeModel;
+        // A queued Goal continuation reads the persisted preset without our turn/start arguments.
+        queuedExecutionModels.push(modeModel);
+        return { thread: { id: threadId }, model: modeModel };
+      }
       if (method === "thread/start") { attached = true; return { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", approvalPolicy: "never", sandbox: { type: options.mode === "write" ? "workspaceWrite" : "readOnly" }, thread: { id: threadId, cwd: root, historyMode: "paginated", ephemeral: false } }; }
       if (method === "thread/read") { if (options.titleReadFails) throw Error("Fixture metadata unavailable"); return { thread: { id: threadId, name: currentTitle, preview: "Read this fixture and design only\nMore context" } }; }
       if (method === "thread/name/set") {
@@ -91,7 +99,7 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
       };
     },
   };
-  return { root, store, calls, changes, id, executionModels,
+  return { root, store, calls, changes, id, executionModels, queuedExecutionModels,
     setModeModel: (model: string) => { modeModel = model; },
     inspect: (jobId: string = id) => inspectWebDelegationResult(adapters, jobId),
     collect: (jobId: string = id) => collectWebDelegationResult(adapters, jobId),
@@ -107,7 +115,11 @@ test("new read-only durable Web job buffers ACK race, returns exact final and ne
       toolItems: 1, toolResultItems: 1, toolResultCoverage: "live-events" });
     expect(f.calls.find(call => call.method === "thread/start")?.params).toMatchObject({ ephemeral: false, historyMode: "paginated", sandbox: "read-only", approvalPolicy: "never" });
     expect(f.calls.find(call => call.method === "turn/start")?.params).toMatchObject({ collaborationMode: { mode: "default", settings: { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", reasoning_effort: "xhigh", developer_instructions: null } }, sandboxPolicy: { type: "readOnly" }, approvalPolicy: "never" });
-    expect(f.calls.map(call => call.method)).toEqual(["model/list", "thread/start", "turn/start"]);
+    expect(f.calls.map(call => call.method)).toEqual(["model/list", "thread/start", "thread/settings/update", "turn/start"]);
+    expect(f.calls.find(call => call.method === "thread/settings/update")?.params).toMatchObject({
+      model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", effort: "xhigh",
+      collaborationMode: { settings: { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa" } },
+    });
     await expect(f.run()).rejects.toThrow();
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
     expect(new WebDelegationStore(f.root).get(f.id)?.answer).toBe("verified design");
@@ -121,6 +133,7 @@ test("new and resumed delegation override a retained Native collaboration model"
     f.setModeModel("native-fixture");
     await f.continue(first.id);
     expect(f.executionModels).toEqual(Array(2).fill(first.selection!.model));
+    expect(f.queuedExecutionModels).toEqual(Array(2).fill(first.selection!.model));
     for (const call of f.calls.filter(call => call.method === "turn/start")) {
       expect(call.params).not.toHaveProperty("model");
       expect(call.params).not.toHaveProperty("effort");
