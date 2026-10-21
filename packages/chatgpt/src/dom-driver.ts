@@ -2262,7 +2262,13 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       };
       // Diagnostic-only DOM structure must not create a product observation revision.
       const revision = semanticRevision({ ...snapshot,
-        turns: snapshot.turns.map(({ bodyStructure: _diagnostic, ...item }) => item) });
+        turns: snapshot.turns.map(({ bodyStructure: _diagnostic, progressProbe, ...item }) => ({
+          ...item, ...(progressProbe ? { progressProbe: {
+            titleCount: progressProbe.titleCount,
+            descriptionCount: progressProbe.descriptionCount,
+            unmappedVisibleProsePresent: progressProbe.unmappedVisibleProsePresent,
+          } } : {}),
+        })) });
       return Object.freeze({ revision, ...snapshot });
     } catch (error) {
       emitDiagnosticEvent("chatgpt_tela_work", "web_dom_observation_failed", {

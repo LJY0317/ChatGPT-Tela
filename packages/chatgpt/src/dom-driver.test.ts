@@ -550,6 +550,7 @@ describe("current ChatGPT DOM surface driver", () => {
     });
     const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
     const before = (await driver.observe()).turns[0]!;
+    const originalRevision = (await driver.observe()).revision;
     expect(before.bodyStructure).toMatchObject({ source: 'markdown_message', rootCandidateCount: 2,
       selectedRootIndex: 1, selectedRootVisible: true, blockCount: 1, visibleBlockCount: 1 });
     expect(JSON.stringify(before.bodyStructure)).not.toContain('Sensitive fixture answer');
@@ -557,6 +558,21 @@ describe("current ChatGPT DOM surface driver", () => {
     const after = (await driver.observe()).turns[0]!;
     expect(after.bodyStructure?.blockFingerprint).not.toBe(before.bodyStructure?.blockFingerprint);
     expect(after.bodyStructure?.visibleBlockCount).toBe(0);
+    expect((await driver.observe()).revision).toBe(originalRevision);
+  });
+
+  test("Stop diagnostic change alone preserves product revision and body proof", async () => {
+    const page = new FakePage();
+    page.raw.turns = [{ key: 'assistant:fixed', role: 'assistant', phase: 'complete',
+      text: 'Fixture answer', bodyProof: { version: 1, value: '[["text","Fixture answer"]]' },
+      progressProbe: { titleCount: 0, descriptionCount: 0, failureStopVisible: false } }];
+    const driver = new ChatGptDomSurfaceDriver(page);
+    const before = await driver.observe();
+    (page.raw.turns[0]!.progressProbe as { failureStopVisible: boolean }).failureStopVisible = true;
+    const after = await driver.observe();
+    expect(after.turns[0]?.progressProbe?.stopVisible).toBe(true);
+    expect(after.turns[0]?.bodyProof).toEqual(before.turns[0]?.bodyProof);
+    expect(after.revision).toBe(before.revision);
   });
 
   test("machine JSON uses literal body text instead of layout line breaks", async () => {
