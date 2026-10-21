@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { diagnosticFingerprint } from "@chatgpt-tela/core";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,6 +50,7 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
     let fixtureDesktopPid: number | undefined;
     let normalQuitCalls = 0;
     const ownershipEvents: string[] = [];
+    const lifecycleEvents: { stage: string; fields: Record<string, any> }[] = [];
     const runtime = await startDefaultDesktopTargetRuntime({
       installation: {
         platform: "linux",
@@ -73,6 +75,7 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       // The shebang fixture is a Bun process, unlike the real native executable.
       processIds: async () => fixtureDesktopPid === undefined ? [] : [fixtureDesktopPid],
       normalQuit: async (_installation, pid) => { normalQuitCalls++; process.kill(pid, "SIGTERM"); },
+      onDiagnostic: (stage, fields) => lifecycleEvents.push({ stage, fields: { ...fields } }),
     });
     fixtureDesktopPid = runtime.desktopPid;
     try {
@@ -80,6 +83,11 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       expect(runtime.backendPid).toBeGreaterThan(0);
       expect(runtime.proxyEndpoint).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/$/);
       expect(runtime.responsesRouteFingerprint).toBe(route.fingerprint);
+      expect(lifecycleEvents.find(event => event.stage === "desktop_start_complete")?.fields).toMatchObject({
+        runtime_process_fingerprint: diagnosticFingerprint(String(process.pid)),
+        backend_process_fingerprint: diagnosticFingerprint(String(runtime.backendPid)),
+        desktop_process_fingerprint: diagnosticFingerprint(String(runtime.desktopPid)),
+      });
       const log = JSON.parse(readFileSync(logPath, "utf8")) as { args: string[]; secret: string | null };
       expect(log.args[0]).toBe("app-server");
       expect(log.secret).toBe("r".repeat(48));
@@ -101,6 +109,15 @@ const stop=()=>{try{ws.close()}catch{};process.exit(0)};process.on("SIGTERM",sto
       expect(normalQuitCalls).toBe(1);
       expect(ownershipEvents).toEqual(["claimed", "spawning", "attached", "exited"]);
       expect(JSON.parse(readFileSync(logPath, "utf8")).nativeInterrupted === true).toBe(historyMode === "paginated");
+      const quit = lifecycleEvents.filter(event => event.stage === "desktop_quit_requested").at(-1)!;
+      const stopped = lifecycleEvents.filter(event => event.stage === "desktop_stop_complete").at(-1)!;
+      expect(quit.fields).toMatchObject({
+        runtime_process_fingerprint: diagnosticFingerprint(String(process.pid)),
+        backend_process_fingerprint: diagnosticFingerprint(String(runtime.backendPid)),
+        desktop_process_fingerprint: diagnosticFingerprint(String(runtime.desktopPid)),
+      });
+      expect(typeof quit.fields.duration_ms).toBe("number");
+      expect(stopped.fields.duration_ms).toBeGreaterThanOrEqual(quit.fields.duration_ms);
       rmSync(root, { recursive: true, force: true });
     }
   });

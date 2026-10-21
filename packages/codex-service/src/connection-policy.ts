@@ -1,6 +1,6 @@
 import type { CodexProfileStatus } from "./controller";
 import type { CodexService } from "./controller";
-import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 
 /** Saved intent cannot authorize taking over or restarting an existing app. */
 export function restorableWorkProfiles(profiles: readonly CodexProfileStatus[], identities: readonly string[]): readonly number[] {
@@ -15,7 +15,21 @@ export async function restoreWorkProfiles(service: Pick<CodexService, "profiles"
   identities: readonly string[], signal: AbortSignal): Promise<void> {
   emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_started", { count: identities.length });
   let restored = 0, failed = 0;
-  const slots = identities.length ? restorableWorkProfiles(await service.profiles(), identities) : [];
+  const inventory = identities.length ? await service.profiles() : [];
+  const slots = restorableWorkProfiles(inventory, identities);
+  const selectedTargets = new Set(identities);
+  const restorableSlots = new Set(slots);
+  for (const profile of inventory) {
+    if (!selectedTargets.has(profile.targetId) || restorableSlots.has(profile.slot)) continue;
+    const processFields = {
+      ...(profile.childProcessId !== undefined ? { runtime_process_fingerprint: diagnosticFingerprint(String(profile.childProcessId)) } : {}),
+      ...(profile.desktopProcessId !== undefined ? { desktop_process_fingerprint: diagnosticFingerprint(String(profile.desktopProcessId)) } : {}),
+    };
+    for (const [phase, state] of [["target_state", profile.targetState],
+      ["session_state", profile.targetSessionState], ["control_state", profile.controlState]] as const) {
+      emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_skipped", { slot: profile.slot, phase, state, ...processFields });
+    }
+  }
   for (const slot of slots) {
     if (signal.aborted) break;
     emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_attempted", { slot });

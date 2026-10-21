@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { emitDiagnosticEvent, type DiagnosticScalar, type NativeIngressMediaRegistry, type NativeLiveTurnRegistry } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, emitDiagnosticEvent, type DiagnosticScalar, type NativeIngressMediaRegistry, type NativeLiveTurnRegistry } from "@chatgpt-tela/core";
 import { execFile, spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
 import { dirname, join } from "node:path";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -179,12 +179,18 @@ export async function startDefaultDesktopTargetRuntime(input: {
 }): Promise<DefaultDesktopTargetRuntime> {
   const started = performance.now();
   const fingerprint = randomBytes(12).toString("hex");
+  let backendPid: number | undefined;
+  let desktopPid: number | undefined;
   let phase = "checking";
   let backendOwnership: BackendOwnership | undefined;
   let quitRequested = false;
   const diagnostic = (stage: string, fields: Readonly<Record<string, DiagnosticScalar>> = {}) => {
     try {
-      const structural = { operation_fingerprint: fingerprint, phase, platform: input.installation.platform,
+      const structural = { operation_fingerprint: fingerprint,
+        runtime_process_fingerprint: diagnosticFingerprint(String(process.pid)),
+        ...(backendPid !== undefined ? { backend_process_fingerprint: diagnosticFingerprint(String(backendPid)) } : {}),
+        ...(desktopPid !== undefined ? { desktop_process_fingerprint: diagnosticFingerprint(String(desktopPid)) } : {}),
+        phase, platform: input.installation.platform,
         duration_ms: Math.max(0, Math.round(performance.now() - started)), ...fields };
       if (input.onDiagnostic) input.onDiagnostic(stage, structural);
       else emitDiagnosticEvent("chatgpt_tela_codex", stage, structural);
@@ -250,10 +256,10 @@ export async function startDefaultDesktopTargetRuntime(input: {
     stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
   }) as BackendProcess;
+  backendPid = backend.pid;
 
   let proxy: DefaultDesktopAppServerProxy | undefined;
   let desktop: ChildProcess | undefined;
-  let desktopPid: number | undefined;
   try {
     backend.once("exit", () => {
       try { backendOwnership?.proveBackendExit(); }
@@ -338,7 +344,8 @@ export async function startDefaultDesktopTargetRuntime(input: {
             diagnostic("desktop_stop_phase", { phase: stopPhase, duration_ms: Math.round(performance.now() - stopStarted) });
             const count = await interruptLoadedAppServerTurns(appServerEndpoint, { signal: AbortSignal.timeout(STOP_TIMEOUT_MS) });
             nativeWorkSettled = true;
-            diagnostic("desktop_native_work_settled", { phase: stopPhase, count });
+            diagnostic("desktop_native_work_settled", { phase: stopPhase, count,
+              duration_ms: Math.round(performance.now() - stopStarted) });
           }
           if (desktop && (alive(desktop) || input.installation.platform === "darwin")) {
             // Re-prove that the exact Desktop pid spawned by this runtime still exists as the
@@ -352,7 +359,8 @@ export async function startDefaultDesktopTargetRuntime(input: {
               try {
                 quitRequested = true;
                 await normalQuit(input.installation, desktopPid!);
-                diagnostic("desktop_quit_requested", { phase: stopPhase, request_state: "accepted" });
+                diagnostic("desktop_quit_requested", { phase: stopPhase, request_state: "accepted",
+                  duration_ms: Math.round(performance.now() - stopStarted) });
               } catch (error) {
                 quitRequested = false;
                 stopFailureReason = error instanceof DesktopNormalQuitError ? error.reasonClass : "request_failed";
