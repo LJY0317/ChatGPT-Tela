@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync, realpathSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, realpathSync, existsSync, writeFileSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -451,5 +451,117 @@ test("multiple collected continuations prune together while an uncollected sibli
     await f.run(f.origin + 40 * DAY);
     expect(f.store.records()).toHaveLength(0);
     expect(f.native.exists).toBe(true);
+  } finally { f.cleanup(); }
+});
+
+test("interrupted excluded history cleanup resumes from terminal and collection proof", async () => {
+  const f = fixture();
+  try {
+    f.store.collect(f.record.id, f.origin);
+    f.native.archived = true;
+    await f.run(f.origin + DAY);
+    const base = join(f.root, `${f.record.id}.json`);
+    // Interrupted after unlinking the base, before deleting the terminal.
+    rmSync(base);
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    expect(existsSync(`${base}.collected`)).toBe(true);
+    await f.run(f.origin + 30 * DAY);
+    expect(f.store.get(f.record.id)).toBeUndefined();
+    expect(existsSync(`${base}.completed`)).toBe(false);
+    expect(existsSync(`${base}.collected`)).toBe(false);
+    expect(f.store.threadRetention(f.record)).toBeUndefined();
+    expect(f.native.exists).toBe(true);
+    expect(f.calls.some(call => call.method === "thread/delete" || call.method === "thread/archive")).toBe(false);
+  } finally { f.cleanup(); }
+});
+
+test("interrupted terminal removal sweeps a collected-only marker and excluded receipt", async () => {
+  const f = fixture();
+  try {
+    f.store.collect(f.record.id, f.origin);
+    f.native.archived = true;
+    await f.run(f.origin + DAY);
+    const base = join(f.root, `${f.record.id}.json`);
+    // Interrupted after removing every answer-bearing file, before the
+    // collection timestamp and excluded receipt were unlinked.
+    rmSync(base);
+    rmSync(`${base}.completed`);
+    expect(existsSync(`${base}.collected`)).toBe(true);
+    await f.run(f.origin + 40 * DAY);
+    expect(existsSync(`${base}.collected`)).toBe(false);
+    expect(f.store.threadRetention(f.record)).toBeUndefined();
+    expect(f.native.exists).toBe(true);
+  } finally { f.cleanup(); }
+});
+
+test("terminal-only excluded answer without collection proof remains protected", async () => {
+  const f = fixture();
+  try {
+    f.store.collect(f.record.id, f.origin);
+    f.native.archived = true;
+    await f.run(f.origin + DAY);
+    const base = join(f.root, `${f.record.id}.json`);
+    // A legacy interrupted sequence lost its collection proof first. Do not
+    // guess whether this remaining terminal answer was ever collected.
+    rmSync(base);
+    rmSync(`${base}.collected`);
+    await f.run(f.origin + 40 * DAY);
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    expect(existsSync(`${base}.completed`)).toBe(true);
+    expect(f.store.threadRetention(f.record)?.state).toBe("excluded");
+  } finally { f.cleanup(); }
+});
+
+test("late same-thread continuation lease protects collected excluded history", async () => {
+  const f = fixture();
+  try {
+    f.store.collect(f.record.id, f.origin);
+    f.native.archived = true;
+    await f.run(f.origin + DAY);
+    const lease = join(f.root, `continuation-thread-${f.record.threadId}.lease`);
+    writeFileSync(lease, randomUUID());
+    await f.run(f.origin + 40 * DAY);
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    rmSync(lease);
+    await f.run(f.origin + 40 * DAY);
+    expect(f.store.get(f.record.id)).toBeUndefined();
+  } finally { f.cleanup(); }
+});
+
+test("only eligible collected bytes trigger the 16 MiB history budget", () => {
+  const f = fixture();
+  try {
+    const eligible = new Set<string>();
+    const exclude = (record: WebDelegationRecord) => {
+      const key = `${record.slot}:${record.owner.accountFingerprint}:${record.threadId}`;
+      eligible.add(key);
+      writeFileSync(join(f.root, `thread-${record.slot}-${record.owner.accountFingerprint}-${record.threadId}.retention`),
+        JSON.stringify({ state: "excluded" }));
+    };
+    f.store.collect(f.record.id, f.origin);
+    exclude(f.record);
+    const protectedJobs: WebDelegationRecord[] = [];
+    const largeAnswer = "x".repeat(500 * 1024);
+    for (let i = 0; i < 35; i++) {
+      const job = { ...f.record, id: randomUUID(), threadId: randomUUID(), turnId: randomUUID(), createdAt: f.origin + i };
+      f.store.reserve(job);
+      f.store.save({ ...job, state: "completed", answer: largeAnswer, finalEvidence: "explicit-final-phase" });
+      exclude(job);
+      protectedJobs.push(job);
+    }
+    // Uncollected results exceed 16 MiB but are outside the reclaimable budget.
+    expect(f.store.pruneCollectedHistory(eligible, f.origin + DAY).removed).toBe(0);
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    for (const [index, job] of protectedJobs.entries()) f.store.collect(job.id, f.origin + DAY + index);
+    const pruned = f.store.pruneCollectedHistory(eligible, f.origin + 2 * DAY);
+    expect(pruned.removed).toBeGreaterThan(1);
+    const remaining = [f.record, ...protectedJobs].filter(job => f.store.get(job.id));
+    expect(remaining.length).toBeGreaterThan(0);
+    expect(f.store.get(protectedJobs.at(-1)!.id)?.answer?.length).toBe(largeAnswer.length);
+    const bytes = remaining.reduce((sum, job) => sum + ["", ".collected", ".failed", ".completed"].reduce((size, suffix) => {
+      const path = join(f.root, `${job.id}.json${suffix}`);
+      return size + (existsSync(path) ? lstatSync(path).size : 0);
+    }, 0), 0);
+    expect(bytes).toBeLessThanOrEqual(16 * 1024 * 1024);
   } finally { f.cleanup(); }
 });

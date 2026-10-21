@@ -330,8 +330,10 @@ export class WebDelegationStore {
   }
   #removeRecordFiles(id: string): number {
     let files = 0;
-    // Preserve terminal ownership until its base has gone, including interrupted cleanup.
-    for (const suffix of ["", ".collected", ".failed", ".completed"]) {
+    // Keep collection proof until all answer-bearing records are gone. An
+    // interrupted prune can then resume from its terminal sidecar; a final
+    // collected-only marker is removed by the existing orphan sweep.
+    for (const suffix of ["", ".failed", ".completed", ".collected"]) {
       const path = this.#path(id) + suffix;
       if (existsSync(path)) { unlinkSync(path); files++; }
     }
@@ -371,6 +373,9 @@ export class WebDelegationStore {
       })) continue;
       const record = jobs[0]!;
       if (this.threadRetention(record)?.state !== "excluded") continue;
+      // A continuation may have acquired its thread lease after the retention
+      // pass observed the Native tail. An unknown lease is protected too.
+      if (this.#leaseOwner(this.#threadPermit(record.threadId!)) !== "free") continue;
       const key = { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! };
       for (const job of jobs) { this.#release(job); this.#removeRecordFiles(job.id); removed++; }
       bytes -= size;
@@ -379,11 +384,17 @@ export class WebDelegationStore {
     }
     return { removed, ...(next === Infinity ? {} : { next }) };
   }
-  /** A cleanup interrupted after its last sidecar left an excluded receipt. */
+  /** Sweep non-answer artifacts left after interrupted local history pruning. */
   pruneOrphanedExcludedReceipts(): void {
+    const retained = new Set(this.#retained());
     const owned = new Set(this.records().filter(record => record.threadId).map(record =>
       webDelegationRetentionPath(this.root, { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! })));
     for (const name of readdirSync(this.root)) {
+      const collectedId = /^([0-9a-f-]{36})\.json\.collected$/.exec(name)?.[1];
+      if (collectedId && UUID.test(collectedId) && !retained.has(`${collectedId}.json`)) {
+        unlinkSync(join(this.root, name));
+        continue;
+      }
       if (!/^thread-([1-9][0-9]?)-[a-f0-9]{64}-[0-9a-f-]{36}\.retention$/i.test(name)) continue;
       const path = join(this.root, name);
       if (owned.has(path)) continue;
