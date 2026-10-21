@@ -333,7 +333,7 @@ export class WebDelegationStore {
     // Keep collection proof until all answer-bearing records are gone. An
     // interrupted prune can then resume from its terminal sidecar; a final
     // collected-only marker is removed by the existing orphan sweep.
-    for (const suffix of ["", ".failed", ".completed", ".collected"]) {
+    for (const suffix of ["", ".failed", ".completed", ".collected", ".named"]) {
       const path = this.#path(id) + suffix;
       if (existsSync(path)) { unlinkSync(path); files++; }
     }
@@ -355,7 +355,7 @@ export class WebDelegationStore {
       if (!eligible.has(key) || this.threadRetention(jobs[0]!)?.state !== "excluded"
         || jobs.some(job => !this.#terminal(job) || !verifiedWebDelegationAnswer(job) || this.collectedAt(job.id) === undefined)) return [];
       const collected = Math.max(...jobs.map(job => this.collectedAt(job.id)!));
-      const size = jobs.reduce((sum, job) => sum + ["", ".collected", ".failed", ".completed"].reduce((total, suffix) => {
+      const size = jobs.reduce((sum, job) => sum + ["", ".collected", ".failed", ".completed", ".named"].reduce((total, suffix) => {
         const path = this.#path(job.id) + suffix;
         return total + (existsSync(path) ? lstatSync(path).size : 0);
       }, 0), 0);
@@ -390,7 +390,7 @@ export class WebDelegationStore {
     const owned = new Set(this.records().filter(record => record.threadId).map(record =>
       webDelegationRetentionPath(this.root, { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! })));
     for (const name of readdirSync(this.root)) {
-      const collectedId = /^([0-9a-f-]{36})\.json\.collected$/.exec(name)?.[1];
+      const collectedId = /^([0-9a-f-]{36})\.json\.(?:collected|named)$/.exec(name)?.[1];
       if (collectedId && UUID.test(collectedId) && !retained.has(`${collectedId}.json`)) {
         unlinkSync(join(this.root, name));
         continue;
@@ -440,6 +440,19 @@ export class WebDelegationStore {
     try {
       const fd = openSync(`${this.#path(id)}.collected`, "wx", 0o600);
       try { writeFileSync(fd, String(now)); fsyncSync(fd); } finally { closeSync(fd); }
+      return true;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return false; }
+  }
+  /** Claim once per Tela-created conversation, independently of answer collection. */
+  claimTitle(record: WebDelegationRecord): boolean {
+    if (!this.#terminal(record) || !record.threadId || record.origin) return false;
+    const root = record.parentJobId ? this.recordsForThread({ slot: record.slot,
+      accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId })
+      .find(job => !job.parentJobId && !job.origin) : record;
+    if (!root || this.collectedAt(root.id) !== undefined) return false;
+    try {
+      const fd = openSync(`${this.#path(root.id)}.named`, "wx", 0o600);
+      closeSync(fd);
       return true;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return false; }
   }
@@ -569,13 +582,11 @@ export interface WebDelegationAdapters {
   store: WebDelegationStore;
   changed?(record: WebDelegationRecord): void;
 }
-/** Naming is a one-time side effect of the existing first-result collection receipt. */
-export async function collectWebDelegationResult(adapters: WebDelegationAdapters, id: string): Promise<string> {
+/** Explicit terminal-result inspection, including failure; never marks an answer collected. */
+export async function inspectWebDelegationResult(adapters: WebDelegationAdapters, id: string): Promise<WebDelegationRecord> {
   const record = adapters.store.get(id);
-  const answer = record && verifiedWebDelegationAnswer(record);
-  if (!record || !answer) throw Error("No verified final result; inspect job status");
-  const firstCollection = adapters.store.collect(id);
-  if (firstCollection && record.threadId && !record.parentJobId && !record.origin) {
+  if (!record) throw Error("Web job was not found");
+  if (adapters.store.claimTitle(record)) {
     try {
       const current = await adapters.owner(record.slot);
       if (sameAccountOwner(record, current)) {
@@ -592,9 +603,16 @@ export async function collectWebDelegationResult(adapters: WebDelegationAdapters
         } finally { await rpc.close(); }
       }
     } catch (error) {
-      emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { phase: "collect", failure_class: diagnosticFailureClass(error) });
+      emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { phase: "inspect", failure_class: diagnosticFailureClass(error) });
     }
   }
+  return record;
+}
+export async function collectWebDelegationResult(adapters: WebDelegationAdapters, id: string): Promise<string> {
+  const record = await inspectWebDelegationResult(adapters, id);
+  const answer = verifiedWebDelegationAnswer(record);
+  if (!answer) throw Error("No verified final result; inspect job status");
+  adapters.store.collect(id);
   return answer;
 }
 function sameOwner(record: WebDelegationRecord, current: Awaited<ReturnType<WebDelegationAdapters["owner"]>>) {

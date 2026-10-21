@@ -7,7 +7,7 @@ import { readOwnershipManifest, type resolveProductPaths } from "@chatgpt-tela/p
 import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
 import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
 import { createLocalNativeAccountProof, type TrustedNativeProfileSession } from "../../../packages/codex-service/src/cross-profile-account-proof";
-import { WebDelegationStore, collectWebDelegationResult, WebDelegationCapacityError, verifiedWebDelegationAnswer, runWebDelegation, reconcileWebDelegation } from "../../../packages/codex-service/src/web-delegation";
+import { WebDelegationStore, inspectWebDelegationResult, collectWebDelegationResult, WebDelegationCapacityError, verifiedWebDelegationAnswer, runWebDelegation, reconcileWebDelegation } from "../../../packages/codex-service/src/web-delegation";
 import { selectDelegationWebModel } from "../../../packages/codex-service/src/web-delegation-model";
 import { profileSlotFromArguments, delegationProfileSlot } from "./profile-selection";
 
@@ -54,8 +54,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     return;
   }
   if (subcommand === "status" || subcommand === "result") {
-    const record = store.get(option("--job"));
-    if (!record) throw Error("Web job was not found");
+    const record = await inspectWebDelegationResult(adapters, option("--job"));
     if (subcommand === "result") {
       console.log(await collectWebDelegationResult(adapters, record.id));
     } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", progress: record.progress, parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure }, null, 2));
@@ -91,6 +90,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   }
   if (subcommand === "reconcile") {
     const record = await reconcileWebDelegation(adapters, selectedJob!.id, AbortSignal.timeout(30_000));
+    await inspectWebDelegationResult(adapters, record.id);
     const answer = verifiedWebDelegationAnswer(record);
     if (answer) await collectWebDelegationResult(adapters, record.id);
     console.log(JSON.stringify({ jobId: record.id, state: record.state, toolItems: record.toolItems ?? 0,
@@ -121,6 +121,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
       ...adapters,
       changed: record => console.log(JSON.stringify({ jobId: record.id, state: record.state, selection: record.selection, toolItems: record.toolItems ?? 0 })),
     }, { id, slot, cwd, prompt, mode, ...(continuation ? { parentJobId: continuation.id } : {}), signal: AbortSignal.timeout(20 * 60 * 1000) });
+    await inspectWebDelegationResult(adapters, result.id);
     const answer = verifiedWebDelegationAnswer(result);
     if (answer) {
       await collectWebDelegationResult(adapters, result.id);
@@ -133,6 +134,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
       process.exitCode = 1;
       return;
     }
+    if (store.get(id)) await inspectWebDelegationResult(adapters, id);
     throw error;
   }
 }

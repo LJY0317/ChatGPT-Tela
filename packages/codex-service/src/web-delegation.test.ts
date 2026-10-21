@@ -6,7 +6,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
-import { runWebDelegation, collectWebDelegationResult, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
+import { runWebDelegation, inspectWebDelegationResult, collectWebDelegationResult, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
 async function fixture(options: { titleReadFails?: boolean; titleSetFails?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write"; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
@@ -86,6 +86,7 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
     },
   };
   return { root, store, calls, changes, id,
+    inspect: (jobId: string = id) => inspectWebDelegationResult(adapters, jobId),
     collect: (jobId: string = id) => collectWebDelegationResult(adapters, jobId),
     setTitle: (name: string | null) => { currentTitle = name; },
     continue: (parentJobId: string, prompt = "Follow up", mode: "read" | "write" = options.mode ?? "read") => runWebDelegation(adapters, { id: randomUUID(), slot, cwd: root, prompt, mode, parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", mode: options.mode ?? "read", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
@@ -118,6 +119,36 @@ test("first collection names once and preserves later manual removal", async () 
     f.setTitle("User removed prefix");
     const before = f.calls.length;
     await f.collect();
+    expect(f.calls).toHaveLength(before);
+  } finally { f.cleanup(); }
+});
+test("failed result inspection names once without starting collected retention", async () => {
+  const f = await fixture({ failedTurn: true, answer: "" });
+  try {
+    await expect(f.run()).rejects.toThrow("Web job turn failed");
+    const result = f.store.get(f.id)!;
+    expect(result.state).toBe("failed");
+    f.setTitle("Failed task");
+    await f.inspect();
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toEqual([{
+      method: "thread/name/set", params: { threadId: result.threadId, name: "[Tela Agent] Failed task" },
+    }]);
+    expect(f.store.collectedAt(f.id)).toBeUndefined();
+    f.setTitle("User rename");
+    await expect(f.collect()).rejects.toThrow("No verified final result");
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(1);
+    f.store.removeDeletedThread({ slot: result.slot, accountFingerprint: result.owner.accountFingerprint, threadId: result.threadId! });
+    expect(() => readFileSync(join(f.root, `${f.id}.json.named`))).toThrow();
+  } finally { f.cleanup(); }
+});
+test("an existing collected receipt preserves manual titles after upgrade", async () => {
+  const f = await fixture();
+  try {
+    await f.run();
+    f.store.collect(f.id);
+    f.setTitle("Personal rename");
+    const before = f.calls.length;
+    await f.inspect();
     expect(f.calls).toHaveLength(before);
   } finally { f.cleanup(); }
 });

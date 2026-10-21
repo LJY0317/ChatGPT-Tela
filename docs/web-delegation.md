@@ -32,10 +32,12 @@ uncollected policy and are never replaced by answer times or file modification t
 
 The source CLI can run a bounded, workspace-write-capable task on a connected Tela Work profile without
 changing the model of an existing conversation or exporting its history. Newly created journal-owned Native
-threads receive a one-time `[Tela Agent] ` prefix when their first verified result is collected,
+threads receive a one-time `[Tela Agent] ` prefix on first explicit inspection of a terminal result,
+successful or failed,
 through Native `thread/name/set`. Naming uses the current title, or the first nonempty line of
-Native preview when unnamed. It reuses the existing collection receipt: no title-event observer,
-timer, pending marker or permanent title list. Later collections and continuations preserve user
+Native preview when unnamed. A one-time naming marker is cleaned with the job and kept separate
+from verified-answer collection time; existing collection receipts count as already handled.
+No title-event observer, timer or permanent title list is used. Later inspections and continuations preserve user
 renames. Naming failures do not block the answer and are not automatically retried.
 The Native engine creates
 a new durable, paginated thread and supplies its own tool/sandbox authority; the existing Web
