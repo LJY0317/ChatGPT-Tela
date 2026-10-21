@@ -196,9 +196,11 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       guard let self else { return }
       self.controlCenter.workInventoryDidChange()
       self.updateConnectionProgress(self.connectionProgress)
+      self.showPendingLaunchNotice()
     }
     controlCenter.onConnectionProgressChanged = { [weak self] message in
       self?.updateConnectionProgress(message)
+      self?.showPendingLaunchNotice()
     }
     let menu = NSMenu()
     menu.autoenablesItems = false
@@ -338,13 +340,16 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     let live = Set(NSWorkspace.shared.runningApplications.map { Int($0.processIdentifier) })
     noticePolicy.prune(livePids: live)
     pendingLaunchPids.formIntersection(live)
+    // Inventory also covers apps opened before Tela and launch events whose PID
+    // was not discoverable yet. OS notifications remain hints, not a second owner.
+    pendingLaunchPids.formUnion(workInventory.profiles.compactMap { $0.desktopProcessId })
     for pid in pendingLaunchPids.sorted() {
-      pendingLaunchPids.remove(pid)
       // Do not steal focus from another app if the user moved on during discovery.
       guard Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0) == pid else { continue }
       guard let profile = noticePolicy.notice(pid: pid, profiles: workInventory.profiles,
           wantedTargets: preferences.workProfileConnections ?? [], inventoryValid: true),
           let app = NSRunningApplication(processIdentifier: pid_t(pid)), !app.isTerminated else { continue }
+      pendingLaunchPids.remove(pid)
       showingLaunchNotice = true
       let alert = NSAlert()
       alert.messageText = "Reopen ChatGPT to use Web models"

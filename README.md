@@ -977,16 +977,17 @@ The menu contains **Open Tela…**, which opens a Dock-less AppKit Control Cente
 window hides only the UI; the menu-bar process and Gateway/Chat/Codex services continue running. The three
 scrollable Control Center pages use the existing authenticated loopback contracts.
 
-Each ChatGPT entry has an **Open** button and a Web connection switch. Open brings the existing app
-to the front; if it is closed, Tela opens it with Web models ready. Changing the connection is a
-separate action and asks before closing an app with ongoing work.
+Each ChatGPT entry has an **Open** button and a Web connection switch. Open starts Tela when needed
+and opens a closed app with Web models ready. It brings a connected app to the front; for an app
+opened without Tela, it offers **Reopen with Tela** before closing or restarting anything.
 
 You can keep using the official ChatGPT icon. If you have chosen to use Web models but open ChatGPT
 without Tela, the macOS menu shows **Reopen to use Web models** and offers a reminder once per app
 launch: **Later** keeps ChatGPT open, while **Reopen with Tela** reconnects it. Tela never silently
 restarts the app. Keep the Tela menu running to receive this reminder. Managed profile icons can also
 open without Tela; the same reminder applies. These controls do not modify the original ChatGPT app
-or its default configuration. Real-app reminder placement and other-OS UI remain unverified.
+or its default configuration. The reminder also checks apps already open when Tela starts and
+rechecks after connection work finishes. Other-OS UI remains unverified.
 
 Tela's Web model connection applies to Work running **On your computer**. In the Work composer,
 open the computer/cloud menu and check the selected execution location. **In the cloud** uses the

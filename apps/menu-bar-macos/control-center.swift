@@ -1527,7 +1527,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   func openProfile(slot: Int) {
-    if let app = runningProfileApps[slot], !app.isTerminated, app.activate(options: []) {
+    if profiles.first(where: { $0.slot == slot })?.connected == true,
+       let app = runningProfileApps[slot], !app.isTerminated, app.activate(options: []) {
       return
     }
     guard !operationInProgress else { show(); return }
@@ -1562,6 +1563,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       }
       if let pid = profile.desktopProcessId, pid > 0, pid <= Int(Int32.max),
          let app = NSRunningApplication(processIdentifier: pid_t(pid)), !app.isTerminated {
+        if !profile.connected {
+          changeConnection(slot: slot)
+          return
+        }
         if !app.activate(options: []) {
           profileFailure = "Couldn't bring ChatGPT to the front. Please try again."
           selectedPage = .work; show()
