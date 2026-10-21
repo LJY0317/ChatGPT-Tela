@@ -1788,6 +1788,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       if (assistant?.phase === "failed" && !tracked.responseRetryAttempted && driver.retryFailedResponse) {
         if (await waitOwned(signal, () => driver.retryFailedResponse!(assistant.key, signal))) {
           tracked.responseRetryAttempted = true;
+          tracked.observeAgain = true;
           continue;
         }
       }
