@@ -291,8 +291,7 @@ export class WebDelegationStore {
   /** Only managed entries are eligible; deleted threads are hidden during cleanup. */
   records(): WebDelegationRecord[] {
     return this.#retained().filter(name => UUID.test(name.slice(0, -5)))
-      .map(name => this.get(name.slice(0, -5))!).filter(Boolean)
-      .filter(record => !record.threadId || this.threadRetention(record)?.state !== "deleted");
+      .map(name => this.get(name.slice(0, -5))!).filter(Boolean);
   }
   threadRetention(record: WebDelegationRecord): WebDelegationRetentionReceipt | undefined {
     if (!record.threadId) return undefined;
@@ -364,7 +363,6 @@ export class WebDelegationStore {
   /** First explicit result retrieval is durable; repeated reads do not extend retention. */
   collect(id: string, now = Date.now()): void {
     const record = this.get(id);
-    if (record && this.#deleted(record)) throw Error("Web job was deleted");
     if (!record || !verifiedWebDelegationAnswer(record)) throw Error("No verified Web result to collect");
     try {
       const fd = openSync(`${this.#path(id)}.collected`, "wx", 0o600);
@@ -449,7 +447,7 @@ export class WebDelegationStore {
   save(record: WebDelegationRecord): WebDelegationRecord {
     if (this.#terminal(record)) { const { progress: _progress, ...settled } = record; record = settled; }
     const current = this.get(record.id);
-    if (!current || this.#deleted(current)) throw Error("Web job was not reserved");
+    if (!current) throw Error("Web job was not reserved");
     const upgradedFailedFinal = current.state === "failed" && current.failure === "turn_failed"
       && !verifiedWebDelegationAnswer(current) && record.state === "failed"
       && record.failure === "turn_failed" && record.turnId === current.turnId
