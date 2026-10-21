@@ -40,7 +40,11 @@ provider UI failure, not its network cause or the outcome of an earlier tool ope
 For an owned failed response with an `Error in message stream` alert and a unique Retry
 button, the existing browser automation clicks that button once and continues observing
 the accepted turn. It does not resubmit the composer or start another Native turn.
-`response_retry_activated` records dispatch; recovery is proven only by later completion.
+`response_retry_preparation_started`, `response_retry_prepared` (target_present),
+`response_retry_dispatch_started` and `response_retry_activated` distinguish lookup,
+missing/already-used controls and attempted versus returned dispatch. Existing execution
+exception/cancellation and cycle-terminal events carry failures and later recovery;
+click return alone does not prove recovery.
 Other failures, absent controls and already-activated buttons keep the terminal failure path.
 Progress probes retain only the last structural signature, so unchanged reads are omitted
 without suppressing failures after an arbitrary number of earlier transitions.

@@ -688,19 +688,26 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(result.turns[0]?.publicProgress).toEqual(["Checking records\n\nReading the current execution record."]);
     expect(result.turns[0]?.publicProgress?.join()).not.toMatch(/HIDDEN_CONTENT|CONTROL_CONTENT|FINAL_CONTENT/);
   });
-  test.each(["owned", "foreign", "authored"])("stream Retry clicks only the owned error control once (%s)", async mode => {
+  test.each(["owned", "foreign", "authored", "click-failed"])("stream Retry clicks only the owned error control once (%s)", async mode => {
     const button = new FixtureElement({ "data-fixture-tag": "BUTTON" }); button.textContent = "Retry";
     const alert = new FixtureElement({ role: "alert" }, { button: [button] }); alert.textContent = "Error in message stream Retry";
     const group = new FixtureElement({ "data-turn-key": "owned" }, { '[role="alert"]': [alert],
       ...(mode === "authored" ? { '[data-markdown-text-style="assistant-message"]': [alert] } : {}) });
     const page = new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] }));
     let clicks = 0;
-    page.pointerClick = async () => { clicks++; };
+    page.pointerClick = async () => { clicks++; if (mode === "click-failed") throw Error("synthetic dispatch failure"); };
     const driver = new ChatGptDomSurfaceDriver(page);
     const key = mode === "foreign" ? "assistant:another" : "assistant:owned";
-    expect(await driver.retryFailedResponse(key)).toBe(mode === "owned");
-    expect(await driver.retryFailedResponse(key)).toBe(false);
-    expect(clicks).toBe(mode === "owned" ? 1 : 0);
+    const rows: Array<Record<string, unknown>> = [];
+    const stop = observeDiagnosticEvents(row => rows.push(row));
+    try {
+      if (mode === "click-failed") await expect(driver.retryFailedResponse(key)).rejects.toThrow("synthetic dispatch failure");
+      else expect(await driver.retryFailedResponse(key)).toBe(mode === "owned");
+      expect(await driver.retryFailedResponse(key)).toBe(false);
+      expect(clicks).toBe(mode === "owned" || mode === "click-failed" ? 1 : 0);
+      expect(rows.some(row => row.stage === "response_retry_dispatch_started")).toBe(clicks === 1);
+      expect(rows.some(row => row.stage === "response_retry_activated")).toBe(mode === "owned");
+    } finally { stop?.(); }
   });
 
   test("failure diagnostics survive more than 32 progress transitions and deduplicate unchanged reads", async () => {
