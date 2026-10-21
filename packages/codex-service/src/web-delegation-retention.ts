@@ -47,39 +47,41 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     groups.set(key, [...(groups.get(key) ?? []), record]);
   }
   let next = Infinity;
-  const checked = new Set<string>();
-  const confirmAbsent = async (key: WebDelegationThreadKey, record: WebDelegationRecord): Promise<boolean> => {
-    const owner = await adapters.owner(key.slot);
-    if (!sameAccountOwner(record, owner)) return false;
-    const rpc = await adapters.connect(owner.session.terminalEndpoint);
+  const confirmAbsent = async (record: WebDelegationRecord, rpc: Awaited<ReturnType<WebDelegationAdapters["connect"]>>): Promise<void> => {
+    const key = { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! };
+    const path = statePath(adapters, record);
     try {
-      try {
-        const read = object(await rpc.request("thread/read", { threadId: key.threadId, includeTurns: false }, input.signal));
-        if (object(read?.thread)?.id === key.threadId) {
-          save(webDelegationRetentionPath(adapters.store.root, key), { state: "excluded" });
-        }
-        return false;
-      } catch (error) {
-        if (!isExactDeletedNativeThreadAbsent(error, key.threadId)) throw error;
-      }
-      if (!sameAccountOwner(record, await adapters.owner(key.slot))) return false;
-      adapters.store.removeDeletedThread(key);
-      return true;
-    } finally { await rpc.close(); }
+      const read = object(await rpc.request("thread/read", { threadId: key.threadId, includeTurns: false }, input.signal));
+      if (object(read?.thread)?.id === key.threadId) save(path, { state: "excluded" });
+      return;
+    } catch (error) {
+      if (!isExactDeletedNativeThreadAbsent(error, key.threadId)) throw error;
+    }
+    if (!sameAccountOwner(record, await adapters.owner(record.slot))) return;
+    save(path, { state: "deleted" });
+    adapters.store.removeDeletedThread(key);
   };
   for (const key of adapters.store.pendingDeletedThreads()) {
-    const jobs = adapters.store.recordsForThread(key);
-    const record = jobs[0];
-    if (!record) continue;
-    checked.add(`${key.slot}:${key.threadId}`);
-    try { await confirmAbsent(key, record); }
-    catch (error) { if (input.signal.aborted) throw error; emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_failed", { failure_class: diagnosticFailureClass(error) }); }
+    const record = adapters.store.recordsForThread(key)[0];
+    if (!record) {
+      adapters.store.removeDeletedThread(key);
+      continue;
+    }
+    try {
+      const owner = await adapters.owner(key.slot);
+      if (!sameAccountOwner(record, owner)) continue;
+      const rpc = await adapters.connect(owner.session.terminalEndpoint);
+      try { await confirmAbsent(record, rpc); }
+      finally { await rpc.close(); }
+    } catch (error) {
+      if (input.signal.aborted) throw error;
+      emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_failed", { failure_class: diagnosticFailureClass(error) });
+    }
   }
   for (const jobs of groups.values()) {
     input.signal.throwIfAborted();
     jobs.sort((a, b) => a.createdAt - b.createdAt || (a.parentJobId === b.id ? 1 : b.parentJobId === a.id ? -1 : 0));
     const record = jobs.at(-1)!;
-    if (checked.has(`${record.slot}:${record.threadId}`)) continue;
     const path = statePath(adapters, record), retained = load(path);
     if (retained?.state === "deleted" || retained?.state === "excluded") continue;
     const collected = adapters.store.collectedAt(record.id);
@@ -116,7 +118,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
         }
         const present = listed.get(record.threadId!);
         if (!present) {
-          await confirmAbsent({ slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! }, record);
+          await confirmAbsent(record, rpc);
           continue;
         }
         const updatedAt = present.thread.updatedAt;
@@ -151,13 +153,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
         try {
           if (retained?.state === "archived") {
             await rpc.request("thread/delete", { threadId: record.threadId }, input.signal);
-            try {
-              await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }, input.signal);
-              save(path, { state: "excluded" });
-            } catch (error) {
-              if (!isExactDeletedNativeThreadAbsent(error, record.threadId!)) throw error;
-              save(path, { state: "deleted" });
-            }
+            await confirmAbsent(record, rpc);
           } else {
             await rpc.request("thread/archive", { threadId: record.threadId }, input.signal);
             const read = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }, input.signal));
@@ -171,9 +167,6 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           // Keep the Native conversation and relinquish automatic management.
           if (load(path)?.state !== "deleted") save(path, { state: "excluded" });
           throw error;
-        }
-        if (retained?.state === "archived") {
-          adapters.store.removeDeletedThread({ slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! });
         }
       } finally { await rpc.close(); }
     } catch (error) {

@@ -281,3 +281,45 @@ test("interrupted base-first cleanup discovers terminal-only ownership on restar
     expect(existsSync(join(f.root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`))).toBe(false);
   } finally { f.cleanup(); }
 });
+
+
+test("post-delete read still present keeps local answer", async () => {
+  const f = fixture();
+  try {
+    await f.run(f.origin + 8 * DAY);
+    const adapters = { ...f.adapters, connect: async () => {
+      const original = await f.adapters.connect();
+      return { ...original, request: async (method: string, params: any, signal?: AbortSignal) => {
+        if (method === "thread/delete") return {};
+        return original.request(method as any, params, signal);
+      } };
+    } };
+    await settleWebDelegationRetention(adapters, { now: f.origin + 40 * DAY, signal: new AbortController().signal });
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    expect(f.store.threadRetention(f.record)?.state).toBe("excluded");
+  } finally { f.cleanup(); }
+});
+
+test("partial terminal cleanup resumes from each remaining sidecar and clears receipt-only residue", async () => {
+  for (const remaining of ["completed-collected", "completed", "failed", "none"] as const) {
+    const f = fixture();
+    try {
+      const base = join(f.root, `${f.record.id}.json`);
+      const key = { slot: f.record.slot, accountFingerprint: f.record.owner.accountFingerprint, threadId: f.record.threadId! };
+      const receipt = join(f.root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`);
+      writeFileSync(receipt, JSON.stringify({ state: "deleted" }));
+      if (remaining === "failed") writeFileSync(`${base}.failed`, JSON.stringify({ ...f.record, state: "failed", failure: "turn_failed" }));
+      if (remaining === "completed-collected") writeFileSync(`${base}.collected`, String(f.origin));
+      rmSync(base);
+      for (const suffix of ["completed", "failed", "collected"] as const) {
+        if (suffix !== remaining && !(remaining === "completed-collected" && (suffix === "completed" || suffix === "collected"))) rmSync(`${base}.${suffix}`, { force: true });
+      }
+      f.native.exists = false;
+      await f.run(f.origin + 40 * DAY);
+      expect(existsSync(receipt)).toBe(false);
+      expect(existsSync(`${base}.completed`)).toBe(false);
+      expect(existsSync(`${base}.failed`)).toBe(false);
+      expect(existsSync(`${base}.collected`)).toBe(false);
+    } finally { f.cleanup(); }
+  }
+});

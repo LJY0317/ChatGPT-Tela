@@ -325,7 +325,7 @@ export class WebDelegationStore {
     for (const record of records) remove(this.#path(record.id));
     for (const record of records) {
       const base = this.#path(record.id);
-      for (const suffix of [".completed", ".failed", ".collected"]) remove(base + suffix);
+      for (const suffix of [".collected", ".failed", ".completed"]) remove(base + suffix);
     }
     remove(webDelegationRetentionPath(this.root, key));
     return { jobs: records.length, files };
