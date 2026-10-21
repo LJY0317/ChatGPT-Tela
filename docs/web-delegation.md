@@ -32,12 +32,12 @@ uncollected policy and are never replaced by answer times or file modification t
 
 The source CLI can run a bounded, workspace-write-capable task on a connected Tela Work profile without
 changing the model of an existing conversation or exporting its history. Newly created journal-owned Native
-threads receive a one-time `[Tela Agent] ` title through `thread/name/set` before
-submission. The creation response's title is preserved when present; otherwise
-Tela uses the first nonempty prompt line, matching the app's unnamed-thread
-fallback. This does not wait for an automatic title notification. Later renames
-and continuations are left alone. Naming failure is diagnosed without rejecting
-the task, and provider-side chats are unaffected.
+threads receive a one-time best-effort `[Tela Agent] ` prefix on the first nonempty
+`thread/name/updated` notification, through `thread/name/set`. The generated title
+text is preserved; later renames and continuations are left alone. The public
+notification does not identify manual versus automatic changes, and titles
+generated after this job's event connection closes are not guaranteed to be
+prefixed. Naming does not delay execution or affect provider-side chats.
 The Native engine creates
 a new durable, paginated thread and supplies its own tool/sandbox authority; the existing Web
 provider performs inference. This is not an independent Tela Chat worker or an API-key fallback.
