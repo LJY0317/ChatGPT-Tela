@@ -102,6 +102,30 @@ test('generic unknown failure cannot claim a classified cause',()=>{
  expect(composer.diagnosis.certainty).toBe('classified_boundary');
 });
 
+test('checkpoint rejection keeps its exact reason through the live cycle receipt',()=>{
+ const root=mkdtempSync(join(tmpdir(),'tela-checkpoint-rejection-')),file=join(root,'events.jsonl');
+ const old=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+ const observer=startTurnDiagnosticSummary(scope,turn,request)!;
+ try{
+  // Isolated summarizer events have the preparation request, not the Native turn context.
+  withDiagnosticContext({request_fingerprint:request,operation_fingerprint:op},()=>{
+   emitDiagnosticEvent('chatgpt_tela_work','checkpoint_json_parse_failed',{body_bytes:9379,json_error_offset:2724});
+   emitDiagnosticEvent('chatgpt_tela_work','checkpoint_response_rejected',{reason_class:'json_invalid'});
+   emitDiagnosticEvent('chatgpt_tela_work','checkpoint_operation_failed',{phase:'completed',completion_observed:true,reason_class:'json_invalid'});
+  },false);
+  withDiagnosticContext({scope_fingerprint:scope,turn_fingerprint:turn,request_fingerprint:request},()=>{
+   emitDiagnosticEvent('chatgpt_tela_work','web_preparation_failed',{reason_class:'history_bootstrap_required'});
+   emitDiagnosticEvent('chatgpt_tela_work','native_turn_retired');
+  });
+  observer.finish();
+  const rows=readFileSync(file,'utf8').trim().split('\n').map(s=>JSON.parse(s));
+  expect(rows.find(x=>x.stage==='native_cycle_summary').first_reason_class).toBe('json_invalid');
+  expect(summarizeTurnDiagnostics(rows).diagnosis.firstFailure).toMatchObject({stage:'checkpoint_response_rejected',reason:'json_invalid'});
+  const diagnostics=join(root,'diagnostics'),incidents=listDiagnosticIncidents(diagnostics);
+  expect(incidents.some(item=>JSON.stringify(readDiagnosticIncident(diagnostics,item.ref)).includes('checkpoint_response_rejected'))).toBe(true);
+ }finally{observer.finish();if(old===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=old;rmSync(root,{recursive:true,force:true});}
+});
+
 test('optional checkpoint refusal is not the cause of a later admitted task failure or a successful final',()=>{
  const optional=[e('native_checkpoint_preparation_rejected',{reason_class:'model_calls',admitted_model_calls:0}),
   e('native_working_checkpoint_deferred'),e('web_turn_plan',{context_mode:'retained-delta'})];
