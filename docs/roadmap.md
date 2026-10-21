@@ -55,6 +55,8 @@ new runtimes, schedulers or queues. This list records product requirements, not 
 
 ## Desktop lifecycle and presentation
 
+- Notify users when a newer release is available and offer installation from the menu-bar UI through
+  the shared update lifecycle. Defer this feature until the existing update path is reliable.
 - Complete the update/repair lifecycle through the running menu-bar UI as well as backend services and
   their owned children. Success must reflect new running code; retain normal recovery after a failed
   final participant. Review both command-line and UI-initiated updates.
