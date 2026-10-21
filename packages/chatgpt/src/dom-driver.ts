@@ -2029,7 +2029,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
   #lastObstructionRevision: string | undefined;
   readonly #approvalProbeStates = new Map<string, string>();
   #progressProbeTurnKey: string | undefined;
-  readonly #progressProbeStates = new Set<string>();
+  #progressProbeSignature: string | undefined;
   constructor(readonly page: BrowserPageAutomation) {}
 
   #diagnostic(stage: string, fields: Readonly<Record<string, string | number | boolean>> = {}): void {
@@ -2095,11 +2095,11 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       if (settled?.progressProbe) {
         if (this.#progressProbeTurnKey !== settled.key) {
           this.#progressProbeTurnKey = settled.key;
-          this.#progressProbeStates.clear();
+          this.#progressProbeSignature = undefined;
         }
         const signature = fingerprint(JSON.stringify([settled.phase, settled.progressProbe]));
-        if (!this.#progressProbeStates.has(signature) && this.#progressProbeStates.size < 32) {
-          this.#progressProbeStates.add(signature);
+        if (this.#progressProbeSignature !== signature) {
+          this.#progressProbeSignature = signature;
           const probe = settled.progressProbe;
           if (settled.phase === "failed") emitDiagnosticEvent("chatgpt_tela_work", "web_provider_failure_observed", {
             turn_fingerprint: diagnosticFingerprint(settled.key),

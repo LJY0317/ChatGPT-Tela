@@ -409,6 +409,10 @@ test("browser lifecycle and input events retain one private surface identity acr
     expect(reveals[0].surface_fingerprint).toMatch(/^[a-f0-9]{24}$/);
     expect(reveals[1].surface_fingerprint).not.toBe(reveals[0].surface_fingerprint);
     expect(disposals.map(row => row.surface_fingerprint)).toEqual(reveals.map(row => row.surface_fingerprint));
+    const bindings = events.filter(row => row.stage === "renderer_surface_bound");
+    expect(bindings.map(row => row.surface_fingerprint)).toEqual(reveals.map(row => row.surface_fingerprint));
+    expect(bindings[0].epoch_fingerprint).toMatch(/^[a-f0-9]{24}$/);
+    expect(bindings[0].scope_fingerprint).not.toBe(bindings[1].scope_fingerprint);
     expect(raw).not.toContain("PRIVATE_");
   } finally {
     await host.close();

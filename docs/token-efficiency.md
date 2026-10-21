@@ -28,8 +28,9 @@ Its source is the selected checkpoint plus the unsealed suffix, including any ne
 instruction revisions. Do not reattach checkpoint-covered historical instructions to
 this summary source: Native restores its current initial context after compaction.
 Ordinary task transport still preserves exact instructions outside historical summaries.
-Preparation and the actual task answer are counted separately; a retained healthy task
-usually needs no preparation model call at all.
+Preparation and the actual task answer are counted separately. A healthy retained page
+selects existing checkpoints without invoking proactive summary maintenance. Prepare a
+new summary when a fresh page or Native compaction actually needs one.
 
 ## Capacity and regular maintenance
 
@@ -83,7 +84,8 @@ One account-scoped stage journal owns summary submissions and completed receipts
 Caches are disposable derived data. Preserve compatible published checkpoints across
 cache loss; never clear uncertain claims to allow another send. Exact account,
 policy, source and active ancestry determine derived-summary reuse. Model/effort and task
-identity still bind physical Web sessions, execution claims and uncertain operations. Current turn identity
+identity still bind execution claims and uncertain operations. Physical session reuse
+requires the same model; effort is applied per submit without retiring a proven page. Current turn identity
 owns execution; derived historical prose cannot grant tool or approval authority.
 
 An undelivered completed response belongs to its canonically bound Native turn, not the

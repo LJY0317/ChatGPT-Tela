@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "bun:test";
-import { structuralDiagnosticEvent } from "@chatgpt-tela/core";
+import { structuralDiagnosticEvent, observeDiagnosticEvents } from "@chatgpt-tela/core";
 import {
   BROWSER_PAGE_AUTOMATION,
   ControlledBrowserHost,
@@ -687,6 +687,26 @@ describe("current ChatGPT DOM surface driver", () => {
     const result = await driver.observe();
     expect(result.turns[0]?.publicProgress).toEqual(["Checking records\n\nReading the current execution record."]);
     expect(result.turns[0]?.publicProgress?.join()).not.toMatch(/HIDDEN_CONTENT|CONTROL_CONTENT|FINAL_CONTENT/);
+  });
+  test("failure diagnostics survive more than 32 progress transitions and deduplicate unchanged reads", async () => {
+    const page = new FakePage();
+    const driver = new ChatGptDomSurfaceDriver(page);
+    const rows: Array<Record<string, unknown>> = [];
+    const stop = observeDiagnosticEvents(row => { rows.push(row); });
+    try {
+      for (let index = 0; index < 35; index++) {
+        page.raw.turns = [{ key: "assistant:owned", role: "assistant", phase: "thinking",
+          progressProbe: { containerPresent: true, containerVisible: true, markerCount: index } }];
+        await driver.observe();
+      }
+      page.raw.turns = [{ key: "assistant:owned", role: "assistant", phase: "failed",
+        progressProbe: { containerPresent: true, containerVisible: true, failureSource: "alert",
+          failureCandidateCount: 1, failureEligibleCount: 1 } }];
+      await driver.observe();
+      await driver.observe();
+      expect(rows.filter(row => row.stage === "web_provider_failure_observed")).toHaveLength(1);
+      expect(rows.filter(row => row.stage === "web_public_progress_extraction")).toHaveLength(36);
+    } finally { stop?.(); }
   });
   test.each(["control-hidden", "label-hidden", "foreign-label", "valid"])("progress probe distinguishes the rejected boundary without exposing prose (%s)", async mode => {
     const scratch = mkdtempSync(join(tmpdir(), "tela-progress-boundary-"));
