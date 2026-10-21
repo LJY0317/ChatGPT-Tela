@@ -273,6 +273,8 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
       phase: "checkpoint_budget", reason_class: "source_exceeds_single_message",
       source_bytes: sourceBytes, source_item_count: source.sourceItemCount,
       source_estimate: chatGptCheckpointInputTokens(physical), input_budget: limit,
+      source_kind: source.kind, completed_receipt_count: completed.size,
+      matching_receipt_present: completed.has(stageIdentity(physical).key),
     });
     throw new NativeHistoryBootstrapRequired("source_budget");
   }

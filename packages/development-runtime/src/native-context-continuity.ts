@@ -140,7 +140,13 @@ export async function resolveNativeContextContinuity(input: {
     ? { checkpointProducer: preparationBudget.producer(input.options.checkpointProducer) } : {}) };
   const signal = preparation?.signal;
   const probe = async <T>(phase: "anchor" | "handoff" | "handoff_verification" | "history" | "visible_prefix", read: () => Promise<T>): Promise<T> => {
-    try { return await read(); }
+    try {
+      const result = await read();
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_probed", {
+        phase, outcome: result === undefined ? "absent" : "available",
+      });
+      return result;
+    }
     catch (error) {
       if (error instanceof NativeHistoryBootstrapRequired) {
         emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_rejected", {
@@ -173,24 +179,37 @@ export async function resolveNativeContextContinuity(input: {
 
   const cache = options.historyCheckpointCache;
   const fingerprint = opaque.fingerprint;
+  emitDiagnosticEvent("chatgpt_tela_codex", "native_context_recovery_sources", {
+    cache_available: !!cache, handoff_available: !!options.nativeWebHandoff,
+    verifier_available: !!options.verifyNativeWebHandoff,
+    visible_prefix_available: !!options.visiblePrefix,
+    anchor_available: !!options.compactionAnchor, history_available: !!options.compactionHistory,
+  });
   let manualAttempted = false;
   const manual = async (): Promise<NativeContinuityDecision | undefined> => {
     if (manualAttempted) return undefined;
     manualAttempted = true;
     if (fingerprint && cache && options.verifyNativeWebHandoff) {
       const hint = await recentManualHandoff(cache, threadId, fingerprint);
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_handoff_cache_probed", {
+        outcome: hint ? "candidate" : "absent",
+      });
       if (hint) {
         const verified = await options.verifyNativeWebHandoff(
           threadId, currentTurnId, hint.handoffTurnId, hint.answerDigest, signal,
         );
         signal?.throwIfAborted();
-        if (verified && verified.threadId === threadId
+        const matches = !!verified && verified.threadId === threadId
           && verified.currentTurnId === currentTurnId
           && verified.handoffTurnId === hint.handoffTurnId
           && verified.handoffItemId === hint.handoffItemId
           && verified.answerDigest === hint.answerDigest
           && verified.summary === hint.summary
-          && verified.limitations === hint.limitations) {
+          && verified.limitations === hint.limitations;
+        emitDiagnosticEvent("chatgpt_tela_codex", "native_handoff_cache_verified", {
+          outcome: matches ? "verified" : verified ? "mismatch" : "source_absent",
+        });
+        if (matches) {
           return resolved("cached-handoff", manualHandoffText(verified));
         }
       }
@@ -235,8 +254,13 @@ export async function resolveNativeContextContinuity(input: {
   // public handoff is cheaper and safer than a giant Legacy full-item probe.
   if (cache && options.nativeWebHandoff) {
     const candidates = await cache.list(threadId);
-    if (!candidates.some(candidate => candidate.checkpoint.revisionId
-      .startsWith("native_visible_history_v1_"))) {
+    const historyCandidates = candidates.filter(candidate => candidate.checkpoint.revisionId
+      .startsWith("native_visible_history_v1_")).length;
+    emitDiagnosticEvent("chatgpt_tela_codex", "native_history_cache_probed", {
+      candidate_count: candidates.length,
+      history_candidate_count: historyCandidates,
+    });
+    if (historyCandidates === 0) {
       const early = await manual();
       if (early) return early;
     }

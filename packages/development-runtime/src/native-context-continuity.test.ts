@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineNativeTurnAuthority } from "@chatgpt-tela/core";
+import { defineNativeTurnAuthority, observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   AppServerCompactionHistorySource, AppServerNativeHandoffSource,
   NativeHistoryBootstrapRequired, NATIVE_WEB_HANDOFF_PROMPT,
@@ -430,4 +430,37 @@ test("unexpected source probe failure retains phase but never private exception 
     else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test("cold recovery distinguishes missing handoff and cache from oversized readable source without model work", async () => {
+  const root = mkdtempSync(join(tmpdir(), "native-recovery-evidence-"));
+  const rows: StructuralDiagnosticEvent[] = [];
+  const stop = observeDiagnosticEvents(row => { if (row.event === "chatgpt_tela_codex") rows.push(row); });
+  const content = JSON.stringify({ type: "tela_native_visible_prefix_v1", items: [{ turnId: "old", item: {
+    type: "agentMessage", id: "prior", text: "private historical body ".repeat(60_000),
+  } }] });
+  const digest = createHash("sha256").update(content).digest("hex");
+  let sends = 0;
+  try {
+    await expect(resolveNativeContextContinuity(input({ effort: "medium", options: {
+      historyCheckpointCache: new FileContextCheckpointCache({ directory: join(root, "cache") }),
+      nativeWebHandoff: async () => undefined,
+      verifyNativeWebHandoff: async () => undefined,
+      visiblePrefix: { accountNamespace: "fixture", journal: new FileNativeVisiblePrefixStageJournal({
+        directory: join(root, "ledger"), initializationPath: join(root, "init"),
+      }), read: async () => ({ kind: "native-visible-prefix", threadId: "task-1", currentTurnId: "web-current",
+        content, digest, contentDigest: digest, sourceItemCount: 1, inlineAssets: [], references: [], localImageCandidates: [],
+      }) },
+      checkpointProducer: async () => { sends++; throw Error("must not send"); },
+    } }))).rejects.toMatchObject({ recoveryReason: "source_budget" });
+    expect(rows.find(row => row.stage === "native_history_cache_probed")).toMatchObject({ candidate_count: 0, history_candidate_count: 0 });
+    expect(rows.find(row => row.stage === "native_handoff_cache_probed")).toMatchObject({ outcome: "absent" });
+    expect(rows.filter(row => row.stage === "native_context_source_probed").map(row => [row.phase, row.outcome]))
+      .toEqual([["handoff", "absent"], ["visible_prefix", "available"]]);
+    expect(rows.find(row => row.stage === "native_context_source_rejected" && row.phase === "checkpoint_budget"))
+      .toMatchObject({ source_kind: "native-visible-prefix", completed_receipt_count: 0, matching_receipt_present: false });
+    expect(JSON.stringify(rows)).not.toContain("private historical body");
+    expect(sends).toBe(0);
+  } finally { stop?.(); rmSync(root, { recursive: true, force: true }); }
 });
