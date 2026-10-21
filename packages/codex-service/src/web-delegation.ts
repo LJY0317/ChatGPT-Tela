@@ -8,6 +8,7 @@ import type { LocalProfileBinding } from "./cross-profile-thread-relay";
 import type { TrustedNativeProfileSession } from "./cross-profile-account-proof";
 import { selectDelegationWebModel, type DelegationWebModel } from "./web-delegation-model";
 import { indexedWebDelegationProgress, WebDelegationProgressProjection, type WebDelegationProgress } from "./web-delegation-progress";
+import { diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RESULT_BYTES = 512 * 1024;
@@ -324,7 +325,7 @@ export class WebDelegationStore {
     for (const record of records) remove(this.#path(record.id));
     for (const record of records) {
       const base = this.#path(record.id);
-      for (const suffix of [".collected", ".failed", ".completed"]) remove(base + suffix);
+      for (const suffix of [".title-pending", ".collected", ".failed", ".completed"]) remove(base + suffix);
     }
     remove(webDelegationRetentionPath(this.root, key));
     return { jobs: records.length, files };
@@ -352,6 +353,19 @@ export class WebDelegationStore {
   }
   #deleted(record: WebDelegationRecord): boolean {
     return Boolean(record.threadId && this.threadRetention(record)?.state === "deleted");
+  }
+  waitForTitle(id: string): void {
+    writeFileSync(`${this.#path(id)}.title-pending`, "", { flag: "wx", mode: 0o600 });
+  }
+  hasPendingTitle(id: string): boolean { return existsSync(`${this.#path(id)}.title-pending`); }
+  pendingTitles(): WebDelegationRecord[] {
+    const suffix = ".json.title-pending";
+    return readdirSync(this.root).filter(name => name.endsWith(suffix) && UUID.test(name.slice(0, -suffix.length)))
+      .flatMap(name => { const record = this.get(name.slice(0, -suffix.length)); return record ? [record] : []; });
+  }
+  takePendingTitle(id: string): boolean {
+    try { unlinkSync(`${this.#path(id)}.title-pending`); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
   }
   collectedAt(id: string): number | undefined {
     const path = `${this.#path(id)}.collected`;
@@ -494,6 +508,33 @@ export interface WebDelegationAdapters {
   connect(endpoint: string): Promise<CodexAppServerRpc>;
   store: WebDelegationStore;
   changed?(record: WebDelegationRecord): void;
+}
+/** The profile's existing notification connection outlives the delegated turn. */
+export async function prefixInitialWebDelegationTitle(input: {
+  store: WebDelegationStore; slot: number; rpc: CodexAppServerRpc;
+  owner: WebDelegationAdapters["owner"];
+}, method: string, params: unknown): Promise<void> {
+  if (method !== "thread/name/updated") return;
+  const event = object(params);
+  if (typeof event?.threadId !== "string" || typeof event.threadName !== "string" || !event.threadName.trim()) return;
+  try {
+    const record = input.store.pendingTitles().find(record => record.slot === input.slot
+      && record.threadId === event.threadId && !record.parentJobId);
+    if (!record || !sameAccountOwner(record, await input.owner(input.slot)) || !input.store.takePendingTitle(record.id)) return;
+    const identity = { slot: input.slot, scope_fingerprint: diagnosticFingerprint(event.threadId) };
+    const read = object(await input.rpc.request("thread/read", { threadId: event.threadId, includeTurns: false }));
+    // A newer name supersedes this event; never overwrite it with stale text.
+    if (object(read?.thread)?.name !== event.threadName) {
+      emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_settled", { ...identity, state: "superseded" });
+      return;
+    }
+    if (!event.threadName.startsWith(DELEGATED_TITLE_PREFIX)) {
+      await input.rpc.request("thread/name/set", { threadId: event.threadId, name: DELEGATED_TITLE_PREFIX + event.threadName });
+    }
+    emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_settled", { ...identity, state: "complete" });
+  } catch (error) {
+    emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { slot: input.slot, failure_class: diagnosticFailureClass(error) });
+  }
 }
 function sameOwner(record: WebDelegationRecord, current: Awaited<ReturnType<WebDelegationAdapters["owner"]>>) {
   return JSON.stringify(record.owner) === JSON.stringify(current.binding)
@@ -654,6 +695,12 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
         || reportedSandbox !== (mode === "write" ? "workspaceWrite" : "readOnly")) {
         throw Error("New Web job model or requested sandbox authority was not proven");
       }
+      try {
+        adapters.store.waitForTitle(record.id);
+        emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_waiting", { slot: record.slot, scope_fingerprint: diagnosticFingerprint(thread.id) });
+      } catch (error) {
+        emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { phase: "arm", failure_class: diagnosticFailureClass(error) });
+      }
     }
     await prove();
     let resolveDone!: () => void, rejectDone!: (error: Error) => void;
@@ -662,22 +709,10 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     const messages = new Map<string, { text: string; phase?: string }>();
     const pending: Array<[string, Record<string, unknown>]> = [];
     let toolItems = 0, turnId: string | undefined, eventCount = 0, reportedStatus: string | undefined;
-    let titleHandled = Boolean(parent);
     const resultItems = new Set<string>();
     const progressProjection = new WebDelegationProgressProjection();
     const accept = (method: string, event: Record<string, unknown>) => {
       if (event.threadId !== record!.threadId) return;
-      if (method === "thread/name/updated" && !titleHandled && typeof event.threadName === "string"
-        && event.threadName.trim()) {
-        titleHandled = true;
-        if (!event.threadName.startsWith(DELEGATED_TITLE_PREFIX)) {
-          // Best effort, once per new managed thread. Naming never delays the turn.
-          void rpc!.request("thread/name/set", {
-            threadId: record!.threadId, name: DELEGATED_TITLE_PREFIX + event.threadName,
-          }).catch(() => {});
-        }
-        return;
-      }
       if (++eventCount > 10_000) { rejectDone(Error("Web job event bound exceeded")); return; }
       if (!turnId) {
         if (pending.length >= 256) { rejectDone(Error("Web job ACK event bound exceeded")); return; }

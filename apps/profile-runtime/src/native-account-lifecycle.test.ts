@@ -3,7 +3,7 @@ import { startNativeAccountLifecycle } from "./native-account-lifecycle";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 const signed = (email = "one@example.test", container = "space") => ({ account: { type: "chatgpt", email }, workspaceRouting: { chatgptAccountId: container } });
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
-function fixture(read: (n: number, signal?: AbortSignal) => Promise<unknown>) {
+function fixture(read: (n: number, signal?: AbortSignal) => Promise<unknown>, observe?: Parameters<typeof startNativeAccountLifecycle>[0]["observe"]) {
   let notification!: (method: string, params: unknown) => void;
   let disconnected!: () => void;
   let reads = 0, closes = 0, unsubscribes = 0;
@@ -14,9 +14,9 @@ function fixture(read: (n: number, signal?: AbortSignal) => Promise<unknown>) {
     async close() { closes++; },
     subscribe(n, d) { notification = n; disconnected = d; return () => { unsubscribes++; }; },
   };
-  const lifecycle = startNativeAccountLifecycle({ signal: new AbortController().signal, connect: async () => rpc,
+  const lifecycle = startNativeAccountLifecycle({ ...(observe ? { observe } : {}), signal: new AbortController().signal, connect: async () => rpc,
     async invalidate(reason) { reasons.push(reason); done.resolve(); } });
-  return { lifecycle, reasons, done, event() { notification("account/updated", {}); }, unrelated() { notification("thread/started", {}); }, disconnected() { disconnected(); }, get reads() { return reads; }, get closes() { return closes; } };
+  return { lifecycle, reasons, done, notify(method: string, params: unknown) { notification(method, params); }, event() { notification("account/updated", {}); }, unrelated() { notification("thread/started", {}); }, disconnected() { disconnected(); }, get reads() { return reads; }, get closes() { return closes; } };
 }
 async function settle() { await new Promise(r => setTimeout(r, 0)); }
 test("initial state and repeated same-account notifications do not revoke Web", async () => {
@@ -93,4 +93,23 @@ test("failed Web cleanup is reported once rather than retried as a different aut
   await expect(lifecycle.ready).rejects.toThrow("cleanup failed");
   expect(calls).toBe(1);
   await expect(lifecycle.stop()).rejects.toThrow("cleanup failed");
+});
+
+
+test("profile notification connection forwards late title events and drains its owned work on shutdown", async () => {
+  const held = deferred<void>();
+  const events: unknown[] = [];
+  const f = fixture(async () => signed(), async (method, params) => {
+    if (method !== "thread/name/updated") return;
+    events.push(params); await held.promise;
+  });
+  await f.lifecycle.ready;
+  f.notify("thread/name/updated", { threadId: "owned", threadName: "Late generated title" });
+  expect(events).toEqual([{ threadId: "owned", threadName: "Late generated title" }]);
+  let stopped = false;
+  const stopping = f.lifecycle.stop().then(() => { stopped = true; });
+  await settle(); expect(stopped).toBe(false);
+  f.notify("thread/name/updated", { threadId: "owned", threadName: "After stop" });
+  held.resolve(); await stopping;
+  expect(events).toHaveLength(1); expect(f.closes).toBe(1); expect(f.reasons).toEqual([]);
 });

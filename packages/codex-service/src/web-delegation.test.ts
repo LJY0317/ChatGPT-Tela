@@ -6,10 +6,10 @@ import { randomUUID, createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
-import { runWebDelegation, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
+import { runWebDelegation, prefixInitialWebDelegationTitle, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
-async function fixture(options: { titleEvents?: Array<{ name: string | null; foreign?: boolean }>; titleSetFails?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write"; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
+async function fixture(options: { titleSetFails?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write"; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const slot = options.slot ?? 1;
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
@@ -20,6 +20,7 @@ async function fixture(options: { titleEvents?: Array<{ name: string | null; for
   let disconnected: () => void = () => {};
   let observedOwners = 0;
   let attached = false;
+  let currentTitle: string | null = null;
   const rpc: CodexAppServerRpc = {
     subscribe(callback, onDisconnected) { notify = callback; disconnected = onDisconnected; return () => {}; },
     async close() { if (options.closeFails) throw Error("connection already closed"); },
@@ -28,8 +29,10 @@ async function fixture(options: { titleEvents?: Array<{ name: string | null; for
       if (method === "model/list") return { data: [{ model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", displayName: "6 (Web)", supportedReasoningEfforts: [{ reasoningEffort: "xhigh" }] }] };
       if (method === "thread/resume") { attached = true; return { thread: { id: threadId } }; }
       if (method === "thread/start") { attached = true; return { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", approvalPolicy: "never", sandbox: { type: options.mode === "write" ? "workspaceWrite" : "readOnly" }, thread: { id: threadId, cwd: root, historyMode: "paginated", ephemeral: false } }; }
+      if (method === "thread/read") return { thread: { id: threadId, name: currentTitle } };
       if (method === "thread/name/set") {
         if (options.titleSetFails) throw Error("Fixture naming RPC failed");
+        currentTitle = (params as { name: string }).name;
         return {};
       }
       if (method === "turn/start") {
@@ -43,9 +46,6 @@ async function fixture(options: { titleEvents?: Array<{ name: string | null; for
         }
         if (options.silent) { if (options.disconnect) queueMicrotask(() => disconnected()); return { turn: { id: currentTurnId } }; }
         if (!attached) return { turn: { id: currentTurnId } };
-        for (const title of options.titleEvents ?? []) notify("thread/name/updated", {
-          threadId: title.foreign ? randomUUID() : threadId, threadName: title.name,
-        });
         // Synchronously complete BEFORE turn/start's ACK, exercising the real notification race.
         notify("item/completed", { threadId: options.foreignFinal ? randomUUID() : threadId, turnId: currentTurnId, item: { id: "final", type: "agentMessage", ...(options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified design" } });
         notify("item/completed", { threadId, turnId: currentTurnId, item: { id: "read", type: "commandExecution",
@@ -85,7 +85,14 @@ async function fixture(options: { titleEvents?: Array<{ name: string | null; for
       };
     },
   };
-  return { root, store, calls, changes, id, continue: (parentJobId: string, prompt = "Follow up", mode: "read" | "write" = options.mode ?? "read") => runWebDelegation(adapters, { id: randomUUID(), slot, cwd: root, prompt, mode, parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", mode: options.mode ?? "read", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, store, calls, changes, id,
+    title: async (name: string | null, options: { foreign?: boolean; stale?: boolean; otherAccount?: boolean } = {}) => {
+      currentTitle = options.stale ? "User rename" : name;
+      await prefixInitialWebDelegationTitle({ store, slot, rpc, owner: async () => {
+        const owner = await adapters.owner();
+        return options.otherAccount ? { ...owner, binding: { ...owner.binding, accountFingerprint: "f".repeat(64) } } : owner;
+      } }, "thread/name/updated", { threadId: options.foreign ? randomUUID() : threadId, threadName: name });
+    }, continue: (parentJobId: string, prompt = "Follow up", mode: "read" | "write" = options.mode ?? "read") => runWebDelegation(adapters, { id: randomUUID(), slot, cwd: root, prompt, mode, parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", mode: options.mode ?? "read", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 test("new read-only durable Web job buffers ACK race, returns exact final and never loads a source conversation", async () => {
@@ -103,32 +110,51 @@ test("new read-only durable Web job buffers ACK race, returns exact final and ne
     expect(JSON.stringify(new WebDelegationStore(f.root).get(f.id))).not.toContain("fixture-result-not-in-journal");
   } finally { f.cleanup(); }
 });
-test("initial delegated title gets one prefix; continuation and subsequent changes keep their title", async () => {
-  const f = await fixture({ titleEvents: [{ name: "Review context" }, { name: "Personal rename" }] });
+test("first title arriving after completion is prefixed once without delaying the task", async () => {
+  const f = await fixture();
   try {
     const first = await f.run();
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(0);
+    expect(f.store.hasPendingTitle(first.id)).toBe(true);
+    await f.title(null); await f.title(""); await f.title("Other", { foreign: true });
+    await f.title("Review context", { otherAccount: true });
+    expect(f.store.hasPendingTitle(first.id)).toBe(true);
+    await Promise.all([f.title("Review context"), f.title("Review context")]);
     expect(f.calls.filter(call => call.method === "thread/name/set")).toEqual([{
       method: "thread/name/set", params: { threadId: first.threadId, name: "[Tela Agent] Review context" },
     }]);
     await f.continue(first.id);
+    await f.title("Personal rename");
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(1);
+    expect(f.store.hasPendingTitle(first.id)).toBe(false);
+  } finally { f.cleanup(); }
+});
+test("an initial existing prefix and a superseded title do not overwrite later names", async () => {
+  for (const stale of [false, true]) {
+    const f = await fixture();
+    try {
+      const first = await f.run();
+      await f.title(stale ? "Generated title" : "[Tela Agent] Existing title", { stale });
+      await f.title("Later rename");
+      expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(0);
+      expect(f.store.hasPendingTitle(first.id)).toBe(false);
+    } finally { f.cleanup(); }
+  }
+});
+test("failed title RPC does not change the completed delegation or retry on later renames", async () => {
+  const f = await fixture({ titleSetFails: true });
+  try {
+    const first = await f.run();
+    await f.title("Review context"); await f.title("Later rename");
+    expect(f.store.get(first.id)).toMatchObject({ state: "completed", answer: "verified design" });
     expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(1);
   } finally { f.cleanup(); }
 });
-test("delegated title ignores foreign and empty events and an existing prefix", async () => {
-  const f = await fixture({ titleEvents: [
-    { name: "Other thread", foreign: true }, { name: "" }, { name: null },
-    { name: "[Tela Agent] Existing title" }, { name: "Later rename" },
-  ] });
+test("a title marker write failure does not prevent the task from running", async () => {
+  const f = await fixture();
   try {
+    f.store.waitForTitle = () => { throw Error("Fixture marker write failed"); };
     expect(await f.run()).toMatchObject({ state: "completed", answer: "verified design" });
-    expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(0);
-  } finally { f.cleanup(); }
-});
-test("failed title RPC does not prevent the delegated final answer", async () => {
-  const f = await fixture({ titleEvents: [{ name: "Review context" }], titleSetFails: true });
-  try {
-    expect(await f.run()).toMatchObject({ state: "completed", answer: "verified design" });
-    expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(1);
   } finally { f.cleanup(); }
 });
 test("a write Web delegation requests and proves workspace-only Native sandbox", async () => {

@@ -28,6 +28,7 @@ export function startNativeAccountLifecycle(input: {
   readonly connect: CodexAppServerRpcFactory;
   readonly signal: AbortSignal;
   readonly invalidate: (reason: NativeAccountInvalidation) => Promise<void>;
+  readonly observe?: (method: string, params: unknown, rpc: CodexAppServerRpc) => Promise<void> | void;
 }): { readonly ready: Promise<void>; stop(): Promise<void> } {
   const controller = new AbortController();
   const signal = AbortSignal.any([input.signal, controller.signal]);
@@ -39,6 +40,7 @@ export function startNativeAccountLifecycle(input: {
     await rpc.close();
   };
   let unsubscribe: (() => void) | undefined;
+  const observations = new Set<Promise<void>>();
   const detach = () => { unsubscribe?.(); unsubscribe = undefined; };
   let previous: Snapshot | undefined;
   let revision = 0;
@@ -87,7 +89,13 @@ export function startNativeAccountLifecycle(input: {
       rpc = await input.connect(AbortSignal.any([signal, AbortSignal.timeout(15_000)]));
       signal.throwIfAborted();
       if (!rpc.subscribe) throw new Error("Native account notifications unavailable");
-      unsubscribe = rpc.subscribe(method => {
+      unsubscribe = rpc.subscribe((method, params) => {
+        if (signal.aborted) return;
+        const observation = input.observe?.(method, params, rpc!);
+        if (observation) {
+          observations.add(observation);
+          void observation.finally(() => observations.delete(observation)).catch(() => {});
+        }
         if (method === "account/updated" || method === "account/login/completed") void refresh().catch(() => {});
       }, () => { void revoke("observation_unavailable").catch(() => {}); });
     } catch {
@@ -111,6 +119,7 @@ export function startNativeAccountLifecycle(input: {
         await closeCurrent();
         await reading;
         await revoking;
+        await Promise.allSettled([...observations]);
         previous = undefined;
       })();
       return stopping;

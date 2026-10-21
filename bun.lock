@@ -110,9 +110,11 @@
       "dependencies": {
         "@chatgpt-tela/chatgpt": "workspace:*",
         "@chatgpt-tela/codex": "workspace:*",
+        "@chatgpt-tela/codex-service": "workspace:*",
         "@chatgpt-tela/core": "workspace:*",
         "@chatgpt-tela/development-runtime": "workspace:*",
         "@chatgpt-tela/http-host": "workspace:*",
+        "@chatgpt-tela/product-lifecycle": "workspace:*",
         "@chatgpt-tela/service-protocol": "workspace:*",
       },
     },

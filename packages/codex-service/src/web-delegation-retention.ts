@@ -47,12 +47,17 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     groups.set(key, [...(groups.get(key) ?? []), record]);
   }
   let next = Infinity;
+  const exclude = (record: WebDelegationRecord) => {
+    save(statePath(adapters, record), { state: "excluded" });
+    for (const job of adapters.store.recordsForThread({ slot: record.slot,
+      accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! })) adapters.store.takePendingTitle(job.id);
+  };
   const confirmAbsent = async (record: WebDelegationRecord, rpc: Awaited<ReturnType<WebDelegationAdapters["connect"]>>): Promise<void> => {
     const key = { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! };
     const path = statePath(adapters, record);
     try {
       const read = object(await rpc.request("thread/read", { threadId: key.threadId, includeTurns: false }, input.signal));
-      if (object(read?.thread)?.id === key.threadId) save(path, { state: "excluded" });
+      if (object(read?.thread)?.id === key.threadId) exclude(record);
       return;
     } catch (error) {
       if (!isExactDeletedNativeThreadAbsent(error, key.threadId)) throw error;
@@ -127,7 +132,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           || retained?.state === "archived" && updatedAt !== retained.updatedAt) {
           // Manual archive, restore or an observed change while archived hands
           // control to the user. Never delete such a thread automatically.
-          save(path, { state: "excluded" }); continue;
+          exclude(record); continue;
         }
         const tail = object(await rpc.request("thread/turns/list", {
           threadId: record.threadId, limit: 1, sortDirection: "desc", itemsView: "summary",
@@ -137,7 +142,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           || present.thread.status?.type === "active") continue;
         if (!jobs.some(job => job.turnId === latest.id)) {
           // The user continued the thread outside the managed journal.
-          save(path, { state: "excluded" }); continue;
+          exclude(record); continue;
         }
         const queue = object(await rpc.request("thread/queue/list", { threadId: record.threadId, limit: 1 }, input.signal));
         if (!Array.isArray(queue?.data)) throw Error("Native queued work inventory unavailable");
@@ -165,7 +170,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
         } catch (error) {
           // Unknown mutation outcomes are not permission to repeat a request.
           // Keep the Native conversation and relinquish automatic management.
-          if (load(path)?.state !== "deleted") save(path, { state: "excluded" });
+          if (load(path)?.state !== "deleted") exclude(record);
           throw error;
         }
       } finally { await rpc.close(); }

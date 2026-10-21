@@ -40,9 +40,10 @@ new runtimes, schedulers or queues. This list records product requirements, not 
   prefixes. Preserve user renames and stable thread IDs; do not rename personal conversations or add
   retention dates to titles. Verify sidebar synchronization and later continuation. Naming must not gate
   execution, create another chat, or rename the provider-side temporary browser conversation.
-  Trace delayed title generation through the existing profile event connection before revising this path:
-  an unnamed snapshot is not proof that no title will be generated. The public name notification exposes
-  no automatic/manual origin; establish that boundary before promising to preserve user renames.
+  First-title adoption now uses the existing profile notification connection and a job-owned pending
+  marker, so it can run after turn completion. Live delayed-generation acceptance remains pending.
+  Notifications expose no automatic/manual origin: a first manual title may also be prefixed once;
+  subsequent renames are untouched. Do not infer generation failure from an unnamed snapshot.
 
 ## Desktop lifecycle and presentation
 
