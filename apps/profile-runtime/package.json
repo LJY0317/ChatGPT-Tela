@@ -9,8 +9,6 @@
     "@chatgpt-tela/codex": "workspace:*",
     "@chatgpt-tela/core": "workspace:*",
     "@chatgpt-tela/chatgpt": "workspace:*",
-    "@chatgpt-tela/service-protocol": "workspace:*",
-    "@chatgpt-tela/product-lifecycle": "workspace:*",
-    "@chatgpt-tela/codex-service": "workspace:*"
+    "@chatgpt-tela/service-protocol": "workspace:*"
   }
 }

@@ -11,11 +11,7 @@ import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import { createAccountCheck } from "./account-check";
 import { createAccountDisplay } from "./account-display";
 import { startNativeAccountLifecycle } from "./native-account-lifecycle";
-import { diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
-import { join } from "node:path";
-import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
-import { WebDelegationStore, prefixInitialWebDelegationTitle } from "../../../packages/codex-service/src/web-delegation";
-import { createLocalNativeAccountProof } from "../../../packages/codex-service/src/cross-profile-account-proof";
+import { diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 
 function writeStderr(value: unknown): void {
   try {
@@ -131,24 +127,9 @@ async function main(config: ReturnType<typeof loadProductProfileRuntimeConfig>):
     throw new Error("profile supervisor connection closed before readiness", { cause: error });
   }
 
-  let delegationStore: WebDelegationStore | undefined;
   const accountLifecycle = startNativeAccountLifecycle({
     signal: lifecycle.signal,
     connect: signal => connectCodexAppServerWebSocket(runtime.routedTarget.session.endpoint, { ...(signal ? { signal } : {}) }),
-    observe(method, params, rpc) {
-      if (method !== "thread/name/updated") return;
-      try {
-        const store = delegationStore ??= new WebDelegationStore(join(resolveProductPaths().serviceState("codex"), "web-delegations"));
-        const ownedSession = async () => ({ slot: config.slot, runtimeProcessId: process.pid,
-          responsesRouteFingerprint: runtime.routedTarget.session.responsesRouteFingerprint,
-          terminalEndpoint: runtime.routedTarget.session.endpoint });
-        const proof = createLocalNativeAccountProof({ resolveOwnedSession: ownedSession, fingerprintKey: store.fingerprintKey });
-        return prefixInitialWebDelegationTitle({ store, slot: config.slot, rpc,
-          owner: async slot => ({ binding: await proof(slot), session: await ownedSession() }) }, params);
-      } catch (error) {
-        emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { slot: config.slot, failure_class: diagnosticFailureClass(error) });
-      }
-    },
     async invalidate(reason) {
       accountRevision++;
       emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_account_invalidated", { reason_class: reason });

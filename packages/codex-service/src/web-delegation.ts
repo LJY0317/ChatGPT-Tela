@@ -325,7 +325,7 @@ export class WebDelegationStore {
     for (const record of records) remove(this.#path(record.id));
     for (const record of records) {
       const base = this.#path(record.id);
-      for (const suffix of [".title-pending", ".collected", ".failed", ".completed"]) remove(base + suffix);
+      for (const suffix of [".collected", ".failed", ".completed"]) remove(base + suffix);
     }
     remove(webDelegationRetentionPath(this.root, key));
     return { jobs: records.length, files };
@@ -354,19 +354,6 @@ export class WebDelegationStore {
   #deleted(record: WebDelegationRecord): boolean {
     return Boolean(record.threadId && this.threadRetention(record)?.state === "deleted");
   }
-  waitForTitle(id: string): void {
-    writeFileSync(`${this.#path(id)}.title-pending`, "", { flag: "wx", mode: 0o600 });
-  }
-  hasPendingTitle(id: string): boolean { return existsSync(`${this.#path(id)}.title-pending`); }
-  pendingTitles(): WebDelegationRecord[] {
-    const suffix = ".json.title-pending";
-    return readdirSync(this.root).filter(name => name.endsWith(suffix) && UUID.test(name.slice(0, -suffix.length)))
-      .flatMap(name => { const record = this.get(name.slice(0, -suffix.length)); return record ? [record] : []; });
-  }
-  takePendingTitle(id: string): boolean {
-    try { unlinkSync(`${this.#path(id)}.title-pending`); return true; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
-  }
   collectedAt(id: string): number | undefined {
     const path = `${this.#path(id)}.collected`;
     if (!existsSync(path)) return undefined;
@@ -375,13 +362,14 @@ export class WebDelegationStore {
     return value;
   }
   /** First explicit result retrieval is durable; repeated reads do not extend retention. */
-  collect(id: string, now = Date.now()): void {
+  collect(id: string, now = Date.now()): boolean {
     const record = this.get(id);
     if (!record || !verifiedWebDelegationAnswer(record)) throw Error("No verified Web result to collect");
     try {
       const fd = openSync(`${this.#path(id)}.collected`, "wx", 0o600);
       try { writeFileSync(fd, String(now)); fsyncSync(fd); } finally { closeSync(fd); }
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      return true;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return false; }
   }
   /** An explicitly linked thread has no task permit and cannot submit a model turn. */
   link(record: WebDelegationRecord): void {
@@ -509,55 +497,32 @@ export interface WebDelegationAdapters {
   store: WebDelegationStore;
   changed?(record: WebDelegationRecord): void;
 }
-/** The profile's existing notification connection outlives the delegated turn. */
-export async function prefixInitialWebDelegationTitle(input: {
-  store: WebDelegationStore; slot: number; rpc: CodexAppServerRpc;
-  owner: WebDelegationAdapters["owner"];
-}, params: unknown): Promise<void> {
-  const event = object(params);
-  if (typeof event?.threadId !== "string") return;
-  if ("threadName" in event && (typeof event.threadName !== "string" || !event.threadName.trim())) return;
-  try {
-    const record = input.store.pendingTitles().find(record => record.slot === input.slot
-      && record.threadId === event.threadId && !record.parentJobId);
-    if (!record || !sameAccountOwner(record, await input.owner(input.slot))) return;
-    const identity = { slot: input.slot, scope_fingerprint: diagnosticFingerprint(event.threadId) };
-    const read = object(await input.rpc.request("thread/read", { threadId: event.threadId, includeTurns: false }));
-    const title = object(read?.thread)?.name;
-    if (typeof title !== "string" || !title.trim()) return;
-    // A newer name supersedes this event; never overwrite it with stale text.
-    if (event.threadName !== undefined && title !== event.threadName) {
-      input.store.takePendingTitle(record.id);
-      emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_settled", { ...identity, state: "superseded" });
-      return;
-    }
-    if (!input.store.takePendingTitle(record.id)) return;
-    if (!title.startsWith(DELEGATED_TITLE_PREFIX)) {
-      await input.rpc.request("thread/name/set", { threadId: event.threadId, name: DELEGATED_TITLE_PREFIX + title });
-    }
-    emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_settled", { ...identity, state: "complete" });
-  } catch (error) {
-    emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { slot: input.slot, failure_class: diagnosticFailureClass(error) });
-  }
-}
-/** On-demand collection reuses naming only while its original marker is pending. */
+/** Naming is a one-time side effect of the existing first-result collection receipt. */
 export async function collectWebDelegationResult(adapters: WebDelegationAdapters, id: string): Promise<string> {
   const record = adapters.store.get(id);
   const answer = record && verifiedWebDelegationAnswer(record);
   if (!record || !answer) throw Error("No verified final result; inspect job status");
-  if (record.threadId && adapters.store.pendingTitles().some(pending => pending.slot === record.slot && pending.threadId === record.threadId)) {
+  const firstCollection = adapters.store.collect(id);
+  if (firstCollection && record.threadId && !record.parentJobId && !record.origin) {
     try {
       const current = await adapters.owner(record.slot);
       if (sameAccountOwner(record, current)) {
         const rpc = await adapters.connect(current.session.terminalEndpoint);
-        try { await prefixInitialWebDelegationTitle({ store: adapters.store, slot: record.slot, rpc, owner: async () => current }, { threadId: record.threadId }); }
-        finally { await rpc.close(); }
+        try {
+          const read = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }));
+          const thread = object(read?.thread);
+          const name = typeof thread?.name === "string" ? thread.name.trim() : "";
+          const preview = typeof thread?.preview === "string" ? thread.preview.split(/\r?\n/).find(line => line.trim())?.trim() : "";
+          const title = name || preview;
+          if (title && !title.startsWith(DELEGATED_TITLE_PREFIX)) {
+            await rpc.request("thread/name/set", { threadId: record.threadId, name: DELEGATED_TITLE_PREFIX + title });
+          }
+        } finally { await rpc.close(); }
       }
     } catch (error) {
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { phase: "collect", failure_class: diagnosticFailureClass(error) });
     }
   }
-  adapters.store.collect(id);
   return answer;
 }
 function sameOwner(record: WebDelegationRecord, current: Awaited<ReturnType<WebDelegationAdapters["owner"]>>) {
@@ -718,12 +683,6 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
         || started?.model !== selection.model || started.approvalPolicy !== "never"
         || reportedSandbox !== (mode === "write" ? "workspaceWrite" : "readOnly")) {
         throw Error("New Web job model or requested sandbox authority was not proven");
-      }
-      try {
-        adapters.store.waitForTitle(record.id);
-        emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_waiting", { slot: record.slot, scope_fingerprint: diagnosticFingerprint(thread.id) });
-      } catch (error) {
-        emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { phase: "arm", failure_class: diagnosticFailureClass(error) });
       }
     }
     await prove();

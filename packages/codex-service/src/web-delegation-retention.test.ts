@@ -112,7 +112,6 @@ test("manual archive, restore, activity and delete relinquish automatic ownershi
   for (const action of ["archive", "restore", "activity", "delete", "direct-turn"] as const) {
     const f = fixture();
     try {
-      f.store.waitForTitle(f.record.id);
       if (action === "restore" || action === "activity") await f.run(f.origin + 7 * DAY);
       if (action === "archive") f.native.archived = true;
       if (action === "restore") f.native.archived = false;
@@ -121,7 +120,6 @@ test("manual archive, restore, activity and delete relinquish automatic ownershi
       if (action === "direct-turn") f.native.tailId = randomUUID();
       await f.run(f.origin + 37 * DAY);
       await f.run(f.origin + 40 * DAY);
-      expect(f.store.hasPendingTitle(f.record.id)).toBe(false);
       expect(f.calls.filter(c => c.method === "thread/delete")).toHaveLength(0);
       expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(action === "restore" || action === "activity" ? 1 : 0);
     } finally { f.cleanup(); }
@@ -166,7 +164,6 @@ test("confirmed deletion removes only matching thread jobs and survives interrup
     f.store.reserve(other);
     f.store.save({ ...other, state: "completed", answer: "other", finalEvidence: "explicit-final-phase" });
     f.store.collect(f.record.id, f.origin);
-    f.store.waitForTitle(f.record.id);
     const base = join(f.root, `${f.record.id}.json`);
     const receipt = join(f.root, `${f.record.id}.json.completed`);
     // A prior cleanup was interrupted after terminal artifacts were removed.
@@ -180,7 +177,6 @@ test("confirmed deletion removes only matching thread jobs and survives interrup
     expect(existsSync(base)).toBe(false);
     expect(existsSync(retention)).toBe(false);
     expect(existsSync(join(f.root, `${f.record.id}.json.collected`))).toBe(false);
-    expect(f.store.hasPendingTitle(f.record.id)).toBe(false);
     expect(f.store.get(f.record.id)).toBeUndefined();
     expect(f.store.get(other.id)?.answer).toBe("other");
     expect(f.store.records()).toHaveLength(1);

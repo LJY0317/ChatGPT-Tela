@@ -32,22 +32,11 @@ uncollected policy and are never replaced by answer times or file modification t
 
 The source CLI can run a bounded, workspace-write-capable task on a connected Tela Work profile without
 changing the model of an existing conversation or exporting its history. Newly created journal-owned Native
-threads wait for their first nonempty `thread/name/updated` notification before
-receiving a one-time `[Tela Agent] ` prefix through `thread/name/set`. The existing
-profile account-notification connection observes this even after the delegated
-turn finishes. Creation does not rename the conversation or delay task execution.
-A job-owned pending marker is consumed once and removed by normal job cleanup;
-continuations do not rearm it. Later renames are left alone. Stale events whose
-name no longer matches current metadata are ignored. Diagnostics contain only
-structural outcomes, not titles. The public notification does not distinguish an
-automatically generated first title from a user's first manual title; either can
-be prefixed once. Events missed while the profile is offline are not replayed.
-Result collection also checks still-pending naming through the same function, using
-current Native metadata without waiting for another title event. Unnamed threads
-and failed metadata reads stay pending; completed naming is never rearmed.
-Once a name mutation is sent, an uncertain failure is not retried automatically.
-Title metadata is not copied into a permanent local title list. Naming failure
-does not change task results or affect provider-side chats.
+threads receive a one-time `[Tela Agent] ` prefix when their first verified result is collected,
+through Native `thread/name/set`. Naming uses the current title, or the first nonempty line of
+Native preview when unnamed. It reuses the existing collection receipt: no title-event observer,
+timer, pending marker or permanent title list. Later collections and continuations preserve user
+renames. Naming failures do not block the answer and are not automatically retried.
 The Native engine creates
 a new durable, paginated thread and supplies its own tool/sandbox authority; the existing Web
 provider performs inference. This is not an independent Tela Chat worker or an API-key fallback.

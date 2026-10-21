@@ -34,16 +34,10 @@ new runtimes, schedulers or queues. This list records product requirements, not 
   Reuse Native events and Queue instead of a second recovery scheduler, repeated model polling or blind
   resubmission. Coalesce the same failure; preserve existing chats and keep private evidence local. Verify
   coordinator wake-up through the supported host contract before promising unattended recovery.
-- **Recognizable delegation names — next dispatch.** Once a Tela-created conversation receives its
-  generated title, prefix it once with `[Tela Agent]` through Native `thread/name/set`, for example
-  `[Tela Agent] Review context reuse`. Reuse title-change notifications; avoid polling and duplicate
-  prefixes. Preserve user renames and stable thread IDs; do not rename personal conversations or add
-  retention dates to titles. Verify sidebar synchronization and later continuation. Naming must not gate
-  execution, create another chat, or rename the provider-side temporary browser conversation.
-  First-title adoption now uses the existing profile notification connection and a job-owned pending
-  marker, so it can run after turn completion. Live delayed-generation acceptance remains pending.
-  Notifications expose no automatic/manual origin: a first manual title may also be prefixed once;
-  subsequent renames are untouched. Do not infer generation failure from an unnamed snapshot.
+- **Recognizable delegation names.** First verified result collection prefixes a new Tela-created
+  conversation once with `[Tela Agent]`, using its Native title or preview first line. Reuse the
+  collection receipt; no title observer or timer. Preserve later user renames and stable thread IDs.
+  Naming does not gate execution or affect provider-side chats. Live sidebar acceptance remains pending.
 
 ## Desktop lifecycle and presentation
 
