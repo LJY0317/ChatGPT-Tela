@@ -399,3 +399,57 @@ test("partial terminal cleanup resumes from each remaining sidecar and clears re
     } finally { f.cleanup(); }
   }
 });
+
+test("excluded collected local history expires without Native mutation or late recreation", async () => {
+  const f = fixture();
+  try {
+    f.store.collect(f.record.id, f.origin);
+    f.native.archived = true;
+    await f.run(f.origin + DAY);
+    expect(f.store.threadRetention(f.record)?.state).toBe("excluded");
+    expect(await f.run(f.origin + 29 * DAY)).toBe(f.origin + 30 * DAY);
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    await f.run(f.origin + 30 * DAY);
+    expect(f.store.get(f.record.id)).toBeUndefined();
+    expect(f.store.records()).toHaveLength(0);
+    expect(() => f.store.collect(f.record.id)).toThrow();
+    expect(() => f.store.save({ ...f.record, state: "running" })).toThrow();
+    expect(f.native.exists).toBe(true);
+    expect(f.calls.filter(call => call.method === "thread/delete" || call.method === "thread/archive")).toHaveLength(0);
+  } finally { f.cleanup(); }
+});
+
+test("excluded history waits for empty Native queue and the managed latest turn", async () => {
+  const f = fixture();
+  try {
+    f.store.collect(f.record.id, f.origin);
+    f.native.archived = true;
+    await f.run(f.origin + DAY);
+    f.native.queued = true;
+    await f.run(f.origin + 40 * DAY);
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    f.native.queued = false;
+    f.native.tailId = randomUUID();
+    await f.run(f.origin + 41 * DAY);
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+  } finally { f.cleanup(); }
+});
+
+test("multiple collected continuations prune together while an uncollected sibling protects all", async () => {
+  const f = fixture();
+  try {
+    f.store.collect(f.record.id, f.origin);
+    const child = { ...f.record, id: randomUUID(), parentJobId: f.record.id, createdAt: f.origin + DAY, turnId: randomUUID() };
+    f.store.reserve(child);
+    f.store.save({ ...child, state: "completed", answer: "followup", finalEvidence: "explicit-final-phase" });
+    f.native.tailId = child.turnId;
+    f.native.archived = true;
+    await f.run(f.origin + 2 * DAY);
+    await f.run(f.origin + 40 * DAY);
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    f.store.collect(child.id, f.origin + 2 * DAY);
+    await f.run(f.origin + 40 * DAY);
+    expect(f.store.records()).toHaveLength(0);
+    expect(f.native.exists).toBe(true);
+  } finally { f.cleanup(); }
+});

@@ -15,6 +15,8 @@ const MAX_RESULT_BYTES = 512 * 1024;
 const DELEGATED_TITLE_PREFIX = "[Tela Agent] ";
 // A reporting threshold, never an admission bound on retained results.
 const RECORD_REVIEW_THRESHOLD = 64;
+const COLLECTED_HISTORY_RETENTION_MS = 30 * 86_400_000;
+const MAX_HISTORY_BYTES = 16 * 1024 * 1024;
 // Reserve the full supported range; lowering a limit never revokes an active lease.
 const MAX_PROFILE_TASKS = 5;
 export type WebDelegationCapacity = CodexWebDelegationCapacityContract;
@@ -205,7 +207,12 @@ export class WebDelegationStore {
     if (!UUID.test(threadId)) throw Error("Invalid continuation thread ID");
     return join(this.root, `continuation-thread-${threadId}.lease`);
   }
-  #retained(): string[] { return readdirSync(this.root).filter(name => name.endsWith(".json")); }
+  #retained(): string[] {
+    return [...new Set(readdirSync(this.root).flatMap(name => {
+      const id = /^([0-9a-f-]{36})\.json(?:\.(?:completed|failed))?$/.exec(name)?.[1];
+      return id && UUID.test(id) ? [id] : [];
+    }))].map(id => `${id}.json`);
+  }
   #leaseOwner(path: string): "free" | "unknown" | string {
     if (!existsSync(path)) return "free";
     const stat = lstatSync(path);
@@ -316,24 +323,78 @@ export class WebDelegationStore {
         ...(record.parentJobId && record.threadId ? [this.#threadPermit(record.threadId)] : [])];
       for (const path of paths) if (this.#leaseOwner(path) === record.id) unlinkSync(path);
     }
-    let files = 0;
-    const remove = (path: string) => {
-      if (existsSync(path)) { unlinkSync(path); files++; }
-    };
-    // A creating base can lack threadId; keep the terminal ownership proof
-    // until its base has been removed, including after interrupted cleanup.
-    for (const record of records) remove(this.#path(record.id));
-    for (const record of records) {
-      const base = this.#path(record.id);
-      for (const suffix of [".collected", ".failed", ".completed"]) remove(base + suffix);
-    }
-    remove(webDelegationRetentionPath(this.root, key));
+    const files = records.reduce((count, record) => count + this.#removeRecordFiles(record.id), 0);
+    const receipt = webDelegationRetentionPath(this.root, key);
+    if (existsSync(receipt)) { unlinkSync(receipt); return { jobs: records.length, files: files + 1 }; }
     return { jobs: records.length, files };
+  }
+  #removeRecordFiles(id: string): number {
+    let files = 0;
+    // Preserve terminal ownership until its base has gone, including interrupted cleanup.
+    for (const suffix of ["", ".collected", ".failed", ".completed"]) {
+      const path = this.#path(id) + suffix;
+      if (existsSync(path)) { unlinkSync(path); files++; }
+    }
+    return files;
+  }
+  /** Local history only: user-controlled Native conversations are never mutated.
+   * Active, unresolved and uncollected results can exceed this reclaimable-history budget. */
+  pruneCollectedHistory(eligible: ReadonlySet<string>, now = Date.now()): { removed: number; next?: number } {
+    const records = this.records();
+    let bytes = 0;
+    const groups = new Map<string, WebDelegationRecord[]>();
+    const identity = (record: WebDelegationRecord) => `${record.slot}:${record.owner.accountFingerprint}:${record.threadId}`;
+    for (const record of records) {
+      if (!record.threadId) continue;
+      const key = identity(record);
+      groups.set(key, [...(groups.get(key) ?? []), record]);
+    }
+    const candidates = [...groups.entries()].flatMap(([key, jobs]) => {
+      if (!eligible.has(key) || this.threadRetention(jobs[0]!)?.state !== "excluded"
+        || jobs.some(job => !this.#terminal(job) || !verifiedWebDelegationAnswer(job) || this.collectedAt(job.id) === undefined)) return [];
+      const collected = Math.max(...jobs.map(job => this.collectedAt(job.id)!));
+      const size = jobs.reduce((sum, job) => sum + ["", ".collected", ".failed", ".completed"].reduce((total, suffix) => {
+        const path = this.#path(job.id) + suffix;
+        return total + (existsSync(path) ? lstatSync(path).size : 0);
+      }, 0), 0);
+      bytes += size;
+      return [{ jobs, collected, size }];
+    }).sort((a, b) => a.collected - b.collected || a.jobs[0]!.id.localeCompare(b.jobs[0]!.id));
+    let removed = 0;
+    let next = Infinity;
+    for (const { jobs, collected, size } of candidates) {
+      const expiry = collected + COLLECTED_HISTORY_RETENTION_MS;
+      if (expiry > now && bytes <= MAX_HISTORY_BYTES) { next = Math.min(next, expiry); continue; }
+      if (jobs.some(job => {
+        const current = this.get(job.id);
+        return !current || !this.#terminal(current) || !verifiedWebDelegationAnswer(current) || this.collectedAt(job.id) === undefined;
+      })) continue;
+      const record = jobs[0]!;
+      if (this.threadRetention(record)?.state !== "excluded") continue;
+      const key = { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! };
+      for (const job of jobs) { this.#release(job); this.#removeRecordFiles(job.id); removed++; }
+      bytes -= size;
+      const receipt = webDelegationRetentionPath(this.root, key);
+      if (existsSync(receipt)) unlinkSync(receipt);
+    }
+    return { removed, ...(next === Infinity ? {} : { next }) };
+  }
+  /** A cleanup interrupted after its last sidecar left an excluded receipt. */
+  pruneOrphanedExcludedReceipts(): void {
+    const owned = new Set(this.records().filter(record => record.threadId).map(record =>
+      webDelegationRetentionPath(this.root, { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! })));
+    for (const name of readdirSync(this.root)) {
+      if (!/^thread-([1-9][0-9]?)-[a-f0-9]{64}-[0-9a-f-]{36}\.retention$/i.test(name)) continue;
+      const path = join(this.root, name);
+      if (owned.has(path)) continue;
+      const receipt = JSON.parse(readFileSync(path, "utf8")) as WebDelegationRetentionReceipt;
+      if (receipt.state === "excluded") unlinkSync(path);
+    }
   }
   /** Recover ownership from terminal sidecars even when the base predates thread creation. */
   recordsForThread(key: WebDelegationThreadKey): WebDelegationRecord[] {
-    const ids = new Set(readdirSync(this.root).map(name => /^([0-9a-f-]{36})\.json(?:\.(?:completed|failed))?$/.exec(name)?.[1]).filter((id): id is string => Boolean(id && UUID.test(id))));
-    return [...ids].map(id => {
+    return this.#retained().map(name => {
+      const id = name.slice(0, -5);
       const base = this.#path(id);
       return this.#read(`${base}.completed`, id) ?? this.#read(`${base}.failed`, id) ?? this.#read(base, id);
     }).filter((record): record is WebDelegationRecord => Boolean(record && record.slot === key.slot

@@ -47,6 +47,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     groups.set(key, [...(groups.get(key) ?? []), record]);
   }
   let next = Infinity;
+  const historyEligible = new Set<string>();
   const connections = new Map<string, Awaited<ReturnType<WebDelegationAdapters["connect"]>>>();
   const confirmAbsent = async (record: WebDelegationRecord, rpc: Awaited<ReturnType<WebDelegationAdapters["connect"]>>): Promise<void> => {
     const key = { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! };
@@ -134,7 +135,21 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           await confirmAbsent(record, rpc);
           continue;
         }
-        if (retained?.state === "excluded") continue;
+        if (retained?.state === "excluded") {
+          // A manual archive/restore hands over Native ownership. Local history
+          // is reclaimable only after a fresh idle/queue/turn proof.
+          const tail = object(await rpc.request("thread/turns/list", {
+            threadId: record.threadId, limit: 1, sortDirection: "desc", itemsView: "summary",
+          }, input.signal));
+          const latest = Array.isArray(tail?.data) ? object(tail.data[0]) : undefined;
+          if (!latest || !["completed", "failed", "interrupted"].includes(latest.status)
+            || present.thread.status?.type === "active" || !jobs.some(job => job.turnId === latest.id)) continue;
+          const queue = object(await rpc.request("thread/queue/list", { threadId: record.threadId, limit: 1 }, input.signal));
+          if (!Array.isArray(queue?.data) || queue.data.length || queue.nextCursor != null) continue;
+          if (!sameAccountOwner(record, await adapters.owner(record.slot))) continue;
+          historyEligible.add(`${record.slot}:${record.owner.accountFingerprint}:${record.threadId}`);
+          continue;
+        }
         const updatedAt = present.thread.updatedAt;
         if (!Number.isFinite(updatedAt)) throw Error("Native thread activity time unavailable");
         if (present.archived !== (retained?.state === "archived")
@@ -193,6 +208,11 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
   }
   } finally {
     await Promise.allSettled([...connections.values()].map(rpc => rpc.close()));
+  }
+  if (!input.signal.aborted) {
+    const history = adapters.store.pruneCollectedHistory(historyEligible, now);
+    adapters.store.pruneOrphanedExcludedReceipts();
+    if (history.next !== undefined) next = Math.min(next, history.next);
   }
   return next === Infinity ? undefined : next;
 }
