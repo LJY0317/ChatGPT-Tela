@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { relative, resolve, sep } from "node:path";
 import { resolveExistingWorkspacePath } from "./paths";
@@ -22,7 +22,7 @@ export interface ChatWorkspaceInstructionContext {
   readonly instructions: readonly ChatLoadedInstruction[];
   readonly availableInstructionFiles: readonly string[];
   readonly instructionScanComplete: boolean;
-  readonly globalInstructionStatus: "loaded" | "oversized" | "missing";
+  readonly globalInstructionStatus: "loaded" | "oversized" | "missing" | "unreadable";
 }
 
 function portableRelative(root: string, absolute: string): string {
@@ -57,31 +57,29 @@ export function discoverWorkspaceInstructions(root: string, options: { readonly 
   const globalHome = resolve(options.codexHome ?? resolve(homedir(), ".codex"));
   const globalInstructionPath = resolve(globalHome, "AGENTS.md");
   try {
-    const fileStat = lstatSync(globalInstructionPath);
-    if (!fileStat.isFile() || fileStat.isSymbolicLink()) throw new Error("global Codex instructions must be a regular file");
+    const fileStat = statSync(globalInstructionPath);
+    if (!fileStat.isFile()) throw new Error("global Codex instructions must be a regular file");
     if (fileStat.size > MAX_ROOT_INSTRUCTION_BYTES) {
       globalInstructionStatus = "oversized";
+      scanComplete = false;
     } else {
       const bytes = readFileSync(globalInstructionPath);
       if (bytes.includes(0)) throw new Error("global Codex instructions appear to be binary");
       const instruction = { bytes: bytes.byteLength, content: bytes.toString("utf8") };
-      loaded.push(Object.freeze({ path: "~/.codex/AGENTS.md", content: instruction.content, source: "global", scope: "user" }));
+      loaded.push(Object.freeze({ path: options.codexHome ? globalInstructionPath : "~/.codex/AGENTS.md", content: instruction.content, source: "global", scope: "user" }));
       loadedBytes += instruction.bytes;
       globalInstructionStatus = "loaded";
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      // Missing global instructions are normal; an existing unreadable or invalid
-      // file should be surfaced rather than silently treated as absent.
-      throw error;
+      globalInstructionStatus = "unreadable";
+      scanComplete = false;
     }
   }
 
   const rootEntries = readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
   for (const entry of rootEntries) {
     if (!INSTRUCTION_NAMES.has(entry.name) || entry.isDirectory()) continue;
-    const stat = lstatSync(resolve(root, entry.name));
-    if (!stat.isFile() || stat.isSymbolicLink()) continue;
     const instruction = readInstruction(root, entry.name);
     if (instruction.bytes <= MAX_ROOT_INSTRUCTION_BYTES
       && loadedBytes + instruction.bytes <= MAX_TOTAL_ROOT_INSTRUCTION_BYTES) {
@@ -125,9 +123,8 @@ export function discoverWorkspaceInstructions(root: string, options: { readonly 
       if (!INSTRUCTION_NAMES.has(entry.name)) continue;
       const path = portableRelative(root, resolve(current.absolute, entry.name));
       try {
-        const absolute = resolve(current.absolute, entry.name);
-        const stat = lstatSync(absolute);
-        if (!stat.isFile() || stat.isSymbolicLink()) continue;
+        const absolute = resolveExistingWorkspacePath(root, path);
+        if (!statSync(absolute).isFile()) throw new Error("workspace instruction is not a regular file");
         available.add(path);
       } catch {
         // An instruction-shaped path that cannot be proven inside the workspace is not safe to advertise.

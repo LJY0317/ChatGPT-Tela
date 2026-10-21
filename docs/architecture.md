@@ -1623,11 +1623,21 @@ shutdown admission. The private completion-storage fixture and restart tests cov
 (`build/process-completion-storage-boundary`); they do not resolve unknown direct records or prove
 power-loss durability or descendant containment. This change remains source-only.
 
-Workspace open also returns bounded root-level `AGENTS.md` / `CLAUDE.md` instruction content plus a bounded
-list of nested instruction files. Nested files are never silently injected later: the caller must read the
-applicable file before working under that subtree. Instruction discovery skips dependency/build trees,
-rejects instruction-shaped paths that cannot be proven inside the workspace, and reports an incomplete scan
-instead of pretending an enumeration bound or unreadable subtree contains no instructions.
+Workspace open and explicit instruction discovery return bounded user instructions from
+`~/.codex/AGENTS.md` together with root-level `AGENTS.md` / `CLAUDE.md` and a bounded list of nested paths.
+Each loaded file identifies its user/global or project/workspace scope. User-managed global symlinks are
+followed; project paths retain the existing workspace boundary. Missing global instructions are normal;
+oversized or unreadable globals are reported as incomplete without blocking project discovery. The default
+Chat service uses the local user's conventional Codex home, not a home guessed from a Web account.
+
+The existing instruction tool result is the delivery path, including internal Chat agents; instruction bodies
+are not separately injected into every model request. Other tools do not automatically rediscover instructions.
+Explicit discovery rereads files, so edits and deletions are reflected without a watcher or a shared
+"already loaded" cache. Nested files are advertised without reading their bodies; callers read applicable
+files before working under those subtrees. Dependency/build trees are skipped and incomplete scans are
+reported. Native-backed direct Web turns and managed Web delegation keep their canonical instruction
+revision/checkpoint path; no cross-path file/revision deduplication is claimed without delivery evidence.
+
 
 `show_changes` is Git-backed, disables external diff/textconv execution, and returns tracked diff plus
 untracked paths for only the selected workspace. It also writes a bounded self-contained historical review

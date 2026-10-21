@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, unlinkSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverWorkspaceInstructions } from "./workspace-instructions";
@@ -27,7 +27,7 @@ describe("workspace instruction discovery", () => {
 
     const first = discoverWorkspaceInstructions(realpathSync(root), { codexHome: realpathSync(codexHome) });
     expect(first.instructions).toEqual([
-      { path: "~/.codex/AGENTS.md", content: "global-v1\n", source: "global", scope: "user" },
+      { path: join(codexHome, "AGENTS.md"), content: "global-v1\n", source: "global", scope: "user" },
       { path: "AGENTS.md", content: "project-v1\n", source: "workspace", scope: "project" },
     ]);
     expect(first.availableInstructionFiles).toContain("src/AGENTS.md");
@@ -37,14 +37,14 @@ describe("workspace instruction discovery", () => {
     writeFileSync(join(codexHome, "AGENTS.md"), "global-v2\n");
     unlinkSync(join(root, "AGENTS.md"));
     const second = discoverWorkspaceInstructions(realpathSync(root), { codexHome: realpathSync(codexHome) });
-    expect(second.instructions).toEqual([{ path: "~/.codex/AGENTS.md", content: "global-v2\n", source: "global", scope: "user" }]);
+    expect(second.instructions).toEqual([{ path: join(codexHome, "AGENTS.md"), content: "global-v2\n", source: "global", scope: "user" }]);
     expect(second.globalInstructionStatus).toBe("loaded");
 
     unlinkSync(join(codexHome, "AGENTS.md"));
     expect(discoverWorkspaceInstructions(realpathSync(root), { codexHome: realpathSync(codexHome) })).toMatchObject({ instructions: [], globalInstructionStatus: "missing" });
   });
 
-  test("advertises an oversized global file instead of silently omitting it", () => {
+  test("reports an oversized global file without advertising an unreadable workspace path", () => {
     const codexHome = realpathSync(directory());
     const root = realpathSync(directory());
     writeFileSync(join(codexHome, "AGENTS.md"), "x".repeat(128 * 1024 + 1));
@@ -52,5 +52,33 @@ describe("workspace instruction discovery", () => {
     expect(result.instructions).toEqual([]);
     expect(result.availableInstructionFiles).not.toContain("~/.codex/AGENTS.md");
     expect(result.globalInstructionStatus).toBe("oversized");
+    expect(result.instructionScanComplete).toBe(false);
   });
 });
+
+ test("follows user-managed global links and keeps workspace link boundaries", () => {
+    const codexHome = realpathSync(directory());
+    const root = realpathSync(directory());
+    const shared = realpathSync(directory());
+    writeFileSync(join(shared, "rules.md"), "user-rule");
+    symlinkSync(join(shared, "rules.md"), join(codexHome, "AGENTS.md"));
+    writeFileSync(join(root, "rules.md"), "project-rule");
+    symlinkSync(join(root, "rules.md"), join(root, "AGENTS.md"));
+    mkdirSync(join(root, "nested"));
+    symlinkSync(join(shared, "rules.md"), join(root, "nested", "AGENTS.md"));
+    const result = discoverWorkspaceInstructions(root, { codexHome });
+    expect(result.instructions.map(row => row.content)).toEqual(["user-rule", "project-rule"]);
+    expect(result.availableInstructionFiles).not.toContain("nested/AGENTS.md");
+    expect(result.instructionScanComplete).toBe(false);
+  });
+
+ test("reports an invalid global file without blocking project instructions", () => {
+    const codexHome = realpathSync(directory());
+    const root = realpathSync(directory());
+    mkdirSync(join(codexHome, "AGENTS.md"));
+    writeFileSync(join(root, "AGENTS.md"), "project-rule");
+    const result = discoverWorkspaceInstructions(root, { codexHome });
+    expect(result.globalInstructionStatus).toBe("unreadable");
+    expect(result.instructionScanComplete).toBe(false);
+    expect(result.instructions.map(row => row.content)).toEqual(["project-rule"]);
+ });

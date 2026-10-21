@@ -13,7 +13,7 @@ function fixtureTools(events: string[], globalInstructions?: string): ChatAgentW
   return {
     workspaceInstructions(workspaceId) {
       events.push(`workspace_instructions:${workspaceId}`);
-      return { instructions: globalInstructions ? [{ path: "~/.codex/AGENTS.md", content: globalInstructions, source: "global", scope: "user" }] : [], availableInstructionFiles: [], instructionScanComplete: true, globalInstructionStatus: globalInstructions ? "loaded" : "missing" };
+      return { instructions: globalInstructions ? [{ path: "~/.codex/AGENTS.md", content: globalInstructions, source: "global", scope: "user" }] : [], availableInstructionFiles: [], instructionScanComplete: true };
     },
     listDirectory(input) {
       events.push(`list_directory:${input.workspaceId}:${input.path ?? "."}`);
@@ -82,7 +82,7 @@ describe("OpenAI Responses Tela Chat agent", () => {
     const driver = new OpenAiChatAgentDriver({
       apiKey: "sk-fixture-secret-value-long-enough",
       model: "test-model",
-      workspaceTools: fixtureTools(events, "fixture-global-rule"),
+      workspaceTools: fixtureTools(events),
       fetch: fetch_,
     });
     const sessionIds: string[] = [];
@@ -95,7 +95,7 @@ describe("OpenAI Responses Tela Chat agent", () => {
 
     expect(result).toEqual({ response: "read complete", providerSessionId: "conv_fixture_1" });
     expect(sessionIds).toEqual(["conv_fixture_1"]);
-    expect(events).toEqual(["workspace_instructions:chatws_1", "read:chatws_1:README.md::10"]);
+    expect(events).toEqual(["read:chatws_1:README.md::10"]);
     expect(requests).toHaveLength(3);
     expect(requests.every(request => request.authorization === "Bearer sk-fixture-secret-value-long-enough")).toBe(true);
     const firstResponse = requests[1]!.body;
@@ -103,7 +103,6 @@ describe("OpenAI Responses Tela Chat agent", () => {
     expect(JSON.stringify(firstResponse)).not.toContain("/private/workspace");
     expect(firstResponse.instructions).toContain("read_many only for already-known independent paths");
     expect(firstResponse.instructions).toContain("workspace_instructions");
-    expect(firstResponse.instructions).toContain("fixture-global-rule");
     expect(firstResponse.instructions).toContain("list_skills");
     expect(firstResponse.instructions).toContain("Treat actual tool results as evidence");
     expect(firstResponse.instructions).toContain("This run is read-only");
@@ -117,32 +116,6 @@ describe("OpenAI Responses Tela Chat agent", () => {
       call_id: "call_read_1",
       output: JSON.stringify({ path: "README.md", content: "1: hello" }),
     }]);
-    expect(requests[2]!.body.instructions).not.toContain("fixture-global-rule");
-  });
-
-  test("workspace_instructions omits the global instruction body already supplied in request context", async () => {
-    const requests: Record<string, unknown>[] = [];
-    const events: string[] = [];
-    const driver = new OpenAiChatAgentDriver({
-      apiKey: "sk-fixture-secret-value-long-enough",
-      model: "test-model",
-      workspaceTools: fixtureTools(events, "fixture-global-rule"),
-      fetch: async (input, init) => {
-        const url = input instanceof Request ? input.url : String(input);
-        if (url.endsWith("/conversations")) return response({ id: "conv_instructions" });
-        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-        requests.push(body);
-        return response(requests.length === 1 ? {
-          output: [{ type: "function_call", call_id: "call_instructions", name: "workspace_instructions", arguments: "{}" }],
-        } : { output: [{ type: "message", content: [{ type: "output_text", text: "done" }] }] });
-      },
-    });
-    await driver.run({ prompt: "Inspect instructions", workspaceId: "chatws_3", workspaceRoot: "/unused", writeMode: "read_only" },
-      { onSessionId() {} }, new AbortController().signal);
-    expect(requests[0]!.instructions).toContain("fixture-global-rule");
-    const outputs = requests[1]!.input as Array<{ readonly output: string }>;
-    expect(outputs[0]!.output).not.toContain("fixture-global-rule");
-    expect(outputs[0]!.output).toContain("globalInstructionStatus");
   });
 
   test("reuses a proven conversation id and only exposes apply_patch in workspace_write mode", async () => {
@@ -182,7 +155,7 @@ describe("OpenAI Responses Tela Chat agent", () => {
 
     expect(result).toEqual({ response: "patched", providerSessionId: "conv_existing_1" });
     expect(sessions).toEqual([]);
-    expect(events).toEqual(["workspace_instructions:chatws_2", "apply_patch:chatws_2"]);
+    expect(events).toEqual(["apply_patch:chatws_2"]);
     expect((requests[0]!.tools as Array<{ name: string }>).map(tool => tool.name)).toContain("apply_patch");
     expect(requests[0]!.instructions).toContain("Read enough relevant context before editing");
     expect(requests[0]!.instructions).toContain("inspect show_changes");
@@ -258,7 +231,7 @@ describe("OpenAI Responses Tela Chat agent", () => {
     await expect(driver.run({ prompt: "write", workspaceId: "chatws_1", workspaceRoot: "/unused",
       providerSessionId: "conv_existing", writeMode: "workspace_write" }, { onSessionId() {} }, controller.signal))
       .rejects.toThrow("fixture stop");
-    expect(events).toEqual(["workspace_instructions:chatws_1"]);
+    expect(events).toEqual([]);
   });
 
   test("stop during a tool revokes subsequent tools and provider submissions", async () => {
@@ -279,7 +252,28 @@ describe("OpenAI Responses Tela Chat agent", () => {
     await expect(driver.run({ prompt: "write", workspaceId: "chatws_1", workspaceRoot: "/unused",
       providerSessionId: "conv_existing", writeMode: "workspace_write" }, { onSessionId() {} }, controller.signal))
       .rejects.toThrow("fixture stop");
-    expect(events).toEqual(["workspace_instructions:chatws_1", "read:chatws_1:a.txt::"]);
+    expect(events).toEqual(["read:chatws_1:a.txt::"]);
     expect(requests).toBe(1);
   });
 });
+
+ test("global instructions use the workspace tool result without a second prompt injection", async () => {
+    const requests: Record<string, unknown>[] = [];
+    const events: string[] = [];
+    const driver = new OpenAiChatAgentDriver({
+      apiKey: "sk-fixture-secret-value-long-enough", model: "test-model",
+      workspaceTools: fixtureTools(events, "fixture-global-rule"),
+      fetch: async (input, init) => {
+        if (String(input).endsWith("/conversations")) return response({ id: "conv_rules" });
+        requests.push(JSON.parse(String(init?.body)));
+        return response(requests.length === 1 ? {
+          output: [{ type: "function_call", call_id: "rules", name: "workspace_instructions", arguments: "{}" }],
+        } : { output: [{ type: "message", content: [{ type: "output_text", text: "done" }] }] });
+      },
+    });
+    await driver.run({ prompt: "Read instructions", workspaceId: "chatws_1", workspaceRoot: "/unused", writeMode: "read_only" },
+      { onSessionId() {} }, new AbortController().signal);
+    expect(events).toEqual(["workspace_instructions:chatws_1"]);
+    expect(requests.every(request => !String(request.instructions).includes("fixture-global-rule"))).toBe(true);
+    expect(JSON.stringify(requests[1]!.input).match(/fixture-global-rule/g)).toHaveLength(1);
+ });

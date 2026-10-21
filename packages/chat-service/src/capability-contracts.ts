@@ -54,7 +54,7 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "open_workspace",
-    description: "Open or reuse one locally approved workspace root. Reuse the returned workspace_id for continued work. Follow returned root instructions; before working under a subtree listed in availableInstructionFiles, read its applicable instruction file. If instructionScanComplete is false, do not assume undiscovered subtrees have no instructions. A Git workspace also establishes or reuses a private last-shown review baseline when safe. The workspace remains user-owned.",
+    description: "Open or reuse one locally approved workspace root. Reuse the returned workspace_id for continued work. Follow returned user-level and project-root instructions; before working under a subtree listed in availableInstructionFiles, read its applicable instruction file. If instructionScanComplete is false, do not assume undiscovered subtrees have no instructions. A Git workspace also establishes or reuses a private last-shown review baseline when safe. The workspace remains user-owned.",
     inputSchema: object({ path }, ["path"]),
   },
   {

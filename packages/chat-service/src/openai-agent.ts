@@ -253,10 +253,10 @@ function toolResult(value: unknown): string {
   return serialized;
 }
 
-function agentInstructions(writeMode: ChatAgentRunInput["writeMode"], globalInstructions?: string): string {
+function agentInstructions(writeMode: ChatAgentRunInput["writeMode"]): string {
   const common = [
     "Work only through the provided Tela workspace tools. Paths are relative to one authorized workspace; do not invent access outside it.",
-    "Use workspace_instructions to identify workspace-scoped root instructions and nested instruction paths. User-scope instructions from ~/.codex/AGENTS.md are already supplied in the initial request context; do not re-inject their contents from workspace_instructions.",
+    "Begin by inspecting workspace_instructions. Follow loaded user and project instructions, and before working under a subtree listed there, read the applicable nested instruction file.",
     "Use list_directory and search_text to locate relevant code instead of guessing paths. When a task matches a reusable workflow, inspect list_skills and read the matching skill before proceeding.",
     "Use read_many only for already-known independent paths. When one result determines what to inspect next, read sequentially.",
     "Treat actual tool results as evidence. After a deterministic failure, update the working hypothesis or observable state before repeating the same call.",
@@ -264,14 +264,12 @@ function agentInstructions(writeMode: ChatAgentRunInput["writeMode"], globalInst
   if (writeMode === "workspace_write") {
     return [
       ...common,
-      ...(globalInstructions ? [`User-level Codex instructions from ~/.codex/AGENTS.md:\n\n${globalInstructions}`] : []),
       "You may inspect and patch files, but no shell or arbitrary filesystem access is available.",
       "Read enough relevant context before editing. After the final related patch, inspect show_changes when it helps verify the resulting Git-backed state before the final answer.",
     ].join(" ");
   }
   return [
     ...common,
-    ...(globalInstructions ? [`User-level Codex instructions from ~/.codex/AGENTS.md:\n\n${globalInstructions}`] : []),
     "This run is read-only. Do not request writes or shell execution, and do not claim a local mutation occurred.",
   ].join(" ");
 }
@@ -283,17 +281,8 @@ async function invokeTool(
 ): Promise<unknown> {
   const args = call.arguments;
   switch (call.name) {
-    case "workspace_instructions": {
-      const result = tools_.workspaceInstructions(input.workspaceId);
-      if (!result || typeof result !== "object" || Array.isArray(result)) return result;
-      const context = result as { readonly instructions?: readonly { readonly source?: string; readonly scope?: string }[] };
-      return Object.freeze({
-        ...context,
-        ...(context.instructions ? {
-          instructions: Object.freeze(context.instructions.filter(item => item.source !== "global" || item.scope !== "user")),
-        } : {}),
-      });
-    }
+    case "workspace_instructions":
+      return tools_.workspaceInstructions(input.workspaceId);
     case "list_directory": {
       const limit = integer(args.limit, "list_directory.limit", 1, 400);
       const path = args.path === undefined || args.path === null ? undefined : relativePath(args.path, "list_directory.path");
@@ -466,16 +455,12 @@ export class OpenAiChatAgentDriver implements ChatAgentDriver {
     const conversation = await this.#conversation(input, callbacks, signal);
     signal.throwIfAborted();
     const availableTools = tools(input.writeMode);
-    const instructionContext = this.#tools.workspaceInstructions(input.workspaceId) as {
-      readonly instructions?: readonly { readonly path?: string; readonly content?: string; readonly source?: string; readonly scope?: string }[];
-    };
-    const globalInstructions = instructionContext.instructions?.find(item => item.source === "global" && item.scope === "user")?.content;
     let nextInput: unknown = [{ role: "user", content: input.prompt }];
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
       const response = parseResponse(await this.#post("responses", {
         model: this.#model,
         conversation,
-        instructions: agentInstructions(input.writeMode, round === 0 ? globalInstructions : undefined),
+        instructions: agentInstructions(input.writeMode),
         input: nextInput,
         tools: availableTools,
         tool_choice: "auto",

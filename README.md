@@ -51,6 +51,12 @@ The product treats the following as explicit design principles:
 - **Multi-OS and efficient by default** — macOS, Windows, and Linux remain architectural targets; long-running work is event-driven/on-demand, with idle CPU, wakeups, battery, I/O, and log volume treated as design constraints.
 - **Evidence-first diagnostics** — failure-triggered, structured, privacy-safe, bounded evidence is preferred over always-on telemetry or ad-hoc raw logs.
 
+Tela Chat includes `~/.codex/AGENTS.md` and project-root instructions when you open a workspace.
+Reuse its workspace ID during continued work; instruction bodies are not added to every tool call.
+Reopen or explicitly rediscover workspace instructions after editing them. Nested instruction files
+are listed for the agent to read before working in their directories. Native-backed Web conversations
+also retain the Native app's existing instruction and checkpoint handling.
+
 For development operators diagnosing one existing Native conversation, a
 read-only source CLI command now joins its exact thread status, recent bounded
 turn statuses, matching structural diagnostic events and last observed approval
