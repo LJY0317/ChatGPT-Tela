@@ -39,6 +39,20 @@ new runtimes, schedulers or queues. This list records product requirements, not 
   collection receipt; no title observer or timer. Preserve later user renames and stable thread IDs.
   Naming does not gate execution or affect provider-side chats. Live sidebar acceptance remains pending.
 
+## Context preservation and failure recovery
+
+- Compare cold Web seeds after edit/restart with the same active Native request and its actual compaction
+  state. Audit whether summaries preserve unresolved goals, decisions, constraints, exceptions and evidence
+  references; distinguish missing source history from omissions introduced by Tela. Report instructions,
+  summary and recent-history shares separately. Byte-based token estimates are not provider billing, and
+  neither a small seed nor a large token count proves sufficient context. Prefer removing redundant
+  transport/instruction restoration over arbitrary minimum sizes, extra model calls or another summary engine.
+- Review current checkpoint/stream failures using exact request and turn evidence. Separate supported
+  paginated history from unindexed legacy history, installed behavior from newer source, and preparation
+  rejection from a failure after submission. Repair current shared defects; document unsupported legacy
+  recovery instead of rebuilding obsolete paths or retrying failed turns blindly. Add diagnostics only at
+  boundaries where existing evidence cannot distinguish the cause.
+
 ## Desktop lifecycle and presentation
 
 - Complete the update/repair lifecycle through the running menu-bar UI as well as backend services and
