@@ -7,7 +7,7 @@ import { readOwnershipManifest, type resolveProductPaths } from "@chatgpt-tela/p
 import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
 import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
 import { createLocalNativeAccountProof, type TrustedNativeProfileSession } from "../../../packages/codex-service/src/cross-profile-account-proof";
-import { WebDelegationStore, WebDelegationCapacityError, verifiedWebDelegationAnswer, runWebDelegation, reconcileWebDelegation } from "../../../packages/codex-service/src/web-delegation";
+import { WebDelegationStore, collectWebDelegationResult, WebDelegationCapacityError, verifiedWebDelegationAnswer, runWebDelegation, reconcileWebDelegation } from "../../../packages/codex-service/src/web-delegation";
 import { selectDelegationWebModel } from "../../../packages/codex-service/src/web-delegation-model";
 import { profileSlotFromArguments, delegationProfileSlot } from "./profile-selection";
 
@@ -21,6 +21,32 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   };
   const store = new WebDelegationStore(join(paths.serviceState("codex"), "web-delegations"),
     slot => webDelegationLimit(readProductPreferences(), slot));
+  let connectedClient: CodexServiceClient | undefined;
+  const getClient = async (): Promise<CodexServiceClient> => {
+    if (connectedClient) return connectedClient;
+    const install = readOwnershipManifest(paths.installManifest);
+    if (!install) throw Error("Tela is not installed");
+    const service = await new LocalServiceSupervisor({ installId: install.installId }).current({
+      service: "codex", descriptorPath: join(paths.serviceRuntime("codex"), "descriptor.json"),
+    });
+    if (!service) throw Error("Tela Work is not running");
+    return connectedClient = new CodexServiceClient(descriptorForService(service.descriptor, "codex"));
+  };
+  const session = async (selected: number): Promise<TrustedNativeProfileSession> => {
+    const client = await getClient();
+    const profile = (await client.profiles()).find(row => row.slot === selected);
+    if (!profile || profile.controlState !== "running" || profile.targetSessionState !== "ready"
+      || !profile.childProcessId || !profile.responsesRouteFingerprint) {
+      throw Error("Selected profile is not ready for a new Web job");
+    }
+    const terminal = await client.terminalSession(selected);
+    return { slot: selected, runtimeProcessId: profile.childProcessId, responsesRouteFingerprint: profile.responsesRouteFingerprint, terminalEndpoint: terminal.endpoint };
+  };
+  const binding = createLocalNativeAccountProof({ resolveOwnedSession: session, fingerprintKey: store.fingerprintKey });
+  const owner = async (selected: number) => {
+    return { binding: await binding(selected), session: await session(selected) };
+  };
+  const adapters = { store, owner, connect: (endpoint: string) => connectCodexAppServerWebSocket(endpoint, { signal: AbortSignal.timeout(10_000) }) };
   if (subcommand === "capacity") {
     const mode = args.includes("--mode") ? option("--mode") : "read";
     if (mode !== "read" && mode !== "write") throw Error("--mode must be read or write");
@@ -31,10 +57,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     const record = store.get(option("--job"));
     if (!record) throw Error("Web job was not found");
     if (subcommand === "result") {
-      const answer = verifiedWebDelegationAnswer(record);
-      if (!answer) throw Error("No verified final result; inspect job status");
-      store.collect(record.id);
-      console.log(answer);
+      console.log(await collectWebDelegationResult(adapters, record.id));
     } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", progress: record.progress, parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure }, null, 2));
     return;
   }
@@ -48,13 +71,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     throw Error("Existing Web job belongs to a different profile; its owner cannot be changed");
   }
   let slot = selectedJob?.slot ?? continuation?.slot ?? profileSlotFromArguments(args);
-  const install = readOwnershipManifest(paths.installManifest);
-  if (!install) throw Error("Tela is not installed");
-  const service = await new LocalServiceSupervisor({ installId: install.installId }).current({
-    service: "codex", descriptorPath: join(paths.serviceRuntime("codex"), "descriptor.json"),
-  });
-  if (!service) throw Error("Tela Work is not running");
-  const client = new CodexServiceClient(descriptorForService(service.descriptor, "codex"));
+  const client = await getClient();
   if (!selectedJob && !continuation) {
     slot = await delegationProfileSlot(args, { findCallerProfile: async threadId => {
       const profiles = (await client.profiles()).filter(profile => profile.targetSessionState === "ready");
@@ -72,25 +89,10 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
       return found.length === 1 ? found[0] : undefined;
     } });
   }
-  const session = async (selected: number): Promise<TrustedNativeProfileSession> => {
-    const profile = (await client.profiles()).find(row => row.slot === selected);
-    if (!profile || profile.controlState !== "running" || profile.targetSessionState !== "ready"
-      || !profile.childProcessId || !profile.responsesRouteFingerprint) {
-      throw Error("Selected profile is not ready for a new Web job");
-    }
-    const terminal = await client.terminalSession(selected);
-    return { slot: selected, runtimeProcessId: profile.childProcessId, responsesRouteFingerprint: profile.responsesRouteFingerprint, terminalEndpoint: terminal.endpoint };
-  };
-  const binding = createLocalNativeAccountProof({ resolveOwnedSession: session, fingerprintKey: store.fingerprintKey });
-  const owner = async (selected: number) => {
-    return { binding: await binding(selected), session: await session(selected) };
-  };
   if (subcommand === "reconcile") {
-    const record = await reconcileWebDelegation({ store, owner,
-      connect: endpoint => connectCodexAppServerWebSocket(endpoint, { signal: AbortSignal.timeout(10_000) }),
-    }, selectedJob!.id, AbortSignal.timeout(30_000));
+    const record = await reconcileWebDelegation(adapters, selectedJob!.id, AbortSignal.timeout(30_000));
     const answer = verifiedWebDelegationAnswer(record);
-    if (answer) store.collect(record.id);
+    if (answer) await collectWebDelegationResult(adapters, record.id);
     console.log(JSON.stringify({ jobId: record.id, state: record.state, toolItems: record.toolItems ?? 0,
       resultAvailable: Boolean(answer), ...(answer ? { finalEvidence: record.finalEvidence, answer } : {}) }));
     return;
@@ -116,13 +118,12 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   if (mode !== "read" && mode !== "write") throw Error("--mode must be read or write");
   try {
     const result = await runWebDelegation({
-      store, owner,
-      connect: endpoint => connectCodexAppServerWebSocket(endpoint, { signal: AbortSignal.timeout(10_000) }),
+      ...adapters,
       changed: record => console.log(JSON.stringify({ jobId: record.id, state: record.state, selection: record.selection, toolItems: record.toolItems ?? 0 })),
     }, { id, slot, cwd, prompt, mode, ...(continuation ? { parentJobId: continuation.id } : {}), signal: AbortSignal.timeout(20 * 60 * 1000) });
     const answer = verifiedWebDelegationAnswer(result);
     if (answer) {
-      store.collect(result.id);
+      await collectWebDelegationResult(adapters, result.id);
       console.log(JSON.stringify({ event: "result", jobId: result.id, state: result.state,
         finalEvidence: result.finalEvidence, taskOutcome: result.taskOutcome, answer }));
     }

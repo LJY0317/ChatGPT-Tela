@@ -144,7 +144,7 @@ async function main(config: ReturnType<typeof loadProductProfileRuntimeConfig>):
           terminalEndpoint: runtime.routedTarget.session.endpoint });
         const proof = createLocalNativeAccountProof({ resolveOwnedSession: ownedSession, fingerprintKey: store.fingerprintKey });
         return prefixInitialWebDelegationTitle({ store, slot: config.slot, rpc,
-          owner: async slot => ({ binding: await proof(slot), session: await ownedSession() }) }, method, params);
+          owner: async slot => ({ binding: await proof(slot), session: await ownedSession() }) }, params);
       } catch (error) {
         emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { slot: config.slot, failure_class: diagnosticFailureClass(error) });
       }

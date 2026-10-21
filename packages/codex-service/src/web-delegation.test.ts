@@ -6,10 +6,10 @@ import { randomUUID, createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
-import { runWebDelegation, prefixInitialWebDelegationTitle, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
+import { runWebDelegation, collectWebDelegationResult, prefixInitialWebDelegationTitle, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
-async function fixture(options: { titleSetFails?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write"; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
+async function fixture(options: { titleReadFails?: boolean; titleSetFails?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; mode?: "read" | "write"; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const slot = options.slot ?? 1;
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
@@ -29,7 +29,7 @@ async function fixture(options: { titleSetFails?: boolean; slot?: number; uncert
       if (method === "model/list") return { data: [{ model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", displayName: "6 (Web)", supportedReasoningEfforts: [{ reasoningEffort: "xhigh" }] }] };
       if (method === "thread/resume") { attached = true; return { thread: { id: threadId } }; }
       if (method === "thread/start") { attached = true; return { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", approvalPolicy: "never", sandbox: { type: options.mode === "write" ? "workspaceWrite" : "readOnly" }, thread: { id: threadId, cwd: root, historyMode: "paginated", ephemeral: false } }; }
-      if (method === "thread/read") return { thread: { id: threadId, name: currentTitle } };
+      if (method === "thread/read") { if (options.titleReadFails) throw Error("Fixture metadata unavailable"); return { thread: { id: threadId, name: currentTitle } }; }
       if (method === "thread/name/set") {
         if (options.titleSetFails) throw Error("Fixture naming RPC failed");
         currentTitle = (params as { name: string }).name;
@@ -86,12 +86,14 @@ async function fixture(options: { titleSetFails?: boolean; slot?: number; uncert
     },
   };
   return { root, store, calls, changes, id,
+    collect: (jobId = id) => collectWebDelegationResult(adapters, jobId),
+    setTitle: (name: string | null) => { currentTitle = name; },
     title: async (name: string | null, options: { foreign?: boolean; stale?: boolean; otherAccount?: boolean } = {}) => {
       currentTitle = options.stale ? "User rename" : name;
       await prefixInitialWebDelegationTitle({ store, slot, rpc, owner: async () => {
         const owner = await adapters.owner();
         return options.otherAccount ? { ...owner, binding: { ...owner.binding, accountFingerprint: "f".repeat(64) } } : owner;
-      } }, "thread/name/updated", { threadId: options.foreign ? randomUUID() : threadId, threadName: name });
+      } }, { threadId: options.foreign ? randomUUID() : threadId, threadName: name });
     }, continue: (parentJobId: string, prompt = "Follow up", mode: "read" | "write" = options.mode ?? "read") => runWebDelegation(adapters, { id: randomUUID(), slot, cwd: root, prompt, mode, parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", mode: options.mode ?? "read", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -145,7 +147,7 @@ test("failed title RPC does not change the completed delegation or retry on late
   const f = await fixture({ titleSetFails: true });
   try {
     const first = await f.run();
-    await f.title("Review context"); await f.title("Later rename");
+    await f.title("Review context"); await f.title("Later rename"); await f.collect();
     expect(f.store.get(first.id)).toMatchObject({ state: "completed", answer: "verified design" });
     expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(1);
   } finally { f.cleanup(); }
@@ -155,6 +157,42 @@ test("a title marker write failure does not prevent the task from running", asyn
   try {
     f.store.waitForTitle = () => { throw Error("Fixture marker write failed"); };
     expect(await f.run()).toMatchObject({ state: "completed", answer: "verified design" });
+  } finally { f.cleanup(); }
+});
+test("collection repairs a missed first-title event and preserves later manual removal", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.run();
+    f.setTitle("Generated title");
+    expect(await f.collect()).toBe("verified design");
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toEqual([{
+      method: "thread/name/set", params: { threadId: first.threadId, name: "[Tela Agent] Generated title" },
+    }]);
+    f.setTitle("User removed prefix");
+    const before = f.calls.length;
+    await f.collect();
+    expect(f.calls).toHaveLength(before);
+  } finally { f.cleanup(); }
+});
+test("collection leaves an unnamed conversation pending and never blocks its answer", async () => {
+  const f = await fixture();
+  try {
+    await f.run();
+    expect(await f.collect()).toBe("verified design");
+    expect(f.store.hasPendingTitle(f.id)).toBe(true);
+    f.setTitle("Late generated title");
+    await f.collect();
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+test("title read failure preserves both the local answer and pending naming", async () => {
+  const f = await fixture({ titleReadFails: true });
+  try {
+    await f.run();
+    f.setTitle("Generated title");
+    expect(await f.collect()).toBe("verified design");
+    expect(f.store.hasPendingTitle(f.id)).toBe(true);
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(0);
   } finally { f.cleanup(); }
 });
 test("a write Web delegation requests and proves workspace-only Native sandbox", async () => {

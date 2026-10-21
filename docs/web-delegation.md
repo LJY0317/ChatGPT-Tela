@@ -42,7 +42,12 @@ name no longer matches current metadata are ignored. Diagnostics contain only
 structural outcomes, not titles. The public notification does not distinguish an
 automatically generated first title from a user's first manual title; either can
 be prefixed once. Events missed while the profile is offline are not replayed.
-Naming failure does not change task results or affect provider-side chats.
+Result collection also checks still-pending naming through the same function, using
+current Native metadata without waiting for another title event. Unnamed threads
+and failed metadata reads stay pending; completed naming is never rearmed.
+Once a name mutation is sent, an uncertain failure is not retried automatically.
+Title metadata is not copied into a permanent local title list. Naming failure
+does not change task results or affect provider-side chats.
 The Native engine creates
 a new durable, paginated thread and supplies its own tool/sandbox authority; the existing Web
 provider performs inference. This is not an independent Tela Chat worker or an API-key fallback.

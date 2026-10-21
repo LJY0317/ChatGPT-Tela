@@ -513,28 +513,52 @@ export interface WebDelegationAdapters {
 export async function prefixInitialWebDelegationTitle(input: {
   store: WebDelegationStore; slot: number; rpc: CodexAppServerRpc;
   owner: WebDelegationAdapters["owner"];
-}, method: string, params: unknown): Promise<void> {
-  if (method !== "thread/name/updated") return;
+}, params: unknown): Promise<void> {
   const event = object(params);
-  if (typeof event?.threadId !== "string" || typeof event.threadName !== "string" || !event.threadName.trim()) return;
+  if (typeof event?.threadId !== "string") return;
+  if ("threadName" in event && (typeof event.threadName !== "string" || !event.threadName.trim())) return;
   try {
     const record = input.store.pendingTitles().find(record => record.slot === input.slot
       && record.threadId === event.threadId && !record.parentJobId);
-    if (!record || !sameAccountOwner(record, await input.owner(input.slot)) || !input.store.takePendingTitle(record.id)) return;
+    if (!record || !sameAccountOwner(record, await input.owner(input.slot))) return;
     const identity = { slot: input.slot, scope_fingerprint: diagnosticFingerprint(event.threadId) };
     const read = object(await input.rpc.request("thread/read", { threadId: event.threadId, includeTurns: false }));
+    const title = object(read?.thread)?.name;
+    if (typeof title !== "string" || !title.trim()) return;
     // A newer name supersedes this event; never overwrite it with stale text.
-    if (object(read?.thread)?.name !== event.threadName) {
+    if (event.threadName !== undefined && title !== event.threadName) {
+      input.store.takePendingTitle(record.id);
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_settled", { ...identity, state: "superseded" });
       return;
     }
-    if (!event.threadName.startsWith(DELEGATED_TITLE_PREFIX)) {
-      await input.rpc.request("thread/name/set", { threadId: event.threadId, name: DELEGATED_TITLE_PREFIX + event.threadName });
+    if (!input.store.takePendingTitle(record.id)) return;
+    if (!title.startsWith(DELEGATED_TITLE_PREFIX)) {
+      await input.rpc.request("thread/name/set", { threadId: event.threadId, name: DELEGATED_TITLE_PREFIX + title });
     }
     emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_settled", { ...identity, state: "complete" });
   } catch (error) {
     emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { slot: input.slot, failure_class: diagnosticFailureClass(error) });
   }
+}
+/** On-demand collection reuses naming only while its original marker is pending. */
+export async function collectWebDelegationResult(adapters: WebDelegationAdapters, id: string): Promise<string> {
+  const record = adapters.store.get(id);
+  const answer = record && verifiedWebDelegationAnswer(record);
+  if (!record || !answer) throw Error("No verified final result; inspect job status");
+  if (record.threadId && adapters.store.pendingTitles().some(pending => pending.slot === record.slot && pending.threadId === record.threadId)) {
+    try {
+      const current = await adapters.owner(record.slot);
+      if (sameAccountOwner(record, current)) {
+        const rpc = await adapters.connect(current.session.terminalEndpoint);
+        try { await prefixInitialWebDelegationTitle({ store: adapters.store, slot: record.slot, rpc, owner: async () => current }, { threadId: record.threadId }); }
+        finally { await rpc.close(); }
+      }
+    } catch (error) {
+      emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { phase: "collect", failure_class: diagnosticFailureClass(error) });
+    }
+  }
+  adapters.store.collect(id);
+  return answer;
 }
 function sameOwner(record: WebDelegationRecord, current: Awaited<ReturnType<WebDelegationAdapters["owner"]>>) {
   return JSON.stringify(record.owner) === JSON.stringify(current.binding)
