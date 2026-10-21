@@ -2547,10 +2547,12 @@ test("owned stream Retry continues the accepted turn without another composer su
     const assistant = { key: "assistant", role: "assistant" as const, parentUserTurnKey: "user-turn-1" };
     driver.queued.push({ ...driver.current, revision: "failed", turns: [...driver.current.turns,
       { ...assistant, phase: "failed", failureDetail: "Error in message stream Retry" }] });
+    driver.queued.push({ ...driver.current, revision: "failed-rendered-again", turns: [...driver.current.turns,
+      { ...assistant, phase: "failed", failureDetail: "Error in message stream Retry" }] });
     driver.queued.push({ ...driver.current, revision: "done", turns: [...driver.current.turns,
       { ...assistant, phase: "complete", text: "Recovered answer" }] });
     const result = await provider.waitForTurnEvent(surface.lease, submitted.value);
-    expect(result.state === "proven" && result.value.kind).toBe("completed");
+    expect(result.state === "proven" && result.value).toMatchObject({ kind: "failed", detail: "Error in message stream Retry" });
     expect(driver.retries).toBe(1); expect(driver.activated.length).toBe(sends);
   } finally { await surface.host.close(); }
 });
