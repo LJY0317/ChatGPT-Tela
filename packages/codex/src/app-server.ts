@@ -208,16 +208,96 @@ export type CodexAppServerRpcFactory = (
   signal?: AbortSignal,
 ) => Promise<CodexAppServerRpc>;
 
+type LoadedAppServerTurn = { readonly threadId: string; readonly turnId: string };
+
+/** Observe active turns through the app-server's bounded public read contract. */
+async function loadedAppServerActiveTurns(
+  rpc: CodexAppServerRpc,
+  signal?: AbortSignal,
+): Promise<readonly LoadedAppServerTurn[]> {
+  const loaded: string[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < 8; page += 1) {
+    const response = record(await rpc.request("thread/loaded/list", {
+      limit: 64,
+      ...(cursor ? { cursor } : {}),
+    }, signal));
+    if (!response || !Array.isArray(response.data)) {
+      throw new Error("Codex app-server loaded-thread response is invalid");
+    }
+    for (const raw of response.data) {
+      const threadId = identifier(raw, "loaded thread id");
+      if (seen.has(threadId)) throw new Error("Codex app-server loaded-thread identity is duplicated");
+      seen.add(threadId);
+      loaded.push(threadId);
+    }
+    const next = response.nextCursor;
+    if (next === null || next === undefined) {
+      cursor = undefined;
+      break;
+    }
+    cursor = identifier(next, "loaded thread cursor");
+    if (page === 7) throw new Error("Codex app-server loaded-thread list exceeds the bounded lifecycle scan");
+  }
+
+  const active: LoadedAppServerTurn[] = [];
+  for (const threadId of loaded) {
+    // Idle loaded conversations can have large histories. Status alone is sufficient to skip
+    // them; retrieve turn history only when Native reports an active thread.
+    const statusResponse = record(await rpc.request("thread/read", {
+      threadId, includeTurns: false,
+    }, signal));
+    const statusThread = statusResponse ? record(statusResponse.thread) : undefined;
+    if (!statusThread || identifier(statusThread.id, "thread id") !== threadId) {
+      throw new Error("Codex app-server returned a different loaded thread");
+    }
+    if (record(statusThread.status)?.type !== "active") continue;
+    // A shallow Legacy turns/list can still reconstruct the entire rollout
+    // inside the Native app-server. Never infer idleness when active ownership
+    // cannot be proved with indexed, bounded history.
+    if (statusThread.historyMode !== "paginated") {
+      throw new Error("Native lifecycle cannot safely prove an unindexed active turn; no history was read or turn interrupted");
+    }
+    const bounded = await readBoundedNewestTurn(rpc, threadId, signal);
+    if (bounded.thread.historyMode !== "paginated"
+      || record(bounded.thread.status)?.type !== "active"
+      || JSON.stringify(owner(statusThread)) !== JSON.stringify(owner(bounded.thread))
+      || JSON.stringify(environment(statusThread)) !== JSON.stringify(environment(bounded.thread))) {
+      throw new Error("Native paginated lifecycle ownership changed during current-turn proof");
+    }
+    const newest = bounded.newest;
+    if (!newest || newest.status !== "inProgress") continue;
+    active.push(Object.freeze({ threadId, turnId: identifier(newest.id, "active turn id") }));
+  }
+  return Object.freeze(active);
+}
+
+/**
+ * Read-only count of active turns loaded by one exact Native app-server. An
+ * incomplete or ambiguous scan throws so lifecycle callers can preserve the
+ * owner instead of treating missing evidence as idle.
+ */
+export async function countLoadedAppServerActiveTurns(
+  endpoint: string,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly connect?: CodexAppServerRpcFactory;
+  } = {},
+): Promise<number> {
+  const connect = options.connect
+    ?? (signal => connectCodexAppServerWebSocket(endpoint, { ...(signal ? { signal } : {}) }));
+  const rpc = await connect(options.signal);
+  try {
+    return (await loadedAppServerActiveTurns(rpc, options.signal)).length;
+  } finally {
+    await rpc.close();
+  }
+}
+
 /**
  * Gracefully interrupt only the exact currently-running turns loaded by one
  * Native app-server before an explicit Desktop restart/stop.
- *
- * This is deliberately a public-protocol operation rather than a process
- * signal. It discovers loaded thread identities, proves each newest turn is
- * currently in progress, then interrupts only those exact thread/turn pairs.
- * Prompt/item payloads are never returned by this API surface or logged by
- * the caller. Any malformed/ambiguous discovery fails before the first
- * interrupt so a lifecycle action cannot partially guess its owners.
  */
 export async function interruptLoadedAppServerTurns(
   endpoint: string,
@@ -230,64 +310,7 @@ export async function interruptLoadedAppServerTurns(
     ?? (signal => connectCodexAppServerWebSocket(endpoint, { ...(signal ? { signal } : {}) }));
   const rpc = await connect(options.signal);
   try {
-    const loaded: string[] = [];
-    const seen = new Set<string>();
-    let cursor: string | undefined;
-    for (let page = 0; page < 8; page += 1) {
-      const response = record(await rpc.request("thread/loaded/list", {
-        limit: 64,
-        ...(cursor ? { cursor } : {}),
-      }, options.signal));
-      if (!response || !Array.isArray(response.data)) {
-        throw new Error("Codex app-server loaded-thread response is invalid");
-      }
-      for (const raw of response.data) {
-        const threadId = identifier(raw, "loaded thread id");
-        if (seen.has(threadId)) throw new Error("Codex app-server loaded-thread identity is duplicated");
-        seen.add(threadId);
-        loaded.push(threadId);
-      }
-      const next = response.nextCursor;
-      if (next === null || next === undefined) {
-        cursor = undefined;
-        break;
-      }
-      cursor = identifier(next, "loaded thread cursor");
-      if (page === 7) throw new Error("Codex app-server loaded-thread list exceeds the bounded lifecycle scan");
-    }
-
-    const active: Array<{ readonly threadId: string; readonly turnId: string }> = [];
-    for (const threadId of loaded) {
-      // Idle loaded conversations can have large histories. Status alone is sufficient to skip
-      // them; retrieve turn history only when Native reports an active thread.
-      const statusResponse = record(await rpc.request("thread/read", {
-        threadId, includeTurns: false,
-      }, options.signal));
-      const statusThread = statusResponse ? record(statusResponse.thread) : undefined;
-      if (!statusThread || identifier(statusThread.id, "thread id") !== threadId) {
-        throw new Error("Codex app-server returned a different loaded thread");
-      }
-      if (record(statusThread.status)?.type !== "active") continue;
-      // A shallow Legacy turns/list can still reconstruct the entire rollout
-      // inside the Native app-server. An includeTurns:true compatibility
-      // fallback is worse: it transfers the same unbounded private history.
-      // Interrupt nothing unless the active thread explicitly advertises
-      // indexed Paginated history and its newest turn can be re-proved.
-      if (statusThread.historyMode !== "paginated") {
-        throw new Error("Native lifecycle cannot safely prove an unindexed active turn; no history was read or turn interrupted");
-      }
-      const bounded = await readBoundedNewestTurn(rpc, threadId, options.signal);
-      if (bounded.thread.historyMode !== "paginated"
-        || record(bounded.thread.status)?.type !== "active"
-        || JSON.stringify(owner(statusThread)) !== JSON.stringify(owner(bounded.thread))
-        || JSON.stringify(environment(statusThread)) !== JSON.stringify(environment(bounded.thread))) {
-        throw new Error("Native paginated lifecycle ownership changed during current-turn proof");
-      }
-      const newest = bounded.newest;
-      if (!newest || newest.status !== "inProgress") continue;
-      active.push(Object.freeze({ threadId, turnId: identifier(newest.id, "active turn id") }));
-    }
-
+    const active = await loadedAppServerActiveTurns(rpc, options.signal);
     for (const item of active) {
       await rpc.request("turn/interrupt", {
         threadId: item.threadId,

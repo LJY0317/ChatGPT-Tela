@@ -90,8 +90,14 @@ export async function startCodexServiceHttpServer(input: {
       try {
         if (request.method === "GET" && url.pathname === "/v1/status") {
           const status = input.service.serviceStatus();
-          return Response.json(status.state === "ready" && input.startupComplete?.() === false
-            ? { ...status, state: "degraded", detail: "Restoring saved profile connections" } : status);
+          const degraded = status.state === "ready" && input.startupComplete?.() === false;
+          const base = degraded ? { ...status, state: "degraded" as const, detail: "Restoring saved profile connections" } : status;
+          if (url.searchParams.get("shutdown-readiness") !== "1") return Response.json(base);
+          let shutdownReadiness: "ready" | "blocked" = "blocked";
+          if (!degraded && status.state === "ready") {
+            try { shutdownReadiness = await input.service.shutdownReadiness(); } catch { /* Unknown activity blocks shutdown. */ }
+          }
+          return Response.json({ ...base, shutdownReadiness });
         }
         if (request.method === "GET" && url.pathname === "/v1/codex/profiles") {
           const profiles = await input.service.profiles();

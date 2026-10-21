@@ -1,5 +1,5 @@
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { connectCodexAppServerWebSocket, readDynamicWebModelCatalog, interruptLoadedAppServerTurns } from "@chatgpt-tela/codex";
+import { connectCodexAppServerWebSocket, readDynamicWebModelCatalog, countLoadedAppServerActiveTurns, interruptLoadedAppServerTurns } from "@chatgpt-tela/codex";
 import { ProfileConnectionError, type ProfileConnectionPhase, type ProfileStartOptions } from "./profile-operation";
 import { parseCodexTerminalSessionContract, type CodexTerminalSessionContract } from "@chatgpt-tela/service-protocol";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -114,6 +114,7 @@ export interface CodexService {
   readonly config: CodexServiceConfig;
   readonly tools: TurnBridgeBackend;
   serviceStatus(): ServiceStatus;
+  shutdownReadiness(): Promise<"ready" | "blocked">;
   profiles(): Promise<readonly CodexProfileStatus[]>;
   startProfile(slot: number, options?: ProfileStartOptions): Promise<CodexProfileStatus>;
   waitWebPreparation(slot: number): Promise<CodexProfileStatus>;
@@ -308,6 +309,7 @@ export async function startCodexService(input: {
   readonly profileRuntimeEnvironment?: (slot: number) => Readonly<Record<string, string | undefined>>;
   readonly nativeTargetAdapter?: CodexNativeTargetAdapter;
   readonly onProfileConnectionChanged?: (targetId: string, enabled: boolean) => void;
+  readonly webDelegationCapacity?: (slot: number) => { readonly total: { readonly used: number }; readonly uncertain: number };
   readonly signal?: AbortSignal;
 }): Promise<CodexService> {
   const instanceId = randomUUID();
@@ -323,6 +325,7 @@ export async function startCodexService(input: {
   const routedBridge = new RoutedCodexTurnBridge();
   const owned = new Map<number, OwnedProfile>();
   const starting = new Map<number, Promise<void>>();
+  const stoppingProfiles = new Set<number>();
   let closing: Promise<void> | undefined;
   let stopping = false;
 
@@ -339,14 +342,51 @@ export async function startCodexService(input: {
     emitDiagnosticEvent("chatgpt_tela_codex", "profile_turns_interrupted", { slot, count });
   };
 
+  const profileShutdownReadiness = async (profile: OwnedProfile, duringStop = false): Promise<"ready" | "blocked"> => {
+    if ((!duringStop && (profile.stopping || stoppingProfiles.has(profile.slot)))
+      || profile.child.exitCode !== null || profile.child.signalCode !== null || starting.has(profile.slot)) return "blocked";
+    const session = await targets.session(profile.target.id);
+    if (!ownsNativeTargetSession(profile.target, session, profile)) return "blocked";
+    if (!session.endpoint) return "blocked";
+    if (await countLoadedAppServerActiveTurns(session.endpoint, input.signal ? { signal: input.signal } : {}) > 0) return "blocked";
+    const response = await fetch(new URL("v1/shutdown-readiness", profile.bridgePreviewUrl), {
+      headers: { authorization: `Bearer ${profile.uiToken}` },
+      signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) return "blocked";
+    const web = await response.json() as { contractVersion?: unknown; slot?: unknown; shutdownReadiness?: unknown };
+    if (web.contractVersion !== 1 || web.slot !== profile.slot || web.shutdownReadiness !== "ready") return "blocked";
+    if (input.webDelegationCapacity) {
+      const capacity = input.webDelegationCapacity(profile.slot);
+      if (capacity.uncertain > 0 || capacity.total.used > 0) return "blocked";
+    }
+    return "ready";
+  };
+
+  const shutdownReadiness = async (duringClose = false): Promise<"ready" | "blocked"> => {
+    if ((!duringClose && stopping) || starting.size > 0 || stoppingProfiles.size > 0) return "blocked";
+    try {
+      for (const profile of owned.values()) {
+        if (await profileShutdownReadiness(profile) !== "ready") return "blocked";
+      }
+      return "ready";
+    } catch {
+      return "blocked";
+    }
+  };
+
   const stopOwned = async (profile: OwnedProfile, interruptTurns = false): Promise<void> => {
     if (profile.stopping) return profile.stopping;
+    stoppingProfiles.add(profile.slot);
     profile.stopping = (async () => {
       // Startup cancellation must not cancel normal cleanup of already-owned resources.
       const session = await targets.session(profile.target.id);
       const ownsTargetRoute = ownsNativeTargetSession(profile.target, session, profile);
       if (ownsTargetRoute && profile.target.adapterKind === "multi-profile") {
         if (interruptTurns) await interruptNativeTurns(profile.slot, session);
+        else if (await profileShutdownReadiness(profile, true) !== "ready") {
+          throw new Error("Tela Codex profile has active or unverifiable Native/Web work; finish it before shutdown");
+        }
         const afterQuit = await targets.quit(profile.target.id);
         if (afterQuit.state === "ready") throw new Error("native target remained ready after normal quit");
       }
@@ -376,6 +416,8 @@ export async function startCodexService(input: {
     })().catch(error => {
       profile.stopping = undefined;
       throw error;
+    }).finally(() => {
+      stoppingProfiles.delete(profile.slot);
     });
     return profile.stopping;
   };
@@ -440,6 +482,7 @@ export async function startCodexService(input: {
       return Object.freeze({ contractVersion: 1 as const, service: "codex" as const, instanceId,
         state: stopping ? "stopping" as const : "ready" as const });
     },
+    shutdownReadiness,
     async profiles() {
       const inventory = await targets.profiles(input.signal);
       return Object.freeze(await Promise.all(inventory.map(async ({ target, session }) => {
@@ -863,14 +906,15 @@ export async function startCodexService(input: {
     },
     close() {
       if (closing) return closing;
-      stopping = true;
       closing = (async () => {
+        stopping = true;
+        if (await shutdownReadiness(true) !== "ready") throw new Error("Tela Codex has active or unverifiable Native/Web work; finish it before shutdown");
         // Admission is closed before taking this snapshot. An already-admitted
         // start may publish its child late; drain it before enumerating owners.
         await Promise.all([...starting.values()]);
         const failures: unknown[] = [];
         for (const profile of [...owned.values()]) {
-          try { await stopOwned(profile, true); }
+          try { await stopOwned(profile, false); }
           catch (error) { failures.push(error); }
         }
         if (failures.length > 0) throw new AggregateError(failures, "Tela Codex could not normally stop every profile");

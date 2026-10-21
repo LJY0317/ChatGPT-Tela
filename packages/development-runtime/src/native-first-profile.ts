@@ -2,7 +2,7 @@ import { augmentNativeCodexModelCatalog } from "./web-model-catalog";
 import { augmentCodexAppServerModelList } from "./app-server-model-list";
 import { classifyNetworkFailure, diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { resolve } from "node:path";
-import { appServerCurrentTurnSource, appServerCompactionHistorySource, appServerNativeHandoffSource, connectCodexAppServerWebSocket, refreshAdmittedWebModelCatalog } from "@chatgpt-tela/codex";
+import { appServerCurrentTurnSource, appServerCompactionHistorySource, appServerNativeHandoffSource, connectCodexAppServerWebSocket, countLoadedAppServerActiveTurns, refreshAdmittedWebModelCatalog } from "@chatgpt-tela/codex";
 import { chatGptWebModelId, CHATGPT_SAVED_CHAT_URL, CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider, parseChatGptWebModelId, type ChatGptWebModelFamily, type ChatGptHistoryUiReadiness, type SavedChatCleanupAcceptanceReceipt, type SyntheticSavedChatRecoveryReceipt } from "@chatgpt-tela/chatgpt";
 import { createDefaultDesktopResponsesRoute, resolveDefaultDesktopInstallation, startDefaultDesktopTargetRuntime, TELA_DEFAULT_DESKTOP_RUNTIME_HEADER } from "@chatgpt-tela/default-desktop-target";
 import { startLocalResponsesServer, type LocalResponsesServer } from "@chatgpt-tela/local-server";
@@ -44,6 +44,8 @@ export interface NativeFirstProfileRuntime {
   readonly webModelIds: readonly string[];
   /** Exact owner-managed account browser currently suspends Web admission. */
   readonly accountManagementActive: boolean;
+  /** Current owner-local activity counters; unknown/transitional state blocks replacement. */
+  shutdownReadiness(): "ready" | "blocked";
   waitForWeb(): Promise<void>;
   reconnectWeb(): Promise<void>;
   /** On-demand, same-profile account browser. Native remains owned/running;
@@ -282,6 +284,7 @@ export async function startNativeFirstProductProfileRuntime(
   };
   const profileStartedAt = performance.now();
   let webRequests = 0;
+  let shutdownPending = false;
   let accountBrowserBlocked = false;
   let accountBrowser: {
     surface: ElectronProfileSetupSurface;
@@ -292,6 +295,11 @@ export async function startNativeFirstProductProfileRuntime(
   let accountBrowserOpening: Promise<void> | undefined;
   let accountBrowserSettling: Promise<void> | undefined;
   const isClosed = () => state === "closed";
+  const shutdownReadiness = (duringStop = false): "ready" | "blocked" =>
+    !isClosed() && state !== "preparing" && !webRequests && !turns.size
+      && !accountBrowserBlocked && !accountBrowser && !accountBrowserOpening
+      && !accountBrowserSettling && !preparation && !accountInvalidation
+      && (!shutdownPending || duringStop) ? "ready" : "blocked";
   const setState = (next: NativeFirstWebState) => {
     if (next !== "ready") void stopDeletedThreadObservation();
     state = next;
@@ -327,7 +335,7 @@ export async function startNativeFirstProductProfileRuntime(
       const body = await request.clone().json().catch(() => undefined);
       const model = typeof body?.model === "string" ? parseChatGptWebModelId(body.model) : undefined;
       if (!model) return undefined;
-      if (accountBrowserBlocked || state !== "ready" || !browser
+      if (shutdownPending || accountBrowserBlocked || state !== "ready" || !browser
         || !admitted.some(family => family.key === model.familyKey)) {
         return Response.json({ error: { type: "invalid_request_error", code: "tela_web_not_ready",
           message: "Web connection is not ready for this model. Native remains available." } }, { status: 400 });
@@ -575,6 +583,7 @@ export async function startNativeFirstProductProfileRuntime(
     },
     get webModelIds() { return Object.freeze(admitted.map(family => chatGptWebModelId(family.key))); },
     get accountManagementActive() { return accountBrowserBlocked; },
+    shutdownReadiness() { return shutdownReadiness(); },
     async waitForWeb() { await preparation?.catch(() => {}); },
     openWebAccountBrowser() {
       if (isClosed()) return Promise.reject(new Error("Native-first profile is closed"));
@@ -771,7 +780,13 @@ export async function startNativeFirstProductProfileRuntime(
     },
     stop() {
       if (stopping) return stopping;
+      shutdownPending = true;
       stopping = (async () => {
+        if (shutdownReadiness(true) !== "ready") throw new Error("Native-first profile has active or unverifiable Web work; finish it before shutdown");
+        if (target.routedTarget.session.endpoint
+          && await countLoadedAppServerActiveTurns(target.routedTarget.session.endpoint, options.signal ? { signal: options.signal } : {}) > 0) {
+          throw new Error("Native profile has an active turn; finish it before shutdown");
+        }
         await target.stop();
         // A normal quit may be refused. Preserve Web state/drafts/control until
         // Native target cleanup has actually succeeded, rather than before it.
@@ -790,7 +805,7 @@ export async function startNativeFirstProductProfileRuntime(
         const cleanup = await Promise.allSettled([mcp.stop(), responses.stop()]);
         const failures = cleanup.filter((r): r is PromiseRejectedResult => r.status === "rejected");
         if (failures.length) throw new AggregateError(failures.map(r => r.reason), "Native-first cleanup incomplete");
-      })().catch(error => { stopping = undefined; throw error; });
+      })().catch(error => { stopping = undefined; shutdownPending = false; throw error; });
       return stopping;
     },
   };

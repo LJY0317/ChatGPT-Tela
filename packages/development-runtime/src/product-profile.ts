@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import {
   connectCodexAppServerWebSocket,
+  countLoadedAppServerActiveTurns,
   appServerCurrentTurnSource,
   appServerCompactionHistorySource,
   type CanonicalCurrentTurnSource,
@@ -533,6 +534,11 @@ export async function startProductProfileRuntime(
     stop() {
       if (stopping) return stopping;
       stopping = (async () => {
+        if (turns.size > 0) throw new Error("Native/Web profile has an active turn; finish it before shutdown");
+        if (routedTarget?.session.endpoint
+          && await countLoadedAppServerActiveTurns(routedTarget.session.endpoint, options.signal ? { signal: options.signal } : {}) > 0) {
+          throw new Error("Native profile has an active turn; finish it before shutdown");
+        }
         if (config.nativeTarget.kind === "default-desktop") {
           await defaultDesktopTarget!.stop();
         } else {

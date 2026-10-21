@@ -30,6 +30,8 @@ async function main(): Promise<void> {
   const installId = required("CHATGPT_TELA_INSTALL_ID");
   const paths = resolveProductPaths();
   const descriptorPath = join(paths.serviceRuntime("codex"), "descriptor.json");
+  const delegationStore = new WebDelegationStore(join(paths.serviceState("codex"), "web-delegations"),
+    slot => webDelegationLimit(readProductPreferences(), slot));
   const lifecycle = new AbortController();
   let retention: ReturnType<typeof startWebDelegationRetention> | undefined;
   const service = await startCodexService({
@@ -39,6 +41,7 @@ async function main(): Promise<void> {
       : {},
     profileRuntimeCommand: [runtimeExecutable, runtimeEntrypoint],
     environment: process.env,
+    webDelegationCapacity: slot => delegationStore.capacity(slot),
     onProfileConnectionChanged: (...args) => { setWorkProfileConnection(...args); retention?.wake(); },
     profileRuntimeEnvironment: slot => {
       const preferences = readProductPreferences();
@@ -52,8 +55,6 @@ async function main(): Promise<void> {
       };
     },
   });
-  const delegationStore = new WebDelegationStore(join(paths.serviceState("codex"), "web-delegations"),
-    slot => webDelegationLimit(readProductPreferences(), slot));
   let restoring = true;
   const http = await startCodexServiceHttpServer({
     service,

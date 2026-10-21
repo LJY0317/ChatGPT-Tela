@@ -17,6 +17,7 @@ function fixtureService(): CodexService {
     serviceStatus() {
       return { contractVersion: 1, service: "codex", instanceId: "codex-fixture", state: "ready" };
     },
+    async shutdownReadiness() { return "ready"; },
     async profiles() { return []; },
     async startProfile() { throw new Error("not used"); },
     async waitWebPreparation() { throw new Error("not used"); },
@@ -67,6 +68,22 @@ describe("Tela Codex private HTTP server", () => {
       expect((await client.status()).state).toBe('degraded');
       complete=true;expect((await client.status()).state).toBe('ready');
     } finally {await server.close();}
+  });
+
+  test("shutdown readiness is an opt-in status observation and unknown work blocks", async () => {
+    const service = fixtureService();
+    let readiness: "ready" | "blocked" = "blocked";
+    service.shutdownReadiness = async () => readiness;
+    const server = await startCodexServiceHttpServer({ service });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+      bearerToken: server.bearerToken, startedAt: new Date().toISOString() });
+    try {
+      expect((await client.status()).shutdownReadiness).toBeUndefined();
+      expect((await client.status(undefined, { shutdownReadiness: true })).shutdownReadiness).toBe("blocked");
+      readiness = "ready";
+      expect((await client.status(undefined, { shutdownReadiness: true })).shutdownReadiness).toBe("ready");
+    } finally { await client.close(); await server.close(); }
   });
 
   test("managed Web delegation capacity is an authenticated, content-free read", async () => {

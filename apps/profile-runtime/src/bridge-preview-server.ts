@@ -35,6 +35,7 @@ export async function startProfileBridgePreviewServer(input: {
   /** Cleanup receipt only. Keep this control endpoint and supervision lease
    * alive until the parent receives it and releases its lease. */
   readonly shutdownProfile?: () => Promise<{ readonly responsesRouteFingerprint: string }>;
+  readonly shutdownReadiness?: () => "ready" | "blocked";
   readonly openAccountBrowser?: () => Promise<void>;
   readonly closeAccountBrowser?: () => Promise<void>;
   readonly inspectHistoryUi?: () => Promise<Omit<CodexHistoryUiContract, "slot">>;
@@ -80,6 +81,10 @@ export async function startProfileBridgePreviewServer(input: {
             message: "The owned app has not completed normal shutdown. Its control connection is preserved." } },
           { status: 409, headers: { "cache-control": "no-store" } });
         }
+      }
+      if (request.method === "GET" && url.pathname === "/v1/shutdown-readiness" && input.shutdownReadiness) {
+        return Response.json({ contractVersion: 1, slot: input.slot, shutdownReadiness: input.shutdownReadiness() },
+          { headers: { "cache-control": "no-store" } });
       }
       if (request.method === "GET" && url.pathname === "/v1/account-display" && input.accountDisplay) {
         return Response.json(parseCodexAccountDisplayContract({ contractVersion: 1, slot: input.slot, ...await input.accountDisplay() }),

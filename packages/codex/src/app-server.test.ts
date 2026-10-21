@@ -6,6 +6,7 @@ import { diagnosticFingerprint, observeDiagnosticEvents, NativeLiveTurnRegistry,
 import {
   AppServerCurrentTurnSource,
   connectCodexAppServerWebSocket,
+  countLoadedAppServerActiveTurns,
   interruptLoadedAppServerTurns,
   type CodexAppServerRpc,
   type CodexAppServerRpcFactory,
@@ -836,6 +837,27 @@ test("normal shutdown scans idle thread status without downloading history", asy
   };
   expect(await interruptLoadedAppServerTurns("ws://127.0.0.1:1", { connect: async () => rpc })).toBe(0);
   expect(reads).toEqual([{ threadId: "idle-thread", includeTurns: false }]);
+});
+
+test("read-only lifecycle observation counts an exact active Native turn without interrupting it", async () => {
+  const calls: string[] = [];
+  const rpc: CodexAppServerRpc = {
+    async request(method, params) {
+      calls.push(method);
+      if (method === "thread/loaded/list") return { data: ["thread-active"], nextCursor: null };
+      if (method === "thread/read") return { thread: activeThread({
+        id: "thread-active", historyMode: "paginated", turns: undefined,
+      }) };
+      if (method === "thread/turns/list") return { data: [
+        { id: "turn-active", status: "inProgress", itemsView: "notLoaded", items: [] },
+      ], nextCursor: null };
+      throw new Error(`unexpected RPC method: ${method}`);
+    },
+    async close() { calls.push("close"); },
+  };
+  expect(await countLoadedAppServerActiveTurns("ws://127.0.0.1:1", { connect: async () => rpc })).toBe(1);
+  expect(calls).not.toContain("turn/interrupt");
+  expect(calls.at(-1)).toBe("close");
 });
 
 describe("Native turn termination observation", () => {

@@ -23,6 +23,25 @@ describe("profile bridge preview server", () => {
       expect(calls).toBe(1);
     } finally { release(); await server.close(); }
   });
+  test("shutdown readiness exposes the current owner-local activity gate without closing the profile", async () => {
+    let readiness: "ready" | "blocked" = "blocked";
+    const token = "r".repeat(48);
+    const server = await startProfileBridgePreviewServer({ slot: 3, bearerToken: token,
+      async observe() { return { activeSurfaceCount: 0 }; },
+      shutdownReadiness: () => readiness,
+    });
+    const url = new URL("v1/shutdown-readiness", server.endpoint);
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      expect((await fetch(url)).status).toBe(401);
+      expect(await (await fetch(url, { headers })).json()).toEqual({
+        contractVersion: 1, slot: 3, shutdownReadiness: "blocked",
+      });
+      readiness = "ready";
+      expect(await (await fetch(url, { headers })).json()).toMatchObject({ shutdownReadiness: "ready" });
+      expect((await fetch(new URL("v1/bridge-preview", server.endpoint), { headers })).status).toBe(200);
+    } finally { await server.close(); }
+  });
   test("refused cleanup preserves control and may be explicitly requested again", async () => {
     let refuse = true, calls = 0; const token = "q".repeat(48);
     const server = await startProfileBridgePreviewServer({ slot: 2, bearerToken: token,
