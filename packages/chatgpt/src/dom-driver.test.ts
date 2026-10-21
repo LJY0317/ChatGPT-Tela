@@ -688,25 +688,28 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(result.turns[0]?.publicProgress).toEqual(["Checking records\n\nReading the current execution record."]);
     expect(result.turns[0]?.publicProgress?.join()).not.toMatch(/HIDDEN_CONTENT|CONTROL_CONTENT|FINAL_CONTENT/);
   });
-  test.each(["owned", "foreign", "authored", "click-failed"])("stream Retry clicks only the owned error control once (%s)", async mode => {
+  test.each(["owned", "foreign", "authored", "click-failed", "anchored"])("stream Retry clicks only the owned error control once (%s)", async mode => {
     const button = new FixtureElement({ "data-fixture-tag": "BUTTON" }); button.textContent = "Retry";
     const alert = new FixtureElement({ role: "alert" }, { button: [button] }); alert.textContent = "Error in message stream Retry";
     const group = new FixtureElement({ "data-turn-key": "owned" }, { '[role="alert"]': [alert],
+      ...(mode === "anchored" ? { '[data-content-search-turn-key]': [new FixtureElement({ 'data-content-search-turn-key': 'stable-turn' })] } : {}),
       ...(mode === "authored" ? { '[data-markdown-text-style="assistant-message"]': [alert] } : {}) });
-    const page = new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] }));
+    const page = new RendererFixturePage(new FixtureElement(mode === "anchored" ? { 'data-page-load-id': 'stable-document' } : {}, { '[data-turn-key]': [group] }));
     let clicks = 0;
     page.pointerClick = async () => { clicks++; if (mode === "click-failed") throw Error("synthetic dispatch failure"); };
     const driver = new ChatGptDomSurfaceDriver(page);
-    const key = mode === "foreign" ? "assistant:another" : "assistant:owned";
+    const key = mode === "anchored" ? (await driver.observe()).turns.find(item => item.role === "assistant")!.key
+      : mode === "foreign" ? "assistant:another" : "assistant:owned";
+    if (mode === "anchored") expect(key).toStartWith("assistant:anchor:");
     const rows: Array<Record<string, unknown>> = [];
     const stop = observeDiagnosticEvents(row => rows.push(row));
     try {
       if (mode === "click-failed") await expect(driver.retryFailedResponse(key)).rejects.toThrow("synthetic dispatch failure");
-      else expect(await driver.retryFailedResponse(key)).toBe(mode === "owned");
+      else expect(await driver.retryFailedResponse(key)).toBe(mode === "owned" || mode === "anchored");
       expect(await driver.retryFailedResponse(key)).toBe(false);
-      expect(clicks).toBe(mode === "owned" || mode === "click-failed" ? 1 : 0);
+      expect(clicks).toBe(mode === "owned" || mode === "anchored" || mode === "click-failed" ? 1 : 0);
       expect(rows.some(row => row.stage === "response_retry_dispatch_started")).toBe(clicks === 1);
-      expect(rows.some(row => row.stage === "response_retry_activated")).toBe(mode === "owned");
+      expect(rows.some(row => row.stage === "response_retry_activated")).toBe(mode === "owned" || mode === "anchored");
     } finally { stop?.(); }
   });
 

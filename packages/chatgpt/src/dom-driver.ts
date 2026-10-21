@@ -2536,8 +2536,12 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
 
   async retryFailedResponse(assistantKey: string, signal?: AbortSignal): Promise<boolean> {
     this.#diagnostic("response_retry_preparation_started");
-    const target = await this.page.evaluate<string, { x: number; y: number } | null>(PREPARE_RESPONSE_RETRY, assistantKey, signal);
-    this.#diagnostic("response_retry_prepared", { target_present: target !== null });
+    // As with Stop, resolve the public lineage key to the current renderer key.
+    const raw = await this.page.evaluate<undefined, RawSnapshot>(OBSERVE_CHATGPT_SURFACE, undefined, signal);
+    const assistant = raw.turns.find(item => item.role === "assistant" && turn(item).key === assistantKey);
+    const target = assistant ? await this.page.evaluate<string, { x: number; y: number } | null>(PREPARE_RESPONSE_RETRY, assistant.key, signal) : null;
+    this.#diagnostic("response_retry_prepared", { target_present: target !== null,
+      assistant_key_matches: assistant !== undefined, renderer_key_changed: assistant !== undefined && assistant.key !== assistantKey });
     if (!target) return false;
     this.#diagnostic("response_retry_dispatch_started");
     await this.page.pointerClick(target, signal);
