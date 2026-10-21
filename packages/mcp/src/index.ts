@@ -4,6 +4,7 @@ export * from "./development-server";
 export * from "./exposure";
 export * from "./http-server";
 export * from "./http-exposure";
+export * from "./native-tool-content";
 export * from "./openai-secure-tunnel";
 export * from "./public-abi";
 export * from "./remote-turn-bridge";

@@ -23,6 +23,7 @@ import {
 } from "@chatgpt-tela/mcp";
 import type { ChatCapabilityContract } from "@chatgpt-tela/service-protocol";
 import { CHATGPT_TELA_PUBLIC_INSTRUCTIONS, createPublicMcpServer } from "./public-server";
+import { DynamicChatBackend } from "./dynamic-chat-backend";
 import {
   CHATGPT_TELA_REVIEW_RESOURCE_MIME_TYPE,
   CHATGPT_TELA_REVIEW_RESOURCE_URI,
@@ -191,6 +192,46 @@ describe("ChatGPT Tela frozen ABI", () => {
 });
 
 
+test("public Goal result uses Native MCP content and error semantics", async () => {
+  const goalTools = [{ wireName: "get_goal", name: "get_goal", kind: "function" as const,
+    description: "Read current Goal", observedFrom: ["native"] }];
+  let failed = false;
+  const bridge: TurnBridgeBackend = {
+    inventory: () => goalTools,
+    async invoke(_capability, invocation) {
+      return { callId: invocation.callId, content: JSON.stringify({ goal: { status: failed ? "blocked" : "active" } }),
+        isError: failed };
+    },
+  };
+  const chat = new DynamicChatBackend(() => undefined, bridge);
+  const server = await startCustomMcpHttpServer({ label: "goal-result-contract",
+    createServer: () => createPublicMcpServer({ chat, codex: bridge }) });
+  const transport = new StreamableHTTPClientTransport(server.endpointUrl, {
+    requestInit: { headers: { authorization: `Bearer ${server.bearerToken}` } },
+  });
+  const client = new Client({ name: "goal-result-contract", version: "1" }, { capabilities: {} });
+  try {
+    await client.connect(transport as unknown as Transport);
+    const inventory = await client.callTool({ name: CHATGPT_TELA_CHAT_CAPABILITY_CALL,
+      arguments: { capability: "goal_control_inventory", arguments: { goal_control: "fixture" } } });
+    expect(JSON.parse(text(inventory))).toMatchObject([{ name: "get_goal" }]);
+    const invoke = () => client.callTool({ name: CHATGPT_TELA_CHAT_CAPABILITY_CALL,
+      arguments: { capability: "goal_control_call", arguments: {
+        goal_control: "fixture", call_id: "read", wire_name: "get_goal", arguments: {},
+      } } });
+    const normal = await invoke();
+    expect(normal.isError).not.toBe(true);
+    expect(JSON.parse(text(normal))).toEqual({ goal: { status: "active" } });
+    failed = true;
+    const errored = await invoke();
+    expect(errored.isError).toBe(true);
+    expect(JSON.parse(text(errored))).toEqual({ goal: { status: "blocked" } });
+  } finally {
+    await client.close();
+    await server.stop();
+  }
+});
+
 test("MCP discovery evidence distinguishes listed tools, empty queries and pre-handler refusal without private data", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-discovery-proof-")), file = join(root, "events.jsonl");
   const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
@@ -223,5 +264,52 @@ test("MCP discovery evidence distinguishes listed tools, empty queries and pre-h
     await client.close(); await server.stop();
     if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE; else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("public Goal call uses Native MCP content and error semantics without wrapping the result", async () => {
+  const body = JSON.stringify({ goal: { status: "complete" } });
+  let nativeError = false;
+  const chat = {
+    inventory: async () => [],
+    async call(capability: string) {
+      if (capability === "goal_control_call") {
+        return { callId: "fixture", content: body, isError: nativeError };
+      }
+      if (capability === "goal_control_inventory") return [{ name: "get_goal" }];
+      return { ok: true };
+    },
+  };
+  const server = await startCustomMcpHttpServer({
+    label: "goal-public-result",
+    createServer: () => createPublicMcpServer({
+      chat,
+      codex: { inventory: () => [], invoke: async () => { throw Error("unused"); } },
+    }),
+  });
+  const transport = new StreamableHTTPClientTransport(server.endpointUrl, {
+    requestInit: { headers: { authorization: `Bearer ${server.bearerToken}` } },
+  });
+  const client = new Client({ name: "goal-public-result", version: "1" }, { capabilities: {} });
+  try {
+    await client.connect(transport as unknown as Transport);
+    const call = (capability: string) => client.callTool({
+      name: CHATGPT_TELA_CHAT_CAPABILITY_CALL, arguments: { capability, arguments: {} },
+    });
+    const success = await call("goal_control_call");
+    expect(success.isError).not.toBe(true);
+    expect(text(success)).toBe(body);
+    expect(JSON.parse(text(success))).toEqual({ goal: { status: "complete" } });
+    nativeError = true;
+    const error = await call("goal_control_call");
+    expect(error.isError).toBe(true);
+    expect(text(error)).toBe(body);
+    const inventory = await call("goal_control_inventory");
+    expect(JSON.parse(text(inventory))).toEqual([{ name: "get_goal" }]);
+    const ordinaryChat = await call("ordinary_chat");
+    expect(JSON.parse(text(ordinaryChat))).toEqual({ ok: true });
+  } finally {
+    await client.close();
+    await server.stop();
   }
 });

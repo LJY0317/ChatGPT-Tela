@@ -3,7 +3,7 @@ import { CHATGPT_FILE_CONNECT_ORIGINS } from "./chatgpt-file-source";
 import { CHATGPT_TELA_IMPORT_RESOURCE_URI, CHATGPT_TELA_IMPORT_WIDGET_HTML } from "./import-widget";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { emitDiagnosticEvent, traceDiagnosticToolCall } from "@chatgpt-tela/core";
+import { emitDiagnosticEvent, traceDiagnosticToolCall, type NativeToolResult } from "@chatgpt-tela/core";
 import {
   CHATGPT_TELA_CHAT_CAPABILITY_CALL,
   CHATGPT_TELA_CHAT_CAPABILITY_INVENTORY,
@@ -11,7 +11,9 @@ import {
   CHATGPT_TELA_MCP_SERVER_VERSION,
   CHATGPT_TELA_CODEX_TOOL_CALL,
   CHATGPT_TELA_CODEX_TOOL_INVENTORY,
+  nativeToolResultToMcpContent,
   registerTurnBridgeTools,
+  type TelaMcpResultContent,
   type TurnBridgeBackend,
 } from "@chatgpt-tela/mcp";
 import type { ChatCapabilityContract } from "@chatgpt-tela/service-protocol";
@@ -64,7 +66,7 @@ export function createPublicMcpServer(input: {
       readonly inputSchema: z.ZodTypeAny;
     },
     handler: (arguments_: Readonly<Record<string, unknown>>, extra?: unknown) => Promise<{
-      readonly content: readonly ({ readonly type: "text"; readonly text: string } | { readonly type: "image"; readonly data: string; readonly mimeType: string })[];
+      readonly content: readonly TelaMcpResultContent[];
       readonly isError?: boolean;
       readonly _meta?: Readonly<Record<string, unknown>>;
     }>,
@@ -133,6 +135,13 @@ export function createPublicMcpServer(input: {
         const image = z.object({ mimeType: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp"]),
           dataBase64: z.string().max(4 * Math.ceil(2 * 1024 * 1024 / 3)) }).strict().parse(result);
         return { content: [{ type: "image", mimeType: image.mimeType, data: image.dataBase64 }] };
+      }
+      if (capability === "goal_control_call") {
+        const nativeResult = result as NativeToolResult;
+        return {
+          content: [...nativeToolResultToMcpContent(nativeResult.content).content],
+          ...(nativeResult.isError ? { isError: true } : {}),
+        };
       }
       return {
         content: [{ type: "text", text: jsonText(result) }],
