@@ -13,6 +13,9 @@ or replay an uncertain operation to save tokens.
    fragmentation, intermediate acknowledgement conversations and merge trees are unsupported.
 4. Keep current user work and exact system/developer instructions outside lossy historical
    summaries. Reattach only missing instruction revisions; identical prose alone is not identity.
+   Apply this to global and project instructions in standalone Chat and delegation alike:
+   avoid repeated tool-result injection when prior delivery remains proven and applicable;
+   reload changed sources or missing context rather than assuming another chat received them.
 5. Bound fresh seeds, maintained summaries and tool/assistant growth separately. A transport
    file is neither compression nor proof that the model understood every byte.
 
