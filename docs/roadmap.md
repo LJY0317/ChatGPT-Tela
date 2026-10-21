@@ -22,20 +22,24 @@ new runtimes, schedulers or queues. This list records product requirements, not 
   Preserve profile ownership, existing chats and canonical context deltas. Availability is not evidence of
   reliable end-to-end delivery. Keep Native controls with the Native coordinator and Web work with Tela
   Chat. Do not duplicate a platform feature merely to advertise it.
-- **Goal completion boundary.** External Native Goal completion can race automatic successor startup.
-  Same-turn completion or a supported scheduler fence is still required for a strict no-successor promise;
-  prose completion and a successful external completion RPC are insufficient.
+- **Native Goal completion.** Route only original Native Goal tools through the existing Tela Chat
+  control path when those tools are advertised by the current harness. A separate, cycle-scoped control
+  capability cannot invoke Native work tools. Native retains Goal state, execution and scheduling.
+  Verify live tool availability, same-turn completion and quiescence before claiming end-to-end support.
+  Do not substitute per-task shell/RPC completion scripts or a second Goal engine; retire isolated test
+  adapters after acceptance and retain only bounded result evidence.
 - **Automatic failure follow-through.** A delegation failure should wake its owning coordinator with the
   exact job/turn, failure boundary and existing local incident reference. Reconcile uncertain effects first,
   then analyze and repair verified causes within the authorized task, or report the specific missing evidence.
   Reuse Native events and Queue instead of a second recovery scheduler, repeated model polling or blind
   resubmission. Coalesce the same failure; preserve existing chats and keep private evidence local. Verify
   coordinator wake-up through the supported host contract before promising unattended recovery.
-- **Recognizable delegation names.** Give Tela-created conversations a short task name such as
-  `[Web] Review context reuse` through Native `thread/name/set`. Keep stable thread IDs as identity,
-  preserve user renames, and do not rename personal conversations. Verify sidebar synchronization and
-  later continuation; naming must not create another chat or gate task execution. This does not rename
-  the separate provider-side temporary browser conversation.
+- **Recognizable delegation names — next dispatch.** Once a Tela-created conversation receives its
+  generated title, prefix it once with `[Tela Agent]` through Native `thread/name/set`, for example
+  `[Tela Agent] Review context reuse`. Reuse title-change notifications; avoid polling and duplicate
+  prefixes. Preserve user renames and stable thread IDs; do not rename personal conversations or add
+  retention dates to titles. Verify sidebar synchronization and later continuation. Naming must not gate
+  execution, create another chat, or rename the provider-side temporary browser conversation.
 
 ## Desktop lifecycle and presentation
 

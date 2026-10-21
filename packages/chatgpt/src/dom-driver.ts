@@ -410,6 +410,27 @@ export const CHATGPT_CURRENT_COMPOSER_SELECTOR = [
   '[data-composer-body] [contenteditable="true"][role="textbox"]',
 ].join(', ');
 
+const PREPARE_RESPONSE_RETRY = String.raw`function retryFailedResponse(assistantKey) {
+  const visible = node => node instanceof HTMLElement && node.getClientRects().length > 0
+    && getComputedStyle(node).display !== 'none' && getComputedStyle(node).visibility !== 'hidden';
+  const group = [...document.querySelectorAll('[data-turn-key]')]
+    .find(node => 'assistant:' + node.getAttribute('data-turn-key') === assistantKey);
+  if (!group) return null;
+  const excluded = [...group.querySelectorAll('[data-user-message-bubble], [data-markdown-text-style="assistant-message"], [data-streaming-response-status], ${APPROVAL_SURFACE_SELECTOR}')];
+  const errors = [...group.querySelectorAll('[role="alert"], [data-message-error], [data-testid="message-error"]')]
+    .filter(node => visible(node) && !excluded.some(root => root.contains(node))
+      && /^Error in message stream\b/i.test(node.textContent.trim()));
+  const buttons = errors.flatMap(node => [...node.querySelectorAll('button')])
+    .filter(node => visible(node) && !node.disabled && /^Retry$/i.test(node.textContent.trim()));
+  const activated = globalThis[Symbol.for('chatgpt-tela.response-retry.v1')] ||= new WeakSet();
+  if (buttons.length !== 1 || activated.has(buttons[0])) return null;
+  const button = buttons[0];
+  button.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+  const rect = button.getBoundingClientRect();
+  activated.add(button);
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}`;
+
 const COMPOSER_SELECTOR_SOURCE = JSON.stringify(CHATGPT_CURRENT_COMPOSER_SELECTOR);
 const CHATGPT_MEMORY_UPLOAD_TARGET_SELECTOR = 'input[data-chatgpt-tela-memory-upload="context"]';
 
@@ -2029,7 +2050,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
   #lastObstructionRevision: string | undefined;
   readonly #approvalProbeStates = new Map<string, string>();
   #progressProbeTurnKey: string | undefined;
-  readonly #progressProbeStates = new Set<string>();
+  #progressProbeSignature: string | undefined;
   constructor(readonly page: BrowserPageAutomation) {}
 
   #diagnostic(stage: string, fields: Readonly<Record<string, string | number | boolean>> = {}): void {
@@ -2095,11 +2116,11 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       if (settled?.progressProbe) {
         if (this.#progressProbeTurnKey !== settled.key) {
           this.#progressProbeTurnKey = settled.key;
-          this.#progressProbeStates.clear();
+          this.#progressProbeSignature = undefined;
         }
         const signature = fingerprint(JSON.stringify([settled.phase, settled.progressProbe]));
-        if (!this.#progressProbeStates.has(signature) && this.#progressProbeStates.size < 32) {
-          this.#progressProbeStates.add(signature);
+        if (this.#progressProbeSignature !== signature) {
+          this.#progressProbeSignature = signature;
           const probe = settled.progressProbe;
           if (settled.phase === "failed") emitDiagnosticEvent("chatgpt_tela_work", "web_provider_failure_observed", {
             turn_fingerprint: diagnosticFingerprint(settled.key),
@@ -2511,6 +2532,17 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     return Object.freeze({ status: "dispatched" as const, reason: prepared.choice,
       cardFingerprint: diagnosticFingerprint(prepared.cardKey),
       revisionFingerprint: fingerprint(JSON.stringify([prepared.cardKey, prepared.proofKey])) });
+  }
+
+  async retryFailedResponse(assistantKey: string, signal?: AbortSignal): Promise<boolean> {
+    this.#diagnostic("response_retry_preparation_started");
+    const target = await this.page.evaluate<string, { x: number; y: number } | null>(PREPARE_RESPONSE_RETRY, assistantKey, signal);
+    this.#diagnostic("response_retry_prepared", { target_present: target !== null });
+    if (!target) return false;
+    this.#diagnostic("response_retry_dispatch_started");
+    await this.page.pointerClick(target, signal);
+    this.#diagnostic("response_retry_activated", { turn_fingerprint: diagnosticFingerprint(assistantKey) });
+    return true;
   }
 
   async replaceComposerText(composerKey: string, text: string, signal?: AbortSignal): Promise<void> {

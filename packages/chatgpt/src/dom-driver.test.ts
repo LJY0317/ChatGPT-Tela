@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "bun:test";
-import { structuralDiagnosticEvent } from "@chatgpt-tela/core";
+import { structuralDiagnosticEvent, observeDiagnosticEvents } from "@chatgpt-tela/core";
 import {
   BROWSER_PAGE_AUTOMATION,
   ControlledBrowserHost,
@@ -279,7 +279,7 @@ class RendererFixturePage extends FakePage {
     ?.querySelectorAll("button").find(b => b.textContent.startsWith("Allow once"));
   constructor(readonly document: FixtureElement) { super(); }
   override async evaluate<Argument, Result>(source: string, argument: Argument): Promise<Result> {
-    if (source.includes("return { url: location.href, composers, sendControls, turns }") || source.includes("const cards =")) {
+    if (source.includes("return { url: location.href, composers, sendControls, turns }") || source.includes("const cards =") || source.includes("function retryFailedResponse")) {
       return runInNewContext(`(${source})(argument)`, Object.assign(this.rendererState, {
         argument, innerWidth: 800, innerHeight: 600, requestAnimationFrame: (callback: () => void) => this.animationFrame(callback),
         document: Object.assign(this.document, { documentElement: this.document, elementFromPoint: this.hitTest, baseURI: "https://chatgpt.com/" }), URL, HTMLElement: FixtureElement, HTMLButtonElement: FixtureElement,
@@ -687,6 +687,48 @@ describe("current ChatGPT DOM surface driver", () => {
     const result = await driver.observe();
     expect(result.turns[0]?.publicProgress).toEqual(["Checking records\n\nReading the current execution record."]);
     expect(result.turns[0]?.publicProgress?.join()).not.toMatch(/HIDDEN_CONTENT|CONTROL_CONTENT|FINAL_CONTENT/);
+  });
+  test.each(["owned", "foreign", "authored", "click-failed"])("stream Retry clicks only the owned error control once (%s)", async mode => {
+    const button = new FixtureElement({ "data-fixture-tag": "BUTTON" }); button.textContent = "Retry";
+    const alert = new FixtureElement({ role: "alert" }, { button: [button] }); alert.textContent = "Error in message stream Retry";
+    const group = new FixtureElement({ "data-turn-key": "owned" }, { '[role="alert"]': [alert],
+      ...(mode === "authored" ? { '[data-markdown-text-style="assistant-message"]': [alert] } : {}) });
+    const page = new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] }));
+    let clicks = 0;
+    page.pointerClick = async () => { clicks++; if (mode === "click-failed") throw Error("synthetic dispatch failure"); };
+    const driver = new ChatGptDomSurfaceDriver(page);
+    const key = mode === "foreign" ? "assistant:another" : "assistant:owned";
+    const rows: Array<Record<string, unknown>> = [];
+    const stop = observeDiagnosticEvents(row => rows.push(row));
+    try {
+      if (mode === "click-failed") await expect(driver.retryFailedResponse(key)).rejects.toThrow("synthetic dispatch failure");
+      else expect(await driver.retryFailedResponse(key)).toBe(mode === "owned");
+      expect(await driver.retryFailedResponse(key)).toBe(false);
+      expect(clicks).toBe(mode === "owned" || mode === "click-failed" ? 1 : 0);
+      expect(rows.some(row => row.stage === "response_retry_dispatch_started")).toBe(clicks === 1);
+      expect(rows.some(row => row.stage === "response_retry_activated")).toBe(mode === "owned");
+    } finally { stop?.(); }
+  });
+
+  test("failure diagnostics survive more than 32 progress transitions and deduplicate unchanged reads", async () => {
+    const page = new FakePage();
+    const driver = new ChatGptDomSurfaceDriver(page);
+    const rows: Array<Record<string, unknown>> = [];
+    const stop = observeDiagnosticEvents(row => { rows.push(row); });
+    try {
+      for (let index = 0; index < 35; index++) {
+        page.raw.turns = [{ key: "assistant:owned", role: "assistant", phase: "thinking",
+          progressProbe: { containerPresent: true, containerVisible: true, markerCount: index } }];
+        await driver.observe();
+      }
+      page.raw.turns = [{ key: "assistant:owned", role: "assistant", phase: "failed",
+        progressProbe: { containerPresent: true, containerVisible: true, failureSource: "alert",
+          failureCandidateCount: 1, failureEligibleCount: 1 } }];
+      await driver.observe();
+      await driver.observe();
+      expect(rows.filter(row => row.stage === "web_provider_failure_observed")).toHaveLength(1);
+      expect(rows.filter(row => row.stage === "web_public_progress_extraction")).toHaveLength(36);
+    } finally { stop?.(); }
   });
   test.each(["control-hidden", "label-hidden", "foreign-label", "valid"])("progress probe distinguishes the rejected boundary without exposing prose (%s)", async mode => {
     const scratch = mkdtempSync(join(tmpdir(), "tela-progress-boundary-"));

@@ -377,7 +377,10 @@ function formatWebPhysicalContextParts(
         `New Web delegations default to profile ${chatTools.defaultProfileSlot}. Pass --slot ${chatTools.defaultProfileSlot} to the delegation CLI unless the user explicitly selects another profile. Existing jobs keep their recorded profile. This is a default, not a restriction on an explicit new delegation.`,
       ] : []),
       "This Web task uses Tela Chat tools only. Do not use Native Codex inventory, Native call tools, or a Native turn capability, including for delegation.",
-      "Finish the assigned objective and report its result and remaining limits. A prose completion statement does not change the host Goal status; the Native coordinator must settle that status through the official Goal API.",
+      ...(chatTools.nativeGoalControl ? [
+        "A Goal-only control capability is supplied in the context header. Use Tela Chat goal_control_inventory and goal_control_call to invoke the original Native Goal tools for this task. Match their actual schemas; this does not grant Native work tools.",
+        "Before marking the Goal complete, verify its full objective against actual results. Completion must use the original Native Goal update tool; prose, shell scripts and completion markers do not complete a Goal. After its result, return your final answer and stop.",
+      ] : ["Finish the assigned objective and report its result and remaining limits. Goal mutation is not exposed in this turn; the Native coordinator must settle it through the official Goal API."]),
     ] : [
       "No Native Codex tool bridge is attached to this response. Do not claim fresh local inspection or mutation unless it is already present as prior task evidence.",
       "Use ChatGPT-native capabilities that are actually available when they help complete the request.",
@@ -387,6 +390,7 @@ function formatWebPhysicalContextParts(
   const header = JSON.stringify({
     type: "chatgpt_tela_context",
     version: 1,
+    ...(chatTools?.nativeGoalControl ? { nativeGoalControl: chatTools.nativeGoalControl } : {}),
     headRevisionId: context.headRevisionId,
     ...(context.baseRevisionId ? { baseRevisionId: context.baseRevisionId } : {}),
     ...(context.activeRequestRevisionId ? { activeRequestRevisionId: context.activeRequestRevisionId } : {}),
@@ -1750,6 +1754,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         };
       }
       const assistant = assistants[0];
+      if (assistant?.phase === "failed" && driver.retryFailedResponse
+        && await waitOwned(signal, () => driver.retryFailedResponse!(assistant.key, signal))) continue;
       const waitState = JSON.stringify([assistant?.phase ?? "absent", snapshot.approval ?? null]);
       this.#observeApproval(surface, tracked, snapshot, assistant);
       const observedApproval = snapshot.approval;

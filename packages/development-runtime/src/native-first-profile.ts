@@ -70,6 +70,8 @@ export interface NativeFirstProfileOptions {
   readonly onWebState?: (state: NativeFirstWebState) => void;
   /** Dependency injection for isolated fixtures; the defaults use normal owned lifecycles. */
   readonly nativeStarter?: (url: URL) => Promise<NativeFirstTarget>;
+  /** Isolated fixture injection; production observes the owned Native endpoint. */
+  readonly connectNativeNotifications?: typeof connectCodexAppServerWebSocket;
   /** Verified candidate descriptor for custom Native fixtures, before initial catalog delivery. */
   readonly nativeEngine?: ReturnType<typeof resolveOwnedNativeEngine>;
   readonly browserStarter?: typeof startElectronDevelopmentRuntime;
@@ -221,6 +223,63 @@ export async function startNativeFirstProductProfileRuntime(
   let stopping: Promise<void> | undefined;
   let controller: AbortController | undefined;
   let native: NativeFirstTarget | undefined;
+  let deletedThreadObserver: AbortController | undefined;
+  let deletedThreadObservation: Promise<void> = Promise.resolve();
+  const stopDeletedThreadObservation = (): Promise<void> => {
+    deletedThreadObserver?.abort();
+    deletedThreadObserver = undefined;
+    return deletedThreadObservation;
+  };
+  const observeDeletedThreads = (account: {
+    readonly checkpointCache: FileContextCheckpointCache;
+    readonly historyCheckpointCache: FileContextCheckpointCache;
+  }): void => {
+    const observer = new AbortController();
+    const previous = deletedThreadObservation;
+    deletedThreadObserver = observer;
+    deletedThreadObservation = (async () => {
+      await previous;
+      if (observer.signal.aborted) return;
+      const rpc = await (options.connectNativeNotifications ?? connectCodexAppServerWebSocket)(
+        native!.routedTarget.session.endpoint, { signal: observer.signal });
+      const pending = new Set<Promise<void>>();
+      let unsubscribe: (() => void) | undefined;
+      try {
+        if (observer.signal.aborted) return;
+        if (!rpc.subscribe) throw new Error("Native thread deletion notifications unavailable");
+        unsubscribe = rpc.subscribe((method, params) => {
+          if (method !== "thread/deleted" || observer.signal.aborted
+            || deletedThreadObserver !== observer || state !== "ready" || accountBrowserBlocked) return;
+          const threadId = params && typeof params === "object" && !Array.isArray(params)
+            ? (params as { threadId?: unknown }).threadId : undefined;
+          if (typeof threadId !== "string" || !threadId.trim()) return;
+          // A Native deletion, unlike archive or transport loss, retires this exact task.
+          // Both removals serialize after earlier writes through the cache's per-task queue.
+          const cleanup = Promise.allSettled([
+            account.checkpointCache.clear(threadId), account.historyCheckpointCache.clear(threadId),
+          ]).then(results => {
+            if (results.some(result => result.status === "rejected")) {
+              emitDiagnosticEvent("chatgpt_tela_profile_startup", "native_deleted_checkpoint_cleanup_failed", {});
+            }
+          });
+          pending.add(cleanup);
+          void cleanup.finally(() => pending.delete(cleanup));
+        }, () => observer.abort());
+        await new Promise<void>(resolve => {
+          if (observer.signal.aborted) resolve();
+          else observer.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      } finally {
+        unsubscribe?.();
+        await Promise.allSettled([...pending]);
+        await rpc.close();
+      }
+    })().catch(() => {
+      if (!observer.signal.aborted) {
+        emitDiagnosticEvent("chatgpt_tela_profile_startup", "native_deleted_checkpoint_observation_failed", {});
+      }
+    });
+  };
   const profileStartedAt = performance.now();
   let webRequests = 0;
   let accountBrowserBlocked = false;
@@ -234,6 +293,7 @@ export async function startNativeFirstProductProfileRuntime(
   let accountBrowserSettling: Promise<void> | undefined;
   const isClosed = () => state === "closed";
   const setState = (next: NativeFirstWebState) => {
+    if (next !== "ready") void stopDeletedThreadObservation();
     state = next;
     detachSurfaces?.();
     detachSurfaces = next === "ready" ? browser?.onBridgeSurfacesChanged(surfacesChanged) : undefined;
@@ -352,6 +412,15 @@ export async function startNativeFirstProductProfileRuntime(
         signal.throwIfAborted();
         await closeBrowser();
         signal.throwIfAborted();
+        const account = readChatGptTelaAccountBinding(config.browserProfile);
+        const accountCache = account ? {
+          checkpointCache: new FileContextCheckpointCache({
+            directory: resolve(config.browserProfile.userDataDir, "context-checkpoints", account.accountFingerprint),
+          }),
+          historyCheckpointCache: new FileContextCheckpointCache({
+            directory: resolve(config.browserProfile.userDataDir, "native-history-checkpoints", account.accountFingerprint),
+          }),
+        } : undefined;
         browser = await (options.browserStarter ?? startElectronDevelopmentRuntime)({
           profileId: config.browserProfile.profileId,
           chatGptUrl: acceptanceSavedChat ? CHATGPT_SAVED_CHAT_URL : CHATGPT_TEMPORARY_CHAT_URL,
@@ -374,18 +443,10 @@ export async function startNativeFirstProductProfileRuntime(
           // An earlier profile/account binding must be re-proven during Web
           // discovery. Separate account namespaces prevent a later intentional
           // rebind from reusing another account's derived history checkpoint.
-          context: (() => {
-            const account = readChatGptTelaAccountBinding(config.browserProfile);
-            return account ? {
+          context: account && accountCache ? {
               ...(config.checkpointPreparationPolicy ? { checkpointPreparationPolicy: config.checkpointPreparationPolicy } : {}),
-              checkpointCache: new FileContextCheckpointCache({
-                directory: resolve(config.browserProfile.userDataDir,
-                  "context-checkpoints", account.accountFingerprint),
-              }),
-              historyCheckpointCache: new FileContextCheckpointCache({
-                directory: resolve(config.browserProfile.userDataDir,
-                  "native-history-checkpoints", account.accountFingerprint),
-              }),
+              checkpointCache: accountCache.checkpointCache,
+              historyCheckpointCache: accountCache.historyCheckpointCache,
               visiblePrefix: {
                 accountNamespace: account.accountFingerprint,
                 journal: new FileNativeVisiblePrefixStageJournal({
@@ -399,8 +460,7 @@ export async function startNativeFirstProductProfileRuntime(
                     .completeVisiblePrefix(threadId, turnId, signal);
                 },
               },
-            } : {};
-          })(),
+            } : {},
           checkpointProvider: new ChatGptContextCheckpointProvider(),
           nativeWebHandoff: (threadId, turnId, signal) => {
             if (!native) throw new Error("Native context authority is not ready");
@@ -449,6 +509,7 @@ export async function startNativeFirstProductProfileRuntime(
         });
         signal.throwIfAborted();
         setState("ready");
+        if (accountCache) observeDeletedThreads(accountCache);
       } catch (error) {
         const failure = webPreparationFailureDetail(error);
         const diagnostic = diagnosticFailureFields(error);
@@ -532,6 +593,7 @@ export async function startNativeFirstProductProfileRuntime(
         return Promise.reject(new Error("Finish the current Web task before changing the account"));
       }
       accountBrowserBlocked = true;
+      void stopDeletedThreadObservation();
       const owner = browser;
       const opening = (async () => {
         let surface: ElectronProfileSetupSurface | undefined;
@@ -714,6 +776,7 @@ export async function startNativeFirstProductProfileRuntime(
         // A normal quit may be refused. Preserve Web state/drafts/control until
         // Native target cleanup has actually succeeded, rather than before it.
         setState("closed");
+        await stopDeletedThreadObservation();
         admitted = [];
         accountBrowser?.detach();
         const accountBrowserFallback = accountBrowser?.fallback;

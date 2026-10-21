@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   NativeToolInventory,
+  type NativeToolDescriptor,
   defineNativeTurnAuthority,
 } from "@chatgpt-tela/core";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
@@ -11,39 +12,39 @@ import {
 } from "@chatgpt-tela/runtime";
 import { McpTurnBridge } from "./turn-bridge";
 
-function binding(): NativeTurnBinding {
+function binding(additional: readonly NativeToolDescriptor[] = [], turnId = "turn-1"): NativeTurnBinding {
   const tools = [{
     wireName: "exec_command",
     name: "exec_command",
     description: "Execute a command",
     kind: "function" as const,
     inputSchema: { type: "object" },
-  }];
+  }, ...additional];
   return {
     claim: {
       threadId: "thread-1",
-      turnId: "turn-1",
+      turnId,
       requestKind: "turn",
       toolObservations: [{ source: "fixture", tools }],
     },
     authority: defineNativeTurnAuthority({
       threadId: "thread-1",
-      turnId: "turn-1",
+      turnId,
       cwd: "/workspace",
       workspaceRoots: ["/workspace"],
       sandbox: { kind: "read-only", network: "restricted" },
     }),
-    tools: NativeToolInventory.fromObservations("thread-1", "turn-1", [
+    tools: NativeToolInventory.fromObservations("thread-1", turnId, [
       { source: "fixture", tools },
     ]),
     canonicalEvidence: {
       threadId: "thread-1",
-      turnId: "turn-1",
+      turnId,
       cwd: "/workspace",
       workspaceRoots: ["/workspace"],
       sandbox: { kind: "read-only", network: "restricted" },
       proof: "turn-context",
-      environmentSourceTurnId: "turn-1",
+      environmentSourceTurnId: turnId,
     },
   };
 }
@@ -88,4 +89,60 @@ describe("internal MCP turn bridge", () => {
     expect(() => bridge.inventory(registered.capability)).toThrow("unknown or retired");
     expect(() => bridge.inventory("thread-1")).toThrow("unknown or retired");
   });
+});
+
+test("Goal-only capability reuses Native tool delivery and expires with its response cycle", async () => {
+  const turns = new ActiveTurnRegistry({ routeId: "GoalRoute" });
+  const bound = binding([
+    { wireName: "update_goal", name: "update_goal", namespace: "functions", kind: "function",
+      description: "Update the current Native Goal", inputSchema: { type: "object", properties: { status: { enum: ["complete"] } }, required: ["status"], additionalProperties: false } },
+    { wireName: "plugin_get_goal", name: "get_goal", namespace: "plugin", kind: "function", description: "Unrelated tool" },
+  ]);
+  const registered = turns.register(bound), bridge = new McpTurnBridge(turns);
+  const control = turns.goalControl(registered.capability)!;
+  expect(control).not.toBe(registered.capability);
+  expect(turns.goalControl(registered.capability)).toBe(control);
+  expect(bridge.inventory(control).map(tool => tool.wireName)).toEqual(["update_goal"]);
+  expect(() => turns.resolve(control)).toThrow("unknown or retired");
+  expect(() => bridge.invoke(control, { callId: "no-work", wireName: "exec_command", mode: "structured", arguments: {} }))
+    .toThrow("cannot invoke Native work tools");
+  registered.channel.markSubmitted(); registered.channel.markAccepted();
+  const result = bridge.invoke(control, { callId: "native-complete", wireName: "update_goal", mode: "structured", arguments: { status: "complete" } });
+  const nativeCall = await nextNativeResponsesToolCall(registered.channel);
+  expect(nativeCall).toMatchObject({ type: "function_call", name: "update_goal", arguments: JSON.stringify({ status: "complete" }) });
+  acceptNativeResponsesToolResult(registered.channel, { input: [{ type: "function_call_output", call_id: nativeCall.call_id, output: "native-goal-result" }] });
+  registered.channel.releaseNativeToolResultToWeb(nativeCall.call_id);
+  expect(await result).toMatchObject({ callId: "native-complete", content: "native-goal-result", isError: false });
+  registered.channel.markWebContinuation();
+  registered.channel.complete("finished");
+  const next = turns.nextCycle(registered.capability, bound);
+  expect(() => bridge.inventory(control)).toThrow("unknown or retired");
+  const nextControl = turns.goalControl(next.capability)!;
+  turns.retire(next.capability);
+  expect(() => bridge.inventory(nextControl)).toThrow("unknown or retired");
+});
+
+test("turns without original Goal controls do not advertise a completion capability", () => {
+  const turns = new ActiveTurnRegistry(), registered = turns.register(binding());
+  expect(turns.goalControl(registered.capability)).toBeUndefined();
+});
+
+ test("repeated Goal caller IDs in later turns cannot collide with historical Native results", async () => {
+  const turns = new ActiveTurnRegistry(), bridge = new McpTurnBridge(turns);
+  let previousId: string | undefined;
+  for (const turnId of ["first-turn", "second-turn"]) {
+    const registered = turns.register(binding([{ wireName: "get_goal", name: "get_goal", kind: "function", description: "Read goal" }], turnId));
+    registered.channel.markSubmitted(); registered.channel.markAccepted();
+    const waiting = bridge.invoke(turns.goalControl(registered.capability)!, { callId: "goal-1", wireName: "get_goal", mode: "structured", arguments: {} });
+    const nativeCall = await nextNativeResponsesToolCall(registered.channel);
+    expect(nativeCall.call_id).not.toBe(previousId);
+    acceptNativeResponsesToolResult(registered.channel, { input: [
+      ...(previousId ? [{ type: "function_call_output", call_id: previousId, output: "historical" }] : []),
+      { type: "function_call_output", call_id: nativeCall.call_id, output: "current" },
+    ] });
+    registered.channel.releaseNativeToolResultToWeb(nativeCall.call_id);
+    expect(await waiting).toMatchObject({ callId: "goal-1", content: "current" });
+    registered.channel.markWebContinuation(); registered.channel.complete("done");
+    turns.retire(registered.capability); previousId = nativeCall.call_id;
+  }
 });

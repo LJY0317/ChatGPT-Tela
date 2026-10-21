@@ -1,6 +1,6 @@
 import { classifyWebPreparationFailure } from "./web-preparation-diagnostics";
 import { decodeTelaCompactionSummary, telaCompactionSummaryText } from "@chatgpt-tela/codex";
-import { CheckpointPreparationBudget, CheckpointPreparationBudgetExceeded } from "./checkpoint-preparation-budget";
+import { CheckpointPreparationBudget } from "./checkpoint-preparation-budget";
 import { createHash } from "node:crypto";
 import {
   NativeHistoryBootstrapRequired,
@@ -199,10 +199,9 @@ function webEpochId(nativeTaskId: string, transportAnchor: string, routeIdentity
 
 function routeIdentity(value: unknown): string {
   const body = record(value);
-  const reasoning = record(body?.reasoning);
+  // Effort is a per-submit picker setting, not ownership of the retained page.
   const normalized = stableJson({
     model: typeof body?.model === "string" ? body.model : null,
-    effort: typeof reasoning?.effort === "string" ? reasoning.effort : null,
   });
   return createHash("sha256")
     .update("chatgpt-tela-web-route-v1")
@@ -378,6 +377,7 @@ function admittedRetainedContext(
   budgetTokens: number | undefined,
   outputReserveTokens: number,
   diagnostic?: { reason?: string },
+  currentLimits = committed.physicalLimits,
 ): { readonly physicalContext: WebPhysicalContext; readonly media: readonly WebTurnMedia[];
   readonly pressure?: WebEpochPressure } | undefined {
   const delta = retainedDelta(projection, committed, route, budgetTokens,
@@ -387,12 +387,12 @@ function admittedRetainedContext(
   const media = includedMedia(projection, bound);
   const physicalContext = physicalMediaCost(bound, media);
   // The estimated task wrapper is not Native tokens and is not a provider-reported bill.
-  const pressure = committed.physicalLimits ? assessWebEpochPressure({
+  const pressure = currentLimits ? assessWebEpochPressure({
     settledEpochTokens: committed.estimatedResidentTokens,
     nextInputTokens: physicalContext.transferTokens + 1_024,
     outputReserveTokens,
-    rolloverTokenLimit: committed.physicalLimits.rolloverTokenLimit,
-    contextWindowTokenLimit: committed.physicalLimits.contextWindowTokenLimit,
+    rolloverTokenLimit: currentLimits.rolloverTokenLimit,
+    contextWindowTokenLimit: currentLimits.contextWindowTokenLimit,
     oversizedFreshSeed: committed.oversizedFreshSeed,
   }) : undefined;
   return Object.freeze({ physicalContext, media, ...(pressure ? { pressure } : {}) });
@@ -928,7 +928,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         turn.channel.binding.canonicalEvidence.nativeGoal,
         turn.channel.binding.canonicalEvidence.nativeGoalState);
       const trial = admittedRetainedContext(provisional, committed, currentRouteIdentity,
-        budgetTokens, workingPolicy.outputReserveTokens);
+        budgetTokens, workingPolicy.outputReserveTokens, undefined, physicalLimits);
       if (trial && (!committed.physicalLimits || (trial.pressure && !trial.pressure.shouldRollover))) {
         retainedHistory = hot.visibleHistory;
         provenRetainedProjection = provisional;
@@ -995,7 +995,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       ? physicalLimits.contextWindowTokenLimit : budgetTokens;
     const retentionDiagnostic: { reason?: string } = {};
     const admitted = committed ? admittedRetainedContext(projection, committed,
-      currentRouteIdentity, budgetTokens, workingPolicy.outputReserveTokens, retentionDiagnostic) : undefined;
+      currentRouteIdentity, budgetTokens, workingPolicy.outputReserveTokens, retentionDiagnostic, physicalLimits) : undefined;
     const pressure = admitted?.pressure;
     const healthyRetained = !!(admitted && committed
       && (!committed.physicalLimits || pressure && !pressure.shouldRollover));
@@ -1006,29 +1006,18 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       ...(pressure ? { epoch_input_estimate: pressure.estimatedEpochInputTokens,
         epoch_rollover_limit: pressure.effectiveRolloverTokenLimit, physical_rollover: pressure.shouldRollover } : {}),
     });
-    // Maintenance is optional while the exact physical page is healthy.
-    // A budget refusal BEFORE the first maintenance stage claim may defer
-    // preparation; pending/uncertain sends and source/owner errors never may.
+    // A healthy page already owns the prefix. Select existing checkpoints, but
+    // defer paid preparation until a fresh page or Native compaction needs it.
     stage("checkpoint_lookup");
-    let working;
-    try {
-      working = await selectNativeWorkingCheckpoint({
-        projection, currentTurnId: turn.channel.binding.authority.turnId,
-        ...(options.checkpointCache ? { cache: options.checkpointCache } : {}),
-        ...(options.visiblePrefix ? { visiblePrefix: options.visiblePrefix } : {}),
-        ...(checkpointProducer ? { producer: checkpointProducer } : {}),
-        ...(browserModel ? { browserModel } : {}),
-        policy: workingPolicy, preparationBudget,
-        ...(preparation ? { preparation, signal: preparation.signal } : {}),
-      });
-    } catch (error) {
-      if (!healthyRetained || !(error instanceof CheckpointPreparationBudgetExceeded)
-        || preparationBudget.modelCalls !== 0) throw error;
-      emitDiagnosticEvent("chatgpt_tela_codex", "native_working_checkpoint_deferred", {
-        reason_class: "preparation_budget", retained_page_proven: true,
-      });
-      working = { produced: false, reused: false, pendingSuffixTokens: 0 };
-    }
+    const working = await selectNativeWorkingCheckpoint({
+      projection, currentTurnId: turn.channel.binding.authority.turnId,
+      ...(options.checkpointCache ? { cache: options.checkpointCache } : {}),
+      ...(options.visiblePrefix ? { visiblePrefix: options.visiblePrefix } : {}),
+      ...(checkpointProducer ? { producer: checkpointProducer } : {}),
+      ...(browserModel ? { browserModel } : {}),
+      policy: workingPolicy, preparationBudget, allowMaintenance: !healthyRetained,
+      ...(preparation ? { preparation, signal: preparation.signal } : {}),
+    });
     const pending = Symbol(threadId);
     if (healthyRetained && admitted && committed) {
       stage("media_binding");
@@ -1064,7 +1053,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           oversizedFreshSeed: committed.oversizedFreshSeed,
           inputTokens: physicalContext.transferTokens + 1_024,
           outputReserveTokens: workingPolicy.outputReserveTokens,
-          ...(committed.physicalLimits ? { physicalLimits: committed.physicalLimits } : {}),
+          ...(physicalLimits ? { physicalLimits } : {}),
           ...(hotCandidate ? { hotHistory: hotCandidate } : {}),
         }),
       });
@@ -1259,6 +1248,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     const authority = boundContext.segments.filter(segment => segment.type !== "checkpoint").filter(segment => segment.kind === "system" || segment.kind === "developer");
     const authorityByContent = new Map(authority.map(segment => [createHash("sha256").update(segment.content).digest("hex"), Buffer.byteLength(segment.content, "utf8")]));
     const authorityUniqueBytes = [...authorityByContent.values()].reduce((sum, bytes) => sum + bytes, 0);
+    const preparedIds = new Set(prepared.physicalContext.segments.flatMap(segment =>
+      segment.type === "revision" ? [segment.revisionId] : []));
+    const restoredAuthority = authority.filter(segment => segment.type === "revision" && !preparedIds.has(segment.revisionId));
     const seedRevisions = new Set<string>();
     let repeatedRevisionBytes = 0;
     for (const segment of boundContext.segments) {
@@ -1273,12 +1265,24 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       seed_repeated_revision_bytes: repeatedRevisionBytes,
       authority_bytes: seedBytes.authority, unique_authority_bytes: authorityUniqueBytes,
       duplicate_authority_bytes: seedBytes.authority - authorityUniqueBytes,
+      restored_authority_count: restoredAuthority.length,
+      restored_authority_bytes: restoredAuthority.reduce((sum, segment) => sum + Buffer.byteLength(segment.content, "utf8"), 0),
       largest_segment_bytes: [...authorityByContent.values()].reduce((largest, bytes) => Math.max(largest, bytes), 0),
       system_bytes: authority.filter(segment => segment.kind === "system").reduce((sum, segment) => sum + Buffer.byteLength(segment.content, "utf8"), 0),
       developer_bytes: authority.filter(segment => segment.kind === "developer").reduce((sum, segment) => sum + Buffer.byteLength(segment.content, "utf8"), 0),
       native_instructions_bytes: typeof nativeRequestContentSource(nativeRequest).instructions === "string"
         ? Buffer.byteLength(nativeRequestContentSource(nativeRequest).instructions as string, "utf8") : 0,
     });
+    for (const [index, segment] of authority.entries()) {
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_seed_authority_segment", {
+        segment_index: index,
+        source_index: segment.type === "revision" ? projection.revisions.findIndex(item => item.revision.id === segment.revisionId) : -1,
+        authority_fingerprint: createHash("sha256").update(segment.content).digest("hex").slice(0, 24),
+        kind: segment.type === "revision" ? segment.kind : "checkpoint",
+        bytes: Buffer.byteLength(segment.content, "utf8"),
+        restored: segment.type === "revision" && !preparedIds.has(segment.revisionId),
+      });
+    }
     const transportAnchor = prepared.plan.mode === "checkpoint-delta"
       ? `checkpoint:${prepared.plan.checkpointId}`
       : `full:${projection.headId}`;

@@ -31,7 +31,14 @@ it does not backdate result collection. Missing collection timestamps follow the
 uncollected policy and are never replaced by answer times or file modification times.
 
 The source CLI can run a bounded, workspace-write-capable task on a connected Tela Work profile without
-changing the model of an existing conversation or exporting its history. The Native engine creates
+changing the model of an existing conversation or exporting its history. Newly created journal-owned Native
+threads receive a one-time best-effort `[Tela Agent] ` prefix on the first nonempty
+`thread/name/updated` notification, through `thread/name/set`. The generated title
+text is preserved; later renames and continuations are left alone. The public
+notification does not identify manual versus automatic changes, and titles
+generated after this job's event connection closes are not guaranteed to be
+prefixed. Naming does not delay execution or affect provider-side chats.
+The Native engine creates
 a new durable, paginated thread and supplies its own tool/sandbox authority; the existing Web
 provider performs inference. This is not an independent Tela Chat worker or an API-key fallback.
 
@@ -53,15 +60,26 @@ bun run cli web-delegate result --job UUID
 These commands operate on journal-owned Web jobs. `continue` requires a proven
 completed eligible parent and starts a new turn in the same thread; it does not
 enqueue work or steer a running generation. The Native conversation's own queue
-and steering operate under its separate Native authority. A Web worker can
-report the result, but it has read-only Goal access and no Goal-mutation
-capability. The Native coordinator can request Goal completion through the
-public API, but that API has no scheduler fence or turn compare-and-set, so a
-successful completion response does not guarantee that an automatic follow-up
-turn will not start. Live acceptance observed a follow-up turn start in the same
-second as Goal completion; the coordinator had to interrupt it. Post-completion
-quiescence is therefore not accepted. The Codex connector inventory remains
-scoped to one exact active Native turn, with tools discovered at runtime.
+and steering operate under its separate Native authority. When the current harness
+advertises its original Goal tools, the Web task receives a separate Goal-only
+control capability. Discover `goal_control_inventory` through Tela Chat and use
+`goal_control_call` with the returned Native schema. This uses the original Native
+tool execution/result path; it creates no Goal store or scheduler and cannot invoke
+Native work tools. Goal caller IDs are scoped to the Native thread and turn before
+execution, so a later turn can reuse a caller label without matching an older result.
+The returned result retains the caller's original ID; duplicate-call checks within
+one turn are unchanged. The capability expires with the response cycle. When no original
+Goal tool is advertised, no completion capability is supplied: report that limit
+instead of creating a shell/RPC completion helper.
+
+Completion requires the full objective's evidence before the original Goal update
+call, followed by a final answer. An isolated installed acceptance verified an actual
+file read, the original completion result, normal Native turn completion and no
+successor turn. This does not guarantee every delegated task reaches its objective.
+The external coordinator API has no scheduler fence or turn compare-and-set; prior
+acceptance observed a successor start in the same second as external completion,
+so an external ACK alone is insufficient.
+
 
 `status` includes the last observed public Native reasoning **summary** in
 `progress`, when available. It retains only the newest summary (up to 2,048

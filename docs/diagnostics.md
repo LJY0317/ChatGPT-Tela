@@ -19,6 +19,11 @@ separate incident-count cap. Raw private capture remains opt-in, local and separ
 The renderer records failed XHR/fetch or WebSocket requests and HTTP responses >=400.
 Owned provider-API POST completions also record status as `renderer_api_request_completed`;
 HTTP completion does not prove JavaScript consumption or semantic stream completion.
+Owned provider requests also record passive `renderer_request_sent` and
+`renderer_response_started` boundaries with their shared request fingerprint and timestamp.
+Only response Content-Type is reduced to `browser_response` (event_stream/json/other/unknown);
+other header values are not read. `renderer_surface_bound` links renderer identity to the
+logical epoch without assigning later traffic to an old Native turn.
 `renderer_request_failed` carries the normalized Chromium failure class;
 `renderer_http_failed` carries status. Domain/route/resource/method classes and one-way
 origin/request fingerprints correlate them without URLs, headers, cookies or payloads.
@@ -32,6 +37,19 @@ content, progress and approval-owned alerts are excluded. Candidate counts disti
 eligible and approval-owned alerts, alongside composer Stop visibility. A visible generic alert outside those regions
 is terminal only when generation has stopped, even if an earlier answer or progress shell remains mounted. This proves a
 provider UI failure, not its network cause or the outcome of an earlier tool operation.
+For an owned failed response with an `Error in message stream` alert and a unique Retry
+button, the existing browser automation clicks that button once and continues observing
+the accepted turn. It does not resubmit the composer or start another Native turn.
+`response_retry_preparation_started`, `response_retry_prepared` (target_present),
+`response_retry_dispatch_started` and `response_retry_activated` distinguish lookup,
+missing/already-used controls and attempted versus returned dispatch. Existing execution
+exception/cancellation and cycle-terminal events carry failures and later recovery;
+click return alone does not prove recovery.
+Other failures, absent controls and already-activated buttons keep the terminal failure path.
+Progress probes retain only the last structural signature, so unchanged reads are omitted
+without suppressing failures after an arbitrary number of earlier transitions.
+Fresh-seed authority events expose ordered source indices, fingerprints, byte counts and
+checkpoint-restored instruction counts; they never contain instruction text.
 
 ## Tela Chat ingress boundary
 

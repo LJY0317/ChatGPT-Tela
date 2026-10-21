@@ -974,6 +974,10 @@ describe("Native request development Web planner", () => {
         duplicate_authority_bytes:content.length,system_bytes:content.length,developer_bytes:content.length});
       expect(event).toMatchObject({seed_revision_count:3,seed_unique_revision_count:3,
         seed_repeated_revision_count:0,seed_repeated_revision_bytes:0});
+      const segments = log.trim().split("\n").map(line => JSON.parse(line)).filter(row => row.stage === "native_seed_authority_segment");
+      expect(segments).toHaveLength(2);
+      expect(segments[0].authority_fingerprint).toBe(segments[1].authority_fingerprint);
+      expect(segments[0].source_index).not.toBe(segments[1].source_index);
       expect(log).not.toContain('PRIVATE_AUTHORITY');
       expect(result.physicalContext.segments.filter(segment=>segment.content===content)).toHaveLength(2);
       result.settle?.({status:'failed'});
@@ -1321,6 +1325,38 @@ describe("Native request development Web planner", () => {
         .rejects.toThrow('requires a verified checkpoint or explicit handoff');
       expect(modelCalls).toBe(0);
     }finally{rmSync(root,{recursive:true,force:true});}
+  });
+
+  test("effort changes reuse the owned page and carry the new picker setting", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const model = chatGptWebModelId(chatGptWebFamilyKey("Fixture"));
+    const firstRequest = { model, reasoning: { effort: "medium" },
+      input: [{ type: "message", role: "user", content: "Do A." }] };
+    const first = await planner(registered(), firstRequest);
+    first.settle?.({ status: "completed", documentGeneration: 1, surfaceLeaseId: "owned-page", answer: "A done." });
+    const next = await planner(registered(), { ...firstRequest, reasoning: { effort: "xhigh" },
+      input: [...firstRequest.input, { type: "message", role: "assistant", content: "A done." },
+        { type: "message", role: "user", content: "Continue." }] });
+    expect(next.physicalContext.mode).toBe("retained-delta");
+    expect(next.retainedSurfaceLeaseId).toBe("owned-page");
+    expect(next.webEpochId).toBe(first.webEpochId);
+    expect(next.browserModel?.effort).toBe("xhigh");
+    expect(next.physicalContext.segments.map(item => item.content).join("\n")).not.toContain("Do A.");
+    next.settle?.({ status: "failed" });
+  });
+
+  test("effort changes recheck the current hard capacity before retaining an oversized page", async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const request = { model: chatGptWebModelId(chatGptWebFamilyKey("Fixture")), reasoning: { effort: "max" },
+      input: [{ role: "user", content: "U".repeat(417_600) }] };
+    const answer = "A".repeat(12_000);
+    const first = await planner(registered(), request);
+    first.settle?.({ status: "completed", documentGeneration: 1, surfaceLeaseId: "max-page", answer });
+    const next = await planner(registered("turn-2"), { ...request, reasoning: { effort: "medium" },
+      input: [...request.input, { role: "assistant", content: answer }, { role: "user", content: "Continue." }] });
+    expect(next.retainedSurfaceLeaseId).toBeUndefined();
+    expect(next.diagnostics?.physical_rollover).toBe(true);
+    next.settle?.({ status: "failed" });
   });
 
   test("retained continuation fails closed to a fresh epoch when ancestry, answer, or route identity changes", async () => {
@@ -1784,6 +1820,36 @@ test("an attributed agent JSON matching the prior answer cannot replace Native f
   expect(next.physicalContext.mode).toBe("full");
   expect(next.physicalContext.segments.some(item=>item.content===serialized)).toBe(true);
   next.settle?.({status:"failed"});
+});
+
+test("a healthy retained page skips paid checkpoint maintenance until a fresh page is needed", async () => {
+  const root = scratch();
+  try {
+    let calls = 0;
+    const planner = createNativeRequestDevelopmentWebTurnPlanner({
+      checkpointCache: new FileContextCheckpointCache({ directory: join(root, "cache") }),
+      visiblePrefix: { accountNamespace: "fixture-account",
+        journal: new FileNativeVisiblePrefixStageJournal({ directory: join(root, "ledger"), initializationPath: join(root, "ledger-init") }),
+        async read(): Promise<never> { throw Error("readable input must not page history"); } },
+      checkpointProducer: async input => { calls++; return { nativeTaskId: input.nativeTaskId,
+        sourceRevisionId: input.sourceRevisionId, content: "Canonical prefix summary." }; },
+    });
+    const request = { model: chatGptWebModelId(chatGptWebFamilyKey("Fixture")), reasoning: { effort: "medium" },
+      input: [{ role: "user", content: "U".repeat(70_000) }] };
+    const first = await planner(registered(), request);
+    first.settle?.({ status: "completed", documentGeneration: 1, surfaceLeaseId: "owned", answer: "Done." });
+    const followup = { ...request, input: [...request.input, { role: "assistant", content: "Done." },
+      { role: "user", content: "Continue." }] };
+    const next = await planner(registered("turn-2"), followup);
+    expect(next.physicalContext.mode).toBe("retained-delta");
+    expect(calls).toBe(0);
+    next.settle?.({ status: "failed" });
+    const fresh = await planner(registered("turn-3"), followup);
+    expect(fresh.retainedSurfaceLeaseId).toBeUndefined();
+    expect(fresh.physicalContext.mode).toBe("checkpoint-delta");
+    expect(calls).toBe(1);
+    fresh.settle?.({ status: "failed" });
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('cold readable request uses one durable complete snapshot and preserves the newest request exact', async () => {

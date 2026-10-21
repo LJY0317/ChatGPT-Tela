@@ -44,7 +44,7 @@ interface ElectronAuthCookieLike {
 }
 
 interface ElectronProfileSessionLike {
-  readonly webRequest?: Pick<WebRequest, "onCompleted" | "onErrorOccurred">;
+  readonly webRequest?: Pick<WebRequest, "onCompleted" | "onErrorOccurred" | "onSendHeaders" | "onResponseStarted">;
   readonly storagePath?: string | null;
   readonly cookies?: {
     on?(event: "changed", listener: (event: unknown, cookie: ElectronAuthCookieLike, cause: string, removed: boolean) => void): void;
@@ -271,6 +271,11 @@ export function createElectronBrowserHost(input: {
       partition_fingerprint: diagnosticFingerprint(profile.partition),
       ...(input.storageFingerprint ? { storage_fingerprint: input.storageFingerprint } : {}),
       surface_fingerprint: diagnosticFingerprint(JSON.stringify([input.profileId, taskId, epochId])) };
+    // Link renderer diagnostics to the logical epoch once; later network events
+    // intentionally carry no stale Native turn authority.
+    withDiagnosticContext(origin, () => emitDiagnosticEvent("chatgpt_tela_browser", "renderer_surface_bound", {
+      scope_fingerprint: diagnosticFingerprint(taskId), epoch_fingerprint: diagnosticFingerprint(epochId),
+    }));
     const browserSession = (window.webContents as unknown as { readonly session?: ElectronProfileSessionLike }).session;
     const sessionAuthDiagnostics = retainSessionAuthDiagnostics(browserSession, origin);
     const releaseNetworkDiagnostics = retainRendererNetworkDiagnostics(browserSession, {

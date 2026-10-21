@@ -184,14 +184,14 @@ async function main(): Promise<void> {
       : undefined;
     return publicConfig.abi === "stable"
       ? startPublicGateway({
-          chat: new DynamicChatBackend(() => resolveBackend("chat")),
+          chat: new DynamicChatBackend(() => resolveBackend("chat"), codex),
           codex,
           config: publicConfig,
           ...(exposure ? { exposure: exposure(probePublicMcp) } : {}),
           signal: ingressAbort.signal,
         })
       : startUnifiedDevelopmentGateway({
-          chat: new DynamicChatBackend(() => resolveBackend("chat")),
+          chat: new DynamicChatBackend(() => resolveBackend("chat"), codex),
           codex,
           config: publicConfig,
           ...(exposure ? { exposure: exposure(probeUnifiedDevelopmentMcp) } : {}),

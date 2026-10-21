@@ -250,6 +250,11 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             contract: webMcpContract,
             turnCapability: turn.capability,
           } : undefined;
+          const nativeGoalControl = toolBridge ? undefined : turns.goalControl(turn.capability);
+          const chatTools = {
+            ...(input.profileSlot !== undefined ? { defaultProfileSlot: input.profileSlot } : {}),
+            ...(nativeGoalControl ? { nativeGoalControl } : {}),
+          };
           // A deterministic size refusal must not retire a reusable Web page,
           // open a fresh Temporary Chat, or spend a model turn on preload.
           try {
@@ -258,7 +263,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
               ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
               ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
               ...(plan.media ? { media: plan.media } : {}),
-              ...(toolBridge ? { toolBridge } : { chatTools: { ...(input.profileSlot !== undefined ? { defaultProfileSlot: input.profileSlot } : {}) } }),
+              ...(toolBridge ? { toolBridge } : { chatTools }),
             });
           } catch (error) {
             rejectedBeforeAcquisition = true;
@@ -328,7 +333,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
             ...(plan.media ? { media: plan.media } : {}),
             ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
-            ...(toolBridge ? { toolBridge } : { chatTools: { ...(input.profileSlot !== undefined ? { defaultProfileSlot: input.profileSlot } : {}) } }),
+            ...(toolBridge ? { toolBridge } : { chatTools }),
             ...(plan.browserModel ? {
               prepareForSubmit: (surface, signal) => selectChatGptWebModel(
                 surface,

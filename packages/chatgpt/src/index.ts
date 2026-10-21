@@ -78,8 +78,8 @@ export interface WebTurnRequest {
    * It cannot be combined with a preloaded reference, retained delta or tool bridge. */
   readonly inertSourceAttachment?: { readonly attachment: ChatGptContextAttachment; readonly receipt: string };
   readonly media?: readonly import("./turn-media").WebTurnMedia[];
-  /** Independent Tela Chat tools; never grants a Native turn capability. */
-  readonly chatTools?: { readonly defaultProfileSlot?: number };
+  /** Independent work tools, optionally carrying a Goal-only control capability. */
+  readonly chatTools?: { readonly defaultProfileSlot?: number; readonly nativeGoalControl?: string };
   readonly toolBridge?: WebToolBridgeContext;
 }
 
