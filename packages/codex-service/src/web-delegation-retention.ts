@@ -43,10 +43,11 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
   const groups = new Map<string, WebDelegationRecord[]>();
   for (const record of adapters.store.records()) {
     if (!record.threadId) continue;
-    const key = `${record.slot}:${record.threadId}`;
+    const key = `${record.slot}:${record.owner.accountFingerprint}:${record.threadId}`;
     groups.set(key, [...(groups.get(key) ?? []), record]);
   }
   let next = Infinity;
+  const connections = new Map<string, Awaited<ReturnType<WebDelegationAdapters["connect"]>>>();
   const confirmAbsent = async (record: WebDelegationRecord, rpc: Awaited<ReturnType<WebDelegationAdapters["connect"]>>): Promise<void> => {
     const key = { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! };
     const path = statePath(adapters, record);
@@ -78,25 +79,35 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_failed", { failure_class: diagnosticFailureClass(error) });
     }
   }
+  const inventories = new Map<string, Map<string, { archived: boolean; thread: Record<string, any> }>>();
+  try {
   for (const jobs of groups.values()) {
     input.signal.throwIfAborted();
     jobs.sort((a, b) => a.createdAt - b.createdAt || (a.parentJobId === b.id ? 1 : b.parentJobId === a.id ? -1 : 0));
     const record = jobs.at(-1)!;
     const path = statePath(adapters, record), retained = load(path);
-    if (retained?.state === "deleted" || retained?.state === "excluded") continue;
+    if (retained?.state === "deleted") continue;
     const collected = adapters.store.collectedAt(record.id);
     const due = retained?.archivedAt !== undefined ? retained.archivedAt + 30 * DAY
       : collected !== undefined ? collected + DAY : record.createdAt + 7 * DAY;
-    if (due > now) { next = Math.min(next, due); continue; }
+    if (due > now && retained?.state !== "excluded") next = Math.min(next, due);
     try {
       const owner = await adapters.owner(record.slot);
       if (!sameAccountOwner(record, owner)) continue;
-      const rpc = await adapters.connect(owner.session.terminalEndpoint);
+      const scopeConnection = JSON.stringify([record.slot, record.owner.accountFingerprint, owner.session.terminalEndpoint]);
+      let rpc = connections.get(scopeConnection);
+      if (!rpc) {
+        rpc = await adapters.connect(owner.session.terminalEndpoint);
+        connections.set(scopeConnection, rpc);
+      }
       try {
         // Native read metadata does not expose archive state. Read both official
         // list partitions (metadata only) and require complete pagination.
-        const listed = new Map<string, { archived: boolean; thread: Record<string, any> }>();
-        for (const archived of [false, true]) {
+        const scope = JSON.stringify([record.slot, record.owner.accountFingerprint, record.cwd]);
+        let listed = inventories.get(scope);
+        if (!listed) {
+          listed = new Map<string, { archived: boolean; thread: Record<string, any> }>();
+          for (const archived of [false, true]) {
           let cursor: string | undefined;
           const seen = new Set<string>();
           do {
@@ -106,7 +117,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
             if (!Array.isArray(page?.data)) throw Error("Native thread inventory unavailable");
             for (const raw of page.data) {
               const thread = object(raw);
-              if (thread && thread.id === record.threadId) listed.set(thread.id, { archived, thread });
+              if (thread && typeof thread.id === "string") listed.set(thread.id, { archived, thread });
             }
             const following = page.nextCursor;
             if (following != null && (typeof following !== "string" || !following || seen.has(following))) {
@@ -115,12 +126,15 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
             cursor = following ?? undefined;
             if (cursor) seen.add(cursor);
           } while (cursor);
+          }
+          inventories.set(scope, listed);
         }
         const present = listed.get(record.threadId!);
         if (!present) {
           await confirmAbsent(record, rpc);
           continue;
         }
+        if (retained?.state === "excluded") continue;
         const updatedAt = present.thread.updatedAt;
         if (!Number.isFinite(updatedAt)) throw Error("Native thread activity time unavailable");
         if (present.archived !== (retained?.state === "archived")
@@ -129,6 +143,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           // control to the user. Never delete such a thread automatically.
           save(path, { state: "excluded" }); continue;
         }
+        if (due > now) continue;
         const tail = object(await rpc.request("thread/turns/list", {
           threadId: record.threadId, limit: 1, sortDirection: "desc", itemsView: "summary",
         }, input.signal));
@@ -168,13 +183,16 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           if (load(path)?.state !== "deleted") save(path, { state: "excluded" });
           throw error;
         }
-      } finally { await rpc.close(); }
+      } finally { /* Shared owner connection closes after the pass. */ }
     } catch (error) {
       if (input.signal.aborted) throw error;
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_failed", { failure_class: diagnosticFailureClass(error) });
       // Reconsider on a real journal/profile change or the next daemon start,
       // not through a retry/polling loop.
     }
+  }
+  } finally {
+    await Promise.allSettled([...connections.values()].map(rpc => rpc.close()));
   }
   return next === Infinity ? undefined : next;
 }

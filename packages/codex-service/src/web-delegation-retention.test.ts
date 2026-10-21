@@ -74,7 +74,8 @@ test("first result collection starts 24h clock, repeated reads do not extend it,
     f.store.collect(f.record.id, f.origin + 2 * DAY);
     expect(f.store.collectedAt(f.record.id)).toBe(f.origin + DAY);
     const immutable = readFileSync(join(f.root, `${f.record.id}.json.completed`), "utf8");
-    await f.run(f.origin + 2 * DAY - 1); expect(f.calls).toHaveLength(0);
+    await f.run(f.origin + 2 * DAY - 1);
+    expect(f.calls.every(c => c.method === "thread/list")).toBe(true);
     expect(await f.run(f.origin + 2 * DAY)).toBe(f.origin + 32 * DAY); expect(f.native.archived).toBe(true);
     expect(await f.run(f.origin + 9 * DAY)).toBe(f.origin + 32 * DAY);
     expect(f.native.exists).toBe(true);
@@ -124,6 +125,81 @@ test("manual archive, restore, activity and delete relinquish automatic ownershi
       expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(action === "restore" || action === "activity" ? 1 : 0);
     } finally { f.cleanup(); }
   }
+});
+test("manual archive then delete cleans an excluded thread before its due date", async () => {
+  const f = fixture();
+  try {
+    f.native.archived = true;
+    await f.run(f.origin + DAY);
+    expect(f.store.threadRetention(f.record)?.state).toBe("excluded");
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    f.native.archived = false;
+    await f.run(f.origin + 2 * DAY);
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    f.native.exists = false;
+    await f.run(f.origin + 3 * DAY);
+    expect(f.store.get(f.record.id)).toBeUndefined();
+    expect(f.store.records()).toHaveLength(0);
+    expect(f.calls.filter(c => c.method === "thread/delete" || c.method === "thread/archive")).toHaveLength(0);
+  } finally { f.cleanup(); }
+});
+test("before-due manual deletion is reconciled without an automatic mutation", async () => {
+  const f = fixture();
+  try {
+    f.native.exists = false;
+    await f.run(f.origin + DAY);
+    expect(f.store.get(f.record.id)).toBeUndefined();
+    expect(f.calls.some(c => c.method === "thread/archive" || c.method === "thread/delete")).toBe(false);
+  } finally { f.cleanup(); }
+});
+test("one owner and cwd share metadata listings across managed threads", async () => {
+  const f = fixture();
+  try {
+    const other = { ...f.record, id: randomUUID(), threadId: randomUUID(), turnId: randomUUID() };
+    f.store.reserve(other);
+    f.store.save({ ...other, state: "completed", answer: "other", finalEvidence: "explicit-final-phase" });
+    await f.run(f.origin + DAY);
+    expect(f.calls.filter(c => c.method === "thread/list")).toHaveLength(2);
+    expect(f.calls.filter(c => c.method === "thread/read")).toHaveLength(1);
+    expect(f.store.get(other.id)?.answer).toBe("other");
+  } finally { f.cleanup(); }
+});
+test("excluded absence remains local under another account or transport error", async () => {
+  const f = fixture();
+  try {
+    f.native.archived = true;
+    await f.run(f.origin + DAY);
+    f.native.exists = false;
+    f.native.accountChanged = true;
+    await f.run(f.origin + 2 * DAY);
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    f.native.accountChanged = false;
+    const adapters = { ...f.adapters, connect: async () => ({
+      close: async () => {},
+      request: async () => { throw Error("Socket closed"); },
+    }) as any };
+    await settleWebDelegationRetention(adapters, { now: f.origin + 3 * DAY, signal: new AbortController().signal });
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    await f.run(f.origin + 4 * DAY);
+    expect(f.store.get(f.record.id)).toBeUndefined();
+  } finally { f.cleanup(); }
+});
+test("excluded moved cwd remains alive after an empty cwd-filtered list", async () => {
+  const f = fixture();
+  try {
+    f.native.archived = true;
+    await f.run(f.origin + DAY);
+    f.native.cwd = join(f.root, "moved");
+    const adapters = { ...f.adapters, connect: async () => {
+      const rpc = await f.adapters.connect();
+      return { ...rpc, request: async (method: string, params: any, signal?: AbortSignal) =>
+        method === "thread/list" ? { data: [], nextCursor: null } : rpc.request(method, params, signal) };
+    } };
+    await settleWebDelegationRetention(adapters, { now: f.origin + 2 * DAY, signal: new AbortController().signal });
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    expect(f.native.exists).toBe(true);
+    expect(f.calls.some(c => c.method === "thread/delete")).toBe(false);
+  } finally { f.cleanup(); }
 });
 test("an unknown mutation outcome is never retried; another account cannot act on the stored thread", async () => {
   const f = fixture();
