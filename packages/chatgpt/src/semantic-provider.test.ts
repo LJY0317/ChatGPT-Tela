@@ -2531,8 +2531,6 @@ test("owned stream Retry continues the accepted turn without another composer su
     retries = 0;
     async retryFailedResponse(key: string) {
       expect(key).toBe("assistant"); this.retries++;
-      this.current = { ...this.current, revision: "retrying", turns: this.current.turns.map(turn =>
-        turn.role === "assistant" ? { ...turn, phase: "thinking" } : turn) };
       return true;
     }
   }
@@ -2552,7 +2550,7 @@ test("owned stream Retry continues the accepted turn without another composer su
     driver.queued.push({ ...driver.current, revision: "done", turns: [...driver.current.turns,
       { ...assistant, phase: "complete", text: "Recovered answer" }] });
     const result = await provider.waitForTurnEvent(surface.lease, submitted.value);
-    expect(result.state === "proven" && result.value).toMatchObject({ kind: "failed", detail: "Error in message stream Retry" });
+    expect(result.state === "proven" && result.value).toMatchObject({ kind: "completed", answer: "Recovered answer" });
     expect(driver.retries).toBe(1); expect(driver.activated.length).toBe(sends);
   } finally { await surface.host.close(); }
 });
@@ -2562,8 +2560,6 @@ test("owned stream Retry is limited to once when the failed control rerenders", 
     retries = 0;
     async retryFailedResponse(key: string) {
       expect(key).toBe("assistant"); this.retries++;
-      this.current = { ...this.current, revision: "retrying", turns: this.current.turns.map(turn =>
-        turn.role === "assistant" ? { ...turn, phase: "thinking" } : turn) };
       return true;
     }
   }
@@ -2578,6 +2574,10 @@ test("owned stream Retry is limited to once when the failed control rerenders", 
     driver.queued.push({ ...driver.current, revision: "failed", turns: [...driver.current.turns,
       { ...assistant, phase: "failed", failureDetail: "Error in message stream Retry" }] });
     driver.queued.push({ ...driver.current, revision: "failed-rendered-again", turns: [...driver.current.turns,
+      { ...assistant, phase: "failed", failureDetail: "Error in message stream Retry" }] });
+    driver.queued.push({ ...driver.current, revision: "retry-started", turns: [...driver.current.turns,
+      { ...assistant, phase: "thinking" }] });
+    driver.queued.push({ ...driver.current, revision: "retry-failed", turns: [...driver.current.turns,
       { ...assistant, phase: "failed", failureDetail: "Error in message stream Retry" }] });
     const result = await provider.waitForTurnEvent(surface.lease, submitted.value);
     expect(result.state === "proven" && result.value).toMatchObject({ kind: "failed", detail: "Error in message stream Retry" });

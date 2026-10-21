@@ -74,7 +74,9 @@ describe("Tela Codex private HTTP server", () => {
     let reads = 0;
     const server = await startCodexServiceHttpServer({
       service, bearerToken: token,
-      delegationCapacity: slot => {
+      delegationCapacity: (...args) => {
+        expect(args).toEqual([2]);
+        const [slot] = args;
         reads++;
         return { contractVersion: 3, profileSlot: slot, source: "managed_delegation_journal",
           observedAt: new Date().toISOString(), coverage: "managed_jobs_only",
@@ -82,7 +84,7 @@ describe("Tela Codex private HTTP server", () => {
           uncertain: 0,
           total: { used: 3, limit: 3 }, records: { retained: 3, limit: 64 },
           available: false, blockCode: "CAPACITY_TOTAL_PROFILE",
-          messageKo: "읽기 위임 한도 도달", messageEn: "Read delegation limit reached",
+          messageKo: "위임 한도 도달", messageEn: "Delegation limit reached",
           nextAction: "wait_for_active_job" };
       },
     });

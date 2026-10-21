@@ -62,7 +62,7 @@ interface TrackedTurn extends TurnOwnership {
   unmappedPublicProgressCaptured?: boolean;
   approvalProgress?: string;
   approvalPendingCaptured?: boolean;
-  responseRetryAttempted?: boolean;
+  responseRetryState?: "dispatched" | "observed";
   approvalFailureCaptured?: string;
   readonly approvalObservation: ChatGptApprovalObservation;
   observeAgain?: boolean;
@@ -1785,12 +1785,20 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         };
       }
       const assistant = assistants[0];
-      if (assistant?.phase === "failed" && !tracked.responseRetryAttempted && driver.retryFailedResponse) {
+      if (assistant?.phase === "failed" && !tracked.responseRetryState && driver.retryFailedResponse) {
+        // Record dispatch before awaiting input: a thrown click may already have reached the page.
+        tracked.responseRetryState = "dispatched";
         if (await waitOwned(signal, () => driver.retryFailedResponse!(assistant.key, signal))) {
-          tracked.responseRetryAttempted = true;
           tracked.observeAgain = true;
           continue;
         }
+        delete tracked.responseRetryState;
+      }
+      if (tracked.responseRetryState === "dispatched") {
+        // A successful click does not clear the old failure synchronously. Keep the owned
+        // observation alive until the retried response changes phase or ownership is cancelled.
+        if (assistant?.phase === "failed") continue;
+        if (assistant) tracked.responseRetryState = "observed";
       }
       const waitState = JSON.stringify([assistant?.phase ?? "absent", snapshot.approval ?? null]);
       this.#observeApproval(surface, tracked, snapshot, assistant);

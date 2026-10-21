@@ -71,7 +71,7 @@ export async function startCodexServiceHttpServer(input: {
   readonly service: CodexService;
   readonly bearerToken?: string;
   readonly startupComplete?: () => boolean;
-  readonly delegationCapacity?: (slot: number, mode: "read" | "write") => unknown;
+  readonly delegationCapacity?: (slot: number) => unknown;
   /** Optional, owner-verified structural inspection; not a Native turn mutation. */
   readonly inspectWork?: (slot: number, threadId: string, minutes: number) => Promise<unknown>;
 }): Promise<CodexServiceHttpServer> {
@@ -101,9 +101,7 @@ export async function startCodexServiceHttpServer(input: {
         const capacityMatch = request.method === "GET"
           ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/web-delegation-capacity$/.exec(url.pathname) : null;
         if (capacityMatch && input.delegationCapacity) {
-          const mode = url.searchParams.get("mode") ?? "read";
-          if (mode !== "read" && mode !== "write") return error(400, "invalid delegation mode");
-          return Response.json(input.delegationCapacity(Number(capacityMatch[1]), mode), {
+          return Response.json(input.delegationCapacity(Number(capacityMatch[1])), {
             headers: { "cache-control": "no-store" },
           });
         }
