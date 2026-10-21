@@ -378,7 +378,7 @@ function formatWebPhysicalContextParts(
       ] : []),
       "This Web task uses Tela Chat tools only. Do not use Native Codex inventory, Native call tools, or a Native turn capability, including for delegation.",
       ...(chatTools.nativeGoalControl ? [
-        "A Goal-only control capability is supplied in the context header. Use Tela Chat goal_control_inventory and goal_control_call to invoke the original Native Goal tools for this task. Match their actual schemas; this does not grant Native work tools.",
+        "Copy the current context header's nativeGoalControl VALUE unchanged into goal_control for Tela Chat goal_control_inventory and goal_control_call; the field name itself is not a capability. These invoke only the original Native Goal tools, using their actual schemas, and do not grant Native work tools.",
         "Before marking the Goal complete, verify its full objective against actual results. Completion must use the original Native Goal update tool; prose, shell scripts and completion markers do not complete a Goal. After its result, return your final answer and stop.",
       ] : ["Finish the assigned objective and report its result and remaining limits. Goal mutation is not exposed in this turn; the Native coordinator must settle it through the official Goal API."]),
     ] : [
