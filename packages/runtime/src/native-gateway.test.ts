@@ -3,6 +3,7 @@ import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 import { ActiveTurnRegistry } from "./registry";
 import { NativeResponsesGateway } from "./native-gateway";
 import { acceptNativeResponsesToolResult } from "./native-round";
+import { diagnosticContext, diagnosticFingerprint, withDiagnosticContext } from "@chatgpt-tela/core";
 
 function request(turnId: string, input: unknown[] = []): unknown {
   return {
@@ -38,6 +39,25 @@ const source: CanonicalCurrentTurnSource = {
 };
 
 describe("Native Responses semantic gateway", () => {
+  test("planning failure retains request and canonical Native scope", async () => {
+    const requestFingerprint = "a".repeat(24);
+    let observed: ReturnType<typeof diagnosticContext> | undefined;
+    const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async () => {
+      await Promise.resolve();
+      observed = diagnosticContext();
+      throw new Error("planning failed");
+    });
+    try {
+      await expect(withDiagnosticContext({ request_fingerprint: requestFingerprint }, () =>
+        gateway.handle(request("turn-1")))).rejects.toThrow("planning failed");
+      expect(observed).toMatchObject({
+        request_fingerprint: requestFingerprint,
+        scope_fingerprint: diagnosticFingerprint("thread-1"),
+        turn_fingerprint: diagnosticFingerprint("turn-1"),
+      });
+    } finally { await gateway.close(); }
+  });
+
   test("reconnection replaces the old response waiter without restarting or cancelling Web execution", async () => {
     let release!: () => void, ready!: () => void;
     const prepared = new Promise<void>(r => { ready = r; });

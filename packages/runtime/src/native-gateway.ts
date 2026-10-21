@@ -336,7 +336,10 @@ export class NativeResponsesGateway {
       lifetime!.diagnostics?.finish();
       lifetime!.diagnostics = startTurnDiagnosticSummary(diagnosticFingerprint(owned.channel.binding.authority.threadId),
         diagnosticFingerprint(owned.channel.binding.authority.turnId), diagnosticContext().request_fingerprint);
-      const launch = Promise.resolve().then(() => this.startWebTurn(owned, body, AbortSignal.any([this.#controller.signal, lifetime!.controller.signal, ...(lifetime?.watch ? [lifetime.watch.signal] : [])]))).catch(error => {
+      const launch = Promise.resolve().then(() => withDiagnosticContext({
+        scope_fingerprint: diagnosticFingerprint(owned.channel.binding.authority.threadId),
+        turn_fingerprint: diagnosticFingerprint(owned.channel.binding.authority.turnId),
+      }, () => this.startWebTurn(owned, body, AbortSignal.any([this.#controller.signal, lifetime!.controller.signal, ...(lifetime?.watch ? [lifetime.watch.signal] : [])])))).catch(error => {
         const failedOwner = owned.channel.binding.authority;
         withDiagnosticContext({
           scope_fingerprint: diagnosticFingerprint(failedOwner.threadId),
