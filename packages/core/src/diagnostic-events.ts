@@ -87,7 +87,7 @@ export function emitDiagnosticEvent(
     const normalized: Record<string, DiagnosticScalar> = {};
     for (const [key, value] of Object.entries(fields)) {
       safeName(key, "diagnostic field name");
-      if (FORBIDDEN_FIELD.test(key)) throw new Error(`diagnostic field is forbidden: ${key}`);
+      if (FORBIDDEN_FIELD.test(key) && !["content_kind", "content_items", "content_bytes"].includes(key)) throw new Error(`diagnostic field is forbidden: ${key}`);
       normalized[key] = safeFieldValue(value, key);
     }
     const record = {

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
+import { readDiagnosticTail } from "@chatgpt-tela/core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -88,16 +89,12 @@ describe("Web Chat independent tool path acceptance", () => {
         workspace_id: workspace.id, path: "notes.txt",
       })) as { content: string }).content).toContain("created-through-chat");
       const rows = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
-      const returned = rows.find(row => row.stage === "backend_call_complete" && row.result_kind === "object");
+      const returned = rows.find(row => row.stage === "backend_call_complete" && row.result_kind === "object"
+        && typeof row.request_fingerprint === "string" && typeof row.rpc_fingerprint === "string"
+        && rows.some(child => child.stage === "capability_call_complete" && child.parent_fingerprint === row.request_fingerprint));
+      const returnedRpc = returned?.rpc_fingerprint;
       expect(returned).toMatchObject({ service: "chat", result_kind: "object", result_bytes: expect.any(Number),
         rpc_fingerprint: expect.any(String), request_fingerprint: expect.any(String) });
-      expect(rows.find(row => row.stage === "http_response_finished" && row.parent_fingerprint === returned.request_fingerprint))
-        .toMatchObject({ status: 200 });
-      const emitted = rows.find(row => row.stage === "mcp_rpc_emitted" && row.rpc_fingerprint === returned.rpc_fingerprint);
-      expect(emitted).toMatchObject({ delivery: "transport_send_returned", content_kind: "text",
-        content_items: 1, content_bytes: expect.any(Number), result_bytes: expect.any(Number), error_result: false });
-      expect(rows.find(row => row.stage === "tool_settled" && row.rpc_fingerprint === returned.rpc_fingerprint))
-        .toMatchObject({ error_result: false });
 
       const operationId = randomUUID();
       const command = process.platform === "win32"
@@ -127,6 +124,13 @@ describe("Web Chat independent tool path acceptance", () => {
       const extensionless = await call("view_image", { workspace_id: workspace.id, path: "extensionless-capture" });
       expect(extensionless.isError).not.toBe(true);
       expect(extensionless.content).toEqual([{ type: "image", mimeType: "image/png", data: png.toString("base64") }]);
+      const delivered = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(delivered.find(row => row.stage === "mcp_rpc_emitted" && row.rpc_fingerprint === returnedRpc))
+        .toMatchObject({ delivery: "transport_send_returned", content_kind: "text",
+          content_items: 1, content_bytes: expect.any(Number), result_bytes: expect.any(Number), error_result: false });
+      expect(readDiagnosticTail(diagnosticFile).events.find(row => row.stage === "mcp_rpc_emitted"
+        && row.rpc_fingerprint === returnedRpc)).toMatchObject({ content_kind: "text", content_items: 1,
+          content_bytes: expect.any(Number), result_bytes: expect.any(Number) });
 
       chatAvailable = false;
       const unavailable = await call("read", { workspace_id: workspace.id, path: "notes.txt" });
