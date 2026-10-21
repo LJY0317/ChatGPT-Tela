@@ -3,6 +3,9 @@ import {
   NativeToolInventory,
   type NativeToolDescriptor,
   defineNativeTurnAuthority,
+  diagnosticFingerprint,
+  observeDiagnosticEvents,
+  type NativeToolResult,
 } from "@chatgpt-tela/core";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
 import {
@@ -92,6 +95,9 @@ describe("internal MCP turn bridge", () => {
 });
 
 test("Goal-only capability reuses Native tool delivery and expires with its response cycle", async () => {
+  const events: Parameters<Parameters<typeof observeDiagnosticEvents>[0]>[0][] = [];
+  const stop = observeDiagnosticEvents(event => { events.push(event); });
+  try {
   const turns = new ActiveTurnRegistry({ routeId: "GoalRoute" });
   const bound = binding([
     { wireName: "update_goal", name: "update_goal", namespace: "functions", kind: "function",
@@ -110,9 +116,19 @@ test("Goal-only capability reuses Native tool delivery and expires with its resp
   const result = bridge.invoke(control, { callId: "native-complete", wireName: "update_goal", mode: "structured", arguments: { status: "complete" } });
   const nativeCall = await nextNativeResponsesToolCall(registered.channel);
   expect(nativeCall).toMatchObject({ type: "function_call", name: "update_goal", arguments: JSON.stringify({ status: "complete" }) });
-  acceptNativeResponsesToolResult(registered.channel, { input: [{ type: "function_call_output", call_id: nativeCall.call_id, output: "native-goal-result" }] });
+  const body = JSON.stringify({ goal: { status: "complete", objective: "PRIVATE_OBJECTIVE" } });
+  acceptNativeResponsesToolResult(registered.channel, { input: [{ type: "function_call_output", call_id: nativeCall.call_id, output: body }] });
   registered.channel.releaseNativeToolResultToWeb(nativeCall.call_id);
-  expect(await result).toMatchObject({ callId: "native-complete", content: "native-goal-result", isError: false });
+  expect(await result).toMatchObject({ callId: "native-complete", content: body, isError: false });
+  expect(events.find(event => event.stage === "native_tool_inventory_queried")).toMatchObject({ goal_only: true, count: 1 });
+  const returned = events.find(event => event.stage === "native_tool_bridge_invoke_returned");
+  expect(returned).toMatchObject({ goal_only: true, goal_tool: true, is_error: false,
+    kind: "string", body_present: true, body_bytes: Buffer.byteLength(body), status: "complete",
+    operation_fingerprint: diagnosticFingerprint(nativeCall.call_id) });
+  expect(events.find(event => event.stage === "native_tool_result_received")?.operation_fingerprint)
+    .toBe(returned?.operation_fingerprint);
+  expect(JSON.stringify(events)).not.toMatch(/PRIVATE_OBJECTIVE|native-complete|update_goal|plugin_get_goal/);
+  expect(JSON.stringify(events)).not.toContain(control);
   registered.channel.markWebContinuation();
   registered.channel.complete("finished");
   const next = turns.nextCycle(registered.capability, bound);
@@ -120,6 +136,61 @@ test("Goal-only capability reuses Native tool delivery and expires with its resp
   const nextControl = turns.goalControl(next.capability)!;
   turns.retire(next.capability);
   expect(() => bridge.inventory(nextControl)).toThrow("unknown or retired");
+  } finally { stop?.(); }
+});
+
+test("bridge distinguishes empty, opaque and structured error returns without changing their values", async () => {
+  const events: Parameters<Parameters<typeof observeDiagnosticEvents>[0]>[0][] = [];
+  const stop = observeDiagnosticEvents(event => { if (event.stage.startsWith("native_tool_bridge_")) events.push(event); });
+  const turns = new ActiveTurnRegistry(), registered = turns.register(binding());
+  const bridge = new McpTurnBridge(turns);
+  try {
+    const circular: Record<string, unknown> = {}; circular.self = circular;
+    const cases = [
+      { content: "", isError: false, expected: { kind: "string", body_present: false, body_bytes: 0 } },
+      { content: "비공개 결과", isError: false, expected: { kind: "string", body_present: true, body_bytes: Buffer.byteLength("비공개 결과") } },
+      { content: { private: "PRIVATE_BODY" }, isError: true, expected: { kind: "object", body_present: true, body_size_known: true } },
+      { content: null, isError: false, expected: { kind: "null", body_present: false } },
+      { content: undefined, isError: false, expected: { kind: "undefined", body_present: false, body_size_known: false } },
+      { content: circular, isError: false, expected: { kind: "object", body_present: true, body_size_known: false } },
+    ];
+    let calls = 0;
+    for (const [index, fixture] of cases.entries()) {
+      const result: NativeToolResult = { callId: `fixture-${index}`, content: fixture.content, isError: fixture.isError };
+      registered.channel.requestTool = async () => { calls++; return result; };
+      expect(await bridge.invoke(registered.capability, { callId: result.callId, wireName: "exec_command", mode: "structured", arguments: {} })).toBe(result);
+      expect(events.at(-1)).toMatchObject({ stage: "native_tool_bridge_invoke_returned", goal_only: false, goal_tool: false,
+        is_error: fixture.isError, ...fixture.expected });
+    }
+    expect(calls).toBe(cases.length);
+    expect(events.filter(event => event.stage === "native_tool_bridge_invoke_failed")).toHaveLength(0);
+    expect(JSON.stringify(events)).not.toMatch(/PRIVATE_BODY|비공개 결과|exec_command|fixture-/);
+  } finally { stop?.(); }
+});
+
+test("diagnostic projection and sink failures preserve success and original synchronous/asynchronous errors", async () => {
+  const events: Parameters<Parameters<typeof observeDiagnosticEvents>[0]>[0][] = [];
+  const stop = observeDiagnosticEvents(event => { events.push(event); throw Error("PRIVATE_SINK"); });
+  const turns = new ActiveTurnRegistry(), registered = turns.register(binding());
+  const bridge = new McpTurnBridge(turns);
+  const invocation = { callId: "fixture-call", wireName: "exec_command", mode: "structured" as const, arguments: {} };
+  try {
+    const result = { callId: invocation.callId, get content(): unknown { throw Error("PRIVATE_PROJECTION"); }, isError: false };
+    registered.channel.requestTool = async () => result;
+    expect(await bridge.invoke(registered.capability, invocation)).toBe(result);
+    // Invalid diagnostic correlation must not prevent the original request either.
+    expect(await bridge.invoke(registered.capability, { ...invocation, callId: "" })).toBe(result);
+    expect(bridge.inventory(registered.capability)).toHaveLength(1);
+    const failure = new Error("PRIVATE_FAILURE");
+    for (const synchronous of [true, false]) {
+      registered.channel.requestTool = () => { if (synchronous) throw failure; return Promise.reject(failure); };
+      let caught: unknown;
+      try { await bridge.invoke(registered.capability, invocation); } catch (error) { caught = error; }
+      expect(caught).toBe(failure);
+    }
+    expect(events.filter(event => event.stage === "native_tool_bridge_invoke_failed")).toHaveLength(2);
+    expect(JSON.stringify(events)).not.toMatch(/PRIVATE_/);
+  } finally { stop?.(); }
 });
 
 test("turns without original Goal controls do not advertise a completion capability", () => {
