@@ -36,7 +36,7 @@ function fixture() {
     session: { slot: 2, runtimeProcessId: 10, responsesRouteFingerprint: "c".repeat(64), terminalEndpoint: "ws://127.0.0.1:1234" } };
   store.reserve(record);
   store.save({ ...record, state: "completed", answer: "result", finalEvidence: "explicit-final-phase" });
-  const native = { exists: true, archived: false, updatedAt: origin / 1000, status: "idle", turnStatus: "completed", tailId: record.turnId, queued: false, accountChanged: false, failArchive: false };
+  const native = { exists: true, cwd: root, archived: false, updatedAt: origin / 1000, status: "idle", turnStatus: "completed", tailId: record.turnId, queued: false, accountChanged: false, failArchive: false };
   const calls: Array<{ method: string; params: any }> = [];
   const rpc: CodexAppServerRpc = {
     async close() {},
@@ -54,7 +54,10 @@ function fixture() {
         if (native.failArchive) throw Error("ACK lost after archive");
         return {};
       }
-      if (method === "thread/read") return { thread: { id: record.threadId, updatedAt: native.updatedAt } };
+      if (method === "thread/read") {
+        if (!native.exists) throw Error(`thread not loaded: ${record.threadId}`);
+        return { thread: { id: record.threadId, cwd: native.cwd ?? root, updatedAt: native.updatedAt } };
+      }
       if (method === "thread/delete") { native.exists = false; return {}; }
       throw Error(`Unexpected RPC ${method}`);
     },
@@ -195,7 +198,7 @@ test("a deletion receipt rejects late result collection and observer save", () =
   } finally { f.cleanup(); }
 });
 
-test("confirmed deletion settles unresolved jobs and releases only their leases", () => {
+test("confirmed deletion settles unresolved jobs and releases only their leases", async () => {
   const f = fixture();
   try {
     const pending = { ...f.record, id: randomUUID(), threadId: f.record.threadId!, turnId: randomUUID(), state: "running" as const };
@@ -206,7 +209,8 @@ test("confirmed deletion settles unresolved jobs and releases only their leases"
     writeFileSync(join(f.root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`), JSON.stringify({ state: "deleted" }));
     expect(f.store.get(pending.id)).toBeUndefined();
     expect(f.store.records().map(job => job.id)).toEqual([separate.id]);
-    f.store.finishDeletedThreads();
+    f.native.exists = false;
+    await f.run(f.origin + 40 * DAY);
     expect(f.store.get(pending.id)).toBeUndefined();
     expect(f.store.get(separate.id)?.state).toBe("running");
     expect(f.store.capacity(2, "read", f.root).total.used).toBe(1);
@@ -214,16 +218,66 @@ test("confirmed deletion settles unresolved jobs and releases only their leases"
   } finally { f.cleanup(); }
 });
 
-test("cleanup uses the authoritative terminal receipt when a base snapshot predates thread creation", () => {
+test("cleanup uses the authoritative terminal receipt when a base snapshot predates thread creation", async () => {
   const f = fixture();
   try {
     const base = join(f.root, `${f.record.id}.json`);
     writeFileSync(base, JSON.stringify({ ...f.record, state: "creating", threadId: undefined, turnId: undefined }));
     const key = { slot: f.record.slot, accountFingerprint: f.record.owner.accountFingerprint, threadId: f.record.threadId! };
     writeFileSync(join(f.root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`), JSON.stringify({ state: "deleted" }));
-    f.store.finishDeletedThreads();
+    f.native.exists = false;
+    await f.run(f.origin + 40 * DAY);
     expect(f.store.get(f.record.id)).toBeUndefined();
     expect(existsSync(base)).toBe(false);
     expect(existsSync(`${base}.completed`)).toBe(false);
+  } finally { f.cleanup(); }
+});
+
+test("cwd-filter absence preserves relocated Native thread and its local answer", async () => {
+  const f = fixture();
+  try {
+    f.native.cwd = join(f.root, "moved");
+    const rpc = f.adapters.connect;
+    const adapters = { ...f.adapters, connect: async (endpoint: string) => {
+      const original = await rpc();
+      return { ...original, request: async (method: string, params: any, signal?: AbortSignal) => {
+        if (method === "thread/list") return { data: [], nextCursor: null };
+        return original.request(method as any, params, signal);
+      } };
+    } };
+    await settleWebDelegationRetention(adapters, { now: f.origin + 8 * DAY, signal: new AbortController().signal });
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    expect(f.native.exists).toBe(true);
+    expect(f.calls.some(c => c.method === "thread/delete")).toBe(false);
+    expect(f.store.threadRetention(f.record)?.state).toBe("excluded");
+  } finally { f.cleanup(); }
+});
+
+test("stale deleted receipt is rechecked; a living moved thread keeps terminal result", async () => {
+  const f = fixture();
+  try {
+    const key = { slot: f.record.slot, accountFingerprint: f.record.owner.accountFingerprint, threadId: f.record.threadId! };
+    writeFileSync(join(f.root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`), JSON.stringify({ state: "deleted" }));
+    f.native.cwd = join(f.root, "moved");
+    await f.run(f.origin + 40 * DAY);
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    expect(f.store.threadRetention(f.record)?.state).toBe("excluded");
+    expect(f.calls.some(c => c.method === "thread/delete")).toBe(false);
+  } finally { f.cleanup(); }
+});
+
+test("interrupted base-first cleanup discovers terminal-only ownership on restart", async () => {
+  const f = fixture();
+  try {
+    const base = join(f.root, `${f.record.id}.json`);
+    writeFileSync(base, JSON.stringify({ ...f.record, state: "creating", threadId: undefined }));
+    const key = { slot: f.record.slot, accountFingerprint: f.record.owner.accountFingerprint, threadId: f.record.threadId! };
+    writeFileSync(join(f.root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`), JSON.stringify({ state: "deleted" }));
+    rmSync(base);
+    f.native.exists = false;
+    expect(f.store.recordsForThread(key).map(job => job.id)).toEqual([f.record.id]);
+    await f.run(f.origin + 40 * DAY);
+    expect(existsSync(`${base}.completed`)).toBe(false);
+    expect(existsSync(join(f.root, `thread-${key.slot}-${key.accountFingerprint}-${key.threadId}.retention`))).toBe(false);
   } finally { f.cleanup(); }
 });

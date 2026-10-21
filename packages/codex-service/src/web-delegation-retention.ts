@@ -1,8 +1,8 @@
 import { watch, existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { isExactDeletedNativeThreadAbsent } from "./one-chat-native-destination";
 import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { sameAccountOwner, webDelegationRetentionPath, type WebDelegationAdapters, type WebDelegationRecord } from "./web-delegation";
+import { sameAccountOwner, webDelegationRetentionPath, type WebDelegationAdapters, type WebDelegationRecord, type WebDelegationThreadKey } from "./web-delegation";
 
 const DAY = 86_400_000;
 interface Retention {
@@ -39,7 +39,6 @@ function save(path: string, value: Retention): void {
 export async function settleWebDelegationRetention(adapters: WebDelegationAdapters, input: {
   now?: number; signal: AbortSignal;
 }): Promise<number | undefined> {
-  adapters.store.finishDeletedThreads();
   const now = input.now ?? Date.now();
   const groups = new Map<string, WebDelegationRecord[]>();
   for (const record of adapters.store.records()) {
@@ -48,10 +47,39 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     groups.set(key, [...(groups.get(key) ?? []), record]);
   }
   let next = Infinity;
+  const checked = new Set<string>();
+  const confirmAbsent = async (key: WebDelegationThreadKey, record: WebDelegationRecord): Promise<boolean> => {
+    const owner = await adapters.owner(key.slot);
+    if (!sameAccountOwner(record, owner)) return false;
+    const rpc = await adapters.connect(owner.session.terminalEndpoint);
+    try {
+      try {
+        const read = object(await rpc.request("thread/read", { threadId: key.threadId, includeTurns: false }, input.signal));
+        if (object(read?.thread)?.id === key.threadId) {
+          save(webDelegationRetentionPath(adapters.store.root, key), { state: "excluded" });
+        }
+        return false;
+      } catch (error) {
+        if (!isExactDeletedNativeThreadAbsent(error, key.threadId)) throw error;
+      }
+      if (!sameAccountOwner(record, await adapters.owner(key.slot))) return false;
+      adapters.store.removeDeletedThread(key);
+      return true;
+    } finally { await rpc.close(); }
+  };
+  for (const key of adapters.store.pendingDeletedThreads()) {
+    const jobs = adapters.store.recordsForThread(key);
+    const record = jobs[0];
+    if (!record) continue;
+    checked.add(`${key.slot}:${key.threadId}`);
+    try { await confirmAbsent(key, record); }
+    catch (error) { if (input.signal.aborted) throw error; emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_failed", { failure_class: diagnosticFailureClass(error) }); }
+  }
   for (const jobs of groups.values()) {
     input.signal.throwIfAborted();
     jobs.sort((a, b) => a.createdAt - b.createdAt || (a.parentJobId === b.id ? 1 : b.parentJobId === a.id ? -1 : 0));
     const record = jobs.at(-1)!;
+    if (checked.has(`${record.slot}:${record.threadId}`)) continue;
     const path = statePath(adapters, record), retained = load(path);
     if (retained?.state === "deleted" || retained?.state === "excluded") continue;
     const collected = adapters.store.collectedAt(record.id);
@@ -88,8 +116,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
         }
         const present = listed.get(record.threadId!);
         if (!present) {
-          save(path, { state: "deleted" });
-          adapters.store.removeDeletedThread({ slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! });
+          await confirmAbsent({ slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! }, record);
           continue;
         }
         const updatedAt = present.thread.updatedAt;
@@ -124,7 +151,13 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
         try {
           if (retained?.state === "archived") {
             await rpc.request("thread/delete", { threadId: record.threadId }, input.signal);
-            save(path, { state: "deleted" });
+            try {
+              await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }, input.signal);
+              save(path, { state: "excluded" });
+            } catch (error) {
+              if (!isExactDeletedNativeThreadAbsent(error, record.threadId!)) throw error;
+              save(path, { state: "deleted" });
+            }
           } else {
             await rpc.request("thread/archive", { threadId: record.threadId }, input.signal);
             const read = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }, input.signal));

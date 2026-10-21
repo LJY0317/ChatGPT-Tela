@@ -307,15 +307,9 @@ export class WebDelegationStore {
     }
     return value;
   }
-  /** Called after a confirmed Native deletion. Receipt and terminal artifacts go before base files. */
+  /** Called after exact Native absence is confirmed. */
   removeDeletedThread(key: WebDelegationThreadKey): { jobs: number; files: number } {
-    const records = this.#retained().filter(name => UUID.test(name.slice(0, -5)))
-      .map(name => {
-        const id = name.slice(0, -5), path = this.#path(id);
-        return this.#read(`${path}.completed`, id) ?? this.#read(`${path}.failed`, id) ?? this.#read(path, id);
-      }).filter((record): record is WebDelegationRecord => Boolean(record))
-      .filter(record => record.slot === key.slot
-        && record.owner.accountFingerprint === key.accountFingerprint && record.threadId === key.threadId);
+    const records = this.recordsForThread(key);
     for (const record of records) {
       const paths = [...this.#permits(record.slot), ...this.#legacyPermits(record.slot),
         ...(record.mode === "write" ? [this.#checkoutPermit(record.checkoutRoot ?? record.cwd), this.#legacyCheckoutPermit(record.cwd)] : []),
@@ -326,23 +320,36 @@ export class WebDelegationStore {
     const remove = (path: string) => {
       if (existsSync(path)) { unlinkSync(path); files++; }
     };
+    // A creating base can lack threadId; keep the terminal ownership proof
+    // until its base has been removed, including after interrupted cleanup.
+    for (const record of records) remove(this.#path(record.id));
     for (const record of records) {
       const base = this.#path(record.id);
       for (const suffix of [".completed", ".failed", ".collected"]) remove(base + suffix);
     }
-    for (const record of records) remove(this.#path(record.id));
     remove(webDelegationRetentionPath(this.root, key));
     return { jobs: records.length, files };
   }
-  /** Resume interrupted deletion before scanning managed jobs for new work. */
-  finishDeletedThreads(): void {
+  /** Recover ownership from terminal sidecars even when the base predates thread creation. */
+  recordsForThread(key: WebDelegationThreadKey): WebDelegationRecord[] {
+    const ids = new Set(readdirSync(this.root).map(name => /^([0-9a-f-]{36})\.json(?:\.(?:completed|failed))?$/.exec(name)?.[1]).filter((id): id is string => Boolean(id && UUID.test(id))));
+    return [...ids].map(id => {
+      const base = this.#path(id);
+      return this.#read(`${base}.completed`, id) ?? this.#read(`${base}.failed`, id) ?? this.#read(base, id);
+    }).filter((record): record is WebDelegationRecord => Boolean(record && record.slot === key.slot
+      && record.owner.accountFingerprint === key.accountFingerprint && record.threadId === key.threadId));
+  }
+  /** Old deleted receipts require renewed exact Native absence proof. */
+  pendingDeletedThreads(): WebDelegationThreadKey[] {
+    const pending: WebDelegationThreadKey[] = [];
     for (const name of readdirSync(this.root)) {
       const match = /^thread-([1-9][0-9]?)-([a-f0-9]{64})-([0-9a-f-]{36})\.retention$/i.exec(name);
       if (!match || !UUID.test(match[3]!)) continue;
       const key = { slot: Number(match[1]), accountFingerprint: match[2]!, threadId: match[3]! };
       const receipt = this.threadRetention({ threadId: key.threadId, slot: key.slot, owner: { accountFingerprint: key.accountFingerprint } } as WebDelegationRecord);
-      if (receipt?.state === "deleted") this.removeDeletedThread(key);
+      if (receipt?.state === "deleted") pending.push(key);
     }
+    return pending;
   }
   #deleted(record: WebDelegationRecord): boolean {
     return Boolean(record.threadId && this.threadRetention(record)?.state === "deleted");
