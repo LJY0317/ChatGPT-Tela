@@ -48,6 +48,11 @@ interface RawTurn {
   readonly userPayloadProbe?: Readonly<Record<string, number | boolean>>;
   readonly userPayloadStructure?: { readonly rootCount: number; readonly nestedRoots?: boolean; readonly equivalentRoots?: boolean; readonly outerLength?: number; readonly innerLength?: number };
   readonly bodyProof?: { readonly version: 1; readonly value?: string; readonly reason?: string };
+  /** DOM-only structure with no attributes or author text; hashed before projection. */
+  readonly bodyStructure?: { readonly source: "markdown_message" | "assistant_markdown" | "role_fallback";
+    readonly rootPath?: string; readonly blockShape: string; readonly rootCandidateCount: number;
+    readonly visibleRootCount: number; readonly selectedRootIndex: number; readonly selectedRootVisible: boolean;
+    readonly blockCount: number; readonly visibleBlockCount: number };
   readonly plainBodyText?: string;
   readonly phase?: ChatGptAssistantPhase;
   readonly text?: string;
@@ -832,9 +837,9 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
       }
     }
     const progressRoot = group.querySelector('[data-streaming-response-status]') || ownedAgentShell;
-    const answerBody = [...group.querySelectorAll('[data-markdown-text-style="assistant-message"]'),
-      ...group.querySelectorAll('[data-message-author-role="assistant"] .markdown')]
-      .find(body => !progressRoot?.contains(body));
+    const answerCandidates = [...group.querySelectorAll('[data-markdown-text-style="assistant-message"]'),
+      ...group.querySelectorAll('[data-message-author-role="assistant"] .markdown')];
+    const answerBody = answerCandidates.find(body => !progressRoot?.contains(body));
     const progressAnchors = progressRoot ? (progressRoot === ownedAgentShell
       ? [progressRoot] : [...progressRoot.querySelectorAll('[data-item-anchor]')]) : [];
     // A display:contents wrapper has no box even when its owned children render.
@@ -947,6 +952,35 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
       const complete = !!assistantBody && [...group.querySelectorAll('button[data-testid="copy-turn-action-button"], .turn-action-controls button')]
         .some(visible);
       const answer = answerBody || (complete ? assistantBody : undefined);
+      let bodyStructure;
+      try {
+        // Capture *only* selector/path and block shapes. No text or DOM attributes
+        // leave this diagnostic boundary, including for presentation-hidden blocks.
+        if (answer instanceof HTMLElement) {
+          const selectedRootIndex = answerCandidates.indexOf(answer);
+          const source = selectedRootIndex < 0 ? 'role_fallback'
+            : answer.getAttribute('data-markdown-text-style') === 'assistant-message'
+              ? 'markdown_message' : 'assistant_markdown';
+          const path = [];
+          let node = answer;
+          while (node && node !== group && path.length < 24) {
+            const parent = node.parentElement;
+            if (!(parent instanceof HTMLElement)) break;
+            path.push(node.tagName.toLowerCase() + ':' + [...parent.children].indexOf(node));
+            node = parent;
+          }
+          const blocks = [...answer.querySelectorAll('p,ul,ol,li,pre,table,blockquote,h1,h2,h3,h4,h5,h6')];
+          bodyStructure = {
+            source, rootCandidateCount: answerCandidates.length,
+            visibleRootCount: answerCandidates.filter(progressVisible).length,
+            selectedRootIndex, selectedRootVisible: progressVisible(answer),
+            ...(node === group ? { rootPath: path.reverse().join('/') } : {}),
+            blockCount: blocks.length, visibleBlockCount: blocks.filter(progressVisible).length,
+            blockShape: blocks.slice(0, 256).map(block =>
+              block.tagName.toLowerCase() + ':' + (progressVisible(block) ? 'v' : 'h')).join(','),
+          };
+        }
+      } catch { /* Diagnostics cannot invalidate an answer observation. */ }
       turns.push({
         key: "assistant:" + rawKey,
         role: "assistant",
@@ -963,6 +997,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         // Reuse the delivered answer serializer. A separate DOM-attribute codec made
         // decorative icon hydration invalidate unchanged answers.
         bodyProof: answerBody ? { version: 1, value: answerSemanticBody(answerBody) } : undefined,
+        ...(bodyStructure ? { bodyStructure } : {}),
         failureDetail: failure ? text(failure) : undefined,
         publicProgress,
         progressProbe: {
@@ -2009,6 +2044,34 @@ function composer(raw: RawComposer): ChatGptComposerObservation {
 
 function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
   const anchor = raw.lineageAnchor ? fingerprint(raw.lineageAnchor) : undefined;
+  const structure = (() => {
+    try {
+      const witness = raw.bodyStructure;
+      if (!witness || !['markdown_message', 'assistant_markdown', 'role_fallback'].includes(witness.source)) return;
+      if (![witness.rootCandidateCount, witness.visibleRootCount, witness.selectedRootIndex,
+        witness.blockCount, witness.visibleBlockCount].every(Number.isSafeInteger)) return;
+      let semanticPartCount: number | undefined;
+      if (raw.bodyProof?.value !== undefined && raw.bodyProof.value.length <= 131072) {
+        try {
+          const parts: unknown = JSON.parse(raw.bodyProof.value);
+          if (Array.isArray(parts)) semanticPartCount = parts.length;
+        } catch { /* A malformed diagnostic part count never changes body proof. */ }
+      }
+      return {
+        source: witness.source, rootCandidateCount: Math.min(4096, Math.max(0, witness.rootCandidateCount)),
+        visibleRootCount: Math.min(4096, Math.max(0, witness.visibleRootCount)),
+        selectedRootIndex: Math.min(4096, Math.max(-1, witness.selectedRootIndex)),
+        selectedRootVisible: witness.selectedRootVisible === true,
+        blockCount: Math.min(4096, Math.max(0, witness.blockCount)),
+        visibleBlockCount: Math.min(4096, Math.max(0, witness.visibleBlockCount)),
+        ...(typeof witness.rootPath === 'string' && witness.rootPath.length <= 512
+          ? { rootFingerprint: fingerprint(witness.rootPath) } : {}),
+        ...(typeof witness.blockShape === 'string' && witness.blockShape.length <= 4096
+          ? { blockFingerprint: fingerprint(witness.blockShape) } : {}),
+        ...(semanticPartCount !== undefined ? { semanticPartCount } : {}),
+      };
+    } catch { return; }
+  })();
   return Object.freeze({
     key: anchor ? `${raw.role}:anchor:${anchor}` : raw.key,
     role: raw.role,
@@ -2022,6 +2085,7 @@ function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
     ...(raw.bodyProof ? { bodyProof: raw.bodyProof.value !== undefined
       ? { version: raw.bodyProof.version, digest: fingerprint(raw.bodyProof.value) }
       : { version: raw.bodyProof.version, reason: raw.bodyProof.reason ?? "body_unavailable" } } : {}),
+    ...(structure ? { bodyStructure: structure } : {}),
     ...(privateCapture && raw.bodyProof?.value !== undefined ? { privateBodyEvidence: {
       chunks: raw.bodyProof.value.slice(0, 65536).match(/[\s\S]{1,8192}/g) ?? [],
       complete: raw.bodyProof.value.length <= 65536,
@@ -2035,7 +2099,8 @@ function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
     ...(raw.failureDetail ? { failureDetail: raw.failureDetail } : {}),
     ...(raw.publicProgress?.length ? { publicProgress: Object.freeze(raw.publicProgress.slice(0, 64)) } : {}),
     ...(raw.progressProbe ? { progressProbe: { titleCount: raw.progressProbe.titleCount,
-      descriptionCount: raw.progressProbe.descriptionCount, unmappedVisibleProsePresent: raw.progressProbe.unmappedVisibleProsePresent === true } } : {}),
+      descriptionCount: raw.progressProbe.descriptionCount, unmappedVisibleProsePresent: raw.progressProbe.unmappedVisibleProsePresent === true,
+      ...(typeof raw.progressProbe.failureStopVisible === "boolean" ? { stopVisible: raw.progressProbe.failureStopVisible } : {}) } } : {}),
   });
 }
 
@@ -2195,7 +2260,10 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
         sendControls: Object.freeze(raw.sendControls.map((control): ChatGptSendObservation => Object.freeze({ ...control }))),
         turns: Object.freeze(raw.turns.map(item => turn(item, privateCapture))),
       };
-      return Object.freeze({ revision: semanticRevision(snapshot), ...snapshot });
+      // Diagnostic-only DOM structure must not create a product observation revision.
+      const revision = semanticRevision({ ...snapshot,
+        turns: snapshot.turns.map(({ bodyStructure: _diagnostic, ...item }) => item) });
+      return Object.freeze({ revision, ...snapshot });
     } catch (error) {
       emitDiagnosticEvent("chatgpt_tela_work", "web_dom_observation_failed", {
         phase,

@@ -510,7 +510,11 @@ describe("ChatGPT semantic provider", () => {
         const committed = readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line))
           .find(row => row.stage === "web_retained_answer_committed");
         expect(committed).toMatchObject({ state: mode === "committed-body-unavailable" ? "unavailable" : "verified",
-          semantic_answer_available: mode !== "committed-body-unavailable" });
+          semantic_answer_available: mode !== "committed-body-unavailable",
+          assistant_phase: "complete", stop_visible: false, approval_cards: 0,
+          handoff_state: "direct", answer_characters: "Exact prior answer".length });
+        expect(committed.assistant_key_fingerprint).toBeDefined();
+        expect(committed.parent_key_fingerprint).toBeDefined();
         if (mode === "committed-body-unavailable") expect(committed.reason_class).toBe("unsupported_node");
         driver.current = { ...driver.current, revision: "next-ready",
           composers: driver.current.composers.map(({textFingerprint: _unused,...composer}) => ({...composer,textLength:0})),
@@ -561,6 +565,8 @@ describe("ChatGPT semantic provider", () => {
             const rejected = log.trim().split("\n").map(line => JSON.parse(line)).find(row => row.stage === "web_retained_anchor_rejected");
             expect(rejected).toMatchObject({ committed_semantic_available: mode !== "committed-body-unavailable",
               observed_semantic_available: false, presentation_matches: true,
+              committed_handoff_state: "direct", committed_approval_cards: 0,
+              observed_approval_cards: 0, assistant_phase: "streaming",
               phase: mode === "untrusted-body-reason" ? "unclassified" : "unsupported_node" });
             expect(log).not.toMatch(/SYNTHETIC_PRIVATE_BROWSER_TEXT|Exact prior answer/);
           }

@@ -520,6 +520,26 @@ function committedAnswerFingerprint(assistant: ChatGptTurnObservation): string |
     assistant.bodyProof.version, assistant.bodyProof.digest]));
 }
 
+function retainedBoundaryFields(assistant: ChatGptTurnObservation | undefined) {
+  const structure = assistant?.bodyStructure;
+  return {
+    ...(assistant?.key ? { assistant_key_fingerprint: diagnosticFingerprint(assistant.key) } : {}),
+    ...(assistant?.parentUserTurnKey ? { parent_key_fingerprint: diagnosticFingerprint(assistant.parentUserTurnKey) } : {}),
+    assistant_phase: assistant?.phase ?? "absent",
+    stop_visible: assistant?.progressProbe?.stopVisible ?? false,
+    semantic_digest_fingerprint: assistant?.bodyProof?.digest ?? "unavailable",
+    ...(structure ? {
+      body_source: structure.source, body_root_candidates: structure.rootCandidateCount,
+      body_visible_roots: structure.visibleRootCount, body_selected_index: structure.selectedRootIndex,
+      body_selected_visible: structure.selectedRootVisible, body_block_count: structure.blockCount,
+      body_visible_blocks: structure.visibleBlockCount,
+      ...(structure.rootFingerprint ? { body_root_fingerprint: structure.rootFingerprint } : {}),
+      ...(structure.blockFingerprint ? { body_blocks_fingerprint: structure.blockFingerprint } : {}),
+      ...(structure.semanticPartCount !== undefined ? { semantic_part_count: structure.semanticPartCount } : {}),
+    } : {}),
+  };
+}
+
 /** Pending decisions outrank presentation completion; failure always remains terminal. */
 function assistantLifecyclePhase(snapshot: ChatGptSurfaceSnapshot, assistant: ChatGptTurnObservation | undefined): WebTurnState["phase"] {
   if (assistant?.phase === "failed") return "failed";
@@ -594,21 +614,26 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     readonly retention: RetainedAnswer;
     readonly presentationFingerprint: string;
     readonly answerCharacters: number;
+    readonly boundary: ReturnType<typeof retainedBoundaryFields> & { readonly approval_cards: number; readonly handoff_state: string };
     readonly privateBodyEvidence?: ChatGptTurnObservation["privateBodyEvidence"];
   }>();
 
-  #commitAnswer(surface: BrowserSurfaceLease, userTurnKey: string, assistant: ChatGptTurnObservation): void {
+  #commitAnswer(surface: BrowserSurfaceLease, userTurnKey: string, assistant: ChatGptTurnObservation,
+    snapshot: ChatGptSurfaceSnapshot, handoffState: "direct" | "post_tool_handoff"): void {
     const digest = committedAnswerFingerprint(assistant);
     const retention: RetainedAnswer = digest === undefined
       ? { state: "unavailable", reason: answerBodyReason(assistant) }
       : { state: "verified", fingerprint: digest };
-    this.#completedBySurface.set(surface, { userTurnKey, assistantKey: assistant.key, retention,
+    const boundary = { ...retainedBoundaryFields(assistant), approval_cards: snapshot.approval?.cardCount ?? 0,
+      handoff_state: handoffState };
+    this.#completedBySurface.set(surface, { userTurnKey, assistantKey: assistant.key, retention, boundary,
       presentationFingerprint: fingerprint(assistant.text ?? ""), answerCharacters: assistant.text?.length ?? 0,
       ...(assistant.privateBodyEvidence ? { privateBodyEvidence: assistant.privateBodyEvidence } : {}),
     });
     // Final delivery and retained-context proof are distinct. Record the latter at
     // completion, not for the first time when the next request tries to reuse it.
     emitDiagnosticEvent("chatgpt_tela_work", "web_retained_answer_committed", {
+      ...boundary, answer_characters: assistant.text?.length ?? 0,
       state: retention.state, semantic_answer_available: retention.state === "verified",
       ...(retention.state === "unavailable" ? { reason_class: retention.reason } : {}),
     });
@@ -634,6 +659,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       && committedAnswerFingerprint(assistant) === anchor.retention.fingerprint;
     if (!anchor || !assistant || !sameKey || !sameAnswer) {
       emitDiagnosticEvent("chatgpt_tela_work", "web_retained_anchor_rejected", {
+        ...retainedBoundaryFields(assistant),
+        ...(anchor ? { committed_boundary_fingerprint: fingerprint(JSON.stringify(anchor.boundary)),
+          committed_handoff_state: anchor.boundary.handoff_state,
+          committed_approval_cards: anchor.boundary.approval_cards } : {}),
+        observed_approval_cards: snapshot.approval?.cardCount ?? 0,
         reason_class: reason,
         phase: bodyReason,
         anchor_present: !!anchor,
@@ -1876,7 +1906,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           };
         }
         if (assistant.phase === "complete") {
-          this.#commitAnswer(surface, tracked.userTurnKey, assistant);
+          this.#commitAnswer(surface, tracked.userTurnKey, assistant, snapshot, "post_tool_handoff");
           tracked.pendingCompletedAnswer = completedAnswerBody(assistant);
         }
         return {
@@ -1887,7 +1917,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       if (assistant.phase === "complete") {
         signal?.throwIfAborted();
-        this.#commitAnswer(surface, tracked.userTurnKey, assistant);
+        this.#commitAnswer(surface, tracked.userTurnKey, assistant, snapshot, "direct");
         this.#retireTurn(surface, tracked);
         return {
           state: "proven",

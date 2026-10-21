@@ -48,6 +48,19 @@ export interface ChatGptTurnObservation {
   readonly bodyProof?: { readonly version: 1; readonly digest?: string; readonly reason?: string };
   /** Opt-in bounded diagnostic witness; never authority or public progress. */
   readonly privateBodyEvidence?: { readonly chunks: readonly string[]; readonly complete: boolean };
+  /** Content-free DOM extraction witness; diagnostic only, never turn or answer authority. */
+  readonly bodyStructure?: {
+    readonly source: "markdown_message" | "assistant_markdown" | "role_fallback";
+    readonly rootFingerprint?: string;
+    readonly blockFingerprint?: string;
+    readonly rootCandidateCount: number;
+    readonly visibleRootCount: number;
+    readonly selectedRootIndex: number;
+    readonly selectedRootVisible: boolean;
+    readonly blockCount: number;
+    readonly visibleBlockCount: number;
+    readonly semanticPartCount?: number;
+  };
   /** Trimmed literal owned-body text before Markdown conversion; protocol equality only. */
   readonly plainBodyFingerprint?: string;
   /** Literal DOM text without layout-derived line breaks; machine-readable consumers require it. */
@@ -59,7 +72,7 @@ export interface ChatGptTurnObservation {
   /** Publicly rendered progress only; hidden/expanded internal reasoning is never read. */
   readonly publicProgress?: readonly string[];
   /** Content-free presentation diagnosis; never turn identity or completion authority. */
-  readonly progressProbe?: { readonly titleCount: number; readonly descriptionCount: number; readonly unmappedVisibleProsePresent?: boolean };
+  readonly progressProbe?: { readonly titleCount: number; readonly descriptionCount: number; readonly unmappedVisibleProsePresent?: boolean; readonly stopVisible?: boolean };
 }
 
 export interface ChatGptSurfaceSnapshot {

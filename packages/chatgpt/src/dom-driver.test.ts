@@ -534,6 +534,31 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(observation.contentFingerprint).toBeUndefined();
   });
 
+  test("answer structure diagnostics identify selected DOM roots without author text", async () => {
+    const first = new FixtureElement({ 'data-markdown-text-style': 'assistant-message' });
+    first.textContent = 'Status prose';
+    const final = new FixtureElement({ 'data-markdown-text-style': 'assistant-message' });
+    final.textContent = 'Sensitive fixture answer';
+    const block = new FixtureElement({ 'data-fixture-tag': 'P' });
+    final.selectors['p'] = [block];
+    const status = new FixtureElement();
+    status.contains = node => node === first || node === status;
+    const group = new FixtureElement({ 'data-turn-key': 'structure' }, {
+      '[data-markdown-text-style="assistant-message"]': [first, final],
+      '[data-streaming-response-status]': [status],
+      'button[data-testid="copy-turn-action-button"]': [new FixtureElement()],
+    });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
+    const before = (await driver.observe()).turns[0]!;
+    expect(before.bodyStructure).toMatchObject({ source: 'markdown_message', rootCandidateCount: 2,
+      selectedRootIndex: 1, selectedRootVisible: true, blockCount: 1, visibleBlockCount: 1 });
+    expect(JSON.stringify(before.bodyStructure)).not.toContain('Sensitive fixture answer');
+    block.attributes['data-fixture-display'] = 'none';
+    const after = (await driver.observe()).turns[0]!;
+    expect(after.bodyStructure?.blockFingerprint).not.toBe(before.bodyStructure?.blockFingerprint);
+    expect(after.bodyStructure?.visibleBlockCount).toBe(0);
+  });
+
   test("machine JSON uses literal body text instead of layout line breaks", async () => {
     const wire = JSON.stringify({ type: "tela_context_checkpoint_v1", summary: "one two" });
     const body = new FixtureElement();
