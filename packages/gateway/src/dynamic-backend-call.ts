@@ -1,4 +1,4 @@
-import { diagnosticDurationMs, diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticDurationMs, diagnosticFailureFields, diagnosticSerializedBytes, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import type { BackendServiceId } from "@chatgpt-tela/service-protocol";
 
 const DISPLAY_NAME: Readonly<Record<BackendServiceId, string>> = Object.freeze({
@@ -36,9 +36,12 @@ export async function dynamicBackendCall<TClient, TResult>(input: {
   emitDiagnosticEvent("chatgpt_tela_gateway", "backend_call_start", { service: input.service });
   try {
     const result = await input.operation(client);
+    const resultBytes = diagnosticSerializedBytes(result);
     emitDiagnosticEvent("chatgpt_tela_gateway", "backend_call_complete", {
       service: input.service,
       duration_ms: diagnosticDurationMs(startedAt),
+      result_kind: result === null ? "null" : Array.isArray(result) ? "array" : typeof result,
+      ...(resultBytes === undefined ? {} : { result_bytes: resultBytes }),
     });
     return result;
   } catch (error) {

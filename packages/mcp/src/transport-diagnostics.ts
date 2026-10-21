@@ -1,4 +1,4 @@
-import { diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, diagnosticSerializedBytes, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   CHATGPT_TELA_CHAT_CAPABILITY_CALL, CHATGPT_TELA_CHAT_CAPABILITY_INVENTORY,
   CHATGPT_TELA_CODEX_TOOL_CALL, CHATGPT_TELA_CODEX_TOOL_INVENTORY,
@@ -33,6 +33,18 @@ export function observeMcpEnvelope(value: unknown, connection: string, direction
       fields.delivery = "transport_send_returned";
       fields.error_result = row.error !== undefined || row.result?.isError === true;
       if (Number.isSafeInteger(row.error?.code)) fields.error_code = row.error.code;
+      const content = row.result?.content;
+      if (Array.isArray(content)) {
+        fields.content_items = content.length;
+        fields.content_kind = content.length === 0 ? "empty"
+          : content.every(item => item?.type === "text") ? "text"
+          : content.every(item => item?.type === "image") ? "image"
+          : content.every(item => item?.type === "text" || item?.type === "image") ? "mixed" : "other";
+        const contentBytes = diagnosticSerializedBytes(content);
+        const resultBytes = diagnosticSerializedBytes(row.result);
+        if (contentBytes !== undefined) fields.content_bytes = contentBytes;
+        if (resultBytes !== undefined) fields.result_bytes = resultBytes;
+      }
       if (Array.isArray(row.result?.tools)) {
         fields.phase = "tools_list";
         fields.count = row.result.tools.length;

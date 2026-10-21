@@ -27,6 +27,9 @@ function jsonContent(result: Awaited<ReturnType<Client["callTool"]>>): unknown {
 describe("Web Chat independent tool path acceptance", () => {
   test("public MCP reaches Chat workspace effects and images without invoking Native, including after a Chat outage", async () => {
     const base = mkdtempSync(join(tmpdir(), "tela-web-chat-acceptance-"));
+    const previousDiagnostics = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    const diagnosticFile = join(base, "events.jsonl");
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = diagnosticFile;
     const root = join(base, "project");
     mkdirSync(root);
     writeFileSync(join(root, "README.md"), "before\n");
@@ -84,6 +87,17 @@ describe("Web Chat independent tool path acceptance", () => {
       expect((jsonContent(await call("read", {
         workspace_id: workspace.id, path: "notes.txt",
       })) as { content: string }).content).toContain("created-through-chat");
+      const rows = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const returned = rows.find(row => row.stage === "backend_call_complete" && row.result_kind === "object");
+      expect(returned).toMatchObject({ service: "chat", result_kind: "object", result_bytes: expect.any(Number),
+        rpc_fingerprint: expect.any(String), request_fingerprint: expect.any(String) });
+      expect(rows.find(row => row.stage === "http_response_finished" && row.parent_fingerprint === returned.request_fingerprint))
+        .toMatchObject({ status: 200 });
+      const emitted = rows.find(row => row.stage === "mcp_rpc_emitted" && row.rpc_fingerprint === returned.rpc_fingerprint);
+      expect(emitted).toMatchObject({ delivery: "transport_send_returned", content_kind: "text",
+        content_items: 1, content_bytes: expect.any(Number), result_bytes: expect.any(Number), error_result: false });
+      expect(rows.find(row => row.stage === "tool_settled" && row.rpc_fingerprint === returned.rpc_fingerprint))
+        .toMatchObject({ error_result: false });
 
       const operationId = randomUUID();
       const command = process.platform === "win32"
@@ -117,6 +131,9 @@ describe("Web Chat independent tool path acceptance", () => {
       chatAvailable = false;
       const unavailable = await call("read", { workspace_id: workspace.id, path: "notes.txt" });
       expect(unavailable.isError).toBe(true);
+      const errorRows = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(errorRows.some(row => row.stage === "mcp_rpc_emitted" && row.error_result === true
+        && row.content_kind === "text" && row.delivery === "transport_send_returned")).toBe(true);
       const unavailableInventory = await client.callTool({
         name: CHATGPT_TELA_CHAT_CAPABILITY_INVENTORY, arguments: { query: "" },
       });
@@ -157,6 +174,8 @@ describe("Web Chat independent tool path acceptance", () => {
       await client.close().catch(() => {});
       await mcp.stop();
       await chat.close();
+      if (previousDiagnostics === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previousDiagnostics;
       rmSync(base, { recursive: true, force: true });
     }
   });
