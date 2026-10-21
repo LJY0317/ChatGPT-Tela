@@ -21,6 +21,8 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
   let observedOwners = 0;
   let attached = false;
   let currentTitle: string | null = null;
+  let modeModel = "native-fixture";
+  const executionModels: string[] = [];
   const rpc: CodexAppServerRpc = {
     subscribe(callback, onDisconnected) { notify = callback; disconnected = onDisconnected; return () => {}; },
     async close() { if (options.closeFails) throw Error("connection already closed"); },
@@ -36,6 +38,10 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
         return {};
       }
       if (method === "turn/start") {
+        const request = params as { collaborationMode?: { settings: { model: string } }; model?: string };
+        // Native applies the retained collaboration preset before top-level model overrides.
+        modeModel = request.collaborationMode?.settings.model ?? modeModel;
+        executionModels.push(modeModel);
         if (calls.filter(call => call.method === "turn/start").length > 1) currentTurnId = randomUUID();
         if (options.uncertain) throw Error("lost acknowledgement");
         if (options.publicProgress) {
@@ -85,7 +91,8 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
       };
     },
   };
-  return { root, store, calls, changes, id,
+  return { root, store, calls, changes, id, executionModels,
+    setModeModel: (model: string) => { modeModel = model; },
     inspect: (jobId: string = id) => inspectWebDelegationResult(adapters, jobId),
     collect: (jobId: string = id) => collectWebDelegationResult(adapters, jobId),
     setTitle: (name: string | null) => { currentTitle = name; },
@@ -99,12 +106,25 @@ test("new read-only durable Web job buffers ACK race, returns exact final and ne
     expect(result).toMatchObject({ state: "completed", answer: "verified design",
       toolItems: 1, toolResultItems: 1, toolResultCoverage: "live-events" });
     expect(f.calls.find(call => call.method === "thread/start")?.params).toMatchObject({ ephemeral: false, historyMode: "paginated", sandbox: "read-only", approvalPolicy: "never" });
-    expect(f.calls.find(call => call.method === "turn/start")?.params).toMatchObject({ effort: "xhigh", sandboxPolicy: { type: "readOnly" }, approvalPolicy: "never" });
+    expect(f.calls.find(call => call.method === "turn/start")?.params).toMatchObject({ collaborationMode: { mode: "default", settings: { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", reasoning_effort: "xhigh", developer_instructions: null } }, sandboxPolicy: { type: "readOnly" }, approvalPolicy: "never" });
     expect(f.calls.map(call => call.method)).toEqual(["model/list", "thread/start", "turn/start"]);
     await expect(f.run()).rejects.toThrow();
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
     expect(new WebDelegationStore(f.root).get(f.id)?.answer).toBe("verified design");
     expect(JSON.stringify(new WebDelegationStore(f.root).get(f.id))).not.toContain("fixture-result-not-in-journal");
+  } finally { f.cleanup(); }
+});
+test("new and resumed delegation override a retained Native collaboration model", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.run();
+    f.setModeModel("native-fixture");
+    await f.continue(first.id);
+    expect(f.executionModels).toEqual(Array(2).fill(first.selection!.model));
+    for (const call of f.calls.filter(call => call.method === "turn/start")) {
+      expect(call.params).not.toHaveProperty("model");
+      expect(call.params).not.toHaveProperty("effort");
+    }
   } finally { f.cleanup(); }
 });
 test("first collection names once and preserves later manual removal", async () => {

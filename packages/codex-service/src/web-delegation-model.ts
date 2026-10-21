@@ -45,3 +45,10 @@ export function selectDelegationWebModel(catalog: unknown): DelegationWebModel {
   if (!effort) throw Error("Latest Web model does not offer Extra high or High");
   return Object.freeze({ model: row.model as string, displayName: row.displayName as string, effort });
 }
+
+/** Native collaboration settings override the top-level model/effort on resumed threads. */
+export function webDelegationTurnSettings(selection: DelegationWebModel) {
+  return { collaborationMode: { mode: "default", settings: {
+    model: selection.model, reasoning_effort: selection.effort, developer_instructions: null,
+  } } } as const;
+}

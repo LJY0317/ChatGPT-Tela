@@ -42,6 +42,11 @@ renames. Naming failures do not block the answer and are not automatically retri
 The Native engine creates
 a new durable, paginated thread and supplies its own tool/sandbox authority; the existing Web
 provider performs inference. This is not an independent Tela Chat worker or an API-key fallback.
+Turn submission sets the selected Web model and effort in Native `collaborationMode.settings`,
+which takes precedence over top-level overrides and any retained Native preset. A Web delegation
+does not fall back to Native inference. Before activating a Native Goal on an idle thread,
+apply these settings through `thread/settings/update` and read them back with `thread/resume`.
+Goal activation starts execution itself; do not also submit a competing `turn/start`.
 
 ## Source CLI
 

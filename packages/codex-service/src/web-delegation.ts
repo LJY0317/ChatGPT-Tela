@@ -6,7 +6,7 @@ import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import type { CodexWebDelegationCapacityContract, WebDelegationBlockCode, WebDelegationMode } from "@chatgpt-tela/service-protocol";
 import type { LocalProfileBinding } from "./cross-profile-thread-relay";
 import type { TrustedNativeProfileSession } from "./cross-profile-account-proof";
-import { selectDelegationWebModel, type DelegationWebModel } from "./web-delegation-model";
+import { selectDelegationWebModel, webDelegationTurnSettings, type DelegationWebModel } from "./web-delegation-model";
 import { indexedWebDelegationProgress, WebDelegationProgressProjection, type WebDelegationProgress } from "./web-delegation-progress";
 import { diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 
@@ -829,7 +829,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
         : { type: "readOnly" };
       turnSubmissionAttempted = true;
       const response = object(await rpc.request("turn/start", {
-        threadId: record.threadId, model: selection.model, effort: selection.effort,
+        threadId: record.threadId, ...webDelegationTurnSettings(selection),
         input: [{ type: "text", text: input.prompt, textElements: [] }],
         sandboxPolicy, approvalPolicy: "never",
       }, input.signal));
