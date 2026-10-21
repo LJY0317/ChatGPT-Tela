@@ -23,10 +23,11 @@ export function ownedServiceShutdown(installId: string, paths: ProductPaths) {
         descriptorPath: join(paths.serviceRuntime(service), "descriptor.json") });
     },
     async prepare(service: TelaServiceId): Promise<void> {
-      const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json") });
+      const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json"),
+        shutdownReadiness: service === "chat" });
       if (!current || current.status.state !== "ready") throw new Error(`${service} runtime is not ready for maintenance`);
-      // The actual owner-authenticated shutdown is the sole activity-admission
-      // boundary. Rechecking it here would race with new work and duplicate RPCs.
+      if (current.status.shutdownReadiness === "blocked") throw new PackagedServiceShutdownNotStartedError(service);
+      // The owner repeats admission on actual shutdown; work can begin after preflight.
     },
   });
 }

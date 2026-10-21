@@ -102,6 +102,7 @@ export class LocalServiceSupervisor {
     readonly service: S;
     readonly descriptorPath: string;
     readonly requestTimeoutMs?: number;
+    readonly shutdownReadiness?: boolean;
   }): Promise<RunningService<S> | undefined> {
     const startedAt = Date.now();
     const descriptor = readServiceRuntimeDescriptor(input.descriptorPath);
@@ -118,7 +119,7 @@ export class LocalServiceSupervisor {
     const exact = descriptorForService(descriptor, input.service);
     const deadline = deadlineSignal(input.requestTimeoutMs ?? 1_500);
     try {
-      const status = await new LocalServiceClient(exact).status(deadline.signal);
+      const status = await new LocalServiceClient(exact).status(deadline.signal, { shutdownReadiness: input.shutdownReadiness === true });
       const observation = `${exact.instanceId}:${status.state}`;
       if (this.#observedStatus.get(input.service) !== observation) {
         emitDiagnosticEvent("chatgpt_tela_service", "status_ready", {

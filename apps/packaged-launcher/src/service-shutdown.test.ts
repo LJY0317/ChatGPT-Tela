@@ -23,10 +23,15 @@ test("real Chat admission reports a blocker without closing and translates only 
     });
     const shutdown = ownedServiceShutdown("fixture", paths);
     service.status(); expect(scans).toBe(0);
-    await shutdown.prepare("chat");
-    expect(scans).toBe(0);
-    await expect(shutdown("chat")).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
+    await expect(shutdown.prepare("chat")).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
     expect(scans).toBe(1);
+    expect(service.status().state).toBe("ready");
+    blocked = false;
+    await shutdown.prepare("chat");
+    expect(scans).toBe(2);
+    blocked = true;
+    await expect(shutdown("chat")).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
+    expect(scans).toBe(3);
     expect(service.status().state).toBe("ready");
     blocked = false; await shutdown.prepare("chat");
     blocked = true; // A new operation won admission after preflight.
