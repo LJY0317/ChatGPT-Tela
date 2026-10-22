@@ -435,6 +435,10 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
             new Error("Native turn terminated"));
         }
       }, () => terminate("observer_disconnected", new Error("Native lifecycle observation disconnected")));
+      // A subscribed Native turn is observable; consumer-app sidebar selection is outside this contract.
+      withDiagnosticContext(origin, () => emitDiagnosticEvent("chatgpt_tela_codex", "native_watch_subscribed", {
+        delivery: "native_notification", ui_observed: false,
+      }));
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) abort();
       // Do not return an open but already-cancelled observer. The catch path

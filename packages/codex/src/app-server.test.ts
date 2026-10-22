@@ -1061,6 +1061,7 @@ describe("Native turn termination observation", () => {
       f.emit("thread-1", "turn-1", "completed");
       await watch.close();
       const items = rows.filter(row => row.stage === "native_public_item_observed");
+      expect(rows.some(row => row.stage === "native_watch_subscribed" && row.ui_observed === false)).toBe(true);
       expect(items).toHaveLength(2);
       expect(items[0]).toMatchObject({ kind: "reasoning", summary_count: 2, progress_characters: 17, ui_observed: false });
       expect(items[1]).toMatchObject({ kind: "agent_message", phase: "commentary" });
