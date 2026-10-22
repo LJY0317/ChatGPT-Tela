@@ -15,6 +15,7 @@ const FORBIDDEN = /(prompt|path|url|uri|secret|email|content|command|output|argu
 const FINGERPRINT = /^[a-f0-9]{24}$/;
 const SAFE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const SAFE_PROOF_STAGES = new Set(["account", "model-discovery", "connector", "readiness"]);
+const RETAINED_KINDS = new Set(["system", "developer", "user", "assistant", "tool-call", "tool-result", "steering", "end"]);
 /** Closed, payload-free substage vocabulary for a failed Native-to-Web context plan. */
 export const WEB_CONTEXT_PLANNER_STAGES = [
   "request_parse", "model_route", "retained_context", "native_continuity",
@@ -38,6 +39,10 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
     if (["ts", "event", "stage"].includes(key) || !SAFE_NAME.test(key) || FORBIDDEN.test(key)) continue;
     if (key === "estimate_kind") {
       if (field === "conservative_upper_bound") safe[key] = field;
+      continue;
+    }
+    if (key === "retained_stop_kind" || key === "retained_last_kind" || key === "retained_active_kind") {
+      if (typeof field === "string" && RETAINED_KINDS.has(field)) safe[key] = field;
       continue;
     }
     if (key === "proof_stage") {

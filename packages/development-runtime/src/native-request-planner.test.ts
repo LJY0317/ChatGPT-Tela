@@ -1984,3 +1984,22 @@ test('retention decisions explain answer mismatch without changing reconstructio
   next.settle?.({status:'failed'});
  }finally{stop?.();}
 });
+
+test('retained boundary denial reports bounded revision order without source prose', async () => {
+ const observed: any[] = [];
+ const stop = observeDiagnosticEvents(row => { if (row.stage === 'web_retained_context_decision') observed.push(row); });
+ try {
+  const planner = createNativeRequestDevelopmentWebTurnPlanner();
+  const input = [{role:'user',content:'PRIVATE original request'}];
+  const first = await planner(registered(),{input});
+  first.settle?.({status:'completed',documentGeneration:1,surfaceLeaseId:'original',answer:'PRIVATE final'});
+  const next = await planner(registered(),{input:[...input,{role:'user',content:'PRIVATE steering'},
+    {role:'assistant',content:'PRIVATE final'},{role:'user',content:'PRIVATE follow-up'}]});
+  expect(next.retainedSurfaceLeaseId).toBeUndefined();
+  const denied = observed.at(-1);
+  expect(denied).toMatchObject({reason_class:'answer_boundary_missing',retained_input_head_found:true,
+   retained_assistant_count:0,retained_scanned_count:0,retained_stop_kind:'user',retained_stop_index:1});
+  expect(JSON.stringify(denied)).not.toContain('PRIVATE');
+  next.settle?.({status:'failed'});
+ } finally { stop?.(); }
+});

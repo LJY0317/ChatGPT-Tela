@@ -97,3 +97,13 @@ test('previous cycle summary cannot mark a newly started cycle complete',()=>{
  const r=summarizeContextContinuity({events:[event('native_cycle_summary',{contract_version:1,state:'completed',local_final_committed:true,summary_complete:true}),event('native_cycle_observation_started')],atMs:100000});
  expect(r.turns[0].completionEvidence).toBe('not_observed');expect(r.turns[0].summary.state).toBe('in_progress');
 });
+test('retained boundary structure survives report sanitation without request prose',()=>{
+ const row=event('web_retained_context_decision',{reason_class:'answer_boundary_missing',retained_revision_count:8,
+  retained_input_head_found:true,retained_input_head_fingerprint:head,retained_input_head_index:2,
+  retained_tail_count:5,retained_scanned_count:0,retained_assistant_count:0,
+  retained_stop_kind:'steering',retained_stop_index:3,private_text:'PRIVATE'});
+ const report=summarizeContextContinuity({events:[row],atMs:100000,scope});
+ expect(report.turns[0].retentionDecisions[0].boundary).toMatchObject({revisionCount:8,
+  headMatched:true,headIndex:2,stopKind:'steering',stopIndex:3});
+ expect(JSON.stringify(report)).not.toContain('PRIVATE');
+});

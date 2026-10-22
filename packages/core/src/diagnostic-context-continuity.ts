@@ -138,6 +138,15 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
     state.retentionDecisions=observations.filter(row=>row.stage==='web_retained_context_decision').map(row=>({
       at:row.ts,reason:row.reason_class,reuseEligible:row.reuse_eligible,priorSettlementPresent:row.prior_settlement_present,
       inputEstimate:count(row.epoch_input_estimate),rolloverLimit:count(row.epoch_rollover_limit),
+      boundary: row.retained_revision_count === undefined ? undefined : {
+        revisionCount:count(row.retained_revision_count),headMatched:row.retained_input_head_found,
+        inputHeadFingerprint:fp(row.retained_input_head_fingerprint),headIndex:count(row.retained_input_head_index),
+        tailCount:count(row.retained_tail_count),scannedCount:count(row.retained_scanned_count),
+        assistantCount:count(row.retained_assistant_count),assistantIndex:count(row.retained_assistant_index),
+        secondAssistantIndex:count(row.retained_second_assistant_index),answerMatches:row.retained_answer_matches,
+        stopKind:row.retained_stop_kind,stopIndex:count(row.retained_stop_index),lastKind:row.retained_last_kind,
+        activeKind:row.retained_active_kind,activeIndex:count(row.retained_active_index),
+      },
     }));
     const latestPlan=state.plans.at(-1);
     state.summary.context.retentionLink=latestPlan?.retentionLink??"incomplete_evidence";

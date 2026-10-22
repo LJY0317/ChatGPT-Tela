@@ -303,14 +303,24 @@ function retainedDelta(
   committed: CommittedRetainedContext,
   currentRouteIdentity: string,
   budgetTokens: number | undefined,
-  onMiss?: (reason: string) => void,
+  onMiss?: (reason: string, fields: Record<string, string | number | boolean>) => void,
 ): WebPhysicalContext | undefined {
-  const miss = (reason: string): undefined => { onMiss?.(reason); return undefined; };
+  const fields: Record<string, string | number | boolean> = { retained_revision_count: projection.revisions.length };
+  const miss = (reason: string): undefined => { onMiss?.(reason, fields); return undefined; };
   if (committed.routeIdentity !== currentRouteIdentity) return miss("route_changed");
   const inputHeadIndex = projection.revisions.findIndex(item => (
     item.revision.id === committed.inputHeadRevisionId
   ));
+  fields.retained_input_head_found = inputHeadIndex >= 0;
+  fields.retained_input_head_fingerprint = diagnosticFingerprint(committed.inputHeadRevisionId);
   if (inputHeadIndex < 0) return miss("input_head_missing");
+  fields.retained_input_head_index = inputHeadIndex;
+  fields.retained_tail_count = projection.revisions.length - inputHeadIndex - 1;
+  fields.retained_assistant_count = 0;
+  fields.retained_scanned_count = 0;
+  let scanned = 0;
+  let assistantCount = 0;
+  let stopped = false;
 
   // Match the answer to the immediately completed original Native request,
   // not to the last assistant message whose prose happens to repeat it.
@@ -321,8 +331,20 @@ function retainedDelta(
   for (let index = inputHeadIndex + 1; index < projection.revisions.length; index += 1) {
     const kind = projection.revisions[index]!.revision.kind;
     if (kind === "user" || kind === "steering"
-      || (kind === "developer" && assistantIndex >= 0 && projection.currentGoalStatus === "active")) break;
+      || (kind === "developer" && assistantIndex >= 0 && projection.currentGoalStatus === "active")) {
+      fields.retained_stop_index = index;
+      fields.retained_stop_kind = kind;
+      stopped = true;
+      break;
+    }
+    scanned++;
+    fields.retained_scanned_count = scanned;
+    fields.retained_last_kind = kind;
     if (kind === "assistant") {
+      assistantCount++;
+      fields.retained_assistant_count = assistantCount;
+      if (assistantCount === 1) fields.retained_assistant_index = index;
+      else fields.retained_second_assistant_index = index;
       // Attributed agent data and source-bound summaries cannot witness our final,
       // even if their serialized text happens to equal its answer fingerprint.
       if (projection.protectedRevisionIds.includes(projection.revisions[index]!.revision.id)) return miss("protected_answer_boundary");
@@ -330,6 +352,7 @@ function retainedDelta(
       // committed answer boundary. Rebuild from canonical history.
       if (assistantIndex >= 0) return miss("ambiguous_answer_boundary");
       assistantIndex = index;
+      fields.retained_answer_matches = contentFingerprint(projection.revisions[index]!.content) === committed.answerFingerprint;
     } else if (assistantIndex >= 0 && !(
       kind === "tool-result" && index === projection.revisions.length - 1
       && projection.revisions[index]!.revision.id === projection.currentGoalObservationId
@@ -339,6 +362,8 @@ function retainedDelta(
       return miss("events_after_answer");
     }
   }
+  fields.retained_scanned_count = scanned;
+  if (!stopped) { fields.retained_stop_index = projection.revisions.length; fields.retained_stop_kind = "end"; }
   if (assistantIndex < 0) return miss("answer_boundary_missing");
   const assistant = projection.revisions[assistantIndex]!;
   if (contentFingerprint(assistant.content) !== committed.answerFingerprint) return miss("answer_changed");
@@ -350,8 +375,11 @@ function retainedDelta(
       || (item.revision.kind === "developer" && projection.currentGoalStatus === "active")
   ));
   if (!activeRequest) return miss("active_request_missing");
+  fields.retained_active_kind = activeRequest.revision.kind;
+  fields.retained_active_index = projection.revisions.findIndex(item => item.revision.id === activeRequest.revision.id);
   const transferTokens = delta.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
   if (budgetTokens !== undefined && transferTokens > budgetTokens) return miss("suffix_budget");
+  onMiss?.("retained_match", fields);
   const logicalTokens = projection.revisions
     .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
   return Object.freeze({
@@ -376,12 +404,12 @@ function admittedRetainedContext(
   route: string,
   budgetTokens: number | undefined,
   outputReserveTokens: number,
-  diagnostic?: { reason?: string },
+  diagnostic?: { reason?: string; fields?: Record<string, string | number | boolean> },
   currentLimits = committed.physicalLimits,
 ): { readonly physicalContext: WebPhysicalContext; readonly media: readonly WebTurnMedia[];
   readonly pressure?: WebEpochPressure } | undefined {
   const delta = retainedDelta(projection, committed, route, budgetTokens,
-    reason => { if (diagnostic) diagnostic.reason = reason; });
+    (reason, fields) => { if (diagnostic) { diagnostic.reason = reason; diagnostic.fields = fields; } });
   if (!delta) return undefined;
   const bound = bindNativePhysicalEvidence(projection, delta);
   const media = includedMedia(projection, bound);
@@ -993,7 +1021,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     const freshBudgetTokens = options.budgetTokens === undefined && physicalLimits
       && exactActiveTokens + 2_048 >= physicalLimits.rolloverTokenLimit
       ? physicalLimits.contextWindowTokenLimit : budgetTokens;
-    const retentionDiagnostic: { reason?: string } = {};
+    const retentionDiagnostic: { reason?: string; fields?: Record<string, string | number | boolean> } = {};
     const admitted = committed ? admittedRetainedContext(projection, committed,
       currentRouteIdentity, budgetTokens, workingPolicy.outputReserveTokens, retentionDiagnostic, physicalLimits) : undefined;
     const pressure = admitted?.pressure;
@@ -1003,6 +1031,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       reason_class: !committed ? "no_committed_context" : !admitted ? retentionDiagnostic.reason ?? "unclassified"
         : pressure?.shouldRollover ? "physical_pressure" : healthyRetained ? "retained_match" : "pressure_unavailable",
       prior_settlement_present: committed !== undefined, reuse_eligible: healthyRetained,
+      ...retentionDiagnostic.fields,
       ...(pressure ? { epoch_input_estimate: pressure.estimatedEpochInputTokens,
         epoch_rollover_limit: pressure.effectiveRolloverTokenLimit, physical_rollover: pressure.shouldRollover } : {}),
     });
