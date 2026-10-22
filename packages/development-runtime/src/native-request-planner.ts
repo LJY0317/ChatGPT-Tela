@@ -1001,10 +1001,13 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       ? Object.freeze({ opaqueFingerprint, visibleHistory }) : undefined;
     const currentAnchor = workingCheckpointAnchor(projection);
     const currentAnchorIndex = currentAnchor ? projection.revisions.indexOf(currentAnchor) : -1;
-    const exactActiveTokens = projection.revisions.slice(currentAnchorIndex + 1)
+    const activeSuffix = projection.revisions.slice(currentAnchorIndex + 1);
+    const activeSuffixIds = new Set(activeSuffix.map(item => item.revision.id));
+    const exactActiveTokens = activeSuffix
       .reduce((sum, item) => sum + item.revision.estimatedTokens, 0)
       + projection.revisions.filter(item =>
-        item.revision.kind === "system" || item.revision.kind === "developer")
+        (item.revision.kind === "system" || item.revision.kind === "developer")
+        && !activeSuffixIds.has(item.revision.id))
         .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
     if (physicalLimits && exactActiveTokens + 2_048 >= physicalLimits.contextWindowTokenLimit) {
       // Required active work is irreducible. Do not burn model calls trying

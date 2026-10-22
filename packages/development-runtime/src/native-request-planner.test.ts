@@ -1271,6 +1271,20 @@ describe("Native request development Web planner", () => {
     second.settle?.({ status: "failed" });
   });
 
+  test('large active developer authority is charged once in a fresh Web seed', async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const model = chatGptWebModelId(chatGptWebFamilyKey('Observed Family'));
+    const currentDeveloper = 'D'.repeat(310_000);
+    const plan = await planner(registered(), { model, reasoning: { effort: 'high' }, input: [
+      { role: 'user', content: 'Past request.' },
+      { role: 'user', content: 'Current request.' },
+      { role: 'developer', content: currentDeveloper },
+    ] });
+    expect(plan.physicalContext.segments.filter(segment => segment.type === 'revision' && segment.kind === 'developer')).toHaveLength(1);
+    expect(plan.physicalContext.transferTokens).toBeGreaterThan(75_000);
+    plan.settle?.({ status: 'failed' });
+  });
+
   test('irreducible fresh authority above soft runway preserves one compatible physical Web generation', async () => {
     const planner = createNativeRequestDevelopmentWebTurnPlanner();
     const model = chatGptWebModelId(chatGptWebFamilyKey('Observed Family'));
@@ -1297,6 +1311,21 @@ describe("Native request development Web planner", () => {
     expect(continued.physicalContext.transferTokens).toBeLessThan(200);
     expect(continued.diagnostics).toMatchObject({retained_delta: true, physical_rollover: false});
     continued.settle?.({status: 'failed'});
+  });
+
+  test('an active developer revision is counted once when fitting a fresh Web seed', async () => {
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const model = chatGptWebModelId(chatGptWebFamilyKey('Observed Family'));
+    const currentDeveloper = 'D'.repeat(310_000);
+    const first = await planner(registered(), {model, reasoning:{effort:'high'}, input:[
+      {role:'user',content:'An earlier request.'},
+      {role:'user',content:'Current request.'},
+      {role:'developer',content:currentDeveloper},
+    ]});
+    expect(first.physicalContext.segments.filter(segment =>
+      segment.type === 'revision' && segment.kind === 'developer')).toHaveLength(1);
+    expect(first.physicalContext.transferTokens).toBeGreaterThan(75_000);
+    first.settle?.({status:'failed'});
   });
 
   test('retained Web context continues for twenty bounded followups without repacking old revisions',async()=>{
