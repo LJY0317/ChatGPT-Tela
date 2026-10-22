@@ -16,6 +16,7 @@ import {
 } from "./dom-driver";
 import { authorFingerprint } from "./turn-ownership";
 import { ChatGptSemanticProvider } from "./semantic-provider";
+import { ChatGptContextCheckpointProvider } from "./checkpoint-provider";
 
 type RawSnapshot = {
   url: string;
@@ -628,6 +629,48 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(first.plainBodyText).toBe(wire);
     expect(JSON.parse(first.plainBodyText!)).toEqual(JSON.parse(wire));
     expect((await driver.observe()).turns[0]!.plainBodyText).toBe(wire);
+  });
+
+  test("nested rendered JSON reaches checkpoint source, operation and receipt validation", async () => {
+    const source = { nativeTaskId: 'task', webEpochId: 'epoch', sourceRevisionId: 'r2', physicalContext: {
+      mode: 'full' as const, headRevisionId: 'r2', logicalTokens: 1, transferTokens: 1,
+      segments: [{ type: 'revision' as const, revisionId: 'r2', kind: 'user' as const, content: 'synthetic'.repeat(40000) }] } };
+    const summary = String.raw`line\npath \\name`;
+    const code = new FixtureElement({ 'data-fixture-tag': 'CODE' });
+    Object.assign(code, { classList: ['language-json'] });
+    const pre = new FixtureElement({ 'data-fixture-tag': 'PRE' }, { code: [code] });
+    const block = new FixtureElement({ 'data-code-block': 'true', 'data-markdown-copy': 'code-block' }, { code: [code] });
+    block.childNodes = [new FixtureElement({ 'data-markdown-copy': 'exclude' }), pre];
+    const body = new FixtureElement({ 'data-markdown-text-style': 'assistant-message' }); body.childNodes = [block];
+    const group = new FixtureElement({ 'data-turn-key': 'checkpoint' }, {
+      '[data-markdown-text-style="assistant-message"]': [body],
+      'button[data-testid="copy-turn-action-button"]': [new FixtureElement()],
+    });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
+    let wire = '';
+    const provider = new ChatGptContextCheckpointProvider(() => ({
+      async submitTurn(_surface, request) {
+        const attachment = request.inertSourceAttachment!;
+        expect(attachment).toBeDefined();
+        wire = JSON.stringify({ type: 'tela_context_checkpoint_v1', operation: request.nativeTurnId,
+          sourceDigest: createHash('sha256').update(attachment.attachment.contextJson).digest('hex'),
+          receipt: `TELA_CONTEXT_ACK ${attachment.receipt}`, summary });
+        code.textContent = pre.textContent = wire;
+        body.textContent = block.textContent = 'JSON Copy code' + wire;
+        return { state: 'proven' as const, value: { nativeTaskId: request.nativeTaskId,
+          nativeTurnId: request.nativeTurnId, webEpochId: request.webEpochId, providerTurnId: 'owned' }, evidence: [] };
+      },
+      async waitForTurnEvent() {
+        const answer = (await driver.observe()).turns.find(turn => turn.role === 'assistant')!;
+        expect(answer.plainBodyText).toBe(wire);
+        expect(answer.text).not.toBe(wire);
+        return { state: 'proven' as const, value: { kind: 'completed' as const,
+          providerTurnId: 'owned', answer: answer.text!, plainAnswer: answer.plainBodyText! }, evidence: [] };
+      },
+    }));
+    const result = await provider.createContextCheckpoint({} as never, source);
+    expect(result.state).toBe('proven');
+    if (result.state === 'proven') expect(result.value.content).toBe(summary);
   });
 
   test("retained answer ignores link icon hydration but preserves destination and author changes", async () => {
