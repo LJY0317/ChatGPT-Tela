@@ -24,7 +24,7 @@ export function ownedServiceShutdown(installId: string, paths: ProductPaths) {
     },
     async prepare(service: TelaServiceId): Promise<void> {
       const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json"),
-        shutdownReadiness: service === "chat" });
+        shutdownReadiness: true });
       if (!current || current.status.state !== "ready") throw new Error(`${service} runtime is not ready for maintenance`);
       if (current.status.shutdownReadiness === "blocked") throw new PackagedServiceShutdownNotStartedError(service);
       // The owner repeats admission on actual shutdown; work can begin after preflight.

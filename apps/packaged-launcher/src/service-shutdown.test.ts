@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { resolveProductPaths, PackagedServiceShutdownNotStartedError } from "@chatgpt-tela/product-lifecycle";
 import { startChatService, createChatToolRuntime } from "@chatgpt-tela/chat-service";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
+import { startCodexServiceHttpServer, type CodexService } from "@chatgpt-tela/codex-service";
 import { ownedServiceShutdown } from "./service-shutdown";
 
 test("real Chat admission reports a blocker without closing and translates only its owner receipt", async () => {
@@ -62,4 +63,30 @@ test("foreign install runtime identity is preserved instead of authorizing shutd
     expect(service.status().state).toBe("ready");
     expect((await fetch(new URL("v1/status", service.endpoint), { headers: { authorization: `Bearer ${service.bearerToken}` } })).status).toBe(200);
   } finally { await service.close(); rmSync(home, { recursive: true, force: true }); }
+});
+
+
+test("Codex activity is checked before any shutdown request", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tela-codex-preflight-"));
+  const paths = resolveProductPaths({ platform: "linux", home, environment: {} });
+  let blocked = true, shutdownCalls = 0;
+  const service = {
+    serviceStatus: () => ({ contractVersion: 1, service: "codex", instanceId: "fixture-codex", state: "ready" }),
+    shutdownReadiness: async () => blocked ? "blocked" : "ready",
+    close: async () => { shutdownCalls++; },
+  } as unknown as CodexService;
+  const http = await startCodexServiceHttpServer({ service });
+  try {
+    mkdirSync(paths.serviceRuntime("codex"), { recursive: true });
+    writeServiceRuntimeDescriptor(join(paths.serviceRuntime("codex"), "descriptor.json"), {
+      version: 1, service: "codex", instanceId: "fixture-codex", installId: "fixture", pid: process.pid,
+      endpoint: http.endpoint.href, bearerToken: http.bearerToken, startedAt: new Date().toISOString(),
+    });
+    const shutdown = ownedServiceShutdown("fixture", paths);
+    await expect(shutdown.prepare("codex")).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
+    expect(shutdownCalls).toBe(0);
+    blocked = false;
+    await shutdown.prepare("codex");
+    expect(shutdownCalls).toBe(0);
+  } finally { await http.close(); rmSync(home, { recursive: true, force: true }); }
 });
