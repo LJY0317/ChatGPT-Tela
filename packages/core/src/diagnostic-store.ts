@@ -252,7 +252,7 @@ function files(root: string, type: "incidents" | "private") {
   return readdirSync(path).filter(name => pattern.test(name)).flatMap(name => {
     try {
       const stat = lstatSync(join(path,name)); if (!stat.isFile() || stat.isSymbolicLink()) return [];
-      const proofName = type === "incidents" ? name : name.replace(/\.(?:html|jpg|json|meta\.json)$/, ".meta.json");
+      const proofName = type === "incidents" ? name : name.replace(/\.(?:meta\.json|html|jpg|json)$/, ".meta.json");
       const proofPath = join(path, proofName); const proofStat = lstatSync(proofPath);
       if (!proofStat.isFile() || proofStat.isSymbolicLink() || proofStat.size > (type === "incidents" ? 128*1024 : 4096)) return [];
       const proof = JSON.parse(readFileSync(proofPath,"utf8"));
