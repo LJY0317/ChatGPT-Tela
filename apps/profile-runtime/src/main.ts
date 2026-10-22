@@ -12,6 +12,7 @@ import { createAccountCheck } from "./account-check";
 import { createAccountDisplay } from "./account-display";
 import { startNativeAccountLifecycle } from "./native-account-lifecycle";
 import { diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
+import { bindBeforeQuitToStop } from "./quit";
 
 function writeStderr(value: unknown): void {
   try {
@@ -143,6 +144,7 @@ async function main(config: ReturnType<typeof loadProductProfileRuntimeConfig>):
 
   let stopping: Promise<void> | undefined;
   let draining: Promise<void> | undefined;
+  let allowQuit = () => {};
   drain = () => {
     draining ??= (async () => {
       // A refusal to quit must leave account observation and private control
@@ -159,6 +161,7 @@ async function main(config: ReturnType<typeof loadProductProfileRuntimeConfig>):
         await preview.close();
         app.removeListener("window-all-closed", keepAliveWithoutWindows);
         lifecycle.dispose();
+        allowQuit();
         app.quit();
       })().catch(error => {
         stopping = undefined;
@@ -167,6 +170,7 @@ async function main(config: ReturnType<typeof loadProductProfileRuntimeConfig>):
     }
     return stopping;
   };
+  allowQuit = bindBeforeQuitToStop(app, stop, writeStderr);
 
   await lifecycle.shutdownRequested;
   await stop();
