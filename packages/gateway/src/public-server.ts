@@ -118,7 +118,12 @@ export function createPublicMcpServer(input: {
   }, async arguments_ => {
     const query = typeof arguments_.query === "string" ? arguments_.query : "";
     const capabilities = await input.chat.inventory(query);
-    emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_chat_inventory_returned", { query_empty: query.length === 0, count: capabilities.length });
+    emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_chat_inventory_returned", {
+      query_empty: query.length === 0,
+      ...(query.length ? { query_fingerprint: diagnosticFingerprint(query) } : {}),
+      query_word_count: query.trim() ? query.trim().split(/\s+/).length : 0,
+      count: capabilities.length,
+    });
     return { content: [{ type: "text", text: JSON.stringify(capabilities) }] };
   });
 
