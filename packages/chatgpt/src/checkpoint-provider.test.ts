@@ -99,6 +99,7 @@ test('dedicated summary has no tool bridge and keeps the complete source inert',
   expect(result.value.sourceRevisionId).toBe('r2');
   expect(result.value.content).toContain('abc');
   expect(f.submitted().toolBridge).toBeUndefined();
+  expect(f.submitted().physicalContext.segments.at(-1)!.content).toContain('single fenced json code block');
   expect(JSON.parse(f.submitted().physicalContext.segments[1]!.content).segments).toEqual(source.physicalContext.segments);
   expect(f.preloads()).toBe(0);
 });

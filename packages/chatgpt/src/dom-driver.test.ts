@@ -591,6 +591,24 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(JSON.parse(answer.plainBodyText!)).toEqual(JSON.parse(wire));
   });
 
+  test("a sole code block preserves JSON escapes and excludes copy chrome", async () => {
+    const wire = JSON.stringify({ summary: String.raw`literal \( and \path with "quotes"` });
+    const code = new FixtureElement({ 'data-fixture-tag': 'CODE' });
+    Object.assign(code, { classList: ['language-json'] });
+    code.textContent = wire;
+    const pre = new FixtureElement({ 'data-fixture-tag': 'PRE' }, { code: [code] });
+    pre.textContent = 'json Copy code' + wire;
+    const body = new FixtureElement(); body.childNodes = [pre]; body.textContent = pre.textContent;
+    const group = new FixtureElement({ 'data-turn-key': 'literal-code' }, {
+      '[data-markdown-text-style="assistant-message"]': [body],
+      'button[data-testid="copy-turn-action-button"]': [new FixtureElement()],
+    });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
+    expect((await driver.observe()).turns[0]!.plainBodyText).toBe(wire);
+    body.childNodes.push({ nodeType: 3, textContent: 'surrounding prose' });
+    expect((await driver.observe()).turns[0]!.plainBodyText).toBe(body.textContent);
+  });
+
   test("retained answer ignores link icon hydration but preserves destination and author changes", async () => {
     const icon = new FixtureElement({ 'data-fixture-tag': 'IMG', src: '/placeholder' });
     const graphic = new FixtureElement({ 'data-fixture-tag': 'SVG' });

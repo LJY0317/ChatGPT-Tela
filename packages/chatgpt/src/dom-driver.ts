@@ -1009,8 +1009,10 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         // Body content and completion authority are independent. Historical action controls
         // can disappear during a new turn without changing the committed answer body.
         text: answer ? answerMarkdown(answer) : undefined,
-        // Machine protocols consume literal DOM text, never layout-derived innerText.
-        plainBodyText: answer?.textContent,
+        // A sole code block is the literal body; its language/copy chrome is presentation.
+        // Prose remains literal DOM text. Never unescape rendered Markdown into a protocol.
+        plainBodyText: answer?.childNodes.length === 1 && answer.children[0]?.tagName === "PRE"
+          ? answer.children[0].querySelector("code")?.textContent : answer?.textContent,
         // Reuse the delivered answer serializer. A separate DOM-attribute codec made
         // decorative icon hydration invalidate unchanged answers.
         bodyProof: answerBody ? { version: 1, value: answerSemanticBody(answerBody) } : undefined,
