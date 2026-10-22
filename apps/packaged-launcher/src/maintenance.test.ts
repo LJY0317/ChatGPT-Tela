@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPackagedPayload, resolveProductPaths, readOwnershipManifest, prepareOwnedDirectory,
-  packagedUpgradeJournalPath, readPackagedUpgradeJournal, planPackagedUpgradeFromPayload, type PackagedUpgradeJournal, type ServiceRegistrationCommandRunner } from "@chatgpt-tela/product-lifecycle";
+  packagedUpgradeJournalPath, readPackagedUpgradeJournal, planPackagedUpgradeFromPayload, PackagedServiceShutdownNotStartedError,
+  type PackagedUpgradeJournal, type ServiceRegistrationCommandRunner } from "@chatgpt-tela/product-lifecycle";
 import { runPackagedLifecycleCommand } from "./lifecycle";
 import { cleanupMaintenanceWindow, runMaintenanceCommand, stageMaintenanceWindow, resolveMaintenanceWindowSource } from "./maintenance";
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
@@ -88,6 +89,38 @@ test("apply requires review and rejects unknown/ambiguous operation arguments", 
   await expect(runMaintenanceCommand(["maintenance", "apply", "uninstall"])).rejects.toThrow("review");
   await expect(runMaintenanceCommand(["maintenance", "review", "uninstall", "--everything"])).rejects.toThrow("only accepts");
   await expect(runMaintenanceCommand(["maintenance", "review", "upgrade"])).rejects.toThrow("explicit package");
+});
+
+test("maintenance review and apply surface a newly blocked shutdown without stopping services", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-maintenance-shutdown-readiness-"));
+  try {
+    const f = fixture(root), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner };
+    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first], options);
+    const paths = resolveProductPaths(options);
+    f.runner.running.add("chatgpt-tela-chat.service");
+    let mode: "none" | "late" | "always" = "none", checks = 0;
+    const liveOptions = { ...options, async prepareShutdownService(service: "gateway" | "codex" | "chat") {
+      if (service !== "chat") return;
+      checks++;
+      if (mode === "always" || mode === "late" && checks >= 2) throw new PackagedServiceShutdownNotStartedError(service);
+    } };
+    const args = ["--payload", f.second];
+    const reviewed = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...args], liveOptions) as any;
+    expect(reviewed.blockers).toEqual([]);
+
+    mode = "late";
+    const applied = await runMaintenanceCommand(["maintenance", "apply", "upgrade", ...args,
+      "--review-token", reviewed.reviewToken], liveOptions) as any;
+    expect(applied).toMatchObject({ success: false, failedCount: 0,
+      blockers: ["chat: active work is still running. Finish it before maintenance."] });
+    expect(f.runner.running).toEqual(new Set(["chatgpt-tela-chat.service"]));
+    expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("1.0.0");
+    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))).toBeUndefined();
+
+    mode = "always";
+    const blockedReview = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...args], liveOptions) as any;
+    expect(blockedReview.blockers).toEqual(["chat: active work is still running. Finish it before maintenance."]);
+  } finally { removeFixture(root); }
 });
 
 test("temporary maintenance binaries clean up only their exact owned snapshot", () => {

@@ -16,6 +16,7 @@ private struct TelaMaintenanceResult: Decodable {
   let success: Bool
   let failedCount: Int
   let preservedCount: Int
+  let blockers: [String]?
 }
 private struct TelaMaintenanceStatus: Decodable {
   let installedVersion: String
@@ -322,10 +323,14 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       busy = false; self.review = nil
       if result.0 == 0, let applied = try? JSONDecoder().decode(TelaMaintenanceResult.self, from: result.1) {
         completedRemoval = removing && applied.success
-        message.stringValue = applied.success ? (removing ? "Tela removed. Preserved resources: \(applied.preservedCount). You can close this window."
+        message.stringValue = if let blockers = applied.blockers, !blockers.isEmpty {
+          blockers.joined(separator: "\n") + "\nNo changes were applied. Resolve the blocker, then review again."
+        } else if applied.success { removing ? "Tela removed. Preserved resources: \(applied.preservedCount). You can close this window."
           : operation == "cancel-upgrade" ? "Update cancelled. The installed version was kept and previously running services were restored."
-          : "Changes verified. Reopen Tela to load the updated control center.")
-          : "Some changes couldn't finish. Failed resources: \(applied.failedCount). Preserved resources: \(applied.preservedCount). Review again to recover."
+          : "Changes verified. Reopen Tela to load the updated control center."
+        } else {
+          "Some changes couldn't finish. Failed resources: \(applied.failedCount). Preserved resources: \(applied.preservedCount). Review again to recover."
+        }
       } else { message.stringValue = "Changes couldn't complete or the reviewed plan changed. Review again before retrying. An interrupted update or repair may require its matching package." }
       await loadStatus(); updateControls()
     }

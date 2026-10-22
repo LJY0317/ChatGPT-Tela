@@ -8,12 +8,17 @@ import { resolve } from "node:path";
 import {
   resolveProductPaths,
   cancelPackagedUpgrade,
+  PackagedServiceShutdownNotStartedError,
+  packagedRepairJournalPath,
+  packagedUpgradeJournalPath,
   planPackagedUpgradeCancellation,
   applyPackagedInstallFromPayload,
   applyPackagedRepairFromPayload,
   applyPackagedUpgradeWithRecovery,
   reviewPackagedRecoveryArtifact,
   PackagedPlatformServiceController,
+  readPackagedRepairJournal,
+  readPackagedUpgradeJournal,
   planPackagedInstallFromPayload,
   planPackagedRepairFromPayload,
   planPackagedUpgradeFromPayload,
@@ -41,6 +46,39 @@ export interface PackagedLifecycleOptions {
   readonly shutdownService?: (service: TelaServiceId) => Promise<void>;
   readonly waitUntilReady?: (service: TelaServiceId, timeoutMs: number) => Promise<void>;
   readonly prepareShutdownService?: (service: TelaServiceId) => Promise<void>;
+  /** Internal: revalidate a reviewed plan without treating live readiness as plan identity. */
+  readonly skipShutdownReadiness?: boolean;
+}
+
+const QUIESCE_ORDER = Object.freeze(["gateway", "codex", "chat"] as const);
+type ShutdownBlueprint = ConstructorParameters<typeof PackagedPlatformServiceController>[0]["blueprint"]
+  & { readonly paths: ReturnType<typeof resolveProductPaths> };
+
+function serviceController(installId: string, blueprint: ShutdownBlueprint, options: PackagedLifecycleOptions) {
+  const shutdown = ownedServiceShutdown(installId, blueprint.paths);
+  return new PackagedPlatformServiceController({
+    blueprint,
+    shutdownService: options.shutdownService ?? shutdown,
+    prepareShutdownService: options.prepareShutdownService ?? (options.shutdownService ? undefined : shutdown.prepare),
+    waitUntilReady: options.waitUntilReady ?? (options.shutdownService ? undefined : shutdown.ready),
+    ...(options.runner ? { runner: options.runner } : {}),
+    ...(options.userId === undefined ? {} : { userId: options.userId }),
+  });
+}
+
+async function shutdownBlockers(installId: string, blueprint: ShutdownBlueprint, options: PackagedLifecycleOptions): Promise<readonly string[]> {
+  // Injected shutdown handlers own their own admission contract; don't claim a
+  // live readiness observation when that contract was not supplied.
+  if (options.skipShutdownReadiness || (options.shutdownService && !options.prepareShutdownService)) return Object.freeze([]);
+  try {
+    await serviceController(installId, blueprint, options).prepare(QUIESCE_ORDER);
+    return Object.freeze([]);
+  } catch (error) {
+    if (error instanceof PackagedServiceShutdownNotStartedError) {
+      return Object.freeze([`${error.service}: active work is still running. Finish it before maintenance.`]);
+    }
+    return Object.freeze(["A running service could not confirm that it is safe to stop. Check its status and try again."]);
+  }
 }
 
 function oneValue(arguments_: readonly string[], index: number, name: string): string {
@@ -150,6 +188,9 @@ export async function runPackagedLifecycleCommand(
       ...environment,
     });
     if (parsed.mode === "dry-run") {
+      const journal = readPackagedRepairJournal(packagedRepairJournalPath(plan.blueprint.paths));
+      const blockers = !journal && plan.payload.action === "repair" && !plan.services.some(service => service.action === "preserve")
+        ? await shutdownBlockers(plan.installId, plan.blueprint, options) : Object.freeze([]);
       return Object.freeze({
         command: parsed.command,
         mode: parsed.mode,
@@ -157,17 +198,10 @@ export async function runPackagedLifecycleCommand(
         installId: plan.installId,
         payload: plan.payload,
         services: plan.services,
+        shutdownBlockers: blockers,
       });
     }
-    const shutdown = ownedServiceShutdown(plan.installId, plan.blueprint.paths);
-    const services = new PackagedPlatformServiceController({
-      blueprint: plan.blueprint,
-      shutdownService: options.shutdownService ?? shutdown,
-      prepareShutdownService: options.prepareShutdownService ?? (options.shutdownService ? undefined : shutdown.prepare),
-      waitUntilReady: options.waitUntilReady ?? (options.shutdownService ? undefined : shutdown.ready),
-      ...(options.runner ? { runner: options.runner } : {}),
-      ...(options.userId === undefined ? {} : { userId: options.userId }),
-    });
+    const services = serviceController(plan.installId, plan.blueprint, options);
     const result = await applyPackagedRepairFromPayload({
       plan,
       payloadSourcePath,
@@ -183,6 +217,8 @@ export async function runPackagedLifecycleCommand(
   });
   const recoveryReview = reviewPackagedRecoveryArtifact(plan);
   if (parsed.mode === "dry-run") {
+    const journal = readPackagedUpgradeJournal(packagedUpgradeJournalPath(plan.targetBlueprint.paths));
+    const blockers = journal ? Object.freeze([]) : await shutdownBlockers(plan.installId, plan.targetBlueprint, options);
     return Object.freeze({
       command: parsed.command,
       mode: parsed.mode,
@@ -196,17 +232,10 @@ export async function runPackagedLifecycleCommand(
         service: service.service,
         action: "preserve-registration" as const,
       }))),
+      shutdownBlockers: blockers,
     });
   }
-  const shutdown = ownedServiceShutdown(plan.installId, plan.targetBlueprint.paths);
-  const services = new PackagedPlatformServiceController({
-    blueprint: plan.targetBlueprint,
-    shutdownService: options.shutdownService ?? shutdown,
-    prepareShutdownService: options.prepareShutdownService ?? (options.shutdownService ? undefined : shutdown.prepare),
-    waitUntilReady: options.waitUntilReady ?? (options.shutdownService ? undefined : shutdown.ready),
-    ...(options.runner ? { runner: options.runner } : {}),
-    ...(options.userId === undefined ? {} : { userId: options.userId }),
-  });
+  const services = serviceController(plan.installId, plan.targetBlueprint, options);
   const upgradeInput = {
     plan,
     payloadSourcePath,
