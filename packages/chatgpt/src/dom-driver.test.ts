@@ -609,6 +609,27 @@ describe("current ChatGPT DOM surface driver", () => {
     expect((await driver.observe()).turns[0]!.plainBodyText).toBe(body.textContent);
   });
 
+  test("a sole rendered DIV code block excludes its language and copy controls", async () => {
+    const wire = JSON.stringify({ type: "tela_context_checkpoint_v1", operation: "owned", sourceDigest: "source", summary: String.raw`line\npath \\name` });
+    const code = new FixtureElement({ 'data-fixture-tag': 'CODE' });
+    code.textContent = wire;
+    Object.assign(code, { classList: ['language-json'] });
+    const pre = new FixtureElement({ 'data-fixture-tag': 'PRE' }, { code: [code] });
+    const block = new FixtureElement({ 'data-fixture-tag': 'DIV', 'data-code-block': 'true', 'data-markdown-copy': 'code-block' }, { code: [code] });
+    block.childNodes = [new FixtureElement({ 'data-fixture-tag': 'DIV', 'data-markdown-copy': 'exclude' }), pre];
+    block.textContent = 'JSON Copy code' + wire;
+    const body = new FixtureElement(); body.childNodes = [block]; body.textContent = block.textContent;
+    const group = new FixtureElement({ 'data-turn-key': 'rendered-code' }, {
+      '[data-markdown-text-style="assistant-message"]': [body],
+      'button[data-testid="copy-turn-action-button"]': [new FixtureElement()],
+    });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
+    const first = (await driver.observe()).turns[0]!;
+    expect(first.plainBodyText).toBe(wire);
+    expect(JSON.parse(first.plainBodyText!)).toEqual(JSON.parse(wire));
+    expect((await driver.observe()).turns[0]!.plainBodyText).toBe(wire);
+  });
+
   test("retained answer ignores link icon hydration but preserves destination and author changes", async () => {
     const icon = new FixtureElement({ 'data-fixture-tag': 'IMG', src: '/placeholder' });
     const graphic = new FixtureElement({ 'data-fixture-tag': 'SVG' });

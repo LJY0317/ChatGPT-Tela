@@ -1011,7 +1011,8 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         text: answer ? answerMarkdown(answer) : undefined,
         // A sole code block is the literal body; its language/copy chrome is presentation.
         // Prose remains literal DOM text. Never unescape rendered Markdown into a protocol.
-        plainBodyText: answer?.childNodes.length === 1 && answer.children[0]?.tagName === "PRE"
+        plainBodyText: answer?.childNodes.length === 1 && (answer.children[0]?.tagName === "PRE"
+          || answer.children[0]?.getAttribute('data-code-block') != null)
           ? answer.children[0].querySelector("code")?.textContent : answer?.textContent,
         // Reuse the delivered answer serializer. A separate DOM-attribute codec made
         // decorative icon hydration invalidate unchanged answers.
