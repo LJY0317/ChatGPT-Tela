@@ -56,7 +56,7 @@ describe("Tela Chat process operations", () => {
     let blocked = false, sessionId: number | undefined;
     try {
       const live = await f.manager.exec({ workspaceId: f.workspace.id,
-        command: "read value; printf completed", yieldTimeMs: 10 });
+        command: "read value; printf completed", interactive: true, yieldTimeMs: 10 });
       sessionId = live.sessionId;
       expect(live.state).toBe("running");
       const saved = readFileSync(f.storePath, "utf8");
@@ -76,10 +76,23 @@ describe("Tela Chat process operations", () => {
     } finally {
       if (blocked) { rmSync(f.storePath, { recursive: true }); renameSync(backup, f.storePath); }
       if (sessionId) await f.manager.writeStdin({ workspaceId: f.workspace.id, sessionId,
-        chars: "cleanup\n", yieldTimeMs: 1000 });
+        yieldTimeMs: 1000 });
       await expect(f.manager.close()).rejects.toThrow("unresolved execution");
       removeFixture(f.base);
     }
+  });
+
+  test("one-shot input reader receives EOF without blocking shutdown", async () => {
+    if (process.platform === "win32") return;
+    const f = fixture();
+    try {
+      const result = await f.manager.exec({ workspaceId: f.workspace.id,
+        command: "read value || :; printf settled", yieldTimeMs: 1000 });
+      expect(result.state).toBe("exited");
+      expect(result.output).toBe("settled");
+      expect(result.ioAvailable).toBe(false);
+      expect(() => f.manager.assertCanClose()).not.toThrow();
+    } finally { await f.manager.close(); removeFixture(f.base); }
   });
 
   test("output wait remains available after a command closes its stdin", async () => {
@@ -103,7 +116,7 @@ describe("Tela Chat process operations", () => {
     let completedAndClosed = false;
     try {
       const live = await f.manager.exec({ workspaceId: f.workspace.id,
-        command: "read value; printf '%s' \"$value\"", yieldTimeMs: 10 });
+        command: "read value; printf '%s' \"$value\"", interactive: true, yieldTimeMs: 10 });
       sessionId = live.sessionId;
       const before = readFileSync(f.storePath, "utf8");
       expect(() => f.manager.assertCanClose()).toThrow("unresolved execution");
@@ -560,7 +573,8 @@ describe("Tela Chat process operations", () => {
       const first = await f.manager.exec({ workspaceId: f.workspace.id, operationId,
         command: "printf start; sleep 0.15; printf end", yieldTimeMs: 10 });
       expect(first.state).toBe("running");
-      expect(f.manager.status(f.workspace.id, operationId).ioAvailable).toBe(true);
+      expect(f.manager.status(f.workspace.id, operationId).liveness).toBe("alive");
+      expect(f.manager.status(f.workspace.id, operationId).ioAvailable).toBe(false);
       const final = await f.manager.writeStdin({ workspaceId: f.workspace.id, sessionId: first.sessionId,
         yieldTimeMs: 1000 });
       expect(final.state).toBe("exited");

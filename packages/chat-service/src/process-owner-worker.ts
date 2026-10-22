@@ -20,6 +20,7 @@ interface Bootstrap {
   readonly approvedRootsPath: string;
   readonly command: string;
   readonly workingDirectory?: string;
+  readonly interactive?: boolean;
 }
 
 /** Called only through the verified Chat executable's private operation-owner role. */
@@ -51,7 +52,7 @@ export async function runProcessOwnerWorker(): Promise<void> {
   const root = workspace();
   const cwd = resolveWorkspaceDirectory(root.root, input.workingDirectory);
   const fingerprint = createHmac("sha256", Buffer.from(store.requestKey, "hex"))
-    .update(JSON.stringify(["tela-chat-exec-v1", root.id, cwd, input.command])).digest("hex");
+    .update(JSON.stringify(["tela-chat-exec-v1", root.id, cwd, input.command, input.interactive === true])).digest("hex");
   if (fingerprint !== operation.requestFingerprint) throw new Error("worker command does not match reservation");
   const journal = new ProcessExecutionJournal({ root: `${input.storePath}.executions`, key: store.requestKey });
   const claim = journal.reserve({ operationId: operation.operationId, workspaceId: root.id,
@@ -68,7 +69,8 @@ export async function runProcessOwnerWorker(): Promise<void> {
       sessionId: operation.sessionId, state, startedAt: operation.startedAt, updatedAt: endedAt ?? operation.startedAt,
       ...(child?.pid ? { pid: child.pid } : {}), ...(endedAt ? { endedAt } : {}),
       ...(exitCode === undefined ? {} : { exitCode }), ...(signal ? { signal } : {}),
-      ioAvailable: state === "running", output: collected.output, outputTruncated: collected.truncated, outputRecovered: false };
+      ioAvailable: state === "running" && input.interactive === true,
+      output: collected.output, outputTruncated: collected.truncated, outputRecovered: false };
   };
   const control = await startProcessOwnerControl({ binding: { ownerId: claim.ownerId, operationId: claim.operationId, workspaceId: claim.workspaceId }, secret, authority: {
     status: () => snapshot(),
@@ -84,7 +86,7 @@ export async function runProcessOwnerWorker(): Promise<void> {
     },
     write(chars) {
       workspace(); // Fresh approval and directory identity before new input authority.
-      if (state !== "running" || !child) throw new Error("worker input is not available");
+      if (state !== "running" || !child || !input.interactive) throw new Error("worker input is not available");
       child.stdin.write(chars);
     },
     // No execution cancellation until an OS-owned-tree adapter is proved.
@@ -118,6 +120,7 @@ export async function runProcessOwnerWorker(): Promise<void> {
     child = spawn(executable, args, { cwd, env: process.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     child.stdout.on("data", (chunk: Buffer) => appendProcessOutput(output, chunk));
     child.stderr.on("data", (chunk: Buffer) => appendProcessOutput(output, chunk));
+    if (!input.interactive) child.stdin.end();
     child.once("spawn", () => { state = "running"; process.stdout.write("TELA_OPERATION_READY\n"); });
     child.once("error", () => settle(null, null, true));
     child.once("close", (code, terminated) => { if (state === "starting" || state === "running") settle(code, terminated); });

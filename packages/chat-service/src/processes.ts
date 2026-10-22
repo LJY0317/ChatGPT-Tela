@@ -527,7 +527,7 @@ export class ChatProcessManager {
   #directIoAvailable(operation: DurableOperation, session: LiveSession | undefined): boolean {
     return session !== undefined && ["starting", "running", "unknown"].includes(operation.state)
       && session.child.pid !== undefined && session.child.exitCode === null
-      && session.child.signalCode === null && !session.child.stdin.destroyed;
+      && session.child.signalCode === null && !session.child.stdin.destroyed && !session.child.stdin.writableEnded;
   }
 
   #ownedEvidence(operation: DurableOperation, authenticatedDigest?: (digest: string) => void) {
@@ -577,7 +577,7 @@ export class ChatProcessManager {
     return Object.freeze(result);
   }
 
-  async #launchOwner(operation: DurableOperation, command: string, workingDirectory: string | undefined): Promise<void> {
+  async #launchOwner(operation: DurableOperation, command: string, workingDirectory: string | undefined, interactive: boolean): Promise<void> {
     const config = this.#ownerWorker!;
     let child: ChildProcess;
     try {
@@ -623,7 +623,7 @@ export class ChatProcessManager {
     // Key remains in the private reservation store, never in argv or this ephemeral command payload.
     child.stdin!.end(JSON.stringify({ version: 1, operationId: operation.operationId, storePath: this.#storePath,
       workspaceStorePath: config.workspaceStorePath, approvedRootsPath: config.approvedRootsPath, command,
-      ...(workingDirectory === undefined ? {} : { workingDirectory }) }));
+      ...(workingDirectory === undefined ? {} : { workingDirectory }), interactive }));
     try { await ready; }
     catch (error) {
       this.#update(operation.operationId, { state: "unknown" });
@@ -738,6 +738,7 @@ export class ChatProcessManager {
     readonly workingDirectory?: string;
     readonly operationId?: string;
     readonly yieldTimeMs?: number;
+    readonly interactive?: boolean;
   }): Promise<ChatProcessSnapshot> {
     if (this.#closed) throw new Error("Tela Chat process manager is closed");
     if (typeof input.command !== "string" || !input.command.trim() || input.command.includes("\0")
@@ -746,10 +747,11 @@ export class ChatProcessManager {
     }
     const workspace = this.#workspaces.get(input.workspaceId);
     if (this.#ownerWorker && workspace.kind !== "user") throw new Error("owner-worker managed workspace admission is not yet supported");
+    if (input.interactive !== undefined && typeof input.interactive !== "boolean") throw new Error("interactive must be a boolean");
     const cwd = resolveWorkspaceDirectory(workspace.root, input.workingDirectory);
     const waitTime = yieldMs(input.yieldTimeMs);
     const requestFingerprint = createHmac("sha256", Buffer.from(this.#requestKey, "hex"))
-      .update(JSON.stringify(["tela-chat-exec-v1", workspace.id, cwd, input.command])).digest("hex");
+      .update(JSON.stringify(["tela-chat-exec-v1", workspace.id, cwd, input.command, input.interactive === true])).digest("hex");
     const operationId = input.operationId ? uuid(input.operationId) : randomUUID();
     const existing = this.#operations.get(operationId) ?? this.#archive.get(operationId);
     if (existing) {
@@ -805,7 +807,7 @@ export class ChatProcessManager {
     this.#operations.set(operationId, reserved);
     this.#save();
     if (this.#ownerWorker) {
-      await this.#launchOwner(reserved, input.command, input.workingDirectory);
+      await this.#launchOwner(reserved, input.command, input.workingDirectory, input.interactive === true);
       return this.#observeOwned(reserved, { action: "wait", yieldTimeMs: waitTime });
     }
     const invocation = shell(input.command);
@@ -837,6 +839,7 @@ export class ChatProcessManager {
     this.#sessions.set(sessionId, session);
     child.stdout.on("data", (chunk: Buffer) => this.#append(session, chunk));
     child.stderr.on("data", (chunk: Buffer) => this.#append(session, chunk));
+    if (!input.interactive) child.stdin.end();
     child.once("spawn", () => {
       processDiagnostic("process_started");
       if (!this.#recordTransition(operationId, { state: "running", ...(child.pid ? { pid: child.pid } : {}) })) {
@@ -937,7 +940,10 @@ export class ChatProcessManager {
     if (session.workspaceId !== input.workspaceId) throw new Error("process session is not available in this workspace");
     const operation = this.#operations.get(session.operationId) ?? this.#archive.get(session.operationId);
     if (!operation) throw new Error("process reservation is no longer available");
-    if (input.chars && this.#directIoAvailable(operation, session)) session.child.stdin.write(input.chars);
+    if (input.chars) {
+      if (!this.#directIoAvailable(operation, session)) throw new Error("process input is no longer available");
+      session.child.stdin.write(input.chars);
+    }
     await this.#wait(session, waitTime);
     return this.#snapshot((this.#operations.get(session.operationId) ?? this.#archive.get(session.operationId))!, true);
   }
@@ -952,7 +958,8 @@ export class ChatProcessManager {
   #statusSnapshot(operation: DurableOperation): ChatProcessStatus {
     const session = this.#sessions.get(operation.sessionId);
     const ioAvailable = this.#directIoAvailable(operation, session);
-    const liveness = ioAvailable ? "alive" : ["exited", "signaled", "spawn_failed"].includes(operation.state)
+    const liveness = session && session.child.pid !== undefined && session.child.exitCode === null
+      && session.child.signalCode === null ? "alive" : ["exited", "signaled", "spawn_failed"].includes(operation.state)
       ? "not_running" : "unknown";
     return Object.freeze({
       operationId: operation.operationId,

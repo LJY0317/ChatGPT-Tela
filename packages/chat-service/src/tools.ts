@@ -385,7 +385,8 @@ export function createChatToolRuntime(input: {
           return processes.exec({ workspaceId: text(args.workspace_id, "workspace_id"), command: multilineText(args.cmd, "cmd", 64 * 1024),
             ...(optionalText(args.working_directory, "working_directory") === undefined ? {} : { workingDirectory: optionalText(args.working_directory, "working_directory")! }),
             ...(optionalText(args.operation_id, "operation_id") === undefined ? {} : { operationId: optionalText(args.operation_id, "operation_id")! }),
-            ...(optionalInteger(args.yield_time_ms, "yield_time_ms") === undefined ? {} : { yieldTimeMs: optionalInteger(args.yield_time_ms, "yield_time_ms")! }) });
+            ...(optionalInteger(args.yield_time_ms, "yield_time_ms") === undefined ? {} : { yieldTimeMs: optionalInteger(args.yield_time_ms, "yield_time_ms")! }),
+            ...(optionalBoolean(args.interactive, "interactive") === undefined ? {} : { interactive: optionalBoolean(args.interactive, "interactive")! }) });
         case "write_stdin":
           return processes.writeStdin({ workspaceId: text(args.workspace_id, "workspace_id"), sessionId: optionalInteger(args.session_id, "session_id")!,
             ...(args.chars === undefined ? {} : { chars: typeof args.chars === "string" ? args.chars : (() => { throw new Error("chars must be a string"); })() }),

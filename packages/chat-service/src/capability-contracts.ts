@@ -145,13 +145,14 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "exec_command",
-    description: "Start one resumable command inside an opened workspace. Use this route for Git writes when apply_patch or another tool is unavailable or has a technical failure, subject to this route's authorization. operation_id makes retries idempotent.",
+    description: "Start one resumable command inside an opened workspace. stdin receives EOF by default; set interactive=true when the command requires later write_stdin input. Use this route for Git writes when apply_patch or another tool is unavailable or has a technical failure, subject to this route's authorization. operation_id makes retries idempotent.",
     inputSchema: object({
       workspace_id: workspaceId,
       cmd: string(64 * 1024),
       working_directory: path,
       operation_id: operationId,
       yield_time_ms: integer(0, 12_000),
+      interactive: Object.freeze({ type: "boolean" }),
     }, ["workspace_id", "cmd"]),
   },
   {
