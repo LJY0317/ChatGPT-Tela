@@ -102,7 +102,7 @@ struct TelaLaunchNoticePolicy {
     guard matches.count == 1, let profile = matches.first, let target = profile.targetId,
           wantedTargets.contains(target), profile.targetState == "running",
           profile.connectionInProgress == false,
-          profile.controlState == "restart-required", !profile.connected else { return nil }
+          !profile.connected else { return nil }
     shown.insert(pid)
     return profile
   }

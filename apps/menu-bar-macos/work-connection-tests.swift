@@ -33,6 +33,9 @@ precondition(notice.notice(pid: 123, profiles: [unconnected], wantedTargets: ["d
 notice.prune(livePids: [])
 precondition(notice.notice(pid: 123, profiles: [unconnected], wantedTargets: ["default"], inventoryValid: true) != nil)
 var managed = unconnected; managed.targetId = "profile-2"; managed.desktopProcessId = 456
+managed = TelaWorkProfile(slot: 2, targetDisplayName: "Profile 2", targetState: "running",
+  targetSessionState: "ready", controlState: "orphaned", targetId: "profile-2",
+  desktopProcessId: 456, connectionInProgress: false)
 precondition(notice.notice(pid: 456, profiles: [unconnected, managed], wantedTargets: ["profile-2"], inventoryValid: true)?.targetId == "profile-2")
 let display = try! JSONDecoder().decode(TelaAccountDisplay.self, from: Data("{\"contractVersion\":1,\"slot\":1,\"native\":{\"state\":\"signed-in\",\"email\":\"user@EXAMPLE.invalid\"},\"web\":{\"state\":\"signed-in\",\"email\":\"user@example.invalid\"},\"comparison\":\"matching\"}".utf8))
 precondition(display.valid(for: 1) && !display.valid(for: 2))

@@ -186,6 +186,9 @@ async function startNativeTarget(config: ProductProfileRuntimeConfig, url: URL, 
           && current.responsesRouteFingerprint === routedTarget.session.responsesRouteFingerprint
           && current.modelListOverlayFingerprint === routedTarget.session.modelListOverlayFingerprint
           && current.desktopProcessId === routedTarget.session.desktopProcessId) {
+          if (current.endpoint && await countLoadedAppServerActiveTurns(current.endpoint) > 0) {
+            throw new Error("Native profile has an active turn; finish it before shutdown");
+          }
           const stopped = await client.quitTarget(id, undefined, current.desktopProcessId);
           if (stopped.state === "ready") throw new Error("Native profile remained ready after normal quit");
         }
@@ -782,11 +785,8 @@ export async function startNativeFirstProductProfileRuntime(
       if (stopping) return stopping;
       shutdownPending = true;
       stopping = (async () => {
-        if (shutdownReadiness(true) !== "ready") throw new Error("Native-first profile has active or unverifiable Web work; finish it before shutdown");
-        if (target.routedTarget.session.endpoint
-          && await countLoadedAppServerActiveTurns(target.routedTarget.session.endpoint, options.signal ? { signal: options.signal } : {}) > 0) {
-          throw new Error("Native profile has an active turn; finish it before shutdown");
-        }
+        // The owning lifecycle checks admission before shutdown. Target.stop proves
+        // current Desktop ownership; remaining local preparation is drained below.
         await target.stop();
         // A normal quit may be refused. Preserve Web state/drafts/control until
         // Native target cleanup has actually succeeded, rather than before it.

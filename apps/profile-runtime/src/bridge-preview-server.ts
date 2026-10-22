@@ -76,7 +76,10 @@ export async function startProfileBridgePreviewServer(input: {
           return Response.json({ contractVersion: 1, slot: input.slot,
             phase: "cleanup-complete", responsesRouteFingerprint: receipt.responsesRouteFingerprint },
           { headers: { "cache-control": "no-store" } });
-        } catch {
+        } catch (error) {
+          emitDiagnosticEvent("chatgpt_tela_codex", "profile_shutdown_failed", {
+            slot: input.slot, ...diagnosticFailureFields(error),
+          });
           return Response.json({ error: { code: "tela_profile_shutdown_blocked",
             message: "The owned app has not completed normal shutdown. Its control connection is preserved." } },
           { status: 409, headers: { "cache-control": "no-store" } });

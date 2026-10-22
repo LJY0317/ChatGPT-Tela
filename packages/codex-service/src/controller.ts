@@ -540,9 +540,6 @@ export async function startCodexService(input: {
           input.onProfileConnectionChanged?.(existing.target.id, true);
           return statusFor(existing.target, slot, current, existing);
         }
-        if (options?.expectedDesktopProcessId !== undefined) {
-          throw new Error("ChatGPT connection ownership changed; the current app was kept open");
-        }
         progress("closing");
         await stopOwned(existing, true);
       }
@@ -560,7 +557,8 @@ export async function startCodexService(input: {
         throw new Error("Work restoration requires a stopped target; existing app preserved");
       }
       if (session.state === "restart-required"
-        || (session.state === "ready" && session.responsesRouteFingerprint === undefined)) {
+        || (session.state === "ready" && (session.responsesRouteFingerprint === undefined
+          || options?.expectedDesktopProcessId !== undefined))) {
         progress("closing");
         emitDiagnosticEvent("chatgpt_tela_codex", "profile_reopen_quit_started", { slot,
           endpoint_available: !!session.endpoint, pid_bound: options?.expectedDesktopProcessId !== undefined,

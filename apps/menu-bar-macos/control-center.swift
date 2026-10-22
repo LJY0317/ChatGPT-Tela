@@ -1600,7 +1600,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         renderCurrentPage(); return
       }
       if profile.connected { return }
-      guard profile.controlState == "restart-required" else { return }
       changeConnection(slot: slot, confirmedDesktopPid: expectedDesktopPid)
     }
   }
@@ -1667,7 +1666,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         if action == "stop" {
           _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/stop", method: "POST")
         } else {
-          try await connectProfile(descriptor, slot: slot, expectedDesktopPid: confirmedDesktopPid, requireStopped: requireStopped)
+          try await connectProfile(descriptor, slot: slot,
+            expectedDesktopPid: action == "restart" ? profile.desktopProcessId : confirmedDesktopPid,
+            requireStopped: requireStopped)
         }
       } catch {
         profileFailure = (error as? TelaConnectionFailure)?.message

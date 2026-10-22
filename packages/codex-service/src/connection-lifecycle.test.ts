@@ -44,6 +44,25 @@ test("profile startup passes the exact owned slot to its optional environment au
   } finally { await service.close(); }
 });
 
+test("explicit PID-bound reopen can replace an obsolete route without adopting it", async () => {
+  const native = fixture("ready", "running", 123);
+  const session = native.adapter.session;
+  native.adapter.session = async (...args) => ({ ...await session(...args), responsesRouteFingerprint: "obsolete-route" });
+  const resolve = native.adapter.resolve;
+  native.adapter.resolve = async (...args) => {
+    const current = await resolve(...args);
+    return { ...current, session: { ...current.session, responsesRouteFingerprint: "obsolete-route" } };
+  };
+  native.adapter.profileRuntimeEnvironment = () => { throw new Error("preparation reached"); };
+  const phases: string[] = [];
+  const service = await startCodexService({ config: {}, profileRuntimeCommand: ["unused"], nativeTargetAdapter: native.adapter });
+  try {
+    await expect(service.startProfile(1, { expectedDesktopProcessId: 123, onProgress: phase => phases.push(phase) })).rejects.toThrow(ProfileConnectionError);
+    expect(native.quits()).toBe(1);
+    expect(phases).toContain("preparing");
+  } finally { await service.close(); }
+});
+
 test("reopen rechecks identity immediately before quit after the initial consent check", async () => {
   const native = fixture("restart-required", "running", 123);
   let reads = 0;
