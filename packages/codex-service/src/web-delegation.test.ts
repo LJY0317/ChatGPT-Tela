@@ -671,7 +671,10 @@ test("failed Native turn releases its task lease; completed turn without final r
     try {
       await expect(f.run()).rejects.toThrow();
       expect(f.store.get(f.id)).toMatchObject({ state: "failed",
-        failure: options.failedTurn ? "turn_failed" : "result_unavailable" });
+        failure: options.failedTurn ? "turn_failed" : "result_unavailable",
+        failureStage: options.failedTurn ? "turn_complete" : "final_result",
+        failureClass: "unknown", failureIncidentRef: expect.stringMatching(/^incident_[0-9a-f-]{36}$/),
+        failureNextAction: options.failedTurn ? "inspect_diagnostics" : "inspect_job" });
       expect(f.store.capacity(1)).toMatchObject({ available: true, total: { used: 0, limit: 3 } });
     } finally { f.cleanup(); }
   }

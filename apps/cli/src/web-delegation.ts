@@ -56,7 +56,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     const record = await inspectWebDelegationResult(adapters, option("--job"));
     if (subcommand === "result") {
       console.log(await collectWebDelegationResult(adapters, record.id));
-    } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", progress: record.progress, parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure }, null, 2));
+    } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", progress: record.progress, parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure, failureStage: record.failureStage, failureClass: record.failureClass, failureIncidentRef: record.failureIncidentRef, failureNextAction: record.failureNextAction, coordinatorWake: "unsupported_public_contract" }, null, 2));
     return;
   }
   if (subcommand !== "start" && subcommand !== "continue" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|capacity|start|continue|status|result|reconcile>");
@@ -93,7 +93,10 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     const answer = verifiedWebDelegationAnswer(record);
     if (answer) await collectWebDelegationResult(adapters, record.id);
     console.log(JSON.stringify({ jobId: record.id, state: record.state, toolItems: record.toolItems ?? 0,
-      resultAvailable: Boolean(answer), ...(answer ? { finalEvidence: record.finalEvidence, answer } : {}) }));
+      resultAvailable: Boolean(answer), failure: record.failure, failureStage: record.failureStage,
+      failureClass: record.failureClass, failureIncidentRef: record.failureIncidentRef,
+      failureNextAction: record.failureNextAction,
+      coordinatorWake: "unsupported_public_contract", ...(answer ? { finalEvidence: record.finalEvidence, answer } : {}) }));
     return;
   }
   const profile = (await client.profiles()).find(row => row.slot === slot);

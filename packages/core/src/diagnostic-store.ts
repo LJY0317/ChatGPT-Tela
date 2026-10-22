@@ -27,7 +27,7 @@ const SAFE_WEB_CONTEXT_PLANNER_STAGES = new Set<string>(WEB_CONTEXT_PLANNER_STAG
 export function isWebContextPlannerStage(value: unknown): value is WebContextPlannerStage {
   return typeof value === "string" && SAFE_WEB_CONTEXT_PLANNER_STAGES.has(value);
 }
-const STRINGS = new Set(["observation_failure", "failure_class", "service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "route_class", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "browser_response", "next_action", "probe_kind", "auth_state", "entry_class", "removal_cause", "expiry_class", "domain_class", "storage_state"]);
+const STRINGS = new Set(["observation_failure", "failure_class", "failure_stage", "service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "route_class", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "browser_response", "next_action", "probe_kind", "auth_state", "entry_class", "removal_cause", "expiry_class", "domain_class", "storage_state"]);
 /** Never copies unclassified text, identifiers or payloads from a raw diagnostic file. */
 export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticEvent | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
@@ -330,7 +330,7 @@ interface AutomaticDiagnosticIncident {
  * Scope/operation ownership keeps distinct tasks separate. Manual reports remain immutable snapshots.
  */
 export function diagnosticFailureIncidentRef(failure: StructuralDiagnosticEvent): string {
-  const keys = ["event", "stage", "reason_class", "failure_class", "phase", "proof_stage", "service", "route_kind", "kind", "status"];
+  const keys = ["event", "stage", "reason_class", "failure_class", "failure_stage", "phase", "proof_stage", "service", "route_kind", "kind", "status"];
   const owner = failure.scope_fingerprint ?? failure.operation_fingerprint ?? failure.profile_fingerprint ?? failure.instance_fingerprint;
   const signature = JSON.stringify([owner, ...keys.map(key => failure[key] ?? null)]);
   const hex = createHash("sha256").update(signature).digest("hex").slice(0,32);

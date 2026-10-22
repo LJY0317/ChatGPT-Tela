@@ -8,7 +8,7 @@ import type { LocalProfileBinding } from "./cross-profile-thread-relay";
 import type { TrustedNativeProfileSession } from "./cross-profile-account-proof";
 import { selectDelegationWebModel, webDelegationTurnSettings, type DelegationWebModel } from "./web-delegation-model";
 import { indexedWebDelegationProgress, WebDelegationProgressProjection, type WebDelegationProgress } from "./web-delegation-progress";
-import { diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFailureClass, diagnosticFailureIncidentRef, diagnosticFingerprint, emitDiagnosticEvent, structuralDiagnosticEvent } from "@chatgpt-tela/core";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RESULT_BYTES = 512 * 1024;
@@ -117,6 +117,58 @@ export interface WebDelegationRecord {
   /** Explicit link to a separately created Native thread, never inferred from history. */
   readonly origin?: "native-thread-link";
   readonly failure?: "owner_changed" | "transport_or_ack" | "turn_failed" | "result_unavailable";
+  /** Payload-free cause and boundary for an actionable terminal or uncertain result. */
+  readonly failureStage?: WebDelegationFailureStage;
+  readonly failureClass?: ReturnType<typeof diagnosticFailureClass>;
+  readonly failureIncidentRef?: string;
+  readonly failureNextAction?: "inspect_job" | "reconcile_exact_turn" | "inspect_diagnostics";
+}
+
+export type WebDelegationFailureStage =
+  | "admission" | "owner_proof" | "connect" | "subscribe" | "thread_create"
+  | "thread_resume" | "settings_update" | "turn_submit" | "turn_observe"
+  | "turn_complete" | "final_result" | "reconcile_owner" | "reconcile_history"
+  | "reconcile_result";
+
+function failureStage(error: unknown, fallback: WebDelegationFailureStage): WebDelegationFailureStage {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("owner changed") || message.includes("owner mismatch")) return "owner_proof";
+  if (message.includes("connection lost") || message.includes("connection")) return "connect";
+  if (message.includes("turn failed")) return "turn_complete";
+  if (message.includes("final answer") || message.includes("final result")) return "final_result";
+  if (message.includes("history") || message.includes("indexed")) return "reconcile_history";
+  return fallback;
+}
+
+function failureMetadata(input: {
+  readonly id: string;
+  readonly threadId?: string;
+  readonly turnId?: string;
+  readonly stage: WebDelegationFailureStage;
+  readonly error: unknown;
+}) {
+  const reasonClass = diagnosticFailureClass(input.error);
+  const operationFingerprint = diagnosticFingerprint(input.id);
+  const fields = {
+    operation_fingerprint: operationFingerprint,
+    failure_class: reasonClass,
+    failure_stage: input.stage,
+    next_action: input.stage === "turn_submit" || input.stage === "turn_observe"
+      ? "reconcile_exact_turn" : input.stage === "final_result" ? "inspect_job" : "inspect_diagnostics",
+    thread_linked: Boolean(input.threadId),
+    turn_linked: Boolean(input.turnId),
+  } as const;
+  emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_failed", fields);
+  const event = structuralDiagnosticEvent({ ts: new Date().toISOString(), event: "chatgpt_tela_codex",
+    stage: "web_delegation_failed", ...fields });
+  return Object.freeze({
+    failureStage: input.stage,
+    failureClass: reasonClass,
+    ...(event ? { failureIncidentRef: diagnosticFailureIncidentRef(event) } : {}),
+    failureNextAction: (input.stage === "turn_submit" || input.stage === "turn_observe"
+      ? "reconcile_exact_turn" : input.stage === "final_result" ? "inspect_job" : "inspect_diagnostics") as
+      "inspect_job" | "reconcile_exact_turn" | "inspect_diagnostics",
+  });
 }
 
 export type WebDelegationRetentionState = "archived" | "excluded" | "deleted";
@@ -609,8 +661,14 @@ export async function collectWebDelegationResult(adapters: WebDelegationAdapters
   const record = await inspectWebDelegationResult(adapters, id);
   const answer = verifiedWebDelegationAnswer(record);
   if (!answer) throw Error("No verified final result; inspect job status");
-  adapters.store.collect(id);
-  return answer;
+  try {
+    adapters.store.collect(id);
+    return answer;
+  } catch (error) {
+    failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
+      ...(record.turnId ? { turnId: record.turnId } : {}), stage: "reconcile_result", error });
+    throw error;
+  }
 }
 function sameOwner(record: WebDelegationRecord, current: Awaited<ReturnType<WebDelegationAdapters["owner"]>>) {
   return JSON.stringify(record.owner) === JSON.stringify(current.binding)
@@ -717,6 +775,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
   let record: WebDelegationRecord | undefined;
   let reserved = false;
   let turnSubmissionAttempted = false;
+  let failureStageHint: WebDelegationFailureStage = "admission";
   let unsubscribe: (() => void) | undefined;
   try {
     record = { id: input.id, slot: input.slot, cwd: input.cwd, createdAt: Date.now(),
@@ -727,7 +786,9 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     adapters.store.reserve(record);
     reserved = true;
     adapters.changed?.(record);
+    failureStageHint = "connect";
     rpc = await adapters.connect(owner.session.terminalEndpoint);
+    failureStageHint = "subscribe";
     if (!rpc.subscribe) throw Error("Event-driven Web delegation is not supported by this engine");
     const selection = parent?.selection ?? selectDelegationWebModel(await rpc.request("model/list", { includeHidden: false }, input.signal));
     const update = (change: Partial<WebDelegationRecord>) => {
@@ -735,7 +796,9 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     };
     update({ selection });
     const prove = async () => { if (!sameOwner(record!, await adapters.owner(input.slot))) throw Error("Web job owner changed"); };
+    failureStageHint = "owner_proof";
     await prove();
+    failureStageHint = parent ? "thread_resume" : "thread_create";
     update({ state: "creating" });
     const sandbox = "workspace-write";
     if (parent) {
@@ -774,6 +837,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     // A Goal or queued continuation can start a turn without passing through our
     // turn/start arguments. Persist the same effective preset before submitting
     // any work on this owned delegation thread.
+    failureStageHint = "settings_update";
     await rpc.request("thread/settings/update", {
       threadId: record.threadId,
       model: selection.model,
@@ -827,6 +891,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     input.signal.addEventListener("abort", abort, { once: true });
     try {
       input.signal.throwIfAborted();
+      failureStageHint = "turn_submit";
       update({ state: "submitting" });
       const sandboxPolicy = { type: "workspaceWrite", writableRoots: [input.cwd], networkAccess: false };
       turnSubmissionAttempted = true;
@@ -839,6 +904,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       if (typeof turn?.id !== "string" || !UUID.test(turn.id)) throw Error("Web job submission ACK is uncertain");
       turnId = turn.id;
       update({ turnId, state: "running" });
+      failureStageHint = "turn_observe";
       for (const [method, event] of pending) accept(method, event);
       pending.length = 0;
       try { await done; }
@@ -853,6 +919,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
         throw error;
       }
       await prove();
+      failureStageHint = "final_result";
       let completed = completedAnswer([...messages.values()]);
       if (!completed) {
         // Missing live item notifications do not prove that a completed turn
@@ -875,8 +942,14 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       const turnFailed = error instanceof Error && error.message === "Web job turn failed";
       const resultUnavailable = error instanceof Error && error.message === "Web job completed without a proven final answer";
       const state = turnFailed || resultUnavailable || !turnSubmissionAttempted ? "failed" : "uncertain";
-      record = { ...record, state, failure: turnFailed ? "turn_failed" : resultUnavailable ? "result_unavailable" : "transport_or_ack" };
+      const stage = failureStage(error, failureStageHint);
+      record = { ...record, state, failure: turnFailed ? "turn_failed" : resultUnavailable ? "result_unavailable" : "transport_or_ack",
+        ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
+          ...(record.turnId ? { turnId: record.turnId } : {}), stage, error }) };
       record = adapters.store.save(record); adapters.changed?.(record);
+    } else {
+      failureMetadata({ id: input.id, ...(record?.threadId ? { threadId: record.threadId } : {}),
+        ...(record?.turnId ? { turnId: record.turnId } : {}), stage: failureStage(error, "admission"), error });
     }
     throw error;
   } finally { unsubscribe?.(); try { await rpc?.close(); } catch { /* Preserve the saved outcome. */ } }
@@ -891,6 +964,7 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
   if (!record.turnId && (record.parentJobId || record.state !== "uncertain")) {
     throw Error("No acknowledged Web turn; do not retry an uncertain submission");
   }
+  try {
   const current = await adapters.owner(record.slot);
   if (!sameAccountOwner(record, current)) throw Error("Web job owner changed");
   const rpc = await adapters.connect(current.session.terminalEndpoint);
@@ -932,12 +1006,27 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
     } as const : {};
     if (turn.status === "failed" || turn.status === "interrupted") {
       return adapters.store.save({ ...record, ...observations, state: "failed", failure: "turn_failed",
+        ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
+          ...(record.turnId ? { turnId: record.turnId } : {}), stage: "turn_complete", error: new Error("Web job turn failed") }),
         ...(turn.status === "failed" && final?.finalEvidence === "explicit-final-phase"
           ? { ...final, taskOutcome: "unassessed" as const } : {}) });
     }
     // Both live and recovery paths release the permit only after the exact
     // completed turn's bounded indexed items prove no deliverable final.
-    if (!final) return adapters.store.save({ ...record, ...observations, state: "failed", failure: "result_unavailable" });
+    if (!final) return adapters.store.save({ ...record, ...observations, state: "failed", failure: "result_unavailable",
+      ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
+        ...(record.turnId ? { turnId: record.turnId } : {}), stage: "reconcile_result", error: new Error("Web job completed without a proven final answer") }) });
     return adapters.store.save({ ...record, ...observations, state: "completed", taskOutcome: "unassessed", ...final });
   } finally { try { await rpc.close(); } catch { /* Preserve a proven recovery result. */ } }
+  } catch (error) {
+    const current = adapters.store.get(id);
+    if (current && !verifiedWebDelegationAnswer(current) && current.state !== "completed") {
+      const stage = failureStage(error, "reconcile_history");
+      const metadata = failureMetadata({ id: current.id, ...(current.threadId ? { threadId: current.threadId } : {}),
+        ...(current.turnId ? { turnId: current.turnId } : {}), stage, error });
+      adapters.store.save({ ...current, ...metadata });
+      adapters.changed?.({ ...current, ...metadata });
+    }
+    throw error;
+  }
 }
