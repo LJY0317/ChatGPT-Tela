@@ -40,6 +40,10 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
       }
       if (method === "thread/start") { attached = true; return { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", approvalPolicy: "never", sandbox: { type: "workspaceWrite" }, thread: { id: threadId, cwd: root, historyMode: "paginated", ephemeral: false } }; }
       if (method === "thread/read") { if (options.titleReadFails) throw Error("Fixture metadata unavailable"); return { thread: { id: threadId, name: currentTitle, preview: "Read this fixture and design only\nMore context" } }; }
+      if (method === "thread/queue/add") {
+        const request = params as { clientUserMessageId: string };
+        return { queuedSubmission: { id: randomUUID(), clientUserMessageId: request.clientUserMessageId, input: [] } };
+      }
       if (method === "thread/name/set") {
         if (options.titleSetFails) throw Error("Fixture naming RPC failed");
         currentTitle = (params as { name: string }).name;
@@ -104,8 +108,25 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
     inspect: (jobId: string = id) => inspectWebDelegationResult(adapters, jobId),
     collect: (jobId: string = id) => collectWebDelegationResult(adapters, jobId),
     setTitle: (name: string | null) => { currentTitle = name; },
-    continue: (parentJobId: string, prompt = "Follow up") => runWebDelegation(adapters, { id: randomUUID(), slot, cwd: root, prompt, parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
+    continue: (parentJobId: string, prompt = "Follow up") => runWebDelegation(adapters, { id: randomUUID(), slot, cwd: root, prompt, parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", signal: AbortSignal.timeout(1000) }), runWithCoordinator: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", coordinator: { slot, threadId, accountFingerprint: "a".repeat(64) }, signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
+
+test("failure notice queues once to the explicitly owned coordinator and preserves the original failure", async () => {
+  const f = await fixture({ failedTurn: true, answer: "" });
+  try {
+    await expect(f.runWithCoordinator()).rejects.toThrow("Web job turn failed");
+    const failed = f.store.get(f.id)!;
+    expect(failed).toMatchObject({ state: "failed", failure: "turn_failed", coordinatorNotice: "queued",
+      coordinatorQueueItemId: expect.any(String), coordinatorClientUserMessageId: expect.any(String), coordinatorFollowThrough: "unobserved" });
+    const notice = f.calls.filter(call => call.method === "thread/queue/add");
+    expect(notice).toHaveLength(1);
+    expect(notice[0]?.params).toMatchObject({ threadId: failed.coordinator?.threadId,
+      clientUserMessageId: failed.coordinatorClientUserMessageId,
+      input: [{ type: "text", text: expect.stringContaining(`job_id: ${f.id}`) }] });
+    await expect(f.runWithCoordinator()).rejects.toThrow();
+    expect(f.calls.filter(call => call.method === "thread/queue/add")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
 
 test("new durable Web job buffers ACK race, returns exact final and never loads a source conversation", async () => {
   const f = await fixture();

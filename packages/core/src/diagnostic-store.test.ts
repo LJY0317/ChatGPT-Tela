@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { diagnosticFingerprint, emitDiagnosticEvent } from "./diagnostic-events";
+import { diagnosticFingerprint, emitDiagnosticEvent, emitDiagnosticIncident } from "./diagnostic-events";
 import { diagnosticContext, withDiagnosticContext } from "./diagnostic-context";
 import { traceDiagnosticToolCall } from "./diagnostic-trace";
 import { analyzeDiagnosticEvents, DIAGNOSTIC_LIMITS, listDiagnosticIncidents, privateDiagnosticCaptureEnabled, readDiagnosticIncident,
@@ -205,6 +205,21 @@ test("failure bursts create a canonical incident asynchronously and coalesce fil
   emitDiagnosticEvent("chatgpt_tela_test","turn_failed"); emitDiagnosticEvent("chatgpt_tela_test","turn_failed");
   await new Promise<void>(resolve=>setImmediate(resolve)); const records=listDiagnosticIncidents(join(root,"diagnostics"));
   expect(records).toHaveLength(1); expect(readDiagnosticIncident(join(root,"diagnostics"),records[0]!.ref)).toMatchObject({occurrences:2});
+});
+test("explicit failure incident returns a reference only after the matching file is readable", () => {
+  const root = fixture();
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = join(root, "events.jsonl");
+  const result = emitDiagnosticIncident("chatgpt_tela_codex", "web_delegation_failed", {
+    operation_fingerprint: fp("job-1"), failure_class: "unknown", failure_stage: "turn_observe",
+    next_action: "reconcile_exact_turn", thread_linked: true, turn_linked: true,
+  });
+  expect(result.state).toBe("recorded");
+  expect(result.ref).toMatch(/^incident_[0-9a-f-]{36}$/);
+  const incident = readDiagnosticIncident(join(root, "diagnostics"), result.ref!);
+  expect(incident).toMatchObject({ ref: result.ref, failure: {
+    stage: "web_delegation_failed", operation_fingerprint: fp("job-1"),
+    failure_stage: "turn_observe", next_action: "reconcile_exact_turn",
+  } });
 });
 test("same RPC number on different requests does not join unrelated conversations",()=>{
   const operation=fp("target"), request=fp("target-request"), other=fp("other-request");

@@ -10,9 +10,10 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { diagnosticContext, DIAGNOSTIC_INSTANCE } from "./diagnostic-context";
-import { structuralDiagnosticEvent, writeDiagnosticIncident, diagnosticFailureIncidentRef, DIAGNOSTIC_LIMITS, type StructuralDiagnosticEvent } from "./diagnostic-store";
+import { structuralDiagnosticEvent, writeDiagnosticIncident, readDiagnosticIncident, diagnosticFailureIncidentRef, DIAGNOSTIC_LIMITS, type StructuralDiagnosticEvent } from "./diagnostic-store";
 
 export type DiagnosticScalar = string | number | boolean;
+export interface DiagnosticEventOptions { readonly scheduleIncident?: boolean; }
 
 const SAFE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const FORBIDDEN_FIELD = /(prompt|path|url|uri|token|secret|email|content|command|output|argument|authorization|cookie|session|turn_capability|workspace_id|account_id|user_id)/i;
@@ -78,11 +79,12 @@ function safeFieldValue(value: DiagnosticScalar, field: string): DiagnosticScala
  * or turn capability material are rejected up front. Callers should log only stage/status/count/duration/
  * fixed enum information and pseudonymous fingerprints when correlation is materially useful.
  */
-export function emitDiagnosticEvent(
+function emitDiagnosticEventResult(
   event: string,
   stage: string,
   fields: Readonly<Record<string, DiagnosticScalar>> = {},
-): void {
+  options: DiagnosticEventOptions = {},
+): StructuralDiagnosticEvent | undefined {
   try {
     const normalized: Record<string, DiagnosticScalar> = {};
     for (const [key, value] of Object.entries(fields)) {
@@ -119,13 +121,46 @@ export function emitDiagnosticEvent(
       const authenticationBoundary = event === "chatgpt_tela_web_auth"
         && (stage === "auth_session_signed_out"
           || (stage === "auth_entry_removed" && normalized.removal_cause !== "overwrite"));
-      if (root && (authenticationBoundary || /(?:failed|error|timeout|crashed|unresponsive|rejected|anomaly)$/.test(stage))) {
+      if (options.scheduleIncident !== false && root
+        && (authenticationBoundary || /(?:failed|error|timeout|crashed|unresponsive|rejected|anomaly)$/.test(stage))) {
         // Failure-triggered only. Never scan raw files, poll, capture payloads or block recovery.
         scheduleIncident(root, safe);
       }
+      return safe;
     }
   } catch {
     // Diagnostics are best-effort and can never replace or alter the primary product result.
+  }
+  return undefined;
+}
+
+/** Emit and synchronously verify one canonical incident when local diagnostics are configured.
+ * A stable reference alone is not a receipt: the returned ref exists only after file readback. */
+export function emitDiagnosticEvent(
+  event: string,
+  stage: string,
+  fields: Readonly<Record<string, DiagnosticScalar>> = {},
+): void {
+  emitDiagnosticEventResult(event, stage, fields);
+}
+
+export function emitDiagnosticIncident(
+  event: string,
+  stage: string,
+  fields: Readonly<Record<string, DiagnosticScalar>> = {},
+): { readonly event?: StructuralDiagnosticEvent; readonly state: "recorded" | "unavailable"; readonly ref?: string } {
+  const emitted = emitDiagnosticEventResult(event, stage, fields, { scheduleIncident: false });
+  if (!emitted) return { state: "unavailable" };
+  const root = configuredDiagnosticRoot();
+  if (!root) return { event: emitted, state: "unavailable" };
+  try {
+    const ref = writeDiagnosticIncident(root, { stage: emitted.stage, observedAt: emitted.ts,
+      firstObservedAt: emitted.ts, occurrences: 1, timeline: recent.slice(-64), failure: emitted });
+    const stored = readDiagnosticIncident(root, ref) as { readonly ref?: unknown };
+    if (stored.ref !== ref) return { event: emitted, state: "unavailable" };
+    return { event: emitted, state: "recorded", ref };
+  } catch {
+    return { event: emitted, state: "unavailable" };
   }
 }
 

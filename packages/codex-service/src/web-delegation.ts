@@ -8,7 +8,7 @@ import type { LocalProfileBinding } from "./cross-profile-thread-relay";
 import type { TrustedNativeProfileSession } from "./cross-profile-account-proof";
 import { selectDelegationWebModel, webDelegationTurnSettings, type DelegationWebModel } from "./web-delegation-model";
 import { indexedWebDelegationProgress, WebDelegationProgressProjection, type WebDelegationProgress } from "./web-delegation-progress";
-import { decodeNativeInlineEvidence, diagnosticFailureClass, diagnosticFailureIncidentRef, diagnosticFingerprint, emitDiagnosticEvent, structuralDiagnosticEvent } from "@chatgpt-tela/core";
+import { decodeNativeInlineEvidence, diagnosticFailureClass, diagnosticFailureIncidentRef, diagnosticFingerprint, emitDiagnosticEvent, emitDiagnosticIncident, structuralDiagnosticEvent } from "@chatgpt-tela/core";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RESULT_BYTES = 512 * 1024;
@@ -121,7 +121,13 @@ export interface WebDelegationRecord {
   readonly failureStage?: WebDelegationFailureStage;
   readonly failureClass?: ReturnType<typeof diagnosticFailureClass>;
   readonly failureIncidentRef?: string;
+  readonly failureIncidentState?: "recorded" | "unavailable";
   readonly failureNextAction?: "inspect_job" | "reconcile_exact_turn" | "inspect_diagnostics";
+  readonly coordinator?: { readonly slot: number; readonly threadId: string; readonly accountFingerprint: string };
+  readonly coordinatorClientUserMessageId?: string;
+  readonly coordinatorQueueItemId?: string;
+  readonly coordinatorNotice?: "queued" | "accepted_unobserved" | "delivery_uncertain" | "unsupported" | "owner_unverified";
+  readonly coordinatorFollowThrough?: "unobserved";
 }
 
 export type WebDelegationFailureStage =
@@ -158,13 +164,12 @@ function failureMetadata(input: {
     thread_linked: Boolean(input.threadId),
     turn_linked: Boolean(input.turnId),
   } as const;
-  emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_failed", fields);
-  const event = structuralDiagnosticEvent({ ts: new Date().toISOString(), event: "chatgpt_tela_codex",
-    stage: "web_delegation_failed", ...fields });
+  const incident = emitDiagnosticIncident("chatgpt_tela_codex", "web_delegation_failed", fields);
   return Object.freeze({
     failureStage: input.stage,
     failureClass: reasonClass,
-    ...(event ? { failureIncidentRef: diagnosticFailureIncidentRef(event) } : {}),
+    failureIncidentState: incident.state,
+    ...(incident.ref ? { failureIncidentRef: incident.ref } : {}),
     failureNextAction: (input.stage === "turn_submit" || input.stage === "turn_observe"
       ? "reconcile_exact_turn" : input.stage === "final_result" ? "inspect_job" : "inspect_diagnostics") as
       "inspect_job" | "reconcile_exact_turn" | "inspect_diagnostics",
@@ -631,6 +636,63 @@ export interface WebDelegationAdapters {
   store: WebDelegationStore;
   changed?(record: WebDelegationRecord): void;
 }
+
+async function notifyFailureCoordinator(adapters: WebDelegationAdapters, record: WebDelegationRecord): Promise<WebDelegationRecord> {
+  if (!record.coordinator || record.coordinatorNotice) return record;
+  const clientUserMessageId = randomUUID();
+  let updated = adapters.store.save({ ...record, coordinatorClientUserMessageId: clientUserMessageId,
+    coordinatorNotice: "delivery_uncertain", coordinatorFollowThrough: "unobserved" });
+  adapters.changed?.(updated);
+  try {
+    const current = await adapters.owner(record.coordinator.slot);
+    const proof: WebDelegationRecord = { ...record, slot: record.coordinator.slot,
+      owner: { ...current.binding, accountFingerprint: record.coordinator.accountFingerprint },
+      session: current.session };
+    if (!sameAccountOwner(proof, current) || current.binding.accountFingerprint !== record.coordinator.accountFingerprint) {
+      updated = adapters.store.save({ ...updated, coordinatorNotice: "owner_unverified" });
+      adapters.changed?.(updated);
+      return updated;
+    }
+    const rpc = await adapters.connect(current.session.terminalEndpoint);
+    try {
+      const read = object(await rpc.request("thread/read", { threadId: record.coordinator.threadId, includeTurns: false }));
+      if (object(read?.thread)?.id !== record.coordinator.threadId) {
+        updated = adapters.store.save({ ...updated, coordinatorNotice: "owner_unverified" });
+        adapters.changed?.(updated);
+        return updated;
+      }
+      const text = [
+        "Tela delegated job failed; inspect this exact job before any retry.",
+        `job_id: ${record.id}`,
+        `thread_id: ${record.threadId ?? "unavailable"}`,
+        `turn_id: ${record.turnId ?? "unavailable"}`,
+        `failure_stage: ${record.failureStage ?? "unknown"}`,
+        `failure_class: ${record.failureClass ?? "unknown"}`,
+        `incident_state: ${record.failureIncidentState ?? "unavailable"}`,
+        `incident_ref: ${record.failureIncidentRef ?? "unavailable"}`,
+        `next_action: ${record.failureNextAction ?? "inspect_diagnostics"}`,
+      ].join("\n");
+      const response = object(await rpc.request("thread/queue/add", {
+        threadId: record.coordinator.threadId, clientUserMessageId,
+        input: [{ type: "text", text }],
+      }));
+      const queued = object(response?.queuedSubmission);
+      if (typeof queued?.id !== "string" || queued.clientUserMessageId !== clientUserMessageId) {
+        updated = adapters.store.save({ ...updated, coordinatorNotice: "delivery_uncertain" });
+      } else {
+        updated = adapters.store.save({ ...updated, coordinatorQueueItemId: queued.id, coordinatorNotice: "queued" });
+      }
+      adapters.changed?.(updated);
+      return updated;
+    } finally { await rpc.close(); }
+  } catch {
+    // The request may have reached Native before the transport failed. Keep the
+    // stable message ID and never submit a second notification blindly.
+    updated = adapters.store.save({ ...updated, coordinatorNotice: "delivery_uncertain" });
+    adapters.changed?.(updated);
+    return updated;
+  }
+}
 /** Explicit terminal-result inspection, including failure; never marks an answer collected. */
 export async function inspectWebDelegationResult(adapters: WebDelegationAdapters, id: string): Promise<WebDelegationRecord> {
   const record = adapters.store.get(id);
@@ -762,6 +824,7 @@ export async function linkNativeThreadForRetention(adapters: WebDelegationAdapte
 export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
   id: string; slot: number; cwd: string; prompt: string; signal: AbortSignal; parentJobId?: string;
   images?: readonly string[];
+  coordinator?: { readonly slot: number; readonly threadId: string; readonly accountFingerprint: string };
 }): Promise<WebDelegationRecord> {
   if (!UUID.test(input.id) || !input.prompt.trim() || Buffer.byteLength(input.prompt) > 24 * 1024) throw Error("Invalid bounded Web delegation");
   if (realpathSync(input.cwd) !== input.cwd || !lstatSync(input.cwd).isDirectory()) throw Error("Web delegation requires an exact workspace");
@@ -778,6 +841,9 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     || parent.cwd !== input.cwd || !sameAccountOwner(parent, owner))) {
     throw Error("Continuation requires a completed, owned Web job in this checkout");
   }
+  if (input.coordinator && (!UUID.test(input.coordinator.threadId)
+    || !Number.isSafeInteger(input.coordinator.slot) || input.coordinator.slot < 1 || input.coordinator.slot > 99
+    || !/^[a-f0-9]{64}$/.test(input.coordinator.accountFingerprint))) throw Error("Coordinator ownership link is invalid");
   let rpc: CodexAppServerRpc | undefined;
   let record: WebDelegationRecord | undefined;
   let reserved = false;
@@ -788,6 +854,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     record = { id: input.id, slot: input.slot, cwd: input.cwd, createdAt: Date.now(),
       promptHash: createHash("sha256").update(input.prompt).digest("hex"), owner: owner.binding,
       session: owner.session, state: "reserved", checkoutRoot: checkoutRoot(input.cwd),
+      ...(parent?.coordinator || input.coordinator ? { coordinator: parent?.coordinator ?? input.coordinator } : {}),
       ...(parent ? { parentJobId: parent.id, threadId: parent.threadId } : {}) };
     // Admission is persistent and atomic before connecting to a model/provider.
     adapters.store.reserve(record);
@@ -950,10 +1017,19 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       const resultUnavailable = error instanceof Error && error.message === "Web job completed without a proven final answer";
       const state = turnFailed || resultUnavailable || !turnSubmissionAttempted ? "failed" : "uncertain";
       const stage = failureStage(error, failureStageHint);
-      record = { ...record, state, failure: turnFailed ? "turn_failed" : resultUnavailable ? "result_unavailable" : "transport_or_ack",
+      const failedRecord: WebDelegationRecord = { ...record, state, failure: turnFailed ? "turn_failed" : resultUnavailable ? "result_unavailable" : "transport_or_ack",
         ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
           ...(record.turnId ? { turnId: record.turnId } : {}), stage, error }) };
-      record = adapters.store.save(record); adapters.changed?.(record);
+      // Persist the failure evidence before any coordinator side effect. Keep
+      // the receipt mutable until the Queue acknowledgement has been journaled.
+      record = adapters.store.save({ ...failedRecord, state: "uncertain" }); adapters.changed?.(record);
+      record = await notifyFailureCoordinator(adapters, record);
+      record = adapters.store.save({ ...failedRecord,
+        ...(record.coordinatorClientUserMessageId ? { coordinatorClientUserMessageId: record.coordinatorClientUserMessageId } : {}),
+        ...(record.coordinatorQueueItemId ? { coordinatorQueueItemId: record.coordinatorQueueItemId } : {}),
+        ...(record.coordinatorNotice ? { coordinatorNotice: record.coordinatorNotice } : {}),
+        ...(record.coordinatorFollowThrough ? { coordinatorFollowThrough: record.coordinatorFollowThrough } : {}) });
+      adapters.changed?.(record);
     } else {
       failureMetadata({ id: input.id, ...(record?.threadId ? { threadId: record.threadId } : {}),
         ...(record?.turnId ? { turnId: record.turnId } : {}), stage: failureStage(error, "admission"), error });
