@@ -99,7 +99,7 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
       };
     },
   };
-  return { root, store, calls, changes, id, executionModels, queuedExecutionModels,
+  return { root, store, calls, changes, id, slot, adapters, executionModels, queuedExecutionModels,
     setModeModel: (model: string) => { modeModel = model; },
     inspect: (jobId: string = id) => inspectWebDelegationResult(adapters, jobId),
     collect: (jobId: string = id) => collectWebDelegationResult(adapters, jobId),
@@ -836,5 +836,24 @@ test("failed Native turns clear approval presentation instead of preserving an a
     expect(f.changes.some(record => record.progress?.summary.startsWith("Approval needed"))).toBe(true);
     expect(f.store.get(f.id)).toMatchObject({ state: "failed" });
     expect(f.store.get(f.id)?.progress).toBeUndefined();
+  } finally { f.cleanup(); }
+});
+
+test("explicit image input reaches start and same-thread continuation exactly once", async () => {
+  const f = await fixture();
+  const png = `data:image/png;base64,${Buffer.from([137,80,78,71,13,10,26,10,0]).toString("base64")}`;
+  try {
+    const first = await runWebDelegation(f.adapters, { id: f.id, slot: f.slot, cwd: f.root,
+      prompt: "Review image", images: [png], signal: AbortSignal.timeout(1000) });
+    const one = f.calls.find(call => call.method === "turn/start")!;
+    expect(one.params).toMatchObject({ input: [{ type: "text" }, { type: "image", url: png }] });
+    await runWebDelegation(f.adapters, { id: randomUUID(), slot: f.slot, cwd: f.root,
+      parentJobId: first.id, prompt: "Follow up", signal: AbortSignal.timeout(1000) });
+    const last = f.calls.filter(call => call.method === "turn/start").at(-1)!;
+    expect(last.params).toMatchObject({ input: [{ type: "text", text: "Follow up", textElements: [] }] });
+    expect(f.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
+    await expect(runWebDelegation(f.adapters, { id: randomUUID(), slot: f.slot, cwd: f.root,
+      prompt: "Invalid image", images: ["https://example.invalid/image.png"], signal: AbortSignal.timeout(1000) })).rejects.toThrow();
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(2);
   } finally { f.cleanup(); }
 });

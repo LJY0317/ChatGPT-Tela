@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readProductPreferences, webDelegationLimit } from "@chatgpt-tela/product-config";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { decodeNativeInlineEvidence } from "@chatgpt-tela/core";
 import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import { readOwnershipManifest, type resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
@@ -115,12 +116,28 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   const promptPath = option("--prompt-file"), stat = lstatSync(promptPath);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 24 * 1024) throw Error("Web job prompt must be a bounded regular file");
   const prompt = readFileSync(promptPath, "utf8");
+  if (args.includes("--file")) throw Error("File attachments are not supported by the current Native turn/start contract");
+  const imagePaths = args.flatMap((arg, index) => arg === "--image-file" ? [args[index + 1]] : []);
+  if (imagePaths.some(path => !path || path.startsWith("--")) || imagePaths.length > 8) throw Error("--image-file requires a bounded local image path");
+  const images = imagePaths.map(path => {
+    const stat = lstatSync(path!);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > 24 * 1024 * 1024) throw Error("Image attachment must be a bounded regular file");
+    const bytes = readFileSync(path!);
+    const mime = bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) ? "image/png"
+      : bytes.subarray(0, 3).equals(Buffer.from([255,216,255])) ? "image/jpeg"
+      : bytes.subarray(0, 3).toString() === "GIF" ? "image/gif"
+      : bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP" ? "image/webp" : undefined;
+    if (!mime) throw Error("Unsupported image attachment format");
+    const inline = `data:${mime};base64,${bytes.toString("base64")}`;
+    decodeNativeInlineEvidence(inline);
+    return inline;
+  });
   const id = continuation ? randomUUID() : args.includes("--job") ? option("--job") : randomUUID();
   try {
     const result = await runWebDelegation({
       ...adapters,
       changed: record => console.log(JSON.stringify({ jobId: record.id, state: record.state, selection: record.selection, toolItems: record.toolItems ?? 0 })),
-    }, { id, slot, cwd, prompt, ...(continuation ? { parentJobId: continuation.id } : {}), signal: AbortSignal.timeout(20 * 60 * 1000) });
+    }, { id, slot, cwd, prompt, ...(images.length ? { images } : {}), ...(continuation ? { parentJobId: continuation.id } : {}), signal: AbortSignal.timeout(20 * 60 * 1000) });
     await inspectWebDelegationResult(adapters, result.id);
     const answer = verifiedWebDelegationAnswer(result);
     if (answer) {

@@ -8,7 +8,7 @@ import type { LocalProfileBinding } from "./cross-profile-thread-relay";
 import type { TrustedNativeProfileSession } from "./cross-profile-account-proof";
 import { selectDelegationWebModel, webDelegationTurnSettings, type DelegationWebModel } from "./web-delegation-model";
 import { indexedWebDelegationProgress, WebDelegationProgressProjection, type WebDelegationProgress } from "./web-delegation-progress";
-import { diagnosticFailureClass, diagnosticFailureIncidentRef, diagnosticFingerprint, emitDiagnosticEvent, structuralDiagnosticEvent } from "@chatgpt-tela/core";
+import { decodeNativeInlineEvidence, diagnosticFailureClass, diagnosticFailureIncidentRef, diagnosticFingerprint, emitDiagnosticEvent, structuralDiagnosticEvent } from "@chatgpt-tela/core";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RESULT_BYTES = 512 * 1024;
@@ -761,9 +761,16 @@ export async function linkNativeThreadForRetention(adapters: WebDelegationAdapte
  * Only an explicitly owned completed thread is eligible for continuation. */
 export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
   id: string; slot: number; cwd: string; prompt: string; signal: AbortSignal; parentJobId?: string;
+  images?: readonly string[];
 }): Promise<WebDelegationRecord> {
   if (!UUID.test(input.id) || !input.prompt.trim() || Buffer.byteLength(input.prompt) > 24 * 1024) throw Error("Invalid bounded Web delegation");
   if (realpathSync(input.cwd) !== input.cwd || !lstatSync(input.cwd).isDirectory()) throw Error("Web delegation requires an exact workspace");
+  if ((input.images?.length ?? 0) > 8) throw Error("Web delegation image count exceeds Native ingress limit");
+  const imageParts = (input.images ?? []).map(url => {
+    const decoded = decodeNativeInlineEvidence(url);
+    if (!decoded.mimeType.startsWith("image/")) throw Error("Web delegation image MIME is unsupported");
+    return { type: "image" as const, url };
+  });
   const owner = await adapters.owner(input.slot);
   const parent = input.parentJobId ? adapters.store.get(input.parentJobId) : undefined;
   if (input.parentJobId && (!parent || parent.state !== "completed" || !verifiedWebDelegationAnswer(parent)
@@ -897,7 +904,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       turnSubmissionAttempted = true;
       const response = object(await rpc.request("turn/start", {
         threadId: record.threadId, ...webDelegationTurnSettings(selection),
-        input: [{ type: "text", text: input.prompt, textElements: [] }],
+        input: [{ type: "text", text: input.prompt, textElements: [] }, ...imageParts],
         sandboxPolicy, approvalPolicy: "never",
       }, input.signal));
       const turn = object(response?.turn);
