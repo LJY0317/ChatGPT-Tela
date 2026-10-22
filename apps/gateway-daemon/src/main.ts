@@ -63,6 +63,7 @@ function optionalPublicConfig(): {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.length > 2) throw new Error("Tela Gateway daemon accepts no command-line arguments");
   const installId = required("CHATGPT_TELA_INSTALL_ID");
   const productVersion = process.env.CHATGPT_TELA_PRODUCT_VERSION?.trim() || "0.0.0";
   const paths = resolveProductPaths();

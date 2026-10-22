@@ -24,6 +24,7 @@ function required(key: string): string {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.length > 2) throw new Error("Tela Codex daemon accepts no command-line arguments");
   const multiProfileLauncher = process.env.CHATGPT_TELA_CODEX_MULTI_PROFILE_LAUNCHER_CLI?.trim();
   const runtimeExecutable = required("CHATGPT_TELA_PRODUCT_PROFILE_RUNTIME_EXECUTABLE");
   const runtimeEntrypoint = required("CHATGPT_TELA_PRODUCT_PROFILE_RUNTIME_ENTRYPOINT");
