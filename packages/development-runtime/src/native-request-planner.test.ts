@@ -1275,14 +1275,25 @@ describe("Native request development Web planner", () => {
     const planner = createNativeRequestDevelopmentWebTurnPlanner();
     const model = chatGptWebModelId(chatGptWebFamilyKey('Observed Family'));
     const currentDeveloper = 'D'.repeat(310_000);
-    const plan = await planner(registered(), { model, reasoning: { effort: 'high' }, input: [
+    const input = [
       { role: 'user', content: 'Past request.' },
       { role: 'user', content: 'Current request.' },
       { role: 'developer', content: currentDeveloper },
-    ] });
+    ];
+    const plan = await planner(registered(), { model, reasoning: { effort: 'high' }, input });
     expect(plan.physicalContext.segments.filter(segment => segment.type === 'revision' && segment.kind === 'developer')).toHaveLength(1);
     expect(plan.physicalContext.transferTokens).toBeGreaterThan(75_000);
-    plan.settle?.({ status: 'failed' });
+    expect(plan.physicalContext.transferTokens).toBeLessThan(95_000);
+    plan.settle?.({ status: 'completed', documentGeneration: 1,
+      surfaceLeaseId: 'developer-counted-once', answer: 'Completed.' });
+    const continued = await planner(registered(), { model, reasoning: { effort: 'high' },
+      input: [...input, { role: 'assistant', content: 'Completed.' },
+        { role: 'user', content: 'Continue this request.' }] });
+    expect(continued.physicalContext.mode).toBe('retained-delta');
+    expect(continued.webEpochId).toBe(plan.webEpochId);
+    expect(continued.retainedSurfaceLeaseId).toBe('developer-counted-once');
+    expect(continued.physicalContext.transferTokens).toBeLessThan(200);
+    continued.settle?.({ status: 'failed' });
   });
 
   test('irreducible fresh authority above soft runway preserves one compatible physical Web generation', async () => {
@@ -1311,21 +1322,6 @@ describe("Native request development Web planner", () => {
     expect(continued.physicalContext.transferTokens).toBeLessThan(200);
     expect(continued.diagnostics).toMatchObject({retained_delta: true, physical_rollover: false});
     continued.settle?.({status: 'failed'});
-  });
-
-  test('an active developer revision is counted once when fitting a fresh Web seed', async () => {
-    const planner = createNativeRequestDevelopmentWebTurnPlanner();
-    const model = chatGptWebModelId(chatGptWebFamilyKey('Observed Family'));
-    const currentDeveloper = 'D'.repeat(310_000);
-    const first = await planner(registered(), {model, reasoning:{effort:'high'}, input:[
-      {role:'user',content:'An earlier request.'},
-      {role:'user',content:'Current request.'},
-      {role:'developer',content:currentDeveloper},
-    ]});
-    expect(first.physicalContext.segments.filter(segment =>
-      segment.type === 'revision' && segment.kind === 'developer')).toHaveLength(1);
-    expect(first.physicalContext.transferTokens).toBeGreaterThan(75_000);
-    first.settle?.({status:'failed'});
   });
 
   test('retained Web context continues for twenty bounded followups without repacking old revisions',async()=>{
