@@ -34,6 +34,11 @@ new runtimes, schedulers or queues. This list records product requirements, not 
   Reuse Native events and Queue instead of a second recovery scheduler, repeated model polling or blind
   resubmission. Coalesce the same failure; preserve existing chats and keep private evidence local. Verify
   coordinator wake-up through the supported host contract before promising unattended recovery.
+  When missing evidence prevents root-cause confirmation, implement and verify the needed diagnostics
+  across recording, notification, investigation and settlement before closing the follow-up. Explicitly
+  record host-contract limits where observation cannot be added; do not fabricate receipt evidence.
+  Expand scan coverage or byte/time retention budgets when evidence is lost; keep raw evidence local and
+  opt-in, coalesce repeats, and retain bounded cleanup rather than introducing another log engine.
 - **Recognizable delegation names.** First verified result collection prefixes a new Tela-created
   conversation once with `[Tela Agent]`, using its Native title or preview first line. Reuse the
   collection receipt; no title observer or timer. Preserve later user renames and stable thread IDs.
