@@ -271,6 +271,10 @@ export class NativeResponsesGateway {
             kind: "request", index, source_index: message.sourceIndex, body_kind: message.contentKind,
             preceded_by_compaction: message.precededByCompaction,
             body_fingerprint: diagnosticFingerprint(message.hash),
+            matched: inputs.some(input => !lifetime!.consumedInputs.has(input.id) && input.textHash === message.hash),
+            // The Responses role is the normalized request role, not a
+            // reliable statement that a human authored this frame upstream.
+            provenance: "upstream_unverified",
           }));
           inputs.forEach((input, index) => emitDiagnosticEvent("chatgpt_tela_work", "native_cycle_input_evidence", {
             kind: "witness", index, item_fingerprint: diagnosticFingerprint(input.id),

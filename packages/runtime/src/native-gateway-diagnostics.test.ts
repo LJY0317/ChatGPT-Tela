@@ -119,9 +119,11 @@ test("cycle failure evidence separates prior final, new message and canonical in
     if (scenario === "input_witness_mismatch") {
       expect(evidence.filter(row => row.kind === "request")).toHaveLength(2);
       expect(evidence).toContainEqual(expect.objectContaining({ kind: "request", index: 0,
-        source_index: 1, body_kind: "string", preceded_by_compaction: false }));
+        source_index: 1, body_kind: "string", preceded_by_compaction: false,
+        matched: true, provenance: "upstream_unverified" }));
       expect(evidence).toContainEqual(expect.objectContaining({ kind: "request", index: 1,
-        source_index: 3, body_kind: "string", preceded_by_compaction: true }));
+        source_index: 3, body_kind: "string", preceded_by_compaction: true,
+        matched: false, provenance: "upstream_unverified" }));
       expect(evidence.filter(row => row.kind === "witness")).toHaveLength(13);
       expect(evidence).toContainEqual(expect.objectContaining({ kind: "witness", index: 0,
         item_fingerprint: diagnosticFingerprint("PRIVATE ID"),
