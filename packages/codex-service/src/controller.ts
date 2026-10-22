@@ -351,8 +351,8 @@ export async function startCodexService(input: {
   };
 
   const profileShutdownReadiness = async (profile: OwnedProfile, duringStop = false): Promise<"ready" | "blocked"> => {
-    if ((!duringStop && (profile.stopping || stoppingProfiles.has(profile.slot)))
-      || profile.child.exitCode !== null || profile.child.signalCode !== null || starting.has(profile.slot)) return "blocked";
+    if ((!duringStop && (profile.stopping || stoppingProfiles.has(profile.slot) || starting.has(profile.slot)))
+      || profile.child.exitCode !== null || profile.child.signalCode !== null) return "blocked";
     const session = await targets.session(profile.target.id);
     if (!ownsNativeTargetSession(profile.target, session, profile)) return "blocked";
     if (!session.endpoint) return "blocked";
@@ -372,10 +372,10 @@ export async function startCodexService(input: {
   };
 
   const shutdownReadiness = async (duringClose = false): Promise<"ready" | "blocked"> => {
-    if ((!duringClose && stopping) || starting.size > 0 || stoppingProfiles.size > 0) return "blocked";
+    if ((!duringClose && (stopping || starting.size > 0)) || stoppingProfiles.size > 0) return "blocked";
     try {
       for (const profile of owned.values()) {
-        if (await profileShutdownReadiness(profile) !== "ready") return "blocked";
+        if (await profileShutdownReadiness(profile, duringClose) !== "ready") return "blocked";
       }
       return "ready";
     } catch {

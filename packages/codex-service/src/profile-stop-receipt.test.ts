@@ -10,6 +10,15 @@ test("refused default Desktop cleanup keeps authenticated child, route and servi
   writeFileSync(state, JSON.stringify({ refuse: true }));
   let active = false, closes = 0, parentQuits = 0;
   const closed = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { closes++; active = false; return new Response(null, { status: 204 }); } });
+  const appServer = Bun.serve({ hostname: "127.0.0.1", port: 0,
+    fetch(request, server) { return server.upgrade(request) ? undefined : new Response(null, { status: 400 }); },
+    websocket: { message(socket, data) {
+      const request = JSON.parse(String(data));
+      if (request.id === undefined) return;
+      socket.send(JSON.stringify({ id: request.id, result: request.method === "thread/loaded/list"
+        ? { data: [], nextCursor: null } : {} }));
+    } },
+  });
   const supervision = resolve(import.meta.dir, "../../../apps/profile-runtime/src/supervision.ts");
   const preview = resolve(import.meta.dir, "../../../apps/profile-runtime/src/bridge-preview-server.ts");
   const mcp = resolve(import.meta.dir, "../../mcp/src/http-server.ts");
@@ -20,13 +29,14 @@ import {startProfileBridgePreviewServer} from ${JSON.stringify(preview)};
 import {startCodexBridgeMcpHttpServer} from ${JSON.stringify(mcp)};
 const lifecycle=await createProfileSupervisorLifecycle();
 const mcp=await startCodexBridgeMcpHttpServer({bridge:{inventory(){return []},async invoke(){throw Error('unused')}},authentication:{kind:'bearer',token:process.env.CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN}});
-const preview=await startProfileBridgePreviewServer({slot:1,bearerToken:process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN,async observe(){return{activeSurfaceCount:0}},async shutdownProfile(){if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).refuse)throw Error('synthetic normal quit refusal');await fetch(process.env.FIXTURE_CLOSED);return{responsesRouteFingerprint:'a'.repeat(64)}}});
+const preview=await startProfileBridgePreviewServer({slot:1,bearerToken:process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN,async observe(){return{activeSurfaceCount:0}},shutdownReadiness(){return 'ready'},async shutdownProfile(){if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).refuse)throw Error('synthetic normal quit refusal');await fetch(process.env.FIXTURE_CLOSED);return{responsesRouteFingerprint:'a'.repeat(64)}}});
 await lifecycle.publishReady({stage:'product-profile-ready',runtimeProcessId:process.pid,slot:1,routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:'default',nativeTargetKind:'default-desktop',targetProcessId:123,nativeReady:true,webState:'preparing',profileId:'fixture',internalMcpUrl:mcp.endpointUrl.href,bridgePreviewUrl:preview.endpoint.href,terminalEndpoint:'ws://127.0.0.1:1234/',responsesUrl:'http://127.0.0.1:1234/',responsesRouteFingerprint:'a'.repeat(64)});
 await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecycle.dispose();`);
   const built = await Bun.build({ entrypoints: [child], target: "bun", outdir: root, naming: "child.mjs" });
   expect(built.success).toBe(true);
   const target = { slot: 1, adapterKind: "default-desktop" as const, id: "default", displayName: "Fixture", state: "stopped", managed: true };
-  const session = () => ({ targetId: "default", state: active ? "ready" : "available", ...(active ? { desktopProcessId: 123 } : {}) });
+  const session = () => ({ targetId: "default", state: active ? "ready" : "available",
+    ...(active ? { desktopProcessId: 123, endpoint: `ws://127.0.0.1:${appServer.port}/` } : {}) });
   const adapter: CodexNativeTargetAdapter = {
     kind: "default-desktop", async profiles() { return [{ target, session: session() }]; },
     async resolve() { return { target, session: session() }; }, async session() { return session(); },
@@ -77,6 +87,6 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
     }
   } finally {
     writeFileSync(state, JSON.stringify({ refuse: false }));
-    await service.close(); await closed.stop(true); rmSync(root, { recursive: true, force: true });
+    await service.close(); await closed.stop(true); await appServer.stop(true); rmSync(root, { recursive: true, force: true });
   }
 }, 20_000);
