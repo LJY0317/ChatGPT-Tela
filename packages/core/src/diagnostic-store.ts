@@ -35,12 +35,7 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
     || typeof row.stage !== "string" || !SAFE_NAME.test(row.stage)) return;
   const safe: Record<string, string | number | boolean> = { ts: new Date(row.ts).toISOString(), event: row.event, stage: row.stage };
   for (const [key, field] of Object.entries(row)) {
-    if (["ts", "event", "stage"].includes(key) || !SAFE_NAME.test(key)
-      || (FORBIDDEN.test(key) && !["content_kind", "content_items", "content_bytes"].includes(key))) continue;
-    if (key === "content_kind") {
-      if (["empty", "text", "image", "mixed", "other"].includes(String(field))) safe[key] = field as string;
-      continue;
-    }
+    if (["ts", "event", "stage"].includes(key) || !SAFE_NAME.test(key) || FORBIDDEN.test(key)) continue;
     if (key === "estimate_kind") {
       if (field === "conservative_upper_bound") safe[key] = field;
       continue;

@@ -40,7 +40,7 @@ export async function dynamicBackendCall<TClient, TResult>(input: {
     emitDiagnosticEvent("chatgpt_tela_gateway", "backend_call_complete", {
       service: input.service,
       duration_ms: diagnosticDurationMs(startedAt),
-      result_kind: result === null ? "null" : Array.isArray(result) ? "array" : typeof result,
+      kind: result === null ? "null" : Array.isArray(result) ? "array" : typeof result,
       ...(resultBytes === undefined ? {} : { result_bytes: resultBytes }),
     });
     return result;

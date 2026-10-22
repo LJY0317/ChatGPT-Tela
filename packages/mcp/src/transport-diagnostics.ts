@@ -35,14 +35,14 @@ export function observeMcpEnvelope(value: unknown, connection: string, direction
       if (Number.isSafeInteger(row.error?.code)) fields.error_code = row.error.code;
       const content = row.result?.content;
       if (Array.isArray(content)) {
-        fields.content_items = content.length;
-        fields.content_kind = content.length === 0 ? "empty"
+        fields.part_count = content.length;
+        fields.kind = content.length === 0 ? "empty"
           : content.every(item => item?.type === "text") ? "text"
           : content.every(item => item?.type === "image") ? "image"
           : content.every(item => item?.type === "text" || item?.type === "image") ? "mixed" : "other";
         const contentBytes = diagnosticSerializedBytes(content);
         const resultBytes = diagnosticSerializedBytes(row.result);
-        if (contentBytes !== undefined) fields.content_bytes = contentBytes;
+        if (contentBytes !== undefined) fields.body_bytes = contentBytes;
         if (resultBytes !== undefined) fields.result_bytes = resultBytes;
       }
       if (Array.isArray(row.result?.tools)) {

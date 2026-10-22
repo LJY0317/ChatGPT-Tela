@@ -89,11 +89,11 @@ describe("Web Chat independent tool path acceptance", () => {
         workspace_id: workspace.id, path: "notes.txt",
       })) as { content: string }).content).toContain("created-through-chat");
       const rows = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
-      const returned = rows.find(row => row.stage === "backend_call_complete" && row.result_kind === "object"
+      const returned = rows.find(row => row.stage === "backend_call_complete" && row.kind === "object"
         && typeof row.request_fingerprint === "string" && typeof row.rpc_fingerprint === "string"
         && rows.some(child => child.stage === "capability_call_complete" && child.parent_fingerprint === row.request_fingerprint));
       const returnedRpc = returned?.rpc_fingerprint;
-      expect(returned).toMatchObject({ service: "chat", result_kind: "object", result_bytes: expect.any(Number),
+      expect(returned).toMatchObject({ service: "chat", kind: "object", result_bytes: expect.any(Number),
         rpc_fingerprint: expect.any(String), request_fingerprint: expect.any(String) });
 
       const operationId = randomUUID();
@@ -126,18 +126,18 @@ describe("Web Chat independent tool path acceptance", () => {
       expect(extensionless.content).toEqual([{ type: "image", mimeType: "image/png", data: png.toString("base64") }]);
       const delivered = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
       expect(delivered.find(row => row.stage === "mcp_rpc_emitted" && row.rpc_fingerprint === returnedRpc))
-        .toMatchObject({ delivery: "transport_send_returned", content_kind: "text",
-          content_items: 1, content_bytes: expect.any(Number), result_bytes: expect.any(Number), error_result: false });
+        .toMatchObject({ delivery: "transport_send_returned", kind: "text",
+          part_count: 1, body_bytes: expect.any(Number), result_bytes: expect.any(Number), error_result: false });
       expect(readDiagnosticTail(diagnosticFile).events.find(row => row.stage === "mcp_rpc_emitted"
-        && row.rpc_fingerprint === returnedRpc)).toMatchObject({ content_kind: "text", content_items: 1,
-          content_bytes: expect.any(Number), result_bytes: expect.any(Number) });
+        && row.rpc_fingerprint === returnedRpc)).toMatchObject({ kind: "text", part_count: 1,
+          body_bytes: expect.any(Number), result_bytes: expect.any(Number) });
 
       chatAvailable = false;
       const unavailable = await call("read", { workspace_id: workspace.id, path: "notes.txt" });
       expect(unavailable.isError).toBe(true);
       const errorRows = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
       expect(errorRows.some(row => row.stage === "mcp_rpc_emitted" && row.error_result === true
-        && row.content_kind === "text" && row.delivery === "transport_send_returned")).toBe(true);
+        && row.kind === "text" && row.delivery === "transport_send_returned")).toBe(true);
       const unavailableInventory = await client.callTool({
         name: CHATGPT_TELA_CHAT_CAPABILITY_INVENTORY, arguments: { query: "" },
       });
