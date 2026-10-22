@@ -1,8 +1,8 @@
 import {expect,test} from "bun:test";
-import {mkdtempSync,readFileSync,rmSync} from "node:fs";
+import {mkdtempSync,rmSync} from "node:fs";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
-import {diagnosticFingerprint, nativeInputReceipt, nativeTextHash} from "@chatgpt-tela/core";
+import {diagnosticFingerprint, nativeInputReceipt, nativeTextHash, readDiagnosticTail} from "@chatgpt-tela/core";
 import type {CanonicalCurrentTurnSource} from "@chatgpt-tela/codex";
 import {NativeResponsesGateway} from "./native-gateway";
 import {ActiveTurnRegistry} from "./registry";
@@ -13,7 +13,7 @@ async function captured(run:()=>Promise<void>){
  const root=mkdtempSync(join(tmpdir(),"tela-gateway-evidence-")),file=join(root,"events.jsonl");
  const previous=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
- try{await run();return readFileSync(file,"utf8").trim().split("\n").map(x=>JSON.parse(x));}
+ try{await run();return readDiagnosticTail(file).events as Record<string, any>[];}
  finally{if(previous===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;rmSync(root,{recursive:true,force:true});}
 }
 test("committed model outcome and denied replay correlate without claiming Native termination",async()=>{
@@ -27,14 +27,14 @@ test("committed model outcome and denied replay correlate without claiming Nativ
   await expect(gateway.handle(request())).rejects.toMatchObject({code:"tela_native_turn_already_retired"});
   expect(launches).toBe(1);
  });
- const commit=rows.find(r=>r.stage==="native_outcome_committed"),replay=rows.find(r=>r.stage==="native_replay_rejected");
+ const commit=rows.find(r=>r.stage==="native_outcome_committed")!,replay=rows.find(r=>r.stage==="native_replay_rejected")!;
  expect(commit.outcome).toBe("final");
  expect(commit.native_terminal_observed).toBe(false);
  expect(replay.current_authority_proven).toBe(false);
  expect(replay.scope_fingerprint).toBe(commit.scope_fingerprint);
  expect(replay.turn_fingerprint).toBe(diagnosticFingerprint("fixture-turn"));
  expect(replay.retryable).toBe(false);
- const retired=rows.find(r=>r.stage==="native_turn_retired");
+ const retired=rows.find(r=>r.stage==="native_turn_retired")!;
  expect(retired).toMatchObject({reason_class:"owner_signal",turn_phase:"completed",retryable:false,execution_proven:false});
  expect(rows.indexOf(retired)).toBeLessThan(rows.indexOf(replay));
  expect(rows.filter(r=>r.stage==="native_cycle_summary")).toHaveLength(1);
@@ -47,7 +47,7 @@ test("first execution failure remains distinct from subsequent replay denial",as
   await expect(gateway.handle(request())).rejects.toThrow("private command failure");
   await expect(gateway.handle(request())).rejects.toMatchObject({code:"tela_native_turn_already_retired"});
  });
- const failure=rows.find(r=>r.stage==="native_execution_failed"),replay=rows.find(r=>r.stage==="native_replay_rejected");
+ const failure=rows.find(r=>r.stage==="native_execution_failed")!,replay=rows.find(r=>r.stage==="native_replay_rejected")!;
  expect(failure.status).toBe("timeout");
  expect(failure.turn_phase).toBe("prepared");
  expect(failure.turn_fingerprint).toBe(replay.turn_fingerprint);
@@ -119,11 +119,11 @@ test("cycle failure evidence separates prior final, new message and canonical in
     if (scenario === "input_witness_mismatch") {
       expect(evidence.filter(row => row.kind === "request")).toHaveLength(2);
       expect(evidence).toContainEqual(expect.objectContaining({ kind: "request", index: 0,
-        source_index: 1, body_kind: "string", preceded_by_compaction: false,
-        matched: true, provenance: "upstream_unverified" }));
+        source_index: 1, mode: "string", preceded_by_compaction: false,
+        matched: true }));
       expect(evidence).toContainEqual(expect.objectContaining({ kind: "request", index: 1,
-        source_index: 3, body_kind: "string", preceded_by_compaction: true,
-        matched: false, provenance: "upstream_unverified" }));
+        source_index: 3, mode: "string", preceded_by_compaction: true,
+        matched: false }));
       expect(evidence.filter(row => row.kind === "witness")).toHaveLength(13);
       expect(evidence).toContainEqual(expect.objectContaining({ kind: "witness", index: 0,
         item_fingerprint: diagnosticFingerprint("PRIVATE ID"),
