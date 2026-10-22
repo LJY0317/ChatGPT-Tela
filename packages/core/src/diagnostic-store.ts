@@ -249,14 +249,22 @@ function ownedRoot(root: string) {
 function files(root: string, type: "incidents" | "private") {
   const path = join(root, type); if (!lstatSync(path).isDirectory() || lstatSync(path).isSymbolicLink()) throw new Error("unsafe diagnostics directory");
   const pattern = type === "incidents" ? INCIDENT_NAME : ARTIFACT_NAME;
+  const proofs = new Map<string, Record<string, any> | null>();
   return readdirSync(path).filter(name => pattern.test(name)).flatMap(name => {
     try {
       const stat = lstatSync(join(path,name)); if (!stat.isFile() || stat.isSymbolicLink()) return [];
       const proofName = type === "incidents" ? name : name.replace(/\.(?:meta\.json|html|jpg|json)$/, ".meta.json");
-      const proofPath = join(path, proofName); const proofStat = lstatSync(proofPath);
-      if (!proofStat.isFile() || proofStat.isSymbolicLink() || proofStat.size > (type === "incidents" ? 128*1024 : 4096)) return [];
-      const proof = JSON.parse(readFileSync(proofPath,"utf8"));
-      if (proof.owner !== OWNER) return [];
+      let proof: Record<string, any> | null = proofs.get(proofName) ?? null;
+      if (!proofs.has(proofName)) {
+        const proofPath = join(path, proofName); const proofStat = lstatSync(proofPath);
+        if (!proofStat.isFile() || proofStat.isSymbolicLink() || proofStat.size > (type === "incidents" ? 128*1024 : 4096)) {
+          proofs.set(proofName, null); return [];
+        }
+        const parsed = JSON.parse(readFileSync(proofPath,"utf8"));
+        proof = parsed.owner === OWNER ? parsed : null;
+        proofs.set(proofName, proof);
+      }
+      if (!proof) return [];
       return [{ name, bytes: stat.size, time: stat.mtimeMs, proof,
         operation: type === "private" && FINGERPRINT.test(proof.operationFingerprint)
           && (proof.kind === "html" || proof.kind === "jpg" || proof.evidenceClass === "failure") ? proof.operationFingerprint as string : undefined }];

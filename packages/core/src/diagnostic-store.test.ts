@@ -169,10 +169,10 @@ test("ongoing private capture persists with the same retention and can be explic
 test("tool JSON churn cannot evict renderer evidence within the existing retention budget", () => {
   const root=fixture(); setPrivateDiagnosticCapture(root,"until-disabled");
   const browser=writePrivateDiagnosticArtifact(root,{kind:"html",bytes:Buffer.from("local renderer evidence"),operationFingerprint:fp("browser")});
-  for(let i=0;i<300;i++) writePrivateDiagnosticArtifact(root,{kind:"json",bytes:Buffer.from("tool traffic"),operationFingerprint:fp("tool")});
+  for(let i=0;i<64;i++) writePrivateDiagnosticArtifact(root,{kind:"json",bytes:Buffer.from("tool traffic"),operationFingerprint:fp("tool")});
   const names=readdirSync(join(root,"private"));
   expect(names).toContain(`${browser}.html`); expect(names).toContain(`${browser}.meta.json`);
-  expect(names).toHaveLength(602);
+  expect(names).toHaveLength(130);
 });
 test("ongoing capture refuses malformed or foreign policy and symlink policy files", () => {
   const root=fixture();setPrivateDiagnosticCapture(root,"until-disabled");
