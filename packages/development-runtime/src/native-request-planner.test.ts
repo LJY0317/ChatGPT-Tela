@@ -489,6 +489,28 @@ describe("Native request development Web planner", () => {
     ]);
     next.settle?.({ status: "failed" });
   });
+  test("edited Goal survives a canonical steered retained continuation", async () => {
+    const goal = { threadId: "thread-1", objective: "Old goal", status: "active", tokenBudget: null,
+      tokensUsed: 0, timeUsedSeconds: 0, updatedAt: 1 };
+    const make = (turnId: string, objective: string) => {
+      const source = binding(turnId);
+      return new ActiveTurnRegistry().register({ ...source, canonicalEvidence: {
+        ...source.canonicalEvidence, nativeGoal: { ...goal, objective },
+      } });
+    };
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    const first = await planner(make("turn-1", "Old goal"), { input: [{ role: "user", content: "Start" }] });
+    first.settle?.({ status: "completed", documentGeneration: 1, surfaceLeaseId: "page", answer: "Done" });
+    const next = await planner(make("turn-2", "Edited goal"), { input: [
+      { role: "user", content: "Start" }, { role: "assistant", content: "Done" },
+      { role: "user", content: "Steering update" },
+    ] });
+    expect(next.physicalContext.mode).toBe("retained-delta");
+    expect(next.physicalContext.segments.map(item => item.content)).toEqual([
+      "Steering update", expect.stringContaining('"objective":"Edited goal"'),
+    ]);
+    next.settle?.({ status: "failed" });
+  });
 
   test("Native current Goal has explicit protected provenance even when historical tool budget is exhausted",()=>{
     const goal={
