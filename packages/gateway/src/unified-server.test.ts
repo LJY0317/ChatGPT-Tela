@@ -150,6 +150,17 @@ describe("unified ChatGPT Tela development MCP", () => {
         },
       });
       expect(text(invoked)).toBe("invoked:future_native_tool_2099");
+
+      const interactive = await client.callTool({
+        name: "tela_chat_exec_command",
+        arguments: { workspace_id: "chatws_fixture", cmd: "read value", interactive: true,
+          operation_id: "11111111-2222-7333-8444-555555555555", yield_time_ms: 0 },
+      });
+      expect(interactive.isError).not.toBe(true);
+      expect(chatCalls.at(-1)).toEqual({ capability: "exec_command", arguments_: {
+        workspace_id: "chatws_fixture", cmd: "read value", interactive: true,
+        operation_id: "11111111-2222-7333-8444-555555555555", yield_time_ms: 0,
+      } });
     } finally {
       await client.close().catch(() => {});
       await server.stop();

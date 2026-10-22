@@ -95,10 +95,10 @@ export const UNIFIED_CHAT_TOOL_DEFINITIONS: readonly ChatToolDefinition[] = Obje
     name: "tela_chat_exec_command",
     capability: "exec_command",
     title: "Run workspace command",
-    description: "Start one resumable command inside an opened workspace. Supply operation_id to make retries idempotent.",
+    description: "Start one resumable command inside an opened workspace. stdin receives EOF by default; set interactive=true when the command requires later write_stdin input. Supply operation_id to make retries idempotent.",
     inputSchema: z.object({ workspace_id: workspaceId, cmd: z.string().min(1).max(64 * 1024),
       working_directory: z.string().min(1).max(16_384).optional(), operation_id: z.string().uuid().optional(),
-      yield_time_ms: yieldTime }),
+      yield_time_ms: yieldTime, interactive: z.boolean().optional() }),
   },
   {
     name: "tela_chat_write_stdin",
