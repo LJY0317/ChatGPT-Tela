@@ -3,7 +3,7 @@ import { CHATGPT_FILE_CONNECT_ORIGINS } from "./chatgpt-file-source";
 import { CHATGPT_TELA_IMPORT_RESOURCE_URI, CHATGPT_TELA_IMPORT_WIDGET_HTML } from "./import-widget";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { emitDiagnosticEvent, traceDiagnosticToolCall, type NativeToolResult } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, emitDiagnosticEvent, traceDiagnosticToolCall, withDiagnosticContext, type NativeToolResult } from "@chatgpt-tela/core";
 import {
   CHATGPT_TELA_CHAT_CAPABILITY_CALL,
   CHATGPT_TELA_CHAT_CAPABILITY_INVENTORY,
@@ -12,6 +12,7 @@ import {
   CHATGPT_TELA_CODEX_TOOL_CALL,
   CHATGPT_TELA_CODEX_TOOL_INVENTORY,
   nativeToolResultToMcpContent,
+  observeNativeMcpResultProjection,
   registerTurnBridgeTools,
   type TelaMcpResultContent,
   type TurnBridgeBackend,
@@ -72,7 +73,17 @@ export function createPublicMcpServer(input: {
     }>,
   ) => void;
   const registerTool: typeof rawRegisterTool = (name, config, handler) => rawRegisterTool(name, config,
-    (arguments_, extra) => traceDiagnosticToolCall(name, arguments_, extra, () => handler(arguments_, extra)));
+    (arguments_, extra) => {
+      const call = () => traceDiagnosticToolCall(name, arguments_, extra, () => handler(arguments_, extra));
+      const goal = name === CHATGPT_TELA_CHAT_CAPABILITY_CALL && arguments_.capability === "goal_control_call"
+        ? arguments_.arguments as { call_id?: unknown } | undefined : undefined;
+      // Bind the caller's opaque correlation ID before the public MCP trace begins.
+      // Native's separate operation fingerprint is recorded by the existing bridge.
+      const id = goal?.call_id;
+      if (typeof id !== "string" || !id || id.length > 512) return call();
+      try { return withDiagnosticContext({ parent_fingerprint: diagnosticFingerprint(id) }, call); }
+      catch { return call(); }
+    });
 
   server.registerResource("tela-chat-review", CHATGPT_TELA_REVIEW_RESOURCE_URI, {
     title: "Tela Chat review",
@@ -138,8 +149,10 @@ export function createPublicMcpServer(input: {
       }
       if (capability === "goal_control_call") {
         const nativeResult = result as NativeToolResult;
+        const mapped = nativeToolResultToMcpContent(nativeResult.content);
+        observeNativeMcpResultProjection(nativeResult, mapped);
         return {
-          content: [...nativeToolResultToMcpContent(nativeResult.content).content],
+          content: [...mapped.content],
           ...(nativeResult.isError ? { isError: true } : {}),
         };
       }

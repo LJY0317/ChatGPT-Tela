@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, traceDiagnosticToolCall } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, traceDiagnosticToolCall, type NativeToolResult } from "@chatgpt-tela/core";
 import type { TurnBridgeBackend } from "./turn-bridge";
 import { nativeToolResultToMcpContent } from "./native-tool-content";
 
@@ -32,6 +32,28 @@ async function inventoryPayload(bridge: TurnBridgeBackend, capability: string, q
     description: tool.description,
     ...(tool.inputSchema ? { inputSchema: tool.inputSchema } : {}),
   })));
+}
+
+/** Shared structural receipt for both Native and Goal calls after MCP content projection. */
+export function observeNativeMcpResultProjection(
+  result: NativeToolResult,
+  mapped: ReturnType<typeof nativeToolResultToMcpContent>,
+): void {
+  let textBytes = 0, textCharacters = 0, textMeasured = true;
+  try {
+    for (const part of mapped.content) if (part.type === "text") {
+      if (typeof part.text !== "string") { textMeasured = false; continue; }
+      textCharacters += part.text.length;
+      if (textCharacters > 1_048_576) { textMeasured = false; continue; }
+      textBytes += Buffer.byteLength(part.text);
+    }
+  } catch { textMeasured = false; }
+  emitDiagnosticEvent("chatgpt_tela_work", "mcp_native_result_projected", {
+    ...(textMeasured ? { text_bytes: textBytes } : {}), text_characters: textCharacters,
+    text_measurement_complete: textMeasured, part_count: mapped.content.length,
+    image_bytes: mapped.uniqueImageBytes, error_result_reported: result.isError === true,
+    kind: mapped.content.length === 0 ? "empty" : mapped.content.every(part => part.type === "text") ? "text" : "mixed",
+  });
 }
 
 /** Register the fixed two-tool turn bridge on one MCP server identity. */
@@ -81,19 +103,7 @@ export function registerTurnBridgeTools(
         };
     const result = await bridge.invoke(turn_capability, invocation);
     const mapped = nativeToolResultToMcpContent(result.content);
-    let textBytes=0,textCharacters=0,textMeasured=true;
-    try {
-      for(const part of mapped.content)if(part.type==="text") {
-        if(typeof part.text!=="string"){textMeasured=false;continue;}
-        textCharacters+=part.text.length;
-        if(textCharacters>1_048_576){textMeasured=false;continue;}
-        textBytes+=Buffer.byteLength(part.text);
-      }
-    }catch{textMeasured=false;}
-    emitDiagnosticEvent("chatgpt_tela_work","mcp_native_result_projected",{
-      ...(textMeasured?{text_bytes:textBytes}:{}),text_characters:textCharacters,text_measurement_complete:textMeasured,
-      part_count:mapped.content.length, image_bytes:mapped.uniqueImageBytes, error_result_reported:result.isError===true,
-    });
+    observeNativeMcpResultProjection(result, mapped);
     return {
       content: [...mapped.content],
       ...(result.isError ? { isError: true } : {}),

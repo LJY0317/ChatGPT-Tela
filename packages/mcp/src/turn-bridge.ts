@@ -44,6 +44,26 @@ export class McpTurnBridge implements TurnBridgeBackend {
     const goalControl = this.turns.resolveGoalControl?.(capability);
     const channel = goalControl ?? this.turns.resolve(capability);
     const tool = channel.binding.tools.exact(invocation.wireName);
+    const goalTool = !!goalControl && !!tool && isNativeGoalTool(tool);
+    // An exact, bounded Goal intent groups repeated logical requests without
+    // retaining argument bodies. The caller and Native operation remain distinct.
+    let goalIntent: Record<string, DiagnosticScalar> = {};
+    try {
+      if (goalTool && invocation.mode === "structured") {
+        const action = tool!.name === "get_goal" ? "read" : "update";
+        const fields = invocation.arguments;
+        const status = action === "read" && Object.keys(fields).length === 0 ? "read"
+          : action === "update" && Object.keys(fields).length === 1
+            && ["complete", "paused", "blocked"].includes(String(fields.status))
+            ? String(fields.status) : "unknown";
+        goalIntent = { action, status,
+          parent_fingerprint: diagnosticFingerprint(invocation.callId),
+          ...(status === "unknown" ? {} : { logical_fingerprint: diagnosticFingerprint(JSON.stringify([
+            channel.binding.authority.threadId, channel.binding.authority.turnId, tool!.name, status,
+          ])) }),
+        };
+      }
+    } catch { /* Diagnostic-only projection must never replace the Native call. */ }
     // Use Native's correlation ID so these events join its existing tool lifecycle.
     const callId = goalControl ? "goal_" + createHash("sha256").update(JSON.stringify([
       channel.binding.authority.threadId, channel.binding.authority.turnId, invocation.callId,
@@ -55,7 +75,7 @@ export class McpTurnBridge implements TurnBridgeBackend {
           scope_fingerprint: diagnosticFingerprint(channel.binding.authority.threadId),
           turn_fingerprint: diagnosticFingerprint(channel.binding.authority.turnId),
           operation_fingerprint: diagnosticFingerprint(callId),
-          goal_only: !!goalControl, goal_tool: !!tool && isNativeGoalTool(tool), ...project(),
+          goal_only: !!goalControl, goal_tool: goalTool, ...goalIntent, ...project(),
         };
       } catch { return; }
       emitDiagnosticEvent("chatgpt_tela_work", stage, fields);
@@ -64,7 +84,7 @@ export class McpTurnBridge implements TurnBridgeBackend {
     try {
       if (goalControl && (!tool || !isNativeGoalTool(tool))) throw Error("Goal control cannot invoke Native work tools");
       return channel.requestTool(goalControl ? { ...invocation, callId } : invocation).then(result => {
-        trace("native_tool_bridge_invoke_returned", () => resultEvidence(result, !!tool && isNativeGoalTool(tool)));
+        trace("native_tool_bridge_invoke_returned", () => resultEvidence(result, goalTool));
         return goalControl ? { ...result, callId: invocation.callId } : result;
       }, error => {
         trace("native_tool_bridge_invoke_failed");

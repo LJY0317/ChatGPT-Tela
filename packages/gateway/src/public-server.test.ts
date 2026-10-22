@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { structuralDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, readDiagnosticTail, structuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { CHATGPT_TELA_EXPORT_RESOURCE_URI } from "./export-widget";
 import { CHATGPT_FILE_CONNECT_ORIGINS } from "./chatgpt-file-source";
 import { CHATGPT_TELA_IMPORT_RESOURCE_URI } from "./import-widget";
@@ -311,5 +311,52 @@ test("public Goal call uses Native MCP content and error semantics without wrapp
   } finally {
     await client.close();
     await server.stop();
+  }
+});
+
+test("completed Goal and subsequent error keep separate persisted MCP receipts", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-goal-receipts-"));
+  const file = join(root, "events.jsonl");
+  const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  let calls = 0;
+  const bridge: TurnBridgeBackend = {
+    inventory: () => [{ wireName: "update_goal", name: "update_goal", kind: "function", description: "Goal", observedFrom: ["fixture"] }],
+    async invoke(_token, invocation) {
+      calls++;
+      return { callId: invocation.callId,
+        content: calls === 1 ? JSON.stringify({ goal: { status: "complete" } }) : "Native goal is already complete",
+        isError: calls !== 1 };
+    },
+  };
+  const server = await startCustomMcpHttpServer({ label: "goal-receipts",
+    createServer: () => createPublicMcpServer({ chat: new DynamicChatBackend(() => undefined, bridge), codex: bridge }) });
+  const transport = new StreamableHTTPClientTransport(server.endpointUrl, {
+    requestInit: { headers: { authorization: `Bearer ${server.bearerToken}` } },
+  });
+  const client = new Client({ name: "goal-receipts", version: "1" }, { capabilities: {} });
+  try {
+    await client.connect(transport as unknown as Transport);
+    const invoke = (id: string) => client.callTool({ name: CHATGPT_TELA_CHAT_CAPABILITY_CALL,
+      arguments: { capability: "goal_control_call", arguments: {
+        goal_control: "fixture", call_id: id, wire_name: "update_goal", arguments: { status: "complete" },
+      } },
+    });
+    expect((await invoke("first-goal")).isError).not.toBe(true);
+    expect((await invoke("second-goal")).isError).toBe(true);
+    const rows = readDiagnosticTail(file).events;
+    for (const [id, error] of [["first-goal", false], ["second-goal", true]] as const) {
+      const related = rows.filter(row => row.parent_fingerprint === diagnosticFingerprint(id));
+      expect(related.some(row => row.stage === "tool_settled" && row.error_result === error)).toBe(true);
+      expect(related.some(row => row.stage === "mcp_native_result_projected"
+        && row.error_result_reported === error && row.kind === "text"
+        && typeof row.text_bytes === "number" && row.text_bytes > 0)).toBe(true);
+    }
+    expect(JSON.stringify(rows)).not.toContain("Native goal is already complete");
+  } finally {
+    await client.close(); await server.stop();
+    if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+    rmSync(root, { recursive: true, force: true });
   }
 });
