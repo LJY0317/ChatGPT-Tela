@@ -1045,7 +1045,11 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       ...(options.visiblePrefix ? { visiblePrefix: options.visiblePrefix } : {}),
       ...(checkpointProducer ? { producer: checkpointProducer } : {}),
       ...(browserModel ? { browserModel } : {}),
-      policy: workingPolicy, preparationBudget, allowMaintenance: !healthyRetained,
+      policy: workingPolicy, preparationBudget,
+      // An opaque Native history bootstrap has already consumed preparation.
+      // Keep optional working-set maintenance out of that same request; the
+      // required physical fit below still decides whether the cold page fits.
+      allowMaintenance: !healthyRetained && continuity.mode !== "visible-prefix-checkpoint",
       ...(preparation ? { preparation, signal: preparation.signal } : {}),
     });
     const pending = Symbol(threadId);

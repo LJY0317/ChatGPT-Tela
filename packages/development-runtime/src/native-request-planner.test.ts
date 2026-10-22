@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2008,6 +2009,81 @@ test('retention decisions explain answer mismatch without changing reconstructio
   expect(reasons).toEqual(['no_committed_context','answer_changed']);
   next.settle?.({status:'failed'});
  }finally{stop?.();}
+});
+
+test('cold Native compaction uses its one completed source summary without a second optional maintenance call', async () => {
+  const directory = scratch();
+  try {
+    const model = chatGptWebModelId(chatGptWebFamilyKey('Fixture'));
+    const sourceContent = JSON.stringify({
+      type: 'tela_native_visible_prefix_v1',
+      items: [{ turnId: 'prior-native', item: { type: 'agentMessage', text: 'Sealed historical task state' } }],
+    });
+    const digest = createHash('sha256').update(sourceContent).digest('hex');
+    const source = {
+      kind: 'native-visible-prefix' as const,
+      threadId: 'thread-1', currentTurnId: 'turn-2', content: sourceContent,
+      contentDigest: digest, digest, sourceItemCount: 1,
+      inlineAssets: [], references: [], localImageCandidates: [],
+    };
+    let sourceReads = 0;
+    const payloads: any[] = [];
+    const observed: any[] = [];
+    const stop = observeDiagnosticEvents(row => {
+      if (row.stage === 'web_retained_context_decision'
+        || row.stage === 'native_checkpoint_preparation_rejected'
+        || row.stage === 'native_working_checkpoint_selected') observed.push(row);
+    });
+    try {
+      const planner = createNativeRequestDevelopmentWebTurnPlanner({
+        checkpointCache: new FileContextCheckpointCache({ directory: join(directory, 'cache') }),
+        visiblePrefix: {
+          accountNamespace: 'fixture-account',
+          journal: new FileNativeVisiblePrefixStageJournal({
+            directory: join(directory, 'ledger'), initializationPath: join(directory, 'ledger-init'),
+          }),
+          async read() { sourceReads++; return source; },
+        },
+        checkpointProducer: async input => {
+          payloads.push(JSON.parse(input.physicalContext.segments[0]!.content));
+          return { nativeTaskId: input.nativeTaskId, sourceRevisionId: input.sourceRevisionId,
+            content: 'Bounded, source-bound historical state; verify old details in Native.' };
+        },
+      });
+      const initial = await planner(registered(), {
+        model, reasoning: { effort: 'medium' },
+        instructions: 'Earlier current instructions.',
+        input: [{ role: 'user', content: 'Original canonical request.' }],
+      });
+      initial.settle?.({ status: 'completed', documentGeneration: 1,
+        surfaceLeaseId: 'original-page', answer: 'Earlier response.' });
+      const canonicalSuffix = Array.from({ length: 8 }, (_, index) => ([
+        { role: 'user', content: `Sealed request ${index}` },
+        { role: 'assistant', content: 'Historical response ' + 'R'.repeat(14_000) },
+      ])).flat();
+      const current = 'Work on the exact newest request; preserve the original Native task.';
+      const request = {
+        model, reasoning: { effort: 'medium' },
+        instructions: 'Current exact instructions differ from the previous page.',
+        input: [
+          { type: 'compaction', encrypted_content: 'opaque-source' },
+          ...canonicalSuffix,
+          { role: 'user', content: current },
+        ],
+      };
+      const result = await planner(registered('turn-2'), request);
+      expect(sourceReads).toBeGreaterThanOrEqual(2);
+      expect(payloads.map(item => item.mode)).toEqual(['snapshot']);
+      expect(payloads[0]?.source?.type).toBe('tela_native_visible_prefix_v1');
+      expect(result.physicalContext.segments.at(-1)).toMatchObject({ kind: 'user', content: current });
+      expect(result.physicalContext.segments.some(item => item.content.includes('source-bound historical state'))).toBe(true);
+      expect(observed).toContainEqual(expect.objectContaining({
+        stage: 'web_retained_context_decision', reason_class: 'input_head_missing',
+      }));
+      expect(observed.filter(item => item.stage === 'native_checkpoint_preparation_rejected')).toHaveLength(0);
+      result.settle?.({ status: 'failed' });
+    } finally { stop?.(); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test('retained boundary denial reports bounded revision order without source prose', async () => {
