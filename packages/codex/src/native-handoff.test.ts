@@ -191,13 +191,24 @@ describe("explicit Native-owned Web handoff, read-only public contract", () => {
       { answer: "markdown code fence\n" + json },
       { answer: JSON.stringify({ type: "tela_native_web_handoff_v1", summary: "ok", limitations: "" }) },
       { overlarge: true },
-      { priorStatus: "inProgress" },
       { current: "some-other-turn" },
     ]) {
       const fixture = source(invalid);
       await expect(fixture.reader.latest("thread-one", "web-turn")).rejects.toThrow();
       expect(fixture.closed()).toBe(1);
     }
+  });
+  test("a failed or interrupted preceding turn without a completed handoff is treated as no handoff", async () => {
+    for (const priorStatus of ["failed", "interrupted", "inProgress", "pending"]) {
+      const fixture = source({ priorStatus, prompt: "Ordinary task that did not complete" });
+      expect(await fixture.reader.latest("thread-one", "web-turn")).toBeUndefined();
+      expect(fixture.closed()).toBe(1);
+    }
+    const cached = source({ priorStatus: "failed" });
+    const digest = createHash("sha256").update(json).digest("hex");
+    await expect(cached.reader.verifyRecent("thread-one", "web-turn", "native-handoff-turn", digest))
+      .rejects.toThrow("no matching authenticated public source");
+    expect(cached.closed()).toBe(1);
   });
   test("an explicit read-only handoff is refused if its turn also performed tools or had another user or answer", async () => {
     const disallowed = [

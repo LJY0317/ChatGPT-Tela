@@ -97,8 +97,11 @@ async function reproveCurrentHandoffTurn(
 
 function parseHandoff(turn: Record<string, unknown>, threadId: string, currentTurnId: string):
   NativeWebHandoff | undefined {
-  if (!checkId(turn.id) || turn.status !== "completed"
-    || turn.itemsView !== "summary" || !Array.isArray(turn.items)) {
+  // Ordinary failed/interrupted/in-progress turns cannot contain an accepted
+  // completed handoff. Treat them as no handoff so they do not block a new Web
+  // request; a cached handoff is still rejected by verifyRecent's digest check.
+  if (turn.status !== "completed") return undefined;
+  if (!checkId(turn.id) || turn.itemsView !== "summary" || !Array.isArray(turn.items)) {
     throw new Error("Native handoff requires a complete public summary of a finished turn");
   }
   const user = turn.items.find(value => record(value)?.type === "userMessage");
