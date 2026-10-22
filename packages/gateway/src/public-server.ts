@@ -41,6 +41,7 @@ export const CHATGPT_TELA_PUBLIC_INSTRUCTIONS = [
   "The Codex inventory query is a literal case-insensitive substring filter, not semantic search. Omit it or use an empty string for the complete inventory. An empty filtered result does not mean no tools are available.",
   "Invoke only tools returned for that same turn capability with arguments matching the returned schema, and continue from the current task state rather than repeating completed work after context rollover or a fresh Web conversation.",
   "Treat actual tool results and platform errors as evidence. A failed tool does not end the user's task: try another suitable tool or method for the same goal. After a deterministic failure, use the failure details to choose the next route; before repeating a side effect, inspect whether the first attempt changed anything.",
+  "Do not claim an execution or service connection was lost merely because a tool result is empty, unavailable, or not visible. Report the exact observed boundary, and claim transport loss only when an explicit transport failure or connection-close event is observed. Keep Native turn completion, captured answer, Goal status, and tool-result delivery as separate facts; Native Goal token counters do not establish Web usage or billing.",
 ].join(" ");
 
 function jsonText(value: unknown): string {

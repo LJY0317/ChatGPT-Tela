@@ -49,6 +49,8 @@ describe("ChatGPT Tela frozen ABI", () => {
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("identifying that exact local task for routing");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("continue the same user goal with another relevant available tool or method");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("actual tool results and platform errors as evidence");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("claim transport loss only when an explicit transport failure or connection-close event is observed");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("Native Goal token counters do not establish Web usage or billing");
   });
 
   test("exposes exactly four generic tools and freezes their real MCP schema fingerprint", async () => {
