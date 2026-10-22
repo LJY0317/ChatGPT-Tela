@@ -57,7 +57,6 @@ profile. They do not start, update or restart services. New delegations default 
 bun run cli web-delegate catalog
 bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt
 bun run cli web-delegate continue --job UUID --prompt-file /path/to/followup.txt
-\n+For explicitly selected local PNG, JPEG, GIF or WebP images, add `--image-file /path/to/image.png` to `start` or `continue` (repeat up to eight times). Only the images named on that request are submitted; a later continuation preserves the same thread without uploading earlier images again. Inline images use the existing Native `turn/start` media contract. The RPC turn acknowledgement proves submission, while a verified Web composer attachment is a separate downstream boundary. Other files are not supported by this managed Native input path and must not be treated as delivered.
 bun run cli web-delegate capacity [--slot N]
 bun run cli web-delegate status --job UUID
 bun run cli web-delegate reconcile --job UUID
