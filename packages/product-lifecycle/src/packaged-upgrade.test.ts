@@ -105,7 +105,10 @@ test("a late no-admission receipt restores stopped peers and leaves the refusing
     };
     // Restoration must use the persisted acknowledgement, not an in-memory settlement guess.
     f.services.settleQuiescence = async () => false;
-    await expect(applyPackagedUpgradeWithRecovery({ plan: f.plan, payloadSourcePath: f.target, services: f.services, ...f.options })).rejects.toMatchObject({ recoveryState: "source-restored" });
+    await expect(applyPackagedUpgradeWithRecovery({ plan: f.plan, payloadSourcePath: f.target, services: f.services, ...f.options })).rejects.toMatchObject({
+      recoveryState: "source-restored",
+      message: expect.stringContaining("chat: active work is still running. Finish it before maintenance. The previous version was restored and previously running services were resumed."),
+    });
     expect(f.services.events).toEqual(["stop:gateway", "stop:codex", "start:codex", "start:gateway"]);
     expect([...f.services.states.values()]).toEqual(["running", "running", "running"]);
     expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(f.plan.targetBlueprint.paths))).toBeUndefined();

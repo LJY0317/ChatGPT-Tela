@@ -508,7 +508,9 @@ async function cancelPackagedUpgradeOwned(input: Parameters<typeof planPackagedU
 
 export class PackagedUpgradeRecoveryError extends Error {
   constructor(readonly recoveryState: "source-restored" | "settlement-required" | "resume-required" | "restoration-incomplete", cause: unknown) {
-    super(`Upgrade did not complete (${recoveryState}); do not replay it automatically`, { cause });
+    super(recoveryState === "source-restored" && cause instanceof PackagedServiceShutdownNotStartedError
+      ? `${cause.message} The previous version was restored and previously running services were resumed.`
+      : `Upgrade did not complete (${recoveryState}); do not replay it automatically`, { cause });
     this.name = "PackagedUpgradeRecoveryError";
   }
 }

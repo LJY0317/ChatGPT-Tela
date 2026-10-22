@@ -24,6 +24,8 @@ class FakeManager implements ServiceRegistrationCommandRunner {
       stdout: this.loaded.has(unit) ? "loaded\n" : "not-found\n", stderr: "" };
     if (args.includes("enable")) this.loaded.add(unit);
     else if (args.includes("disable")) this.loaded.delete(unit);
+    else if (args.includes("stop")) this.running.delete(unit);
+    else if (args.includes("start")) this.running.add(unit);
     else if (!args.includes("daemon-reload") && !args.includes("stop") && !args.includes("start")) throw new Error("Unexpected fake manager operation");
     return { exitCode: 0, stdout: "", stderr: "" };
   }
@@ -97,14 +99,19 @@ test("maintenance review and apply surface a newly blocked shutdown without stop
     const f = fixture(root), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner };
     await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first], options);
     const paths = resolveProductPaths(options);
-    f.runner.running.add("chatgpt-tela-chat.service");
+    for (const service of ["gateway", "codex", "chat"] as const) f.runner.running.add(`chatgpt-tela-${service}.service`);
     let mode: "none" | "late" | "always" = "none", checks = 0;
     const liveOptions = { ...options, async prepareShutdownService(service: "gateway" | "codex" | "chat") {
       if (service !== "chat") return;
       checks++;
-      if (mode === "always" || mode === "late" && checks >= 2) throw new PackagedServiceShutdownNotStartedError(service);
+      if (mode === "always" || mode === "late" && checks >= 3) throw new PackagedServiceShutdownNotStartedError(service);
+    }, async shutdownService(service: "gateway" | "codex" | "chat") {
+      if (service === "chat") throw new PackagedServiceShutdownNotStartedError(service);
+      f.runner.running.delete(`chatgpt-tela-${service}.service`);
     } };
     const args = ["--payload", f.second];
+    const directReview = await runPackagedLifecycleCommand(["upgrade", "--dry-run", ...args], liveOptions) as any;
+    expect(directReview.shutdownBlockers).toEqual([]);
     const reviewed = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...args], liveOptions) as any;
     expect(reviewed.blockers).toEqual([]);
 
@@ -113,11 +120,23 @@ test("maintenance review and apply surface a newly blocked shutdown without stop
       "--review-token", reviewed.reviewToken], liveOptions) as any;
     expect(applied).toMatchObject({ success: false, failedCount: 0,
       blockers: ["chat: active work is still running. Finish it before maintenance."] });
-    expect(f.runner.running).toEqual(new Set(["chatgpt-tela-chat.service"]));
+    expect(f.runner.running).toEqual(new Set(["chatgpt-tela-gateway.service", "chatgpt-tela-codex.service", "chatgpt-tela-chat.service"]));
+    expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("1.0.0");
+    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))).toBeUndefined();
+
+    mode = "none";
+    const raceReview = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...args], liveOptions) as any;
+    const raceApply = await runMaintenanceCommand(["maintenance", "apply", "upgrade", ...args,
+      "--review-token", raceReview.reviewToken], liveOptions) as any;
+    expect(raceApply).toMatchObject({ success: false, failedCount: 0, productVersion: "1.0.0" });
+    expect(raceApply.blockers[0]).toContain("The previous version was restored and previously running services were resumed.");
+    expect(f.runner.running).toEqual(new Set(["chatgpt-tela-gateway.service", "chatgpt-tela-codex.service", "chatgpt-tela-chat.service"]));
     expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("1.0.0");
     expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))).toBeUndefined();
 
     mode = "always";
+    const directBlocked = await runPackagedLifecycleCommand(["upgrade", "--dry-run", ...args], liveOptions) as any;
+    expect(directBlocked.shutdownBlockers).toEqual(["chat: active work is still running. Finish it before maintenance."]);
     const blockedReview = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...args], liveOptions) as any;
     expect(blockedReview.blockers).toEqual(["chat: active work is still running. Finish it before maintenance."]);
   } finally { removeFixture(root); }

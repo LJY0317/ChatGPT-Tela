@@ -4,7 +4,8 @@ import { chmodSync, copyFileSync, lstatSync, mkdtempSync, readFileSync, readdirS
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { readOwnershipManifest, resolveProductPaths, readPackagedUpgradeJournal, readPackagedRepairJournal,
-  packagedUpgradeJournalPath, packagedRepairJournalPath, PackagedServiceShutdownNotStartedError } from "@chatgpt-tela/product-lifecycle";
+  packagedUpgradeJournalPath, packagedRepairJournalPath, PackagedServiceShutdownNotStartedError,
+  PackagedUpgradeRecoveryError } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { parsePackagedLifecycleCommand, runPackagedLifecycleCommand, type PackagedLifecycleOptions } from "./lifecycle";
 import { packagedPayloadFingerprint, readPackagedProductManifest } from "@chatgpt-tela/product-lifecycle";
@@ -51,8 +52,7 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
   }
   const raw = record(operation === "uninstall"
     ? await runProductUninstall({ mode: "dry-run", removeData, ...options, ...(options.runner ? { serviceRegistrationRunner: options.runner } : {}) })
-    : await runPackagedLifecycleCommand([operation, "--dry-run", ...rest], mode === "apply"
-      ? { ...options, skipShutdownReadiness: true } : options));
+    : await runPackagedLifecycleCommand([operation, "--dry-run", ...rest], options));
   // Bind the review to the complete plan and exact package bytes.
   const identity = operation === "uninstall" ? []
     : [packagedPayloadFingerprint(realpathSync(rest[rest.indexOf("--payload") + 1]!))];
@@ -71,10 +71,13 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
         ? await runProductUninstall({ mode: "apply", removeData, ...options, ...(options.runner ? { serviceRegistrationRunner: options.runner } : {}) })
         : await runPackagedLifecycleCommand([operation, "--apply", ...rest], options));
     } catch (error) {
-      if (!(error instanceof PackagedServiceShutdownNotStartedError)) throw error;
+      const blockerMessage = error instanceof PackagedServiceShutdownNotStartedError ? error.message
+        : error instanceof PackagedUpgradeRecoveryError && error.recoveryState === "source-restored"
+          && error.cause instanceof PackagedServiceShutdownNotStartedError ? error.message : undefined;
+      if (!blockerMessage) throw error;
       return { operation, success: false, removedCount: 0, preservedCount: 0, failedCount: 0,
         productVersion: readOwnershipManifest(paths.installManifest)?.productVersion ?? null,
-        blockers: [`${error.service}: active work is still running. Finish it before maintenance.`] };
+        blockers: [blockerMessage] };
     }
     const failed = Number(result.failedCount ?? 0) + (Array.isArray(result.shutdownFailures) ? result.shutdownFailures.length : 0);
     const preservedRepair = operation === "repair" && (result.payload === "preserved" || result.services?.some((s: any) => s.outcome === "preserved"));

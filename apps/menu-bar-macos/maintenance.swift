@@ -324,7 +324,7 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       if result.0 == 0, let applied = try? JSONDecoder().decode(TelaMaintenanceResult.self, from: result.1) {
         completedRemoval = removing && applied.success
         message.stringValue = if let blockers = applied.blockers, !blockers.isEmpty {
-          blockers.joined(separator: "\n") + "\nNo changes were applied. Resolve the blocker, then review again."
+          blockers.joined(separator: "\n") + "\nMaintenance did not complete. Resolve the blocker, then review again."
         } else if applied.success { removing ? "Tela removed. Preserved resources: \(applied.preservedCount). You can close this window."
           : operation == "cancel-upgrade" ? "Update cancelled. The installed version was kept and previously running services were restored."
           : "Changes verified. Reopen Tela to load the updated control center."

@@ -46,11 +46,8 @@ export interface PackagedLifecycleOptions {
   readonly shutdownService?: (service: TelaServiceId) => Promise<void>;
   readonly waitUntilReady?: (service: TelaServiceId, timeoutMs: number) => Promise<void>;
   readonly prepareShutdownService?: (service: TelaServiceId) => Promise<void>;
-  /** Internal: revalidate a reviewed plan without treating live readiness as plan identity. */
-  readonly skipShutdownReadiness?: boolean;
 }
 
-const QUIESCE_ORDER = Object.freeze(["gateway", "codex", "chat"] as const);
 type ShutdownBlueprint = ConstructorParameters<typeof PackagedPlatformServiceController>[0]["blueprint"]
   & { readonly paths: ReturnType<typeof resolveProductPaths> };
 
@@ -69,14 +66,12 @@ function serviceController(installId: string, blueprint: ShutdownBlueprint, opti
 async function shutdownBlockers(installId: string, blueprint: ShutdownBlueprint, options: PackagedLifecycleOptions): Promise<readonly string[]> {
   // Injected shutdown handlers own their own admission contract; don't claim a
   // live readiness observation when that contract was not supplied.
-  if (options.skipShutdownReadiness || (options.shutdownService && !options.prepareShutdownService)) return Object.freeze([]);
+  if (options.shutdownService && !options.prepareShutdownService) return Object.freeze([]);
   try {
-    await serviceController(installId, blueprint, options).prepare(QUIESCE_ORDER);
+    await serviceController(installId, blueprint, options).prepare(blueprint.services.map(({ service }) => service));
     return Object.freeze([]);
   } catch (error) {
-    if (error instanceof PackagedServiceShutdownNotStartedError) {
-      return Object.freeze([`${error.service}: active work is still running. Finish it before maintenance.`]);
-    }
+    if (error instanceof PackagedServiceShutdownNotStartedError) return Object.freeze([error.message]);
     return Object.freeze(["A running service could not confirm that it is safe to stop. Check its status and try again."]);
   }
 }
