@@ -1,0 +1,27 @@
+# Native checkpoint preparation and response-cycle investigation (2026-10-22)
+
+Scope: selected integration candidate `codex/goal-settlement-rootcause-20261022`; no installed product, service, main branch, unrelated checkout, or retired Native turn changed.
+
+## A: profile 1 checkpoint preparation
+
+The captured failing Native turn has a completed `native-visible-prefix` model stage, followed by `web_retained_context_decision=input_head_missing`. The planner then found four working checkpoint candidates but zero covered revisions. It attempted an *optional* `native-request-prefix` maintenance stage: one additional planned call, 34,014 estimated input tokens within the 98,905-token transfer budget. The **one-call preparation budget was already spent** by the required visible-history recovery, so `native_checkpoint_preparation_rejected=model_calls` occurred before task execution. This is a two-stage scheduling defect, not a source-too-large rejection or proof that the existing authority-token accounting was wrong.
+
+The minimum change skips optional working-set maintenance specifically when the continuity result is `visible-prefix-checkpoint`. Its completed historical summary is carried into the current physical context, and the existing physical fit still checks actual capacity and preserves the exact current request and instructions. Ordinary rolling maintenance, cold requests without opaque history, and explicit zero-budget behavior keep their previous code path. The default one-call limit was not raised. No fragment/merge preparation, forced session switch, inferred receipt, or replay was introduced.
+
+A new unique regression in `native-request-planner.test.ts` first reproduced `CheckpointPreparationBudgetExceeded(model_calls)` on the unpatched candidate, then passed after the one-line admission change. It asserts exactly one completed source summary, no second preparation rejection, and exact newest user request.
+
+The installed build `e0454fa` predates this fix and the candidate's earlier authority-estimate changes (`7acc4fd`/`308fe04`). The exact historical checkpoint publication/working-source bytes were not read; source compatibility is established only to the resolution of the logged candidate and coverage counts. Actual ChatGPT Web acceptance after applying the candidate still needs a future authorized, **new** Native turn and verified ordinary product rollout. The retired failed turn must never be retried.
+
+## D: response-cycle conflict
+
+The separate failed D Native turn has `prior_final_present=true`, three appended request user messages, and only two fresh matched Native input witnesses; `native_cycle_proof_rejected=input_witness_mismatch` and `native_replay_rejected=missing_input_proof` follow. Structural fingerprints show two matches and one unmatched third request. The Web answer was produced earlier, but cannot establish that the third request was accepted by Native or that Native received the Web final. The gateway's refusal is correct on this evidence.
+
+The focused regression in `native-gateway-lifetime.test.ts` proves that two witnessed followups plus a third unobserved user message **cannot** launch a second Web cycle. Existing diagnostics already preserve bounded `source_index`, content shape, fingerprints, matched/consumed status, without personal prose. No relaxation of input witnesses or speculative cycle retry was made.
+
+The precise upstream producer of D's third unobserved request is unresolved. A minimal externally supported proof is a bounded, exact-turn correlation of the Native input's `item/started`/turn steering acceptance with the third request index, or a proven upstream request normalization contract. Without this, an automatic transform or re-send would invent Native permission. D is therefore diagnosed to the verified rejection boundary, with a supported additional evidence requirement; no product fix is asserted.
+
+## Validation and limitations
+
+Targeted suite: 99 tests across request planning, working checkpoints and Native response-cycle diagnostics; **98 passed, 1 failed**. The failing pre-existing rolling-context test expects at least five model stages across 31 synthetic turns, but observes three. Re-running that exact test with the original `allowMaintenance: !healthyRetained` expression also observes three, proving this assertion failure is independent of the candidate fix. It was not altered or hidden. The new A and D focused regressions pass. TypeScript `bun run typecheck` passed; no live paid Web operation or product deployment was performed.
+
+Existing integration candidate `4c0ce56` and its earlier validations are preserved. The correct status distinction is: A's two-stage budget defect fixed in source and uniquely regression-tested; D's Native input-evidence boundary diagnosed and protected, upstream origin unproven; installation/live acceptance still pending external authorization.

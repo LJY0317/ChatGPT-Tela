@@ -113,6 +113,26 @@ test("body mutation, stale request and wrong-input witness never authorize anoth
   expect(f.launches()).toBe(1); await f.gateway.close();
 });
 
+test("three appended Native user messages cannot start a cycle with only two fresh input witnesses", async () => {
+  const f = fixture();
+  try {
+    const first = await f.gateway.handle(f.request());
+    f.gateway.commit(first);
+    f.steer("verified followup one", "accepted-one");
+    f.steer("verified followup two", "accepted-two");
+    const continuation = f.request([
+      { role: "user", content: "initial" },
+      { role: "assistant", content: "answer 1" },
+      { role: "user", content: "verified followup one" },
+      { role: "user", content: "verified followup two" },
+      { role: "user", content: "unobserved third input" },
+    ]);
+    await expect(f.gateway.handle(continuation))
+      .rejects.toMatchObject({ code: "tela_native_response_cycle_conflict", retryable: false });
+    expect(f.launches()).toBe(1);
+  } finally { await f.gateway.close(); }
+});
+
 test("pending steering cannot replace an uncommitted final and starts only after its delivery", async () => {
   const f = fixture(), body = f.request();
   const first = await f.gateway.handle(body);
