@@ -137,6 +137,14 @@ export interface CodexService {
   readonly activeProfileCount: number;
 }
 
+/** The Codex owner proved shutdown did not begin because work is active or unverifiable. */
+export class CodexShutdownNotStartedError extends Error {
+  constructor() {
+    super("Tela Codex has active or unverifiable Native/Web work; finish it before shutdown");
+    this.name = "CodexShutdownNotStartedError";
+  }
+}
+
 function routeId(): string {
   return randomBytes(10).toString("hex");
 }
@@ -908,7 +916,7 @@ export async function startCodexService(input: {
       if (closing) return closing;
       closing = (async () => {
         stopping = true;
-        if (await shutdownReadiness(true) !== "ready") throw new Error("Tela Codex has active or unverifiable Native/Web work; finish it before shutdown");
+        if (await shutdownReadiness(true) !== "ready") throw new CodexShutdownNotStartedError();
         // Admission is closed before taking this snapshot. An already-admitted
         // start may publish its child late; drain it before enumerating owners.
         await Promise.all([...starting.values()]);

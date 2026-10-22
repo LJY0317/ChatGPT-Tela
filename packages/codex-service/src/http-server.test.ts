@@ -1,8 +1,8 @@
 import { ProfileConnectionError } from "./profile-operation";
 import { describe, expect, test } from "bun:test";
-import type { CodexService } from "./controller";
+import { CodexShutdownNotStartedError, type CodexService } from "./controller";
 import { startCodexServiceHttpServer } from "./http-server";
-import { CodexServiceClient } from "@chatgpt-tela/service-protocol/client";
+import { CodexServiceClient, ServiceShutdownNotStartedError } from "@chatgpt-tela/service-protocol/client";
 
 function fixtureService(): CodexService {
   return {
@@ -59,6 +59,21 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("a busy owner returns the exact no-start shutdown receipt", async () => {
+    const service = fixtureService();
+    let stopAttempts = 0;
+    service.close = async () => { stopAttempts++; throw new CodexShutdownNotStartedError(); };
+    const server = await startCodexServiceHttpServer({ service });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+      bearerToken: server.bearerToken, startedAt: new Date().toISOString() });
+    try {
+      await expect(client.shutdown()).rejects.toBeInstanceOf(ServiceShutdownNotStartedError);
+      expect(stopAttempts).toBe(1);
+      expect(service.serviceStatus().state).toBe("ready");
+    } finally { await client.close(); await server.close(); }
+  });
+
   test("service readiness waits for its one startup restoration pass", async () => {
     let complete=false;
     const server=await startCodexServiceHttpServer({service:fixtureService(),startupComplete:()=>complete});
