@@ -147,6 +147,14 @@ test("private capture is off, expires without polling, and pairs are bounded", (
   const incident=JSON.stringify(readDiagnosticIncident(root,ref)); expect(incident).toContain("privateArtifacts"); expect(incident).not.toContain("private conversation");
   writeFileSync(join(root,"capture-policy.json"),JSON.stringify({owner:"chatgpt-tela-diagnostics-v1",enabledUntil:Date.now()-1})); expect(capture()).toBeUndefined();
 });
+test("JSON private artifacts resolve their existing metadata pair during retention scans", () => {
+  const root=fixture(); setPrivateDiagnosticCapture(root,"until-disabled");
+  const ref=writePrivateDiagnosticArtifact(root,{kind:"json",bytes:Buffer.from("private JSON evidence"),operationFingerprint:fp("json-artifact")});
+  expect(ref).toBeDefined();
+  const names=readdirSync(join(root,"private"));
+  expect(names).toContain(`${ref}.json`); expect(names).toContain(`${ref}.meta.json`);
+  expect(readFileSync(join(root,"private",`${ref}.json`),"utf8")).toBe("private JSON evidence");
+});
 test("ongoing private capture persists with the same retention and can be explicitly stopped", () => {
   const root=fixture();
   const enabled=setPrivateDiagnosticCapture(root,"until-disabled");
