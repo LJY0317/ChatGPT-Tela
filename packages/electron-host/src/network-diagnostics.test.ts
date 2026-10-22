@@ -35,7 +35,7 @@ test("shared renderer network observation records provider POST completion and f
     sent!(request);
     expect(rows.at(-1)).toMatchObject({ stage: "renderer_request_sent", network_timestamp_ms: 1000 });
     response!({ ...request, timestamp: 1200, statusCode: 200, responseHeaders: headers });
-    expect(rows.at(-1)).toMatchObject({ stage: "renderer_response_started", browser_response: "event_stream", http_status: 200, network_timestamp_ms: 1200 });
+    expect(rows.at(-1)).toMatchObject({ stage: "renderer_response_started", browser_response: "event_stream", request_role: "stream_candidate", http_status: 200, network_timestamp_ms: 1200 });
     const responseRequest = rows.at(-1)!.network_request_fingerprint;
     withDiagnosticContext({ request_fingerprint: diagnosticFingerprint("unrelated-request") }, () => {
       failed!({ ...request, error: "net::ERR_CONNECTION_RESET" });
@@ -46,7 +46,7 @@ test("shared renderer network observation records provider POST completion and f
     expect(rows.at(-1)).not.toHaveProperty("request_fingerprint");
     expect(rows.at(-1)!.network_request_fingerprint).toBe(responseRequest);
     completed!({ ...request, statusCode: 429 });
-    expect(rows.at(-1)).toMatchObject({ stage: "renderer_http_failed", http_status: 429 });
+    expect(rows.at(-1)).toMatchObject({ stage: "renderer_http_failed", http_status: 429, request_role: "unresolved_post" });
     completed!({ ...request, statusCode: 503 });
     expect(rows.at(-1)).toMatchObject({ http_status: 503 });
     const route = rows.at(-1)!.route_fingerprint;

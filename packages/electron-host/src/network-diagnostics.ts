@@ -44,6 +44,9 @@ export function retainRendererNetworkDiagnostics(
       const mime = mimeKey ? headers![mimeKey]?.[0]?.split(";", 1)[0]?.trim().toLowerCase() : undefined;
       const responseClass = mime === "text/event-stream" ? "event_stream"
         : mime === "application/json" || mime?.endsWith("+json") ? "json" : mime ? "other" : "unknown";
+      // This is an observed transport role, not a claim about provider semantics.
+      const requestRole = details.method === "POST" && responseClass === "event_stream" ? "stream_candidate"
+        : details.method !== "POST" ? "auxiliary_candidate" : "unresolved_post";
       const context = target?.origin ?? owner.origin;
       // A persistent surface can outlive its creating Native turn. Correlate the
       // renderer and time, never attribute later requests to that original turn.
@@ -61,6 +64,7 @@ export function retainRendererNetworkDiagnostics(
           method_class: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].includes(details.method) ? details.method.toLowerCase() : "other",
           surface_correlated: !!target,
           browser_response: responseClass,
+          request_role: requestRole,
           network_timestamp_ms: Math.round(details.timestamp),
           ...("error" in details ? { failure_class: /^net::ERR_[A-Z0-9_]+$/.test(details.error) ? details.error.slice(5).toLowerCase() : "unclassified" } : {}),
           ...(httpStatus !== undefined ? { http_status: httpStatus } : {}),
