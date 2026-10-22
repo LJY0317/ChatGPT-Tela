@@ -204,6 +204,13 @@ function mutationClockBootstrap(): string {
       };
       const observer = new MutationObserver(notify);
       document.addEventListener('chatgpt-tela-inspection-settled', notify);
+      document.addEventListener('visibilitychange', notify);
+      globalThis.addEventListener('focus', notify);
+      globalThis.addEventListener('pageshow', notify);
+      globalThis.addEventListener('resize', notify);
+      document.addEventListener('scrollend', notify, true);
+      document.addEventListener('transitionend', notify, true);
+      document.addEventListener('animationend', notify, true);
       observer.observe(document.documentElement || document, {
         subtree: true,
         childList: true,
@@ -238,9 +245,8 @@ function mutationClockBootstrap(): string {
 /**
  * Electron implementation of ChatGPT Tela's generic page-automation capability.
  *
- * DOM mutation waits use one renderer-local MutationObserver and monotonic revision. The revision
- * check and waiter registration happen in the same renderer task, so no polling and no lost wakeup
- * exists between semantic observation and the next relevant DOM change.
+ * DOM mutations and presentation events share one renderer-local monotonic revision.
+ * The check and waiter registration run in one renderer task, with no polling or lost wakeup.
  */
 export class ElectronWebContentsPageAutomation implements BrowserPageAutomation {
   constructor(readonly webContents: ElectronWebContentsLike, readonly dispatchInput?: NonNullable<ElectronWebContentsLike["sendInputEvent"]>) {}

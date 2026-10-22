@@ -1596,6 +1596,32 @@ describe("current ChatGPT DOM surface driver", () => {
     expect((await driver.processApprovalCard("full_access")).status).toBe("dispatched");
     expect(page.actions).toEqual(["pointer:30,40"]);
   });
+  test("unchanged approval card wakes on restored hit-test and dispatches only once", async () => {
+    const deny = new FixtureElement(); deny.textContent = "Deny";
+    const allow = new FixtureElement(); allow.textContent = "Allow once";
+    const card = new FixtureElement({}, { button: [deny, allow] });
+    card.textContent = "Same synthetic request";
+    const root = new FixtureElement({}, { '[data-codex-approval-surface="true"]': [card] });
+    const page = new RendererFixturePage(root);
+    page.hitTest = () => root;
+    let dispatches = 0;
+    page.pointerClick = async () => { dispatches++; };
+    const driver = new ChatGptDomSurfaceDriver(page);
+    const before = await driver.observe();
+    const expected = { cardFingerprint: before.approval!.cardFingerprint!,
+      revisionFingerprint: before.approval!.revisionFingerprint };
+    expect((await driver.processApprovalCard("full_access", undefined, 0, expected)).status).toBe("none");
+    expect(dispatches).toBe(0);
+    // A screen/layout wakeup changes only the actual pointer hit, not card text or identity.
+    page.mutations.push(() => {});
+    page.mutations.push(() => { page.hitTest = () => allow; });
+    const restored = await driver.waitForChange(before.revision);
+    expect(restored.revision).not.toBe(before.revision);
+    expect(restored.approval).toEqual(before.approval);
+    expect((await driver.processApprovalCard("full_access", undefined, 0, expected)).status).toBe("dispatched");
+    expect((await driver.processApprovalCard("full_access", undefined, 0, expected)).status).toBe("none");
+    expect(dispatches).toBe(1);
+  });
 
   test("hung renderer preparation times out; its late completion cannot dispatch input", async () => {
     let release!: (value: Record<string, unknown>) => void;

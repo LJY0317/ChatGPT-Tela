@@ -63,13 +63,13 @@ export interface BrowserPageAutomation {
     signal?: AbortSignal,
   ): Promise<void>;
 
-  /** Monotonic renderer-local DOM mutation revision. Reading it also ensures the event source exists. */
+  /** Monotonic renderer-local DOM and presentation-event revision. Reading initializes the event source. */
   mutationRevision(signal?: AbortSignal): Promise<number>;
 
   /**
-   * Resolve when the DOM mutation revision becomes greater than `afterRevision`.
+   * Resolve when a DOM mutation or relevant presentation event advances the revision.
    * Implementations must perform the revision check and event wait atomically in the renderer so a
-   * mutation between caller observation and waiter registration cannot be lost.
+   * change between caller observation and waiter registration cannot be lost.
    */
   waitForDomMutation(afterRevision: number, signal?: AbortSignal): Promise<number>;
 }

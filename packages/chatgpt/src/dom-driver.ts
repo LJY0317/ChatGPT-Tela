@@ -74,6 +74,8 @@ interface ApprovalDomObservation {
   readonly inputReceived?: boolean;
   readonly receipt?: { cardKey: string; proofKey: string } | null;
   readonly targetState?: "unprepared" | "changed" | "outside_viewport" | "occluded" | "ready";
+  readonly targetHitMask?: number;
+  readonly documentHidden?: boolean;
   readonly obstruction?: {
     readonly kind: string;
     readonly inCard: boolean;
@@ -158,6 +160,8 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     cardKey: null,
     proofKey: null,
     targetState: "unprepared",
+    targetHitMask: 0,
+    documentHidden: document.visibilityState === "hidden",
     inputReceived: false,
     receipt: registry.receipt || null,
   };
@@ -324,6 +328,21 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   result.optionsAnchorStable = prior.menuOpenAnchorText === undefined
     ? null : prior.menuOpenAnchorText === text;
   diagnosticTarget = allowConversationButton || optionsDisclosure || allowOnceButton || allowButton;
+  if (!prepare?.choice) {
+    // Passive geometry is a wakeup hint only. Exact card ownership and a fresh
+    // trusted-input hit test are still required immediately before dispatch.
+    const reachable = element => {
+      if (!element || !visible(element) || element.disabled || element.getAttribute('aria-disabled') === 'true'
+        || element.closest('[inert]')) return false;
+      const center = point(element);
+      if (!center || center.x < 0 || center.y < 0 || Math.round(center.x) >= innerWidth
+        || Math.round(center.y) >= innerHeight) return false;
+      const hit = document.elementFromPoint(Math.round(center.x), Math.round(center.y));
+      return hit === element || !!hit && element.contains(hit);
+    };
+    result.targetHitMask = (reachable(allowOnceButton) ? 1 : 0) | (reachable(allowButton) ? 2 : 0)
+      | (reachable(allowConversationButton) ? 4 : 0) | (reachable(optionsDisclosure) ? 8 : 0);
+  }
   if (prepare?.choice) {
     result.allowPoint = null;
     result.allowOncePoint = null;
@@ -2260,6 +2279,8 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       };
       // Diagnostic-only DOM structure must not create a product observation revision.
       const revision = semanticRevision({ ...snapshot,
+        // A card may become clickable without changing its request text or DOM identity.
+        ...(approval ? { approvalVisual: [card.targetHitMask, card.documentHidden] } : {}),
         turns: snapshot.turns.map(({ bodyStructure: _diagnostic, progressProbe, ...item }) => ({
           ...item, ...(progressProbe ? { progressProbe: {
             titleCount: progressProbe.titleCount,

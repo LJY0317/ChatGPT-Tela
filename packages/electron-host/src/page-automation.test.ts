@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createContext, runInContext } from "node:vm";
 import { ElectronWebContentsPageAutomation, type ElectronWebContentsLike } from "./page-automation";
 
 class FakeWebContents implements ElectronWebContentsLike {
@@ -126,6 +127,28 @@ describe("Electron WebContents page automation", () => {
 
     expect(await automation.mutationRevision()).toBe(3);
     expect(await automation.waitForDomMutation(2)).toBe(3);
+  });
+  test("existing renderer wait wakes on visibility and focus without any DOM mutation", async () => {
+    const document = Object.assign(new EventTarget(), { documentElement: {} });
+    const windowEvents = new EventTarget();
+    const context = createContext({ document,
+      addEventListener: windowEvents.addEventListener.bind(windowEvents),
+      MutationObserver: class { observe() {} },
+    });
+    const page = new ElectronWebContentsPageAutomation({
+      isDestroyed: () => false,
+      executeJavaScript: async code => runInContext(code, context),
+    });
+    let revision = await page.mutationRevision();
+    for (const [target, type] of [[document, "visibilitychange"], [windowEvents, "focus"],
+      [document, "transitionend"]] as const) {
+      const waiting = page.waitForDomMutation(revision);
+      target.dispatchEvent(new Event(type));
+      const observed = await waiting;
+      expect(observed).toBe(revision + 1);
+      revision = observed;
+    }
+    expect(await page.mutationRevision()).toBe(revision);
   });
 
   test("pointer click emits one Electron mouse sequence without retry", async () => {
