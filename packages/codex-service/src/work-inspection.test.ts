@@ -7,6 +7,8 @@ import { CodexServiceClient } from "@chatgpt-tela/service-protocol/client";
 import { startCodexServiceHttpServer } from "./http-server";
 import type { CodexService } from "./controller";
 import { createCodexWorkInspector } from "./work-inspection";
+import { diagnosticFingerprint } from "@chatgpt-tela/core";
+import { writeFileSync } from "node:fs";
 
 const threadId = "11111111-2222-7333-8444-555555555555";
 const turnId = "66666666-7777-7888-9999-aaaaaaaaaaaa";
@@ -78,6 +80,24 @@ describe("profile-owned read-only Work inspection", () => {
         turnFingerprint: current, turnStatus: "inProgress", nativeFinalCommitted: false,
         observedStages: ["native_response_observer_started", "web_turn_identity_pending"],
       });
+      const completed = [
+        { ts: at, event: "chatgpt_tela_work", stage: "web_turn_final_observed",
+          scope_fingerprint: scope, turn_fingerprint: current, assistant_phase: "complete" },
+        { ts: at, event: "chatgpt_tela_work", stage: "native_outcome_committed",
+          scope_fingerprint: scope, turn_fingerprint: current, outcome: "final" },
+        { ts: at, event: "chatgpt_tela_work", stage: "native_response_body_closed",
+          scope_fingerprint: scope, turn_fingerprint: current, reason_class: "drained",
+          delivery: "http_body_consumer", ui_observed: false },
+      ];
+      writeFileSync(join(root, "logs", "codex.diagnostics.jsonl"),
+        [...rows, ...completed].map(row => JSON.stringify(row)).join("\n") + "\n");
+      const settled = await createCodexWorkInspector({ service: f.service as any,
+        logsRoot: join(root, "logs"), connect: f.connect })(2, threadId);
+      expect(settled.diagnostics.activeRequestBoundary).toMatchObject({
+        browserFinalObserved: true, nativeFinalCommitted: true, nativeResponseDrained: true,
+        turnFingerprint: current, turnStatus: "inProgress",
+      });
+      expect(JSON.stringify(settled)).not.toContain("private assistant body");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
   test("passes bounded checkpoint decisions for the exact selected slot and rejects private fields", async () => {
