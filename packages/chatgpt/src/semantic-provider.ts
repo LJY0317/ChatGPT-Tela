@@ -491,7 +491,7 @@ function approvalAssistantVersion(assistant: ChatGptTurnObservation | undefined)
   return fingerprint(JSON.stringify([assistant?.text ?? "", assistant?.publicProgress ?? []]));
 }
 
-/** Structural failure/transition evidence only; no renderer keys, text, URLs or fingerprints of text. */
+/** Structural failure/transition evidence only; raw renderer keys, text and URLs stay private. */
 async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: TrackedTurn,
   snapshot: ChatGptSurfaceSnapshot, reason: "identity_pending" | "approval_pending" | "multiple_assistants"): Promise<void> {
   const completed = snapshot.turns.filter(turn => turn.role === "assistant" && turn.phase === "complete"
@@ -501,6 +501,7 @@ async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: T
   (tracked.deferredCompletionEvidence ??= new Set()).add(reason);
   try {
     await withDiagnosticContext({
+      scope_fingerprint: diagnosticFingerprint(tracked.handle.nativeTaskId),
       operation_fingerprint: diagnosticFingerprint([tracked.handle.nativeTaskId, tracked.handle.nativeTurnId,
         tracked.handle.webEpochId].join("\n")),
       turn_fingerprint: diagnosticFingerprint(tracked.handle.nativeTurnId),
@@ -511,6 +512,7 @@ async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: T
         reason_class: reason, assistant_phase: "complete", assistant_count: completed.length,
         matched_assistant_count: completed.filter(turn => turn.parentUserTurnKey === tracked.userTurnKey).length,
         approval_card_count: snapshot.approval?.cardCount ?? 0,
+        ...(snapshot.approval?.cardFingerprint ? { card_fingerprint: snapshot.approval.cardFingerprint } : {}),
         current_authority_proven: reason === "approval_pending",
       });
       // Reuse local opt-in HTML/screenshot retention. This is an uncommitted

@@ -3044,7 +3044,9 @@ describe("completed browser answer awaiting Native delivery", () => {
       expect(deferred[0]).toMatchObject({ reason_class: reason, assistant_phase: "complete",
         assistant_count: reason === "multiple_assistants" ? 2 : 1,
         complete_assistant_count: reason === "multiple_assistants" ? 2 : 1,
+        scope_fingerprint: diagnosticFingerprint(taskRequest.nativeTaskId),
         current_authority_proven: reason === "approval_pending", turn_fingerprint: diagnosticFingerprint(taskRequest.nativeTurnId) });
+      if (reason === "approval_pending") expect(deferred[0]?.card_fingerprint).toBe(recognizedApproval.cardFingerprint);
       expect(events.filter(row => row.stage === "browser_snapshot_observed" && row.reason_class === "completion_deferred")).toHaveLength(1);
       const structural = readFileSync(file, "utf8");
       expect(structural).not.toContain("PRIVATE_");
