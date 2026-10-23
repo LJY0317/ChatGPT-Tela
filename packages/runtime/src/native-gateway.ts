@@ -46,7 +46,10 @@ interface NativeLifetime {
 }
 
 function requestHash(body: unknown): string {
-  return createHash("sha256").update(JSON.stringify(body)).digest("hex");
+  // Admission identity follows canonical message history. Changes to model,
+  // tools, or other request settings cannot replay an already handled input.
+  return createHash("sha256").update(JSON.stringify(requestMessages(body).map(
+    ({ role, hash, sourceIndex }) => ({ role, hash, sourceIndex })))).digest("hex");
 }
 
 function requestMessages(body: unknown): readonly { role: string; hash: string; sourceIndex: number; contentKind: string; precededByCompaction: boolean }[] {

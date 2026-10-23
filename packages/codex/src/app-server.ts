@@ -1,7 +1,7 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import type { CanonicalCurrentTurnSource } from "./binding";
 import type { CanonicalCurrentTurnEvidence } from "./rollout";
-import { nativeInputReceipt, capturePrivateDiagnosticValue, diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
+import { capturePrivateDiagnosticValue, diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import { NativeHistoryBootstrapRequired } from "./history-bootstrap-error";
 import type { NativeLiveTurnProof, NativeLiveTurnReceipt } from "@chatgpt-tela/core";
 
@@ -367,12 +367,10 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
     let unsubscribe: (() => void) | undefined;
     let unsubscribeLive: (() => void) | undefined;
     let closing = false;
-    const inputReceipts = new Map<string, import("@chatgpt-tela/core").NativeInputReceipt>();
     let liveReceipt: NativeLiveTurnReceipt | undefined;
     const presentation = { reasoning_delta_count: 0, reasoning_part_added_count: 0,
       reasoning_completed_item_count: 0, message_completed_item_count: 0, execution_completed_item_count: 0 };
 
-    const inputs = () => liveReceipt ? (this.#liveTurnProof?.inputs?.(liveReceipt) ?? []) : [...inputReceipts.values()];
     const terminate = (reason: string, error: unknown) => {
       if (closing || controller.signal.aborted) return;
       withDiagnosticContext(origin, () => emitDiagnosticEvent("chatgpt_tela_codex", "native_watch_terminated", {
@@ -410,16 +408,6 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
                 delivery: "native_notification", ui_observed: false,
               }));
             } else if (item?.type === "commandExecution") presentation.execution_completed_item_count++;
-          }
-        }
-        if ((method === "item/started" || method === "item/completed")
-          && event?.threadId === threadId && event.turnId === turnId) {
-          const receipt = nativeInputReceipt(event.item);
-          if (receipt) {
-            const prior = inputReceipts.get(receipt.id);
-            if (prior && prior.textHash !== receipt.textHash || !prior && inputReceipts.size >= 256) {
-              terminate("input_proof_invalid", new Error("Native input observation lost"));
-            } else inputReceipts.set(receipt.id, receipt);
           }
         }
         if (method !== "turn/completed") return;
@@ -467,18 +455,18 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
             terminate("live_owner_revoked", new Error("Native live turn ownership was not retained"));
           }
           signal?.throwIfAborted();
-          if (controller.signal.aborted) return { signal: controller.signal, close, inputs };
+          if (controller.signal.aborted) return { signal: controller.signal, close };
           const fresh = await readBoundedNewestTurn(rpc, threadId, signal, this.#liveTurnProof);
           if (fresh.liveReceipt !== initial.liveReceipt
             || fresh.newest?.id !== turnId || fresh.newest.status !== "inProgress"
             || !this.#liveTurnProof?.isCurrent(initial.liveReceipt)) {
             terminate("snapshot_inactive", new Error("Native live turn changed during observation"));
           }
-          return { signal: controller.signal, close, inputs };
+          return { signal: controller.signal, close };
         }
       }
       signal?.throwIfAborted();
-      if (controller.signal.aborted) return { signal: controller.signal, close, inputs };
+      if (controller.signal.aborted) return { signal: controller.signal, close };
       // Public resume attaches this connection to the loaded thread's notifications.
       // No model/config overrides: Native keeps its existing runtime and authority.
       await rpc.request("thread/resume", { threadId, excludeTurns: true }, signal);
@@ -495,7 +483,7 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
         || newest?.id !== turnId || newest.status !== "inProgress") {
         terminate("snapshot_inactive", new Error("Native turn no longer active"));
       }
-      return { signal: controller.signal, close, inputs };
+      return { signal: controller.signal, close };
     } catch (error) {
       await close();
       throw error;

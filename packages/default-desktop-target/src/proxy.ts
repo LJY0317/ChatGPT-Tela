@@ -330,10 +330,6 @@ export async function startDefaultDesktopAppServerProxy(input: {
           const existing = liveTurnProof.current(threadId);
           if (existing && existing.turnId !== turnId) liveTurnProof.retireThread(threadId);
         }
-        if ((parsed?.method === "item/started" || parsed?.method === "item/completed")
-          && nativeLiveIdentity(parsed.params?.threadId) && nativeLiveIdentity(parsed.params?.turnId)) {
-          liveTurnProof.observeInput(parsed.params.threadId, parsed.params.turnId, state, parsed.params.item);
-        }
         if (parsed?.method === "turn/completed"
           && nativeLiveIdentity(parsed.params?.threadId)
           && nativeLiveIdentity(parsed.params?.turn?.id)) {

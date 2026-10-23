@@ -1,12 +1,10 @@
 import { expect, test } from "bun:test";
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
-import { nativeInputReceipt } from "@chatgpt-tela/core";
 import { NativeResponsesGateway, type StartWebTurn } from "./native-gateway";
 import { ActiveTurnRegistry } from "./registry";
 
 function fixture(run?: StartWebTurn) {
   const owner = new AbortController();
-  const inputs: NonNullable<ReturnType<typeof nativeInputReceipt>>[] = [];
   let cwd = "/fixture";
   let current = "one", proven = true, launches = 0, closes = 0;
   const capabilities: string[] = [];
@@ -15,7 +13,7 @@ function fixture(run?: StartWebTurn) {
       return proven ? { threadId, turnId: current, cwd, workspaceRoots: [cwd],
         sandbox: { kind: "read-only", network: "restricted" }, proof: "turn-context", environmentSourceTurnId: current } : undefined;
     },
-    async watchTurn() { return { signal: owner.signal, inputs: () => inputs, async close() { closes++; } }; },
+    async watchTurn() { return { signal: owner.signal, async close() { closes++; } }; },
   };
   const turns = new ActiveTurnRegistry();
   const gateway = new NativeResponsesGateway(source, turns, async (turn, body, signal) => {
@@ -27,7 +25,6 @@ function fixture(run?: StartWebTurn) {
     client_metadata: { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "fixture", turn_id: current } }, input, tools: [],
   });
   const steer = (text = "followup", id = "steer") => {
-    inputs.push(nativeInputReceipt({ type: "userMessage", id, content: [{ type: "text", text }] })!);
     return request([{ role: "user", content: "initial" }, { role: "assistant", content: "answer 1" }, { role: "user", content: text }]);
   };
   return { gateway, turns, owner, request, steer, capabilities, launches: () => launches, closes: () => closes,
@@ -111,6 +108,17 @@ test("body mutation, stale request and wrong-input witness never authorize anoth
   f.steer("different");
   await expect(f.gateway.handle(forged)).rejects.toThrow("new supported request");
   expect(f.launches()).toBe(1); await f.gateway.close();
+});
+
+test("changing request settings cannot replay an accepted canonical user message", async () => {
+  const f = fixture();
+  const first = await f.gateway.handle(f.request()); f.gateway.commit(first);
+  const followup = f.steer();
+  const second = await f.gateway.handle(followup); f.gateway.commit(second);
+  await expect(f.gateway.handle({ ...followup, model: "other-model", tools: [{ type: "function", name: "extra" }] }))
+    .rejects.toThrow("new supported request");
+  expect(f.launches()).toBe(2);
+  await f.gateway.close();
 });
 
 test("three appended Native user messages cannot start a cycle with only two fresh input witnesses", async () => {

@@ -22,7 +22,7 @@ import {
 } from "@chatgpt-tela/mcp";
 import { startDevelopmentRuntime } from "./runtime";
 import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
-import { nativeInputReceipt, setPrivateDiagnosticCapture, structuralDiagnosticEvent } from "@chatgpt-tela/core";
+import { setPrivateDiagnosticCapture, structuralDiagnosticEvent } from "@chatgpt-tela/core";
 
 const source: CanonicalCurrentTurnSource = {
   async currentTurn(threadId) {
@@ -1337,7 +1337,6 @@ test("same Native turn continuation runs two settled Web cycles through the real
   const previousDiagnosticFile = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
   process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = diagnosticFile;
   const owner = new AbortController();
-  const inputs: NonNullable<ReturnType<typeof nativeInputReceipt>>[] = [];
   const provider = new ExternalContractProvider();
   const submitted: WebTurnRequest[] = [];
   const originalSubmit = provider.submitTurn.bind(provider);
@@ -1345,7 +1344,7 @@ test("same Native turn continuation runs two settled Web cycles through the real
   let acquisitions = 0;
   const retainedPlanner = createNativeRequestDevelopmentWebTurnPlanner();
   const runtime = await startDevelopmentRuntime({
-    currentTurnSource: { ...source, async watchTurn() { return { signal: owner.signal, inputs: () => inputs, async close() {} }; } },
+    currentTurnSource: { ...source, async watchTurn() { return { signal: owner.signal, async close() {} }; } },
     browserHost: new ControlledBrowserHost(async () => {
       acquisitions++;
       return { async navigate() {}, async reveal() {}, async hide() {}, async close() {},
@@ -1358,7 +1357,6 @@ test("same Native turn continuation runs two settled Web cycles through the real
   try {
     const first = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, nativeRequest([{ role: "user", content: "initial" }]));
     expect(first.status).toBe(200); expect(await first.text()).toContain("external-v2-final");
-    inputs.push(nativeInputReceipt({ type: "userMessage", id: "steered", content: [{ type: "text", text: "followup" }] })!);
     const secondBody = nativeRequest([{ role: "user", content: "initial" }, { role: "assistant", content: "external-v2-final" }, { role: "user", content: "followup" }]);
     const second = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, secondBody);
     expect(second.status).toBe(200); expect(await second.text()).toContain("external-v2-final");

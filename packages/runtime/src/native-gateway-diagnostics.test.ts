@@ -2,7 +2,7 @@ import {expect,test} from "bun:test";
 import {mkdtempSync,rmSync} from "node:fs";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
-import {diagnosticFingerprint, nativeInputReceipt, nativeTextHash, readDiagnosticTail} from "@chatgpt-tela/core";
+import {diagnosticFingerprint, nativeTextHash, readDiagnosticTail} from "@chatgpt-tela/core";
 import type {CanonicalCurrentTurnSource} from "@chatgpt-tela/codex";
 import {NativeResponsesGateway} from "./native-gateway";
 import {ActiveTurnRegistry} from "./registry";

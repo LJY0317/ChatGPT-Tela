@@ -1087,17 +1087,6 @@ describe("Native turn termination observation", () => {
     f.disconnect(); expect(watch.signal.aborted).toBe(true); await watch.close();
     expect(f.removed()).toBe(1);
   });
-  test("only exact Native user-message events grant bounded input witnesses", async () => {
-    const f = fixture(), watch = await f.source.watchTurn("thread-1", "turn-1");
-    const item = { type: "userMessage", id: "new-input", content: [{ type: "text", text: "synthetic steering" }] };
-    f.input("foreign", "turn-1", item); f.input("thread-1", "foreign", item);
-    expect(watch.inputs()).toEqual([]);
-    f.input("thread-1", "turn-1", item); f.input("thread-1", "turn-1", item);
-    expect(watch.inputs()).toHaveLength(1);
-    f.input("thread-1", "turn-1", { ...item, content: [{ type: "text", text: "changed" }] });
-    expect(watch.signal.aborted).toBe(true);
-    await watch.close();
-  });
   test("termination during snapshot setup is not missed", async () => {
     const f = fixture(); const read = f.rpc.request.bind(f.rpc);
     f.rpc.request = async (method, params) => { f.emit("thread-1", "turn-1", "interrupted"); return read(method, params); };

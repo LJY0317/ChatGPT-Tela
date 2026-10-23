@@ -13,14 +13,8 @@ export interface NativeLiveTurnReceipt {
   readonly turnId: string;
 }
 
-export interface NativeInputReceipt {
-  readonly id: string;
-  readonly textHash: string;
-}
-
 export interface NativeLiveTurnProof {
   current(threadId: string): NativeLiveTurnReceipt | undefined;
-  inputs?(receipt: NativeLiveTurnReceipt): readonly NativeInputReceipt[];
   isCurrent(receipt: NativeLiveTurnReceipt): boolean;
   /** Undefined means the exact receipt was already lost; callers fail closed. */
   subscribe(receipt: NativeLiveTurnReceipt, revoked: () => void): (() => void) | undefined;
@@ -30,7 +24,6 @@ interface ActiveReceipt {
   readonly receipt: NativeLiveTurnReceipt;
   readonly owner: object;
   readonly subscribers: Set<() => void>;
-  readonly inputs: Map<string, NativeInputReceipt>;
 }
 
 const MAX_ACTIVE_LIVE_TURNS = 64;
@@ -81,27 +74,8 @@ export class NativeLiveTurnRegistry implements NativeLiveTurnProof {
       receipt: Object.freeze({ threadId, turnId }),
       owner,
       subscribers: new Set(),
-      inputs: new Map(),
     });
     return true;
-  }
-
-  inputs(receipt: NativeLiveTurnReceipt): readonly NativeInputReceipt[] {
-    const active = this.#turns.get(receipt.threadId);
-    return active?.receipt === receipt ? [...active.inputs.values()] : [];
-  }
-
-  observeInput(threadId: string, turnId: string, owner: object, item: unknown): void {
-    const active = this.#turns.get(threadId);
-    if (!active || active.owner !== owner || active.receipt.turnId !== turnId) return;
-    const receipt = nativeInputReceipt(item);
-    if (!receipt) return;
-    const previous = active.inputs.get(receipt.id);
-    if (previous && previous.textHash !== receipt.textHash || !previous && active.inputs.size >= 256) {
-      this.#revoke(threadId);
-      return;
-    }
-    active.inputs.set(receipt.id, receipt);
   }
 
   #revoke(threadId: string): void {
@@ -132,24 +106,6 @@ export class NativeLiveTurnRegistry implements NativeLiveTurnProof {
   }
 }
 
-/** Exact, bounded text-only input witnesses. Unknown/multimodal inputs do not grant continuation. */
 export function nativeTextHash(text: string): string {
   return createHash("sha256").update(text).digest("hex");
-}
-
-export function nativeInputReceipt(raw: unknown): NativeInputReceipt | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const item = raw as Record<string, unknown>;
-  if (item.type !== "userMessage" || !identifier(item.id) || !Array.isArray(item.content)
-    || item.content.length === 0 || item.content.length > 256) return undefined;
-  const texts: string[] = [];
-  for (const rawPart of item.content) {
-    if (!rawPart || typeof rawPart !== "object") return undefined;
-    const part = rawPart as Record<string, unknown>;
-    if (part.type !== "text" || typeof part.text !== "string") return undefined;
-    texts.push(part.text);
-  }
-  const text = texts.join("\n");
-  if (!text.trim() || Buffer.byteLength(text) > 1024 * 1024) return undefined;
-  return Object.freeze({ id: item.id, textHash: nativeTextHash(text) });
 }
