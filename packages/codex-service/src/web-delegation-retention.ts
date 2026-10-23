@@ -10,6 +10,7 @@ interface Retention {
   archivedAt?: number;
   /** Native metadata after our archive, used to detect subsequent manual changes. */
   updatedAt?: number;
+  excludedJobId?: string;
 }
 function object(value: unknown): Record<string, any> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : undefined;
@@ -148,6 +149,13 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           if (!Array.isArray(queue?.data) || queue.data.length || queue.nextCursor != null) continue;
           if (!sameAccountOwner(record, await adapters.owner(record.slot))) continue;
           historyEligible.add(`${record.slot}:${record.owner.accountFingerprint}:${record.threadId}`);
+          const boundary = jobs.findIndex(job => job.id === retained.excludedJobId);
+          if (boundary < 0 || boundary === jobs.length - 1 || present.archived
+            || !jobs.slice(boundary + 1).some(job => job.turnId === latest.id)) continue;
+          unlinkSync(path);
+          const activity = Math.max(record.createdAt, Number(present.thread.updatedAt) * 1000);
+          const archiveDue = collected !== undefined ? Math.max(collected, activity) + DAY : activity + 7 * DAY;
+          if (Number.isFinite(archiveDue)) next = Math.min(next, archiveDue);
           continue;
         }
         const updatedAt = present.thread.updatedAt;
@@ -156,7 +164,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           || retained?.state === "archived" && updatedAt !== retained.updatedAt) {
           // Manual archive, restore or an observed change while archived hands
           // control to the user. Never delete such a thread automatically.
-          save(path, { state: "excluded" }); continue;
+          save(path, { state: "excluded", excludedJobId: record.id }); continue;
         }
         if (due > now) continue;
         const tail = object(await rpc.request("thread/turns/list", {
@@ -167,7 +175,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           || present.thread.status?.type === "active") continue;
         if (!jobs.some(job => job.turnId === latest.id)) {
           // The user continued the thread outside the managed journal.
-          save(path, { state: "excluded" }); continue;
+          save(path, { state: "excluded", excludedJobId: record.id }); continue;
         }
         const queue = object(await rpc.request("thread/queue/list", { threadId: record.threadId, limit: 1 }, input.signal));
         if (!Array.isArray(queue?.data)) throw Error("Native queued work inventory unavailable");
@@ -195,7 +203,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
         } catch (error) {
           // Unknown mutation outcomes are not permission to repeat a request.
           // Keep the Native conversation and relinquish automatic management.
-          if (load(path)?.state !== "deleted") save(path, { state: "excluded" });
+          if (load(path)?.state !== "deleted") save(path, { state: "excluded", excludedJobId: record.id });
           throw error;
         }
       } finally { /* Shared owner connection closes after the pass. */ }

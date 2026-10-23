@@ -143,6 +143,28 @@ test("manual archive then delete cleans an excluded thread before its due date",
     expect(f.calls.filter(c => c.method === "thread/delete" || c.method === "thread/archive")).toHaveLength(0);
   } finally { f.cleanup(); }
 });
+test("a later managed continuation reclaims manual exclusion, while old history does not", async () => {
+  const f = fixture();
+  try {
+    f.native.archived = true;
+    await f.run(f.origin + DAY);
+    expect(f.store.threadRetention(f.record)?.state).toBe("excluded");
+    f.native.archived = false;
+    await f.run(f.origin + 8 * DAY);
+    expect(f.native.archived).toBe(false);
+    const child = { ...f.record, id: randomUUID(), parentJobId: f.record.id,
+      turnId: randomUUID(), createdAt: f.origin + 9 * DAY };
+    f.store.reserve(child);
+    f.store.save({ ...child, state: "completed", answer: "continued", finalEvidence: "explicit-final-phase" });
+    f.native.tailId = child.turnId;
+    f.native.updatedAt = child.createdAt / 1000;
+    await f.run(f.origin + 10 * DAY);
+    expect(f.store.threadRetention(child)).toBeUndefined();
+    expect(f.native.archived).toBe(false);
+    await f.run(f.origin + 16 * DAY);
+    expect(f.native.archived).toBe(true);
+  } finally { f.cleanup(); }
+});
 test("before-due manual deletion is reconciled without an automatic mutation", async () => {
   const f = fixture();
   try {
