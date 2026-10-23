@@ -72,7 +72,15 @@ bun run cli web-delegate result --job UUID --confirm-title-retry
 These commands operate on journal-owned Web jobs. `continue` requires a proven
 completed eligible parent and starts a new turn in the same thread; it does not
 enqueue work or steer a running generation. The Native conversation's own queue
-and steering operate under its separate Native authority. When the current harness
+and steering operate under its separate Native authority.
+The original checkout must still exist for `continue`: it anchors the workspace-write
+sandbox and single-writer lease. A deleted checkout requires a fresh delegation in
+an existing workspace; the CLI cannot resume that thread by silently changing its cwd.
+Failed turns retain a bounded `tela_native_*` error code when supplied by Native,
+alongside the generic failure class. The incident reason is the same sanitized code;
+arbitrary error messages and codes are never recorded.
+
+When the current harness
 advertises its original Goal tools, the Web task receives a separate Goal-only
 control capability. Discover `goal_control_inventory` through Tela Chat and use
 `goal_control_call` with the returned Native schema. This uses the original Native

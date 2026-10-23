@@ -9,7 +9,7 @@ import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { runWebDelegation, inspectWebDelegationResult, collectWebDelegationResult, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
-async function fixture(options: { titleReadFails?: boolean; titleReadAfterSetFails?: boolean; titleSetFails?: boolean; titleSetAckLost?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; latestStatus?: "failed" | "interrupted"; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
+async function fixture(options: { nativeFailureCode?: string; titleReadFails?: boolean; titleReadAfterSetFails?: boolean; titleSetFails?: boolean; titleSetAckLost?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; latestStatus?: "failed" | "interrupted"; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const slot = options.slot ?? 1;
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
@@ -74,7 +74,7 @@ async function fixture(options: { titleReadFails?: boolean; titleReadAfterSetFai
           status: options.failedTool ? "failed" : "completed",
           aggregatedOutput: options.enormousOutput ? "x".repeat(140 * 1024) : "fixture-result-not-in-journal" } });
         if (options.collaboration) notify("item/completed", { threadId, turnId: currentTurnId, item: { id: "collab", type: "collabAgentToolCall" } });
-        notify("turn/completed", { threadId, turn: { id: currentTurnId, status: options.failedTurn ? "failed" : "completed" } });
+        notify("turn/completed", { threadId, turn: { id: currentTurnId, status: options.failedTurn ? "failed" : "completed", ...(options.nativeFailureCode ? { error: { code: options.nativeFailureCode, message: "private native error" } } : {}) } });
         return { turn: { id: currentTurnId } };
       }
       if (method === "thread/turns/list") {
@@ -87,7 +87,7 @@ async function fixture(options: { titleReadFails?: boolean; titleReadAfterSetFai
           ] },
           ...(options.ambiguousFirstTurn ? [{ id: randomUUID(), status: "completed", items: [] }] : []),
         ], nextCursor: null };
-        return { data: [{ id: currentTurnId, status: options.indexedProgress ? "inProgress" : options.latestStatus ?? (options.failedTurn ? "failed" : "completed"), items: [
+        return { data: [{ id: currentTurnId, status: options.indexedProgress ? "inProgress" : options.latestStatus ?? (options.failedTurn ? "failed" : "completed"), ...(options.nativeFailureCode ? { error: { code: options.nativeFailureCode, message: "private native error" } } : {}), items: [
         ...(options.indexedProgress ? [{ id: "reasoning", type: "reasoning", summary: ["Earlier public summary", "Approval needed" + "x".repeat(5000)], rawContent: "hidden-reasoning-must-not-be-read" }] : []),
         { id: "final", type: "agentMessage", ...(options.foreignFinal ? { phase: "commentary" } : options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified recovered design" },
         ...(options.summaryToolResult ? [{ id: "read", type: "commandExecution",
@@ -945,5 +945,16 @@ test("explicit image input reaches start and same-thread continuation exactly on
     await expect(runWebDelegation(f.adapters, { id: randomUUID(), slot: f.slot, cwd: f.root,
       prompt: "Invalid image", images: ["https://example.invalid/image.png"], signal: AbortSignal.timeout(1000) })).rejects.toThrow();
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(2);
+  } finally { f.cleanup(); }
+});
+
+test("structured Native failure code survives journal settlement without private text", async () => {
+  const f = await fixture({ failedTurn: true, answer: "", nativeFailureCode: "tela_native_projection_unsupported" });
+  try {
+    await expect(f.run()).rejects.toThrow("Web job turn failed");
+    const record = f.store.get(f.id)!;
+    expect(record).toMatchObject({ failure: "turn_failed", failureStage: "turn_complete",
+      failureNativeCode: "tela_native_projection_unsupported", failureIncidentRef: expect.any(String) });
+    expect(JSON.stringify(record)).not.toContain("private native error");
   } finally { f.cleanup(); }
 });
