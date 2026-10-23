@@ -962,14 +962,20 @@ test("explicit image input reaches start and same-thread continuation exactly on
       prompt: "Review image", images: [png], signal: AbortSignal.timeout(1000) });
     const one = f.calls.find(call => call.method === "turn/start")!;
     expect(one.params).toMatchObject({ input: [{ type: "text" }, { type: "image", url: png }] });
-    await runWebDelegation(f.adapters, { id: randomUUID(), slot: f.slot, cwd: f.root,
-      parentJobId: first.id, prompt: "Follow up", signal: AbortSignal.timeout(1000) });
+    const second = await runWebDelegation(f.adapters, { id: randomUUID(), slot: f.slot, cwd: f.root,
+      parentJobId: first.id, prompt: "Follow up", images: [png], signal: AbortSignal.timeout(1000) });
     const last = f.calls.filter(call => call.method === "turn/start").at(-1)!;
-    expect(last.params).toMatchObject({ input: [{ type: "text", text: "Follow up", textElements: [] }] });
+    expect(last.params).toMatchObject({ input: [{ type: "text", text: "Follow up", textElements: [] }, { type: "image", url: png }] });
+    const continued = await runWebDelegation(f.adapters, { id: randomUUID(), slot: f.slot, cwd: f.root,
+      parentJobId: second.id,
+      prompt: "Text only followup", signal: AbortSignal.timeout(1000) });
+    expect(continued.state).toBe("completed");
+    expect(f.calls.filter(call => call.method === "turn/start").at(-1)!.params)
+      .toMatchObject({ input: [{ type: "text", text: "Text only followup", textElements: [] }] });
     expect(f.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
     await expect(runWebDelegation(f.adapters, { id: randomUUID(), slot: f.slot, cwd: f.root,
       prompt: "Invalid image", images: ["https://example.invalid/image.png"], signal: AbortSignal.timeout(1000) })).rejects.toThrow();
-    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(2);
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(3);
   } finally { f.cleanup(); }
 });
 

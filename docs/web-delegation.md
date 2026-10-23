@@ -61,6 +61,8 @@ profile. They do not start, update or restart services. New delegations default 
 bun run cli web-delegate catalog
 bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt
 bun run cli web-delegate continue --job UUID --prompt-file /path/to/followup.txt
+bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt --image-file /path/to/photo.png
+bun run cli web-delegate continue --job UUID --prompt-file /path/to/followup.txt --image-file /path/to/photo.png
 bun run cli web-delegate capacity [--slot N]
 bun run cli web-delegate status --job UUID
 bun run cli web-delegate status --job UUID --confirm-title-retry
@@ -68,6 +70,8 @@ bun run cli web-delegate reconcile --job UUID
 bun run cli web-delegate result --job UUID
 bun run cli web-delegate result --job UUID --confirm-title-retry
 ```
+
+The optional `--image-file` sends inline PNG/JPEG/GIF/WebP image bytes with either start or continuation (at most eight images per turn). Omitting it on continuation does not resend previous images. Arbitrary file uploads are not part of the supported Native `turn/start` input here; `--file` is rejected. For an existing workspace file, give the worker its authorized path to inspect with discovered tools; a path reference is not proof of upload or read receipt.
 
 These commands operate on journal-owned Web jobs. `continue` requires a proven
 completed eligible parent and starts a new turn in the same thread; it does not

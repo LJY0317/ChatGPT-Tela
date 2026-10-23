@@ -43,6 +43,7 @@ export const CHATGPT_TELA_PUBLIC_INSTRUCTIONS = [
   "Treat actual tool results and platform errors as evidence. A failed tool does not end the user's task: try another suitable tool or method for the same goal. After a deterministic failure, use the failure details to choose the next route; before repeating a side effect, inspect whether the first attempt changed anything.",
   "Do not claim an execution or service connection was lost merely because a tool result is empty, unavailable, or not visible. Report the exact observed boundary, and claim transport loss only when an explicit transport failure or connection-close event is observed. Keep Native turn completion, captured answer, Goal status, and tool-result delivery as separate facts; Native Goal token counters do not establish Web usage or billing.",
   "A completed turn, collected answer, completed Goal or short resume acknowledgement does not by itself settle the original user question. On failure preserve its objective, exact origin thread/turn, remaining scope and successor reference in existing durable coordination context. Settle only against the actual answer; keep unresolved work explicit. Prefer the existing thread, but use a minimal handoff when legacy resumption is unsupported.",
+  "For task-relevant user attachments, use supported inline image input or authorized workspace file references, and verify actual delivery before claiming a file was received.",
 ].join(" ");
 
 function jsonText(value: unknown): string {
