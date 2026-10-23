@@ -647,6 +647,10 @@ describe("current ChatGPT DOM surface driver", () => {
     });
     const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
     expect((await driver.observe()).turns[0]!.plainBodyText).toBe(wire);
+    // Authored prose inside the same wrapper must never be dropped as code chrome.
+    wrapper.childNodes.push({ nodeType: 3, textContent: 'explanation' });
+    body.textContent = wrapper.textContent = 'JSON' + wire + 'explanation';
+    expect((await driver.observe()).turns[0]!.plainBodyText).toBe(body.textContent);
   });
 
   test("nested rendered JSON reaches checkpoint source, operation and receipt validation", async () => {
