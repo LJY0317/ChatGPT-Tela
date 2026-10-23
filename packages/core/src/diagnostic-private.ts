@@ -1,5 +1,5 @@
 import { diagnosticContext } from "./diagnostic-context";
-import { configuredDiagnosticRoot, emitDiagnosticEvent } from "./diagnostic-events";
+import { configuredDiagnosticRoot, diagnosticFingerprint, emitDiagnosticEvent } from "./diagnostic-events";
 import { privateDiagnosticCaptureEnabled, writePrivateDiagnosticArtifact } from "./diagnostic-store";
 function redact(value: unknown, depth=0): unknown {
   if (depth>8) return "[DEPTH LIMIT]";
@@ -10,13 +10,26 @@ function redact(value: unknown, depth=0): unknown {
 }
 /** Explicit private capture only. Redaction is best effort; these files remain sensitive. */
 export function capturePrivateDiagnosticValue(phase: "tool_request" | "tool_result" | "web_context" | "web_preparation_failure" | "web_execution_failure" | "native_turn_failure" | "native_backend_failure" | "context_preload_failure" | "retained_body_mismatch", value: unknown): void {
+  const failure = /failure|mismatch/.test(phase);
+  // Trace capture stays quiet when disabled. A failed operation needs to explain
+  // why its private evidence is absent without exposing the evidence itself.
+  const report = (reason: string, bytes?: number, ref?: string) => {
+    if (!failure) return;
+    emitDiagnosticEvent("chatgpt_tela_diagnostics", ref ? "private_capture_recorded" : "private_capture_omitted", {
+      phase, reason_class: reason,
+      ...(bytes === undefined ? {} : { requested_bytes: bytes }),
+      ...(ref ? { item_fingerprint: diagnosticFingerprint(ref) } : {}),
+    });
+  };
   try {
-    const root=configuredDiagnosticRoot(); if (!root || !privateDiagnosticCaptureEnabled(root)) return;
+    const root=configuredDiagnosticRoot(); if (!root) return;
+    if (!privateDiagnosticCaptureEnabled(root)) { report("capture_disabled"); return; }
     const context=diagnosticContext(); const operation=context.operation_fingerprint ?? context.request_fingerprint;
-    if (!operation) return;
+    if (!operation) { report("correlation_missing"); return; }
     const bytes=Buffer.from(JSON.stringify({ phase, context, value:redact(value) }));
     if(bytes.length>256*1024) { emitDiagnosticEvent("chatgpt_tela_diagnostics", "private_capture_omitted", { phase, reason_class: "byte_budget", requested_bytes: bytes.length }); return; }
-    writePrivateDiagnosticArtifact(root,{kind:"json",bytes,operationFingerprint:operation,
-      evidenceClass: /failure|mismatch/.test(phase) ? "failure" : "trace"});
-  } catch { /* Private diagnostics cannot affect primary execution. */ }
+    const ref=writePrivateDiagnosticArtifact(root,{kind:"json",bytes,operationFingerprint:operation,
+      evidenceClass: failure ? "failure" : "trace"});
+    report(ref ? "captured" : "capture_not_retained", bytes.length, ref);
+  } catch { report("capture_error"); /* Diagnostics cannot affect primary execution. */ }
 }
