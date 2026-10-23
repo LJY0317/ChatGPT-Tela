@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync, realpathSync, existsSync, writeFileSync, lstatSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, realpathSync, existsSync, writeFileSync, lstatSync, mkdirSync, utimesSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -63,7 +63,14 @@ function fixture() {
     },
   };
   const adapters = { store, owner: async () => ({ binding: { ...record.owner, ...(native.accountChanged ? { accountFingerprint: "d".repeat(64) } : {}) }, session: record.session }), connect: async () => rpc };
-  const run = (now: number) => settleWebDelegationRetention(adapters, { now, signal: new AbortController().signal });
+  const run = async (now: number) => {
+    const path = join(root, `thread-${record.slot}-${record.owner.accountFingerprint}-${record.threadId}.retention`);
+    const previous = existsSync(path) ? statSync(path).mtimeMs : undefined;
+    const result = await settleWebDelegationRetention(adapters, { now, signal: new AbortController().signal });
+    if (existsSync(path) && store.threadRetention(record)?.state === "excluded"
+      && (!previous || statSync(path).mtimeMs !== previous)) utimesSync(path, now / 1000, now / 1000);
+    return result;
+  };
   return { root, store, record, native, calls, origin, adapters, run, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -163,6 +170,25 @@ test("a later managed continuation reclaims manual exclusion, while old history 
     expect(f.native.archived).toBe(false);
     await f.run(f.origin + 16 * DAY);
     expect(f.native.archived).toBe(true);
+  } finally { f.cleanup(); }
+});
+test("legacy excluded receipt uses its mtime; a later copied timestamp stays excluded", async () => {
+  const f = fixture();
+  try {
+    const path = join(f.root, `thread-${f.record.slot}-${f.record.owner.accountFingerprint}-${f.record.threadId}.retention`);
+    writeFileSync(path, JSON.stringify({ state: "excluded" }));
+    utimesSync(path, (f.origin + DAY) / 1000, (f.origin + DAY) / 1000);
+    const child = { ...f.record, id: randomUUID(), parentJobId: f.record.id, createdAt: f.origin + 2 * DAY, turnId: randomUUID() };
+    f.store.reserve(child);
+    f.store.save({ ...child, state: "completed", answer: "continued", finalEvidence: "explicit-final-phase" });
+    f.native.tailId = child.turnId;
+    f.native.updatedAt = child.createdAt / 1000;
+    utimesSync(path, (f.origin + 3 * DAY) / 1000, (f.origin + 3 * DAY) / 1000);
+    await f.run(f.origin + 4 * DAY);
+    expect(f.store.threadRetention(child)?.state).toBe("excluded");
+    utimesSync(path, (f.origin + DAY) / 1000, (f.origin + DAY) / 1000);
+    await f.run(f.origin + 4 * DAY);
+    expect(f.store.threadRetention(child)).toBeUndefined();
   } finally { f.cleanup(); }
 });
 test("before-due manual deletion is reconciled without an automatic mutation", async () => {
