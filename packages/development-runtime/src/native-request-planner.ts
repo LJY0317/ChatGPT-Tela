@@ -64,6 +64,7 @@ import {
 } from "./provider-projection";
 import { assessWebEpochPressure, type WebEpochPressure } from "./web-epoch-pressure";
 import { projectNativeUserContent, projectNativeToolEvidence, type NativeProjectedMedia } from "./native-evidence";
+import { annotateNativeProjectionFailure } from "./native-projection-diagnostics";
 
 export interface ProjectedNativeRevision {
   readonly revision: LogicalRevision;
@@ -433,8 +434,11 @@ type UnsupportedProjectionKind =
   | "input_item_type"
   | "input_container";
 
-function unsupportedProjection(kind: UnsupportedProjectionKind): NativeProjectionUnsupported {
-  return Object.assign(new NativeProjectionUnsupported(), { projectionKind: kind });
+function unsupportedProjection(kind: UnsupportedProjectionKind, input: unknown, index?: number,
+  partIndex?: number): NativeProjectionUnsupported {
+  const error = Object.assign(new NativeProjectionUnsupported(), { projectionKind: kind });
+  annotateNativeProjectionFailure(error, input, index, partIndex);
+  return error;
 }
 
 function messageKind(role: unknown): RevisionKind {
@@ -587,6 +591,7 @@ export function projectNativeRequestContext(
     let awaitingCompactionSummary = false;
     for (let index = startAt; index < body.input.length; index++) {
       const raw = body.input[index];
+      try {
       if (awaitingCompactionSummary) {
         const summary = record(raw);
         if (!summary || (summary.type !== undefined && summary.type !== "message") || summary.role !== "user"
@@ -600,7 +605,7 @@ export function projectNativeRequestContext(
         continue;
       }
       const item = record(raw);
-      if (!item) throw unsupportedProjection("input_item_shape");
+      if (!item) throw unsupportedProjection("input_item_shape", body.input, index);
       const type = typeof item.type === "string" ? item.type : undefined;
 
       if (type === "message" || (type === undefined && typeof item.role === "string")) {
@@ -620,11 +625,11 @@ export function projectNativeRequestContext(
         // Native metadata or opaque/encrypted agent state into the Web transcript.
         if (typeof item.author !== "string" || !item.author.trim()
           || typeof item.recipient !== "string" || !item.recipient.trim()
-          || !Array.isArray(item.content)) throw unsupportedProjection("agent_message_shape");
-        const content = item.content.map(raw => {
+          || !Array.isArray(item.content)) throw unsupportedProjection("agent_message_shape", body.input, index);
+        const content = item.content.map((raw, partIndex) => {
           const part = record(raw);
           if (part?.type !== "input_text" || typeof part.text !== "string") {
-            throw unsupportedProjection("agent_content_part");
+            throw unsupportedProjection("agent_content_part", body.input, index, partIndex);
           }
           return { type: "input_text", text: part.text };
         });
@@ -669,13 +674,16 @@ export function projectNativeRequestContext(
       // not copied into the Web prompt and are never treated as user-visible logical context.
       if (type === "reasoning" || type === "additional_tools") continue;
 
-      throw unsupportedProjection("input_item_type");
+      throw unsupportedProjection("input_item_type", body.input, index);
+      } catch (error) {
+        throw annotateNativeProjectionFailure(error, body.input, index);
+      }
     }
     if (awaitingCompactionSummary) {
       throw new Error("Native local compaction marker requires a following readable user summary");
     }
   } else if (body.input !== undefined) {
-    throw unsupportedProjection("input_container");
+    throw unsupportedProjection("input_container", body.input);
   }
   const inputAnchorId = projected.at(-1)?.revision.id;
   appendCurrentGoal();
@@ -1391,6 +1399,11 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       }),
     });
     } catch (error) {
+      if (lastStage === "logical_projection") {
+        // Marker, media or compaction failures can occur outside the item loop.
+        // Retain their unmodified error classification with bounded shape evidence.
+        annotateNativeProjectionFailure(error, record(nativeRequest)?.input);
+      }
       if (lastStage === "physical_context_fit" && fitProjection) {
         // Failure-only numeric evidence; no request, revision identity or exception prose.
         const revisions = fitProjection.revisions;

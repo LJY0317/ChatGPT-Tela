@@ -12,6 +12,7 @@ import {
 } from "@chatgpt-tela/chatgpt";
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 import { classifyWebPreparationFailure } from "./web-preparation-diagnostics";
+import { failedNativeRequestFingerprint, type NativeProjectionError } from "./native-projection-diagnostics";
 import {
   startLocalResponsesServer,
   type LocalResponsesAuthentication,
@@ -414,13 +415,18 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
         if (!executionStarted) withDiagnosticContext({
           scope_fingerprint: diagnosticFingerprint(authority.threadId),
           turn_fingerprint: diagnosticFingerprint(authority.turnId),
+          ...(failedNativeRequestFingerprint(nativeRequest) ? { request_fingerprint: failedNativeRequestFingerprint(nativeRequest)! } : {}),
         }, () => {
           capturePrivateDiagnosticValue("web_preparation_failure", {
-            phase: preparationPhase, request: nativeRequest,
-            error: error instanceof Error ? { name: error.name, message: error.message } : { name: "unknown" },
+            phase: preparationPhase, plannerStage,
+            error: error instanceof Error ? { name: error.name } : { name: "unknown" },
+            projection: error instanceof Error ? (error as NativeProjectionError).projectionPrivateShape : undefined,
           });
           emitDiagnosticEvent("chatgpt_tela_work", "web_preparation_failed", {
             phase: preparationPhase, reason_class: classifyWebPreparationFailure(error),
+            ...(error instanceof Error ? (error as NativeProjectionError).projectionEvidence : {}),
+            web_send_count: 0, web_accept_count: 0, local_final_committed: false,
+            browser_observed_for_request: false,
             ...(error instanceof WebContextFitFailed ? {
               ...(error.estimates.required === undefined ? {} : { required_estimate: error.estimates.required }),
               ...(error.estimates.budget === undefined ? {} : { fit_budget: error.estimates.budget }),

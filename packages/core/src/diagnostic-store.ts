@@ -28,6 +28,16 @@ export function isWebContextPlannerStage(value: unknown): value is WebContextPla
   return typeof value === "string" && SAFE_WEB_CONTEXT_PLANNER_STAGES.has(value);
 }
 const STRINGS = new Set(["observation_failure", "failure_class", "failure_stage", "service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "route_class", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "request_role", "browser_response", "next_action", "probe_kind", "auth_state", "entry_class", "removal_cause", "expiry_class", "domain_class", "storage_state"]);
+const PROJECTION_ENUMS: Readonly<Record<string, readonly string[]>> = {
+  input_container_kind: ["array", "string", "absent", "null", "record", "scalar"],
+  input_item_kind: ["none", "array", "string", "absent", "null", "record", "scalar"],
+  input_type_class: ["absent", "invalid", "unknown", "message", "agent_message", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "tool_search_call", "tool_search_output", "mcp_tool_call_output", "context_compaction", "compaction", "compaction_summary", "reasoning", "additional_tools"],
+  input_role_kind: ["system", "developer", "user", "assistant", "absent", "other"],
+  input_body_kind: ["absent", "null", "array", "record", "string", "scalar"],
+  input_part_kind: ["absent", "null", "array", "record", "string", "scalar"],
+  input_part_type_class: ["absent", "invalid", "unknown", "input_text", "output_text", "text", "input_image", "input_file", "image", "file", "resource", "resource_link", "audio", "input_audio", "encrypted_content"],
+  question_relation: ["absent", "call_only", "matched", "item_only"],
+};
 /** Never copies unclassified text, identifiers or payloads from a raw diagnostic file. */
 export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticEvent | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
@@ -67,6 +77,10 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
     }
     if (key === "planner_stage") {
       if (isWebContextPlannerStage(field)) safe[key] = field;
+      continue;
+    }
+    if (Object.hasOwn(PROJECTION_ENUMS, key)) {
+      if (typeof field === "string" && PROJECTION_ENUMS[key]!.includes(field)) safe[key] = field;
       continue;
     }
     if (typeof field === "number" && Number.isSafeInteger(field) && Math.abs(field) <= Number.MAX_SAFE_INTEGER) safe[key] = field;
