@@ -525,6 +525,17 @@ function turnObservationFields(snapshot: ChatGptSurfaceSnapshot, tracked: Tracke
   };
 }
 
+/** The owned browser turn has actually returned a completed final to its caller. */
+function reportWebFinalObserved(tracked: TrackedTurn): void {
+  emitDiagnosticEvent("chatgpt_tela_work", "web_turn_final_observed", {
+    scope_fingerprint: diagnosticFingerprint(tracked.handle.nativeTaskId),
+    turn_fingerprint: diagnosticFingerprint(tracked.handle.nativeTurnId),
+    operation_fingerprint: diagnosticFingerprint([tracked.handle.nativeTaskId, tracked.handle.nativeTurnId,
+      tracked.handle.webEpochId].join("\n")),
+    assistant_phase: "complete",
+  });
+}
+
 function answerBodyReason(assistant: ChatGptTurnObservation | undefined): string {
   // Renderer observations remain untrusted, including exception-like strings.
   return ["body_empty", "body_budget", "unsupported_node", "unsupported_link", "unsupported_list", "unsupported_table"]
@@ -1788,6 +1799,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       if (!snapshot.approval?.cardCount) {
         signal?.throwIfAborted();
         this.#retireTurn(surface, tracked);
+        reportWebFinalObserved(tracked);
         return {
           state: "proven",
           value: { kind: "completed", providerTurnId: tracked.handle.providerTurnId, ...answer },
@@ -1979,6 +1991,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         signal?.throwIfAborted();
         this.#commitAnswer(surface, tracked, assistant, snapshot, "direct");
         this.#retireTurn(surface, tracked);
+        reportWebFinalObserved(tracked);
         return {
           state: "proven",
           value: {

@@ -513,6 +513,14 @@ describe("ChatGPT semantic provider", () => {
           semantic_answer_available: mode !== "committed-body-unavailable",
           assistant_phase: "complete", stop_visible: false, approval_cards: 0,
           handoff_state: "direct", answer_characters: "Exact prior answer".length });
+        const webFinal = readDiagnosticTail(file).events.filter(row => row.stage === "web_turn_final_observed");
+        expect(webFinal).toHaveLength(1);
+        expect(webFinal[0]).toMatchObject({
+          scope_fingerprint: diagnosticFingerprint("task-1"),
+          turn_fingerprint: diagnosticFingerprint("turn-1"),
+          assistant_phase: "complete",
+        });
+        expect(JSON.stringify(webFinal)).not.toContain("Exact prior answer");
         expect(committed.assistant_key_fingerprint).toBeDefined();
         expect(committed.parent_key_fingerprint).toBeDefined();
         if (mode === "committed-body-unavailable") expect(committed.reason_class).toBe("unsupported_node");

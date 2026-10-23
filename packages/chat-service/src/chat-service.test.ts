@@ -3,7 +3,7 @@ import { startChatService } from "./index";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
+import { setPrivateDiagnosticCapture, readDiagnosticTail } from "@chatgpt-tela/core";
 import { createChatToolRuntime } from "./tools";
 
 
@@ -227,6 +227,36 @@ test.each([false, true])("failed patch headers and exact errors use existing opt
       expect(captured.value.error).toBe("workspace-relative path must not be absolute");
       expect(JSON.stringify(captured)).not.toContain(secretBody);
     }
+  } finally {
+    await service.close();
+    if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+    rmSync(f.base, { recursive: true, force: true });
+  }
+});
+
+test("empty and populated Chat capability results survive sanitized durable readback", async () => {
+  const f = shutdownFixture(), path = join(f.base, "call-events.jsonl");
+  const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = path;
+  let calls = 0;
+  const service = await startChatService({ bearerToken: f.token, tools: { ...f.tools,
+    async call() { return ++calls === 1 ? {} : { finished: true, privateText: "PRIVATE_RESULT" }; },
+  } });
+  try {
+    for (let i = 0; i < 2; i++) {
+      const reply = await fetch(new URL("v1/call", service.endpoint), {
+        method: "POST", headers: { authorization: `Bearer ${f.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ capability: "read", arguments: {} }),
+      });
+      expect(reply.status).toBe(200);
+      await reply.json();
+    }
+    const rows = readDiagnosticTail(path).events.filter(row => row.stage === "capability_call_complete");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ result_present: true, result_empty: true, result_bytes: 2 });
+    expect(rows[1]).toMatchObject({ result_present: true, result_empty: false });
+    expect(JSON.stringify(rows)).not.toContain("PRIVATE_RESULT");
   } finally {
     await service.close();
     if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
