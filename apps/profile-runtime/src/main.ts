@@ -77,6 +77,7 @@ async function main(config: ReturnType<typeof loadProductProfileRuntimeConfig>):
         return { responsesRouteFingerprint: runtime.routedTarget.session.responsesRouteFingerprint };
       },
       shutdownReadiness: () => runtime.shutdownReadiness(),
+      inspectCheckpointCandidates: threadId => runtime.inspectCheckpointCandidates(threadId),
       openAccountBrowser: () => runtime.openWebAccountBrowser(),
       closeAccountBrowser: () => runtime.closeWebAccountBrowser(),
       inspectHistoryUi: () => runtime.inspectWebHistoryUi(),

@@ -121,6 +121,7 @@ export interface CodexService {
   reconnectWeb(slot: number): Promise<CodexProfileStatus>;
   stopProfile(slot: number): Promise<CodexProfileStatus>;
   terminalSession(slot: number): Promise<CodexTerminalSessionContract>;
+  inspectCheckpointCandidates?(slot: number, threadId: string): Promise<unknown>;
   revealBridgeSurface?(slot: number, surfaceId: string, interactive?: boolean): Promise<void>;
   openAccountBrowser?(slot: number): Promise<void>;
   closeAccountBrowser?(slot: number): Promise<void>;
@@ -724,6 +725,20 @@ export async function startCodexService(input: {
       }
       if (!profile.terminalEndpoint) throw new Error("profile runtime requires an update before terminal attachment");
       return parseCodexTerminalSessionContract({ contractVersion: 1, slot, endpoint: profile.terminalEndpoint });
+    },
+    async inspectCheckpointCandidates(slotValue: number, threadId: string) {
+      const slot = slotNumber(slotValue);
+      const profile = await controlledProfile(slot);
+      const response = await fetch(new URL("v1/checkpoint-inspection", profile.bridgePreviewUrl), {
+        method: "POST",
+        headers: { authorization: `Bearer ${profile.uiToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ threadId }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) throw Error("Checkpoint inspection unavailable");
+      const value: unknown = await response.json();
+      if (await controlledProfile(slot) !== profile) throw Error("Checkpoint inspection owner changed");
+      return value;
     },
     async revealBridgeSurface(slotValue: number, surfaceId: string, interactive = false) {
       const profile = owned.get(slotNumber(slotValue));

@@ -36,6 +36,7 @@ export async function startProfileBridgePreviewServer(input: {
    * alive until the parent receives it and releases its lease. */
   readonly shutdownProfile?: () => Promise<{ readonly responsesRouteFingerprint: string }>;
   readonly shutdownReadiness?: () => "ready" | "blocked";
+  readonly inspectCheckpointCandidates?: (threadId: string) => Promise<unknown>;
   readonly openAccountBrowser?: () => Promise<void>;
   readonly closeAccountBrowser?: () => Promise<void>;
   readonly inspectHistoryUi?: () => Promise<Omit<CodexHistoryUiContract, "slot">>;
@@ -88,6 +89,21 @@ export async function startProfileBridgePreviewServer(input: {
       if (request.method === "GET" && url.pathname === "/v1/shutdown-readiness" && input.shutdownReadiness) {
         return Response.json({ contractVersion: 1, slot: input.slot, shutdownReadiness: input.shutdownReadiness() },
           { headers: { "cache-control": "no-store" } });
+      }
+      if (request.method === "POST" && url.pathname === "/v1/checkpoint-inspection" && input.inspectCheckpointCandidates) {
+        const body = await request.json().catch(() => undefined) as { threadId?: unknown } | undefined;
+        if (!body || typeof body.threadId !== "string"
+          || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.threadId)
+          || Object.keys(body).some(key => key !== "threadId")) return new Response(null, { status: 400 });
+        try {
+          return Response.json({ contractVersion: 1, slot: input.slot, threadId: body.threadId,
+            ...(await input.inspectCheckpointCandidates(body.threadId) as Record<string, unknown>) },
+            { headers: { "cache-control": "no-store" } });
+        } catch {
+          return Response.json({ contractVersion: 1, slot: input.slot, threadId: body.threadId,
+            readiness: "unknown", reason: "storage_unavailable" },
+            { headers: { "cache-control": "no-store" } });
+        }
       }
       if (request.method === "GET" && url.pathname === "/v1/account-display" && input.accountDisplay) {
         return Response.json(parseCodexAccountDisplayContract({ contractVersion: 1, slot: input.slot, ...await input.accountDisplay() }),

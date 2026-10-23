@@ -123,6 +123,39 @@ export interface WorkingCheckpointSources {
   readonly preparationBudget: CheckpointPreparationBudget;
 }
 
+/** Owner-local metadata only. Without the exact live request projection, an
+ * existing publication cannot be declared a prefix or anchor match. */
+export async function inspectNativeWorkingCheckpointCandidates(input: {
+  readonly nativeTaskId: string;
+  readonly accountNamespace: string;
+  readonly cache: ContextCheckpointCache;
+  readonly journal: Pick<import("./native-visible-prefix-journal").FileNativeVisiblePrefixStageJournal, "inspectPublishedCounts">;
+}) {
+  if (!input.nativeTaskId.trim() || !input.accountNamespace.trim()) {
+    throw Error("Invalid checkpoint inspection owner");
+  }
+  const reuseScope = sha(JSON.stringify([
+    "native-working-prefix-v1", input.accountNamespace, chatGptCheckpointPolicyFingerprint(),
+  ]));
+  const [cached, published] = await Promise.allSettled([
+    input.cache.list(input.nativeTaskId), input.journal.inspectPublishedCounts(reuseScope),
+  ]);
+  const counts = published.status === "fulfilled" ? published.value : undefined;
+  if (cached.status !== "fulfilled" || !counts) {
+    return Object.freeze({ readiness: "unknown" as const, reason: "storage_unavailable" as const });
+  }
+  return Object.freeze({
+    readiness: "available" as const,
+    reason: cached.value.length === 0 && counts.publications === 0
+      ? "no_local_candidates" as const : "projection_unavailable" as const,
+    cachedForThread: cached.value.length,
+    completedReceipts: counts.completedReceipts,
+    publishedForAccount: counts.publications,
+    matchingReuseScope: counts.matchingReuseScope,
+    exactScope: "unknown" as const, prefix: "unknown" as const, anchor: "unknown" as const,
+  });
+}
+
 export interface WorkingCheckpointDecision {
   readonly checkpoint?: CachedContextCheckpoint;
   readonly produced: boolean;

@@ -12,6 +12,7 @@ import { ActiveTurnRegistry } from "@chatgpt-tela/runtime";
 import { MultiProfileControlClient } from "@chatgpt-tela/setup";
 import { createDefaultProfileCompositeProviderRouter } from "./composite-provider-router";
 import { FileContextCheckpointCache } from "./context-cache";
+import { inspectNativeWorkingCheckpointCandidates } from "./native-working-context";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 import { readChatGptTelaAccountBinding } from "./browser-profile";
 import { startModelListOverlayServer } from "./model-list-overlay-server";
@@ -44,6 +45,7 @@ export interface NativeFirstProfileRuntime {
   readonly webModelIds: readonly string[];
   /** Exact owner-managed account browser currently suspends Web admission. */
   readonly accountManagementActive: boolean;
+  inspectCheckpointCandidates(threadId: string): Promise<unknown>;
   /** Current owner-local activity counters; unknown/transitional state blocks replacement. */
   shutdownReadiness(): "ready" | "blocked";
   waitForWeb(): Promise<void>;
@@ -586,6 +588,24 @@ export async function startNativeFirstProductProfileRuntime(
     },
     get webModelIds() { return Object.freeze(admitted.map(family => chatGptWebModelId(family.key))); },
     get accountManagementActive() { return accountBrowserBlocked; },
+    async inspectCheckpointCandidates(threadId) {
+      if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(threadId)) throw Error("Invalid Native thread identity");
+      const binding = readChatGptTelaAccountBinding(config.browserProfile);
+      if (!binding || state !== "ready" || accountBrowserBlocked) {
+        return { readiness: "unknown", reason: "owner_unavailable" };
+      }
+      const account = binding.accountFingerprint;
+      return inspectNativeWorkingCheckpointCandidates({
+        nativeTaskId: threadId, accountNamespace: account,
+        cache: new FileContextCheckpointCache({
+          directory: resolve(config.browserProfile.userDataDir, "context-checkpoints", account),
+        }),
+        journal: new FileNativeVisiblePrefixStageJournal({
+          directory: resolve(config.browserProfile.userDataDir, "native-visible-prefix-executions", account),
+          initializationPath: `${config.browserProfile.accountBindingPath}.native-prefix-${account}`,
+        }),
+      });
+    },
     shutdownReadiness() { return shutdownReadiness(); },
     async waitForWeb() { await preparation?.catch(() => {}); },
     openWebAccountBrowser() {

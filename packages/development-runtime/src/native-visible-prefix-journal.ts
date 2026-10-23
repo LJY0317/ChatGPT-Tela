@@ -231,6 +231,26 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
         Object.freeze({ scopeFingerprint, revisionId, sourceRootDigest, stageKey, content, estimatedTokens,
           ...(prefixDigest ? { prefixDigest, reuseScopeFingerprint } : {}) }))));
   }
+  /** Pure read for inspection. Never creates a journal, writer lock, or receipt. */
+  async inspectPublishedCounts(reuseScopeFingerprint: string): Promise<{
+    readonly completedReceipts: number;
+    readonly publications: number;
+    readonly matchingReuseScope: number;
+  } | undefined> {
+    if (!/^[a-f0-9]{64}$/.test(reuseScopeFingerprint)) throw Error("Invalid Web prefix reuse scope");
+    try {
+      const state = await this.#read();
+      return Object.freeze({
+        completedReceipts: state.entries.filter(entry => entry.status === "completed").length,
+        publications: state.checkpoints?.length ?? 0,
+        matchingReuseScope: state.checkpoints?.filter(item =>
+          item.reuseScopeFingerprint === reuseScopeFingerprint).length ?? 0,
+      });
+    } catch {
+      // Missing, interrupted or invalid journals cannot prove absence.
+      return undefined;
+    }
+  }
   async publishCheckpoint(input: PublishedNativeWorkingCheckpoint): Promise<void> {
     if (!validPublished(input)) throw Error("Invalid Web checkpoint publication");
     await this.#transaction(async state => {

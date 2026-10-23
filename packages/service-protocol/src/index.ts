@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
 export { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
 export { parseCodexWorkInspectionContract } from "./work-inspection";
+export { parseCodexCheckpointInspectionContract } from "./work-inspection";
 export { parseCodexWebDelegationCapacityContract, type CodexWebDelegationCapacityContract,
   type WebDelegationBlockCode } from "./web-delegation-capacity";
 export { parseCodexApprovalWait, type CodexApprovalWaitContract } from "./approval-review";

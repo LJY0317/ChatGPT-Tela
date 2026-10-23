@@ -1,6 +1,7 @@
 import { diagnosticSourcePaths, inspectNativeThread } from "@chatgpt-tela/core";
 import { connectCodexAppServerWebSocket, type CodexAppServerRpc } from "@chatgpt-tela/codex";
 import type { CodexService } from "./controller";
+import { parseCodexCheckpointInspectionContract } from "@chatgpt-tela/service-protocol";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 type Profile = Awaited<ReturnType<CodexService["profiles"]>>[number];
@@ -20,7 +21,8 @@ function readyOwner(profile: Profile | undefined, slot: number): Profile {
  * A profile's active browser is not proof it belongs to this Native thread.
  */
 export function createCodexWorkInspector(input: {
-  readonly service: Pick<CodexService, "profiles" | "terminalSession" | "bridgePreview">;
+  readonly service: Pick<CodexService, "profiles" | "terminalSession" | "bridgePreview"> &
+    Partial<Pick<CodexService, "inspectCheckpointCandidates">>;
   readonly logsRoot: string;
   readonly connect?: typeof connectCodexAppServerWebSocket;
 }) {
@@ -42,6 +44,17 @@ export function createCodexWorkInspector(input: {
       });
     } finally {
       await rpc.close().catch(() => {});
+    }
+    let checkpointCandidates: ReturnType<typeof parseCodexCheckpointInspectionContract> = {
+      readiness: "unknown", reason: "owner_unavailable",
+    };
+    if (input.service.inspectCheckpointCandidates) {
+      try {
+        checkpointCandidates = parseCodexCheckpointInspectionContract(
+          await input.service.inspectCheckpointCandidates(slot, threadId), slot, threadId);
+      } catch {
+        checkpointCandidates = { readiness: "unknown", reason: "storage_unavailable" };
+      }
     }
     // This is a current on-demand profile observation, not a stale log or
     // a proof that a browser card belongs to the requested Native thread.
@@ -89,6 +102,7 @@ export function createCodexWorkInspector(input: {
     }
     return Object.freeze({
       ...thread,
+      checkpointCandidates,
       observedAt: new Date().toISOString(),
       browser: Object.freeze({
         scope: "selected_profile_only" as const,

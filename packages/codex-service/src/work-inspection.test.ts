@@ -52,6 +52,30 @@ function harness() {
 }
 
 describe("profile-owned read-only Work inspection", () => {
+  test("passes bounded checkpoint decisions for the exact selected slot and rejects private fields", async () => {
+    const f = harness(), root = mkdtempSync(join(tmpdir(), "tela-checkpoint-inspect-"));
+    const requests: number[] = [];
+    const inspect = createCodexWorkInspector({
+      service: { ...f.service, async inspectCheckpointCandidates(slot: number) {
+        requests.push(slot);
+        return { contractVersion: 1, slot, threadId, readiness: "available",
+          reason: "projection_unavailable", cachedForThread: 1,
+          completedReceipts: 3, publishedForAccount: 2, matchingReuseScope: 1,
+          exactScope: "unknown", prefix: "unknown", anchor: "unknown",
+          content: "SENSITIVE_CHECKPOINT" };
+      } } as any, logsRoot: root, connect: f.connect,
+    });
+    try {
+      const result = await inspect(2, threadId);
+      expect(result.checkpointCandidates).toMatchObject({
+        cachedForThread: 1, publishedForAccount: 2, prefix: "unknown",
+      });
+      expect(requests).toEqual([2]);
+      expect(JSON.stringify(result)).not.toContain("SENSITIVE_CHECKPOINT");
+      await expect(inspect(1, threadId)).rejects.toThrow("owner-verified");
+      expect(requests).toEqual([2]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("reports Native statuses and selected browser observation without exposing screenshot or claiming card ownership", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-work-inspection-")); mkdirSync(join(root, "logs"));
     const f = harness();
