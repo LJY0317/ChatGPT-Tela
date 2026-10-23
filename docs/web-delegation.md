@@ -76,9 +76,15 @@ and steering operate under its separate Native authority.
 The original checkout must still exist for `continue`: it anchors the workspace-write
 sandbox and single-writer lease. A deleted checkout requires a fresh delegation in
 an existing workspace; the CLI cannot resume that thread by silently changing its cwd.
-Failed turns retain a bounded `tela_native_*` error code when supplied by Native,
+Failed turns retain a bounded `tela_*` error code when supplied by Native,
 alongside the generic failure class. The incident reason is the same sanitized code;
 arbitrary error messages and codes are never recorded.
+Task completion, answer collection, Goal completion and short resume acknowledgements
+do not prove that the original user question was answered. On failure, preserve the
+original objective, exact origin thread/turn, unresolved scope and successor job/thread
+reference in existing durable coordination notes. Reconcile against the actual answer;
+never mark unsupported or unanswered work successful. Prefer resuming the same thread,
+but hand off only the necessary context when a legacy resume is unsupported.
 
 When the current harness
 advertises its original Goal tools, the Web task receives a separate Goal-only

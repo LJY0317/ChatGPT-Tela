@@ -151,7 +151,7 @@ function failureStage(error: unknown, fallback: WebDelegationFailureStage): WebD
 function nativeTurnFailureCode(turn: Record<string, unknown> | undefined): string | undefined {
   const failure = object(turn?.error);
   const code = failure?.code;
-  return typeof code === "string" && /^tela_native_[a-z_]{1,64}$/.test(code) ? code : undefined;
+  return typeof code === "string" && /^tela_[a-z_]{1,64}$/.test(code) ? code : undefined;
 }
 
 function failureMetadata(input: {

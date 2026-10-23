@@ -948,13 +948,15 @@ test("explicit image input reaches start and same-thread continuation exactly on
   } finally { f.cleanup(); }
 });
 
-test("structured Native failure code survives journal settlement without private text", async () => {
-  const f = await fixture({ failedTurn: true, answer: "", nativeFailureCode: "tela_native_projection_unsupported" });
-  try {
-    await expect(f.run()).rejects.toThrow("Web job turn failed");
-    const record = f.store.get(f.id)!;
-    expect(record).toMatchObject({ failure: "turn_failed", failureStage: "turn_complete",
-      failureNativeCode: "tela_native_projection_unsupported", failureIncidentRef: expect.any(String) });
-    expect(JSON.stringify(record)).not.toContain("private native error");
-  } finally { f.cleanup(); }
+test("Native projection and compaction codes survive bounded journal and incident settlement", async () => {
+  for (const code of ["tela_native_projection_unsupported", "tela_compaction_requires_readable_checkpoint"]) {
+    const f = await fixture({ failedTurn: true, answer: "", nativeFailureCode: code });
+    try {
+      await expect(f.run()).rejects.toThrow("Web job turn failed");
+      const record = f.store.get(f.id)!;
+      expect(record).toMatchObject({ failure: "turn_failed", failureStage: "turn_complete",
+        failureNativeCode: code, failureIncidentRef: expect.any(String) });
+      expect(JSON.stringify(record)).not.toContain("private native error");
+    } finally { f.cleanup(); }
+  }
 });
