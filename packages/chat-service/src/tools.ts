@@ -124,8 +124,7 @@ export interface ChatToolRuntime {
   initialize(): Promise<void>;
   call(capability: TelaChatCapability, arguments_: unknown): Promise<unknown>;
   assertCanClose(): void;
-  maintenanceProcesses(): Promise<readonly { workspaceId: string; operationId: string; sessionId: number; state: string; liveness: string }[]>;
-  cancelMaintenanceProcess(workspaceId: string, operationId: string): Promise<unknown>;
+  maintenanceProcesses(): Promise<readonly { workspaceId: string; workspaceName: string; operationId: string; sessionId: number; startedAt: string; state: string; liveness: string }[]>;
   close(): Promise<void>;
 }
 
@@ -483,7 +482,7 @@ export function createChatToolRuntime(input: {
     },
     assertCanClose() { processes.assertCanClose(); },
     async maintenanceProcesses() {
-      const unresolved: { workspaceId: string; operationId: string; sessionId: number; state: string; liveness: string }[] = [];
+      const unresolved: { workspaceId: string; workspaceName: string; operationId: string; sessionId: number; startedAt: string; state: string; liveness: string }[] = [];
       for (const workspace of workspaces.list()) {
         let afterSessionId = 0;
         while (true) {
@@ -491,8 +490,9 @@ export function createChatToolRuntime(input: {
           for (const row of page.processes) {
             const current = await processes.inspect(workspace.id, row.operationId);
             if (!["exited", "signaled", "spawn_failed"].includes(current.state)) {
-              unresolved.push({ workspaceId: workspace.id, operationId: current.operationId,
-                sessionId: current.sessionId, state: current.state, liveness: current.liveness });
+              unresolved.push({ workspaceId: workspace.id, workspaceName: workspace.root.split(/[\\/]/).filter(Boolean).at(-1) ?? "Workspace",
+                operationId: current.operationId, sessionId: current.sessionId, startedAt: current.startedAt,
+                state: current.state, liveness: current.liveness });
             }
           }
           if (page.nextAfterSessionId === null) break;
@@ -501,7 +501,6 @@ export function createChatToolRuntime(input: {
       }
       return unresolved;
     },
-    cancelMaintenanceProcess(workspaceId: string, operationId: string) { return processes.cancel(workspaceId, operationId); },
     async close() {
       // Refuse before closing any peer subsystem; recovery must remain usable.
       processes.assertCanClose();

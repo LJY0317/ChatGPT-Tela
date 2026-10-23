@@ -13,17 +13,17 @@ test("explicit maintenance cancellation is followed by observed shutdown readine
   const home = mkdtempSync(join(tmpdir(), "tela-update-cancel-path-"));
   const paths = resolveProductPaths({ platform: "linux", home, environment: {} });
   const tools = createChatToolRuntime({ allowedRoots: [home], stateRoot: join(home, "tools") });
-  const entry = { workspaceId: tools.workspaces.open(home).id, operationId: "fixture-operation", sessionId: 3,
-    state: "running", liveness: "alive" };
+  const entry = { workspaceId: tools.workspaces.open(home).id, workspaceName: "example-project", operationId: "fixture-operation", sessionId: 3,
+    startedAt: new Date().toISOString(), state: "running", liveness: "alive" };
   let terminalJournal = false, cancellations = 0;
   const service = await startChatService({ bearerToken: "fixture-maintenance-token".repeat(2), tools: {
     ...tools,
     assertCanClose() { if (!terminalJournal) throw Error("unresolved owner"); },
     async maintenanceProcesses() { return terminalJournal ? [] : [entry]; },
-    async cancelMaintenanceProcess(workspaceId, operationId) {
-      expect([workspaceId, operationId]).toEqual([entry.workspaceId, entry.operationId]);
-      cancellations++;
-      terminalJournal = true; // Signed completion settlement is exercised by process-owner tests.
+    async call(capability, args) {
+      expect(capability).toBe("cancel_process");
+      expect(args).toEqual({ workspace_id: entry.workspaceId, operation_id: entry.operationId });
+      cancellations++; terminalJournal = true;
       return { state: "signaled" };
     },
   } });
@@ -37,7 +37,7 @@ test("explicit maintenance cancellation is followed by observed shutdown readine
     await expect(owner.prepare("chat")).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
     const client = new ChatServiceClient(descriptorForService(descriptor, "chat"));
     expect(await client.maintenanceProcesses()).toEqual([entry]);
-    expect(await client.cancelMaintenanceProcess(entry.workspaceId, entry.operationId)).toEqual({ state: "signaled" });
+    expect(await client.call("cancel_process", { workspace_id: entry.workspaceId, operation_id: entry.operationId })).toEqual({ state: "signaled" });
     expect(cancellations).toBe(1);
     expect(await client.maintenanceProcesses()).toEqual([]);
     await owner.prepare("chat");

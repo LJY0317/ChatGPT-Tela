@@ -24,8 +24,10 @@ private struct TelaMaintenanceStatus: Decodable {
 }
 private struct TelaMaintenanceProcess: Decodable {
   let workspaceId: String
+  let workspaceName: String
   let operationId: String
   let sessionId: Int
+  let startedAt: String
   let state: String
   let liveness: String
 }
@@ -305,9 +307,11 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       unresolvedProcesses = parsed.processes
       processPicker.removeAllItems()
       for entry in unresolvedProcesses {
-        processPicker.addItem(withTitle: "Session \(entry.sessionId) · \(entry.state) · \(entry.liveness) · \(entry.operationId.prefix(8))")
+        let started = ISO8601DateFormatter().date(from: entry.startedAt)
+        let when = started.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) } ?? "Unknown start time"
+        processPicker.addItem(withTitle: "\(entry.workspaceName) · \(when) · task \(entry.sessionId)")
       }
-      processInfo.stringValue = unresolvedProcesses.isEmpty ? "No unresolved Chat executions." : "Review the selected execution before cancellation. Running work may be interrupted."
+      processInfo.stringValue = unresolvedProcesses.isEmpty ? "No unfinished Chat commands found. Check update readiness again." : "These Chat commands have no confirmed completion. Some may still be running. Select only work you want to interrupt."
     } else {
       unresolvedProcesses = []; processPicker.removeAllItems()
       processInfo.stringValue = "Couldn't verify Chat execution status. Maintenance remains blocked until readiness is confirmed."
@@ -319,8 +323,8 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       processPicker.indexOfSelectedItem < unresolvedProcesses.count else { return }
     let selected = unresolvedProcesses[processPicker.indexOfSelectedItem]
     let alert = NSAlert(); alert.alertStyle = .warning
-    alert.messageText = "Cancel Chat execution \(selected.sessionId)?"
-    alert.informativeText = "This requests cancellation of the exact workspace-owned execution \(selected.operationId). It may be active work. Update can proceed only after completion is verified."
+    alert.messageText = "Cancel task \(selected.sessionId) in \(selected.workspaceName)?"
+    alert.informativeText = "This command may still be running. Only the selected task will be cancelled. The update remains blocked until the command's completion and service readiness are verified."
     alert.addButton(withTitle: "Cancel execution"); alert.addButton(withTitle: "Keep running")
     guard alert.runModal() == .alertFirstButtonReturn else { return }
     busy = true; updateControls()
@@ -328,9 +332,16 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     Task {
       let result = await Task.detached { Self.execute(path, ["maintenance", "cancel-process", selected.workspaceId, selected.operationId]) }.value
       busy = false
-      message.stringValue = result.0 == 0 ? "Cancellation requested. Recheck the execution and review the update again." : "Cancellation outcome is uncertain. Status will be checked; do not repeat cancellation without verifying it."
       review = nil
       await refreshProcesses()
+      if result.0 == 0 {
+        message.stringValue = unresolvedProcesses.contains(where: { $0.operationId == selected.operationId })
+          ? "Cancellation was requested, but completion is not yet confirmed. Review the status before updating."
+          : "The selected command is no longer unfinished. Review the update again to verify service readiness."
+      } else {
+        message.stringValue = "Cancellation outcome is uncertain. Current status was checked where available; review it before another request."
+      }
+      updateControls()
     }
   }
   @objc private func reviewChanges() {

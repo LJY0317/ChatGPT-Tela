@@ -47,11 +47,15 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
       : readPackagedRepairJournal(packagedRepairJournalPath(paths)) ? "repair" : "none" };
   }
   if (args[1] === "processes" && args.length === 2) {
-    return { processes: await (await maintenanceChatClient(options)).maintenanceProcesses() };
+    const client = await maintenanceChatClient(options);
+    try { return { processes: await client.maintenanceProcesses() }; }
+    finally { await client.close(); }
   }
   if (args[1] === "cancel-process" && args.length === 4) {
     const [, , workspaceId, operationId] = args;
-    return { result: await (await maintenanceChatClient(options)).cancelMaintenanceProcess(workspaceId!, operationId!) };
+    const client = await maintenanceChatClient(options);
+    try { return { result: await client.call("cancel_process", { workspace_id: workspaceId!, operation_id: operationId! }) }; }
+    finally { await client.close(); }
   }
   const mode = args[1], operation = args[2];
   if (!(mode === "review" || mode === "apply") || !(operation === "upgrade" || operation === "repair" || operation === "cancel-upgrade" || operation === "uninstall")) {
