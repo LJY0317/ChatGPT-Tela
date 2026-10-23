@@ -35,10 +35,11 @@ changing the model of an existing conversation or exporting its history. Newly c
 threads receive a one-time `[Tela Agent] ` prefix on first explicit inspection of a terminal result,
 successful or failed,
 through Native `thread/name/set`. Naming uses the current title, or the first nonempty line of
-Native preview when unnamed. A one-time naming marker is cleaned with the job and kept separate
-from verified-answer collection time; existing collection receipts count as already handled.
-No title-event observer, timer or permanent title list is used. Later inspections and continuations preserve user
-renames. Naming failures do not block the answer and are not automatically retried.
+Native preview when unnamed. The naming marker is settled only after success, including public
+readback after an ambiguous mutation acknowledgement, and remains separate from verified-answer
+collection time. Failed or empty metadata attempts release the claim for a later explicit inspection.
+No title-event observer, timer or permanent title list is used. Later inspections and continuations
+preserve user renames after naming has settled. Naming failures do not block the answer.
 The Native engine creates
 a new durable, paginated thread and supplies its own tool/sandbox authority; the existing Web
 provider performs inference. This is not an independent Tela Chat worker or an API-key fallback.

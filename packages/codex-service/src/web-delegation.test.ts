@@ -9,7 +9,7 @@ import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { runWebDelegation, inspectWebDelegationResult, collectWebDelegationResult, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
-async function fixture(options: { titleReadFails?: boolean; titleSetFails?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; latestStatus?: "failed" | "interrupted"; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
+async function fixture(options: { titleReadFails?: boolean; titleSetFails?: boolean; titleSetAckLost?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; latestStatus?: "failed" | "interrupted"; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const slot = options.slot ?? 1;
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
@@ -47,6 +47,7 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
       if (method === "thread/name/set") {
         if (options.titleSetFails) throw Error("Fixture naming RPC failed");
         currentTitle = (params as { name: string }).name;
+        if (options.titleSetAckLost) throw Error("Fixture naming ACK lost");
         return {};
       }
       if (method === "turn/start") {
@@ -195,10 +196,11 @@ test("failed result inspection names once without starting collected retention",
     expect(() => readFileSync(join(f.root, `${f.id}.json.named`))).toThrow();
   } finally { f.cleanup(); }
 });
-test("an existing collected receipt preserves manual titles after upgrade", async () => {
+test("a settled title marker preserves manual titles after collection", async () => {
   const f = await fixture();
   try {
     await f.run();
+    await f.inspect();
     f.store.collect(f.id);
     f.setTitle("Personal rename");
     const before = f.calls.length;
@@ -229,7 +231,7 @@ test("an existing prefix is not duplicated on collection", async () => {
     expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(0);
   } finally { f.cleanup(); }
 });
-test("naming failure preserves the answer without rearming naming", async () => {
+test("naming failures preserve the answer and leave naming eligible for the next explicit inspection", async () => {
   for (const options of [{ titleReadFails: true }, { titleSetFails: true }]) {
     const f = await fixture(options);
     try {
@@ -237,10 +239,24 @@ test("naming failure preserves the answer without rearming naming", async () => 
       expect(await f.collect()).toBe("verified design");
       const before = f.calls.length;
       expect(await f.collect()).toBe("verified design");
-      expect(f.calls).toHaveLength(before);
+      expect(f.calls.length).toBeGreaterThan(before);
+      expect(() => readFileSync(join(f.root, `${f.id}.json.named`))).toThrow();
       expect(f.store.collectedAt(f.id)).toBeNumber();
     } finally { f.cleanup(); }
   }
+});
+test("lost title mutation ACK is settled by public readback", async () => {
+  const f = await fixture({ titleSetAckLost: true });
+  try {
+    await f.run();
+    await f.inspect();
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(1);
+    expect(f.store.collectedAt(f.id)).toBeUndefined();
+    f.setTitle("Personal rename");
+    const before = f.calls.length;
+    await f.inspect();
+    expect(f.calls).toHaveLength(before);
+  } finally { f.cleanup(); }
 });
 test("default Web delegation requests and proves workspace-only Native sandbox", async () => {
   const f = await fixture();

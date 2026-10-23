@@ -506,12 +506,23 @@ export class WebDelegationStore {
     const root = record.parentJobId ? this.recordsForThread({ slot: record.slot,
       accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId })
       .find(job => !job.parentJobId && !job.origin) : record;
-    if (!root || this.collectedAt(root.id) !== undefined) return false;
+    if (!root) return false;
     try {
       const fd = openSync(`${this.#path(root.id)}.named`, "wx", 0o600);
       closeSync(fd);
       return true;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return false; }
+  }
+  /** A failed or inconclusive naming attempt must remain eligible for a later explicit inspection. */
+  releaseTitleClaim(record: WebDelegationRecord): void {
+    if (!record.threadId || record.origin) return;
+    const root = record.parentJobId ? this.recordsForThread({ slot: record.slot,
+      accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId })
+      .find(job => !job.parentJobId && !job.origin) : record;
+    if (root) {
+      const path = `${this.#path(root.id)}.named`;
+      if (existsSync(path)) unlinkSync(path);
+    }
   }
   /** An explicitly linked thread has no task permit and cannot submit a model turn. */
   link(record: WebDelegationRecord): void {
@@ -708,12 +719,25 @@ export async function inspectWebDelegationResult(adapters: WebDelegationAdapters
           const name = typeof thread?.name === "string" ? thread.name.trim() : "";
           const preview = typeof thread?.preview === "string" ? thread.preview.split(/\r?\n/).find(line => line.trim())?.trim() : "";
           const title = name || preview;
-          if (title && !title.startsWith(DELEGATED_TITLE_PREFIX)) {
-            await rpc.request("thread/name/set", { threadId: record.threadId, name: DELEGATED_TITLE_PREFIX + title });
+          if (!title) { adapters.store.releaseTitleClaim(record); return record; }
+          if (!title.startsWith(DELEGATED_TITLE_PREFIX)) {
+            try {
+              await rpc.request("thread/name/set", { threadId: record.threadId, name: DELEGATED_TITLE_PREFIX + title });
+            } catch (error) {
+              // A lost ACK is ambiguous. Public metadata readback settles a successful
+              // mutation without blindly issuing it again on the next inspection.
+              const after = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }));
+              const afterThread = object(after?.thread);
+              const afterName = typeof afterThread?.name === "string" ? afterThread.name.trim() : "";
+              if (!afterName.startsWith(DELEGATED_TITLE_PREFIX)) throw error;
+            }
           }
         } finally { await rpc.close(); }
+      } else {
+        adapters.store.releaseTitleClaim(record);
       }
     } catch (error) {
+      adapters.store.releaseTitleClaim(record);
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { phase: "inspect", failure_class: diagnosticFailureClass(error) });
     }
   }
