@@ -45,6 +45,7 @@ import { isChatGptTemporaryChatUrl, isChatGptProvisionalConversationUrl } from "
 interface TrackedTurn extends TurnOwnership {
   readonly handle: WebTurnHandle;
   readonly surfaceLeaseId: string;
+  readonly preSubmitApprovalRevision?: string;
   revision: string;
   continuationBoundary?: {
     readonly callId: string;
@@ -513,7 +514,8 @@ async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: T
         matched_assistant_count: completed.filter(turn => turn.parentUserTurnKey === tracked.userTurnKey).length,
         approval_card_count: snapshot.approval?.cardCount ?? 0,
         ...(snapshot.approval?.cardFingerprint ? { card_fingerprint: snapshot.approval.cardFingerprint } : {}),
-        current_authority_proven: reason === "approval_pending",
+        // A visible card has surface scope; its owner is not proven by the assistant lineage.
+        current_authority_proven: false,
       });
       // Reuse local opt-in HTML/screenshot retention. This is an uncommitted
       // observation, never an answer receipt or permission to replay the task.
@@ -605,10 +607,18 @@ function retainedBoundaryFields(assistant: ChatGptTurnObservation | undefined) {
   };
 }
 
+/** An unchanged single card already present before send belongs to an earlier request. */
+function pendingApproval(snapshot: ChatGptSurfaceSnapshot, tracked: TrackedTurn): ChatGptSurfaceSnapshot["approval"] {
+  const card = snapshot.approval;
+  return card?.cardCount === 1 && card.revisionFingerprint === tracked.preSubmitApprovalRevision
+    ? undefined : card;
+}
+
 /** Pending decisions outrank presentation completion; failure always remains terminal. */
-function assistantLifecyclePhase(snapshot: ChatGptSurfaceSnapshot, assistant: ChatGptTurnObservation | undefined): WebTurnState["phase"] {
+function assistantLifecyclePhase(snapshot: ChatGptSurfaceSnapshot, tracked: TrackedTurn,
+  assistant: ChatGptTurnObservation | undefined): WebTurnState["phase"] {
   if (assistant?.phase === "failed") return "failed";
-  if (snapshot.approval?.cardCount || assistant?.phase === "tool-wait") return "tool-wait";
+  if (pendingApproval(snapshot, tracked)?.cardCount || assistant?.phase === "tool-wait") return "tool-wait";
   if (assistant?.phase === "complete") return "completed";
   return assistant ? "continuing" : "accepted";
 }
@@ -651,7 +661,7 @@ function stateFromSnapshot(
       evidence: evidence("accepted user turn has no assistant descendant yet"),
     };
   }
-  const phase = assistantLifecyclePhase(snapshot, assistant);
+  const phase = assistantLifecyclePhase(snapshot, tracked, assistant);
   return {
     state: "proven",
     value: { providerTurnId: tracked.handle.providerTurnId, phase },
@@ -1585,6 +1595,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             conversationRoute: new URL(snapshot.url).origin + new URL(snapshot.url).pathname,
             baselineUserLineageKeys: preSubmitUserLineageKeys,
             revision: snapshot.revision,
+            ...(filled.approval?.cardCount === 1
+              ? { preSubmitApprovalRevision: filled.approval.revisionFingerprint } : {}),
             approvalObservation: new ChatGptApprovalObservation(),
             operationAbort: new AbortController(),
           });
@@ -1597,6 +1609,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
               : /^\/c\/[^/]+$/.test(acceptedRoute.pathname) ? "conversation" : "other",
             user_count: snapshot.turns.filter(turn => turn.role === "user").length,
             baseline_lineage_count: preSubmitUserLineageKeys.size,
+            preexisting_approval_card_count: filled.approval?.cardCount ?? 0,
             accepted_fingerprint_matches: observedFingerprint === expectedFingerprint,
             causal_receipt: causalReceipt,
             logical_anchor_present: userTurn.lineageAnchor !== undefined,
@@ -1699,7 +1712,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     }
     const assistant = assistants[0];
     this.#observeApproval(surface, tracked, snapshot, assistant);
-    const phase = assistantLifecyclePhase(snapshot, assistant);
+    const phase = assistantLifecyclePhase(snapshot, tracked, assistant);
     if (phase === "completed" || phase === "failed") {
       emitDiagnosticEvent("chatgpt_tela_work", "web_tool_handoff_rejected", {
         ...turnObservationFields(snapshot, tracked), assistant_phase: assistant!.phase!,
@@ -1751,7 +1764,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   #observeApproval(surface: BrowserSurfaceLease, tracked: TrackedTurn, snapshot: ChatGptSurfaceSnapshot,
     assistant: ChatGptTurnObservation | undefined): void {
     logApprovalTransition(tracked.approvalObservation.recordInputReceipt(snapshot.approvalInputReceipt, Date.now()));
-    const transition = tracked.approvalObservation.observe(snapshot.approval, approvalAssistantVersion(assistant),
+    const transition = tracked.approvalObservation.observe(pendingApproval(snapshot, tracked), approvalAssistantVersion(assistant),
       assistant !== undefined && assistant.phase !== "failed", Date.now());
     logApprovalTransition(transition);
   }
@@ -1820,7 +1833,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       const answer = tracked.pendingCompletedAnswer;
       delete tracked.pendingCompletedAnswer;
       // A new approval can render after completion controls. It still blocks final delivery.
-      if (assistantLifecyclePhase(snapshot, ownership.assistants[0]) === "failed") {
+      if (assistantLifecyclePhase(snapshot, tracked, ownership.assistants[0]) === "failed") {
         signal?.throwIfAborted();
         observeProviderFailure(ownership.assistants[0]!.failureDetail);
         this.#retireTurn(surface, tracked);
@@ -1828,7 +1841,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           detail: ownership.assistants[0]!.failureDetail ?? "ChatGPT turn failed" },
           evidence: evidence("assistant failure superseded pending completion") };
       }
-      if (!snapshot.approval?.cardCount) {
+      if (!pendingApproval(snapshot, tracked)?.cardCount) {
         signal?.throwIfAborted();
         this.#retireTurn(surface, tracked);
         reportWebFinalObserved(tracked);
@@ -1896,9 +1909,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         if (assistant?.phase === "failed") continue;
         if (assistant) tracked.responseRetryState = "observed";
       }
-      const waitState = JSON.stringify([assistant?.phase ?? "absent", snapshot.approval ?? null]);
+      const observedApproval = pendingApproval(snapshot, tracked);
+      const waitState = JSON.stringify([assistant?.phase ?? "absent", observedApproval ?? null]);
       this.#observeApproval(surface, tracked, snapshot, assistant);
-      const observedApproval = snapshot.approval;
       const approvalChoice = observedApproval
         ? decideChatGptApproval(this.#approvalAutomationMode, observedApproval) : undefined;
       if (observedApproval?.cardCount && !tracked.approvalPendingCaptured) {
@@ -1996,7 +2009,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       // Pending authority decisions dominate display completion controls. Never commit a
       // progress message or clear a tool continuation while its approval remains unresolved.
-      if (snapshot.approval?.cardCount && assistantLifecyclePhase(snapshot, assistant) !== "failed") {
+      if (observedApproval?.cardCount && assistant?.phase !== "failed") {
         await recordDeferredCompletion(surface, tracked, snapshot, "approval_pending");
         continue;
       }

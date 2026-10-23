@@ -3004,6 +3004,32 @@ test.each(["owned", "changed_author"] as const)("public cancellation aborts pend
 
 
 describe("completed browser answer awaiting Native delivery", () => {
+  test("a card already present before submission cannot defer a different completed request", async () => {
+    const driver = new FixtureDriver({ ...fixture("ready-new-chat"), approval: recognizedApproval });
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "off" });
+    try {
+      const submitting = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await submitting;
+      if (submitted.state !== "proven") throw Error("expected accepted Web turn");
+      const completed = { ...driver.current, revision: "new-completed-with-prior-card",
+        turns: [...driver.current.turns, { key: "assistant-new", role: "assistant" as const,
+          parentUserTurnKey: "user-turn-1", phase: "complete" as const, text: "New request completed" }] };
+      driver.current = completed;
+      const observed = await provider.observeTurn(surface.lease, submitted.value);
+      expect(observed.state === "proven" && observed.value.phase).toBe("completed");
+      driver.queued.push({ ...completed, revision: "prior-card-still-present" });
+      const event = await provider.waitForTurnEvent(surface.lease, submitted.value);
+      expect(event.state === "proven" && event.value).toMatchObject({
+        kind: "completed", answer: "New request completed",
+      });
+      expect(driver.current.approval?.cardFingerprint).toBe(recognizedApproval.cardFingerprint);
+      expect(driver.approvalCalls).toBe(0);
+    } finally { await surface.host.close(); }
+  });
+
   test.each(["identity_pending", "approval_pending", "multiple_assistants"] as const)("records and privately captures %s once, then delivers the original answer", async reason => {
     const scratch = mkdtempSync(join(tmpdir(), "tela-deferred-completion-"));
     const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
@@ -3045,7 +3071,7 @@ describe("completed browser answer awaiting Native delivery", () => {
         assistant_count: reason === "multiple_assistants" ? 2 : 1,
         complete_assistant_count: reason === "multiple_assistants" ? 2 : 1,
         scope_fingerprint: diagnosticFingerprint(taskRequest.nativeTaskId),
-        current_authority_proven: reason === "approval_pending", turn_fingerprint: diagnosticFingerprint(taskRequest.nativeTurnId) });
+        current_authority_proven: false, turn_fingerprint: diagnosticFingerprint(taskRequest.nativeTurnId) });
       if (reason === "approval_pending") expect(deferred[0]?.card_fingerprint).toBe(recognizedApproval.cardFingerprint);
       expect(events.filter(row => row.stage === "browser_snapshot_observed" && row.reason_class === "completion_deferred")).toHaveLength(1);
       const structural = readFileSync(file, "utf8");
