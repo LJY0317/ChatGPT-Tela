@@ -71,8 +71,8 @@ function macCodesign(outputPath: string, identity: string): void {
   };
   sign(join(outputPath, "chatgpt-tela"));
   for (const service of ["gateway", "chat", "codex"] as const) sign(join(outputPath, "services", service));
-  const menuBar = join(outputPath, "ui", "chatgpt-tela-menu-bar");
-  if (existsSync(menuBar)) sign(menuBar);
+  const menuBarApp = join(outputPath, "ui", "ChatGPT Tela.app");
+  if (existsSync(menuBarApp)) sign(menuBarApp);
   const workspaceFiles = join(outputPath, "helpers", "tela-workspace-files");
   if (existsSync(workspaceFiles)) sign(workspaceFiles);
   const nativeEngine = join(outputPath, "native-engine", "codex");
