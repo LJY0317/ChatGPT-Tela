@@ -145,7 +145,10 @@ macTest("a wrapper PID alone cannot acknowledge GUI startup, including an old in
   const pending=waitForPackagedMenuBar({paths,parentPid:4321,productVersion:"2.0.0",signal:abort.signal});
   abort.abort();await expect(pending).rejects.toThrow("did not acknowledge startup");
   const ready=waitForPackagedMenuBar({paths,parentPid:4321,productVersion:"2.0.0",signal:new AbortController().signal});
-  writeFileSync(packagedMenuBarReadyPath(paths),JSON.stringify({pid:process.pid,parentPid:4321,productVersion:"2.0.0"}));
+  await new Promise<void>(resolve=>setImmediate(()=>{
+   writeFileSync(packagedMenuBarReadyPath(paths),JSON.stringify({pid:process.pid,parentPid:4321,productVersion:"2.0.0"}));
+   resolve();
+  }));
   await ready;
  }finally{rmSync(f.root,{recursive:true,force:true});}
 });
