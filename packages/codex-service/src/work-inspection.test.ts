@@ -52,6 +52,34 @@ function harness() {
 }
 
 describe("profile-owned read-only Work inspection", () => {
+  test("turn-scoped request and settlement boundaries survive an unselected browser without borrowing older finals", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-turn-boundary-"));
+    const f = harness();
+    f.service.bridgePreview = async () => ({ contractVersion: 1, slot: 2, activeSurfaceCount: 2,
+      previewAvailable: false, approvalState: "unavailable" } as any);
+    const at = new Date().toISOString();
+    const scope = diagnosticFingerprint(threadId), current = diagnosticFingerprint(turnId);
+    const other = diagnosticFingerprint("22222222-3333-7444-8555-666666666666");
+    const rows = [
+      { ts: at, event: "chatgpt_tela_work", stage: "native_outcome_committed",
+        scope_fingerprint: scope, turn_fingerprint: other, outcome: "final" },
+      { ts: at, event: "chatgpt_tela_work", stage: "native_response_observer_started",
+        scope_fingerprint: scope, turn_fingerprint: current },
+      { ts: at, event: "chatgpt_tela_work", stage: "web_turn_identity_pending",
+        scope_fingerprint: scope, turn_fingerprint: current, reason_class: "user_not_rendered" },
+    ];
+    mkdirSync(join(root, "logs"), { recursive: true });
+    writeFileSync(join(root, "logs", "codex.diagnostics.jsonl"), rows.map(row => JSON.stringify(row)).join("\n")+"\n");
+    try {
+      const result = await createCodexWorkInspector({ service: f.service as any,
+        logsRoot: join(root, "logs"), connect: f.connect })(2, threadId);
+      expect(result.browser.selectedSurface).toBe(false);
+      expect(result.diagnostics.activeRequestBoundary).toMatchObject({
+        turnFingerprint: current, turnStatus: "inProgress", nativeFinalCommitted: false,
+        observedStages: ["native_response_observer_started", "web_turn_identity_pending"],
+      });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("passes bounded checkpoint decisions for the exact selected slot and rejects private fields", async () => {
     const f = harness(), root = mkdtempSync(join(tmpdir(), "tela-checkpoint-inspect-"));
     const requests: number[] = [];

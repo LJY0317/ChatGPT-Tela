@@ -94,6 +94,37 @@ export async function inspectNativeThread(input: {
   const pendingStillObserved = pending?.phase === "pending";
   const lastPlan = last("web_turn_plan");
   const lastObserved = correlated.at(-1);
+  // Public turn identity, not the selected browser tab, chooses the diagnostic
+  // stream. Historical finals for other turns must never settle this turn.
+  const activeTurn = recentTurns[0];
+  const activeTurnFingerprint = activeTurn ? diagnosticFingerprint(activeTurn.id) : undefined;
+  const activeEvents = activeTurnFingerprint
+    ? correlated.filter(event => event.turn_fingerprint === activeTurnFingerprint) : [];
+  const boundaryStages = new Set([
+    "native_response_observer_started", "web_turn_plan", "web_send_activation_started",
+    "web_turn_identity_pending", "web_turn_identity_accepted", "web_public_progress_extraction",
+    "native_outcome_committed", "native_response_body_closed", "native_turn_retired",
+    "native_execution_failed", "web_turn_failed",
+  ]);
+  const boundaries = activeEvents.filter(event => boundaryStages.has(event.stage));
+  const latestOperation = [...boundaries].reverse().find(event =>
+    typeof event.operation_fingerprint === "string")?.operation_fingerprint;
+  const stages = [...new Set(boundaries.map(event => event.stage))];
+  const activeRequestBoundary = activeTurn ? {
+    turnFingerprint: activeTurnFingerprint,
+    turnStatus: activeTurn.status,
+    operationFingerprint: latestOperation ?? null,
+    observedAt: boundaries.at(-1)?.ts ?? null,
+    observedStages: stages,
+    accepted: stages.includes("web_turn_identity_accepted"),
+    browserFinalObserved: activeEvents.some(event =>
+      event.stage === "web_turn_completed" || event.stage === "web_turn_final_observed"),
+    nativeFinalCommitted: activeEvents.some(event =>
+      event.stage === "native_outcome_committed" && event.outcome === "final"),
+    nativeResponseDrained: activeEvents.some(event =>
+      event.stage === "native_response_body_closed" && event.reason_class === "drained"),
+    proof: "turn_scoped_local_events_only" as const,
+  } : null;
   const coverage = {
     sourcesRead: logs.coverage.filter(item => item.state === "read").length,
     sourcesUnavailable: logs.coverage.filter(item => item.state !== "read").length,
@@ -126,6 +157,7 @@ export async function inspectNativeThread(input: {
       coverage,
       lastObservedAt: lastObserved?.ts ?? null,
       lastWebPlan,
+      activeRequestBoundary,
       approvalWaitEvidence,
       recentEvents: correlated.slice(-MAX_TIMELINE).map(event => ({
         at: event.ts, stage: event.stage,
