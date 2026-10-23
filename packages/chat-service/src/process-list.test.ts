@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -63,6 +63,24 @@ test("public registry discovery paginates unresolved work without cross-workspac
     expect(first.processes.every((row: any) => row.workspaceId === f.first.id)).toBe(true);
     expect(readFileSync(f.storePath, "utf8")).toBe(before);
     await expect(f.runtime.close()).rejects.toThrow("unresolved execution");
+  } finally { removeFixture(f.base); }
+});
+
+test("maintenance inventory preserves orphaned blockers without scanning completed history or stale workspace roots", async () => {
+  const f = fixture();
+  try {
+    const before = readFileSync(f.storePath, "utf8");
+    rmSync(join(f.base, "first"), { recursive: true });
+    const listed = await f.runtime.maintenanceProcesses();
+    expect(listed).toHaveLength(61);
+    expect(listed.filter(row => row.workspaceId === f.first.id)).toHaveLength(60);
+    expect(listed.find(row => row.workspaceId === f.first.id)).toMatchObject({
+      workspaceName: "Unavailable workspace", state: "unknown", liveness: "unknown",
+    });
+    expect(listed.filter(row => row.workspaceId === f.second.id)).toHaveLength(1);
+    expect(listed.some(row => row.sessionId === 61)).toBe(false);
+    expect(readFileSync(f.storePath, "utf8")).toBe(before);
+    expect(() => f.runtime.assertCanClose()).toThrow("unresolved execution");
   } finally { removeFixture(f.base); }
 });
 

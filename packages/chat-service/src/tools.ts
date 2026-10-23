@@ -483,20 +483,18 @@ export function createChatToolRuntime(input: {
     assertCanClose() { processes.assertCanClose(); },
     async maintenanceProcesses() {
       const unresolved: { workspaceId: string; workspaceName: string; operationId: string; sessionId: number; startedAt: string; state: string; liveness: string }[] = [];
-      for (const workspace of workspaces.list()) {
-        let afterSessionId = 0;
-        while (true) {
-          const page = processes.list({ workspaceId: workspace.id, afterSessionId, limit: 50 });
-          for (const row of page.processes) {
-            const current = await processes.inspect(workspace.id, row.operationId);
-            if (!["exited", "signaled", "spawn_failed"].includes(current.state)) {
-              unresolved.push({ workspaceId: workspace.id, workspaceName: workspace.root.split(/[\\/]/).filter(Boolean).at(-1) ?? "Workspace",
-                operationId: current.operationId, sessionId: current.sessionId, startedAt: current.startedAt,
-                state: current.state, liveness: current.liveness });
-            }
-          }
-          if (page.nextAfterSessionId === null) break;
-          afterSessionId = page.nextAfterSessionId;
+      for (const row of processes.maintenanceUnresolved()) {
+        let workspaceName = "Unavailable workspace";
+        let current = row;
+        try {
+          const workspace = workspaces.get(row.workspaceId);
+          workspaceName = workspace.root.split(/[\\/]/).filter(Boolean).at(-1) ?? "Workspace";
+          try { current = await processes.inspect(row.workspaceId, row.operationId); }
+          catch { /* An unobservable owner remains an unresolved shutdown blocker. */ }
+        } catch { /* A missing workspace cannot retire its process reservation. */ }
+        if (!["exited", "signaled", "spawn_failed"].includes(current.state)) {
+          unresolved.push({ workspaceId: row.workspaceId, workspaceName, operationId: row.operationId,
+            sessionId: row.sessionId, startedAt: row.startedAt, state: current.state, liveness: current.liveness });
         }
       }
       return unresolved;

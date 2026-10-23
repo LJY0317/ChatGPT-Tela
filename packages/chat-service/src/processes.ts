@@ -978,6 +978,15 @@ export class ChatProcessManager {
     });
   }
 
+  /** Maintenance uses the same hot unresolved reservations that block shutdown.
+   * Workspace directories may have disappeared; their reservations still count. */
+  maintenanceUnresolved(): readonly ChatProcessStatus[] {
+    return Object.freeze([...this.#operations.values()].map(operation =>
+      this.#reconcileOwnedCompletion(operation)).filter(operation =>
+      !["exited", "signaled", "spawn_failed"].includes(operation.state))
+      .map(operation => this.#statusSnapshot(operation)));
+  }
+
   /** Bounded registry discovery only: no owner probes, output consumption or execution replay. */
   list(input: { readonly workspaceId: string; readonly afterSessionId?: number;
     readonly limit?: number; readonly includeCompleted?: boolean }) {
