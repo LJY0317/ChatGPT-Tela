@@ -164,18 +164,26 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
   }
   const candidates: CachedContextCheckpoint[] = [];
   const legacyPublications = new Map<string, PublishedNativeWorkingCheckpoint>();
+  let cacheReadFailed = false;
+  let publicationCount = 0;
+  let prefixRejectedCount = 0;
   if (input.cache) {
     try { candidates.push(...await input.cache.list(projection.nativeTaskId)); }
-    catch { /* Derived cache loss is not authority loss. */ }
+    catch { cacheReadFailed = true; /* Derived cache loss is not authority loss. */ }
   }
+  const cachedCount = candidates.length;
   if (scope && input.visiblePrefix?.journal.publishedCheckpoints) {
     for (const item of await input.visiblePrefix.journal.publishedCheckpoints(scope, reuseScope)) {
+      publicationCount++;
       let revisionId = item.revisionId;
       if (item.scopeFingerprint !== scope) {
         const index = item.reuseScopeFingerprint === reuseScope && item.prefixDigest
           ? prefixDigests.get(item.prefixDigest) : undefined;
         if (index === undefined || projection.media.some(media =>
-          projection.revisions.slice(0, index + 1).some(revision => revision.revision.id === media.revisionId))) continue;
+          projection.revisions.slice(0, index + 1).some(revision => revision.revision.id === media.revisionId))) {
+          prefixRejectedCount++;
+          continue;
+        }
         revisionId = projection.revisions[index]!.revision.id;
       }
       if (!item.prefixDigest && item.scopeFingerprint === scope) legacyPublications.set(revisionId, item);
@@ -217,6 +225,8 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     candidate_count: candidates.length, source_revision_count: projection.revisions.length,
     covered_revision_count: selectedIndex + 1, checkpoint_reused: selected !== undefined,
     summary_estimate: selected?.checkpoint.estimatedTokens ?? 0,
+    cached_candidate_count: cachedCount, cache_read_failed: cacheReadFailed,
+    published_candidate_count: publicationCount, published_prefix_rejected_count: prefixRejectedCount,
   });
   const pendingSuffixTokens = projection.revisions.slice(selectedIndex + 1)
     .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
