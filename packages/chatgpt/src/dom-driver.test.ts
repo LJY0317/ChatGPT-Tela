@@ -631,6 +631,24 @@ describe("current ChatGPT DOM surface driver", () => {
     expect((await driver.observe()).turns[0]!.plainBodyText).toBe(wire);
   });
 
+  test("nested sole PRE excludes a sibling language label from the checkpoint JSON", async () => {
+    const wire = JSON.stringify({ type: 'tela_context_checkpoint_v1', summary: String.raw`path \\folder` });
+    const code = new FixtureElement({ 'data-fixture-tag': 'CODE' }); code.textContent = wire;
+    Object.assign(code, { classList: ['language-json'] });
+    const pre = new FixtureElement({ 'data-fixture-tag': 'PRE' }, { code: [code] });
+    pre.childNodes = [code]; pre.textContent = wire;
+    const chrome = new FixtureElement({ 'aria-hidden': 'true' }); chrome.textContent = 'JSON'; chrome.childNodes = [];
+    const wrapper = new FixtureElement(); wrapper.childNodes = [chrome, pre]; wrapper.textContent = 'JSON' + wire;
+    const body = new FixtureElement({}, { pre: [pre] });
+    body.childNodes = [wrapper]; body.textContent = wrapper.textContent;
+    const group = new FixtureElement({ 'data-turn-key': 'nested-language' }, {
+      '[data-markdown-text-style="assistant-message"]': [body],
+      'button[data-testid="copy-turn-action-button"]': [new FixtureElement()],
+    });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
+    expect((await driver.observe()).turns[0]!.plainBodyText).toBe(wire);
+  });
+
   test("nested rendered JSON reaches checkpoint source, operation and receipt validation", async () => {
     const source = { nativeTaskId: 'task', webEpochId: 'epoch', sourceRevisionId: 'r2', physicalContext: {
       mode: 'full' as const, headRevisionId: 'r2', logicalTokens: 1, transferTokens: 1,

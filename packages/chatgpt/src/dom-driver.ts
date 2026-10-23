@@ -1011,9 +1011,29 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         text: answer ? answerMarkdown(answer) : undefined,
         // A sole code block is the literal body; its language/copy chrome is presentation.
         // Prose remains literal DOM text. Never unescape rendered Markdown into a protocol.
-        plainBodyText: answer?.childNodes.length === 1 && (answer.children[0]?.tagName === "PRE"
-          || answer.children[0]?.getAttribute('data-code-block') != null)
-          ? answer.children[0].querySelector("code")?.textContent : answer?.textContent,
+        plainBodyText: (() => {
+          if (!answer) return undefined;
+          // A renderer may place the language label beside a nested PRE, so the
+          // outer textContent includes chrome (e.g. "JSON" before the envelope).
+          // The existing Markdown serializer proves when that PRE is the entire
+          // authored answer, regardless of how many presentation wrappers exist.
+          const blocks = answer.querySelectorAll("pre");
+          const block = blocks.length === 1 ? blocks[0] : undefined;
+          const onlyCode = (node) => {
+            if (node === block) return true;
+            if (node.nodeType === 3) return !(node.textContent ?? "").trim();
+            if (!(node instanceof HTMLElement)) return true;
+            if (node.hidden || node.getAttribute("aria-hidden") === "true"
+              || ["button", "svg", "nav"].includes(node.tagName.toLowerCase())) return true;
+            return Array.from(node.childNodes).every(onlyCode);
+          };
+          if (block && onlyCode(answer))
+            return (block.querySelector("code") ?? block).textContent ?? undefined;
+          if (answer.childNodes.length === 1 && (answer.children[0]?.tagName === "PRE"
+            || answer.children[0]?.getAttribute('data-code-block') != null))
+            return answer.children[0].querySelector("code")?.textContent;
+          return answer.textContent;
+        })(),
         // Reuse the delivered answer serializer. A separate DOM-attribute codec made
         // decorative icon hydration invalidate unchanged answers.
         bodyProof: answerBody ? { version: 1, value: answerSemanticBody(answerBody) } : undefined,
