@@ -120,6 +120,8 @@ describe("Tela Chat process operations", () => {
       sessionId = live.sessionId;
       const before = readFileSync(f.storePath, "utf8");
       expect(() => f.manager.assertCanClose()).toThrow("unresolved execution");
+      await expect(f.manager.cancel(f.workspace.id, live.operationId)).rejects.toThrow("no verified owner cancellation authority");
+      expect(f.manager.status(f.workspace.id, live.operationId).state).toBe("running");
       await expect(f.manager.close()).rejects.toThrow("unresolved execution");
       expect(readFileSync(f.storePath, "utf8")).toBe(before);
       expect(f.manager.status(f.workspace.id, live.operationId).ioAvailable).toBe(true);

@@ -1013,13 +1013,24 @@ export class ChatProcessManager {
       nextAfterSessionId: matching.length > limit ? page.at(-1)!.sessionId : null });
   }
 
-  /** Public on-demand observation; never equates a saved PID with live execution authority. */
+  /** Public on-demand observation and explicit cancellation share one authenticated owner exchange. */
   async inspect(workspaceId: string, operationId: string): Promise<ChatProcessStatus> {
+    return this.#observeProcess(workspaceId, operationId, "status");
+  }
+
+  async #observeProcess(workspaceId: string, operationId: string, action: "status" | "cancel"): Promise<ChatProcessStatus> {
     const known = this.status(workspaceId, operationId);
     const operation = this.#operations.get(known.operationId);
-    if (!operation || operation.executionMode !== "owned-worker-v1" || ["exited", "signaled", "spawn_failed"].includes(known.state)) return known;
-    const observed = await this.#observeOwned(operation, { action: "status" });
-    return Object.freeze({ ...this.status(workspaceId, operationId),
+    if (!operation || ["exited", "signaled", "spawn_failed"].includes(known.state)) return known;
+    if (operation.executionMode !== "owned-worker-v1") {
+      if (action === "cancel") throw new Error("execution has no verified owner cancellation authority; inspect its original lifecycle");
+      return known;
+    }
+    const observed = await this.#observeOwned(operation, { action });
+    const settled = this.status(workspaceId, operationId);
+    // A signed terminal journal wins if the owner completed while replying.
+    if (["exited", "signaled", "spawn_failed"].includes(settled.state)) return settled;
+    return Object.freeze({ ...settled,
       state: observed.state, ioAvailable: observed.ioAvailable, updatedAt: observed.updatedAt,
       ...(observed.pid === undefined ? {} : { pid: observed.pid }),
       liveness: ["starting", "running"].includes(observed.state) ? "alive" as const
@@ -1029,12 +1040,7 @@ export class ChatProcessManager {
 
   /** Explicit workspace-owned cancellation only; update readiness never invokes it. */
   async cancel(workspaceId: string, operationId: string): Promise<ChatProcessStatus> {
-    const known = this.status(workspaceId, operationId);
-    const operation = this.#operations.get(known.operationId);
-    if (!operation || operation.executionMode !== "owned-worker-v1"
-      || ["exited", "signaled", "spawn_failed"].includes(known.state)) return known;
-    await this.#observeOwned(operation, { action: "cancel" });
-    return this.inspect(workspaceId, operationId);
+    return this.#observeProcess(workspaceId, operationId, "cancel");
   }
 
   /** Shutdown cannot substitute for unproved process-tree cancellation. */

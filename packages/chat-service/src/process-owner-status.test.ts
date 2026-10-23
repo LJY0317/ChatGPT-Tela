@@ -22,16 +22,17 @@ async function fixture(options: { holdWait?: boolean } = {}) {
     serverInstanceId, requestFingerprint, sessionId: 1, state: "running", executionMode: "owned-worker-v1", startedAt: timestamp, updatedAt: timestamp }] }), { mode: 0o600 });
   const journal = new ProcessExecutionJournal({ root: `${storePath}.executions`, key: requestKey });
   const claim = journal.reserve({ operationId, workspaceId: workspace.id, launchingServerId: serverInstanceId, requestFingerprint });
-  let queries = 0, waits = 0, writes = 0, wrongOwner = false;
+  let queries = 0, waits = 0, writes = 0, cancellations = 0, wrongOwner = false;
   let releaseWait!: () => void;
   let markWaitStarted!: () => void;
   const waitGate = new Promise<void>(resolve => { releaseWait = resolve; });
   const waitStarted = new Promise<void>(resolve => { markWaitStarted = resolve; });
+  const running = () => ({ operationId, workspaceId: workspace.id, serverInstanceId: wrongOwner ? randomUUID() : serverInstanceId,
+    sessionId: 1, state: "running", startedAt: timestamp, updatedAt: timestamp, pid: 321,
+    ioAvailable: true, output: "", outputTruncated: false, outputRecovered: false });
   const control = await startProcessOwnerControl({ binding: { ownerId: claim.ownerId, operationId, workspaceId: workspace.id },
     secret: randomBytes(32).toString("hex"), authority: {
-      status() { queries++; return { operationId, workspaceId: workspace.id, serverInstanceId: wrongOwner ? randomUUID() : serverInstanceId,
-        sessionId: 1, state: "running", startedAt: timestamp, updatedAt: timestamp, pid: 321,
-        ioAvailable: true, output: "", outputTruncated: false, outputRecovered: false }; },
+      status() { queries++; return running(); },
       async wait() {
         waits++; markWaitStarted();
         if (options.holdWait) await waitGate;
@@ -40,6 +41,7 @@ async function fixture(options: { holdWait?: boolean } = {}) {
           updatedAt: new Date().toISOString(), ioAvailable: false,
           output: "", outputTruncated: false, outputRecovered: false };
       }, write() { writes++; },
+      async cancelOwnedExecution() { cancellations++; return running(); },
     } });
   journal.publishLive(claim, control.descriptor);
   const runtime = createChatToolRuntime({ allowedRoots: [root], stateRoot });
@@ -51,6 +53,7 @@ async function fixture(options: { holdWait?: boolean } = {}) {
   };
   return { workspace, operationId, serverInstanceId, runtime, storePath,
     complete, waitStarted, releaseWait, counts: () => ({ queries, waits, writes }),
+    cancelRequests: () => cancellations,
     corruptOwner: () => { wrongOwner = true; }, async close() {
       complete();
       await runtime.close(); await control.close(); removeFixture(root);
@@ -75,6 +78,25 @@ test("public process status authenticates the current owner on demand without co
     expect(f.counts()).toEqual({ queries: 1, waits: 0, writes: 0 });
     await expect(f.runtime.call("process_status", { workspace_id: "unapproved-workspace", operation_id: f.operationId })).rejects.toThrow();
     expect(f.counts().queries).toBe(1);
+  } finally { await f.close(); }
+});
+
+test("owned cancellation replies with one owner exchange and waits for signed terminal evidence before shutdown", async () => {
+  const f = await fixture();
+  try {
+    const cancelled = await f.runtime.call("cancel_process", { workspace_id: f.workspace.id,
+      operation_id: f.operationId }) as { state: string; liveness: string };
+    expect(cancelled.state).toBe("running");
+    expect(cancelled.liveness).toBe("alive");
+    expect(f.cancelRequests()).toBe(1);
+    expect(f.counts()).toEqual({ queries: 0, waits: 0, writes: 0 });
+    expect(() => f.runtime.processes.assertCanClose()).toThrow("unresolved execution");
+    f.complete();
+    const terminal = await f.runtime.call("process_status", { workspace_id: f.workspace.id,
+      operation_id: f.operationId }) as { state: string; liveness: string };
+    expect(terminal.state).toBe("spawn_failed");
+    expect(terminal.liveness).toBe("not_running");
+    expect(() => f.runtime.processes.assertCanClose()).not.toThrow();
   } finally { await f.close(); }
 });
 
