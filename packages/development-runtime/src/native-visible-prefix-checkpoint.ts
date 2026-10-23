@@ -272,23 +272,50 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     // Bounded structural accounting distinguishes restored instructions, a prior
     // working checkpoint and canonical suffix without recording their text.
     const items = parsed.items as unknown[];
-    const revisions = items.filter((item): item is Record<string, unknown> =>
-      !!item && typeof item === "object" && !Array.isArray(item));
-    const instructionItems = requestPrefix ? revisions.filter(item => item.type === "revision"
-      && (item.kind === "system" || item.kind === "developer")) : [];
-    const checkpointItems = requestPrefix ? revisions.filter(item => item.type === "checkpoint") : [];
-    const bytes = (items: readonly unknown[]) => items.reduce<number>((total, item) =>
-      total + Buffer.byteLength(JSON.stringify(item), "utf8"), 0);
+    let instructionCount = 0, instructionBytes = 0, checkpointCount = 0, checkpointBytes = 0;
+    let largestBytes = 0;
+    let largest: Record<string, unknown> | undefined;
+    for (const item of items) {
+      const size = Buffer.byteLength(JSON.stringify(item), "utf8");
+      if (size > largestBytes) {
+        largestBytes = size;
+        largest = item && typeof item === "object" && !Array.isArray(item)
+          ? item as Record<string, unknown> : undefined;
+      }
+      if (!requestPrefix || !item || typeof item !== "object" || Array.isArray(item)) continue;
+      const entry = item as Record<string, unknown>;
+      if (entry.type === "revision" && (entry.kind === "system" || entry.kind === "developer")) {
+        instructionCount++; instructionBytes += size;
+      } else if (entry.type === "checkpoint") {
+        checkpointCount++; checkpointBytes += size;
+      }
+    }
+    const itemType = requestPrefix ? largest?.type :
+      (largest?.item && typeof largest.item === "object" && !Array.isArray(largest.item)
+        ? (largest.item as Record<string, unknown>).type : undefined);
+    const largestType = itemType === "revision" || itemType === "checkpoint" ? itemType
+      : itemType === "userMessage" ? "user_message"
+      : itemType === "agentMessage" ? "agent_message"
+      : itemType === "mcpToolCall" ? "mcp_tool_call"
+      : itemType === "commandExecution" ? "command_execution"
+      : itemType === "functionCallOutput" ? "function_call_output"
+      : itemType === "contextCompaction" ? "context_compaction"
+      : itemType === undefined ? "absent" : "other";
+    const role = requestPrefix && largest?.type === "revision" ? largest.kind :
+      !requestPrefix && largest?.item && typeof largest.item === "object" && !Array.isArray(largest.item)
+        ? (largest.item as Record<string, unknown>).role : undefined;
+    const largestRole = role === "system" || role === "developer" || role === "user"
+      || role === "assistant" || role === "tool-call" || role === "tool-result" || role === "steering"
+      ? role : role === undefined ? "absent" : "other";
     emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_rejected", {
       phase: "checkpoint_budget", reason_class: "source_exceeds_single_message",
       source_bytes: sourceBytes, source_item_count: source.sourceItemCount,
       source_estimate: chatGptCheckpointInputTokens(physical), input_budget: limit,
       source_kind: source.kind, completed_receipt_count: completed.size,
       matching_receipt_present: completed.has(stageIdentity(physical).key),
-      instruction_item_count: instructionItems.length, instruction_bytes: bytes(instructionItems),
-      checkpoint_item_count: checkpointItems.length, checkpoint_bytes: bytes(checkpointItems),
-      largest_item_bytes: items.reduce<number>((largest, item) =>
-        Math.max(largest, Buffer.byteLength(JSON.stringify(item), "utf8")), 0),
+      instruction_item_count: instructionCount, instruction_bytes: instructionBytes,
+      checkpoint_item_count: checkpointCount, checkpoint_bytes: checkpointBytes,
+      largest_item_bytes: largestBytes, entry_class: largestType, request_role: largestRole,
     });
     throw new NativeHistoryBootstrapRequired("source_budget");
   }
