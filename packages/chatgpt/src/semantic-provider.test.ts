@@ -3030,6 +3030,26 @@ describe("completed browser answer awaiting Native delivery", () => {
     } finally { await surface.host.close(); }
   });
 
+  test("a changed approval card still defers the completed request", async () => {
+    const driver = new FixtureDriver({ ...fixture("ready-new-chat"), approval: recognizedApproval });
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "off" });
+    try {
+      const submitting = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await submitting;
+      if (submitted.state !== "proven") throw Error("expected accepted Web turn");
+      driver.current = { ...driver.current, revision: "new-approval-card",
+        approval: { ...recognizedApproval, revisionFingerprint: "new-card-revision" },
+        turns: [...driver.current.turns, { key: "assistant-new", role: "assistant" as const,
+          parentUserTurnKey: "user-turn-1", phase: "complete" as const, text: "Answer behind new approval" }] };
+      const observed = await provider.observeTurn(surface.lease, submitted.value);
+      expect(observed.state === "proven" && observed.value.phase).toBe("tool-wait");
+      expect(driver.approvalCalls).toBe(0);
+    } finally { await surface.host.close(); }
+  });
+
   test.each(["identity_pending", "approval_pending", "multiple_assistants"] as const)("records and privately captures %s once, then delivers the original answer", async reason => {
     const scratch = mkdtempSync(join(tmpdir(), "tela-deferred-completion-"));
     const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
