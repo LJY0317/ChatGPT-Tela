@@ -269,12 +269,26 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
   // Object embedding avoids stringifying/escaping the whole serialized source a second time.
   const physical = stageContext({ mode: "snapshot", source: parsed });
   if (!fits(physical)) {
+    // Bounded structural accounting distinguishes restored instructions, a prior
+    // working checkpoint and canonical suffix without recording their text.
+    const items = parsed.items as unknown[];
+    const revisions = items.filter((item): item is Record<string, unknown> =>
+      !!item && typeof item === "object" && !Array.isArray(item));
+    const instructionItems = requestPrefix ? revisions.filter(item => item.type === "revision"
+      && (item.kind === "system" || item.kind === "developer")) : [];
+    const checkpointItems = requestPrefix ? revisions.filter(item => item.type === "checkpoint") : [];
+    const bytes = (items: readonly unknown[]) => items.reduce<number>((total, item) =>
+      total + Buffer.byteLength(JSON.stringify(item), "utf8"), 0);
     emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_rejected", {
       phase: "checkpoint_budget", reason_class: "source_exceeds_single_message",
       source_bytes: sourceBytes, source_item_count: source.sourceItemCount,
       source_estimate: chatGptCheckpointInputTokens(physical), input_budget: limit,
       source_kind: source.kind, completed_receipt_count: completed.size,
       matching_receipt_present: completed.has(stageIdentity(physical).key),
+      instruction_item_count: instructionItems.length, instruction_bytes: bytes(instructionItems),
+      checkpoint_item_count: checkpointItems.length, checkpoint_bytes: bytes(checkpointItems),
+      largest_item_bytes: items.reduce<number>((largest, item) =>
+        Math.max(largest, Buffer.byteLength(JSON.stringify(item), "utf8")), 0),
     });
     throw new NativeHistoryBootstrapRequired("source_budget");
   }
