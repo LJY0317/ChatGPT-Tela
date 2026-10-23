@@ -143,6 +143,10 @@ private final class TelaMenuToggleRow: NSView {
 
 @MainActor
 final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    controlCenter.show()
+    return true
+  }
   private var statusItem: NSStatusItem!
   private var statusMenu: NSMenu!
   private var connectionSpinner: NSProgressIndicator?
@@ -180,6 +184,8 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     supportRoot.appendingPathComponent("config/preferences-v1.json", isDirectory: false)
   }
   func applicationDidFinishLaunching(_ notification: Notification) {
+    DistributedNotificationCenter.default().addObserver(self, selector: #selector(reopenInstalledMenu),
+      name: Notification.Name("com.openai.chatgpt-tela.menu-bar.reopen"), object: nil)
     NSApp.setActivationPolicy(.accessory)
     controlCenter.onPreferencesChanged = { [weak self] in
       Task { await self?.refreshNow() }
@@ -235,6 +241,8 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       }
     }
   }
+
+  @objc private func reopenInstalledMenu() { controlCenter.show() }
 
   private func updateConnectionProgress(_ message: String?) {
     connectionProgress = message
@@ -702,6 +710,16 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
 struct ChatGPTTelaMenuBarMain {
   @MainActor
   static func main() {
+    // Finder/Spotlight launches inherit no launchd environment; resolve the same
+    // installed product launcher used by the packaged menu admission path.
+    if Bundle.main.bundleIdentifier == "com.openai.chatgpt-tela.menu-bar",
+       ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"] == nil {
+      let launcher = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/ChatGPT Tela/bin/chatgpt-tela").path
+      if FileManager.default.isExecutableFile(atPath: launcher) {
+        setenv("CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE", launcher, 0)
+      }
+    }
     if CommandLine.arguments.contains("--maintenance-only") {
       let app = NSApplication.shared
       let delegate = TelaMaintenanceController()
@@ -711,7 +729,10 @@ struct ChatGPTTelaMenuBarMain {
     }
     let instance = TelaMenuBarInstanceLock()
     do {
-      guard try instance.acquire() else { return }
+      guard try instance.acquire() else {
+        DistributedNotificationCenter.default().post(name: Notification.Name("com.openai.chatgpt-tela.menu-bar.reopen"), object: nil)
+        return
+      }
     } catch {
       // Startup diagnostics never expose user paths or OS error payloads.
       fputs("Tela menu bar could not acquire its instance lock.\n", stderr)

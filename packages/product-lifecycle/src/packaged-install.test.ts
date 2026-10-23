@@ -367,6 +367,35 @@ describe("packaged product install", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  darwinLifecycleTest("macOS app bundle installs to owned Applications path and is reused without another registration", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-installed-app-")), home = join(root, "home"), source = join(root, "payload");
+    mkdirSync(join(source, "ui", "ChatGPT Tela.app", "Contents", "MacOS"), { recursive: true });
+    mkdirSync(home);
+    writeFileSync(join(source, "tela"), "launcher", { mode: 0o755 });
+    writeFileSync(join(source, "ui", "ChatGPT Tela.app", "Contents", "Info.plist"), "<plist/>");
+    writeFileSync(join(source, "ui", "ChatGPT Tela.app", "Contents", "MacOS", "chatgpt-tela-menu-bar"), "menu", { mode: 0o755 });
+    const spec = { productVersion: "1.2.3", payloadSourcePath: source,
+      menuBar: { executableRelativePath: "ui/ChatGPT Tela.app/Contents/MacOS/chatgpt-tela-menu-bar" },
+      menuBarApp: { sourceRelativePath: "ui/ChatGPT Tela.app" as const },
+      services: (["gateway", "chat", "codex"] as const).map(service => ({ service, executableRelativePath: "tela" })) };
+    const runner = new LaunchctlFixtureRunner();
+    try {
+      const options = { spec, platform: "darwin" as const, home, environment: {}, runner };
+      const planned = await planPackagedInstall(options);
+      expect(planned.plan.createCount).toBe(6);
+      const appPath = join(home, "Applications", "ChatGPT Tela.app");
+      expect((planned.blueprint.menuBar!.definition as { content: string }).content)
+        .toContain(join(planned.blueprint.paths.binaryRoot, "ui", "ChatGPT Tela.app", "Contents", "MacOS", "chatgpt-tela-menu-bar"));
+      const applied = await applyPackagedInstall({ ...options, planned });
+      expect(applied.verify.ready).toBe(true);
+      expect(readFileSync(join(appPath, "Contents", "Info.plist"), "utf8")).toBe("<plist/>");
+      expect(readOwnershipManifest(planned.blueprint.paths.installManifest)!.resources)
+        .toEqual(expect.arrayContaining([expect.objectContaining({ id: "menu-bar-app", path: appPath })]));
+      const reused = await planPackagedInstall(options);
+      expect(reused.plan.steps.find(s => s.resourceId === "menu-bar-app")?.action).toBe("keep");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 });
 
 

@@ -195,9 +195,21 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
       join(outputPath, ...setupEntrypoint.split("/")));
   }
 
-  const menuBarRelative = input.menuBarSourcePath ? "ui/chatgpt-tela-menu-bar" : undefined;
+  const menuBarRelative = input.menuBarSourcePath ? "ui/ChatGPT Tela.app/Contents/MacOS/chatgpt-tela-menu-bar" : undefined;
   if (input.menuBarSourcePath && menuBarRelative) {
     copyFile(realRegularFile(input.menuBarSourcePath, "packaged menu bar source"), join(outputPath, ...menuBarRelative.split("/")));
+    writeFileSync(join(outputPath, "ui/ChatGPT Tela.app/Contents/Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>chatgpt-tela-menu-bar</string>
+<key>CFBundleIdentifier</key><string>com.openai.chatgpt-tela.menu-bar</string>
+<key>CFBundleName</key><string>ChatGPT Tela</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>1.0</string>
+<key>LSUIElement</key><true/>
+</dict></plist>
+`);
   }
 
   let nativeEngine: PackagedNativeEngine | undefined;

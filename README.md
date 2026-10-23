@@ -948,6 +948,10 @@ bun run menu-bar
 ```
 
 New source builds share an OS-managed instance lock so concurrent launches create only one menu icon.
+On macOS, the installed package owns **~/Applications/ChatGPT Tela.app**. Open **ChatGPT Tela**
+from Applications or Spotlight to restore the menu after **Quit Tela Menu**; reopening an
+already-running copy shows its control center without starting another menu or restarting
+Tela services. The packaged uninstaller removes this owned app and its LaunchAgent.
 The development starter also avoids launching beside an existing installed menu bar. The lock releases
 on exit or crash without polling. These source changes require a later package to update the installed
 binary. Package upgrades and repairs refresh the installed menu bar through its owned macOS registration.
@@ -978,6 +982,10 @@ binary and register `com.openai.chatgpt-tela.menu-bar` as a **product-owned** Aq
 manifest/marker ownership. Install uses `RunAtLoad=true` and explicitly kickstarts that LaunchAgent after
 registration, so the menu-bar surface appears immediately after a successful install and again on normal
 login. Install/uninstall therefore never relies on a name-only login-item guess.
+On macOS the signed package also installs the owned **ChatGPT Tela.app** in the user's
+Applications folder. It can be reopened from Finder or Spotlight after **Quit Tela Menu**;
+this only reopens the menu and leaves the three services and ChatGPT browser running.
+The existing installer, update, and uninstaller own the bundle and its LaunchAgent.
 
 The menu contains **Open Tela…**, which opens a Dock-less AppKit Control Center window. Closing that
 window hides only the UI; the menu-bar process and Gateway/Chat/Codex services continue running. The three
