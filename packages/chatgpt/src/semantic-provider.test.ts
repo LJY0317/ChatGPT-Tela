@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync, mkdtempSync, rmSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test, spyOn } from "bun:test";
-import { BROWSER_INPUT_OWNERSHIP, ControlledBrowserHost, type BrowserMemoryFile } from "@chatgpt-tela/browser-host";
+import { BROWSER_INPUT_OWNERSHIP, BROWSER_PAGE_AUTOMATION, ControlledBrowserHost, type BrowserMemoryFile } from "@chatgpt-tela/browser-host";
 import { diagnosticFingerprint, nativeEvidenceRef, observeDiagnosticEvents, readDiagnosticTail, setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
 import { createChatGptContextAttachment } from "./context-attachment";
 import {
@@ -305,14 +305,14 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   }
 }
 
-async function leaseFor(driver: FixtureDriver, inputOwner?: { current(): { revision: number; available: boolean; signal: AbortSignal }; observationCurrent?(): { revision: number; available: boolean; pending: boolean } }) {
+async function leaseFor(driver: FixtureDriver, inputOwner?: { current(): { revision: number; available: boolean; signal: AbortSignal }; observationCurrent?(): { revision: number; available: boolean; pending: boolean } }, extraCapability?: (capability: unknown) => unknown) {
   const host = new ControlledBrowserHost(async () => ({
     async navigate() {},
     async reveal() {},
     async hide() {},
     async close() {},
     capability(capability) {
-      return capability === CHATGPT_SURFACE_DRIVER ? driver as never : capability === BROWSER_INPUT_OWNERSHIP ? inputOwner as never : undefined;
+      return capability === CHATGPT_SURFACE_DRIVER ? driver as never : capability === BROWSER_INPUT_OWNERSHIP ? inputOwner as never : extraCapability?.(capability) as never;
     },
   }));
   const lease = await host.acquire({ taskId: "task-1", epochId: "epoch-1" });
@@ -3000,4 +3000,59 @@ test.each(["owned", "changed_author"] as const)("public cancellation aborts pend
     await expect(provider.waitForTurnEvent(surface.lease, submitted.value)).rejects.toThrow("not bound");
     expect(driver.activated).toHaveLength(1);
   } finally { await surface.host.close(); }
+});
+
+
+describe("completed browser answer awaiting Native delivery", () => {
+  test.each(["identity_pending", "approval_pending"] as const)("records and privately captures %s once, then delivers the original answer", async reason => {
+    const scratch = mkdtempSync(join(tmpdir(), "tela-deferred-completion-"));
+    const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    const file = join(scratch, "events.jsonl"); process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+    setPrivateDiagnosticCapture(join(scratch, "diagnostics"), 1);
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const surface = await leaseFor(driver, undefined, capability => capability === BROWSER_PAGE_AUTOMATION ? {
+      async evaluate() { return { capture_safe: true, html: "<article>PRIVATE_COMPLETED_ANSWER</article>" }; },
+    } : undefined);
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "off" });
+    try {
+      const taskRequest = { ...request(), nativeTurnId: "turn-" + reason };
+      const submitting = provider.submitTurn(surface.lease, taskRequest);
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await submitting;
+      if (submitted.state !== "proven") throw new Error("fixture did not accept");
+      const user = driver.current.turns.find(turn => turn.role === "user")!;
+      const answer = { key: "PRIVATE_ASSISTANT_KEY", role: "assistant" as const,
+        parentUserTurnKey: user.key, phase: "complete" as const, text: "PRIVATE_COMPLETED_ANSWER" };
+      const blocked = { ...driver.current, revision: "completed-but-blocked", url: "https://chatgpt.com/c/deferred",
+        turns: reason === "identity_pending" ? [answer] : [user, answer],
+        ...(reason === "approval_pending" ? { approval: recognizedApproval } : {}) };
+      driver.current = blocked;
+      const cleared = { ...blocked, revision: "delivery-proof-restored", turns: [user, answer] };
+      delete cleared.approval;
+      driver.queued.push({ ...blocked, revision: "same-blocker-observed-again" }, cleared);
+      let completed;
+      for (let remaining = 8; remaining > 0; remaining--) {
+        const event = await provider.waitForTurnEvent(surface.lease, submitted.value);
+        if (event.state === "proven" && event.value.kind === "completed") { completed = event.value; break; }
+      }
+      expect(completed).toMatchObject({ kind: "completed", answer: "PRIVATE_COMPLETED_ANSWER" });
+      const events = readDiagnosticTail(file).events;
+      const deferred = events.filter(row => row.stage === "web_completed_answer_deferred");
+      expect(deferred).toHaveLength(1);
+      expect(deferred[0]).toMatchObject({ reason_class: reason, assistant_phase: "complete", assistant_count: 1,
+        current_authority_proven: reason === "approval_pending", turn_fingerprint: diagnosticFingerprint(taskRequest.nativeTurnId) });
+      expect(events.filter(row => row.stage === "browser_snapshot_observed" && row.reason_class === "completion_deferred")).toHaveLength(1);
+      const structural = readFileSync(file, "utf8");
+      expect(structural).not.toContain("PRIVATE_");
+      const privateFiles = readdirSync(join(scratch, "diagnostics", "private")).filter(name => name.endsWith(".html"));
+      expect(privateFiles.some(name => readFileSync(join(scratch, "diagnostics", "private", name), "utf8").includes("PRIVATE_COMPLETED_ANSWER"))).toBe(true);
+      expect(driver.activated).toHaveLength(1);
+      expect(driver.approvalCalls).toBe(0);
+    } finally {
+      await surface.host.close();
+      if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE; else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
 });

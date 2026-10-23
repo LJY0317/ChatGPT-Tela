@@ -53,6 +53,7 @@ interface TrackedTurn extends TurnOwnership {
   };
   pendingCompletedAnswer?: Pick<Extract<WebTurnEvent, { kind: "completed" }>, "answer" | "plainAnswer">;
   waitState?: string;
+  deferredCompletionEvidence?: Set<string>;
   waitSnapshotCount?: number;
   lastWaitSnapshotAt?: number;
   diagnosticBoundaryCount?: number;
@@ -491,14 +492,41 @@ function approvalAssistantVersion(assistant: ChatGptTurnObservation | undefined)
 }
 
 /** Structural failure/transition evidence only; no renderer keys, text, URLs or fingerprints of text. */
+async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: TrackedTurn,
+  snapshot: ChatGptSurfaceSnapshot, reason: "identity_pending" | "approval_pending"): Promise<void> {
+  const completed = snapshot.turns.filter(turn => turn.role === "assistant" && turn.phase === "complete"
+    && (reason === "approval_pending" ? turn.parentUserTurnKey === tracked.userTurnKey
+      : !turn.parentUserTurnKey || !tracked.baselineUserLineageKeys.has(turn.parentUserTurnKey)));
+  if (!completed.length || tracked.deferredCompletionEvidence?.has(reason)) return;
+  (tracked.deferredCompletionEvidence ??= new Set()).add(reason);
+  try {
+    await withDiagnosticContext({
+      operation_fingerprint: diagnosticFingerprint([tracked.handle.nativeTaskId, tracked.handle.nativeTurnId,
+        tracked.handle.webEpochId].join("\n")),
+      turn_fingerprint: diagnosticFingerprint(tracked.handle.nativeTurnId),
+    }, async () => {
+      emitDiagnosticEvent("chatgpt_tela_work", "web_completed_answer_deferred", {
+        reason_class: reason, assistant_phase: "complete", assistant_count: completed.length,
+        matched_assistant_count: completed.filter(turn => turn.parentUserTurnKey === tracked.userTurnKey).length,
+        approval_card_count: snapshot.approval?.cardCount ?? 0,
+        current_authority_proven: reason === "approval_pending",
+      });
+      // Reuse local opt-in HTML/screenshot retention. This is an uncommitted
+      // observation, never an answer receipt or permission to replay the task.
+      await captureBrowserDiagnosticCheckpoint(surface, "completion_deferred");
+    });
+  } catch { /* Evidence collection cannot change delivery or task execution. */ }
+}
+
 async function waitForLineage(
-  driver: ChatGptSurfaceDriver, tracked: TrackedTurn, signal?: AbortSignal,
+  surface: BrowserSurfaceLease, driver: ChatGptSurfaceDriver, tracked: TrackedTurn, signal?: AbortSignal,
 ): Promise<{ snapshot: ChatGptSurfaceSnapshot; lineage: AssistantLineageResolution }> {
   let snapshot = await driver.observe(signal);
   for (;;) {
     signal?.throwIfAborted();
     const lineage = resolveAssistantLineage(snapshot, tracked);
     if (!lineage.identityPending) return { snapshot, lineage };
+    await recordDeferredCompletion(surface, tracked, snapshot, "identity_pending");
     snapshot = await driver.waitForChange(snapshot.revision, signal);
   }
 }
@@ -1641,7 +1669,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     if (!callId.trim()) throw new Error("Web tool continuation call id must be non-empty");
     const tracked = this.#tracked(surface, turn);
     signal = AbortSignal.any([...(signal ? [signal] : []), tracked.operationAbort.signal]);
-    const { snapshot, lineage } = await waitOwned(signal, () => waitForLineage(driverFor(surface), tracked, signal));
+    const { snapshot, lineage } = await waitOwned(signal, () => waitForLineage(surface, driverFor(surface), tracked, signal));
     signal?.throwIfAborted();
     this.#tracked(surface, turn);
     const assistants = lineage.assistants;
@@ -1777,7 +1805,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const driver = driverFor(surface);
 
     if (tracked.pendingCompletedAnswer !== undefined) {
-      const { snapshot } = await waitOwned(signal, () => waitForLineage(driver, tracked, signal));
+      const { snapshot } = await waitOwned(signal, () => waitForLineage(surface, driver, tracked, signal));
       signal.throwIfAborted();
       this.#tracked(surface, turn);
       const ownership = resolveAssistantLineage(snapshot, tracked);
@@ -1806,6 +1834,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           evidence: evidence("assistant completion followed a proven post-tool continuation boundary"),
         };
       }
+      await recordDeferredCompletion(surface, tracked, snapshot, "approval_pending");
     }
 
     for (;;) {
@@ -1818,7 +1847,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       tracked.waitSnapshotCount = Math.min((tracked.waitSnapshotCount ?? 0) + 1, Number.MAX_SAFE_INTEGER);
       tracked.lastWaitSnapshotAt = Date.now();
       const lineage = resolveAssistantLineage(snapshot, tracked);
-      if (lineage.identityPending) continue;
+      if (lineage.identityPending) {
+        await recordDeferredCompletion(surface, tracked, snapshot, "identity_pending");
+        continue;
+      }
       const assistants = lineage.assistants;
       if (lineage.ambiguous) {
         return {
@@ -1957,7 +1989,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       // Pending authority decisions dominate display completion controls. Never commit a
       // progress message or clear a tool continuation while its approval remains unresolved.
-      if (snapshot.approval?.cardCount && assistantLifecyclePhase(snapshot, assistant) !== "failed") continue;
+      if (snapshot.approval?.cardCount && assistantLifecyclePhase(snapshot, assistant) !== "failed") {
+        await recordDeferredCompletion(surface, tracked, snapshot, "approval_pending");
+        continue;
+      }
       if (!assistant) continue;
       const boundary = tracked.continuationBoundary;
       if (boundary) {
