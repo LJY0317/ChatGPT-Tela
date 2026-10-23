@@ -1,12 +1,12 @@
 import { webWorkingContextPolicy } from "./web-working-context-policy";
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chatGptWebFamilyKey, chatGptWebModelId,
   chatGptCheckpointInputTokens, chatGptWebCheckpointSourceTokenLimit } from "@chatgpt-tela/chatgpt";
 import { ActiveTurnRegistry } from "@chatgpt-tela/runtime";
-import { NativeToolInventory, defineNativeTurnAuthority } from "@chatgpt-tela/core";
+import { NativeToolInventory, defineNativeTurnAuthority, readDiagnosticTail } from "@chatgpt-tela/core";
 import { FileContextCheckpointCache } from "./context-cache";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 import { createNativeRequestDevelopmentWebTurnPlanner, projectNativeRequestContext } from "./native-request-planner";
@@ -284,6 +284,9 @@ test("zero-budget optional maintenance cannot block a proven healthy retained pa
 
 test("completed summaries reuse across model changes and exact-prefix forks, while account and edited ancestry stay isolated", async () => {
   const directory = root();
+  const diagnosticFile = join(directory, "checkpoint-events.jsonl");
+  const previousDiagnosticFile = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = diagnosticFile;
   try {
     const cache = new FileContextCheckpointCache({ directory: join(directory, "cache") });
     const journal = new FileNativeVisiblePrefixStageJournal({
@@ -319,6 +322,22 @@ test("completed summaries reuse across model changes and exact-prefix forks, whi
     expect(same.physicalContext.segments.at(-1)?.content).toBe("A changed current request");
     same.settle?.({ status: "failed" });
     expect(calls).toBe(1);
+    const cacheReadFailed = await createNativeRequestDevelopmentWebTurnPlanner({
+      ...options, checkpointPreparationPolicy: noSpending,
+      checkpointCache: {
+        async list() { throw Error("derived cache unavailable"); },
+        put: cache.put.bind(cache), clear: cache.clear.bind(cache),
+      },
+    })(registered("cache-read-failed"), { model, reasoning: { effort: "high" }, input: source });
+    expect(cacheReadFailed.physicalContext.mode).toBe("checkpoint-delta");
+    cacheReadFailed.settle?.({ status: "failed" });
+    expect(calls).toBe(1);
+    await expect(createNativeRequestDevelopmentWebTurnPlanner({
+      ...options, checkpointPreparationPolicy: noSpending,
+    })(registered("edited-ancestor", "edited-task"), { model, reasoning: { effort: "high" },
+      input: [{ ...source[0]!, content: "An altered original objective" }, ...source.slice(1)],
+    })).rejects.toMatchObject({ budgetReason: "model_calls" });
+    expect(calls).toBe(1);
     const fork = await createNativeRequestDevelopmentWebTurnPlanner({
       ...options, checkpointPreparationPolicy: noSpending,
     })(registered("edited-current", "child-task"), {
@@ -350,7 +369,26 @@ test("completed summaries reuse across model changes and exact-prefix forks, whi
       }
       expect(calls).toBe(1);
     }
-  } finally { rmSync(directory, { recursive: true, force: true }); }
+    const stored = readDiagnosticTail(diagnosticFile);
+    expect(stored.state).toBe("read");
+    const selected = stored.events.filter(item => item.stage === "native_working_checkpoint_selected");
+    expect(selected.some(item => item.candidate_count === 0 && item.cached_candidate_count === 0
+      && item.published_candidate_count === 0 && item.cache_read_failed === false)).toBe(true);
+    expect(selected.some(item => item.checkpoint_reused === true && item.cached_candidate_count === 1
+      && Number(item.published_candidate_count) >= 1)).toBe(true);
+    expect(selected.some(item => item.checkpoint_reused === true && item.cache_read_failed === true
+      && item.cached_candidate_count === 0 && Number(item.published_candidate_count) >= 1)).toBe(true);
+    expect(selected.some(item => item.checkpoint_reused === false
+      && Number(item.published_cross_scope_excluded_count) >= 1)).toBe(true);
+    const raw = readFileSync(diagnosticFile, "utf8");
+    expect(raw).not.toContain("Establish the task objective");
+    expect(raw).not.toContain("Settled history");
+    expect(raw).not.toContain("account-a");
+  } finally {
+    if (previousDiagnosticFile === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previousDiagnosticFile;
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("a past edit cannot inherit the old derived branch; losing the entire stage journal fails closed", async () => {
