@@ -72,9 +72,7 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
   const browser = object(doc.browser), host = object(doc.hostPlatformReview);
   const checkpointCandidates = doc.checkpointCandidates === undefined
     ? Object.freeze({ readiness: "unknown" as const, reason: "owner_unavailable" as const })
-    : parseCodexCheckpointInspectionContract({
-        ...object(doc.checkpointCandidates), contractVersion: 1, slot: expectedSlot, threadId: expectedThreadId,
-      }, expectedSlot, expectedThreadId);
+    : parseCodexCheckpointInspectionContract(doc.checkpointCandidates, expectedSlot, expectedThreadId);
   if (doc.contractVersion !== 1 || doc.slot !== expectedSlot || doc.threadId !== expectedThreadId
     || doc.identityVerified !== true || !["active", "idle", "notLoaded"].includes(String(native.state))
     || !["paginated", "legacy"].includes(String(native.historyMode))

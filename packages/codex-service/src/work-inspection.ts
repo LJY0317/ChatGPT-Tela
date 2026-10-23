@@ -53,6 +53,7 @@ export function createCodexWorkInspector(input: {
         checkpointCandidates = parseCodexCheckpointInspectionContract(
           await input.service.inspectCheckpointCandidates(slot, threadId), slot, threadId);
       } catch {
+        // A verified Native thread does not imply checkpoint storage is reachable.
         checkpointCandidates = { readiness: "unknown", reason: "storage_unavailable" };
       }
     }
@@ -102,7 +103,7 @@ export function createCodexWorkInspector(input: {
     }
     return Object.freeze({
       ...thread,
-      checkpointCandidates,
+      checkpointCandidates: Object.freeze({ contractVersion: 1 as const, slot, threadId, ...checkpointCandidates }),
       observedAt: new Date().toISOString(),
       browser: Object.freeze({
         scope: "selected_profile_only" as const,

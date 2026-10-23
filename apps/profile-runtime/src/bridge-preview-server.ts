@@ -96,8 +96,8 @@ export async function startProfileBridgePreviewServer(input: {
           || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.threadId)
           || Object.keys(body).some(key => key !== "threadId")) return new Response(null, { status: 400 });
         try {
-          return Response.json({ contractVersion: 1, slot: input.slot, threadId: body.threadId,
-            ...(await input.inspectCheckpointCandidates(body.threadId) as Record<string, unknown>) },
+          return Response.json({ ...(await input.inspectCheckpointCandidates(body.threadId) as Record<string, unknown>),
+            contractVersion: 1, slot: input.slot, threadId: body.threadId },
             { headers: { "cache-control": "no-store" } });
         } catch {
           return Response.json({ contractVersion: 1, slot: input.slot, threadId: body.threadId,

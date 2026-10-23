@@ -76,6 +76,22 @@ describe("profile-owned read-only Work inspection", () => {
       expect(requests).toEqual([2]);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+  test("rejects mismatched checkpoint ownership and keeps the verified Native result", async () => {
+    const f = harness(), root = mkdtempSync(join(tmpdir(), "tela-checkpoint-mismatch-"));
+    try {
+      const inspect = createCodexWorkInspector({
+        service: { ...f.service, async inspectCheckpointCandidates() {
+          return { contractVersion: 1, slot: 1, threadId,
+            readiness: "available", reason: "no_local_candidates", cachedForThread: 0,
+            completedReceipts: 0, publishedForAccount: 0, matchingReuseScope: 0,
+            exactScope: "unknown", prefix: "unknown", anchor: "unknown" };
+        } } as any, logsRoot: root, connect: f.connect,
+      });
+      const observed = await inspect(2, threadId);
+      expect(observed.identityVerified).toBe(true);
+      expect(observed.checkpointCandidates).toMatchObject({ readiness: "unknown", reason: "storage_unavailable" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("reports Native statuses and selected browser observation without exposing screenshot or claiming card ownership", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-work-inspection-")); mkdirSync(join(root, "logs"));
     const f = harness();
