@@ -23,6 +23,22 @@ interface Bootstrap {
   readonly interactive?: boolean;
 }
 
+/** Only the freshly spawned, isolated owned-process tree is eligible. */
+export async function terminateOwnedProcessTree(pid: number): Promise<void> {
+  if (!Number.isSafeInteger(pid) || pid < 1) throw Error("invalid owned process identity");
+  if (process.platform === "win32") {
+    // Windows has no POSIX process groups; taskkill /T targets this exact owned tree.
+    await new Promise<void>((resolve, reject) => {
+      const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      killer.once("error", reject);
+      killer.once("close", code => code === 0 ? resolve() : reject(Error("owned tree cancellation failed")));
+    });
+  } else {
+    // The owned shell is a new session/group leader, never the worker's group.
+    process.kill(-pid, "SIGTERM");
+  }
+}
+
 /** Called only through the verified Chat executable's private operation-owner role. */
 export async function runProcessOwnerWorker(): Promise<void> {
   const chunks: Buffer[] = [];
@@ -89,7 +105,14 @@ export async function runProcessOwnerWorker(): Promise<void> {
       if (state !== "running" || !child || !input.interactive) throw new Error("worker input is not available");
       child.stdin.write(chars);
     },
-    // No execution cancellation until an OS-owned-tree adapter is proved.
+    async cancelOwnedExecution() {
+      workspace(); // Re-prove the original approved workspace before ending owned work.
+      if (state !== "starting" && state !== "running") return snapshot();
+      if (!child?.pid) throw Error("owned execution has no started process");
+      await terminateOwnedProcessTree(child.pid);
+      await completion;
+      return snapshot();
+    },
   } });
   const settle = (code: number | null, terminated: NodeJS.Signals | null, failed = false) => {
     endedAt = new Date().toISOString(); exitCode = code ?? -1; signal = terminated ?? undefined;
@@ -117,7 +140,7 @@ export async function runProcessOwnerWorker(): Promise<void> {
     journal.publishLive(claim, control.descriptor);
     const executable = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "/bin/sh";
     const args = process.platform === "win32" ? ["/d", "/s", "/c", windowsCommandLine(input.command)] : ["-lc", input.command];
-    child = spawn(executable, args, { cwd, env: process.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    child = spawn(executable, args, { cwd, env: process.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: process.platform !== "win32" });
     child.stdout.on("data", (chunk: Buffer) => appendProcessOutput(output, chunk));
     child.stderr.on("data", (chunk: Buffer) => appendProcessOutput(output, chunk));
     if (!input.interactive) child.stdin.end();

@@ -358,3 +358,21 @@ reconnection and daemon startup trigger another pass; there is no polling or
 new service. If a due thread is active or its profile unavailable, it is checked
 again on one of those events. A stopped daemon performs no cleanup and catches
 up after restart. Browser-window retirement is a separate lifecycle.
+
+
+## Owned Chat execution and update readiness
+
+A running Tela Chat command, including a noninteractive command with closed stdin,
+is not automatically cancelled by update preflight. An authorized user can inspect
+the exact workspace/operation with `process_status` and explicitly request
+`cancel_process`; the live owner must authenticate the request, terminate its
+isolated child tree and publish terminal evidence before normal shutdown proceeds.
+Repeated requests observe the same owner decision; uncertain delivery requires
+status inspection, not blind retries. This does not authorize cancelling unrelated
+active work. Preflight refusal keeps the app running.
+
+The cancellation adapter is present only in newly launched workers. An already
+running older worker cannot acquire it retroactively, so an update blocked by such
+a worker still needs an explicit supported stop/settlement outside this new API.
+POSIX uses an isolated process group; Windows uses the owned PID with `taskkill /T /F`
+and requires separate Windows acceptance.

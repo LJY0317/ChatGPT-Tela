@@ -24,6 +24,7 @@ export const CHAT_CAPABILITY_SEMANTICS: Readonly<Record<TelaChatCapability, Chat
   // Even empty-input collection consumes output; nonempty chars can affect a process.
   write_stdin: descriptor("arbitrary_execution", "owned_process", "inspect_before_repeat", "process_status"),
   list_processes: descriptor("read", "workspace", "observe_again", "bounded_result"),
+  cancel_process: descriptor("arbitrary_execution", "owned_process", "inspect_before_repeat", "process_status"),
   process_status: descriptor("read", "owned_process", "observe_again", "process_status"),
   show_changes: descriptor("service_state", "workspace", "inspect_before_repeat", "review_checkpoint"),
   show_review: read, list_reviews: read, list_incidents: read, show_incident: read,

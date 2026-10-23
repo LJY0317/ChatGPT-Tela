@@ -172,6 +172,11 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
       limit: integer(1, 50), include_completed: boolean }, ["workspace_id"]),
   },
   {
+    capability: "cancel_process",
+    description: "Explicitly cancel only a currently authenticated workspace-owned execution tree. This is destructive, never automatic update preflight; inspect the operation first. Older owner workers may not support cancellation.",
+    inputSchema: object({ workspace_id: workspaceId, operation_id: operationId }, ["workspace_id", "operation_id"]),
+  },
+  {
     capability: "process_status",
     description: "Inspect one durable Tela Chat process operation without re-running it.",
     inputSchema: object({ workspace_id: workspaceId, operation_id: operationId }, ["workspace_id", "operation_id"]),

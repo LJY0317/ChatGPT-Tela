@@ -69,6 +69,7 @@ export const TELA_CHAT_BASE_CAPABILITIES = Object.freeze([
   "write_stdin",
   "list_processes",
   "process_status",
+  "cancel_process",
   "show_changes",
   "show_review",
   "list_reviews",
@@ -279,7 +280,7 @@ export function createChatToolRuntime(input: {
       const args = object(inputValue, `${selected} arguments`);
       // A fixed-name, payload-free witness for mutations/executions that actually
       // Its absence alone is not proof of a refusal (logs may be unavailable).
-      if (selected === "exec_command" || selected === "apply_patch" || selected === "write_stdin") {
+      if (selected === "exec_command" || selected === "apply_patch" || selected === "write_stdin" || selected === "cancel_process") {
         const workspaceId = args.workspace_id;
         emitDiagnosticEvent("chatgpt_tela_chat", "chat_capability_dispatch_received", {
           capability: selected,
@@ -396,6 +397,8 @@ export function createChatToolRuntime(input: {
             ...(optionalInteger(args.after_session_id, "after_session_id") === undefined ? {} : { afterSessionId: optionalInteger(args.after_session_id, "after_session_id")! }),
             ...(optionalInteger(args.limit, "limit") === undefined ? {} : { limit: optionalInteger(args.limit, "limit")! }),
             ...(optionalBoolean(args.include_completed, "include_completed") === undefined ? {} : { includeCompleted: optionalBoolean(args.include_completed, "include_completed")! }) });
+        case "cancel_process":
+          return processes.cancel(text(args.workspace_id, "workspace_id"), text(args.operation_id, "operation_id"));
         case "process_status":
           return processes.inspect(text(args.workspace_id, "workspace_id"), text(args.operation_id, "operation_id"));
         case "show_changes": {

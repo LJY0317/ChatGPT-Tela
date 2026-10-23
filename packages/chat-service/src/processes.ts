@@ -1018,6 +1018,16 @@ export class ChatProcessManager {
     });
   }
 
+  /** Explicit workspace-owned cancellation only; update readiness never invokes it. */
+  async cancel(workspaceId: string, operationId: string): Promise<ChatProcessStatus> {
+    const known = this.status(workspaceId, operationId);
+    const operation = this.#operations.get(known.operationId);
+    if (!operation || operation.executionMode !== "owned-worker-v1"
+      || ["exited", "signaled", "spawn_failed"].includes(known.state)) return known;
+    await this.#observeOwned(operation, { action: "cancel" });
+    return this.inspect(workspaceId, operationId);
+  }
+
   /** Shutdown cannot substitute for unproved process-tree cancellation. */
   assertCanClose(): void {
     for (const operation of this.#operations.values()) {
