@@ -35,11 +35,14 @@ changing the model of an existing conversation or exporting its history. Newly c
 threads receive a one-time `[Tela Agent] ` prefix on first explicit inspection of a terminal result,
 successful or failed,
 through Native `thread/name/set`. Naming uses the current title, or the first nonempty line of
-Native preview when unnamed. The naming marker is settled only after success, including public
-readback after an ambiguous mutation acknowledgement, and remains separate from verified-answer
-collection time. Failed or empty metadata attempts release the claim for a later explicit inspection.
-No title-event observer, timer or permanent title list is used. Later inspections and continuations
-preserve user renames after naming has settled. Naming failures do not block the answer.
+Native preview when unnamed. A separate in-flight claim serializes inspections; the settled marker
+is separate from verified-answer collection time. An ambiguous mutation whose public readback also
+fails is retained as uncertain and is not retried automatically. `status` or `result` can explicitly
+confirm a retry with `--confirm-title-retry`. A collected receipt from an older version still counts
+as settled, preserving titles renamed after upgrade. No title-event observer, timer or permanent title
+list is used. Later inspections and continuations preserve user renames after naming has settled.
+Naming failures do not block the answer. Native `thread/name/set` has no compare-and-set contract,
+so a user rename racing between the public read and the mutation cannot be guaranteed to survive.
 The Native engine creates
 a new durable, paginated thread and supplies its own tool/sandbox authority; the existing Web
 provider performs inference. This is not an independent Tela Chat worker or an API-key fallback.
@@ -60,8 +63,10 @@ bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/tas
 bun run cli web-delegate continue --job UUID --prompt-file /path/to/followup.txt
 bun run cli web-delegate capacity [--slot N]
 bun run cli web-delegate status --job UUID
+bun run cli web-delegate status --job UUID --confirm-title-retry
 bun run cli web-delegate reconcile --job UUID
 bun run cli web-delegate result --job UUID
+bun run cli web-delegate result --job UUID --confirm-title-retry
 ```
 
 These commands operate on journal-owned Web jobs. `continue` requires a proven

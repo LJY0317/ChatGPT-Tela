@@ -54,10 +54,13 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     return;
   }
   if (subcommand === "status" || subcommand === "result") {
-    const record = await inspectWebDelegationResult(adapters, option("--job"));
     if (subcommand === "result") {
-      console.log(await collectWebDelegationResult(adapters, record.id));
-    } else console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", progress: record.progress, parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure, failureStage: record.failureStage, failureClass: record.failureClass, failureIncidentRef: record.failureIncidentRef, failureNextAction: record.failureNextAction, coordinatorWake: "unsupported_public_contract" }, null, 2));
+      const id = option("--job");
+      console.log(await collectWebDelegationResult(adapters, id, args.includes("--confirm-title-retry")));
+    } else {
+      const record = await inspectWebDelegationResult(adapters, option("--job"), args.includes("--confirm-title-retry"));
+      console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", progress: record.progress, parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure, failureStage: record.failureStage, failureClass: record.failureClass, failureIncidentRef: record.failureIncidentRef, failureNextAction: record.failureNextAction, coordinatorWake: "unsupported_public_contract" }, null, 2));
+    }
     return;
   }
   if (subcommand !== "start" && subcommand !== "continue" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|capacity|start|continue|status|result|reconcile>");
@@ -133,18 +136,21 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     return inline;
   });
   const id = continuation ? randomUUID() : args.includes("--job") ? option("--job") : randomUUID();
+  const lifecycle = new AbortController();
+  const interrupt = () => lifecycle.abort(new Error("CLI interrupted"));
+  process.once("SIGINT", interrupt);
+  process.once("SIGTERM", interrupt);
   try {
     const result = await runWebDelegation({
       ...adapters,
       changed: record => console.log(JSON.stringify({ jobId: record.id, state: record.state, selection: record.selection, toolItems: record.toolItems ?? 0 })),
-    }, { id, slot, cwd, prompt, ...(images.length ? { images } : {}), ...(continuation ? { parentJobId: continuation.id } : {}), signal: AbortSignal.timeout(20 * 60 * 1000) });
-    await inspectWebDelegationResult(adapters, result.id);
+    }, { id, slot, cwd, prompt, ...(images.length ? { images } : {}), ...(continuation ? { parentJobId: continuation.id } : {}), signal: lifecycle.signal });
     const answer = verifiedWebDelegationAnswer(result);
     if (answer) {
       await collectWebDelegationResult(adapters, result.id);
       console.log(JSON.stringify({ event: "result", jobId: result.id, state: result.state,
         finalEvidence: result.finalEvidence, taskOutcome: result.taskOutcome, answer }));
-    }
+    } else await inspectWebDelegationResult(adapters, result.id);
   } catch (error) {
     if (error instanceof WebDelegationCapacityError) {
       console.error(JSON.stringify({ status: "admission_refused", code: error.code, capacity: error.capacity }));
@@ -153,5 +159,8 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     }
     if (store.get(id)) await inspectWebDelegationResult(adapters, id);
     throw error;
+  } finally {
+    process.off("SIGINT", interrupt);
+    process.off("SIGTERM", interrupt);
   }
 }

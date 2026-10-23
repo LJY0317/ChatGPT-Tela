@@ -9,7 +9,7 @@ import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { runWebDelegation, inspectWebDelegationResult, collectWebDelegationResult, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
-async function fixture(options: { titleReadFails?: boolean; titleSetFails?: boolean; titleSetAckLost?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; latestStatus?: "failed" | "interrupted"; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
+async function fixture(options: { titleReadFails?: boolean; titleReadAfterSetFails?: boolean; titleSetFails?: boolean; titleSetAckLost?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; latestStatus?: "failed" | "interrupted"; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const slot = options.slot ?? 1;
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
@@ -21,6 +21,8 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
   let observedOwners = 0;
   let attached = false;
   let currentTitle: string | null = null;
+  let titleSetAttempted = false;
+  let failTitleReadAfterSet = Boolean(options.titleReadAfterSetFails);
   let modeModel = "native-fixture";
   const executionModels: string[] = [];
   const queuedExecutionModels: string[] = [];
@@ -39,12 +41,13 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
         return { thread: { id: threadId }, model: modeModel };
       }
       if (method === "thread/start") { attached = true; return { model: "chatgpt-tela-web/family/aaaaaaaaaaaaaaaaaaaa", approvalPolicy: "never", sandbox: { type: "workspaceWrite" }, thread: { id: threadId, cwd: root, historyMode: "paginated", ephemeral: false } }; }
-      if (method === "thread/read") { if (options.titleReadFails) throw Error("Fixture metadata unavailable"); return { thread: { id: threadId, name: currentTitle, preview: "Read this fixture and design only\nMore context" } }; }
+      if (method === "thread/read") { if (options.titleReadFails || (failTitleReadAfterSet && titleSetAttempted)) throw Error("Fixture metadata unavailable"); return { thread: { id: threadId, name: currentTitle, preview: "Read this fixture and design only\nMore context" } }; }
       if (method === "thread/queue/add") {
         const request = params as { clientUserMessageId: string };
         return { queuedSubmission: { id: randomUUID(), clientUserMessageId: request.clientUserMessageId, input: [] } };
       }
       if (method === "thread/name/set") {
+        titleSetAttempted = true;
         if (options.titleSetFails) throw Error("Fixture naming RPC failed");
         currentTitle = (params as { name: string }).name;
         if (options.titleSetAckLost) throw Error("Fixture naming ACK lost");
@@ -106,9 +109,11 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
   };
   return { root, store, calls, changes, id, slot, adapters, executionModels, queuedExecutionModels,
     setModeModel: (model: string) => { modeModel = model; },
-    inspect: (jobId: string = id) => inspectWebDelegationResult(adapters, jobId),
+    inspect: (jobId: string = id, confirmUncertainTitleRetry = false) => inspectWebDelegationResult(adapters, jobId, confirmUncertainTitleRetry),
     collect: (jobId: string = id) => collectWebDelegationResult(adapters, jobId),
     setTitle: (name: string | null) => { currentTitle = name; },
+    title: () => currentTitle,
+    allowTitleReadback: () => { failTitleReadAfterSet = false; },
     continue: (parentJobId: string, prompt = "Follow up") => runWebDelegation(adapters, { id: randomUUID(), slot, cwd: root, prompt, parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", signal: AbortSignal.timeout(1000) }), runWithCoordinator: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", coordinator: { slot, threadId, accountFingerprint: "a".repeat(64) }, signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -208,6 +213,18 @@ test("a settled title marker preserves manual titles after collection", async ()
     expect(f.calls).toHaveLength(before);
   } finally { f.cleanup(); }
 });
+test("an existing collected receipt preserves manual titles across upgrades", async () => {
+  const f = await fixture();
+  try {
+    await f.run();
+    f.store.collect(f.id);
+    f.setTitle("Personal rename from an older version");
+    const before = f.calls.length;
+    await f.inspect();
+    expect(f.calls).toHaveLength(before);
+    expect(f.title()).toBe("Personal rename from an older version");
+  } finally { f.cleanup(); }
+});
 test("unnamed collection uses the preview first line and concurrent collection names once", async () => {
   const f = await fixture();
   try {
@@ -240,7 +257,8 @@ test("naming failures preserve the answer and leave naming eligible for the next
       const before = f.calls.length;
       expect(await f.collect()).toBe("verified design");
       expect(f.calls.length).toBeGreaterThan(before);
-      expect(() => readFileSync(join(f.root, `${f.id}.json.named`))).toThrow();
+      expect(readFileSync(join(f.root, `${f.id}.json.named`), "utf8")).toBe("retry");
+      expect(() => readFileSync(join(f.root, `${f.id}.json.naming`))).toThrow();
       expect(f.store.collectedAt(f.id)).toBeNumber();
     } finally { f.cleanup(); }
   }
@@ -256,6 +274,24 @@ test("lost title mutation ACK is settled by public readback", async () => {
     const before = f.calls.length;
     await f.inspect();
     expect(f.calls).toHaveLength(before);
+  } finally { f.cleanup(); }
+});
+test("an unreadable readback fences uncertain title mutation until explicit retry confirmation", async () => {
+  const f = await fixture({ titleSetAckLost: true, titleReadAfterSetFails: true });
+  try {
+    await f.run();
+    await f.inspect();
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(1);
+    expect(readFileSync(join(f.root, `${f.id}.json.named`), "utf8")).toBe("uncertain");
+    f.setTitle("Personal rename after the successful mutation");
+    f.allowTitleReadback();
+    const before = f.calls.length;
+    await f.inspect();
+    expect(f.calls).toHaveLength(before);
+    expect(f.title()).toBe("Personal rename after the successful mutation");
+    await f.inspect(f.id, true);
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(2);
+    expect(f.title()).toBe("[Tela Agent] Personal rename after the successful mutation");
   } finally { f.cleanup(); }
 });
 test("default Web delegation requests and proves workspace-only Native sandbox", async () => {

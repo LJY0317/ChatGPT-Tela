@@ -390,7 +390,7 @@ export class WebDelegationStore {
     // Keep collection proof until all answer-bearing records are gone. An
     // interrupted prune can then resume from its terminal sidecar; a final
     // collected-only marker is removed by the existing orphan sweep.
-    for (const suffix of ["", ".failed", ".completed", ".collected", ".named"]) {
+    for (const suffix of ["", ".failed", ".completed", ".collected", ".named", ".naming"]) {
       const path = this.#path(id) + suffix;
       if (existsSync(path)) { unlinkSync(path); files++; }
     }
@@ -412,7 +412,7 @@ export class WebDelegationStore {
       if (!eligible.has(key) || this.threadRetention(jobs[0]!)?.state !== "excluded"
         || jobs.some(job => !this.#terminal(job) || !verifiedWebDelegationAnswer(job) || this.collectedAt(job.id) === undefined)) return [];
       const collected = Math.max(...jobs.map(job => this.collectedAt(job.id)!));
-      const size = jobs.reduce((sum, job) => sum + ["", ".collected", ".failed", ".completed", ".named"].reduce((total, suffix) => {
+      const size = jobs.reduce((sum, job) => sum + ["", ".collected", ".failed", ".completed", ".named", ".naming"].reduce((total, suffix) => {
         const path = this.#path(job.id) + suffix;
         return total + (existsSync(path) ? lstatSync(path).size : 0);
       }, 0), 0);
@@ -501,27 +501,54 @@ export class WebDelegationStore {
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return false; }
   }
   /** Claim once per Tela-created conversation, independently of answer collection. */
-  claimTitle(record: WebDelegationRecord): boolean {
+  claimTitle(record: WebDelegationRecord, confirmUncertain = false): boolean {
     if (!this.#terminal(record) || !record.threadId || record.origin) return false;
     const root = record.parentJobId ? this.recordsForThread({ slot: record.slot,
       accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId })
       .find(job => !job.parentJobId && !job.origin) : record;
     if (!root) return false;
+    const named = `${this.#path(root.id)}.named`;
+    const state = existsSync(named) ? readFileSync(named, "utf8") : undefined;
+    if (this.collectedAt(root.id) !== undefined && state !== "retry" && state !== "uncertain") return false;
+    if (existsSync(named)) {
+      if (state === "complete" || state === "") return false;
+      if (state === "uncertain" && !confirmUncertain) return false;
+      if (state !== "uncertain" && state !== "retry") return false;
+    }
     try {
-      const fd = openSync(`${this.#path(root.id)}.named`, "wx", 0o600);
+      const fd = openSync(`${this.#path(root.id)}.naming`, "wx", 0o600);
       closeSync(fd);
+      if (state === "uncertain") unlinkSync(named);
       return true;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return false; }
   }
-  /** A failed or inconclusive naming attempt must remain eligible for a later explicit inspection. */
-  releaseTitleClaim(record: WebDelegationRecord): void {
+  completeTitleClaim(record: WebDelegationRecord): void {
     if (!record.threadId || record.origin) return;
     const root = record.parentJobId ? this.recordsForThread({ slot: record.slot,
       accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId })
       .find(job => !job.parentJobId && !job.origin) : record;
     if (root) {
-      const path = `${this.#path(root.id)}.named`;
-      if (existsSync(path)) unlinkSync(path);
+      writeFileSync(`${this.#path(root.id)}.named`, "complete", { mode: 0o600 });
+      const claim = `${this.#path(root.id)}.naming`;
+      if (existsSync(claim)) unlinkSync(claim);
+    }
+  }
+  /** Unknown mutation outcomes stay fenced until an explicit retry confirmation. */
+  releaseTitleClaim(record: WebDelegationRecord, outcome: "uncertain" | "retry" | "keep" = "keep"): void {
+    if (!record.threadId || record.origin) return;
+    const root = record.parentJobId ? this.recordsForThread({ slot: record.slot,
+      accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId })
+      .find(job => !job.parentJobId && !job.origin) : record;
+    if (root) {
+      const named = `${this.#path(root.id)}.named`;
+      if (outcome === "uncertain" && (!existsSync(named) || readFileSync(named, "utf8") !== "complete")) {
+        writeFileSync(named, "uncertain", { mode: 0o600 });
+      }
+      else if (outcome === "retry" && (!existsSync(named) || readFileSync(named, "utf8") !== "complete")) {
+        writeFileSync(named, "retry", { mode: 0o600 });
+      }
+      const claim = `${this.#path(root.id)}.naming`;
+      if (existsSync(claim)) unlinkSync(claim);
     }
   }
   /** An explicitly linked thread has no task permit and cannot submit a model turn. */
@@ -705,36 +732,42 @@ async function notifyFailureCoordinator(adapters: WebDelegationAdapters, record:
   }
 }
 /** Explicit terminal-result inspection, including failure; never marks an answer collected. */
-export async function inspectWebDelegationResult(adapters: WebDelegationAdapters, id: string): Promise<WebDelegationRecord> {
+export async function inspectWebDelegationResult(adapters: WebDelegationAdapters, id: string, confirmUncertainTitleRetry = false): Promise<WebDelegationRecord> {
   const record = adapters.store.get(id);
   if (!record) throw Error("Web job was not found");
-  if (adapters.store.claimTitle(record)) {
+  if (adapters.store.claimTitle(record, confirmUncertainTitleRetry)) {
     try {
       const current = await adapters.owner(record.slot);
       if (sameAccountOwner(record, current)) {
         const rpc = await adapters.connect(current.session.terminalEndpoint);
         try {
-          const read = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }));
+          let read: Record<string, unknown> | undefined;
+          try { read = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false })); }
+          catch (error) { adapters.store.releaseTitleClaim(record, "retry"); throw error; }
           const thread = object(read?.thread);
           const name = typeof thread?.name === "string" ? thread.name.trim() : "";
           const preview = typeof thread?.preview === "string" ? thread.preview.split(/\r?\n/).find(line => line.trim())?.trim() : "";
           const title = name || preview;
-          if (!title) { adapters.store.releaseTitleClaim(record); return record; }
+          if (!title) { adapters.store.releaseTitleClaim(record, "retry"); return record; }
           if (!title.startsWith(DELEGATED_TITLE_PREFIX)) {
             try {
               await rpc.request("thread/name/set", { threadId: record.threadId, name: DELEGATED_TITLE_PREFIX + title });
+              adapters.store.completeTitleClaim(record);
             } catch (error) {
               // A lost ACK is ambiguous. Public metadata readback settles a successful
               // mutation without blindly issuing it again on the next inspection.
-              const after = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }));
+              let after: Record<string, unknown> | undefined;
+              try { after = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false })); }
+              catch { adapters.store.releaseTitleClaim(record, "uncertain"); throw error; }
               const afterThread = object(after?.thread);
               const afterName = typeof afterThread?.name === "string" ? afterThread.name.trim() : "";
-              if (!afterName.startsWith(DELEGATED_TITLE_PREFIX)) throw error;
+              if (afterName.startsWith(DELEGATED_TITLE_PREFIX)) adapters.store.completeTitleClaim(record);
+              else { adapters.store.releaseTitleClaim(record, "retry"); throw error; }
             }
-          }
+          } else adapters.store.completeTitleClaim(record);
         } finally { await rpc.close(); }
       } else {
-        adapters.store.releaseTitleClaim(record);
+        adapters.store.releaseTitleClaim(record, "retry");
       }
     } catch (error) {
       adapters.store.releaseTitleClaim(record);
@@ -743,8 +776,8 @@ export async function inspectWebDelegationResult(adapters: WebDelegationAdapters
   }
   return record;
 }
-export async function collectWebDelegationResult(adapters: WebDelegationAdapters, id: string): Promise<string> {
-  const record = await inspectWebDelegationResult(adapters, id);
+export async function collectWebDelegationResult(adapters: WebDelegationAdapters, id: string, confirmUncertainTitleRetry = false): Promise<string> {
+  const record = await inspectWebDelegationResult(adapters, id, confirmUncertainTitleRetry);
   const answer = verifiedWebDelegationAnswer(record);
   if (!answer) throw Error("No verified final result; inspect job status");
   try {
