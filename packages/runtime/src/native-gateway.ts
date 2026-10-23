@@ -43,7 +43,6 @@ interface NativeLifetime {
   delivered: boolean;
   requestHash: string;
   answerHash?: string;
-  readonly consumedInputs: Set<string>;
 }
 
 function requestHash(body: unknown): string {
@@ -247,21 +246,19 @@ export class NativeResponsesGateway {
       const messages = requestMessages(body);
       const finalIndex = messages.map(message => message.role === "assistant" && message.hash === lifetime!.answerHash).lastIndexOf(true);
       const newMessages = finalIndex < 0 ? [] : messages.slice(finalIndex + 1).filter(message => message.role === "user");
-      const inputs = lifetime.watch?.inputs?.() ?? [];
-      const fresh = inputs.filter(input => !lifetime!.consumedInputs.has(input.id)
-        && newMessages.some(message => message.hash === input.textHash));
-      if (!fresh.length || newMessages.length !== fresh.length || newMessages.some(message => !fresh.some(input => input.textHash === message.hash))) {
+      // Canonical Native ownership and the appended request history are the
+      // admission contract. Public input notifications do not cover every
+      // internally accepted Goal continuation; absence is not a replay proof.
+      if (finalIndex < 0 || !newMessages.length || newMessages.some(message => message.hash === "unproven")
+        || lifetime.requestHash === requestHash(body)) {
         // Failure-triggered structural evidence distinguishes an absent final anchor,
         // no new user message, and an absent/mismatched canonical input witness.
         withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId), turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () => {
           emitDiagnosticEvent("chatgpt_tela_work", "native_cycle_proof_rejected", {
             reason_class: finalIndex < 0 ? "prior_final_missing" : !newMessages.length ? "new_input_missing"
-              : !fresh.length ? "input_witness_missing" : "input_witness_mismatch",
+              : newMessages.some(message => message.hash === "unproven") ? "unsupported_input" : "exact_request_replay",
             prior_final_present: finalIndex >= 0,
             new_message_count: newMessages.length,
-            observed_input_count: inputs.length,
-            fresh_input_count: fresh.length,
-            unconsumed_input_count: inputs.filter(input => !lifetime!.consumedInputs.has(input.id)).length,
             exact_request_replay: lifetime!.requestHash === requestHash(body),
             ...(finalIndex >= 0 ? { prior_final_fingerprint: diagnosticFingerprint(messages[finalIndex]!.hash) } : {}),
           });
@@ -271,15 +268,10 @@ export class NativeResponsesGateway {
             kind: "request", index, source_index: message.sourceIndex, mode: message.contentKind,
             preceded_by_compaction: message.precededByCompaction,
             body_fingerprint: diagnosticFingerprint(message.hash),
-            matched: inputs.some(input => !lifetime!.consumedInputs.has(input.id) && input.textHash === message.hash),
-          }));
-          inputs.forEach((input, index) => emitDiagnosticEvent("chatgpt_tela_work", "native_cycle_input_evidence", {
-            kind: "witness", index, item_fingerprint: diagnosticFingerprint(input.id),
-            body_fingerprint: diagnosticFingerprint(input.textHash), consumed: lifetime!.consumedInputs.has(input.id),
-            matched: newMessages.some(message => message.hash === input.textHash),
+            matched: message.hash !== "unproven",
           }));
         });
-        this.#rejectCycle(identity, "missing_input_proof", "Native response cycle continuation lacks proven new input and prior final delivery");
+        this.#rejectCycle(identity, "missing_input_proof", "Native response cycle continuation lacks a new supported request after its prior final");
       }
       // A final answer may reach Native before browser/context settlement. Never overlap planners.
       await this.#launches.get(registered.capability);
@@ -293,9 +285,8 @@ export class NativeResponsesGateway {
       lifetime.delivered = false;
       delete lifetime.answerHash;
       lifetime.requestHash = requestHash(body);
-      for (const input of fresh) lifetime.consumedInputs.add(input.id);
       withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId), turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () =>
-        emitDiagnosticEvent("chatgpt_tela_work", "native_steering_cycle_started", { input_count: fresh.length,
+        emitDiagnosticEvent("chatgpt_tela_work", "native_steering_cycle_started", { input_count: newMessages.length,
           current_authority_proven: true, prior_final_present: true }));
     } else if (registered && terminalPhase(registered.channel.phase)) {
       if (!lifetime) {
@@ -310,7 +301,7 @@ export class NativeResponsesGateway {
     if (!registered || registered.channel.phase === "prepared" && !this.#launches.has(registered.capability)) {
       if (!registered) {
         registered = this.turns.register(binding);
-        lifetime = { controller: new AbortController(), current: registered, watch: undefined, delivered: false, requestHash: requestHash(body), consumedInputs: new Set() };
+        lifetime = { controller: new AbortController(), current: registered, watch: undefined, delivered: false, requestHash: requestHash(body) };
         this.#lifetimes.set(key, lifetime);
         try {
           lifetime.watch = await this.source.watchTurn?.(identity.threadId, identity.turnId, this.#controller.signal);
@@ -320,9 +311,6 @@ export class NativeResponsesGateway {
           if (lifetime.watch) {
             const signal = lifetime.watch.signal;
             signal.addEventListener("abort", () => this.#retire(key, signal.reason, "owner_signal"), { once: true });
-            for (const input of lifetime.watch.inputs?.() ?? []) {
-              if (requestMessages(body).some(message => message.role === "user" && message.hash === input.textHash)) lifetime.consumedInputs.add(input.id);
-            }
           }
         } catch (error) {
           withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId), turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () => {
@@ -413,10 +401,6 @@ export class NativeResponsesGateway {
       } else {
         registered = this.turns.refresh(binding);
         if (lifetime) lifetime.requestHash = requestHash(body);
-        const waitingInputs = lifetime?.watch?.inputs?.().filter(input => !lifetime!.consumedInputs.has(input.id)).length ?? 0;
-        if (waitingInputs) withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId), turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () =>
-          emitDiagnosticEvent("chatgpt_tela_work", "native_steering_deferred", { input_count: waitingInputs,
-            turn_phase: registered!.channel.phase, execution_restarted: false }));
       }
     }
 
