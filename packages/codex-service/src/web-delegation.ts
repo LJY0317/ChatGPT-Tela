@@ -908,10 +908,16 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     return { type: "image" as const, url };
   });
   const owner = await adapters.owner(input.slot);
-  const parent = input.parentJobId ? adapters.store.get(input.parentJobId) : undefined;
+  let parent = input.parentJobId ? adapters.store.get(input.parentJobId) : undefined;
   if (input.parentJobId && (!parent || !parent.threadId || !parent.turnId || parent.slot !== input.slot
     || parent.cwd !== input.cwd || !sameAccountOwner(parent, owner))) {
     throw Error("Continuation requires an owned Web job in this checkout");
+  }
+  // A detached observer can leave a completed Native turn recorded as running.
+  // Recover only this exact parent before checking its retained writer permit.
+  if (parent && !verifiedWebDelegationAnswer(parent) && parent.state !== "failed"
+    && parent.state !== "completed") {
+    parent = await reconcileWebDelegation(adapters, parent.id, input.signal);
   }
   if (input.coordinator && (!UUID.test(input.coordinator.threadId)
     || !Number.isSafeInteger(input.coordinator.slot) || input.coordinator.slot < 1 || input.coordinator.slot > 99

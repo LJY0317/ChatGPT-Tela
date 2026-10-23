@@ -659,6 +659,31 @@ test("continuation appends a new turn to the same Native thread without creating
   } finally { f.cleanup(); }
 });
 
+test("continuation reconciles a completed exact parent left running by a detached observer", async () => {
+  const options = { silent: true };
+  const f = await fixture(options);
+  try {
+    await expect(f.run()).rejects.toThrow();
+    expect(f.store.get(f.id)?.state).toBe("uncertain");
+    expect(f.store.capacity(f.slot, f.root).blockCode).toBe("CAPACITY_WRITER_CHECKOUT");
+    options.silent = false;
+    const result = await f.continue(f.id);
+    expect(f.store.get(f.id)).toMatchObject({ state: "completed", answer: "verified recovered design" });
+    expect(result).toMatchObject({ state: "completed", parentJobId: f.id });
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(2);
+  } finally { f.cleanup(); }
+});
+
+test("continuation preserves an in-progress parent's checkout reservation", async () => {
+  const f = await fixture({ silent: true, indexedProgress: true });
+  try {
+    await expect(f.run()).rejects.toThrow();
+    await expect(f.continue(f.id)).rejects.toMatchObject({ code: "CAPACITY_WRITER_CHECKOUT" });
+    expect(f.store.get(f.id)?.state).toBe("uncertain");
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
 test.each(["failed", "interrupted"] as const)("new authorized follow-up reuses a %s thread without requiring a prior answer", async latestStatus => {
   const options = { failedTurn: true, answer: "", latestStatus };
   const f = await fixture(options);
