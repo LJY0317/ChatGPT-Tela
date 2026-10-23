@@ -263,6 +263,10 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
 
       if (event.kind === "completed") {
         eventWait.signal.throwIfAborted();
+        emitDiagnosticEvent("chatgpt_tela_work", "web_answer_received", {
+          kind: "task", completion_observed: true, answer_characters: event.answer.length,
+          plain_body_available: event.plainAnswer !== undefined,
+        });
         input.channel.complete(event.answer);
         return event.answer;
       }

@@ -83,6 +83,23 @@ test("HTTP disconnect aborts its observer while a subsequent request reuses the 
 });
 
 describe("Native Responses HTTP transport", () => {
+  test.each([false, true])("final production and HTTP consumption remain distinct diagnostic facts (cancel=%s)", async cancel => {
+    const events: StructuralDiagnosticEvent[] = [];
+    const stop = observeDiagnosticEvents(event => { if (event.stage === "native_response_body_closed") events.push(event); });
+    const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async turn => {
+      turn.channel.markSubmitted(); turn.channel.markAccepted(); turn.channel.complete("PRIVATE_FINAL");
+    });
+    try {
+      const response = await handleNativeResponsesHttp(post(body([], false)), gateway);
+      expect(events).toHaveLength(0);
+      if (cancel) await response.body!.cancel(); else await response.text();
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ outcome: "final", outcome_committed: !cancel,
+        reason_class: cancel ? "consumer_cancelled" : "drained", delivery: "http_body_consumer", ui_observed: false });
+      expect(JSON.stringify(events)).not.toContain("PRIVATE_FINAL");
+    } finally { stop?.(); await gateway.close(); }
+  });
+
   test.each(["conversation_changed", "request_changed", "lineage_conflict"] as const)("accepted observation failure remains terminal with original cause after retirement: %s", async reason => {
     let sends=0;
     const gateway=new NativeResponsesGateway(source,new ActiveTurnRegistry(),async turn=>{

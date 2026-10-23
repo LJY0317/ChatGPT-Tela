@@ -58,7 +58,7 @@ interface RawTurn {
   readonly text?: string;
   readonly failureDetail?: string;
   readonly publicProgress?: readonly string[];
-  readonly progressProbe?: { readonly failureCandidateCount?: number; readonly failureEligibleCount?: number; readonly failureApprovalCount?: number; readonly failureStopVisible?: boolean; readonly failureSource?: "alert" | "provider_marker" | "none"; readonly answerBodyCount?: number; readonly visibleAnswerBodyCount?: number; readonly answerBodyOutsideProgress?: boolean; readonly answerBodyAnimated?: boolean; readonly answerProsePresent?: boolean; readonly answerBlockCount?: number; readonly unmappedVisibleProsePresent?: boolean; readonly linkedRegionCount?: number; readonly visibleLinkedRegionCount?: number; readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
+  readonly progressProbe?: { readonly failureCandidateCount?: number; readonly failureEligibleCount?: number; readonly failureApprovalCount?: number; readonly failureStopVisible?: boolean; readonly completionControlsPresent?: boolean; readonly failureSource?: "alert" | "provider_marker" | "none"; readonly answerBodyCount?: number; readonly visibleAnswerBodyCount?: number; readonly answerBodyOutsideProgress?: boolean; readonly answerBodyAnimated?: boolean; readonly answerProsePresent?: boolean; readonly answerBlockCount?: number; readonly unmappedVisibleProsePresent?: boolean; readonly linkedRegionCount?: number; readonly visibleLinkedRegionCount?: number; readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
 }
 
 interface RawSnapshot {
@@ -1028,6 +1028,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
           failureEligibleCount: Math.min(65, providerErrors.length),
           failureApprovalCount: Math.min(65, errorCandidates.filter(node => approvalRoots.some(root => root.contains(node))).length),
           failureStopVisible: stopVisible,
+          completionControlsPresent: complete,
           failureSource: failure ? failure.getAttribute('role') === 'alert' ? 'alert' : 'provider_marker' : 'none',
           // Prose may use the same renderer as a final answer. Observe that boundary
           // without relabelling answer content as progress or recording its text.
@@ -2221,6 +2222,9 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
           });
           emitDiagnosticEvent("chatgpt_tela_work", "web_public_progress_extraction", {
             assistant_phase: settled.phase ?? "unknown",
+            completion_controls_present: probe.completionControlsPresent ?? false,
+            plain_body_available: settled.plainBodyText !== undefined,
+            answer_characters: settled.text?.length ?? 0,
             failure_class: probe.failureSource ?? "none",
             provider_error_candidate_count: probe.failureCandidateCount ?? 0,
             eligible_error_candidate_count: probe.failureEligibleCount ?? 0,

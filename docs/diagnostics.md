@@ -51,6 +51,16 @@ without suppressing failures after an arbitrary number of earlier transitions.
 Fresh-seed authority events expose ordered source indices, fingerprints, byte counts and
 checkpoint-restored instruction counts; they never contain instruction text.
 
+Trace answer delivery separately: `web_public_progress_extraction` records browser phase,
+completion controls, body availability and character count; controls alone do not prove completion.
+`checkpoint_operation_observed` identifies a completed preparation summary before envelope validation;
+`web_answer_received` identifies a task answer before Native outcome settlement. Join these with
+`native_outcome_committed` and `native_response_body_closed` (or `public_progress_stream_closed`
+for live progress) to separate extraction, validation, settlement and HTTP consumption failures.
+HTTP consumption is not proof of official-app UI display (`ui_observed=false`). These are existing
+observation/response boundaries, not a new watcher; a final arriving after observation retires
+requires later readback and cannot be inferred retroactively from a prior error.
+
 ## Tela Chat ingress boundary
 
 `chat_capability_dispatch_received` is emitted only after a supported effectful

@@ -1,4 +1,5 @@
 import { nativeFailure } from "./native-failure";
+import { diagnosticContext, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import type {
   NativeGatewayOutcome,
   NativeResponsesGateway,
@@ -29,25 +30,37 @@ function committedBody(input: {
   readonly chunks: readonly string[];
   readonly commitAfterChunk: number;
   readonly commit: () => void;
+  readonly outcome: NativeGatewayOutcome["type"];
 }): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   let index = 0;
   let committed = false;
+  const diagnostics = diagnosticContext();
+  const closed = (reason: string) => withDiagnosticContext(diagnostics, () =>
+    emitDiagnosticEvent("chatgpt_tela_work", "native_response_body_closed", {
+      reason_class: reason, outcome: input.outcome, outcome_committed: committed,
+      pulled_frame_count: index, queued_frame_count: input.chunks.length - index,
+      delivery: "http_body_consumer", ui_observed: false,
+    }));
 
   return new ReadableStream<Uint8Array>({
     pull(controller) {
-      if (index >= input.chunks.length) {
-        controller.close();
-        return;
-      }
-      const current = index;
-      controller.enqueue(encoder.encode(input.chunks[index++]!));
-      if (!committed && current === input.commitAfterChunk) {
-        input.commit();
-        committed = true;
-      }
-      if (index >= input.chunks.length) controller.close();
+      try {
+        if (index >= input.chunks.length) {
+          closed("drained");
+          controller.close();
+          return;
+        }
+        const current = index;
+        controller.enqueue(encoder.encode(input.chunks[index++]!));
+        if (!committed && current === input.commitAfterChunk) {
+          input.commit();
+          committed = true;
+        }
+        if (index >= input.chunks.length) { closed("drained"); controller.close(); }
+      } catch (error) { closed("failed"); throw error; }
     },
+    cancel() { closed("consumer_cancelled"); },
   }, { highWaterMark: 0 });
 }
 
@@ -69,6 +82,7 @@ function responseForOutcome(input: {
       chunks: [json],
       commitAfterChunk: 0,
       commit: () => input.gateway.commit(input.outcome),
+      outcome: input.outcome.type,
     }), {
       headers: { "content-type": "application/json" },
     });
@@ -79,6 +93,7 @@ function responseForOutcome(input: {
     chunks: plan.frames,
     commitAfterChunk: plan.commitAfterFrame,
     commit: () => input.gateway.commit(input.outcome),
+    outcome: input.outcome.type,
   }), {
     headers: {
       "content-type": "text/event-stream",

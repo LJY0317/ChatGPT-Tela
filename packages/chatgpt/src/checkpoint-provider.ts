@@ -157,7 +157,8 @@ export class ChatGptContextCheckpointProvider implements WebContextCheckpointPro
         if (event.kind !== "completed") continue;
         phase = "completed";
         emitDiagnosticEvent("chatgpt_tela_work", "checkpoint_operation_observed", {
-          phase, submission_accepted: true, completion_observed: true,
+          kind: "checkpoint", phase, submission_accepted: true, completion_observed: true,
+          answer_characters: event.answer.length, plain_body_available: event.plainAnswer !== undefined,
         });
         const rejectCompleted = (reason: CompletedResponseRejection, message: string): never => rejectCheckpointResponse(reason, message, {
           nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId, webEpochId: request.webEpochId,
