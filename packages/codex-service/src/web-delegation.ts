@@ -836,10 +836,9 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
   });
   const owner = await adapters.owner(input.slot);
   const parent = input.parentJobId ? adapters.store.get(input.parentJobId) : undefined;
-  if (input.parentJobId && (!parent || parent.state !== "completed" || !verifiedWebDelegationAnswer(parent)
-    || !parent.threadId || !parent.turnId || parent.slot !== input.slot
+  if (input.parentJobId && (!parent || !parent.threadId || !parent.turnId || parent.slot !== input.slot
     || parent.cwd !== input.cwd || !sameAccountOwner(parent, owner))) {
-    throw Error("Continuation requires a completed, owned Web job in this checkout");
+    throw Error("Continuation requires an owned Web job in this checkout");
   }
   if (input.coordinator && (!UUID.test(input.coordinator.threadId)
     || !Number.isSafeInteger(input.coordinator.slot) || input.coordinator.slot < 1 || input.coordinator.slot > 99
@@ -881,12 +880,12 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
         threadId: parent.threadId, limit: 1, sortDirection: "desc", itemsView: "summary",
       }, input.signal));
       const latest = Array.isArray(response?.data) ? object(response.data[0]) : undefined;
-      if (!latest || latest.status !== "completed") {
+      if (!latest || !["completed", "failed", "interrupted"].some(status => status === latest.status)) {
         throw Error("Continuation thread has an unsettled last turn");
       }
       if (!sameOwner(parent, owner)) {
         const priorTurn = await findDelegatedTurn(rpc, parent.threadId!, parent.turnId!, input.signal);
-        if (priorTurn?.status !== "completed") throw Error("Original Web turn is not proven on the current owner session");
+        if (!priorTurn || !["completed", "failed", "interrupted"].some(status => status === priorTurn.status)) throw Error("Original Web turn is not proven on the current owner session");
       }
       // Each delegation opens a fresh connection. Attach it to this indexed
       // thread so turn/start's completion notifications reach this observer.

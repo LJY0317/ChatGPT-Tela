@@ -637,8 +637,10 @@ describe("current ChatGPT DOM surface driver", () => {
     Object.assign(code, { classList: ['language-json'] });
     const pre = new FixtureElement({ 'data-fixture-tag': 'PRE' }, { code: [code] });
     pre.childNodes = [code]; pre.textContent = wire;
-    const chrome = new FixtureElement({ 'aria-hidden': 'true' }); chrome.textContent = 'JSON'; chrome.childNodes = [];
-    const wrapper = new FixtureElement(); wrapper.childNodes = [chrome, pre]; wrapper.textContent = 'JSON' + wire;
+    const chrome = new FixtureElement(); chrome.textContent = 'JSON'; chrome.childNodes = [{ nodeType: 3, textContent: 'JSON' }];
+    const block = new FixtureElement({ 'data-code-block': 'true' }, { code: [code] });
+    block.childNodes = [chrome, pre]; block.textContent = 'JSON' + wire;
+    const wrapper = new FixtureElement(); wrapper.childNodes = [block]; wrapper.textContent = block.textContent;
     const body = new FixtureElement({}, { pre: [pre] });
     body.childNodes = [wrapper]; body.textContent = wrapper.textContent;
     const group = new FixtureElement({ 'data-turn-key': 'nested-language' }, {

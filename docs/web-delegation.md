@@ -204,8 +204,11 @@ timeouts or stale in-flight snapshots.
 
 A Native turn can fail after emitting an explicit `final_answer`. Its Web job
 remains `failed/turn_failed`, while `result` and `reconcile` may deliver that
-verified final for diagnosis; the answer does not prove task success or permit
-continuation. For a completed turn with no final in live notifications, the
+verified final for diagnosis; the answer does not prove task success. A new
+authorized follow-up can reuse the owned thread after its latest turn is completed,
+failed, or interrupted; a successful prior answer is not required. This appends a
+new turn and never retries the old operation. Review existing effects before continuing.
+For a completed turn with no final in live notifications, the
 exact indexed turn is read before settling `failed/result_unavailable` and
 releasing its lease. Recovery applies the same terminal rule without replaying
 the input. Missing or untrusted history remains uncertain and retains its
@@ -216,9 +219,9 @@ restricted filesystem permissions. Finished receipts and unresolved recovery jou
 available for exact readback, even beyond the legacy 64-record review threshold. The capacity
 response retains `records.limit=64` for v2 clients but sets `records.admissionBound=false`:
 the threshold is advisory, and only owned active leases determine new job admission. No
-automatic record expiry, deletion, or pruning is performed. Storage errors remain ordinary
-filesystem failures, independent of capacity refusals. Do not put records, prompts, keys or
-results in a repository or release. A complete user-reviewed removal lifecycle remains future work.
+record-count limit prevents admission. Managed thread retention and collected-history
+pruning follow the lifecycle below. Storage errors remain ordinary filesystem failures,
+independent of capacity refusals. Do not put records, prompts, keys or results in a repository or release.
 Source fixtures and a profile-1 live same-thread continuation verify final-answer delivery and
 completion after attaching the fresh connection. Both-profile acceptance remains a separate check.
 

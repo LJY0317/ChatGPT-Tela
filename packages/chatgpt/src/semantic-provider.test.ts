@@ -2605,7 +2605,7 @@ test("failed assistant supersedes a cached post-tool final even with a pending a
   expect(failed.state==="proven"&&failed.value).toMatchObject({kind:"failed",detail:"Failed to fetch"});
   expect(reasons).toEqual(["fetch_failed"]);
  expect(driver.approvalCalls).toBe(0);
- }finally{stop();await surface.host.close();}
+ }finally{stop?.();await surface.host.close();}
 });
 
 test("inert checkpoint source uploads once and sends once, carrying its receipt only inside the file", async () => {
@@ -2801,7 +2801,7 @@ test.each(['present', 'unmounted', 'across-frames', 'provisional', 'presentation
       expect(event.state==='proven'&&event.value).toMatchObject({kind:'completed',answer:'owned useful final'});
     }
     expect(driver.activated).toHaveLength(1);
-  }finally{stop();await surface.host.close();}
+  }finally{await surface.host.close();}
 });
 
 test.each(['missing-host','unavailable-host','changed-input','unconsumed','missing-anchor','wrong-parent','wrong-anchor','competing-parent','foreign-route'] as const)('causal receipt fails closed: %s',async mode=>{

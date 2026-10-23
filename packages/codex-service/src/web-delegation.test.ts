@@ -9,7 +9,7 @@ import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { runWebDelegation, inspectWebDelegationResult, collectWebDelegationResult, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
-async function fixture(options: { titleReadFails?: boolean; titleSetFails?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
+async function fixture(options: { titleReadFails?: boolean; titleSetFails?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; latestStatus?: "failed" | "interrupted"; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const slot = options.slot ?? 1;
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
@@ -83,7 +83,7 @@ async function fixture(options: { titleReadFails?: boolean; titleSetFails?: bool
           ] },
           ...(options.ambiguousFirstTurn ? [{ id: randomUUID(), status: "completed", items: [] }] : []),
         ], nextCursor: null };
-        return { data: [{ id: currentTurnId, status: options.indexedProgress ? "inProgress" : options.failedTurn ? "failed" : "completed", items: [
+        return { data: [{ id: currentTurnId, status: options.indexedProgress ? "inProgress" : options.latestStatus ?? (options.failedTurn ? "failed" : "completed"), items: [
         ...(options.indexedProgress ? [{ id: "reasoning", type: "reasoning", summary: ["Earlier public summary", "Approval needed" + "x".repeat(5000)], rawContent: "hidden-reasoning-must-not-be-read" }] : []),
         { id: "final", type: "agentMessage", ...(options.foreignFinal ? { phase: "commentary" } : options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified recovered design" },
         ...(options.summaryToolResult ? [{ id: "read", type: "commandExecution",
@@ -607,6 +607,24 @@ test("continuation appends a new turn to the same Native thread without creating
   } finally { f.cleanup(); }
 });
 
+test.each(["failed", "interrupted"] as const)("new authorized follow-up reuses a %s thread without requiring a prior answer", async latestStatus => {
+  const options = { failedTurn: true, answer: "", latestStatus };
+  const f = await fixture(options);
+  try {
+    await expect(f.run()).rejects.toThrow("turn failed");
+    const prior = f.store.get(f.id)!;
+    expect(verifiedWebDelegationAnswer(prior)).toBeUndefined();
+    options.failedTurn = false;
+    options.answer = "Reviewed existing effects and continued";
+    const next = await f.continue(f.id, "Review existing work, then continue");
+    expect(next).toMatchObject({ state: "completed", threadId: prior.threadId, parentJobId: prior.id });
+    expect(next.turnId).not.toBe(prior.turnId);
+    expect(f.store.get(f.id)?.state).toBe("failed");
+    expect(f.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(2);
+  } finally { f.cleanup(); }
+});
+
 test("recovery identifies the delegated turn after a direct user message", async () => {
   const f = await fixture({ silent: true, manualTurn: true });
   try {
@@ -701,7 +719,7 @@ test("failed Native turn releases its task lease; completed turn without final r
   }
 });
 
-test("failed Native turn preserves an explicit final for result retrieval without success or continuation", async () => {
+test("failed Native turn preserves an explicit final without misreporting success", async () => {
   for (const silent of [false, true]) {
     const f = await fixture({ slot: 2, failedTurn: true, silent, answer: "An error occurred after the final response." });
     try {
@@ -713,7 +731,6 @@ test("failed Native turn preserves an explicit final for result retrieval withou
       expect(verifiedWebDelegationAnswer(record)).toBe("An error occurred after the final response.");
       expect(new WebDelegationStore(f.root).get(f.id)?.state).toBe("failed");
       expect(f.store.capacity(2).total.used).toBe(0);
-      await expect(f.continue(f.id)).rejects.toThrow("Continuation requires a completed");
       expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
     } finally { f.cleanup(); }
   }
