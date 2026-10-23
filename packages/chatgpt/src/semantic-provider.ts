@@ -70,6 +70,15 @@ interface TrackedTurn extends TurnOwnership {
   retirement?: Promise<void>;
 }
 
+/** Classify the already proven provider failure without retaining UI text. */
+function observeProviderFailure(detail: string | undefined): void {
+  const normalized = detail?.trim().toLowerCase();
+  const reason = normalized === "failed to fetch" ? "fetch_failed"
+    : normalized?.includes("message stream") ? "message_stream_failed"
+      : normalized ? "other_provider_error" : "detail_unavailable";
+  emitDiagnosticEvent("chatgpt_tela_work", "web_provider_failure_detail_classified", { reason_class: reason });
+}
+
 function logApprovalTransition(transition: ApprovalObservationTransition | undefined): void {
   if (!transition) return;
   emitDiagnosticEvent("chatgpt_tela_work", "approval_wait_transition", {
@@ -1736,6 +1745,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       // A new approval can render after completion controls. It still blocks final delivery.
       if (assistantLifecyclePhase(snapshot, ownership.assistants[0]) === "failed") {
         signal?.throwIfAborted();
+        observeProviderFailure(ownership.assistants[0]!.failureDetail);
         this.#retireTurn(surface, tracked);
         return { state: "proven", value: { kind: "failed", providerTurnId: tracked.handle.providerTurnId,
           detail: ownership.assistants[0]!.failureDetail ?? "ChatGPT turn failed" },
@@ -1908,6 +1918,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         delete tracked.continuationBoundary;
         if (assistant.phase === "failed") {
           signal?.throwIfAborted();
+          observeProviderFailure(assistant.failureDetail);
           this.#retireTurn(surface, tracked);
           return {
             state: "proven",
@@ -1945,6 +1956,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       if (assistant.phase === "failed") {
         signal?.throwIfAborted();
+        observeProviderFailure(assistant.failureDetail);
         this.#retireTurn(surface, tracked);
         return {
           state: "proven",

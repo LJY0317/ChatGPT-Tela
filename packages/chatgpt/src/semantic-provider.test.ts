@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test, spyOn } from "bun:test";
 import { BROWSER_INPUT_OWNERSHIP, ControlledBrowserHost, type BrowserMemoryFile } from "@chatgpt-tela/browser-host";
-import { nativeEvidenceRef, setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
+import { nativeEvidenceRef, observeDiagnosticEvents, setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
 import { createChatGptContextAttachment } from "./context-attachment";
 import {
   CHATGPT_SURFACE_DRIVER,
@@ -2588,6 +2588,7 @@ test("owned stream Retry is limited to once when the failed control rerenders", 
 test("failed assistant supersedes a cached post-tool final even with a pending approval",async()=>{
  const driver=new FixtureDriver(fixture("ready-new-chat"));const surface=await leaseFor(driver);
  const provider=new ChatGptSemanticProvider({approvalAutomationMode:"off"});
+ const reasons:string[]=[];const stop=observeDiagnosticEvents(row=>{if(row.stage==="web_provider_failure_detail_classified")reasons.push(String(row.reason_class));});
  try{
   const submitting=provider.submitTurn(surface.lease,request());
   while(driver.current.revision==="r1")await Promise.resolve();
@@ -2599,11 +2600,12 @@ test("failed assistant supersedes a cached post-tool final even with a pending a
   const continuing=await provider.waitForTurnEvent(surface.lease,submitted.value);
   expect(continuing.state==="proven"&&continuing.value.kind).toBe("continuing");
   driver.current={...driver.current,revision:"failed-after-completion",approval:recognizedApproval,
-   turns:driver.current.turns.map(t=>t.role==="assistant"?{...t,phase:"failed",failureDetail:"Synthetic failure"}:t)};
+   turns:driver.current.turns.map(t=>t.role==="assistant"?{...t,phase:"failed",failureDetail:"Failed to fetch"}:t)};
   const failed=await provider.waitForTurnEvent(surface.lease,submitted.value);
-  expect(failed.state==="proven"&&failed.value).toMatchObject({kind:"failed",detail:"Synthetic failure"});
-  expect(driver.approvalCalls).toBe(0);
- }finally{await surface.host.close();}
+  expect(failed.state==="proven"&&failed.value).toMatchObject({kind:"failed",detail:"Failed to fetch"});
+  expect(reasons).toEqual(["fetch_failed"]);
+ expect(driver.approvalCalls).toBe(0);
+ }finally{stop();await surface.host.close();}
 });
 
 test("inert checkpoint source uploads once and sends once, carrying its receipt only inside the file", async () => {
@@ -2799,7 +2801,7 @@ test.each(['present', 'unmounted', 'across-frames', 'provisional', 'presentation
       expect(event.state==='proven'&&event.value).toMatchObject({kind:'completed',answer:'owned useful final'});
     }
     expect(driver.activated).toHaveLength(1);
-  }finally{await surface.host.close();}
+  }finally{stop();await surface.host.close();}
 });
 
 test.each(['missing-host','unavailable-host','changed-input','unconsumed','missing-anchor','wrong-parent','wrong-anchor','competing-parent','foreign-route'] as const)('causal receipt fails closed: %s',async mode=>{
