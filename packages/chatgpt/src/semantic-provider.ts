@@ -1214,8 +1214,17 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     if (new Set(files.map(file => file.name)).size !== files.length) throw Error("source and media attachments have duplicate names");
     const formatted = formatWebPhysicalContextParts(request.physicalContext, request.toolBridge, request.contextAttachment, request.media, request.chatTools);
     const text = formatted.text;
+    const sourceContents = request.physicalContext.segments.map(segment => segment.content);
+    const uniqueContents = new Set(sourceContents);
+    const sourceContentBytes = sourceContents.reduce((bytes, content) => bytes + Buffer.byteLength(content), 0);
+    const uniqueSourceContentBytes = [...uniqueContents].reduce((bytes, content) => bytes + Buffer.byteLength(content), 0);
     emitDiagnosticEvent("chatgpt_tela_work", "browser_message_prepared", {
       context_mode: request.physicalContext.mode,
+      source_transport: sourceUpload ? "source_file" : request.contextAttachment ? "preloaded_reference" : "inline",
+      source_segment_count: sourceContents.length,
+      repeated_source_segment_count: sourceContents.length - uniqueContents.size,
+      source_content_bytes: sourceContentBytes,
+      repeated_source_content_bytes: sourceContentBytes - uniqueSourceContentBytes,
       message_chars: text.length,
       composer_wire_bytes: formatted.composerBytes, context_wire_bytes: formatted.contextBytes,
       protocol_wire_bytes: formatted.protocolBytes,
