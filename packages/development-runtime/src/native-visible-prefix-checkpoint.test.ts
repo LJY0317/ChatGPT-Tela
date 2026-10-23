@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readDiagnosticTail } from "@chatgpt-tela/core";
 import type { NativeVisiblePrefixSnapshot } from "@chatgpt-tela/codex";
 import { chatGptCheckpointInputTokens, chatGptWebCheckpointSourceTokenLimit } from "@chatgpt-tela/chatgpt";
 import {
@@ -160,4 +164,27 @@ test('escaped Korean source is embedded once in one complete snapshot and reused
  expect(result.sourceBytes).toBe(Buffer.byteLength(f.source.content));
  await produceNativePrefixCheckpoint({...f.input, preparationPolicy:{maxModelCalls:0,maxInputTokens:0,maxElapsedMs:0}});
  expect(f.calls).toHaveLength(1);
+});
+
+test('oversized source diagnostic fields persist through privacy and file readback', async()=>{
+ const root=mkdtempSync(join(tmpdir(),'checkpoint-diagnostic-'));
+ const before=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+ try {
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=join(root,'events.jsonl');
+  const items=[{type:'checkpoint',content:'prior'}, {type:'revision',kind:'developer',content:'directive'}, {type:'revision',kind:'user',content:'x'.repeat(500_000)}];
+  const content=JSON.stringify({type:'tela_native_request_prefix_v1',items});
+  const digest=createHash('sha256').update(content).digest('hex');
+  const f=fixture();
+  await expect(produceNativePrefixCheckpoint({...f.input,source:{...f.source,kind:'native-request-prefix',content,contentDigest:digest,digest,sourceItemCount:3},confirmSource:async()=>({threadId:f.source.threadId,currentTurnId:f.source.currentTurnId,digest})})).rejects.toMatchObject({recoveryReason:'source_budget'});
+  expect(f.calls).toHaveLength(0);
+  expect(readDiagnosticTail(process.env.CHATGPT_TELA_DIAGNOSTIC_FILE).events.find(e=>e.stage==='native_context_source_rejected')).toMatchObject({
+   instruction_item_count:1,instruction_bytes:Buffer.byteLength(JSON.stringify(items[1])),
+   checkpoint_item_count:1,checkpoint_bytes:Buffer.byteLength(JSON.stringify(items[0])),
+   largest_item_bytes:Buffer.byteLength(JSON.stringify(items[2])),
+  });
+ } finally {
+  if(before===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=before;
+  rmSync(root,{recursive:true,force:true});
+ }
 });
