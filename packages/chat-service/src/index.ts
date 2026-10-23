@@ -59,6 +59,9 @@ function resultDiagnosticFields(result: unknown): Readonly<Record<string, number
       && (item as Record<string, unknown>).hasMore === true) === true;
   const outputTruncated = record?.outputTruncated === true;
   return Object.freeze({
+    result_present: result !== undefined && result !== null,
+    result_empty: result === undefined || result === null || result === "" || (array?.length === 0)
+      || (record !== undefined && Object.keys(record).length === 0),
     ...(resultBytes === undefined ? {} : { result_bytes: resultBytes }),
     ...(array ? { item_count: array.length } : {}),
     ...(hasMore ? { has_more: true } : {}),
@@ -173,12 +176,15 @@ export async function startChatService(input: {
           });
           try {
             const result = await input.tools.call(record.capability as TelaChatCapability, record.arguments ?? {});
+            // Construct the reply before reporting completion: an unserializable
+            // result is a failed delivery boundary, not a successful tool return.
+            const response = Response.json({ contractVersion: 1, service: "chat", capability: record.capability, result });
             emitDiagnosticEvent("chatgpt_tela_chat", "capability_call_complete", { ...correlation,
               capability: diagnosticCapability,
               duration_ms: diagnosticDurationMs(startedAt),
               ...resultDiagnosticFields(result),
             });
-            return Response.json({ contractVersion: 1, service: "chat", capability: record.capability, result });
+            return response;
           } catch (error) {
             if (diagnosticCapability === "apply_patch") {
               const args = record.arguments as { patch?: unknown; workspace_id?: unknown } | null;
