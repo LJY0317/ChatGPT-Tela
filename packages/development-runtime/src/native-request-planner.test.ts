@@ -1813,15 +1813,17 @@ describe("Native inter-agent request projection", () => {
       .not.toBe(result.headId);
   });
   test("opaque, mixed or malformed agent input fails closed with no content in its error", () => {
-    for (const invalid of [
-      { ...agent, author: undefined }, { ...agent, recipient: "" }, { ...agent, content: "plaintext" },
-      { ...agent, content: [...agent.content, { type: "encrypted_content", encrypted_content: "PRIVATE" }] },
-      { ...agent, content: [{ type: "input_text", text: 123 }] },
-      { ...agent, content: [{ type: "future-content", text: "PRIVATE" }] },
-    ]) {
+    for (const [invalid, projectionKind] of [
+      [{ ...agent, author: undefined }, "agent_message_shape"],
+      [{ ...agent, recipient: "" }, "agent_message_shape"],
+      [{ ...agent, content: "plaintext" }, "agent_message_shape"],
+      [{ ...agent, content: [...agent.content, { type: "encrypted_content", encrypted_content: "PRIVATE" }] }, "agent_content_part"],
+      [{ ...agent, content: [{ type: "input_text", text: 123 }] }, "agent_content_part"],
+      [{ ...agent, content: [{ type: "future-content", text: "PRIVATE" }] }, "agent_content_part"],
+    ] as const) {
       try { projectNativeRequestContext("thread", { input: [invalid] }); throw new Error("accepted invalid input"); }
       catch (error) {
-        expect(error).toMatchObject({ code: "native_projection_unsupported" });
+        expect(error).toMatchObject({ code: "native_projection_unsupported", projectionKind });
         expect(String(error)).not.toContain("PRIVATE");
       }
     }

@@ -24,6 +24,20 @@ test("preparation diagnostics classify known boundaries without returning arbitr
 test("typed projection failure is classified without exposing private exception text", () => {
   const error = Object.assign(new Error("PRIVATE message"), { code: "native_projection_unsupported" });
   expect(classifyWebPreparationFailure(error)).toBe("request_projection_unsupported");
+  for (const [projectionKind, expected] of [
+    ["agent_message_shape", "request_projection_agent_message_shape"],
+    ["agent_content_part", "request_projection_agent_content_part"],
+    ["input_item_shape", "request_projection_input_item_shape"],
+    ["input_item_type", "request_projection_input_item_type"],
+    ["input_container", "request_projection_input_container"],
+  ] as const) {
+    expect(classifyWebPreparationFailure(Object.assign(new Error("PRIVATE body"), {
+      code: "native_projection_unsupported", projectionKind,
+    }))).toBe(expected);
+  }
+  expect(classifyWebPreparationFailure(Object.assign(new Error("PRIVATE body"), {
+    code: "native_projection_unsupported", projectionKind: "private-raw-type",
+  }))).toBe("request_projection_unsupported");
 });
 
 test('fit classification uses a closed typed boundary rather than private exception prose',async()=>{

@@ -426,6 +426,17 @@ function admittedRetainedContext(
   return Object.freeze({ physicalContext, media, ...(pressure ? { pressure } : {}) });
 }
 
+type UnsupportedProjectionKind =
+  | "agent_message_shape"
+  | "agent_content_part"
+  | "input_item_shape"
+  | "input_item_type"
+  | "input_container";
+
+function unsupportedProjection(kind: UnsupportedProjectionKind): NativeProjectionUnsupported {
+  return Object.assign(new NativeProjectionUnsupported(), { projectionKind: kind });
+}
+
 function messageKind(role: unknown): RevisionKind {
   if (role === "system" || role === "developer") return role;
   if (role === "assistant") return "assistant";
@@ -589,7 +600,7 @@ export function projectNativeRequestContext(
         continue;
       }
       const item = record(raw);
-      if (!item) throw new Error(`unsupported Native request input at index ${index}`);
+      if (!item) throw unsupportedProjection("input_item_shape");
       const type = typeof item.type === "string" ? item.type : undefined;
 
       if (type === "message" || (type === undefined && typeof item.role === "string")) {
@@ -609,11 +620,11 @@ export function projectNativeRequestContext(
         // Native metadata or opaque/encrypted agent state into the Web transcript.
         if (typeof item.author !== "string" || !item.author.trim()
           || typeof item.recipient !== "string" || !item.recipient.trim()
-          || !Array.isArray(item.content)) throw new NativeProjectionUnsupported();
+          || !Array.isArray(item.content)) throw unsupportedProjection("agent_message_shape");
         const content = item.content.map(raw => {
           const part = record(raw);
           if (part?.type !== "input_text" || typeof part.text !== "string") {
-            throw new NativeProjectionUnsupported();
+            throw unsupportedProjection("agent_content_part");
           }
           return { type: "input_text", text: part.text };
         });
@@ -658,13 +669,13 @@ export function projectNativeRequestContext(
       // not copied into the Web prompt and are never treated as user-visible logical context.
       if (type === "reasoning" || type === "additional_tools") continue;
 
-      throw new NativeProjectionUnsupported();
+      throw unsupportedProjection("input_item_type");
     }
     if (awaitingCompactionSummary) {
       throw new Error("Native local compaction marker requires a following readable user summary");
     }
   } else if (body.input !== undefined) {
-    throw new Error("Native request input must be a string or array");
+    throw unsupportedProjection("input_container");
   }
   const inputAnchorId = projected.at(-1)?.revision.id;
   appendCurrentGoal();

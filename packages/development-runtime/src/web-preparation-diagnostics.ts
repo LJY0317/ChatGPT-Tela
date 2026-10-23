@@ -6,7 +6,16 @@ export function classifyWebPreparationFailure(error: unknown): string {
   if (fit) return fit;
   if (!(error instanceof Error)) return "unclassified";
   if ((error as Error & { readonly code?: unknown }).code === "native_projection_unsupported") {
-    return "request_projection_unsupported";
+    const kind = (error as Error & { readonly projectionKind?: unknown }).projectionKind;
+    const projectionKinds: Readonly<Record<string, string>> = {
+      agent_message_shape: "request_projection_agent_message_shape",
+      agent_content_part: "request_projection_agent_content_part",
+      input_item_shape: "request_projection_input_item_shape",
+      input_item_type: "request_projection_input_item_type",
+      input_container: "request_projection_input_container",
+    };
+    return typeof kind === "string" && Object.hasOwn(projectionKinds, kind)
+      ? projectionKinds[kind]! : "request_projection_unsupported";
   }
   // Own typed cold-history recovery before matching message prose. A future
   // wording change must not turn a real historical bootstrap failure into
