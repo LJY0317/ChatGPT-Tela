@@ -8,10 +8,11 @@ import { applyPackagedRepairFromPayload, planPackagedRepairFromPayload } from ".
 import { assertPackagedLaunchAdmission } from "./packaged-launch-admission";
 import { observeInstalledPackagedPayload } from "./packaged-payload";
 import { readOwnershipManifest } from "./ownership";
+import { FilesystemOwnershipObserver, planUninstall } from "./uninstall";
 import { refreshPackagedMenuBar, packagedMenuBarReadyPath, waitForPackagedMenuBar } from "./packaged-menu-bar";
 import type { ServiceRegistrationCommandRunner } from "./service-registration";
 
-async function fixture(sourceHasMenu = true) {
+async function fixture(sourceHasMenu = true, targetHasApp = false, sourceHasApp = false) {
   const root = mkdtempSync(join(tmpdir(), "tela-menu-refresh-")), home = join(root, "home"); mkdirSync(home);
   const paths = new Map<string, string>(); let failRefresh = false;
   let readyBlueprint: Awaited<ReturnType<typeof planPackagedInstallFromPayload>>["blueprint"];
@@ -41,9 +42,16 @@ async function fixture(sourceHasMenu = true) {
   function payload(version: string) {
     const p=join(root, version);mkdirSync(p);writeFileSync(join(p,"tela"),version,{mode:0o755});
     writeFileSync(join(p,"menu"),version,{mode:0o755});
+    if ((version==="2.0.0" && targetHasApp) || (version==="1.0.0" && sourceHasApp)) {
+      const app=join(p,"ui","ChatGPT Tela.app","Contents");
+      mkdirSync(join(app,"MacOS"),{recursive:true});
+      writeFileSync(join(app,"Info.plist"),version);
+      writeFileSync(join(app,"MacOS","chatgpt-tela-menu-bar"),version,{mode:0o755});
+    }
     writeFileSync(join(p,"chatgpt-tela-package-v1.json"),JSON.stringify({version:1,product:"chatgpt-tela",productVersion:version,
       launcher:{executable:"tela"},profileRuntime:{executable:"tela",entrypoint:"tela"},
-      ...(sourceHasMenu || version!=="1.0.0" ? {menuBar:{executable:"menu"}} : {}),
+      ...(sourceHasMenu || version!=="1.0.0" ? {menuBar:{executable:(version==="2.0.0" && targetHasApp)||(version==="1.0.0" && sourceHasApp)
+        ?"ui/ChatGPT Tela.app/Contents/MacOS/chatgpt-tela-menu-bar":"menu"}} : {}),
       lifecycle:{transitionLaunch:1,sourceCancellation:1},services:Object.fromEntries(["gateway","chat","codex"].map(service=>[service,{executable:"tela",arguments:["service",service]}]))}));return p;
   }
   const source=payload("1.0.0"),target=payload("2.0.0"),options={platform:"darwin" as const,home,environment:{},runner};
@@ -78,6 +86,37 @@ macTest("upgrade refreshes the running UI last and retains its journal until ref
   expect(existsSync(journal)).toBe(false);
   expect(f.events.filter(e=>e.startsWith("stop-")||e.startsWith("start-"))).toHaveLength(6);
   expect(f.calls.filter(c=>c.startsWith("kickstart -k -p"))).toHaveLength(2);
+ }finally{rmSync(f.root,{recursive:true,force:true});}
+});
+macTest("older installed menu migrates to an owned Applications bundle and retry after refresh failure retains ownership",async()=>{
+ const f=await fixture(true,true);try{
+  f.fail();
+  await expect(applyPackagedUpgradeFromPayload({plan:f.plan,payloadSourcePath:f.target,services:f.services,...f.options})).rejects.toThrow("updated menu bar");
+  const app=f.plan.targetBlueprint.menuBarApp!;
+  const installed=join(f.options.home,"Applications","ChatGPT Tela.app");
+  const manifest=readOwnershipManifest(f.plan.targetBlueprint.paths.installManifest)!;
+  expect(manifest.resources.some(r=>r.id==="menu-bar-app")).toBe(true);
+  expect(observeInstalledPackagedPayload(app.resource,manifest).state).toBe("owned");
+  expect(readFileSync(join(installed,"Contents","Info.plist"),"utf8")).toBe("2.0.0");
+  f.recover();
+  await applyPackagedUpgradeFromPayload({plan:f.plan,payloadSourcePath:f.target,services:f.services,...f.options});
+  expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(f.plan.targetBlueprint.paths))).toBeUndefined();
+  expect(observeInstalledPackagedPayload(app.resource,readOwnershipManifest(f.plan.targetBlueprint.paths.installManifest)!).state).toBe("owned");
+ }finally{rmSync(f.root,{recursive:true,force:true});}
+});
+macTest("upgrading an already owned app replaces its receipt and binary in the existing lifecycle",async()=>{
+ const f=await fixture(true,true,true);try{
+  const resource=f.plan.targetBlueprint.menuBarApp!.resource;
+  const app=join(f.options.home,"Applications","ChatGPT Tela.app","Contents","Info.plist");
+  expect(readFileSync(app,"utf8")).toBe("1.0.0");
+  await applyPackagedUpgradeFromPayload({plan:f.plan,payloadSourcePath:f.target,services:f.services,...f.options});
+  expect(readFileSync(app,"utf8")).toBe("2.0.0");
+  const manifest=readOwnershipManifest(f.plan.targetBlueprint.paths.installManifest)!;
+  expect(observeInstalledPackagedPayload(resource,manifest).state).toBe("owned");
+  const uninstall=await planUninstall({manifest,observer:new FilesystemOwnershipObserver(),removeData:false});
+  expect(uninstall.steps.find(s=>s.resourceId==="menu-bar-app")?.action).toBe("remove");
+  expect(uninstall.steps.findIndex(s=>s.resourceId==="menu-bar-registration"))
+    .toBeLessThan(uninstall.steps.findIndex(s=>s.resourceId==="menu-bar-app"));
  }finally{rmSync(f.root,{recursive:true,force:true});}
 });
 macTest("healthy repair also refreshes UI; changed registration never receives restart authority",async()=>{
