@@ -11,6 +11,8 @@ import { serializeChatGptContextAttachment } from './context-attachment';
 import { decodeNativeInlineEvidence, nativeEvidenceRef, setPrivateDiagnosticCapture, withDiagnosticContext } from '@chatgpt-tela/core';
 import { webEvidenceFilename } from './turn-media';
 import { formatWebPhysicalContext } from './semantic-provider';
+import { chatGptWebCheckpointSourceTokenLimit, chatGptWebPhysicalLimits } from './physical-limits';
+import { formatInertSourceAttachment } from './context-attachment';
 import { assistantMarkdown } from './answer-markdown';
 
 const surface = {} as BrowserSurfaceLease;
@@ -230,6 +232,23 @@ test('inline checkpoint budget measures serialized UTF8 including escaped source
  expect(physical.transferTokens).toBe(actual);
  expect(chatGptCheckpointInputTokens(request.physicalContext)).toBe(actual);
  expect(actual).toBeGreaterThan(Math.ceil(serializeChatGptContextAttachment(request.physicalContext).length/4));
+});
+test('file-backed checkpoint input counts the exact attachment and composer wire once',async()=>{
+  expect(chatGptWebCheckpointSourceTokenLimit('medium')).toBe(98_905);
+  for (const bytes of [428_110,441_985]) {
+    const request={...source,physicalContext:{...source.physicalContext,segments:[{
+      type:'revision' as const,revisionId:'r2',kind:'user' as const,content:'x'.repeat(bytes)}]}};
+    const f=fixture();await f.provider.createContextCheckpoint(surface,request);
+    const sent=f.submitted(), attachment=sent.inertSourceAttachment!;
+    expect(attachment).toBeDefined();
+    const wire=Buffer.byteLength(formatWebPhysicalContext(sent.physicalContext,undefined),'utf8')
+      +formatInertSourceAttachment(attachment.attachment,attachment.receipt).file.bytes.byteLength;
+    expect(sent.physicalContext.transferTokens).toBe(Math.ceil(wire/4));
+    expect(chatGptCheckpointInputTokens(request.physicalContext)).toBe(Math.ceil(wire/4));
+    expect(formatWebPhysicalContext(sent.physicalContext,undefined).length)
+      .toBeLessThan(chatGptWebPhysicalLimits('medium').composerCharLimit);
+    expect(sent.physicalContext.transferTokens).toBeGreaterThan(98_905);
+  }
 });
 
 test('checkpoint rejection diagnostics distinguish validation causes without saving source or summary', async () => {
