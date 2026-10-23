@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test, spyOn } from "bun:test";
 import { BROWSER_INPUT_OWNERSHIP, ControlledBrowserHost, type BrowserMemoryFile } from "@chatgpt-tela/browser-host";
-import { nativeEvidenceRef, observeDiagnosticEvents, setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, nativeEvidenceRef, observeDiagnosticEvents, readDiagnosticTail, setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
 import { createChatGptContextAttachment } from "./context-attachment";
 import {
   CHATGPT_SURFACE_DRIVER,
@@ -2609,7 +2609,8 @@ test("failed assistant supersedes a cached post-tool final even with a pending a
 });
 
 test("provider failure diagnostics retain shape but never the error text",async()=>{
- const driver=new FixtureDriver(fixture("ready-new-chat"));const surface=await leaseFor(driver);
+ class NoRetryDriver extends FixtureDriver { retries=0; async retryFailedResponse() {this.retries++;return true;} }
+ const driver=new NoRetryDriver(fixture("ready-new-chat"));const surface=await leaseFor(driver);
  const provider=new ChatGptSemanticProvider();
  const rows:Record<string,unknown>[]=[];
  const stop=observeDiagnosticEvents(row=>{if(row.stage==="web_provider_failure_detail_classified")rows.push(row);});
@@ -2623,10 +2624,51 @@ test("provider failure diagnostics retain shape but never the error text",async(
    {key:"assistant",role:"assistant",parentUserTurnKey:"user-turn-1",phase:"failed",failureDetail:detail}]});
   const result=await provider.waitForTurnEvent(surface.lease,submitted.value);
   expect(result.state==="proven"&&result.value.kind).toBe("failed");
+  expect(result.state==="proven"&&result.value).toMatchObject({kind:"failed",detail});
+  expect(driver.retries).toBe(0);
+  expect(driver.activated).toHaveLength(1);
   expect(rows).toEqual([expect.objectContaining({reason_class:"message_too_long",detail_chars:detail.length,
    contains_length_term:true,contains_submission_term:true})]);
   expect(JSON.stringify(rows)).not.toContain(detail);
  }finally{stop?.();await surface.host.close();}
+});
+
+test("prepared input diagnostics survive emission and sanitized readback without source text", async () => {
+ const scratch=mkdtempSync(join(tmpdir(),"tela-input-shape-"));
+ const file=join(scratch,"events.jsonl");
+ const old=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+ process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+ const driver=new FixtureDriver(fixture("ready-new-chat"));
+ const surface=await leaseFor(driver);
+ const seen:Record<string,unknown>[]=[];
+ const stop=observeDiagnosticEvents(row=>{if(row.stage==="browser_message_prepared")seen.push(row);});
+ try {
+  const payload=request();
+  const source="PRIVATE_SYNTHETIC_한글";
+  const context={...payload.physicalContext,segments:[
+   {...payload.physicalContext.segments[0]!,content:source},
+   {type:"revision" as const,revisionId:"r2",kind:"developer" as const,content:source},
+  ]};
+  const pending=new ChatGptSemanticProvider().submitTurn(surface.lease,{...payload,physicalContext:context});
+  while(driver.current.revision==="r1")await Promise.resolve();
+  driver.queued.push(acceptedSnapshot(driver));
+  expect((await pending).state).toBe("proven");
+  const recorded=readDiagnosticTail(file).events.filter(row=>row.stage==="browser_message_prepared");
+  const operation=diagnosticFingerprint([payload.nativeTaskId,payload.nativeTurnId,payload.webEpochId].join("\n"));
+  const expected={kind:"inline",source_segment_count:2,duplicate_source_segment_count:1,
+   source_bytes:2*Buffer.byteLength(source),duplicate_source_bytes:Buffer.byteLength(source),
+   source_file_bytes:0,attachment_count:0,operation_fingerprint:operation};
+  expect(seen).toEqual([expect.objectContaining(expected)]);
+  expect(recorded).toEqual([expect.objectContaining(expected)]);
+  expect(recorded[0]!.composer_wire_bytes).toBeGreaterThan(recorded[0]!.context_wire_bytes as number);
+  expect(readDiagnosticTail(file).events.find(row=>row.stage==="web_turn_identity_accepted")?.operation_fingerprint).toBe(operation);
+  expect(readFileSync(file,"utf8")).not.toContain(source);
+ }finally{
+  stop?.();await surface.host.close();
+  if(old===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=old;
+  rmSync(scratch,{recursive:true,force:true});
+ }
 });
 
 test("inert checkpoint source uploads once and sends once, carrying its receipt only inside the file", async () => {

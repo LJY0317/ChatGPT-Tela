@@ -640,7 +640,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     readonly privateBodyEvidence?: ChatGptTurnObservation["privateBodyEvidence"];
   }>();
 
-  #commitAnswer(surface: BrowserSurfaceLease, userTurnKey: string, assistant: ChatGptTurnObservation,
+  #commitAnswer(surface: BrowserSurfaceLease, tracked: TrackedTurn, assistant: ChatGptTurnObservation,
     snapshot: ChatGptSurfaceSnapshot, handoffState: "direct" | "post_tool_handoff"): void {
     const digest = committedAnswerFingerprint(assistant);
     const retention: RetainedAnswer = digest === undefined
@@ -648,13 +648,15 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       : { state: "verified", fingerprint: digest };
     const boundary = { ...retainedBoundaryFields(assistant), approval_cards: snapshot.approval?.cardCount ?? 0,
       handoff_state: handoffState };
-    this.#completedBySurface.set(surface, { userTurnKey, assistantKey: assistant.key, retention, boundary,
+    this.#completedBySurface.set(surface, { userTurnKey: tracked.userTurnKey, assistantKey: assistant.key, retention, boundary,
       presentationFingerprint: fingerprint(assistant.text ?? ""), answerCharacters: assistant.text?.length ?? 0,
       ...(assistant.privateBodyEvidence ? { privateBodyEvidence: assistant.privateBodyEvidence } : {}),
     });
     // Final delivery and retained-context proof are distinct. Record the latter at
     // completion, not for the first time when the next request tries to reuse it.
     emitDiagnosticEvent("chatgpt_tela_work", "web_retained_answer_committed", {
+      operation_fingerprint: diagnosticFingerprint([tracked.handle.nativeTaskId, tracked.handle.nativeTurnId,
+        tracked.handle.webEpochId].join("\n")),
       ...boundary, answer_characters: assistant.text?.length ?? 0,
       state: retention.state, semantic_answer_available: retention.state === "verified",
       ...(retention.state === "unavailable" ? { reason_class: retention.reason } : {}),
@@ -1214,17 +1216,23 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     if (new Set(files.map(file => file.name)).size !== files.length) throw Error("source and media attachments have duplicate names");
     const formatted = formatWebPhysicalContextParts(request.physicalContext, request.toolBridge, request.contextAttachment, request.media, request.chatTools);
     const text = formatted.text;
-    const sourceContents = request.physicalContext.segments.map(segment => segment.content);
-    const uniqueContents = new Set(sourceContents);
-    const sourceContentBytes = sourceContents.reduce((bytes, content) => bytes + Buffer.byteLength(content), 0);
-    const uniqueSourceContentBytes = [...uniqueContents].reduce((bytes, content) => bytes + Buffer.byteLength(content), 0);
+    const seenSources = new Set<string>();
+    let sourceBytes = 0, duplicateSourceBytes = 0, duplicateSourceCount = 0;
+    for (const segment of request.physicalContext.segments) {
+      const bytes = Buffer.byteLength(segment.content);
+      sourceBytes += bytes;
+      if (seenSources.has(segment.content)) { duplicateSourceBytes += bytes; duplicateSourceCount++; }
+      else seenSources.add(segment.content);
+    }
     emitDiagnosticEvent("chatgpt_tela_work", "browser_message_prepared", {
+      operation_fingerprint: diagnosticFingerprint([request.nativeTaskId, request.nativeTurnId,
+        request.webEpochId].join("\n")),
       context_mode: request.physicalContext.mode,
-      source_transport: sourceUpload ? "source_file" : request.contextAttachment ? "preloaded_reference" : "inline",
-      source_segment_count: sourceContents.length,
-      repeated_source_segment_count: sourceContents.length - uniqueContents.size,
-      source_content_bytes: sourceContentBytes,
-      repeated_source_content_bytes: sourceContentBytes - uniqueSourceContentBytes,
+      kind: sourceUpload ? "source_file" : request.contextAttachment ? "preloaded_reference" : "inline",
+      source_segment_count: request.physicalContext.segments.length,
+      duplicate_source_segment_count: duplicateSourceCount,
+      source_bytes: sourceBytes,
+      duplicate_source_bytes: duplicateSourceBytes,
       message_chars: text.length,
       composer_wire_bytes: formatted.composerBytes, context_wire_bytes: formatted.contextBytes,
       protocol_wire_bytes: formatted.protocolBytes,
@@ -1539,6 +1547,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           });
           const acceptedRoute = new URL(snapshot.url);
           emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_accepted", {
+            operation_fingerprint: diagnosticFingerprint([request.nativeTaskId, request.nativeTurnId,
+              request.webEpochId].join("\n")),
             route_kind: acceptedRoute.pathname === "/" ? "initial"
               : isChatGptProvisionalConversationUrl(snapshot.url) ? "provisional"
               : /^\/c\/[^/]+$/.test(acceptedRoute.pathname) ? "conversation" : "other",
@@ -1956,7 +1966,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           };
         }
         if (assistant.phase === "complete") {
-          this.#commitAnswer(surface, tracked.userTurnKey, assistant, snapshot, "post_tool_handoff");
+          this.#commitAnswer(surface, tracked, assistant, snapshot, "post_tool_handoff");
           tracked.pendingCompletedAnswer = completedAnswerBody(assistant);
         }
         return {
@@ -1967,7 +1977,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       if (assistant.phase === "complete") {
         signal?.throwIfAborted();
-        this.#commitAnswer(surface, tracked.userTurnKey, assistant, snapshot, "direct");
+        this.#commitAnswer(surface, tracked, assistant, snapshot, "direct");
         this.#retireTurn(surface, tracked);
         return {
           state: "proven",
