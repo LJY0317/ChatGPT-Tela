@@ -296,6 +296,11 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             surface_fingerprint: diagnosticFingerprint(acquired.surface.leaseId),
             ...(document ? { document_generation: document.generation } : {}),
             head_revision_fingerprint: diagnosticFingerprint(plan.physicalContext.headRevisionId),
+            ...(plan.physicalContext.activeRequestRevisionId ? {
+              active_request_revision_fingerprint: diagnosticFingerprint(plan.physicalContext.activeRequestRevisionId),
+              active_request_kind: plan.physicalContext.segments.flatMap(s => s.type === "revision"
+                && s.revisionId === plan.physicalContext.activeRequestRevisionId ? [s.kind] : [])[0] ?? "not_inline",
+            } : {}),
             ...(plan.physicalContext.baseRevisionId ? { base_revision_fingerprint: diagnosticFingerprint(plan.physicalContext.baseRevisionId) } : {}),
             checkpoint_count: checkpoints.length,
             ...(checkpoints.length ? { checkpoint_fingerprint: diagnosticFingerprint(JSON.stringify(checkpoints.map(s => s.checkpointId))) } : {}),

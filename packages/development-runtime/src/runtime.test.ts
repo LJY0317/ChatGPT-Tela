@@ -1375,6 +1375,9 @@ test("same Native turn continuation runs two settled Web cycles through the real
       retained_input_head_fingerprint: settled[0].head_revision_fingerprint,
       surface_fingerprint: settled[0].surface_fingerprint, epoch_fingerprint: settled[0].epoch_fingerprint });
     expect(plans[0].head_revision_fingerprint).toMatch(/^[a-f0-9]{24}$/);
+    expect(plans[1].active_request_revision_fingerprint).toMatch(/^[a-f0-9]{24}$/);
+    expect(plans[1].active_request_kind).toBe("user");
+    expect(plans[1].active_request_inline).toBe(true);
     expect(rows.some(row => row.stage === "native_response_observer_started")).toBe(true);
     expect(rows.filter(row => row.stage === "native_outcome_committed" && row.outcome === "final")).toHaveLength(2);
     const duplicate = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, secondBody);
