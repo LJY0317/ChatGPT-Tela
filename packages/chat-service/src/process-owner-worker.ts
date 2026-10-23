@@ -110,7 +110,8 @@ export async function runProcessOwnerWorker(): Promise<void> {
       if (state !== "starting" && state !== "running") return snapshot();
       if (!child?.pid) throw Error("owned execution has no started process");
       await terminateOwnedProcessTree(child.pid);
-      await completion;
+      // Signal delivery is not terminal completion (the child can ignore TERM
+      // or keep inherited pipes open). Keep the owner reachable for status.
       return snapshot();
     },
   } });

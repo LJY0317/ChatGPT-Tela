@@ -124,6 +124,8 @@ export interface ChatToolRuntime {
   initialize(): Promise<void>;
   call(capability: TelaChatCapability, arguments_: unknown): Promise<unknown>;
   assertCanClose(): void;
+  maintenanceProcesses(): Promise<readonly { workspaceId: string; operationId: string; sessionId: number; state: string; liveness: string }[]>;
+  cancelMaintenanceProcess(workspaceId: string, operationId: string): Promise<unknown>;
   close(): Promise<void>;
 }
 
@@ -480,6 +482,26 @@ export function createChatToolRuntime(input: {
       }
     },
     assertCanClose() { processes.assertCanClose(); },
+    async maintenanceProcesses() {
+      const unresolved: { workspaceId: string; operationId: string; sessionId: number; state: string; liveness: string }[] = [];
+      for (const workspace of workspaces.list()) {
+        let afterSessionId = 0;
+        while (true) {
+          const page = processes.list({ workspaceId: workspace.id, afterSessionId, limit: 50 });
+          for (const row of page.processes) {
+            const current = await processes.inspect(workspace.id, row.operationId);
+            if (!["exited", "signaled", "spawn_failed"].includes(current.state)) {
+              unresolved.push({ workspaceId: workspace.id, operationId: current.operationId,
+                sessionId: current.sessionId, state: current.state, liveness: current.liveness });
+            }
+          }
+          if (page.nextAfterSessionId === null) break;
+          afterSessionId = page.nextAfterSessionId;
+        }
+      }
+      return unresolved;
+    },
+    cancelMaintenanceProcess(workspaceId: string, operationId: string) { return processes.cancel(workspaceId, operationId); },
     async close() {
       // Refuse before closing any peer subsystem; recovery must remain usable.
       processes.assertCanClose();

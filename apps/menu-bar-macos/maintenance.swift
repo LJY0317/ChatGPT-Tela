@@ -22,6 +22,14 @@ private struct TelaMaintenanceStatus: Decodable {
   let installedVersion: String
   let pendingTransition: String
 }
+private struct TelaMaintenanceProcess: Decodable {
+  let workspaceId: String
+  let operationId: String
+  let sessionId: Int
+  let state: String
+  let liveness: String
+}
+private struct TelaMaintenanceProcesses: Decodable { let processes: [TelaMaintenanceProcess] }
 
 // A verified, temporary copy survives shutdown/removal of the installed menu bar.
 // It calls the same launcher lifecycle engine and owns no service or install authority.
@@ -38,6 +46,10 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
   private let reviewButton = NSButton(title: "Review changes", target: nil, action: nil)
   private let applyButton = NSButton(title: "Apply…", target: nil, action: nil)
   private let packageButton = NSButton(title: "Choose package…", target: nil, action: nil)
+  private let processPicker = NSPopUpButton()
+  private let cancelProcessButton = NSButton(title: "Cancel selected execution…", target: nil, action: nil)
+  private let processInfo = NSTextField(wrappingLabelWithString: "")
+  private var unresolvedProcesses: [TelaMaintenanceProcess] = []
   private let progress = NSProgressIndicator()
   private let packageSection = NSBox()
   private let removalSection = NSBox()
@@ -111,6 +123,9 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     content.addArrangedSubview(removalSection)
     planText.font = .systemFont(ofSize: 13)
     content.addArrangedSubview(section("Changes to review", views: [planText]))
+    cancelProcessButton.target = self; cancelProcessButton.action = #selector(cancelSelectedProcess)
+    processPicker.target = self
+    content.addArrangedSubview(section("Blocking Chat executions", views: [processInfo, processPicker, cancelProcessButton]))
 
     message.font = .systemFont(ofSize: 12); message.textColor = .secondaryLabelColor
     let spacer = NSView()
@@ -154,7 +169,7 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     ])
     window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     updateControls()
-    Task { await loadStatus() }
+    Task { await loadStatus(); await refreshProcesses() }
   }
 
   private func section(_ title: String, views: [NSView]) -> NSBox {
@@ -221,6 +236,8 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     removeData.isEnabled = !busy && operation == "uninstall" && !completedRemoval
     reviewButton.isEnabled = !busy && !completedRemoval && (operation == "uninstall" || package != nil)
     applyButton.isEnabled = !busy && review != nil && review?.blockers.isEmpty == true && !completedRemoval
+    processPicker.isEnabled = !busy && !unresolvedProcesses.isEmpty
+    cancelProcessButton.isEnabled = !busy && !unresolvedProcesses.isEmpty
     if busy || completedRemoval {
       nextStep.stringValue = ""
     } else if let review {
@@ -281,6 +298,41 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     } else { version.stringValue = "Installation status unavailable" }
     updateControls()
   }
+  private func refreshProcesses() async {
+    let path = launcher
+    let result = await Task.detached { Self.execute(path, ["maintenance", "processes"]) }.value
+    if result.0 == 0, let parsed = try? JSONDecoder().decode(TelaMaintenanceProcesses.self, from: result.1) {
+      unresolvedProcesses = parsed.processes
+      processPicker.removeAllItems()
+      for entry in unresolvedProcesses {
+        processPicker.addItem(withTitle: "Session \(entry.sessionId) · \(entry.state) · \(entry.liveness) · \(entry.operationId.prefix(8))")
+      }
+      processInfo.stringValue = unresolvedProcesses.isEmpty ? "No unresolved Chat executions." : "Review the selected execution before cancellation. Running work may be interrupted."
+    } else {
+      unresolvedProcesses = []; processPicker.removeAllItems()
+      processInfo.stringValue = "Couldn't verify Chat execution status. Maintenance remains blocked until readiness is confirmed."
+    }
+    updateControls()
+  }
+  @objc private func cancelSelectedProcess() {
+    guard !busy, processPicker.indexOfSelectedItem >= 0,
+      processPicker.indexOfSelectedItem < unresolvedProcesses.count else { return }
+    let selected = unresolvedProcesses[processPicker.indexOfSelectedItem]
+    let alert = NSAlert(); alert.alertStyle = .warning
+    alert.messageText = "Cancel Chat execution \(selected.sessionId)?"
+    alert.informativeText = "This requests cancellation of the exact workspace-owned execution \(selected.operationId). It may be active work. Update can proceed only after completion is verified."
+    alert.addButton(withTitle: "Cancel execution"); alert.addButton(withTitle: "Keep running")
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+    busy = true; updateControls()
+    let path = launcher
+    Task {
+      let result = await Task.detached { Self.execute(path, ["maintenance", "cancel-process", selected.workspaceId, selected.operationId]) }.value
+      busy = false
+      message.stringValue = result.0 == 0 ? "Cancellation requested. Recheck the execution and review the update again." : "Cancellation outcome is uncertain. Status will be checked; do not repeat cancellation without verifying it."
+      review = nil
+      await refreshProcesses()
+    }
+  }
   @objc private func reviewChanges() {
     guard !busy else { return }; busy = true; review = nil
     message.stringValue = "Checking package, ownership, and planned changes…"; updateControls()
@@ -302,6 +354,7 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
           ? "Couldn't verify cancellation. Select the signed installed-version package. Cancellation also requires launcher support and no file replacement. Otherwise resume with the original update package. No changes applied."
           : "Couldn't review these changes. Check the package. Repair needs the installed version; an unfinished transition needs its original package. No changes applied." }
       updateControls()
+      await refreshProcesses()
     }
   }
   @objc private func applyChanges() {

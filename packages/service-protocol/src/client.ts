@@ -281,6 +281,16 @@ export class CodexServiceClient extends LocalServiceClient {
 }
 
 export class ChatServiceClient extends LocalServiceClient {
+  async maintenanceProcesses(): Promise<readonly { workspaceId: string; operationId: string; sessionId: number; state: string; liveness: string }[]> {
+    const value = await this.request("v1/maintenance/processes", "GET") as Record<string, unknown>;
+    if (value.contractVersion !== 1 || value.instanceId !== this.descriptor.instanceId || !Array.isArray(value.processes)) throw Error("invalid maintenance process inventory");
+    return value.processes as { workspaceId: string; operationId: string; sessionId: number; state: string; liveness: string }[];
+  }
+  async cancelMaintenanceProcess(workspaceId: string, operationId: string): Promise<unknown> {
+    const value = await this.request("v1/maintenance/processes", "POST", { workspaceId, operationId }) as Record<string, unknown>;
+    if (value.contractVersion !== 1 || value.instanceId !== this.descriptor.instanceId) throw Error("invalid maintenance cancellation receipt");
+    return value.result;
+  }
   async workspacePolicyFingerprint(signal?: AbortSignal): Promise<string | undefined> {
     const value = await this.request("v1/chat/workspace-policy", "GET", undefined, signal) as Record<string, unknown>;
     if (value.contractVersion !== 1 || value.service !== "chat") throw new Error("invalid Chat workspace policy");

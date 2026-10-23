@@ -10,6 +10,18 @@ import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { parsePackagedLifecycleCommand, runPackagedLifecycleCommand, type PackagedLifecycleOptions } from "./lifecycle";
 import { packagedPayloadFingerprint, readPackagedProductManifest } from "@chatgpt-tela/product-lifecycle";
 import { resolvePackagedMenuBarLaunch } from "./runtime";
+import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
+import { ChatServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
+
+async function maintenanceChatClient(options: PackagedLifecycleOptions): Promise<ChatServiceClient> {
+  const paths = resolveProductPaths(options);
+  const owner = readOwnershipManifest(paths.installManifest);
+  if (!owner) throw Error("No owned Tela installation");
+  const current = await new LocalServiceSupervisor({ installId: owner.installId }).current({
+    service: "chat", descriptorPath: join(paths.serviceRuntime("chat"), "descriptor.json") });
+  if (!current || current.status.state !== "ready") throw Error("Chat service is unavailable for maintenance");
+  return new ChatServiceClient(descriptorForService(current.descriptor, "chat"));
+}
 
 const OWNER = "maintenance-owner.json";
 function digest(data: string | Buffer): string { return createHash("sha256").update(data).digest("hex"); }
@@ -33,6 +45,13 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
     return { installedVersion: ownership?.productVersion ?? "Not installed", pendingTransition:
       readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths)) ? "upgrade"
       : readPackagedRepairJournal(packagedRepairJournalPath(paths)) ? "repair" : "none" };
+  }
+  if (args[1] === "processes" && args.length === 2) {
+    return { processes: await (await maintenanceChatClient(options)).maintenanceProcesses() };
+  }
+  if (args[1] === "cancel-process" && args.length === 4) {
+    const [, , workspaceId, operationId] = args;
+    return { result: await (await maintenanceChatClient(options)).cancelMaintenanceProcess(workspaceId!, operationId!) };
   }
   const mode = args[1], operation = args[2];
   if (!(mode === "review" || mode === "apply") || !(operation === "upgrade" || operation === "repair" || operation === "cancel-upgrade" || operation === "uninstall")) {

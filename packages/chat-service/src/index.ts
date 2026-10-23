@@ -115,6 +115,23 @@ export async function startChatService(input: {
       if (request.method === "GET" && url.pathname === "/v1/status") {
         return Response.json(status(url.searchParams.get("shutdown-readiness") === "1"));
       }
+      if (url.pathname === "/v1/maintenance/processes" && input.tools) {
+        if (request.method === "GET") {
+          try { return Response.json({ contractVersion: 1, instanceId, processes: await input.tools.maintenanceProcesses() }); }
+          catch { return Response.json({ error: "Cannot verify owned executions" }, { status: 409 }); }
+        }
+        if (request.method === "POST") {
+          activeCalls++;
+          try {
+            if (stopping) return new Response(null, { status: 409 });
+            const body = await request.json() as Record<string, unknown>;
+            if (!body || typeof body.workspaceId !== "string" || typeof body.operationId !== "string") return new Response(null, { status: 400 });
+            const result = await input.tools.cancelMaintenanceProcess(body.workspaceId, body.operationId);
+            return Response.json({ contractVersion: 1, instanceId, result });
+          } catch { return Response.json({ error: "Cancellation uncertain; inspect status before another request" }, { status: 409 }); }
+          finally { activeCalls--; }
+        }
+      }
       if (request.method === "GET" && url.pathname === "/v1/chat/workspace-policy") {
         return Response.json({contractVersion:1,service:"chat",fingerprint:input.workspacePolicyFingerprint ?? null});
       }

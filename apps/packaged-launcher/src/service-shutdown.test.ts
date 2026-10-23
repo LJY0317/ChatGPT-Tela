@@ -7,6 +7,43 @@ import { startChatService, createChatToolRuntime } from "@chatgpt-tela/chat-serv
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 import { startCodexServiceHttpServer, type CodexService } from "@chatgpt-tela/codex-service";
 import { ownedServiceShutdown } from "./service-shutdown";
+import { ChatServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
+
+test("explicit maintenance cancellation is followed by observed shutdown readiness", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tela-update-cancel-path-"));
+  const paths = resolveProductPaths({ platform: "linux", home, environment: {} });
+  const tools = createChatToolRuntime({ allowedRoots: [home], stateRoot: join(home, "tools") });
+  const entry = { workspaceId: tools.workspaces.open(home).id, operationId: "fixture-operation", sessionId: 3,
+    state: "running", liveness: "alive" };
+  let terminalJournal = false, cancellations = 0;
+  const service = await startChatService({ bearerToken: "fixture-maintenance-token".repeat(2), tools: {
+    ...tools,
+    assertCanClose() { if (!terminalJournal) throw Error("unresolved owner"); },
+    async maintenanceProcesses() { return terminalJournal ? [] : [entry]; },
+    async cancelMaintenanceProcess(workspaceId, operationId) {
+      expect([workspaceId, operationId]).toEqual([entry.workspaceId, entry.operationId]);
+      cancellations++;
+      terminalJournal = true; // Signed completion settlement is exercised by process-owner tests.
+      return { state: "signaled" };
+    },
+  } });
+  try {
+    mkdirSync(paths.serviceRuntime("chat"), { recursive: true });
+    const descriptor = { version: 1 as const, service: "chat" as const, instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: service.endpoint.href,
+      bearerToken: service.bearerToken, startedAt: new Date().toISOString() };
+    writeServiceRuntimeDescriptor(join(paths.serviceRuntime("chat"), "descriptor.json"), descriptor);
+    const owner = ownedServiceShutdown("fixture", paths);
+    await expect(owner.prepare("chat")).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
+    const client = new ChatServiceClient(descriptorForService(descriptor, "chat"));
+    expect(await client.maintenanceProcesses()).toEqual([entry]);
+    expect(await client.cancelMaintenanceProcess(entry.workspaceId, entry.operationId)).toEqual({ state: "signaled" });
+    expect(cancellations).toBe(1);
+    expect(await client.maintenanceProcesses()).toEqual([]);
+    await owner.prepare("chat");
+    expect(service.status().state).toBe("ready");
+  } finally { terminalJournal = true; await service.close(); rmSync(home, { recursive: true, force: true }); }
+});
 
 test("real Chat admission reports a blocker without closing and translates only its owner receipt", async () => {
   const home = mkdtempSync(join(tmpdir(), "tela-shutdown-blocker-"));
