@@ -1,6 +1,8 @@
 import { diagnosticSourcePaths, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { waitForChatShutdown } from "./shutdown";
+import { runProcessOwnerWorker } from "../../../packages/chat-service/src/process-owner-worker";
 import { randomBytes } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
   createResolvedChatAgentDriverFactories,
@@ -16,6 +18,7 @@ import {
 } from "@chatgpt-tela/credential-store";
 import {
   readOwnershipManifest,
+  readPackagedProductManifest,
   resolveProductPaths,
 } from "@chatgpt-tela/product-lifecycle";
 import {
@@ -53,10 +56,20 @@ async function main(): Promise<void> {
     environment: process.env,
     ...(credentialResolver ? { credentials: credentialResolver } : {}),
   });
+  const ownerWorker = ownership?.installId === installId ? (() => {
+    const manifest = readPackagedProductManifest(paths.binaryRoot);
+    const executable = realpathSync(join(paths.binaryRoot, manifest.services.chat.executable));
+    if (realpathSync(process.execPath) !== executable) {
+      throw new Error("the running Chat executable does not match the installed owner-worker package");
+    }
+    return { executable, workspaceStorePath: join(paths.serviceState("chat"), "workspaces-v1.json"),
+      approvedRootsPath: join(paths.configRoot, "chat", "approved-roots-v1.json") };
+  })() : undefined;
   const tools = roots.roots.length > 0
     ? createChatToolRuntime({
         allowedRoots: roots.roots,
         stateRoot: paths.serviceState("chat"),
+        ...(ownerWorker ? { ownerWorker } : {}),
         ...(ownership?.installId === installId
           ? { historicalDiagnosticPaths: diagnosticSourcePaths(paths.logsRoot) } : {}),
         agentDriverFactories,
@@ -116,7 +129,7 @@ async function main(): Promise<void> {
 }
 
 const running = process.argv.includes("--tela-operation-owner-v1")
-  ? import("../../../packages/chat-service/src/process-owner-worker").then(module => module.runProcessOwnerWorker())
+  ? runProcessOwnerWorker()
   : main();
 void running.catch(error => {
   if (process.argv.includes("--tela-operation-owner-v1")) {
