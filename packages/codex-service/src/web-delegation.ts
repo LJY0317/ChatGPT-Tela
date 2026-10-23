@@ -150,7 +150,12 @@ function failureStage(error: unknown, fallback: WebDelegationFailureStage): WebD
 // Only product-owned, bounded identifiers cross the diagnostic boundary.
 function nativeTurnFailureCode(turn: Record<string, unknown> | undefined): string | undefined {
   const failure = object(turn?.error);
-  const code = failure?.code;
+  let code = failure?.code;
+  if (code === undefined && typeof failure?.message === "string") {
+    try {
+      code = object(object(JSON.parse(failure.message))?.error)?.code;
+    } catch { /* Native errors may contain plain text. */ }
+  }
   return typeof code === "string" && /^tela_[a-z_]{1,64}$/.test(code) ? code : undefined;
 }
 

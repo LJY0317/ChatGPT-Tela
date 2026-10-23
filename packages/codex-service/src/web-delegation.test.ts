@@ -9,7 +9,7 @@ import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { runWebDelegation, inspectWebDelegationResult, collectWebDelegationResult, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
-async function fixture(options: { nativeFailureCode?: string; titleReadFails?: boolean; titleReadAfterSetFails?: boolean; titleSetFails?: boolean; titleSetAckLost?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; latestStatus?: "failed" | "interrupted"; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
+async function fixture(options: { nativeFailureCode?: string; nativeFailureJson?: boolean; titleReadFails?: boolean; titleReadAfterSetFails?: boolean; titleSetFails?: boolean; titleSetAckLost?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; latestStatus?: "failed" | "interrupted"; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const slot = options.slot ?? 1;
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
@@ -74,7 +74,7 @@ async function fixture(options: { nativeFailureCode?: string; titleReadFails?: b
           status: options.failedTool ? "failed" : "completed",
           aggregatedOutput: options.enormousOutput ? "x".repeat(140 * 1024) : "fixture-result-not-in-journal" } });
         if (options.collaboration) notify("item/completed", { threadId, turnId: currentTurnId, item: { id: "collab", type: "collabAgentToolCall" } });
-        notify("turn/completed", { threadId, turn: { id: currentTurnId, status: options.failedTurn ? "failed" : "completed", ...(options.nativeFailureCode ? { error: { code: options.nativeFailureCode, message: "private native error" } } : {}) } });
+        notify("turn/completed", { threadId, turn: { id: currentTurnId, status: options.failedTurn ? "failed" : "completed", ...(options.nativeFailureCode ? { error: options.nativeFailureJson ? { message: JSON.stringify({ error: { type: "invalid_request_error", code: options.nativeFailureCode, message: "private native error" } }) } : { code: options.nativeFailureCode, message: "private native error" } } : {}) } });
         return { turn: { id: currentTurnId } };
       }
       if (method === "thread/turns/list") {
@@ -87,7 +87,7 @@ async function fixture(options: { nativeFailureCode?: string; titleReadFails?: b
           ] },
           ...(options.ambiguousFirstTurn ? [{ id: randomUUID(), status: "completed", items: [] }] : []),
         ], nextCursor: null };
-        return { data: [{ id: currentTurnId, status: options.indexedProgress ? "inProgress" : options.latestStatus ?? (options.failedTurn ? "failed" : "completed"), ...(options.nativeFailureCode ? { error: { code: options.nativeFailureCode, message: "private native error" } } : {}), items: [
+        return { data: [{ id: currentTurnId, status: options.indexedProgress ? "inProgress" : options.latestStatus ?? (options.failedTurn ? "failed" : "completed"), ...(options.nativeFailureCode ? { error: options.nativeFailureJson ? { message: JSON.stringify({ error: { type: "invalid_request_error", code: options.nativeFailureCode, message: "private native error" } }) } : { code: options.nativeFailureCode, message: "private native error" } } : {}), items: [
         ...(options.indexedProgress ? [{ id: "reasoning", type: "reasoning", summary: ["Earlier public summary", "Approval needed" + "x".repeat(5000)], rawContent: "hidden-reasoning-must-not-be-read" }] : []),
         { id: "final", type: "agentMessage", ...(options.foreignFinal ? { phase: "commentary" } : options.finalPhase === null ? {} : { phase: options.finalPhase ?? "final_answer" }), text: options.answer ?? "verified recovered design" },
         ...(options.summaryToolResult ? [{ id: "read", type: "commandExecution",
@@ -949,8 +949,8 @@ test("explicit image input reaches start and same-thread continuation exactly on
 });
 
 test("Native projection and compaction codes survive bounded journal and incident settlement", async () => {
-  for (const code of ["tela_native_projection_unsupported", "tela_compaction_requires_readable_checkpoint"]) {
-    const f = await fixture({ failedTurn: true, answer: "", nativeFailureCode: code });
+  for (const code of ["tela_native_context_checkpoint_required", "tela_compaction_requires_readable_checkpoint"]) {
+    const f = await fixture({ failedTurn: true, answer: "", nativeFailureCode: code, nativeFailureJson: true });
     try {
       await expect(f.run()).rejects.toThrow("Web job turn failed");
       const record = f.store.get(f.id)!;
