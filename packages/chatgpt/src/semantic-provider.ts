@@ -71,12 +71,24 @@ interface TrackedTurn extends TurnOwnership {
 }
 
 /** Classify the already proven provider failure without retaining UI text. */
-function observeProviderFailure(detail: string | undefined): void {
+function providerFailureReason(detail: string | undefined): string {
   const normalized = detail?.trim().toLowerCase();
-  const reason = normalized === "failed to fetch" ? "fetch_failed"
+  return normalized === "failed to fetch" ? "fetch_failed"
     : normalized?.includes("message stream") ? "message_stream_failed"
+      : normalized && /message\s+you\s+submitted\s+was\s+too\s+long/.test(normalized) ? "message_too_long"
       : normalized ? "other_provider_error" : "detail_unavailable";
-  emitDiagnosticEvent("chatgpt_tela_work", "web_provider_failure_detail_classified", { reason_class: reason });
+}
+
+function observeProviderFailure(detail: string | undefined): void {
+  // Keep only shape evidence when the provider's rendered error differs from its
+  // underlying failure. Never retain the displayed error text.
+  const normalized = detail?.trim().toLowerCase() ?? "";
+  emitDiagnosticEvent("chatgpt_tela_work", "web_provider_failure_detail_classified", {
+    reason_class: providerFailureReason(detail),
+    detail_chars: detail?.length ?? 0,
+    contains_length_term: /\b(long|length|large|limit)\b/.test(normalized),
+    contains_submission_term: /\b(message|submitted|prompt)\b/.test(normalized),
+  });
 }
 
 function logApprovalTransition(transition: ApprovalObservationTransition | undefined): void {
@@ -1207,6 +1219,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       message_chars: text.length,
       composer_wire_bytes: formatted.composerBytes, context_wire_bytes: formatted.contextBytes,
       protocol_wire_bytes: formatted.protocolBytes,
+      source_file_bytes: sourceUpload?.file.bytes.byteLength ?? 0,
+      media_file_bytes: upload.statistics.uniqueBytes,
+      attachment_count: files.length,
       logical_estimate: request.physicalContext.logicalTokens,
       transfer_estimate: request.physicalContext.transferTokens,
     });
@@ -1795,7 +1810,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         };
       }
       const assistant = assistants[0];
-      if (assistant?.phase === "failed" && !tracked.responseRetryState && driver.retryFailedResponse) {
+      if (assistant?.phase === "failed" && providerFailureReason(assistant.failureDetail) !== "message_too_long"
+        && !tracked.responseRetryState && driver.retryFailedResponse) {
         // Record dispatch before awaiting input: a thrown click may already have reached the page.
         tracked.responseRetryState = "dispatched";
         if (await waitOwned(signal, () => driver.retryFailedResponse!(assistant.key, signal))) {

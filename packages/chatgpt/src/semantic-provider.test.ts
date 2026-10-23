@@ -2608,6 +2608,27 @@ test("failed assistant supersedes a cached post-tool final even with a pending a
  }finally{stop?.();await surface.host.close();}
 });
 
+test("provider failure diagnostics retain shape but never the error text",async()=>{
+ const driver=new FixtureDriver(fixture("ready-new-chat"));const surface=await leaseFor(driver);
+ const provider=new ChatGptSemanticProvider();
+ const rows:Record<string,unknown>[]=[];
+ const stop=observeDiagnosticEvents(row=>{if(row.stage==="web_provider_failure_detail_classified")rows.push(row);});
+ try {
+  const pending=provider.submitTurn(surface.lease,request());
+  while(driver.current.revision==="r1")await Promise.resolve();
+  driver.queued.push(acceptedSnapshot(driver));
+  const submitted=await pending;if(submitted.state!=="proven")throw Error("fixture submit failed");
+  const detail="The message you submitted was too long, please edit it and resubmit.";
+  driver.queued.push({...driver.current,revision:"long-failure",turns:[...driver.current.turns,
+   {key:"assistant",role:"assistant",parentUserTurnKey:"user-turn-1",phase:"failed",failureDetail:detail}]});
+  const result=await provider.waitForTurnEvent(surface.lease,submitted.value);
+  expect(result.state==="proven"&&result.value.kind).toBe("failed");
+  expect(rows).toEqual([expect.objectContaining({reason_class:"message_too_long",detail_chars:detail.length,
+   contains_length_term:true,contains_submission_term:true})]);
+  expect(JSON.stringify(rows)).not.toContain(detail);
+ }finally{stop?.();await surface.host.close();}
+});
+
 test("inert checkpoint source uploads once and sends once, carrying its receipt only inside the file", async () => {
   const driver = new FixtureDriver(fixture("ready-new-chat"));
   const surface = await leaseFor(driver);
