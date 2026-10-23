@@ -412,10 +412,11 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
         nativeSignal.removeEventListener("abort", forwardRuntimeAbort);
       }
       } catch (error) {
+        const failedRequestFingerprint = !executionStarted ? failedNativeRequestFingerprint(nativeRequest) : undefined;
         if (!executionStarted) withDiagnosticContext({
           scope_fingerprint: diagnosticFingerprint(authority.threadId),
           turn_fingerprint: diagnosticFingerprint(authority.turnId),
-          ...(failedNativeRequestFingerprint(nativeRequest) ? { request_fingerprint: failedNativeRequestFingerprint(nativeRequest)! } : {}),
+          ...(failedRequestFingerprint ? { request_fingerprint: failedRequestFingerprint } : {}),
         }, () => {
           capturePrivateDiagnosticValue("web_preparation_failure", {
             phase: preparationPhase, plannerStage,
