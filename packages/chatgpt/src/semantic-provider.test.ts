@@ -3004,7 +3004,7 @@ test.each(["owned", "changed_author"] as const)("public cancellation aborts pend
 
 
 describe("completed browser answer awaiting Native delivery", () => {
-  test.each(["identity_pending", "approval_pending"] as const)("records and privately captures %s once, then delivers the original answer", async reason => {
+  test.each(["identity_pending", "approval_pending", "multiple_assistants"] as const)("records and privately captures %s once, then delivers the original answer", async reason => {
     const scratch = mkdtempSync(join(tmpdir(), "tela-deferred-completion-"));
     const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
     const file = join(scratch, "events.jsonl"); process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
@@ -3025,7 +3025,8 @@ describe("completed browser answer awaiting Native delivery", () => {
       const answer = { key: "PRIVATE_ASSISTANT_KEY", role: "assistant" as const,
         parentUserTurnKey: user.key, phase: "complete" as const, text: "PRIVATE_COMPLETED_ANSWER" };
       const blocked = { ...driver.current, revision: "completed-but-blocked", url: "https://chatgpt.com/c/deferred",
-        turns: reason === "identity_pending" ? [answer] : [user, answer],
+        turns: reason === "identity_pending" ? [answer] : reason === "multiple_assistants"
+          ? [user, answer, { ...answer, key: "PRIVATE_SECOND_ASSISTANT_KEY", text: "PRIVATE_OTHER_ANSWER" }] : [user, answer],
         ...(reason === "approval_pending" ? { approval: recognizedApproval } : {}) };
       driver.current = blocked;
       const cleared = { ...blocked, revision: "delivery-proof-restored", turns: [user, answer] };
@@ -3040,7 +3041,9 @@ describe("completed browser answer awaiting Native delivery", () => {
       const events = readDiagnosticTail(file).events;
       const deferred = events.filter(row => row.stage === "web_completed_answer_deferred");
       expect(deferred).toHaveLength(1);
-      expect(deferred[0]).toMatchObject({ reason_class: reason, assistant_phase: "complete", assistant_count: 1,
+      expect(deferred[0]).toMatchObject({ reason_class: reason, assistant_phase: "complete",
+        assistant_count: reason === "multiple_assistants" ? 2 : 1,
+        complete_assistant_count: reason === "multiple_assistants" ? 2 : 1,
         current_authority_proven: reason === "approval_pending", turn_fingerprint: diagnosticFingerprint(taskRequest.nativeTurnId) });
       expect(events.filter(row => row.stage === "browser_snapshot_observed" && row.reason_class === "completion_deferred")).toHaveLength(1);
       const structural = readFileSync(file, "utf8");

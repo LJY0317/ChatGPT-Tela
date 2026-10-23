@@ -493,9 +493,9 @@ function approvalAssistantVersion(assistant: ChatGptTurnObservation | undefined)
 
 /** Structural failure/transition evidence only; no renderer keys, text, URLs or fingerprints of text. */
 async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: TrackedTurn,
-  snapshot: ChatGptSurfaceSnapshot, reason: "identity_pending" | "approval_pending"): Promise<void> {
+  snapshot: ChatGptSurfaceSnapshot, reason: "identity_pending" | "approval_pending" | "multiple_assistants"): Promise<void> {
   const completed = snapshot.turns.filter(turn => turn.role === "assistant" && turn.phase === "complete"
-    && (reason === "approval_pending" ? turn.parentUserTurnKey === tracked.userTurnKey
+    && (reason !== "identity_pending" ? turn.parentUserTurnKey === tracked.userTurnKey
       : !turn.parentUserTurnKey || !tracked.baselineUserLineageKeys.has(turn.parentUserTurnKey)));
   if (!completed.length || tracked.deferredCompletionEvidence?.has(reason)) return;
   (tracked.deferredCompletionEvidence ??= new Set()).add(reason);
@@ -506,6 +506,8 @@ async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: T
       turn_fingerprint: diagnosticFingerprint(tracked.handle.nativeTurnId),
     }, async () => {
       emitDiagnosticEvent("chatgpt_tela_work", "web_completed_answer_deferred", {
+        ...turnObservationFields(snapshot, tracked),
+        ...(completed.length === 1 ? retainedBoundaryFields(completed[0]) : {}),
         reason_class: reason, assistant_phase: "complete", assistant_count: completed.length,
         matched_assistant_count: completed.filter(turn => turn.parentUserTurnKey === tracked.userTurnKey).length,
         approval_card_count: snapshot.approval?.cardCount ?? 0,
@@ -1852,6 +1854,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         continue;
       }
       const assistants = lineage.assistants;
+      if (lineage.ambiguous || assistants.length > 1) {
+        await recordDeferredCompletion(surface, tracked, snapshot, "multiple_assistants");
+      }
       if (lineage.ambiguous) {
         return {
           state: "ambiguous",
