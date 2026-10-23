@@ -26,11 +26,11 @@ function errorResponse(status: number, message: string): Response {
   }, { status });
 }
 
-function committedBody(input: {
+function observedBody(input: {
   readonly chunks: readonly string[];
-  readonly commitAfterChunk: number;
-  readonly commit: () => void;
-  readonly outcome: NativeGatewayOutcome["type"];
+  readonly commitAfterChunk?: number;
+  readonly commit?: () => void;
+  readonly outcome: NativeGatewayOutcome["type"] | "failed";
 }): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   let index = 0;
@@ -53,7 +53,7 @@ function committedBody(input: {
         }
         const current = index;
         controller.enqueue(encoder.encode(input.chunks[index++]!));
-        if (!committed && current === input.commitAfterChunk) {
+        if (!committed && input.commit && current === input.commitAfterChunk) {
           input.commit();
           committed = true;
         }
@@ -78,7 +78,7 @@ function responseForOutcome(input: {
   });
   if (!input.stream) {
     const json = `${JSON.stringify(encoded.response)}\n`;
-    return new Response(committedBody({
+    return new Response(observedBody({
       chunks: [json],
       commitAfterChunk: 0,
       commit: () => input.gateway.commit(input.outcome),
@@ -89,7 +89,7 @@ function responseForOutcome(input: {
   }
 
   const plan = nativeResponsesSsePlan(input.outcome, encoded);
-  return new Response(committedBody({
+  return new Response(observedBody({
     chunks: plan.frames,
     commitAfterChunk: plan.commitAfterFrame,
     commit: () => input.gateway.commit(input.outcome),
@@ -152,7 +152,9 @@ export async function handleNativeResponsesHttp(
   } catch (error) {
     // A late SSE failure already committed HTTP 200; a subsequent replay
     // returns the same public cause as a terminal HTTP 400 without re-execution.
-    return Response.json({ error: nativeFailure(error).error }, { status: 400 });
+    return new Response(observedBody({
+      chunks: [JSON.stringify({ error: nativeFailure(error).error })], outcome: "failed",
+    }), { status: 400, headers: { "content-type": "application/json" } });
   }
 
   return responseForOutcome({

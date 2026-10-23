@@ -57,6 +57,9 @@ completion controls, body availability and character count; controls alone do no
 `web_answer_received` identifies a task answer before Native outcome settlement. Join these with
 `native_outcome_committed` and `native_response_body_closed` (or `public_progress_stream_closed`
 for live progress) to separate extraction, validation, settlement and HTTP consumption failures.
+Native execution failures returned as HTTP 400 emit `native_response_body_closed` only after
+body consumption or cancellation (`outcome=failed`, `outcome_committed=false`), correlated by
+the existing request fingerprint; a failed producer never commits a Native final.
 HTTP consumption is not proof of official-app UI display (`ui_observed=false`). These are existing
 observation/response boundaries, not a new watcher; a final arriving after observation retires
 requires later readback and cannot be inferred retroactively from a prior error.

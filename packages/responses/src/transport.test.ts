@@ -1,4 +1,4 @@
-import { WebProviderResponseFailed, observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
+import { WebProviderResponseFailed, observeDiagnosticEvents, readDiagnosticTail, withDiagnosticContext, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { WebSubmissionUnproven, WEB_SUBMISSION_PROOF_REASONS } from "@chatgpt-tela/core";
 import { describe, expect, test } from "bun:test";
 import { WebObservationUnproven } from "@chatgpt-tela/core";
@@ -83,6 +83,40 @@ test("HTTP disconnect aborts its observer while a subsequent request reuses the 
 });
 
 describe("Native Responses HTTP transport", () => {
+  test.each(["drained", "consumer_cancelled"] as const)("failed Native HTTP response retains its structural consumer receipt (%s)", async reason => {
+    const root = mkdtempSync(join(tmpdir(), "tela-http-failure-diagnostics-"));
+    const path = join(root, "events.jsonl");
+    const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = path;
+    const context = { request_fingerprint: "a".repeat(24) };
+    const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async () => {
+      throw new Error("PRIVATE_EXECUTION_FAILURE");
+    });
+    try {
+      const response = await withDiagnosticContext(context, () => handleNativeResponsesHttp(post(body([], false)), gateway));
+      expect(response.status).toBe(400);
+      expect(readDiagnosticTail(path).events.filter(row => row.stage === "native_response_body_closed")).toHaveLength(0);
+      if (reason === "drained") expect((await response.json() as { error?: unknown }).error).toBeDefined();
+      else await response.body!.cancel();
+      const readback = readDiagnosticTail(path).events;
+      const rows = readback.filter(row => row.stage === "native_response_body_closed");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ ...context, outcome: "failed", outcome_committed: false,
+        reason_class: reason, delivery: "http_body_consumer", ui_observed: false });
+      const nativeFailures = readback.filter(row => row.stage === "native_execution_failed");
+      expect(nativeFailures).toHaveLength(1);
+      expect(nativeFailures[0]).toMatchObject(context);
+      expect(nativeFailures[0]?.scope_fingerprint).toMatch(/^[a-f0-9]{24}$/);
+      expect(nativeFailures[0]?.turn_fingerprint).toMatch(/^[a-f0-9]{24}$/);
+      expect(JSON.stringify(rows)).not.toContain("PRIVATE_EXECUTION_FAILURE");
+    } finally {
+      if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+      await gateway.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test.each([false, true])("final production and HTTP consumption remain distinct diagnostic facts (cancel=%s)", async cancel => {
     const events: StructuralDiagnosticEvent[] = [];
     const stop = observeDiagnosticEvents(event => { if (event.stage === "native_response_body_closed") events.push(event); });
