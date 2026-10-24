@@ -37,7 +37,7 @@ function fixture() {
     session: { slot: 2, runtimeProcessId: 10, responsesRouteFingerprint: "c".repeat(64), terminalEndpoint: "ws://127.0.0.1:1234" } };
   store.reserve(record);
   store.save({ ...record, state: "completed", answer: "result", finalEvidence: "explicit-final-phase" });
-  const native = { exists: true, cwd: root, archived: false, updatedAt: origin / 1000, status: "idle", turnStatus: "completed", tailId: record.turnId, queued: false, accountChanged: false, failArchive: false };
+  const native = { exists: true, cwd: root, title: "Managed title", archived: false, updatedAt: origin / 1000, status: "idle", turnStatus: "completed", tailId: record.turnId, queued: false, accountChanged: false, failArchive: false };
   const calls: Array<{ method: string; params: any }> = [];
   const rpc: CodexAppServerRpc = {
     async close() {},
@@ -45,7 +45,7 @@ function fixture() {
       calls.push({ method, params });
       if (method === "thread/list") {
         return { data: native.exists && (params as any).archived === native.archived
-          ? [{ id: record.threadId, cwd: root, updatedAt: native.updatedAt, status: { type: native.status } }] : [], nextCursor: null };
+          ? [{ id: record.threadId, cwd: root, name: native.title, updatedAt: native.updatedAt, status: { type: native.status } }] : [], nextCursor: null };
       }
       if (method === "thread/turns/list") return { data: [{ id: native.tailId, status: native.turnStatus }] };
       if (method === "thread/queue/list") return { data: native.queued ? [{ id: "queued" }] : [], nextCursor: null };
@@ -95,6 +95,21 @@ test("first result collection starts 24h clock, repeated reads do not extend it,
     expect(f.store.get(f.record.id)).toBeUndefined();
     expect(f.store.records()).toHaveLength(0);
     expect(existsSync(join(f.root, `${f.record.id}.json.completed`))).toBe(false);
+  } finally { f.cleanup(); }
+});
+test("manual rename stays linked by Native thread ID and resets the activity-based archive clock", async () => {
+  const f = fixture();
+  try {
+    f.store.collect(f.record.id, f.origin);
+    f.native.title = "A title chosen by the user";
+    f.native.updatedAt = (f.origin + 2 * DAY) / 1000;
+    await f.run(f.origin + 3 * DAY - 1);
+    expect(f.native.archived).toBe(false);
+    expect(f.store.get(f.record.id)?.answer).toBe("result");
+    expect(f.store.threadRetention(f.record)?.state).toBeUndefined();
+    await f.run(f.origin + 3 * DAY);
+    expect(f.native.archived).toBe(true);
+    expect(f.calls.filter(call => call.method === "thread/archive")).toHaveLength(1);
   } finally { f.cleanup(); }
 });
 test("failed continuation keeps the prior collected result as the 24h retention basis", async () => {
