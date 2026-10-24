@@ -302,6 +302,15 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       proofLevel: "historical-thread-scoped-events-only" as const,
     } : null,
     ownershipFailureEvidence,
+    // Progress updates can push a completed Goal call out of the recent tail.
+    // Report actual per-turn returns, without inferring the current Goal state.
+    goalControlReturns: events.filter(event => event.stage === "native_tool_bridge_invoke_returned"
+      && event.goal_tool === true).slice(-MAX_TIMELINE).map(event => ({
+      at: event.ts, turnFingerprint: event.turn_fingerprint ?? null,
+      operationFingerprint: event.operation_fingerprint ?? null,
+      action: event.action ?? "unknown", status: event.status ?? "unknown",
+      isError: event.is_error ?? null, bodyPresent: event.body_present ?? null,
+    })),
     recentEvents: events.slice(-MAX_TIMELINE).map(event => ({
       at: event.ts, stage: event.stage,
       ...(typeof event.reason_class === "string" ? { reasonClass: event.reason_class } : {}),

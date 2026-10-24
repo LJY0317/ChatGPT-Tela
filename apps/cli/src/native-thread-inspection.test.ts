@@ -38,6 +38,36 @@ function fixtureReader(overrides: {
 }
 
 describe("one read-only conversation inspection by exact Native ID", () => {
+  test("Goal returns remain visible across progress noise without merging turns or trusting prose", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tela-goal-return-evidence-"));
+    const path = join(dir, "events.jsonl");
+    const scope_fingerprint = diagnosticFingerprint(THREAD);
+    const turn_fingerprint = diagnosticFingerprint(TURN);
+    const operation_fingerprint = diagnosticFingerprint("goal-call");
+    writeFileSync(path, [
+      { ts: "2026-10-17T08:17:59Z", event: "chatgpt_tela_work", stage: "native_tool_bridge_invoke_returned",
+        scope_fingerprint, turn_fingerprint: diagnosticFingerprint("previous-turn"), goal_tool: true,
+        action: "read", status: "unknown", is_error: true, body_present: false },
+      { ts: "2026-10-17T08:18:00Z", event: "chatgpt_tela_work", stage: "native_tool_bridge_invoke_returned",
+        scope_fingerprint, turn_fingerprint, operation_fingerprint, goal_tool: true,
+        action: "update", status: "complete", is_error: false, body_present: true, content: "PRIVATE RESULT" },
+      { ts: "2026-10-17T08:18:01Z", event: "chatgpt_tela_work", stage: "native_tool_bridge_invoke_returned",
+        scope_fingerprint, goal_tool: false, status: "complete" },
+      ...Array.from({ length: 30 }, (_, index) => ({ ts: new Date(NOW - 60_000 + index).toISOString(), event: "chatgpt_tela_work",
+        stage: "web_public_progress_extraction", scope_fingerprint })),
+    ].map(row => JSON.stringify(row)).join("\n"));
+    try {
+      const result = inspectNativeThreadHistoricalEvidence({ threadId: THREAD, diagnosticPaths: [path], nowMs: NOW });
+      expect(result.goalControlReturns).toEqual([
+        { at: "2026-10-17T08:17:59.000Z", turnFingerprint: diagnosticFingerprint("previous-turn"),
+          operationFingerprint: null, action: "read", status: "unknown", isError: true, bodyPresent: false },
+        { at: "2026-10-17T08:18:00.000Z", turnFingerprint: turn_fingerprint,
+          operationFingerprint: operation_fingerprint, action: "update", status: "complete", isError: false, bodyPresent: true },
+      ]);
+      expect(result.recentEvents.every(row => row.stage !== "native_tool_bridge_invoke_returned")).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("PRIVATE");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   test("offline evidence correlates one UUID after owner loss without claiming a live approval", () => {
     const dir = mkdtempSync(join(tmpdir(), "tela-thread-evidence-"));
     const path = join(dir, "events.jsonl");
