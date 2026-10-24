@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
+import { structuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { WebDelegationStore, linkNativeThreadForRetention, type WebDelegationRecord } from "./web-delegation";
 import { settleWebDelegationRetention, startWebDelegationRetention } from "./web-delegation-retention";
 const DAY = 86_400_000;
@@ -95,6 +96,31 @@ test("first result collection starts 24h clock, repeated reads do not extend it,
     expect(f.store.records()).toHaveLength(0);
     expect(existsSync(join(f.root, `${f.record.id}.json.completed`))).toBe(false);
   } finally { f.cleanup(); }
+});
+test("failed continuation keeps the prior collected result as the 24h retention basis", async () => {
+  const f = fixture();
+  try {
+    f.store.collect(f.record.id, f.origin);
+    const child: WebDelegationRecord = { ...f.record, id: randomUUID(), parentJobId: f.record.id,
+      createdAt: f.origin + 6 * DAY, turnId: randomUUID(), state: "failed", failure: "turn_failed" };
+    delete (child as { answer?: string }).answer;
+    delete (child as { finalEvidence?: "explicit-final-phase" | "sole-completed-message" }).finalEvidence;
+    f.store.reserve(child);
+    f.store.save(child);
+    f.native.tailId = child.turnId;
+    f.native.updatedAt = child.createdAt / 1000;
+    expect(await f.run(f.origin + 7 * DAY - 1)).toBe(f.origin + 7 * DAY);
+    expect(f.native.archived).toBe(false);
+    await f.run(f.origin + 7 * DAY);
+    expect(f.native.archived).toBe(true);
+  } finally { f.cleanup(); }
+});
+test("retention diagnostics preserve only structural reason, due, relation and operation fields", () => {
+  const event = structuralDiagnosticEvent({ ts: new Date(0).toISOString(), event: "chatgpt_tela_codex",
+    stage: "web_delegation_retention_skipped", reason_class: "latest_turn_unmanaged", due_at: 1700000000000,
+    kind: "unmanaged", policy: "collection_and_activity", next_action: "managed_turn_comparison" });
+  expect(event).toMatchObject({ stage: "web_delegation_retention_skipped", reason_class: "latest_turn_unmanaged",
+    due_at: 1700000000000, kind: "unmanaged", policy: "collection_and_activity", next_action: "managed_turn_comparison" });
 });
 test("uncollected results use seven actual idle days, polling never resets activity", async () => {
   const f = fixture();
