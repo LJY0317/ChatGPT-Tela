@@ -28,6 +28,19 @@ const SAFE_WEB_CONTEXT_PLANNER_STAGES = new Set<string>(WEB_CONTEXT_PLANNER_STAG
 export function isWebContextPlannerStage(value: unknown): value is WebContextPlannerStage {
   return typeof value === "string" && SAFE_WEB_CONTEXT_PLANNER_STAGES.has(value);
 }
+export const WEB_CONTEXT_PLANNER_SUBSTAGES = [
+  "checkpoint_lookup_started", "working_checkpoint_scope", "working_checkpoint_cache_read",
+  "working_checkpoint_publication_read", "working_checkpoint_candidate_selection",
+  "working_checkpoint_maintenance_preflight", "working_checkpoint_model_production",
+  "working_checkpoint_result_validation", "working_checkpoint_journal_publish",
+  "working_checkpoint_cache_publish", "request_checkpoint_cache_read",
+  "request_checkpoint_candidate_selection",
+] as const;
+export type WebContextPlannerSubstage = typeof WEB_CONTEXT_PLANNER_SUBSTAGES[number];
+const SAFE_WEB_CONTEXT_PLANNER_SUBSTAGES = new Set<string>(WEB_CONTEXT_PLANNER_SUBSTAGES);
+export function isWebContextPlannerSubstage(value: unknown): value is WebContextPlannerSubstage {
+  return typeof value === "string" && SAFE_WEB_CONTEXT_PLANNER_SUBSTAGES.has(value);
+}
 const STRINGS = new Set(["observation_failure", "failure_class", "failure_stage", "service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "result_kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "route_class", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "request_role", "browser_response", "next_action", "probe_kind", "auth_state", "entry_class", "removal_cause", "expiry_class", "domain_class", "storage_state"]);
 const PROJECTION_ENUMS: Readonly<Record<string, readonly string[]>> = {
   input_container_kind: ["array", "string", "absent", "null", "record", "scalar"],
@@ -78,6 +91,10 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
     }
     if (key === "planner_stage") {
       if (isWebContextPlannerStage(field)) safe[key] = field;
+      continue;
+    }
+    if (key === "planner_substage") {
+      if (isWebContextPlannerSubstage(field)) safe[key] = field;
       continue;
     }
     if (key === "error_kind" || key === "first_error_kind") {

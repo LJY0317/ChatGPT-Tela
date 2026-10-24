@@ -85,13 +85,14 @@ test('cycle receipt includes preparation before generic execution failure',()=>{
  const observer=startTurnDiagnosticSummary(scope,turn,request)!;
  try{
   withDiagnosticContext({scope_fingerprint:scope,turn_fingerprint:turn,request_fingerprint:request},()=>{
-   emitDiagnosticEvent('chatgpt_tela_work','web_preparation_failed',{reason_class:'unclassified',error_kind:'type_error',planner_stage:'physical_context_fit',phase:'context_plan'});
+   emitDiagnosticEvent('chatgpt_tela_work','web_preparation_failed',{reason_class:'unclassified',error_kind:'type_error',planner_stage:'checkpoint_lookup',planner_substage:'working_checkpoint_publication_read',phase:'context_plan'});
    emitDiagnosticEvent('chatgpt_tela_work','native_execution_failed');
   });observer.finish();
   const rows=readFileSync(file,'utf8').trim().split('\n').map(s=>JSON.parse(s));
   expect(rows.find(x=>x.stage==='native_cycle_summary').first_reason_class).toBe('unclassified');
    expect(rows.find(x=>x.stage==='native_cycle_summary').first_error_kind).toBe('type_error');
-   expect(summarizeTurnDiagnostics(rows).diagnosis.firstFailure).toMatchObject({reason:'unclassified',errorKind:'type_error'});
+   expect(rows.find(x=>x.stage==='native_cycle_summary').first_planner_substage).toBe('working_checkpoint_publication_read');
+    expect(summarizeTurnDiagnostics(rows).diagnosis.firstFailure).toMatchObject({reason:'unclassified',errorKind:'type_error',plannerSubstage:'working_checkpoint_publication_read'});
   expect(summarizeTurnDiagnostics(rows).diagnosis.certainty).toBe('insufficient_evidence');
  }finally{observer.finish();if(old===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=old;rmSync(root,{recursive:true,force:true});}
 });

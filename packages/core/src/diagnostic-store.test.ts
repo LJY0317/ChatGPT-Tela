@@ -35,17 +35,21 @@ test("preparation exception category survives redaction and incident readback", 
   const root = fixture(), file = join(root, "events.jsonl");
   process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
   emitDiagnosticEvent("chatgpt_tela_work", "web_preparation_failed", {
-    phase: "context_plan", planner_stage: "checkpoint_lookup", reason_class: "unclassified", error_kind: "type_error",
+    phase: "context_plan", planner_stage: "checkpoint_lookup", planner_substage: "working_checkpoint_publication_read",
+    reason_class: "unclassified", error_kind: "type_error",
   });
   await new Promise<void>(resolve => setImmediate(resolve));
   expect(readDiagnosticTail(file).events.at(-1)).toMatchObject({
-    stage: "web_preparation_failed", phase: "context_plan", planner_stage: "checkpoint_lookup", error_kind: "type_error",
+    stage: "web_preparation_failed", phase: "context_plan", planner_stage: "checkpoint_lookup",
+    planner_substage: "working_checkpoint_publication_read", error_kind: "type_error",
   });
   expect(event("web_preparation_failed", { error_kind: "private/path" }).error_kind).toBeUndefined();
+  expect(event("web_preparation_failed", { planner_substage: "private/path" }).planner_substage).toBeUndefined();
   const center = join(root, "diagnostics"), records = listDiagnosticIncidents(center);
   expect(records).toHaveLength(1);
   expect(readDiagnosticIncident(center, records[0]!.ref)).toMatchObject({ timeline: expect.arrayContaining([expect.objectContaining({
-    stage: "web_preparation_failed", planner_stage: "checkpoint_lookup", reason_class: "unclassified", error_kind: "type_error",
+    stage: "web_preparation_failed", planner_stage: "checkpoint_lookup",
+    planner_substage: "working_checkpoint_publication_read", reason_class: "unclassified", error_kind: "type_error",
   })]) });
 });
 test("proof stages accept only classified preparation stages", () => {

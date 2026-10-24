@@ -4,7 +4,7 @@ import {
   type ChatGptWebEffort, type WebPhysicalContext,
 } from "@chatgpt-tela/chatgpt";
 import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
-import { emitDiagnosticEvent, planPhysicalContext } from "@chatgpt-tela/core";
+import { emitDiagnosticEvent, planPhysicalContext, type WebContextPlannerSubstage } from "@chatgpt-tela/core";
 import { derivedContextCheckpoint, type CachedContextCheckpoint, type ContextCheckpointCache } from "./context-cache";
 import type { CheckpointPreparationBudget } from "./checkpoint-preparation-budget";
 import type {
@@ -121,6 +121,7 @@ export interface WorkingCheckpointSources {
   readonly browserModel?: { readonly familyKey: string; readonly effort: ChatGptWebEffort };
   readonly policy: WebWorkingContextPolicy;
   readonly preparationBudget: CheckpointPreparationBudget;
+  readonly onSubstage?: (stage: WebContextPlannerSubstage) => void;
 }
 
 /** Owner-local metadata only. Without the exact live request projection, an
@@ -179,6 +180,10 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
   readonly allowMaintenance?: boolean;
 }): Promise<WorkingCheckpointDecision> {
   const { projection } = input;
+  const substage = (value: WebContextPlannerSubstage): void => {
+    try { input.onSubstage?.(value); } catch { /* Diagnostics never replace the primary operation. */ }
+  };
+  substage("working_checkpoint_scope");
   const anchor = workingCheckpointAnchor(projection);
   const anchorIndex = anchor ? projection.revisions.findIndex(item => item.revision.id === anchor.revision.id) : -1;
   const scope = input.visiblePrefix && input.browserModel
@@ -201,11 +206,13 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
   let publicationCount = 0;
   let crossScopeExcludedCount = 0;
   if (input.cache) {
+    substage("working_checkpoint_cache_read");
     try { candidates.push(...await input.cache.list(projection.nativeTaskId)); }
     catch { cacheReadFailed = true; /* Derived cache loss is not authority loss. */ }
   }
   const cachedCount = candidates.length;
   if (scope && input.visiblePrefix?.journal.publishedCheckpoints) {
+    substage("working_checkpoint_publication_read");
     for (const item of await input.visiblePrefix.journal.publishedCheckpoints(scope, reuseScope)) {
       publicationCount++;
       let revisionId = item.revisionId;
@@ -228,6 +235,7 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     }
   }
   const active = new Map(projection.revisions.map((item, index) => [item.revision.id, index]));
+  substage("working_checkpoint_candidate_selection");
   let selected: CachedContextCheckpoint | undefined;
   let selectedIndex = -1;
   let scopeExcluded = 0, ancestryExcluded = 0, fitExcluded = 0;
@@ -244,6 +252,7 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
   }
   const legacy = selected ? legacyPublications.get(selected.checkpoint.revisionId) : undefined;
   if (legacy && reuseScope && input.visiblePrefix?.journal.publishCheckpoint) {
+    substage("working_checkpoint_journal_publish");
     // An exact same-task canonical ancestor supplies the missing portable prefix
     // proof for older publications; the completed model stage is not executed again.
     try {
@@ -282,6 +291,7 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     .filter(item => item.type === "revision" && !suffixIds.has(item.revisionId))
     .reduce((sum, item) => sum + tokens(item.content), 0);
   const prospectiveSeed = summaryTokens + pendingSuffixTokens + (selected ? currentInstructionsTokens : 0);
+  substage("working_checkpoint_maintenance_preflight");
   const shouldAdvance = anchorIndex >= 0 && (
     (selected !== undefined && (sealedTokens > input.policy.suffixTargetTokens
       || sealedTokens + summaryTokens >= input.policy.checkpointSourceTokens - input.policy.suffixTargetTokens))
@@ -332,6 +342,7 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
   }
   input.signal?.throwIfAborted();
   const previousCalls = input.preparationBudget.modelCalls;
+  substage("working_checkpoint_model_production");
   const content = await produceNativePrefixCheckpoint({
     source, accountNamespace: input.visiblePrefix.accountNamespace,
     journal: input.visiblePrefix.journal, producer: input.producer,
@@ -342,6 +353,7 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     ...(input.preparation ? { preparation: input.preparation } : {}),
   });
   input.signal?.throwIfAborted();
+  substage("working_checkpoint_result_validation");
   if (tokens(content) > input.policy.checkpointTargetTokens + 256) {
     // A provider-generated summary cannot silently expand the rolling working set.
     throw new NativeHistoryBootstrapRequired("source_budget");
@@ -357,8 +369,10 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
   // The stage journal already contains a completed summary. Atomically publish its
   // matching source-bound pointer BEFORE updating the disposable cache.
   if (input.visiblePrefix.journal.publishCheckpoint) {
+    substage("working_checkpoint_journal_publish");
     await input.visiblePrefix.journal.publishCheckpoint(published);
   }
+  substage("working_checkpoint_cache_publish");
   const checkpoint = derivedContextCheckpoint({
     revisionId: published.revisionId, content, estimatedTokens: published.estimatedTokens,
     ...(scope ? { scopeFingerprint: scope } : {}),

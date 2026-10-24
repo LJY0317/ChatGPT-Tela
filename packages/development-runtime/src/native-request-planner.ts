@@ -19,6 +19,7 @@ import {
   type NativeIngressTurnMedia,
   type NativeEvidenceReference,
   type RevisionKind,
+  type WebContextPlannerSubstage,
 } from "@chatgpt-tela/core";
 import {
   CHATGPT_WEB_EFFORTS,
@@ -958,6 +959,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       lastStage = value;
       try { preparation?.onPlannerStage?.(value); } catch { /* Diagnostics are best effort. */ }
     };
+    const plannerSubstage = (value: WebContextPlannerSubstage): void => {
+      try { preparation?.onPlannerSubstage?.(value); } catch { /* Diagnostics are best effort. */ }
+    };
     try {
     stage("request_parse");
     const threadId = turn.channel.binding.authority.threadId;
@@ -1089,6 +1093,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       // required physical fit below still decides whether the cold page fits.
       allowMaintenance: !healthyRetained && continuity.mode !== "visible-prefix-checkpoint",
       ...(preparation ? { preparation, signal: preparation.signal } : {}),
+      onSubstage: plannerSubstage,
     });
     const pending = Symbol(threadId);
     if (healthyRetained && admitted && committed) {
@@ -1132,7 +1137,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       });
     }
     const contentById = new Map(projection.revisions.map(item => [item.revision.id, item.content]));
+    plannerSubstage("request_checkpoint_cache_read");
     const candidates = await cachedCheckpoints(options.checkpointCache, threadId);
+    plannerSubstage("request_checkpoint_candidate_selection");
     let selected = working.checkpoint ?? (options.visiblePrefix && browserModel
       ? undefined : activeCheckpoint(projection, candidates, budgetTokens));
     const requestCheckpointFromCache = !working.produced && selected !== undefined;

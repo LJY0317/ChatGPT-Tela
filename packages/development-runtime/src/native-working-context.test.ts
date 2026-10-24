@@ -95,6 +95,29 @@ function registered(turnId: string, threadId = "task") {
   });
 }
 
+test("checkpoint lookup reports the failed publication-read substage without replacing the exception", async () => {
+  const directory = root();
+  const failure = new Error("private checkpoint publication failure");
+  const stages: string[] = [];
+  const planner = createNativeRequestDevelopmentWebTurnPlanner({
+    checkpointCache: new FileContextCheckpointCache({ directory: join(directory, "cache") }),
+    visiblePrefix: {
+      accountNamespace: "verified-fixture-account",
+      journal: { async publishedCheckpoints() { throw failure; } } as any,
+      async read(): Promise<never> { throw new Error("visible prefix read must not run"); },
+    },
+  });
+  try {
+    await expect(planner(registered("turn-checkpoint-lookup"), {
+      model, reasoning: { effort: "high" }, input: [{ role: "user", content: "Current request" }],
+    }, {
+      signal: new AbortController().signal, onProgress() {},
+      onPlannerSubstage(stage) { stages.push(stage); },
+    })).rejects.toBe(failure);
+    expect(stages).toContain("working_checkpoint_publication_read");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("rolling derived context stays bounded across long archives, repeated physical rollovers and cache-loss restart", async () => {
   const directory = root();
   try {

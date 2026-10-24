@@ -1,6 +1,6 @@
 import { WebContextFitFailed } from "@chatgpt-tela/core";
 import { BROWSER_DOCUMENT_LIFETIME, captureBrowserDiagnosticEvidence, type BrowserHost } from "@chatgpt-tela/browser-host";
-import { classifyNetworkFailure, diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, observeDiagnosticInventory, observeDiagnosticContextPressure, capturePrivateDiagnosticValue, isWebContextPlannerStage, type WebContextPlannerStage } from "@chatgpt-tela/core";
+import { classifyNetworkFailure, diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, observeDiagnosticInventory, observeDiagnosticContextPressure, capturePrivateDiagnosticValue, isWebContextPlannerStage, isWebContextPlannerSubstage, type WebContextPlannerStage, type WebContextPlannerSubstage } from "@chatgpt-tela/core";
 import {
   ChatGptSemanticProvider,
   selectChatGptWebModel,
@@ -84,6 +84,8 @@ export type DevelopmentWebTurnPlanner = (
     readonly onProgress: (summary: string) => void;
     /** Optional diagnostic observer. */
     readonly onPlannerStage?: (stage: WebContextPlannerStage) => void;
+    /** Closed substage vocabulary for diagnosing failures inside checkpoint lookup. */
+    readonly onPlannerSubstage?: (stage: WebContextPlannerSubstage) => void;
   },
 ) => Promise<DevelopmentWebTurnPlan> | DevelopmentWebTurnPlan;
 
@@ -200,6 +202,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
       const preparationStartedAt = Date.now();
       let preparationPhase = "native_watch";
       let plannerStage: WebContextPlannerStage | undefined;
+      let plannerSubstage: WebContextPlannerSubstage | undefined;
       let executionStarted = false;
       try {
       const nativeSignal = ownerSignal ? AbortSignal.any([abortController.signal, ownerSignal]) : abortController.signal;
@@ -210,7 +213,13 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
         onProgress: summary => turn.channel.publishProgress(summary),
         onPlannerStage: stage => {
           // Custom planners are not trusted to send a valid diagnostic enum.
-          if (isWebContextPlannerStage(stage)) plannerStage = stage;
+          if (isWebContextPlannerStage(stage)) {
+            plannerStage = stage;
+            plannerSubstage = stage === "checkpoint_lookup" ? "checkpoint_lookup_started" : undefined;
+          }
+        },
+        onPlannerSubstage: stage => {
+          if (isWebContextPlannerSubstage(stage)) plannerSubstage = stage;
         },
       });
       // Planning may successfully reserve the task's transactional context
@@ -434,6 +443,8 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
               ...(error.estimates.budget === undefined ? {} : { fit_budget: error.estimates.budget }),
             } : {}),
             ...(preparationPhase === "context_plan" && plannerStage ? { planner_stage: plannerStage } : {}),
+            ...(preparationPhase === "context_plan" && plannerStage === "checkpoint_lookup" && plannerSubstage
+              ? { planner_substage: plannerSubstage } : {}),
             network_kind: classifyNetworkFailure(error),
             duration_ms: diagnosticDurationMs(preparationStartedAt),
             turn_phase: turn.channel.phase, tool_round_count: turn.channel.toolRoundCount,
