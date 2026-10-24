@@ -50,6 +50,8 @@ describe("ChatGPT Tela frozen ABI", () => {
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("continue the same user goal with another relevant available tool or method");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("actual tool results and platform errors as evidence");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("claim transport loss only when an explicit transport failure or connection-close event is observed");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("An HTTP rejection for one capability and an MCP isError response establish that call's failure");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("does not prove model receipt");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("Native Goal token counters do not establish Web usage or billing");
   });
 
