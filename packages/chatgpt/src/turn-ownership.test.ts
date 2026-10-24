@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test";
+import { diagnosticFingerprint, observeDiagnosticEvents, readDiagnosticTail, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { authorFingerprint, resolveAssistantLineage, type TurnOwnership } from "./turn-ownership";
 import type { ChatGptSurfaceSnapshot, ChatGptTurnObservation } from "./surface";
 
@@ -9,6 +13,67 @@ const { lineageAnchor: _answerAnchor, ...unanchoredAnswer } = answer;
 const owner = (): TurnOwnership => ({ userTurnKey: user.key, acceptedUserFingerprint: user.contentFingerprint!, acceptedLineageAnchor: user.lineageAnchor!,
   conversationRoute: "https://chatgpt.com/c/owned", baselineUserLineageKeys: new Set() });
 const snapshot = (turns: readonly ChatGptTurnObservation[], url = "https://chatgpt.com/c/owned"): ChatGptSurfaceSnapshot => ({ revision: "fixture", url, turns, composers: [], sendControls: [] });
+
+test("ownership rejection persists before/after input-state evidence without request text", () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-request-changed-proof-"));
+  const file = join(root, "events.jsonl"), previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  let state: "unchanged" | "changed" = "unchanged";
+  const tracked: TurnOwnership = { ...owner(), causalReceipt: true, inputUnchanged: () => state === "unchanged",
+    observationInputState: () => state, diagnosticLineage: {
+      operation_fingerprint: diagnosticFingerprint("operation"), native_task_fingerprint: diagnosticFingerprint("task"),
+      native_turn_fingerprint: diagnosticFingerprint("turn"), web_epoch_fingerprint: diagnosticFingerprint("epoch"),
+      request_lineage_fingerprint: diagnosticFingerprint("lineage"),
+      active_request_revision_fingerprint: diagnosticFingerprint("active-revision"),
+      head_revision_fingerprint: diagnosticFingerprint("head-revision"), context_mode: "checkpoint-delta",
+    } };
+  const events: StructuralDiagnosticEvent[] = [];
+  const stop = observeDiagnosticEvents(row => events.push(row));
+  try {
+    expect(resolveAssistantLineage(snapshot([user, answer]), tracked).assistants).toEqual([answer]);
+    state = "changed";
+    expect(() => resolveAssistantLineage(snapshot([{ ...user, contentFingerprint: "changed-private-body" }, answer]), tracked))
+      .toThrow("accepted user identity changed");
+    const rejected = events.find(row => row.stage === "web_turn_identity_rejected");
+    expect(rejected).toMatchObject({ reason_class: "accepted_user_changed", comparison: "payload_changed_after_input_change",
+      payload_state: "changed", rendered_payload_state: "changed", anchor_state: "matching", observation_input_state: "changed",
+      operation_fingerprint: diagnosticFingerprint("operation"), request_lineage_fingerprint: diagnosticFingerprint("lineage"),
+      active_request_revision_fingerprint: diagnosticFingerprint("active-revision"), context_mode: "checkpoint-delta" });
+    const persisted = readDiagnosticTail(file);
+    expect(persisted.state).toBe("read");
+    expect(persisted.events).toContainEqual(expect.objectContaining({ stage: "web_turn_identity_rejected",
+      reason_class: "accepted_user_changed", comparison: "payload_changed_after_input_change",
+      observation_input_state: "changed", request_lineage_fingerprint: diagnosticFingerprint("lineage"),
+      active_request_revision_fingerprint: diagnosticFingerprint("active-revision") }));
+    expect(readFileSync(file, "utf8")).not.toContain("changed-private-body");
+  } finally {
+    stop?.();
+    if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ownership rejection distinguishes a payload mismatch with unchanged or unavailable input evidence", () => {
+  const events: StructuralDiagnosticEvent[] = [];
+  const stop = observeDiagnosticEvents(row => events.push(row));
+  try {
+    const changedUser = { ...user, contentFingerprint: "different-private-body" };
+    const unchangedInput: TurnOwnership = { ...owner(), inputUnchanged: () => true,
+      observationInputState: () => "unchanged" };
+    expect(() => resolveAssistantLineage(snapshot([changedUser, answer]), unchangedInput)).toThrow("accepted user identity changed");
+    expect(events.find(row => row.stage === "web_turn_identity_rejected")).toMatchObject({
+      comparison: "payload_changed_without_input_change", observation_input_state: "unchanged",
+    });
+
+    events.length = 0;
+    expect(() => resolveAssistantLineage(snapshot([changedUser, answer]), owner())).toThrow("accepted user identity changed");
+    expect(events.find(row => row.stage === "web_turn_identity_rejected")).toMatchObject({
+      comparison: "payload_changed_with_unknown_input_state", observation_input_state: "unknown",
+    });
+    expect(JSON.stringify(events)).not.toContain("different-private-body");
+  } finally { stop?.(); }
+});
 
 test("a proven viewing gesture preserves accepted causality across canonical hydration, pending or unknown input never does", () => {
   let state: "pending" | "unchanged" | "changed" = "pending";

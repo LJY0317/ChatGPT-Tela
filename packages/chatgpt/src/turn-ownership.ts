@@ -1,4 +1,4 @@
-import { emitDiagnosticEvent, WebObservationUnproven } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, emitDiagnosticEvent, WebObservationUnproven } from "@chatgpt-tela/core";
 import type { ChatGptSurfaceSnapshot, ChatGptTurnObservation } from "./surface";
 import { isChatGptProvisionalConversationUrl } from "./session";
 
@@ -28,6 +28,18 @@ export interface TurnOwnership {
   readonly inputUnchanged?: () => boolean;
   readonly observationInputState?: () => "unchanged" | "pending" | "changed";
   readonly acceptedUserCharacters?: number;
+  /** Privacy-safe request lineage captured when the accepted Web turn was created. */
+  readonly diagnosticLineage?: {
+    readonly operation_fingerprint: string;
+    readonly native_task_fingerprint: string;
+    readonly native_turn_fingerprint: string;
+    readonly web_epoch_fingerprint: string;
+    readonly request_lineage_fingerprint: string;
+    readonly active_request_revision_fingerprint?: string;
+    readonly head_revision_fingerprint?: string;
+    readonly base_revision_fingerprint?: string;
+    readonly context_mode: "full" | "checkpoint-delta" | "retained-delta";
+  };
   conversationRoute: string;
   pendingConversationRoute?: string;
   /** Same-document navigation suspends delivery until the original request is re-proven. */
@@ -99,6 +111,7 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
   const ownedFingerprint = ownedAuthorFingerprint(current, tracked);
   const payloadState = !current ? "unmounted" : ownedFingerprint === undefined ? "unavailable"
     : ownedFingerprint === tracked.acceptedUserFingerprint ? (tracked.causalReceipt && observationUnchanged(tracked) ? "causal" : "matching") : "changed";
+  const inputState = tracked.observationInputState?.() ?? (tracked.inputUnchanged ? (tracked.inputUnchanged() ? "unchanged" : "changed") : "unknown");
   const anchorState = !current?.lineageAnchor || !tracked.acceptedLineageAnchor ? "unavailable"
     : current.lineageAnchor === tracked.acceptedLineageAnchor ? "matching" : "changed";
   const proofReason = current?.userPayloadReason;
@@ -106,7 +119,7 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
     ? proofReason : "unclassified";
   // One bounded witness per structural transition, never text, raw identifiers or polling.
   const witness = JSON.stringify([payloadState, renderedState, anchorState, reasonClass, users.length, route === tracked.conversationRoute,
-    tracked.inputUnchanged?.() ?? null, tracked.navigationSuspended === true,
+    inputState, tracked.navigationSuspended === true,
     snapshot.turns.filter(item => item.role === "assistant").length]);
   if (tracked.ownershipWitness !== witness) {
     tracked.ownershipWitness = witness;
@@ -117,8 +130,8 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
       accepted_key_count: users.length, route_matches: route === tracked.conversationRoute,
       reason_class: reasonClass,
       author_root_available: renderedFingerprint !== undefined, causal_receipt: tracked.causalReceipt === true,
-      input_unchanged: tracked.inputUnchanged?.() ?? false, navigation_suspended: tracked.navigationSuspended === true,
-      observation_input_state: tracked.observationInputState?.() ?? "unknown",
+      input_unchanged: inputState === "unchanged", navigation_suspended: tracked.navigationSuspended === true,
+      observation_input_state: inputState,
       expected_author_characters: tracked.acceptedUserCharacters ?? 0,
       author_root_count: current?.userPayloadStructure?.rootCount ?? 0,
       author_outer_characters: current?.userPayloadStructure?.outerLength ?? 0,
@@ -208,10 +221,18 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
     }
   }
   if (payloadState === "changed") {
+    const changeClass = inputState === "changed" ? "payload_changed_after_input_change"
+      : inputState === "unchanged" ? "payload_changed_without_input_change"
+        : inputState === "pending" ? "payload_changed_during_input_pending" : "payload_changed_with_unknown_input_state";
     emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rejected", { reason_class: "accepted_user_changed",
+      comparison: changeClass,
       payload_state: payloadState, rendered_payload_state: renderedState, anchor_state: anchorState,
+      accepted_request_fingerprint: diagnosticFingerprint(tracked.acceptedUserFingerprint),
+      ...(renderedFingerprint === undefined ? {} : { observed_request_fingerprint: diagnosticFingerprint(renderedFingerprint) }),
+      accepted_user_key_fingerprint: diagnosticFingerprint(tracked.userTurnKey),
+      ...(tracked.diagnosticLineage ?? {}),
       input_unchanged: tracked.inputUnchanged?.() ?? false,
-      observation_input_state: tracked.observationInputState?.() ?? "unknown",
+      observation_input_state: inputState,
     });
     throw new WebObservationUnproven("request_changed", "ChatGPT accepted user identity changed during the active Web turn");
   }

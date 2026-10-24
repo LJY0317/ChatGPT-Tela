@@ -1603,6 +1603,20 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             ...(inputUnchanged ? { inputUnchanged } : {}),
             ...(observationInputState ? { observationInputState } : {}),
             acceptedUserCharacters: text.length,
+            diagnosticLineage: {
+              operation_fingerprint: diagnosticFingerprint([request.nativeTaskId, request.nativeTurnId, request.webEpochId].join("\n")),
+              native_task_fingerprint: diagnosticFingerprint(request.nativeTaskId),
+              native_turn_fingerprint: diagnosticFingerprint(request.nativeTurnId),
+              web_epoch_fingerprint: diagnosticFingerprint(request.webEpochId),
+              request_lineage_fingerprint: diagnosticFingerprint([request.nativeTaskId, request.nativeTurnId,
+                request.webEpochId, request.physicalContext.activeRequestRevisionId ?? "unavailable"].join("\n")),
+              ...(request.physicalContext.activeRequestRevisionId
+                ? { active_request_revision_fingerprint: diagnosticFingerprint(request.physicalContext.activeRequestRevisionId) } : {}),
+              head_revision_fingerprint: diagnosticFingerprint(request.physicalContext.headRevisionId),
+              ...(request.physicalContext.baseRevisionId
+                ? { base_revision_fingerprint: diagnosticFingerprint(request.physicalContext.baseRevisionId) } : {}),
+              context_mode: request.physicalContext.mode,
+            },
             ...(causalReceipt ? { causalReceipt: true } : {}),
             ...(userTurn.lineageAnchor ? { acceptedLineageAnchor: userTurn.lineageAnchor } : {}),
             conversationRoute: new URL(snapshot.url).origin + new URL(snapshot.url).pathname,
