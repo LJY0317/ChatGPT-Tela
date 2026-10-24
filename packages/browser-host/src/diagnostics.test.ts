@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
-import { diagnosticFingerprint, setPrivateDiagnosticCapture, withDiagnosticContext } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, readDiagnosticTail, setPrivateDiagnosticCapture, withDiagnosticContext } from "@chatgpt-tela/core";
 import { captureBrowserDiagnosticEvidence, captureBrowserDiagnosticCheckpoint, DIAGNOSTIC_DOM_CAPTURE } from "./diagnostics";
 import { BROWSER_PAGE_AUTOMATION } from "./page-automation";
 import { BROWSER_READ_ONLY_PREVIEW, type BrowserSurfaceLease } from "./index";
@@ -51,6 +51,9 @@ test.each(["approval_anomaly", "approval_preparation_failed", "progress_descript
   await capture("off");expect(privateFlags).toEqual([false]);expect(previews).toBe(0);
   setPrivateDiagnosticCapture(join(root,"diagnostics"),1);safe=false;await capture("auth");expect(previews).toBe(0);expect(readdirSync(join(root,"diagnostics","private"))).toHaveLength(0);
   safe=true;await capture("enabled");await capture("enabled");expect(previews).toBe(1);expect(evaluations).toBe(3);expect(readdirSync(join(root,"diagnostics","private"))).toHaveLength(4);
+  const retained=readDiagnosticTail(join(root,"events.jsonl")).events.filter(row=>row.stage==="private_capture_recorded");
+  expect(retained).toHaveLength(1);
+  expect(retained[0]).toMatchObject({retained_count:2,omitted_count:0,operation_fingerprint:diagnosticFingerprint("enabled")});
 });
 test("broken diagnostic capability cannot replace the primary outcome",async()=>{
   const surface={capability(){throw new Error("broken");},taskId:"diagnostic",epochId:"epoch"} as unknown as BrowserSurfaceLease;

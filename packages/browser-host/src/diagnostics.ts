@@ -173,14 +173,18 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_pick
       emitDiagnosticEvent("chatgpt_tela_browser","browser_progress_branch_observed",evidence);
     }
     if (!enabled || snapshot.capture_safe!==true) return;
-    if (typeof snapshot.html==="string") writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.html),operationFingerprint:operation,captureScope:"document" });
-    if (typeof snapshot.focus_html==="string") writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.focus_html),operationFingerprint:operation,captureScope:"latest_turn_shell" });
+    let retained=0, omitted=0;
+    const record=(ref: string | undefined)=>{ if(ref) retained++; else omitted++; };
+    if (typeof snapshot.html==="string") record(writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.html),operationFingerprint:operation,captureScope:"document" }));
+    if (typeof snapshot.focus_html==="string") record(writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.focus_html),operationFingerprint:operation,captureScope:"latest_turn_shell" }));
     const preview=surface.capability(BROWSER_READ_ONLY_PREVIEW);
     if (preview) {
       const bytes=await preview.captureJpeg();
-      if (!controller.signal.aborted) writePrivateDiagnosticArtifact(root,{kind:"jpg",bytes,operationFingerprint:operation});
+      if (!controller.signal.aborted) record(writePrivateDiagnosticArtifact(root,{kind:"jpg",bytes,operationFingerprint:operation}));
     }
-    const row=structuralDiagnosticEvent({ ts:new Date().toISOString(), event:"chatgpt_tela_browser", stage:"private_capture_recorded", operation_fingerprint:operation, ...fields });
+    const stage=retained ? "private_capture_recorded" : "private_capture_omitted";
+    emitDiagnosticEvent("chatgpt_tela_browser",stage,{...fields,retained_count:retained,omitted_count:omitted});
+    const row=structuralDiagnosticEvent({ ts:new Date().toISOString(), event:"chatgpt_tela_browser", stage, operation_fingerprint:operation, ...fields, retained_count:retained, omitted_count:omitted });
     if (row && !controller.signal.aborted) writeDiagnosticIncident(root,{stage:row.stage,observedAt:row.ts,timeline:[row]});
   };
   try {
