@@ -1035,6 +1035,21 @@ describe("Native request development Web planner", () => {
     small.settle?.({ status: "failed" });
   });
 
+  test("active tool and assistant chain is accounted for in a fresh Goal follow-up", async () => {
+    const plan = await createNativeRequestDevelopmentWebTurnPlanner()(registered(), { input: [
+      { role: "user", content: "Continue checkout" },
+      { type: "function_call", name: "exec_command", call_id: "synthetic", arguments: "{}" },
+      { type: "function_call_output", call_id: "synthetic", output: "changed file" },
+      { role: "assistant", content: "File change recorded" },
+    ] });
+    expect(plan.diagnostics).toMatchObject({
+      active_chain_assistant_source_count: 1, active_chain_tool_call_source_count: 1,
+      active_chain_tool_result_source_count: 1, active_chain_assistant_inline_count: 1,
+      active_chain_tool_call_inline_count: 1, active_chain_tool_result_inline_count: 1,
+    });
+    plan.settle?.({ status: "failed" });
+  });
+
   test("canonical prefixes keep stable revision ids across later turns and append-only steering-like input", () => {
     const earlier = projectNativeRequestContext("thread-1", {
       instructions: "Keep repository context.",

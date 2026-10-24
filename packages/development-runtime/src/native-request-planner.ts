@@ -299,6 +299,25 @@ function physicalMediaCost(context: WebPhysicalContext, media: readonly WebTurnM
   return Object.freeze({ ...context, transferTokens: context.transferTokens + Math.ceil(bytes / 4) });
 }
 
+/** Structural receipt for the preceding and current Native work chain; no source text or IDs. */
+function activeChainEvidence(projection: NativeRequestContextProjection, physical: WebPhysicalContext) {
+  const userIndices = projection.revisions.flatMap((item, index) => item.revision.kind === "user" ? [index] : []);
+  const precedingUser = userIndices.at(-2) ?? -1;
+  const chain = projection.revisions.slice(precedingUser + 1);
+  const sent = new Set(physical.segments.flatMap(item => item.type === "revision" ? [item.revisionId] : []));
+  const tally = (kind: string) => chain.filter(item => item.revision.kind === kind);
+  const included = (kind: string) => tally(kind).filter(item => sent.has(item.revision.id)).length;
+  return {
+    active_chain_assistant_source_count: tally("assistant").length,
+    active_chain_tool_call_source_count: tally("tool-call").length,
+    active_chain_tool_result_source_count: tally("tool-result").length,
+    active_chain_assistant_inline_count: included("assistant"),
+    active_chain_tool_call_inline_count: included("tool-call"),
+    active_chain_tool_result_inline_count: included("tool-result"),
+    active_chain_checkpoint_count: physical.segments.filter(item => item.type === "checkpoint").length,
+  };
+}
+
 function retainedDelta(
   projection: NativeRequestContextProjection,
   committed: CommittedRetainedContext,
@@ -1088,6 +1107,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         diagnostics: Object.freeze({
           provider_projection: false,
           retained_delta: true,
+          ...activeChainEvidence(projection, physicalContext),
           retained_input_head_fingerprint: diagnosticFingerprint(committed.inputHeadRevisionId),
           history_checkpoint_reused: historyCheckpointReused,
           history_checkpoint_produced: historyCheckpointProduced,
@@ -1351,6 +1371,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       ...(physicalLimits ? { physicalLimits } : {}),
       diagnostics: Object.freeze({
         provider_projection: true,
+        ...activeChainEvidence(projection, physicalContext),
         visible_compaction_history: visibleHistory !== undefined,
         history_checkpoint_reused: historyCheckpointReused,
         history_checkpoint_produced: historyCheckpointProduced,
