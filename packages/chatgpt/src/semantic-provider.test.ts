@@ -523,6 +523,10 @@ describe("ChatGPT semantic provider", () => {
         expect(JSON.stringify(webFinal)).not.toContain("Exact prior answer");
         expect(committed.assistant_key_fingerprint).toBeDefined();
         expect(committed.parent_key_fingerprint).toBeDefined();
+        expect(committed.semantic_version).toBe(1);
+        if (mode !== "committed-body-unavailable") expect(committed.retained_answer_fingerprint).toBeDefined();
+        expect(readDiagnosticTail(file).events.find(row => row.stage === "web_retained_answer_committed")?.retained_answer_fingerprint)
+          .toBe(committed.retained_answer_fingerprint);
         if (mode === "committed-body-unavailable") expect(committed.reason_class).toBe("unsupported_node");
         driver.current = { ...driver.current, revision: "next-ready",
           composers: driver.current.composers.map(({textFingerprint: _unused,...composer}) => ({...composer,textLength:0})),
@@ -568,6 +572,19 @@ describe("ChatGPT semantic provider", () => {
               : mode === "unreadable-answer" ? "observed_body_missing" : "semantic_digest_mismatch",
           });
           expect(driver.activated).toHaveLength(1);
+          if (mode === "semantic-change" || mode === "changed-answer") {
+            const rejected = readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line))
+              .find(row => row.stage === "web_retained_anchor_rejected");
+            expect(rejected).toMatchObject({
+              committed_semantic_version: 1, observed_semantic_version: 1,
+              committed_answer_fingerprint: committed.retained_answer_fingerprint,
+            });
+            expect(rejected?.committed_semantic_digest_fingerprint).toBeDefined();
+            expect(rejected?.observed_answer_fingerprint).toBeDefined();
+            expect(rejected?.observed_answer_fingerprint).not.toBe(committed.retained_answer_fingerprint);
+            expect(readDiagnosticTail(file).events.find(row => row.stage === "web_retained_anchor_rejected")?.observed_answer_fingerprint)
+              .toBe(rejected?.observed_answer_fingerprint);
+          }
           if (mode === "committed-body-unavailable" || mode === "observed-body-unavailable" || mode === "untrusted-body-reason") {
             const log = readFileSync(file, "utf8");
             const rejected = log.trim().split("\n").map(line => JSON.parse(line)).find(row => row.stage === "web_retained_anchor_rejected");

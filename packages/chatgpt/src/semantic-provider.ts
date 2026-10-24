@@ -690,6 +690,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     readonly retention: RetainedAnswer;
     readonly presentationFingerprint: string;
     readonly answerCharacters: number;
+    readonly semanticVersion: number | undefined;
     readonly boundary: ReturnType<typeof retainedBoundaryFields> & { readonly approval_cards: number; readonly handoff_state: string };
     readonly privateBodyEvidence?: ChatGptTurnObservation["privateBodyEvidence"];
   }>();
@@ -704,6 +705,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       handoff_state: handoffState };
     this.#completedBySurface.set(surface, { userTurnKey: tracked.userTurnKey, assistantKey: assistant.key, retention, boundary,
       presentationFingerprint: fingerprint(assistant.text ?? ""), answerCharacters: assistant.text?.length ?? 0,
+      semanticVersion: assistant.bodyProof?.version,
       ...(assistant.privateBodyEvidence ? { privateBodyEvidence: assistant.privateBodyEvidence } : {}),
     });
     // Final delivery and retained-context proof are distinct. Record the latter at
@@ -712,6 +714,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       operation_fingerprint: diagnosticFingerprint([tracked.handle.nativeTaskId, tracked.handle.nativeTurnId,
         tracked.handle.webEpochId].join("\n")),
       ...boundary, answer_characters: assistant.text?.length ?? 0,
+      ...(assistant.bodyProof ? { semantic_version: assistant.bodyProof.version } : {}),
+      ...(retention.state === "verified" ? { retained_answer_fingerprint: diagnosticFingerprint(retention.fingerprint) } : {}),
       state: retention.state, semantic_answer_available: retention.state === "verified",
       ...(retention.state === "unavailable" ? { reason_class: retention.reason } : {}),
     });
@@ -732,15 +736,23 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       : !observedSemanticAvailable ? "observed_body_incomplete"
       : assistant.text === undefined ? "answer_unavailable" : "semantic_digest_mismatch";
     const bodyReason = answerBodyReason(assistant);
+    const observedAnswerFingerprint = assistant ? committedAnswerFingerprint(assistant) : undefined;
     const sameAnswer = !!anchor && !!assistant && assistant.text !== undefined
       && anchor.retention.state === "verified"
-      && committedAnswerFingerprint(assistant) === anchor.retention.fingerprint;
+      && observedAnswerFingerprint === anchor.retention.fingerprint;
     if (!anchor || !assistant || !sameKey || !sameAnswer) {
       emitDiagnosticEvent("chatgpt_tela_work", "web_retained_anchor_rejected", {
         ...retainedBoundaryFields(assistant),
         ...(anchor ? { committed_boundary_fingerprint: fingerprint(JSON.stringify(anchor.boundary)),
           committed_handoff_state: anchor.boundary.handoff_state,
-          committed_approval_cards: anchor.boundary.approval_cards } : {}),
+          committed_approval_cards: anchor.boundary.approval_cards,
+          committed_semantic_digest_fingerprint: anchor.boundary.semantic_digest_fingerprint,
+          ...(anchor.semanticVersion !== undefined ? { committed_semantic_version: anchor.semanticVersion } : {}),
+          ...(anchor.retention.state === "verified" ? { committed_answer_fingerprint: diagnosticFingerprint(anchor.retention.fingerprint) } : {}) } : {}),
+        ...(assistant?.bodyProof ? { observed_semantic_version: assistant.bodyProof.version } : {}),
+        ...(observedAnswerFingerprint ? {
+          observed_answer_fingerprint: diagnosticFingerprint(observedAnswerFingerprint),
+        } : {}),
         observed_approval_cards: snapshot.approval?.cardCount ?? 0,
         reason_class: reason,
         phase: bodyReason,
@@ -760,7 +772,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       capturePrivateDiagnosticValue("retained_body_mismatch", {
         before: anchor?.privateBodyEvidence ?? null, after: assistant?.privateBodyEvidence ?? null,
         beforeDigest: anchor?.retention.state === "verified" ? anchor.retention.fingerprint : null,
-        afterDigest: assistant ? committedAnswerFingerprint(assistant) ?? null : null,
+        afterDigest: observedAnswerFingerprint ?? null,
         assistantKeyMatches: sameKey,
       });
       throw new WebRetainedContextUnproven(reason);
