@@ -248,7 +248,8 @@ test('cycle incident retains checkpoint selection and distinct request decisions
     withDiagnosticContext({request_fingerprint:id},()=>{
      emitDiagnosticEvent('chatgpt_tela_work','web_retained_context_decision',{reason_class:reason,reuse_eligible:chosen});
      emitDiagnosticEvent('chatgpt_tela_codex','native_working_checkpoint_selected',{
-      candidate_count:1,covered_revision_count:chosen?4:0,checkpoint_reused:chosen});
+      candidate_count:1,covered_revision_count:chosen?4:0,checkpoint_reused:chosen,
+      reason_class:chosen?'selected':'canonical_ancestry_mismatch'});
     });
    }
   });
@@ -260,6 +261,8 @@ test('cycle incident retains checkpoint selection and distinct request decisions
    .toEqual(['no_committed_context','retained_match']);
   expect(incident.timeline.filter(row=>row.stage==='native_working_checkpoint_selected').map(row=>row.checkpoint_reused))
    .toEqual([false,true]);
+  expect(incident.timeline.filter(row=>row.stage==='native_working_checkpoint_selected').map(row=>row.reason_class))
+   .toEqual(['canonical_ancestry_mismatch','selected']);
   expect(incident.timeline.filter(row=>row.stage==='native_working_checkpoint_selected').map(row=>row.request_fingerprint))
    .toEqual([request,'6'.repeat(24)]);
  }finally{observer.finish();if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;rmSync(root,{recursive:true,force:true});}

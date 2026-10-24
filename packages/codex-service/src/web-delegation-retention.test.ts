@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
-import { structuralDiagnosticEvent } from "@chatgpt-tela/core";
+import { structuralDiagnosticEvent, observeDiagnosticEvents } from "@chatgpt-tela/core";
 import { WebDelegationStore, linkNativeThreadForRetention, type WebDelegationRecord } from "./web-delegation";
 import { settleWebDelegationRetention, startWebDelegationRetention } from "./web-delegation-retention";
 const DAY = 86_400_000;
@@ -77,23 +77,29 @@ function fixture() {
 
 test("profile reconnect defers retention without losing due work; other owner failures stay observable", async () => {
   const f = fixture();
+  const failures: string[] = [];
+  const stop = observeDiagnosticEvents(row => {
+    if (row.stage === "web_delegation_retention_failed") failures.push(row.stage);
+  });
   try {
     f.store.collect(f.record.id, f.origin);
     let ready = false;
-    const adapters = { ...f.adapters, owner: async (slot: number) => {
+    const adapters = { ...f.adapters, owner: async () => {
       if (!ready) throw Error("Web cleanup profile unavailable");
-      return f.adapters.owner(slot);
+      return f.adapters.owner();
     } };
     await settleWebDelegationRetention(adapters, { now: f.origin + 2 * DAY, signal: new AbortController().signal });
     expect(f.native.archived).toBe(false);
     expect(f.store.threadRetention(f.record)).toBeUndefined();
+    expect(failures).toHaveLength(0);
     ready = true;
     await settleWebDelegationRetention(adapters, { now: f.origin + 2 * DAY, signal: new AbortController().signal });
     expect(f.native.archived).toBe(true);
     const broken = { ...f.adapters, owner: async () => { throw Error("Authenticated selected ChatGPT login and routing are unavailable"); } };
     await settleWebDelegationRetention(broken, { now: f.origin + 3 * DAY, signal: new AbortController().signal });
     expect(f.store.threadRetention(f.record)?.state).toBe("archived");
-  } finally { f.cleanup(); }
+    expect(failures).toHaveLength(1);
+  } finally { stop?.(); f.cleanup(); }
 });
 
 test("first result collection starts 24h clock, repeated reads do not extend it, auto archive deletes thirty days later", async () => {

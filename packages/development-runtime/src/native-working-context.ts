@@ -263,7 +263,7 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     summary_estimate: selected?.checkpoint.estimatedTokens ?? 0,
     cached_candidate_count: cachedCount, cache_read_failed: cacheReadFailed,
     published_candidate_count: publicationCount, published_cross_scope_excluded_count: crossScopeExcludedCount,
-    selection_reason: selected ? "selected" : !candidates.length
+    reason_class: selected ? "selected" : !candidates.length
       ? crossScopeExcludedCount ? "portable_prefix_excluded" : cacheReadFailed ? "cache_unavailable_or_empty" : "no_candidate"
       : fitExcluded ? "physical_plan_incompatible" : ancestryExcluded ? "canonical_ancestry_mismatch"
         : scopeExcluded ? "scope_mismatch" : "no_eligible_candidate",

@@ -372,9 +372,9 @@ test("completed summaries reuse across model changes and exact-prefix forks, whi
     const stored = readDiagnosticTail(diagnosticFile);
     expect(stored.state).toBe("read");
     const selected = stored.events.filter(item => item.stage === "native_working_checkpoint_selected");
-    expect(selected.some(item => item.candidate_count === 0 && item.cached_candidate_count === 0
+    expect(selected.some(item => item.reason_class === "no_candidate" && item.candidate_count === 0 && item.cached_candidate_count === 0
       && item.published_candidate_count === 0 && item.cache_read_failed === false)).toBe(true);
-    expect(selected.some(item => item.checkpoint_reused === true && item.cached_candidate_count === 1
+    expect(selected.some(item => item.reason_class === "selected" && item.checkpoint_reused === true && item.cached_candidate_count === 1
       && Number(item.published_candidate_count) >= 1)).toBe(true);
     expect(selected.some(item => item.checkpoint_reused === true && item.cache_read_failed === true
       && item.cached_candidate_count === 0 && Number(item.published_candidate_count) >= 1)).toBe(true);
