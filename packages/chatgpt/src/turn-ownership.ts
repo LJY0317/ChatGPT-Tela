@@ -268,6 +268,10 @@ export function resolveAssistantLineage(
     if (identityPending) emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_pending", {
       reason_class: routeProven ? "user_not_rendered" : "canonical_route_pending",
       assistant_count: snapshot.turns.filter(item => item.role === "assistant").length,
+      complete_assistant_count: snapshot.turns.filter(item => item.role === "assistant" && item.phase === "complete").length,
+      accepted_user_present: acceptedUserPresent,
+      anchored_assistant_present: anchored,
+      approval_card_count: snapshot.approval?.cardCount ?? 0,
     });
     else emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_resumed", { contract_version: 1 });
   }

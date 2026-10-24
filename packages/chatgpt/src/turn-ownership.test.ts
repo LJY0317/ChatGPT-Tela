@@ -68,6 +68,13 @@ test("unmounted user requires the same document-scoped logical answer anchor", (
   expect(resolveAssistantLineage(snapshot([answer]), owner()).assistants).toEqual([answer]);
   expect(resolveAssistantLineage(snapshot([{ ...answer, lineageAnchor: "replacement-document" }]), owner())).toMatchObject({ identityPending: true, assistants: [] });
 });
+test("missing accepted author never promotes a completed unanchored assistant", () => {
+  const tracked = owner();
+  const completed = { ...unanchoredAnswer, phase: "complete" as const };
+  const observed = snapshot([completed]);
+  expect(resolveAssistantLineage(observed, tracked)).toMatchObject({ identityPending: true, assistants: [] });
+  expect(resolveAssistantLineage(snapshot([user, completed]), tracked).assistants).toEqual([completed]);
+});
 test("old baseline users do not turn an unmounted accepted user into a conflict", () => {
   const tracked = { ...owner(), baselineUserLineageKeys: new Set(["user:old"]) };
   expect(resolveAssistantLineage(snapshot([{ ...user, key: "user:old" }, unanchoredAnswer]), tracked))
