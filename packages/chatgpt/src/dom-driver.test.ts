@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "bun:test";
-import { structuralDiagnosticEvent, observeDiagnosticEvents } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, structuralDiagnosticEvent, observeDiagnosticEvents, withDiagnosticContext } from "@chatgpt-tela/core";
 import {
   BROWSER_PAGE_AUTOMATION,
   ControlledBrowserHost,
@@ -896,9 +896,13 @@ describe("current ChatGPT DOM surface driver", () => {
       page.raw.turns = [{ key: "assistant:owned", role: "assistant", phase: "failed",
         progressProbe: { containerPresent: true, containerVisible: true, failureSource: "alert",
           failureCandidateCount: 1, failureEligibleCount: 1 } }];
+      await withDiagnosticContext({ scope_fingerprint: "a".repeat(24), turn_fingerprint: "b".repeat(24),
+        operation_fingerprint: "c".repeat(24) }, () => driver.observe());
       await driver.observe();
-      await driver.observe();
-      expect(rows.filter(row => row.stage === "web_provider_failure_observed")).toHaveLength(1);
+      const failures = rows.filter(row => row.stage === "web_provider_failure_observed");
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({ scope_fingerprint: "a".repeat(24), turn_fingerprint: "b".repeat(24),
+        operation_fingerprint: "c".repeat(24), assistant_fingerprint: diagnosticFingerprint("assistant:owned") });
       expect(rows.filter(row => row.stage === "web_public_progress_extraction")).toHaveLength(36);
     } finally { stop?.(); }
   });

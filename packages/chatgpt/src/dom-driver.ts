@@ -2214,7 +2214,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
           this.#progressProbeSignature = signature;
           const probe = settled.progressProbe;
           if (settled.phase === "failed") emitDiagnosticEvent("chatgpt_tela_work", "web_provider_failure_observed", {
-            turn_fingerprint: diagnosticFingerprint(settled.key),
+            assistant_fingerprint: diagnosticFingerprint(settled.key),
             failure_class: probe.failureSource ?? "none", error_candidate_count: probe.failureCandidateCount ?? 0,
             eligible_error_candidate_count: probe.failureEligibleCount ?? 0,
             approval_error_candidate_count: probe.failureApprovalCount ?? 0,
