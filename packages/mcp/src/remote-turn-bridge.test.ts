@@ -61,3 +61,24 @@ test('SDK request timeouts record the observed adapter phase and never replay a 
   expect(JSON.stringify(events)).not.toMatch(/PRIVATE_|127\.0\.0\.1|opaque_capability/);
  }finally{stop?.();await bridge?.close();await server.stop(true)}
 });
+
+test('rejected Native inventory emits a bounded failure-stage diagnostic', async () => {
+  const { observeDiagnosticEvents } = await import('@chatgpt-tela/core');
+  const events: any[] = [];
+  const stop = observeDiagnosticEvents(row => {
+    if (row.stage === 'native_mcp_inventory_rejected') events.push(row);
+  });
+  const server = await startCodexBridgeMcpHttpServer({
+    bridge: {
+      inventory() { throw new Error('PRIVATE_INVENTORY_FAILURE'); },
+      async invoke() { throw new Error('unexpected invocation'); },
+    },
+  });
+  const bridge = await connectCodexTurnBridge({ endpoint: server.endpointUrl, bearerToken: server.bearerToken! });
+  try {
+    await expect(bridge.inventory('turnr_Fixture1_opaque_capability')).rejects.toThrow('rejected Native tool inventory request');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ phase: 'inventory_result', reason_class: 'tool_result_error' });
+    expect(JSON.stringify(events)).not.toContain('PRIVATE_INVENTORY_FAILURE');
+  } finally { stop?.(); await bridge.close(); await server.stop(); }
+});

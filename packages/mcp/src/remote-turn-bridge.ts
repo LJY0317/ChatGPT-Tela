@@ -112,11 +112,19 @@ export async function connectCodexTurnBridge(input: {
   await withClient(async () => {});
   return Object.freeze({
     async inventory(capability: string, query = "") {
-      const result = await withClient(client => client.callTool({
-        name: CHATGPT_TELA_CODEX_TOOL_INVENTORY,
-        arguments: { turn_capability: capability, query },
-      }));
-      if (result.isError) throw new Error("remote turn bridge rejected Native tool inventory request");
+      const result = await withClient(async client => {
+        const response = await client.callTool({
+          name: CHATGPT_TELA_CODEX_TOOL_INVENTORY,
+          arguments: { turn_capability: capability, query },
+        });
+        if (response.isError) {
+          emitDiagnosticEvent("chatgpt_tela_mcp", "native_mcp_inventory_rejected", {
+            phase: "inventory_result", reason_class: "tool_result_error",
+          });
+          throw new Error("remote turn bridge rejected Native tool inventory request");
+        }
+        return response;
+      });
       let parsed: unknown;
       try { parsed = JSON.parse(textContent(result)); }
       catch (error) { throw new Error("remote turn bridge returned invalid Native tool inventory JSON", { cause: error }); }
