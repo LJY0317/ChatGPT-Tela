@@ -534,6 +534,29 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(observation.bodyProof?.digest).toBeDefined();
     expect(observation.contentFingerprint).toBeUndefined();
   });
+  test("user-owned Copy message cannot finish an assistant still rendering JSON", async () => {
+    const body = new FixtureElement({ 'data-markdown-text-style': 'assistant-message' });
+    body.textContent = '{"summary":"unfinished';
+    const userCopy = new FixtureElement();
+    userCopy.closest = selector => selector.includes('[class~="group/user-message"]')
+      ? new FixtureElement({ class: 'group/user-message' }) : null;
+    const assistantCopy = new FixtureElement();
+    const group = new FixtureElement({ 'data-turn-key': 'streaming-json' }, {
+      '[data-markdown-text-style="assistant-message"]': [body],
+      '.turn-action-controls button': [userCopy],
+    });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(
+      new FixtureElement({}, { '[data-turn-key]': [group] }),
+    ));
+    const pending = (await driver.observe()).turns[0]!;
+    expect(pending.phase).not.toBe('complete');
+    expect(pending.progressProbe?.completionControlsPresent).toBeFalsy();
+    group.selectors['button[data-testid="copy-turn-action-button"]'] = [assistantCopy];
+    body.textContent = '{"summary":"finished"}';
+    const settled = (await driver.observe()).turns[0]!;
+    expect(settled.phase).toBe('complete');
+    expect(settled.plainBodyText).toBe('{"summary":"finished"}');
+  });
 
   test("answer structure diagnostics identify selected DOM roots without author text", async () => {
     const first = new FixtureElement({ 'data-markdown-text-style': 'assistant-message' });

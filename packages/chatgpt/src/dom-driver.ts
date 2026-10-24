@@ -966,8 +966,10 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
     const failure = providerErrors.find(node => progressVisible(node)
       && (node.getAttribute('role') !== 'alert' || !stopVisible));
     if (assistantBody || progressRoot || failure) {
+      // A keyed turn can contain both the user's Copy message control and an
+      // unfinished assistant body. User-owned actions cannot settle the answer.
       const complete = !!assistantBody && [...group.querySelectorAll('button[data-testid="copy-turn-action-button"], .turn-action-controls button')]
-        .some(visible);
+        .some(control => visible(control) && !control.closest('[data-user-message-bubble], [data-message-author-role="user"], [data-conversation-role="user"], [class~="group/user-message"]'));
       const answer = answerBody || (complete ? assistantBody : undefined);
       let bodyStructure;
       try {
