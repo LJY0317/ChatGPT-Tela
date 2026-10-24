@@ -230,14 +230,16 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
   const active = new Map(projection.revisions.map((item, index) => [item.revision.id, index]));
   let selected: CachedContextCheckpoint | undefined;
   let selectedIndex = -1;
+  let scopeExcluded = 0, ancestryExcluded = 0, fitExcluded = 0;
   for (const candidate of candidates) {
-    if (scope ? candidate.scopeFingerprint !== scope : candidate.scopeFingerprint !== undefined) continue;
+    if (scope ? candidate.scopeFingerprint !== scope : candidate.scopeFingerprint !== undefined) { scopeExcluded++; continue; }
     const index = active.get(candidate.checkpoint.revisionId) ?? -1;
-    if (index < 0 || index > anchorIndex || index < selectedIndex) continue;
+    if (index < 0 || index > anchorIndex) { ancestryExcluded++; continue; }
+    if (index < selectedIndex) continue;
     // A checkpoint is usable only when its canonical ancestor is still on the active path.
     const plan = planPhysicalContext({ lineage: projection.lineage, headId: projection.headId,
       checkpoint: candidate.checkpoint });
-    if (plan.status !== "ready" || plan.mode !== "checkpoint-delta") continue;
+    if (plan.status !== "ready" || plan.mode !== "checkpoint-delta") { fitExcluded++; continue; }
     selected = candidate; selectedIndex = index;
   }
   const legacy = selected ? legacyPublications.get(selected.checkpoint.revisionId) : undefined;
@@ -261,6 +263,12 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     summary_estimate: selected?.checkpoint.estimatedTokens ?? 0,
     cached_candidate_count: cachedCount, cache_read_failed: cacheReadFailed,
     published_candidate_count: publicationCount, published_cross_scope_excluded_count: crossScopeExcludedCount,
+    selection_reason: selected ? "selected" : !candidates.length
+      ? crossScopeExcludedCount ? "portable_prefix_excluded" : cacheReadFailed ? "cache_unavailable_or_empty" : "no_candidate"
+      : fitExcluded ? "physical_plan_incompatible" : ancestryExcluded ? "canonical_ancestry_mismatch"
+        : scopeExcluded ? "scope_mismatch" : "no_eligible_candidate",
+    scope_excluded_count: scopeExcluded, ancestry_excluded_count: ancestryExcluded,
+    physical_plan_excluded_count: fitExcluded,
   });
   const pendingSuffixTokens = projection.revisions.slice(selectedIndex + 1)
     .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);

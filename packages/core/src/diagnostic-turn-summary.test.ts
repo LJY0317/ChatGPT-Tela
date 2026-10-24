@@ -237,3 +237,30 @@ test('cycle closure archives sparse context evidence locally without private pro
   expect(restored.cost.preparationModelDuration.total).toBe(34601);
  }finally{observer.finish();if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;rmSync(root,{recursive:true,force:true});}
 });
+
+test('cycle incident retains checkpoint selection and distinct request decisions after log rotation',()=>{
+ const root=mkdtempSync(join(tmpdir(),'tela-context-cycle-')),file=join(root,'events.jsonl');
+ const prior=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+ const observer=startTurnDiagnosticSummary(scope,turn,request)!;
+ try{
+  withDiagnosticContext({scope_fingerprint:scope,turn_fingerprint:turn},()=>{
+   for(const [id,reason,chosen] of [[request,'no_committed_context',false],['6'.repeat(24),'retained_match',true]] as const){
+    withDiagnosticContext({request_fingerprint:id},()=>{
+     emitDiagnosticEvent('chatgpt_tela_work','web_retained_context_decision',{reason_class:reason,reuse_eligible:chosen});
+     emitDiagnosticEvent('chatgpt_tela_codex','native_working_checkpoint_selected',{
+      candidate_count:1,covered_revision_count:chosen?4:0,checkpoint_reused:chosen});
+    });
+   }
+  });
+  observer.finish();
+  const incidents=listDiagnosticIncidents(join(root,'diagnostics'));
+  expect(incidents).toHaveLength(1);
+  const incident=readDiagnosticIncident(join(root,'diagnostics'),incidents[0]!.ref) as {timeline:StructuralDiagnosticEvent[]};
+  expect(incident.timeline.filter(row=>row.stage==='web_retained_context_decision').map(row=>row.reason_class))
+   .toEqual(['no_committed_context','retained_match']);
+  expect(incident.timeline.filter(row=>row.stage==='native_working_checkpoint_selected').map(row=>row.checkpoint_reused))
+   .toEqual([false,true]);
+  expect(incident.timeline.filter(row=>row.stage==='native_working_checkpoint_selected').map(row=>row.request_fingerprint))
+   .toEqual([request,'6'.repeat(24)]);
+ }finally{observer.finish();if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;rmSync(root,{recursive:true,force:true});}
+});
