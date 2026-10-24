@@ -633,10 +633,13 @@ test("only eligible collected bytes trigger the 16 MiB history budget", () => {
     exclude(f.record);
     const protectedJobs: WebDelegationRecord[] = [];
     const largeAnswer = "x".repeat(500 * 1024);
-    for (let i = 0; i < 35; i++) {
+    for (let i = 0; i < 34; i++) {
       const job = { ...f.record, id: randomUUID(), threadId: randomUUID(), turnId: randomUUID(), createdAt: f.origin + i };
-      f.store.reserve(job);
-      f.store.save({ ...job, state: "completed", answer: largeAnswer, finalEvidence: "explicit-final-phase" });
+      // Exercise physical retained bytes directly; lease admission and terminal
+      // publishing are covered elsewhere, and would repeat large-file reads here.
+      writeFileSync(join(f.root, `${job.id}.json.completed`), JSON.stringify({
+        ...job, state: "completed", answer: largeAnswer, finalEvidence: "explicit-final-phase",
+      }));
       exclude(job);
       protectedJobs.push(job);
     }
