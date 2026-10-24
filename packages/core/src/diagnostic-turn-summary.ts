@@ -107,6 +107,20 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
   const activationKeys=at('web_send_activation_started').filter(e=>fp(e.operation_fingerprint))
     .map(e=>[e.operation_fingerprint,e.phase].join(':'));
   const repeatActivations=activationKeys.length-new Set(activationKeys).size;
+  // Count only operations that reached the provider, including failed results.
+  // A claimed stage, planned transfer or completed receipt is not a model invocation.
+  const invoked=new Set(at('context_checkpoint_provider_invoked').map(e=>e.operation_fingerprint).filter(fp));
+  const accepted=new Set(at('checkpoint_operation_observed')
+    .filter(e=>e.submission_accepted===true).map(e=>e.operation_fingerprint).filter(fp));
+  const invokedOperations=new Set([...invoked].filter(operation=>accepted.has(operation)));
+  const preparationModelCalls={observed:invokedOperations.size,total:invokedOperations.size,complete:invokedOperations.size>0};
+  const settledDurations=new Map<string,number>();
+  for(const row of rows.filter(e=>e.stage==='native_visible_prefix_stage_settled'||e.stage==='native_checkpoint_model_failed')){
+    if(fp(row.operation_fingerprint)&&invokedOperations.has(row.operation_fingerprint)&&number(row.duration_ms))
+      settledDurations.set(row.operation_fingerprint,row.duration_ms);
+  }
+  const preparationModelDuration={observed:settledDurations.size,total:[...settledDurations.values()].reduce((n,ms)=>n+ms,0),
+    complete:invokedOperations.size>0&&settledDurations.size===invokedOperations.size};
   const warnings=[...(events.length>512?['event_window_clipped']:[]),...(failure&&!final?['execution_or_acceptance_failed']:[]),
     ...(failure&&final?['recovered_failure_observed']:[]),...(!final&&retired?['retired_without_final']:[]),
     ...(bytes.complete&&body.complete&&protocol.complete&&bytes.total!==body.total+protocol.total?['composer_byte_partition_mismatch']:[]),...(repeatActivations?['repeated_send_boundary']:[]),...(at('native_tool_result_error').length?['tool_reported_error']:[])];
@@ -156,8 +170,8 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
       settled:at('web_context_settled').some(e=>e.status==='completed')},
     cost:{composer:bytes, context:body, protocol, taskComposer,
       preparationTransfer:sum('checkpoint_transfer_planned','transfer_estimate'),
-      preparationModelCalls:sum('native_checkpoint_efficiency_settled','model_calls'),
-      preparationModelDuration:sum('native_visible_prefix_stage_settled','duration_ms'), preparedComposer:sum('browser_message_prepared','composer_wire_bytes'), attachments:sum('web_media_upload_started','total_bytes'), toolText:results,
+      preparationModelCalls,
+      preparationModelDuration, preparedComposer:sum('browser_message_prepared','composer_wire_bytes'), attachments:sum('web_media_upload_started','total_bytes'), toolText:results,
       mcpRequestEnvelope:mcpRequest,mcpResultEnvelope:mcpResult, billedUsage:'unmeasured', semanticRecall:'not_evaluated'},
     evidence:{rows:rows.length, clipped:events.length>512,postTerminalEvents:terminal?rows.filter(e=>e.ts>terminal.ts).length:0, scope:'observed_local_events', hostDisplay:'not_observed'},
   };
@@ -177,7 +191,7 @@ export function startTurnDiagnosticSummary(scope: string, turn: string, request?
     const direct=fp(row.scope_fingerprint)&&fp(row.turn_fingerprint);
     if(direct?(row.scope_fingerprint!==scope||row.turn_fingerprint!==turn):!fp(row.request_fingerprint)||!requests.has(row.request_fingerprint))return;
     if(fp(row.request_fingerprint)&&requests.size<64)requests.add(row.request_fingerprint);
-    if (/^(web_turn_plan|web_retained_context_.*|web_context_settled|web_send_activation_started|native_seed_authority_observed|checkpoint_transfer_planned|checkpoint_response_rejected|checkpoint_json_parse_failed|native_checkpoint_efficiency_settled|native_checkpoint_model_started|native_visible_prefix_stage_settled|native_working_checkpoint_advanced|web_model_picker_timeout|native_execution_failed|native_tool_request_rejected|web_preparation_failed)$/.test(row.stage)) {
+    if (/^(web_turn_plan|web_retained_context_.*|web_context_settled|web_send_activation_started|native_seed_authority_observed|checkpoint_transfer_planned|checkpoint_response_rejected|checkpoint_json_parse_failed|native_checkpoint_efficiency_settled|native_checkpoint_model_started|native_checkpoint_model_failed|context_checkpoint_provider_invoked|native_visible_prefix_stage_settled|native_working_checkpoint_advanced|web_model_picker_timeout|native_execution_failed|native_tool_request_rejected|web_preparation_failed)$/.test(row.stage)) {
       const key=JSON.stringify([row.stage,row.operation_fingerprint,row.phase]);
       if(durable.has(key)||durable.size<DIAGNOSTIC_LIMITS.timeline-1)durable.set(key,row);
     }

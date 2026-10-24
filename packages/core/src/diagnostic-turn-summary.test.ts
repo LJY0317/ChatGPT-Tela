@@ -169,8 +169,10 @@ test('task input and checkpoint preparation costs remain separate',()=>{
   e('web_send_activation_started',{operation_fingerprint:op,composer_wire_bytes:100}),
   e('web_send_activation_started',{operation_fingerprint:preparation,composer_wire_bytes:50}),
   e('checkpoint_transfer_planned',{operation_fingerprint:preparation,transfer_estimate:23000}),
+  e('context_checkpoint_provider_invoked',{operation_fingerprint:preparation}),
+   e('checkpoint_operation_observed',{operation_fingerprint:preparation,submission_accepted:true}),
   e('native_checkpoint_efficiency_settled',{model_calls:1}),
-  e('native_visible_prefix_stage_settled',{duration_ms:10000}),
+  e('native_visible_prefix_stage_settled',{operation_fingerprint:preparation,duration_ms:10000}),
   e('native_tool_request_rejected',{reason_class:'duplicate_call'}),
  ]);
  expect(result.state).toBe('in_progress');
@@ -178,6 +180,34 @@ test('task input and checkpoint preparation costs remain separate',()=>{
  expect(result.cost.composer.total).toBe(150);
  expect(result.cost.preparationTransfer.total).toBe(23000);
  expect(result.cost.preparationModelDuration.total).toBe(10000);
+});
+
+test('failed and duplicate provider events count one real invocation and its failed duration',()=>{
+ const stage='5'.repeat(24);
+ const r=summarizeTurnDiagnostics([
+  e('native_checkpoint_model_started',{operation_fingerprint:stage}),
+  e('context_checkpoint_provider_invoked',{operation_fingerprint:stage}),
+  e('context_checkpoint_provider_invoked',{operation_fingerprint:stage}),
+  e('checkpoint_operation_observed',{operation_fingerprint:stage,submission_accepted:true}),
+  e('checkpoint_transfer_planned',{operation_fingerprint:stage,model_calls:1}),
+  e('checkpoint_response_rejected',{operation_fingerprint:stage,reason_class:'json_invalid'}),
+  e('native_checkpoint_model_failed',{operation_fingerprint:stage,duration_ms:34601}),
+  e('native_checkpoint_model_failed',{operation_fingerprint:stage,duration_ms:34601})]);
+ expect(r.cost.preparationModelCalls).toEqual({observed:1,total:1,complete:true});
+ expect(r.cost.preparationModelDuration).toEqual({observed:1,total:34601,complete:true});
+ expect(r.cost.billedUsage).toBe('unmeasured');
+});
+
+test('planned, rejected and reused stages without provider invocation cost zero',()=>{
+ const r=summarizeTurnDiagnostics([
+  e('native_checkpoint_preparation_planned',{planned_model_calls:1}),
+  e('native_checkpoint_model_started',{operation_fingerprint:op}),
+  e('checkpoint_transfer_planned',{operation_fingerprint:op,model_calls:1}),
+  e('native_checkpoint_model_failed',{operation_fingerprint:op,duration_ms:42}),
+  e('native_visible_prefix_stage_settled',{outcome:'reused',duration_ms:100}),
+  e('native_checkpoint_efficiency_settled',{model_calls:1})]);
+ expect(r.cost.preparationModelCalls.total).toBe(0);
+ expect(r.cost.preparationModelDuration.total).toBe(0);
 });
 
 test('cycle closure archives sparse context evidence locally without private prose',()=>{
