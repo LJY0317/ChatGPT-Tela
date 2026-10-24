@@ -317,18 +317,26 @@ function prune(root: string, type: "incidents" | "private", now = Date.now(), en
   }
   return kept;
 }
-export function listDiagnosticIncidents(root: string) {
-  ownedRoot(resolve(root));
+export function listDiagnosticIncidents(root: string, readOnly = false) {
+  if (readOnly) {
+    try {
+      if (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink()
+        || JSON.parse(readFileSync(join(root, "ownership.json"), "utf8")).owner !== OWNER) return [];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  } else ownedRoot(resolve(root));
   const incidents = files(root,"incidents");
-  const kept = prune(root,"incidents", Date.now(), incidents);
-  prune(root,"private");
+  const kept = readOnly ? new Set(incidents.map(item => item.name)) : prune(root,"incidents", Date.now(), incidents);
+  if (!readOnly) prune(root,"private");
   const records = incidents.filter(item => kept.has(item.name)).flatMap(item => {
     if (item.bytes > 128 * 1024) return [];
     try { const record = item.proof;
       return record.owner === OWNER && record.schemaVersion === 1 ? [{ ref: item.name.replace(/\.json$/,""), recordedAt: record.recordedAt, observedAt: record.observedAt, stage: record.stage, symptom: record.hostReported?.symptom ?? "unknown", privateArtifactCount: record.privateArtifactCount ?? 0, occurrences: record.occurrences ?? 1, firstObservedAt: record.firstObservedAt ?? record.observedAt }] : [];
     } catch { return []; }
   });
-  atomic(join(root,"INDEX.json"), { owner: OWNER, schemaVersion: 1, generatedAt: new Date().toISOString(), entryPoint: "START-HERE.md", retention: DIAGNOSTIC_LIMITS, incidents: records });
+  if (!readOnly) atomic(join(root,"INDEX.json"), { owner: OWNER, schemaVersion: 1, generatedAt: new Date().toISOString(), entryPoint: "START-HERE.md", retention: DIAGNOSTIC_LIMITS, incidents: records });
   return records;
 }
 interface AutomaticDiagnosticIncident {
@@ -390,7 +398,7 @@ export function writeDiagnosticIncident(root: string, data: ReturnType<typeof an
 }
 export function readDiagnosticIncident(root: string, ref: string): unknown {
   if (!INCIDENT_NAME.test(`${ref}.json`)) throw new Error("invalid incident reference");
-  ownedRoot(root); const path = join(root,"incidents",`${ref}.json`);
+  const path = join(root,"incidents",`${ref}.json`);
   const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 128*1024) throw new Error("unsafe incident");
   const record = JSON.parse(readFileSync(path,"utf8")); if (record.owner !== OWNER) throw new Error("incident ownership mismatch"); return record;
 }

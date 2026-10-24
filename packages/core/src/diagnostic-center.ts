@@ -23,7 +23,7 @@ export function diagnosticCenter(root: string, paths: readonly string[], command
     const view=option("--view")??"full",limit=Number(option("--limit")??(view==="summary"?8:64));
     if(!["full","summary"].includes(view)||!Number.isInteger(limit)||limit<1||limit>64)throw Error("invalid context report view or limit");
     const source = readDiagnosticSources(paths, { fromMs: atMs - minutes * 60000, toMs: atMs });
-    const archived = listDiagnosticIncidents(root).filter(record=>record.stage==='native_cycle_summary').flatMap(record=>{
+    const archived = listDiagnosticIncidents(root, true).filter(record=>record.stage==='native_cycle_summary').flatMap(record=>{
       const incident=readDiagnosticIncident(root,record.ref);
       const timeline=incident&&typeof incident==='object'&&'timeline' in incident&&Array.isArray(incident.timeline)?incident.timeline:[];
       return timeline.flatMap((row:unknown)=>{

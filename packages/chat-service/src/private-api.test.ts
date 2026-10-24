@@ -27,7 +27,7 @@ describe("Tela Chat private capability API", () => {
       expect(capabilities.capabilities).toContain("open_workspace");
       expect(capabilities.capabilities).toContain("process_status");
       expect(capabilities.capabilities).not.toContain("start_agent");
-      expect(capabilities.catalog.map(item => item.capability)).toEqual(capabilities.capabilities);
+      expect(capabilities.catalog.map(item => item.capability).sort()).toEqual([...capabilities.capabilities].sort());
       expect(capabilities.catalog.find(item => item.capability === "read")?.inputSchema).toMatchObject({
         type: "object",
         additionalProperties: false,

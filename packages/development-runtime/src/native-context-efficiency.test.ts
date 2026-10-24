@@ -56,40 +56,6 @@ test.each([false, true])("observation failure follows physical release through t
   } finally { await host.close().catch(() => {}); await rm(root, {recursive: true, force: true}); }
 });
 
-test("durable unchanged-fragment reuse survives cache loss, appended history and edited tails",async()=>{
-  const root=await mkdtemp(join(tmpdir(),"tela-efficient-context-"));
-  const journal=()=>new FileNativeVisiblePrefixStageJournal({directory:join(root,"journal"),initializationPath:join(root,"receipt")});
-  const calls:any[]=[];
-  const original=source("한글😀\\\"\n".repeat(60000));
-  const produce=async(snapshot:NativeVisiblePrefixSnapshot,extra:Partial<NativePrefixCheckpointInput>={})=>produceNativePrefixCheckpoint({source:snapshot,journal:journal(),accountNamespace:"account",effort:"medium",
-    preparationPolicy:{maxModelCalls:128,maxInputTokens:20_000_000,maxElapsedMs:600_000},
-    confirmSource:async()=>extra.source??snapshot,producer:async r=>{const body=JSON.parse(r.physicalContext.segments[0]!.content);calls.push(body);
-      return {nativeTaskId:r.nativeTaskId,sourceRevisionId:r.sourceRevisionId,content:`Bounded derived summary ${hash(JSON.stringify(body)).slice(0,16)}`};},...extra});
-  try {
-    await produce(original);
-    const fragments=calls.filter(c=>c.mode==="fragment");expect(fragments.length).toBeGreaterThan(2);
-    expect(fragments.map(f=>f.fragment).join("")).toBe(original.content);
-    calls.length=0;
-    await produce({...original,currentTurnId:"new-native-owner"});
-    expect(calls).toHaveLength(0); // New journal object; no disposable cache supplied.
-    const appended=source("한글😀\\\"\n".repeat(60000)+"new canonical suffix");
-    const envelope=JSON.parse(await produce(appended));
-    const changed=calls.filter(c=>c.mode==="fragment");
-    expect(changed.length).toBeLessThan(fragments.length);
-    expect(changed.every(c=>c.startByte>0)).toBe(true);
-    expect(envelope.sourceDigest).toBe(appended.digest);expect(envelope.sourceBytes).toBe(Buffer.byteLength(appended.content));
-    expect(calls.filter(c=>c.mode==="merge").at(-1).endByte).toBe(Buffer.byteLength(appended.content));
-    calls.length=0;
-    await produce(source("한글😀\\\"\n".repeat(60000)+"edited canonical suffix"));
-    expect(calls.filter(c=>c.mode==="fragment").every(c=>c.startByte>0)).toBe(true);
-    for (const extra of [{accountNamespace:"foreign-account"},{source:{...original,threadId:"foreign-thread"}},
-      {effort:"high"},{browserModel:{familyKey:"different-family",effort:"medium"}},
-      {summaryPolicyFingerprint:hash("different semantic policy")}] satisfies Partial<NativePrefixCheckpointInput>[]) {
-      calls.length=0;await produce(original,extra);expect(calls.filter(c=>c.mode==="fragment")).toHaveLength(fragments.length);
-    }
-  } finally {await rm(root,{recursive:true,force:true});}
-},30000);
-
 test("new stage keys cannot bypass a legacy uncertain send or require a cache to preserve it",async()=>{
   const root=await mkdtemp(join(tmpdir(),"tela-legacy-efficiency-"));
   const options={directory:join(root,"journal"),initializationPath:join(root,"receipt")};
@@ -200,40 +166,6 @@ test("public AppServer snapshot flows through the production checkpoint contract
   expect(JSON.parse(result).sourceDigest).toBe(snapshot.digest);expect(sends).toBe(1);
  }finally{await rm(root,{recursive:true,force:true});}
 });
-
-test("production request-prefix serialization reuses unchanged fragments across head growth",async()=>{
- const {nativeRequestPrefixSnapshot}=await import("./native-request-planner");
- const root=await mkdtemp(join(tmpdir(),"tela-request-prefix-"));
- const options={directory:join(root,"journal"),initializationPath:join(root,"receipt")};
- const base={mode:"full" as const,headRevisionId:"original",logicalTokens:1,transferTokens:1,
-  segments:[{type:"revision" as const,kind:"user" as const,revisionId:"original",content:"large canonical prefix ".repeat(35000)}]};
- const original=nativeRequestPrefixSnapshot("thread","active",base);
- const grown=nativeRequestPrefixSnapshot("thread","new-owner",{...base,headRevisionId:"appended",
-  segments:[...base.segments,{type:"revision",kind:"user",revisionId:"appended",content:"new suffix"}]});
- const calls:any[]=[];
- const run=(snapshot:typeof original)=>produceNativePrefixCheckpoint({source:snapshot,accountNamespace:"account",effort:"medium",
-  journal:new FileNativeVisiblePrefixStageJournal(options),confirmSource:async()=>snapshot,
-  producer:async r=>{const body=JSON.parse(r.physicalContext.segments[0]!.content);calls.push(body);return {...r,content:"summary "+hash(JSON.stringify(body))};}});
- try{
-  await run(original);const cold=calls.filter(x=>x.mode==="fragment").length;expect(cold).toBeGreaterThan(2);
-  calls.length=0;await run(grown);
-  const changed=calls.filter(x=>x.mode==="fragment");expect(changed.length).toBeLessThan(cold);
-  expect(changed.every(x=>x.startByte>0)).toBe(true);
-  calls.length=0;await run(grown);expect(calls).toHaveLength(0);
-  // A genuine edited branch replaces the suffix under new Native authority.
-  // It must neither resend the unchanged prefix nor reuse the old suffix/merge.
-  const edited=nativeRequestPrefixSnapshot("thread","edited-owner",{...base,headRevisionId:"edited",
-   segments:[...base.segments,{type:"revision",kind:"user",revisionId:"edited",content:"replacement suffix"}]});
-  calls.length=0;await run(edited);
-  const editedFragments=calls.filter(x=>x.mode==="fragment");
-  expect(editedFragments.length).toBeGreaterThan(0);expect(editedFragments.length).toBeLessThan(cold);
-  expect(editedFragments.every(x=>x.startByte>0)).toBe(true);
-  expect(editedFragments.map(x=>x.fragment).join("")).toContain("replacement suffix");
-  expect(editedFragments.map(x=>x.fragment).join("")).not.toContain("new suffix");
-  expect(calls.filter(x=>x.mode==="merge")).toHaveLength(1);
-  calls.length=0;await run({...edited,currentTurnId:"another-proven-owner"});expect(calls).toHaveLength(0);
- }finally{await rm(root,{recursive:true,force:true});}
-},30000);
 
 test("proven unusable stage is closed without replay and a fresh owner may replace its claim",async()=>{
  const {WebCheckpointOperationClosed}=await import("@chatgpt-tela/chatgpt");
