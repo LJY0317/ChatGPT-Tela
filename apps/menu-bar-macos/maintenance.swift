@@ -311,7 +311,7 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
         let when = started.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) } ?? "Unknown start time"
         processPicker.addItem(withTitle: "\(entry.workspaceName) · \(when) · task \(entry.sessionId)")
       }
-      processInfo.stringValue = unresolvedProcesses.isEmpty ? "No unfinished Chat commands found. Check update readiness again." : "These Chat commands have no confirmed completion. Some may still be running. Select only work you want to interrupt."
+      processInfo.stringValue = unresolvedProcesses.isEmpty ? "No unfinished Chat commands found. Review changes to check update readiness." : "Wait for commands to finish, then choose Review changes again. To stop one, select it and choose Cancel selected execution."
     } else {
       unresolvedProcesses = []; processPicker.removeAllItems()
       processInfo.stringValue = "Couldn't verify Chat execution status. Maintenance remains blocked until readiness is confirmed."
