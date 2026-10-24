@@ -38,6 +38,35 @@ function fixtureReader(overrides: {
 }
 
 describe("one read-only conversation inspection by exact Native ID", () => {
+  test("latest request keeps old approval and another operation out of its delivery boundary", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tela-current-boundary-"));
+    const path = join(dir, "events.jsonl");
+    const scope_fingerprint = diagnosticFingerprint(THREAD);
+    const turn_fingerprint = diagnosticFingerprint(TURN);
+    const old = diagnosticFingerprint("old-operation");
+    const current = diagnosticFingerprint("current-operation");
+    writeFileSync(path, [
+      {ts:"2026-10-17T08:10:00Z",event:"chatgpt_tela_work",stage:"approval_wait_transition",scope_fingerprint,
+        turn_fingerprint:diagnosticFingerprint("old-turn"),phase:"pending"},
+      {ts:"2026-10-17T08:11:00Z",event:"chatgpt_tela_work",stage:"web_turn_plan",scope_fingerprint,
+        turn_fingerprint,operation_fingerprint:old},
+      {ts:"2026-10-17T08:12:00Z",event:"chatgpt_tela_work",stage:"web_answer_received",scope_fingerprint,
+        turn_fingerprint,operation_fingerprint:old},
+      {ts:"2026-10-17T08:13:00Z",event:"chatgpt_tela_work",stage:"web_turn_plan",scope_fingerprint,
+        turn_fingerprint,operation_fingerprint:current},
+      {ts:"2026-10-17T08:13:01Z",event:"chatgpt_tela_work",stage:"web_answer_received",scope_fingerprint,
+        turn_fingerprint,operation_fingerprint:current},
+      {ts:"2026-10-17T08:13:02Z",event:"chatgpt_tela_codex",stage:"native_public_item_observed",scope_fingerprint,
+        turn_fingerprint,operation_fingerprint:current,kind:"agent_message",phase:"final_answer",ui_observed:false},
+    ].map(row=>JSON.stringify(row)).join("\n"));
+    try {
+      const result = await inspectNativeThread({rpc:fixtureReader(),threadId:THREAD,slot:2,diagnosticPaths:[path],nowMs:NOW});
+      expect(result.diagnostics.approvalWaitEvidence).toBeNull();
+      expect(result.diagnostics.activeRequestBoundary).toMatchObject({operationFingerprint:current,
+        webAnswerReceived:true,nativeFinalItemObserved:true,nativeFinalCommitted:false});
+      expect(result.continuation.classification).toBe("in_progress_without_verified_approval");
+    } finally { rmSync(dir,{recursive:true,force:true}); }
+  });
   test("Goal returns remain visible across progress noise without merging turns or trusting prose", () => {
     const dir = mkdtempSync(join(tmpdir(), "tela-goal-return-evidence-"));
     const path = join(dir, "events.jsonl");
@@ -191,7 +220,7 @@ describe("one read-only conversation inspection by exact Native ID", () => {
         scope_fingerprint: scope, transfer_estimate: 109966, retained_surface: false,
         content: "SECRET SHOULD NOT APPEAR" },
       { ts: "2026-10-17T08:05:23Z", event: "chatgpt_tela_work", stage: "approval_wait_transition",
-        scope_fingerprint: scope, phase: "pending", card_fingerprint: "aaaaaaaabbbbbbbbcccccccc" },
+        scope_fingerprint: scope, turn_fingerprint: diagnosticFingerprint(TURN), phase: "pending", card_fingerprint: "aaaaaaaabbbbbbbbcccccccc" },
     ].map(row => JSON.stringify(row)).join("\n") + "\n");
     const rpc = fixtureReader();
     try {
@@ -226,9 +255,9 @@ describe("one read-only conversation inspection by exact Native ID", () => {
     const path = join(dir, "events.jsonl");
     writeFileSync(path, [
       { ts: "2026-10-17T08:05:23Z", event: "chatgpt_tela_work", stage: "approval_wait_transition",
-        scope_fingerprint: diagnosticFingerprint(THREAD), phase: "pending" },
+        scope_fingerprint: diagnosticFingerprint(THREAD), turn_fingerprint: diagnosticFingerprint(TURN), phase: "pending" },
       { ts: "2026-10-17T08:06:00Z", event: "chatgpt_tela_work", stage: "approval_wait_transition",
-        scope_fingerprint: diagnosticFingerprint(THREAD), phase: "cleared" },
+        scope_fingerprint: diagnosticFingerprint(THREAD), turn_fingerprint: diagnosticFingerprint(TURN), phase: "cleared" },
     ].map(row => JSON.stringify(row)).join("\n") + "\n");
     try {
       const result = await inspectNativeThread({

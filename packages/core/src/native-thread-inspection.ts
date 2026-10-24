@@ -90,8 +90,6 @@ export async function inspectNativeThread(input: {
   const correlated = logs.events.filter(event => event.scope_fingerprint === fingerprint
     && (event.event === "chatgpt_tela_work" || event.event === "chatgpt_tela_codex"));
   const last = (stage: string) => correlated.filter(event => event.stage === stage).at(-1);
-  const pending = last("approval_wait_transition");
-  const pendingStillObserved = pending?.phase === "pending";
   const lastPlan = last("web_turn_plan");
   const lastObserved = correlated.at(-1);
   // Public turn identity, not the selected browser tab, chooses the diagnostic
@@ -109,19 +107,29 @@ export async function inspectNativeThread(input: {
   const boundaries = activeEvents.filter(event => boundaryStages.has(event.stage));
   const latestOperation = [...boundaries].reverse().find(event =>
     typeof event.operation_fingerprint === "string")?.operation_fingerprint;
-  const stages = [...new Set(boundaries.map(event => event.stage))];
+  const requestEvents = latestOperation
+    ? activeEvents.filter(event => event.operation_fingerprint === latestOperation)
+    : activeEvents;
+  const stages = [...new Set(requestEvents.filter(event => boundaryStages.has(event.stage)).map(event => event.stage))];
+  const pending = requestEvents.filter(event => event.stage === "approval_wait_transition").at(-1);
+  const pendingStillObserved = activeTurn?.status === "inProgress" && pending?.phase === "pending";
+  const webAnswerReceived = requestEvents.some(event => event.stage === "web_answer_received");
+  const nativeFinalItemObserved = requestEvents.some(event => event.stage === "native_public_item_observed"
+    && event.kind === "agent_message" && event.phase === "final_answer");
   const activeRequestBoundary = activeTurn ? {
     turnFingerprint: activeTurnFingerprint,
     turnStatus: activeTurn.status,
     operationFingerprint: latestOperation ?? null,
-    observedAt: boundaries.at(-1)?.ts ?? null,
+    observedAt: requestEvents.at(-1)?.ts ?? null,
     observedStages: stages,
     accepted: stages.includes("web_turn_identity_accepted"),
-    browserFinalObserved: activeEvents.some(event =>
+    browserFinalObserved: requestEvents.some(event =>
       event.stage === "web_turn_completed" || event.stage === "web_turn_final_observed"),
-    nativeFinalCommitted: activeEvents.some(event =>
+    webAnswerReceived,
+    nativeFinalItemObserved,
+    nativeFinalCommitted: requestEvents.some(event =>
       event.stage === "native_outcome_committed" && event.outcome === "final"),
-    nativeResponseDrained: activeEvents.some(event =>
+    nativeResponseDrained: requestEvents.some(event =>
       event.stage === "native_response_body_closed" && event.reason_class === "drained"),
     proof: "turn_scoped_local_events_only" as const,
   } : null;
