@@ -138,7 +138,7 @@ test("surface inventory follows lease and title events without observing the pag
   }));
   const detach = host.onSurfacesChanged(() => { notifications++; });
   const lease = await host.acquire({ taskId: "inventory", epochId: "one" });
-  expect(host.listSurfaces()).toEqual([{ id: lease.leaseId, label: "Web session 1" }]);
+  expect(host.listSurfaces()).toEqual([{ id: lease.leaseId, label: "Web session 1", taskId: "inventory" }]);
   title = "A useful task"; titleChanged!();
   expect(host.listSurfaces()[0]?.label).toBe(title);
   expect(host.surfaceRevision).toBe(2);

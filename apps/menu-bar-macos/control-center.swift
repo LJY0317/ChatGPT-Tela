@@ -48,7 +48,7 @@ private struct ControlCenterDelegationCapacity: Decodable {
   }
 }
 
-private struct ControlCenterBridgeSurface: Decodable, Equatable { let id: String; let label: String }
+private struct ControlCenterBridgeSurface: Decodable, Equatable { let id: String; let label: String; let title: String? }
 private struct ControlCenterBridgeInventory: Decodable {
   let contractVersion: Int
   let slot: Int
@@ -894,7 +894,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       previewPane.distribution = .fill
       previewPane.spacing = 10
       activityLayout.addArrangedSubview(previewPane)
-      var sessionSidebarWidth: CGFloat = 100
+      let sessionSidebarWidth: CGFloat = 100
       sessionScroll.heightAnchor.constraint(equalTo: activityLayout.heightAnchor).isActive = true
       sessionDivider.heightAnchor.constraint(equalTo: activityLayout.heightAnchor).isActive = true
       previewPane.heightAnchor.constraint(equalTo: activityLayout.heightAnchor).isActive = true
@@ -925,7 +925,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         }
         for surface in surfaces {
           let selected = selectedPreviewSlot == profile.slot && selectedBridgeSurface == surface.id
-          let button = NSButton(title: surface.label, target: self, action: #selector(selectBridgeSurface(_:)))
+          let title = displayBridgeTitle(surface.title) ?? surface.label
+          let button = NSButton(title: title, target: self, action: #selector(selectBridgeSurface(_:)))
           button.setButtonType(.pushOnPushOff)
           button.bezelStyle = .recessed
           button.state = selected ? .on : .off
@@ -933,10 +934,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           button.lineBreakMode = .byTruncatingTail
           button.tag = profile.slot
           button.identifier = NSUserInterfaceItemIdentifier(surface.id)
-          button.toolTip = surface.label
-          button.setAccessibilityLabel(surface.label)
+          button.toolTip = surface.title ?? surface.label
+          button.setAccessibilityLabel(surface.title ?? surface.label)
           sessionList.addArrangedSubview(button)
-          sessionSidebarWidth = max(sessionSidebarWidth, button.fittingSize.width)
+          button.widthAnchor.constraint(equalTo: sessionScroll.contentView.widthAnchor).isActive = true
         }
         if let last = sessionList.arrangedSubviews.last {
           sessionList.setCustomSpacing(18, after: last)
@@ -1434,7 +1435,33 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     selectedPreviewSlot = sender.tag
     selectedBridgeSurface = sender.identifier?.rawValue
     bridgeImage = nil
+    Task { await refreshBridgeTitles(slot: sender.tag) }
     Task { await loadBridgePreview() }
+  }
+
+  private func displayBridgeTitle(_ title: String?) -> String? {
+    guard let title else { return nil }
+    let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let prefix = "[Tela Agent] "
+    let display = trimmed.hasPrefix(prefix) ? String(trimmed.dropFirst(prefix.count)) : trimmed
+    return display.isEmpty ? nil : display
+  }
+
+  private func refreshBridgeTitles(slot: Int) async {
+    do {
+      guard let descriptor = try readDescriptor("codex") else { return }
+      let data = try await request(descriptor, path: "v1/codex/profiles/\(slot)/bridge-surfaces")
+      let value = try JSONDecoder().decode(ControlCenterBridgeInventory.self, from: data)
+      guard value.contractVersion == 1, value.slot == slot,
+            profiles.contains(where: { $0.slot == slot && $0.controlState == "running" }) else { return }
+      bridgeSurfaces[slot] = value.surfaces
+      renderCurrentPage()
+    } catch {
+      if let current = bridgeSurfaces[slot] {
+        bridgeSurfaces[slot] = current.map { ControlCenterBridgeSurface(id: $0.id, label: $0.label, title: nil) }
+        renderCurrentPage()
+      }
+    }
   }
 
   @objc private func revealBridgeSurface() { revealSelectedBridge(interactive: false) }

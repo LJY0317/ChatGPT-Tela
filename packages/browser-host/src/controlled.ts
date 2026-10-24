@@ -148,9 +148,9 @@ export class ControlledBrowserHost implements BrowserHost {
   }
 
   /** Disposable leases select a view; they never grant task authority. */
-  listSurfaces(): readonly { readonly id: string; readonly label: string }[] {
+  listSurfaces(): readonly { readonly id: string; readonly label: string; readonly taskId: string }[] {
     return [...this.#surfaces].map(([id, surface], index) => Object.freeze({
-      id, label: safeSurfaceLabel(surface.controller.displayName?.(), index),
+      id, label: safeSurfaceLabel(surface.controller.displayName?.(), index), taskId: surface.lease.taskId,
     }));
   }
 

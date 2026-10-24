@@ -84,7 +84,7 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
    * Multiple surfaces require explicit selection of a currently owned lease.
    */
   revealBridgeSurface(id: string, interactive?: boolean): Promise<void>;
-  bridgeSurfaces(): { readonly revision: number; readonly surfaces: readonly { readonly id: string; readonly label: string }[] };
+  bridgeSurfaces(): { readonly revision: number; readonly surfaces: readonly { readonly id: string; readonly label: string; readonly taskId: string }[] };
   onBridgeSurfacesChanged(listener: () => void): () => void;
   observeBridgePreview(id?: string): Promise<{
     readonly activeSurfaceCount: number;

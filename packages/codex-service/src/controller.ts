@@ -42,6 +42,7 @@ import {
 import { profileLaunch, verifyProfileRuntimeProcess } from "./profile-launch";
 import { RoutedCodexTurnBridge } from "./routed-turn-bridge";
 import { createProfileSupervisorLease, type ProfileSupervisorLease } from "./profile-supervision";
+import { nativeThreadDisplayTitle } from "./bridge-surface-title";
 
 // Native and Web preparation share an authenticated startup lease and bounded deadline.
 const CHILD_START_TIMEOUT_MS = 5 * 60_000;
@@ -128,7 +129,7 @@ export interface CodexService {
   inspectAccountBrowserHistoryUi?(slot: number): Promise<CodexHistoryUiContract>;
   runSavedDeleteAcceptance?(slot: number): Promise<CodexSavedDeleteAcceptanceContract>;
   recoverSyntheticSavedChat?(slot: number): Promise<CodexSyntheticRecoveryContract>;
-  bridgeSurfaces(slot: number, since?: number, signal?: AbortSignal): Promise<{ contractVersion: 1; slot: number; revision: number; surfaces: readonly { id: string; label: string }[] }>;
+  bridgeSurfaces(slot: number, since?: number, signal?: AbortSignal): Promise<{ contractVersion: 1; slot: number; revision: number; surfaces: readonly { id: string; label: string; title?: string }[] }>;
   bridgePreview(slot: number, surfaceId?: string): Promise<CodexBridgePreviewContract>;
   accountCheck?(slot: number): Promise<CodexAccountCheckContract>;
   accountDisplay?(slot: number): Promise<CodexAccountDisplayContract>;
@@ -842,14 +843,35 @@ export async function startCodexService(input: {
       if (since !== undefined) url.searchParams.set("since", String(since));
       const response = await fetch(url, { headers: { authorization: `Bearer ${profile.uiToken}` }, ...(signal ? { signal } : {}) });
       if (!response.ok) throw new Error("profile browser surfaces unavailable");
-      const result = await response.json() as { contractVersion: number; slot: number; revision: number; surfaces: { id: string; label: string }[] };
+      const result = await response.json() as { contractVersion: number; slot: number; revision: number; surfaces: { id: string; label: string; taskId?: string; title?: string }[] };
       if (result.contractVersion !== 1 || result.slot !== slot || !Number.isSafeInteger(result.revision)
         || result.revision < 0 || !Array.isArray(result.surfaces)
-        || result.surfaces.some(row => !/^surface_[A-Za-z0-9_-]{32}$/.test(row.id) || typeof row.label !== "string" || row.label.length > 200)
+        || result.surfaces.some(row => !/^surface_[A-Za-z0-9_-]{32}$/.test(row.id) || typeof row.label !== "string" || row.label.length > 200
+          || (row.taskId !== undefined && (typeof row.taskId !== "string" || row.taskId.length > 512)))
         || new Set(result.surfaces.map(row => row.id)).size !== result.surfaces.length) {
         throw new Error("invalid browser surface inventory");
       }
-      return { contractVersion: 1 as const, slot, revision: result.revision, surfaces: result.surfaces };
+      let rpc: Awaited<ReturnType<typeof connectCodexAppServerWebSocket>> | undefined;
+      const deadline = signal ? AbortSignal.any([signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000);
+      try {
+        if (profile.terminalEndpoint && result.surfaces.some(row => row.taskId
+          && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(row.taskId))) {
+          rpc = await connectCodexAppServerWebSocket(profile.terminalEndpoint, { signal: deadline });
+        }
+      } catch { /* Native metadata is optional; keep the established session labels. */ }
+      const surfaces = [] as { id: string; label: string; title?: string }[];
+      for (const [index, row] of result.surfaces.entries()) {
+        let title: string | undefined;
+        if (rpc && row.taskId && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(row.taskId)) {
+          try {
+            const response = await rpc.request("thread/read", { threadId: row.taskId, includeTurns: false }, deadline);
+            title = nativeThreadDisplayTitle(response, row.taskId);
+          } catch { /* Missing metadata uses this surface's own fallback label. */ }
+        }
+        surfaces.push({ id: row.id, label: `Web session ${index + 1}`, ...(title ? { title } : {}) });
+      }
+      await rpc?.close().catch(() => {});
+      return { contractVersion: 1 as const, slot, revision: result.revision, surfaces };
     },
     async bridgePreview(slotValue: number, surfaceId?: string) {
       const slot = slotNumber(slotValue);
