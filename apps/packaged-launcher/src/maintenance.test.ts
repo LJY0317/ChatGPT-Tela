@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPackagedPayload, resolveProductPaths, readOwnershipManifest, prepareOwnedDirectory,
-  packagedUpgradeJournalPath, readPackagedUpgradeJournal, planPackagedUpgradeFromPayload, PackagedServiceShutdownNotStartedError,
+  packagedUpgradeJournalPath, readPackagedUpgradeJournal, readPackagedProductManifest, planPackagedUpgradeFromPayload, PackagedServiceShutdownNotStartedError,
   type PackagedUpgradeJournal, type ServiceRegistrationCommandRunner } from "@chatgpt-tela/product-lifecycle";
 import { runPackagedLifecycleCommand } from "./lifecycle";
 import { cleanupMaintenanceWindow, runMaintenanceCommand, stageMaintenanceWindow, resolveMaintenanceWindowSource } from "./maintenance";
@@ -167,7 +167,7 @@ test("damaged installation stages only a same-version repair source", async () =
     const f = fixture(root), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner };
     await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first, ], options);
     const resolveSource = (payload: string) => resolveMaintenanceWindowSource("unused", "unused", ["--payload", payload, ], options);
-    expect((await resolveSource(f.first)).ui).toBe(realpathSync(join(f.first, "ui/chatgpt-tela-menu-bar")));
+    expect((await resolveSource(f.first)).ui).toBe(realpathSync(join(f.first, readPackagedProductManifest(f.first).menuBar!.executable)));
     await expect(resolveSource(f.second)).rejects.toThrow();
     const manifestPath = join(f.first, "chatgpt-tela-package-v1.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")); delete manifest.menuBar;
@@ -231,7 +231,7 @@ for (const supported of [true, false]) test(`maintenance cancellation review bin
     expect(readFileSync(journalPath)).toEqual(journal);
     const source = await resolveMaintenanceWindowSource("unused", "unused", ["--operation", "cancel-upgrade", ...args], options);
     expect(source.launcher).toBe(realpathSync(join(f.first, "chatgpt-tela")));
-    expect(source.ui).toBe(realpathSync(join(f.first, "ui/chatgpt-tela-menu-bar")));
+    expect(source.ui).toBe(realpathSync(join(f.first, readPackagedProductManifest(f.first).menuBar!.executable)));
     expect((await resolveMaintenanceWindowSource("unused", "unused", ["--operation", "upgrade", "--payload", f.second, ], options)).launcher)
       .toBe(realpathSync(join(f.second, "chatgpt-tela")));
     // Same phase/version/service list, but changed quiescence must invalidate review.
