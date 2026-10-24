@@ -192,6 +192,13 @@ function failureMetadata(input: {
   });
 }
 
+/** Bounded, payload-free lifecycle evidence for distinguishing orphan boundaries. */
+function delegationBoundary(id: string, phase: string, fields: Record<string, boolean | string> = {}): void {
+  emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_lifecycle", {
+    operation_fingerprint: diagnosticFingerprint(id), phase, ...fields,
+  });
+}
+
 export type WebDelegationRetentionState = "archived" | "excluded" | "deleted";
 export interface WebDelegationRetentionReceipt {
   readonly state: WebDelegationRetentionState;
@@ -451,6 +458,7 @@ export class WebDelegationStore {
       if (this.#leaseOwner(this.#threadPermit(record.threadId!)) !== "free") continue;
       const key = { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! };
       for (const job of jobs) { this.#release(job); this.#removeRecordFiles(job.id); removed++; }
+      delegationBoundary(record.id, "collected_history_pruned", { thread_linked: true });
       bytes -= size;
       const receipt = webDelegationRetentionPath(this.root, key);
       if (existsSync(receipt)) unlinkSync(receipt);
@@ -757,6 +765,9 @@ export async function inspectWebDelegationResult(adapters: WebDelegationAdapters
     try { record = await reconcileWebDelegation(adapters, id, AbortSignal.timeout(30_000)); }
     catch { record = adapters.store.get(id) ?? record; } // Keep inspection available when Native is unreachable.
   }
+  if (record.state === "completed" || record.state === "failed") {
+    delegationBoundary(record.id, "terminal_inspection", { thread_linked: Boolean(record.threadId) });
+  }
   if ((record.state === "completed" || record.state === "failed")
     && adapters.store.claimTitle(record, confirmUncertainTitleRetry)) {
     try {
@@ -945,6 +956,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     // Admission is persistent and atomic before connecting to a model/provider.
     adapters.store.reserve(record);
     reserved = true;
+    delegationBoundary(record.id, "job_reserved");
     adapters.changed?.(record);
     failureStageHint = "connect";
     rpc = await adapters.connect(owner.session.terminalEndpoint);
@@ -960,6 +972,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     await prove();
     failureStageHint = parent ? "thread_resume" : "thread_create";
     update({ state: "creating" });
+    delegationBoundary(record.id, parent ? "thread_resume_requested" : "thread_create_requested");
     const sandbox = "workspace-write";
     if (parent) {
       // Direct user turns may follow the parent. The current tail must be settled.
@@ -985,7 +998,9 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       }, input.signal));
       const thread = object(started?.thread);
       if (!thread || typeof thread.id !== "string" || !UUID.test(thread.id)) throw Error("New Web job thread was not proven");
+      delegationBoundary(record.id, "thread_acknowledged", { thread_fingerprint: diagnosticFingerprint(thread.id) });
       update({ threadId: thread.id, state: "created" });
+      delegationBoundary(record.id, "thread_link_persisted", { thread_linked: true });
       const reportedSandbox = object(started?.sandbox)?.type;
       if (thread.cwd !== input.cwd || thread.ephemeral === true || thread.historyMode !== "paginated"
         || started?.model !== selection.model || started.approvalPolicy !== "never"
@@ -1104,6 +1119,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       const resultUnavailable = error instanceof Error && error.message === "Web job completed without a proven final answer";
       const state = turnFailed || resultUnavailable || !turnSubmissionAttempted ? "failed" : "uncertain";
       const stage = failureStage(error, failureStageHint);
+      delegationBoundary(record.id, "execution_failed", { failure_stage: stage, thread_linked: Boolean(record.threadId) });
       const failedRecord: WebDelegationRecord = { ...record, state, failure: turnFailed ? "turn_failed" : resultUnavailable ? "result_unavailable" : "transport_or_ack",
         ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
           ...(record.turnId ? { turnId: record.turnId } : {}), stage, error, nativeCode: reportedNativeCode }) };
