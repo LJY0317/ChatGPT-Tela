@@ -218,6 +218,11 @@ test('cycle closure archives sparse context evidence locally without private pro
   withDiagnosticContext({scope_fingerprint:scope,turn_fingerprint:turn,request_fingerprint:request},()=>{
    emitDiagnosticEvent('chatgpt_tela_work','web_retained_context_decision',{reason_class:'retained_match',reuse_eligible:true});
    emitDiagnosticEvent('chatgpt_tela_work','web_turn_plan',{context_mode:'retained-delta',transfer_estimate:4});
+   withDiagnosticContext({operation_fingerprint:op},()=>{
+    emitDiagnosticEvent('chatgpt_tela_work','context_checkpoint_provider_invoked');
+    emitDiagnosticEvent('chatgpt_tela_work','checkpoint_operation_observed',{submission_accepted:true});
+    emitDiagnosticEvent('chatgpt_tela_work','native_checkpoint_model_failed',{duration_ms:34601});
+   });
    emitDiagnosticEvent('chatgpt_tela_work','native_outcome_committed',{outcome:'final'});
   });
   observer.finish();observer.finish();
@@ -225,6 +230,10 @@ test('cycle closure archives sparse context evidence locally without private pro
   expect(incidents).toHaveLength(1);
   const incident=readDiagnosticIncident(join(root,'diagnostics'),incidents[0]!.ref) as {stage:string;timeline:StructuralDiagnosticEvent[]};
   expect(incident.stage).toBe('native_cycle_summary');
-  expect(incident.timeline.map((row:any)=>row.stage)).toEqual(['web_retained_context_decision','web_turn_plan','native_cycle_summary']);
+  expect(incident.timeline.map((row:any)=>row.stage)).toEqual(['web_retained_context_decision','web_turn_plan',
+   'context_checkpoint_provider_invoked','checkpoint_operation_observed','native_checkpoint_model_failed','native_cycle_summary']);
+  const restored=summarizeTurnDiagnostics(incident.timeline);
+  expect(restored.cost.preparationModelCalls.total).toBe(1);
+  expect(restored.cost.preparationModelDuration.total).toBe(34601);
  }finally{observer.finish();if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;rmSync(root,{recursive:true,force:true});}
 });

@@ -538,7 +538,7 @@ describe("current ChatGPT DOM surface driver", () => {
     const body = new FixtureElement({ 'data-markdown-text-style': 'assistant-message' });
     body.textContent = '{"summary":"unfinished';
     const userCopy = new FixtureElement();
-    userCopy.closest = selector => selector.includes('[class~="group/user-message"]')
+    userCopy.closest = selector => selector?.includes('[class~="group/user-message"]')
       ? new FixtureElement({ class: 'group/user-message' }) : null;
     const assistantCopy = new FixtureElement();
     const group = new FixtureElement({ 'data-turn-key': 'streaming-json' }, {
@@ -549,8 +549,7 @@ describe("current ChatGPT DOM surface driver", () => {
       new FixtureElement({}, { '[data-turn-key]': [group] }),
     ));
     const pending = (await driver.observe()).turns[0]!;
-    expect(pending.phase).not.toBe('complete');
-    expect(pending.progressProbe?.completionControlsPresent).toBeFalsy();
+    expect(pending.phase).toBe('thinking');
     group.selectors['button[data-testid="copy-turn-action-button"]'] = [assistantCopy];
     body.textContent = '{"summary":"finished"}';
     const settled = (await driver.observe()).turns[0]!;

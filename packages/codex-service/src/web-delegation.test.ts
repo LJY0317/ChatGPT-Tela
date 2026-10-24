@@ -6,6 +6,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
+import { observeDiagnosticEvents, diagnosticFingerprint, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { runWebDelegation, inspectWebDelegationResult, collectWebDelegationResult, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
@@ -140,6 +141,10 @@ test("failure notice queues once to the explicitly owned coordinator and preserv
 
 test("new durable Web job buffers ACK race, returns exact final and never loads a source conversation", async () => {
   const f = await fixture();
+  const boundaries: StructuralDiagnosticEvent[] = [];
+  const stop = observeDiagnosticEvents(row => {
+    if (row.stage === "web_delegation_lifecycle" && row.operation_fingerprint === diagnosticFingerprint(f.id)) boundaries.push(row);
+  });
   try {
     const result = await f.run();
     expect(result).toMatchObject({ state: "completed", answer: "verified design",
@@ -155,7 +160,13 @@ test("new durable Web job buffers ACK race, returns exact final and never loads 
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
     expect(new WebDelegationStore(f.root).get(f.id)?.answer).toBe("verified design");
     expect(JSON.stringify(new WebDelegationStore(f.root).get(f.id))).not.toContain("fixture-result-not-in-journal");
-  } finally { f.cleanup(); }
+    expect(boundaries.map(row => row.phase)).toEqual([
+      "job_reserved", "thread_create_requested", "thread_acknowledged", "thread_link_persisted",
+    ]);
+    expect(boundaries[2]?.thread_fingerprint).toBe(diagnosticFingerprint(result.threadId!));
+    expect(JSON.stringify(boundaries)).not.toContain(f.root);
+    expect(JSON.stringify(boundaries)).not.toContain(result.threadId!);
+  } finally { stop?.(); f.cleanup(); }
 });
 test("new and resumed delegation override a retained Native collaboration model", async () => {
   const f = await fixture();

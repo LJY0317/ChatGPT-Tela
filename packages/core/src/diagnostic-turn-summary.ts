@@ -191,7 +191,7 @@ export function startTurnDiagnosticSummary(scope: string, turn: string, request?
     const direct=fp(row.scope_fingerprint)&&fp(row.turn_fingerprint);
     if(direct?(row.scope_fingerprint!==scope||row.turn_fingerprint!==turn):!fp(row.request_fingerprint)||!requests.has(row.request_fingerprint))return;
     if(fp(row.request_fingerprint)&&requests.size<64)requests.add(row.request_fingerprint);
-    if (/^(web_turn_plan|web_retained_context_.*|web_context_settled|web_send_activation_started|native_seed_authority_observed|checkpoint_transfer_planned|checkpoint_response_rejected|checkpoint_json_parse_failed|native_checkpoint_efficiency_settled|native_checkpoint_model_started|native_checkpoint_model_failed|context_checkpoint_provider_invoked|native_visible_prefix_stage_settled|native_working_checkpoint_advanced|web_model_picker_timeout|native_execution_failed|native_tool_request_rejected|web_preparation_failed)$/.test(row.stage)) {
+    if (/^(web_turn_plan|web_retained_context_.*|web_context_settled|web_send_activation_started|native_seed_authority_observed|checkpoint_transfer_planned|checkpoint_operation_observed|checkpoint_response_rejected|checkpoint_json_parse_failed|native_checkpoint_efficiency_settled|native_checkpoint_model_started|native_checkpoint_model_failed|context_checkpoint_provider_invoked|native_visible_prefix_stage_settled|native_working_checkpoint_advanced|web_model_picker_timeout|native_execution_failed|native_tool_request_rejected|web_preparation_failed)$/.test(row.stage)) {
       const key=JSON.stringify([row.stage,row.operation_fingerprint,row.phase]);
       if(durable.has(key)||durable.size<DIAGNOSTIC_LIMITS.timeline-1)durable.set(key,row);
     }
