@@ -97,10 +97,16 @@ export function readDiagnosticTail(path: string, maxBytes = DIAGNOSTIC_LIMITS.ta
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 8 * 1024 * 1024) throw new Error("invalid diagnostic read budget");
   if (window && (!Number.isFinite(window.fromMs) || !Number.isFinite(window.toMs) || window.fromMs > window.toMs)) throw new Error("invalid diagnostic window");
   let fd: number | undefined;
+  let unavailableReason: "missing" | "access_denied" | "unsafe_source" | "read_failed" = "read_failed";
   try {
-    if (lstatSync(path).isSymbolicLink()) throw new Error("unsafe source");
+    let link;
+    try { link = lstatSync(path); } catch (error) {
+      unavailableReason = (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : (error as NodeJS.ErrnoException).code === "EACCES" ? "access_denied" : "read_failed";
+      throw error;
+    }
+    if (link.isSymbolicLink()) { unavailableReason = "unsafe_source"; throw new Error("unsafe source"); }
     fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    const stat = fstatSync(fd); if (!stat.isFile()) throw new Error("unsafe source");
+    const stat = fstatSync(fd); if (!stat.isFile()) { unavailableReason = "unsafe_source"; throw new Error("unsafe source"); }
     const bytes = Math.min(stat.size, maxBytes); const buffer = Buffer.alloc(bytes);
     let used = 0; while (used < bytes) { const count = readSync(fd, buffer, used, bytes - used, stat.size - bytes + used); if (!count) break; used += count; }
     let text = buffer.subarray(0, used).toString("utf8");
@@ -122,7 +128,7 @@ export function readDiagnosticTail(path: string, maxBytes = DIAGNOSTIC_LIMITS.ta
     return { state: "read" as const, invalidTimestampRows, malformedRows, oversizedRows, outsideWindowRows,
       windowSelected: Boolean(window), bytesRead: used, fileBytes: stat.size, truncated: stat.size > bytes,
       events, eventLimitReached: false };
-  } catch { return { state: "unavailable" as const, invalidTimestampRows: 0, malformedRows: 0, oversizedRows: 0,
+  } catch { return { state: "unavailable" as const, reason: unavailableReason, invalidTimestampRows: 0, malformedRows: 0, oversizedRows: 0,
     outsideWindowRows: 0, windowSelected: Boolean(window), bytesRead: 0, fileBytes: 0, truncated: false, events: [] as StructuralDiagnosticEvent[], eventLimitReached: false }; }
   finally { if (fd !== undefined) closeSync(fd); }
 }
@@ -130,11 +136,11 @@ export function readDiagnosticTail(path: string, maxBytes = DIAGNOSTIC_LIMITS.ta
 export function readDiagnosticSources(paths: readonly string[], window?: DiagnosticWindow) {
   const selected = [...new Set(paths)];
   let remaining = DIAGNOSTIC_LIMITS.scanBytes;
-  const sources = selected.flatMap((path, index) => {
-    if (!remaining) return [];
+  const sources = selected.map((path, index) => {
+    if (!remaining) return { index, coverage: { state: "not_scanned" as const, reason: "aggregate_byte_budget", bytesRead: 0, fileBytes: 0, truncated: false, windowSelected: Boolean(window), invalidTimestampRows: 0, malformedRows: 0, oversizedRows: 0, outsideWindowRows: 0, eventLimitReached: false }, events: [] as StructuralDiagnosticEvent[] };
     const { events, ...coverage } = readDiagnosticTail(path, Math.min(remaining, DIAGNOSTIC_LIMITS.tailBytes), window);
     remaining -= coverage.bytesRead;
-    return [{ index, coverage, events }];
+    return { index, coverage, events };
   });
   const excluded = new Set<string>();
   for (const parent of new Set(selected.map(path=>dirname(path)))) {
@@ -152,7 +158,8 @@ export function readDiagnosticSources(paths: readonly string[], window?: Diagnos
     if(event.environment==="test" || excluded.has(String(event.instance_fingerprint))) { excludedTestEvents++;return false; }
     const key = JSON.stringify(event); if (seen.has(key)) return false; seen.add(key); return true;
   });
-  return { events, excludedTestEvents, coverage: sources.map(({ index, coverage }) => ({ source: index, ...coverage })), sourceLimitReached: false, byteLimitReached: sources.length < selected.length };
+  const coverage = sources.map(({ index, coverage }) => ({ source: index, ...coverage }));
+  return { events, excludedTestEvents, coverage, sourceLimitReached: false, byteLimitReached: coverage.some(source => source.truncated || source.state === "not_scanned") };
 }
 
 export const HOST_SYMPTOMS = ["stream-failure", "connection-interrupted", "response-stalled", "additional-review", "response-recovered", "approval-stalled", "tool-review-blocked", "missing-models", "startup-stalled", "ui-anomaly", "unknown"] as const;

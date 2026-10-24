@@ -261,6 +261,7 @@ test("byte-bounded source reads preserve early evidence across more than 24 file
 });
 
 
+test("source coverage reports unavailable reasons", () => { const root=fixture(); const missing=join(root,"missing.jsonl"); const result=readDiagnosticSources([missing]); expect(result.coverage[0]).toMatchObject({source:0,state:"unavailable",reason:"missing"}); expect(result.events).toHaveLength(0); });
 test("private retention still expires old artifacts and enforces the total byte budget", () => {
   const root = fixture(); setPrivateDiagnosticCapture(root, "until-disabled");
   const old = writePrivateDiagnosticArtifact(root, { kind: "html", bytes: Buffer.from("old evidence"), operationFingerprint: fp("old") });
