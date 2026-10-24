@@ -42,7 +42,7 @@ function sameSecret(candidate: string | undefined, expected: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function resultDiagnosticFields(result: unknown): Readonly<Record<string, number | boolean>> {
+function resultDiagnosticFields(result: unknown): Readonly<Record<string, string | number | boolean>> {
   let resultBytes: number | undefined;
   try {
     const json = JSON.stringify(result);
@@ -58,7 +58,11 @@ function resultDiagnosticFields(result: unknown): Readonly<Record<string, number
     || array?.some(item => item && typeof item === "object" && !Array.isArray(item)
       && (item as Record<string, unknown>).hasMore === true) === true;
   const outputTruncated = record?.outputTruncated === true;
+  const resultKind = result === undefined ? "undefined" : result === null ? "null"
+    : Array.isArray(result) ? "array" : typeof result === "object" ? "object" : typeof result;
   return Object.freeze({
+    result_kind: resultKind,
+    result_is_error: record?.isError === true,
     result_present: result !== undefined && result !== null,
     result_empty: result === undefined || result === null || result === "" || (array?.length === 0)
       || (record !== undefined && Object.keys(record).length === 0),

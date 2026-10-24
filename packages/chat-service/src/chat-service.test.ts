@@ -241,7 +241,7 @@ test("empty and populated Chat capability results survive sanitized durable read
   process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = path;
   let calls = 0;
   const service = await startChatService({ bearerToken: f.token, tools: { ...f.tools,
-    async call() { return ++calls === 1 ? {} : { finished: true, privateText: "PRIVATE_RESULT" }; },
+    async call() { return ++calls === 1 ? {} : { finished: true, privateText: "PRIVATE_RESULT", isError: true }; },
   } });
   try {
     for (let i = 0; i < 2; i++) {
@@ -254,8 +254,9 @@ test("empty and populated Chat capability results survive sanitized durable read
     }
     const rows = readDiagnosticTail(path).events.filter(row => row.stage === "capability_call_complete");
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ result_present: true, result_empty: true, result_bytes: 2 });
-    expect(rows[1]).toMatchObject({ result_present: true, result_empty: false });
+    expect(rows[0]).toMatchObject({ result_present: true, result_empty: true, result_bytes: 2, result_kind: "object", result_is_error: false });
+    expect(rows[1]).toMatchObject({ result_present: true, result_empty: false, result_kind: "object", result_is_error: true });
+    expect(readDiagnosticTail(path).events.filter(row => row.stage === "capability_call_complete")).toMatchObject(rows);
     expect(JSON.stringify(rows)).not.toContain("PRIVATE_RESULT");
   } finally {
     await service.close();
