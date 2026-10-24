@@ -805,7 +805,10 @@ export async function inspectWebDelegationResult(adapters: WebDelegationAdapters
       }
     } catch (error) {
       adapters.store.releaseTitleClaim(record);
-      emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", { phase: "inspect", failure_class: diagnosticFailureClass(error) });
+      emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_title_failed", {
+        phase: "inspect", operation_fingerprint: diagnosticFingerprint(record.id),
+        failure_class: diagnosticFailureClass(error), thread_linked: Boolean(record.threadId),
+      });
     }
   }
   return record;

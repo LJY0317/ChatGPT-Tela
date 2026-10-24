@@ -6,7 +6,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
-import { observeDiagnosticEvents, diagnosticFingerprint, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
+import { observeDiagnosticEvents, diagnosticFingerprint, readDiagnosticTail, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { runWebDelegation, inspectWebDelegationResult, collectWebDelegationResult, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
@@ -276,6 +276,35 @@ test("naming failures preserve the answer and leave naming eligible for the next
       expect(() => readFileSync(join(f.root, `${f.id}.json.naming`))).toThrow();
       expect(f.store.collectedAt(f.id)).toBeNumber();
     } finally { f.cleanup(); }
+  }
+});
+test("title settlement failures remain linked to the owning Web job in lifecycle diagnostics", async () => {
+  const f = await fixture({ titleReadFails: true });
+  const diagnosticsFile = join(f.root, "diagnostics.jsonl");
+  const previousDiagnosticFile = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  const events: StructuralDiagnosticEvent[] = [];
+  const stop = observeDiagnosticEvents(row => {
+    if (row.stage === "web_delegation_title_failed" && row.operation_fingerprint === diagnosticFingerprint(f.id)) events.push(row);
+  });
+  try {
+    await f.run();
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = diagnosticsFile;
+    await f.inspect();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      phase: "inspect", thread_linked: true, failure_class: "unknown",
+    });
+    const stored = readDiagnosticTail(diagnosticsFile).events.filter(row => row.stage === "web_delegation_title_failed");
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({ operation_fingerprint: diagnosticFingerprint(f.id), thread_linked: true, failure_class: "unknown" });
+    expect(JSON.stringify(events)).not.toContain(f.id);
+    expect(JSON.stringify(events)).not.toContain(f.root);
+    expect(JSON.stringify(stored)).not.toContain(f.id);
+    expect(JSON.stringify(stored)).not.toContain(f.root);
+  } finally {
+    if (previousDiagnosticFile === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previousDiagnosticFile;
+    stop?.(); f.cleanup();
   }
 });
 test("lost title mutation ACK is settled by public readback", async () => {
