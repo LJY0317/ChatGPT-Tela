@@ -360,10 +360,13 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       pendingLaunchPids.remove(pid)
       showingLaunchNotice = true
       let alert = NSAlert()
-      alert.messageText = "Reopen ChatGPT to use Web models"
-      alert.informativeText = "\(profile.targetDisplayName) opened without its Web connection. Reopen it with Tela to use Web models. Finish ongoing work before reopening. Later keeps ChatGPT running."
+      alert.messageText = "Reopen \(profile.targetDisplayName)?"
+      alert.informativeText = "Reopen with Tela to enable Web models.\nFinish any ongoing work first."
+      alert.icon = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
       alert.addButton(withTitle: "Reopen with Tela")
-      alert.addButton(withTitle: "Later")
+      alert.addButton(withTitle: "Later").keyEquivalent = "\u{1b}"
+      // A modeless window bypasses NSAlert's usual presentation-time layout.
+      alert.layout()
       alert.window.level = .floating
       NSApp.activate(ignoringOtherApps: true)
       let decisionId = UUID().uuidString
