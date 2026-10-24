@@ -23,6 +23,7 @@ execFileSync("/usr/bin/xcrun", [
   ] : [
     resolve(repoRoot, "apps/menu-bar-macos/main.swift"),
     resolve(repoRoot, "apps/menu-bar-macos/single-instance.swift"),
+    resolve(repoRoot, "apps/menu-bar-macos/bridge-title-read.swift"),
     resolve(repoRoot, "apps/menu-bar-macos/control-center.swift"),
     resolve(repoRoot, "apps/menu-bar-macos/maintenance.swift"),
     resolve(repoRoot, "apps/menu-bar-macos/work-connection.swift"),

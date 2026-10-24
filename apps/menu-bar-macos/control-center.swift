@@ -1448,25 +1448,21 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func refreshBridgeTitles(slot: Int) async {
-    let owner = surfaceOwners[slot]
-    let watchID = surfaceWatchIDs[slot]
-    let previous = bridgeSurfaces[slot]
-    let selectionSlot = selectedPreviewSlot
-    let selection = selectedBridgeSurface
+    let identity = BridgeTitleReadIdentity(owner: surfaceOwners[slot], watchID: surfaceWatchIDs[slot],
+      inventory: bridgeSurfaces[slot], selectedSlot: selectedPreviewSlot, selectedSurface: selectedBridgeSurface)
     do {
       guard let descriptor = try readDescriptor("codex") else { return }
       let data = try await request(descriptor, path: "v1/codex/profiles/\(slot)/bridge-surfaces")
       let value = try JSONDecoder().decode(ControlCenterBridgeInventory.self, from: data)
       guard value.contractVersion == 1, value.slot == slot,
-            owner == surfaceOwners[slot], watchID == surfaceWatchIDs[slot],
-            previous == bridgeSurfaces[slot],
-            selectionSlot == selectedPreviewSlot, selection == selectedBridgeSurface,
+            identity == BridgeTitleReadIdentity(owner: surfaceOwners[slot], watchID: surfaceWatchIDs[slot],
+              inventory: bridgeSurfaces[slot], selectedSlot: selectedPreviewSlot, selectedSurface: selectedBridgeSurface),
             profiles.contains(where: { $0.slot == slot && $0.controlState == "running" }) else { return }
       bridgeSurfaces[slot] = value.surfaces
       renderCurrentPage()
     } catch {
-      if owner == surfaceOwners[slot], watchID == surfaceWatchIDs[slot],
-         previous == bridgeSurfaces[slot],
+      if identity == BridgeTitleReadIdentity(owner: surfaceOwners[slot], watchID: surfaceWatchIDs[slot],
+         inventory: bridgeSurfaces[slot], selectedSlot: selectedPreviewSlot, selectedSurface: selectedBridgeSurface),
          let current = bridgeSurfaces[slot] {
         bridgeSurfaces[slot] = current.map { ControlCenterBridgeSurface(id: $0.id, label: $0.label, title: nil) }
         renderCurrentPage()
