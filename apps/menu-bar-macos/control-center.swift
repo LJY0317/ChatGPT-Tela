@@ -1448,16 +1448,26 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func refreshBridgeTitles(slot: Int) async {
+    let owner = surfaceOwners[slot]
+    let watchID = surfaceWatchIDs[slot]
+    let previous = bridgeSurfaces[slot]
+    let selectionSlot = selectedPreviewSlot
+    let selection = selectedBridgeSurface
     do {
       guard let descriptor = try readDescriptor("codex") else { return }
       let data = try await request(descriptor, path: "v1/codex/profiles/\(slot)/bridge-surfaces")
       let value = try JSONDecoder().decode(ControlCenterBridgeInventory.self, from: data)
       guard value.contractVersion == 1, value.slot == slot,
+            owner == surfaceOwners[slot], watchID == surfaceWatchIDs[slot],
+            previous == bridgeSurfaces[slot],
+            selectionSlot == selectedPreviewSlot, selection == selectedBridgeSurface,
             profiles.contains(where: { $0.slot == slot && $0.controlState == "running" }) else { return }
       bridgeSurfaces[slot] = value.surfaces
       renderCurrentPage()
     } catch {
-      if let current = bridgeSurfaces[slot] {
+      if owner == surfaceOwners[slot], watchID == surfaceWatchIDs[slot],
+         previous == bridgeSurfaces[slot],
+         let current = bridgeSurfaces[slot] {
         bridgeSurfaces[slot] = current.map { ControlCenterBridgeSurface(id: $0.id, label: $0.label, title: nil) }
         renderCurrentPage()
       }
@@ -1854,6 +1864,13 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     ingressStatus = await ingress
     await loadProfiles()
     updateSurfaceWatches()
+    // Refresh Native-only renames on the existing user-initiated/status lifecycle.
+    // Surface revision tracks Web leases and cannot signal a Native thread rename.
+    if selectedPage == .work {
+      for profile in profiles where profile.controlState == "running" {
+        await refreshBridgeTitles(slot: profile.slot)
+      }
+    }
     delegationCapacity = [:]
     if selectedPage == .work, let descriptor = try? readDescriptor("codex") {
       for profile in profiles {
@@ -1997,7 +2014,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
             let data = try await self.request(descriptor, path: "v1/codex/profiles/\(slot)/bridge-surfaces" + suffix)
             try Task.checkCancellation()
             let value = try JSONDecoder().decode(ControlCenterBridgeInventory.self, from: data)
-            guard value.contractVersion == 1, value.slot == slot else { return }
+            guard value.contractVersion == 1, value.slot == slot,
+                  self.surfaceWatchIDs[slot] == watchID else { return }
             revision = value.revision
             let wasUnavailable = self.surfaceMessages.removeValue(forKey: slot) != nil
             if self.bridgeSurfaces[slot] != value.surfaces {
