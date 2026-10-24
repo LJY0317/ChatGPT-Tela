@@ -827,6 +827,12 @@ bun run cli status
 
 Advanced multi-account users start extra profiles explicitly (for example `bun run cli start --slot 2`) and
 use `bun run cli profiles` when the profile list itself is relevant.
+For an explicit, remote PID-bound reopen, first inspect `bun run cli profiles` and confirm
+the affected profile has no active Native or managed work. Then run
+`bun run cli start --slot 2 --expected-desktop-process-id <desktopProcessId>` using the observed
+`desktopProcessId`. This reuses the running Codex service, checks the exact Desktop owner
+again before reopening, and preserves a changed Desktop process. It does not require a
+terminal session in `restart-required` state.
 
 Startup makes Native available first. The owned engine uses its official Native model discovery,
 cache and refresh path. Web preparation runs independently and adds only browser-discovered families after

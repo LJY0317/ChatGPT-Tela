@@ -1,6 +1,18 @@
 import {expect,test} from 'bun:test';
 import {observeDiagnosticEvents,structuralDiagnosticEvent} from '@chatgpt-tela/core';
-import {LocalServiceClient,ServiceHttpError,ServiceShutdownNotStartedError} from './client';
+import {CodexServiceClient,LocalServiceClient,ServiceHttpError,ServiceShutdownNotStartedError} from './client';
+
+test('profile client forwards explicit PID consent once and rejects invalid PIDs before dispatch',async()=>{
+ const bodies:unknown[]=[];
+ const server=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(request){bodies.push(await request.json());return Response.json({slot:2,targetId:'default',targetDisplayName:'ChatGPT',targetState:'running',targetSessionState:'ready',controlState:'running'});}});
+ const client=new CodexServiceClient({version:1,service:'codex',instanceId:'fixture',installId:'fixture',pid:process.pid,endpoint:`http://127.0.0.1:${server.port}/`,bearerToken:'fixture',startedAt:new Date().toISOString()});
+ try{
+  await expect(client.startProfile(2,undefined,{expectedDesktopProcessId:1234})).resolves.toMatchObject({slot:2,controlState:'running'});
+  await expect(client.startProfile(2)).resolves.toMatchObject({slot:2});
+  for(const pid of [0,-1,1.5,Number.NaN])await expect(client.startProfile(2,undefined,{expectedDesktopProcessId:pid})).rejects.toThrow('positive integer');
+  expect(bodies).toEqual([{expectedDesktopProcessId:1234},{}]);
+ }finally{await server.stop(true)}
+});
 
 test("only an exact shutdown admission receipt proves that no shutdown started", async () => {
  const receipt = { contractVersion: 1, service: "chat", instanceId: "fixture", shutdown: "not-started" };

@@ -967,11 +967,25 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "start") {
-    const services = await ensureSourceServices(productPaths);
-    const result = await services.codex.startProfile(slot());
+    const expectedPidRaw = option("--expected-desktop-process-id");
+    const expectedPid = expectedPidRaw === undefined ? undefined : Number(expectedPidRaw);
+    if (expectedPid !== undefined && (!Number.isSafeInteger(expectedPid) || expectedPid < 1)) {
+      throw new Error("--expected-desktop-process-id must be a positive integer");
+    }
+    // An explicit PID-bound reopen uses the existing owner. It must not bootstrap services.
+    const services = expectedPid === undefined ? await ensureSourceServices(productPaths) : undefined;
+    const codex = services?.codex ?? await (async () => {
+      const manifest = readOwnershipManifest(productPaths.installManifest);
+      if (!manifest) throw new Error("PID-bound reopen requires an installed Tela Codex service");
+      const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
+      const running = await supervisor.current({ service: "codex", descriptorPath: serviceDescriptorPath(productPaths, "codex") });
+      if (!running) throw new Error("PID-bound reopen requires a running Tela Codex service");
+      return new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
+    })();
+    const result = await codex.startProfile(slot(), undefined, expectedPid === undefined ? undefined : { expectedDesktopProcessId: expectedPid });
     console.log(JSON.stringify({
       ...result,
-      ...(services.chatError ? { chatServiceWarning: services.chatError } : {}),
+      ...(services?.chatError ? { chatServiceWarning: services.chatError } : {}),
     }, null, 2));
     return;
   }
@@ -1137,7 +1151,7 @@ async function main(): Promise<void> {
     + "  ingress status [--public] [--public-dns-url <DNS-JSON-URL>]\n"
     + "  ingress adopt-existing\n"
     + "  setup [--slot <n>]\n"
-    + "  start [--slot <n>]\n"
+    + "  start [--slot <n>] [--expected-desktop-process-id <pid>]\n"
     + "  work [--slot <n>] [--thread <id>] [--model <id>] [--cwd <path>]\n"
     + "  stop [--slot <n>]\n"
     + "  profiles\n"

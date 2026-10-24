@@ -220,9 +220,12 @@ export class CodexServiceClient extends LocalServiceClient {
     return value;
   }
 
-  async startProfile(slot: number, signal?: AbortSignal): Promise<CodexProfileStatusContract> {
+  async startProfile(slot: number, signal?: AbortSignal, options?: { readonly expectedDesktopProcessId?: number }): Promise<CodexProfileStatusContract> {
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("Codex profile slot must be an integer from 1 to 99");
-    return parseCodexProfileStatusContract(await this.request(`v1/codex/profiles/${slot}/start`, "POST", {}, signal));
+    if (options?.expectedDesktopProcessId !== undefined && (!Number.isSafeInteger(options.expectedDesktopProcessId) || options.expectedDesktopProcessId < 1)) {
+      throw new Error("expected Desktop process ID must be a positive integer");
+    }
+    return parseCodexProfileStatusContract(await this.request(`v1/codex/profiles/${slot}/start`, "POST", options ?? {}, signal));
   }
 
   async stopProfile(slot: number, signal?: AbortSignal): Promise<CodexProfileStatusContract> {
