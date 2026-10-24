@@ -275,7 +275,7 @@ describe("Native Responses semantic gateway", () => {
       if (final.type !== "final") throw new Error("expected final");
       expect(final.answer).toBe(`${agent.threadId}:result-${agent.threadId}`);
       gateway.commit(final);
-      await expect(gateway.handle(body(agent))).rejects.toThrow("proven new input");
+      await expect(gateway.handle(body(agent))).rejects.toThrow("lacks a new supported request");
     }
     await gateway.close();
     expect(turns.size).toBe(0);
@@ -341,7 +341,7 @@ describe("Native Responses semantic gateway", () => {
     expect(finalReplay).toEqual(final);
     gateway.commit(final);
 
-    await expect(gateway.handle(followup)).rejects.toThrow("proven new input");
+    await expect(gateway.handle(followup)).rejects.toThrow("lacks a new supported request");
     await gateway.close();
     expect(launches).toBe(1);
   });

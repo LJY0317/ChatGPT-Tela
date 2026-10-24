@@ -3030,7 +3030,11 @@ describe("completed browser answer awaiting Native delivery", () => {
     } finally { await surface.host.close(); }
   });
 
-  test("a changed approval card still defers the completed request", async () => {
+  test.each([
+    ["changed", { ...recognizedApproval, revisionFingerprint: "new-card-revision" }],
+    ["missing revision", { ...recognizedApproval, revisionFingerprint: undefined }],
+    ["multiple cards", { ...recognizedApproval, cardCount: 2 }],
+  ])("a %s approval card still defers the completed request", async (_case, approval) => {
     const driver = new FixtureDriver({ ...fixture("ready-new-chat"), approval: recognizedApproval });
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "off" });
@@ -3041,7 +3045,7 @@ describe("completed browser answer awaiting Native delivery", () => {
       const submitted = await submitting;
       if (submitted.state !== "proven") throw Error("expected accepted Web turn");
       driver.current = { ...driver.current, revision: "new-approval-card",
-        approval: { ...recognizedApproval, revisionFingerprint: "new-card-revision" },
+        approval: approval as typeof recognizedApproval,
         turns: [...driver.current.turns, { key: "assistant-new", role: "assistant" as const,
           parentUserTurnKey: "user-turn-1", phase: "complete" as const, text: "Answer behind new approval" }] };
       const observed = await provider.observeTurn(surface.lease, submitted.value);

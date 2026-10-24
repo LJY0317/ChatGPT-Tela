@@ -610,7 +610,8 @@ function retainedBoundaryFields(assistant: ChatGptTurnObservation | undefined) {
 /** An unchanged single card already present before send belongs to an earlier request. */
 function pendingApproval(snapshot: ChatGptSurfaceSnapshot, tracked: TrackedTurn): ChatGptSurfaceSnapshot["approval"] {
   const card = snapshot.approval;
-  return card?.cardCount === 1 && card.revisionFingerprint === tracked.preSubmitApprovalRevision
+  return card?.cardCount === 1 && typeof tracked.preSubmitApprovalRevision === "string"
+    && card.revisionFingerprint === tracked.preSubmitApprovalRevision
     ? undefined : card;
 }
 
@@ -1595,7 +1596,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             conversationRoute: new URL(snapshot.url).origin + new URL(snapshot.url).pathname,
             baselineUserLineageKeys: preSubmitUserLineageKeys,
             revision: snapshot.revision,
-            ...(filled.approval?.cardCount === 1
+            ...(filled.approval?.cardCount === 1 && typeof filled.approval.revisionFingerprint === "string"
               ? { preSubmitApprovalRevision: filled.approval.revisionFingerprint } : {}),
             approvalObservation: new ChatGptApprovalObservation(),
             operationAbort: new AbortController(),
