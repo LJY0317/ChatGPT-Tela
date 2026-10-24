@@ -747,11 +747,18 @@ async function notifyFailureCoordinator(adapters: WebDelegationAdapters, record:
     return updated;
   }
 }
-/** Explicit terminal-result inspection, including failure; never marks an answer collected. */
+/** Inspect the journal after one on-demand recovery of an unfinished exact turn.
+ * The observer process may have exited after Native completed its turn. */
 export async function inspectWebDelegationResult(adapters: WebDelegationAdapters, id: string, confirmUncertainTitleRetry = false): Promise<WebDelegationRecord> {
-  const record = adapters.store.get(id);
+  let record = adapters.store.get(id);
   if (!record) throw Error("Web job was not found");
-  if (adapters.store.claimTitle(record, confirmUncertainTitleRetry)) {
+  if ((record.state === "running" || record.state === "uncertain") && record.threadId
+    && (record.turnId || record.state === "uncertain" && !record.parentJobId)) {
+    try { record = await reconcileWebDelegation(adapters, id, AbortSignal.timeout(30_000)); }
+    catch { record = adapters.store.get(id) ?? record; } // Keep inspection available when Native is unreachable.
+  }
+  if ((record.state === "completed" || record.state === "failed")
+    && adapters.store.claimTitle(record, confirmUncertainTitleRetry)) {
     try {
       const current = await adapters.owner(record.slot);
       if (sameAccountOwner(record, current)) {
@@ -1179,7 +1186,11 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
     if (!final) return adapters.store.save({ ...record, ...observations, state: "failed", failure: "result_unavailable",
       ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
         ...(record.turnId ? { turnId: record.turnId } : {}), stage: "reconcile_result", error: new Error("Web job completed without a proven final answer") }) });
-    return adapters.store.save({ ...record, ...observations, state: "completed", taskOutcome: "unassessed", ...final });
+    const { failure: _failure, failureStage: _stage, failureClass: _class, failureNativeCode: _code,
+      failureIncidentRef: _incident, failureIncidentState: _incidentState, failureNextAction: _action, ...resolved } = record;
+    const settled = adapters.store.save({ ...resolved, ...observations, state: "completed", taskOutcome: "unassessed", ...final });
+    adapters.changed?.(settled);
+    return settled;
   } finally { try { await rpc.close(); } catch { /* Preserve a proven recovery result. */ } }
   } catch (error) {
     const current = adapters.store.get(id);

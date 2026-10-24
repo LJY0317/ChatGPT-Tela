@@ -93,7 +93,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   }
   if (subcommand === "reconcile") {
     const record = await reconcileWebDelegation(adapters, selectedJob!.id, AbortSignal.timeout(30_000));
-    await inspectWebDelegationResult(adapters, record.id);
+    if (record.state === "completed" || record.state === "failed") await inspectWebDelegationResult(adapters, record.id);
     const answer = verifiedWebDelegationAnswer(record);
     if (answer) await collectWebDelegationResult(adapters, record.id);
     console.log(JSON.stringify({ jobId: record.id, state: record.state, toolItems: record.toolItems ?? 0,

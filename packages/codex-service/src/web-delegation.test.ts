@@ -79,7 +79,11 @@ async function fixture(options: { nativeFailureCode?: string; nativeFailureJson?
       }
       if (method === "thread/turns/list") {
         const cursor = (params as { cursor?: string }).cursor;
-        if (options.manualTurn && !cursor) return { data: [{ id: randomUUID(), status: "completed", items: [] }], nextCursor: "older" };
+        if (options.manualTurn && !cursor) return { data: [{ id: randomUUID(), status: "completed", items: [
+          { type: "agentMessage", phase: "finalAnswer", text: "Foreign follow-up answer" },
+        ] }], nextCursor: "older" };
+        if (options.manualTurn && cursor === "older") return { data: [{ id: currentTurnId,
+          status: "completed", items: [{ type: "agentMessage", phase: "finalAnswer", text: "verified recovered design" }] }], nextCursor: null };
         if (options.uncertain) return { data: [
           { id: currentTurnId, status: "completed", items: [
             { id: "input", type: "userMessage", content: [{ type: "text", text: "Read this fixture and design only" }] },
@@ -363,6 +367,31 @@ test("an acknowledged job with lost completion events is recovered from its exac
     const { answer, ...olderObserver } = recovered;
     f.store.save({ ...olderObserver, state: "uncertain" });
     expect(f.store.get(f.id)?.answer).toBe("verified recovered design");
+  } finally { f.cleanup(); }
+});
+test.each(["inspect", "collect"] as const)("on-demand %s settles an orphaned running journal from its original Native turn", async action => {
+  const f = await fixture({ silent: true, disconnect: true });
+  try {
+    await expect(f.run()).rejects.toThrow("connection lost");
+    const stale = f.store.get(f.id)!;
+    expect(stale.state).toBe("uncertain");
+    expect(typeof stale.turnId).toBe("string");
+    f.store.save({ ...stale, state: "running", progress: { summary: "Old running progress",
+      observedAt: 1, source: "native-public-summary" } });
+    if (action === "collect") expect(await f.collect()).toBe("verified recovered design");
+    else expect(await f.inspect()).toMatchObject({ state: "completed", answer: "verified recovered design" });
+    expect(f.store.get(f.id)).toMatchObject({ state: "completed", answer: "verified recovered design",
+      finalEvidence: "explicit-final-phase" });
+    expect(f.store.get(f.id)?.progress).toBeUndefined();
+    expect(f.store.get(f.id)?.failure).toBeUndefined();
+    expect(f.store.get(f.id)?.failureStage).toBeUndefined();
+    expect(f.store.capacity(1).total.used).toBe(0);
+    const history = f.calls.filter(call => call.method === "thread/turns/list");
+    expect(history).toHaveLength(1);
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+    await f.inspect();
+    expect(f.calls.filter(call => call.method === "thread/turns/list")).toHaveLength(1);
+    if (action === "collect") expect(f.store.collectedAt(f.id)).toBeNumber();
   } finally { f.cleanup(); }
 });
 test("exact completed turn recovers after session replacement under the same account", async () => {
@@ -924,6 +953,19 @@ test("explicit reconcile observes only bounded indexed public summaries without 
     expect(JSON.stringify(result)).not.toContain("hidden-reasoning-must-not-be-read");
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
     expect(result.state).toBe("uncertain");
+  } finally { f.cleanup(); }
+});
+test("on-demand status keeps a genuinely in-progress Native turn running and its lease owned", async () => {
+  const f = await fixture({ silent: true, disconnect: true, indexedProgress: true });
+  try {
+    await expect(f.run()).rejects.toThrow("connection lost");
+    f.store.save({ ...f.store.get(f.id)!, state: "running" });
+    const observed = await f.inspect();
+    expect(observed).toMatchObject({ state: "running", progress: { source: "native-indexed-summary" } });
+    expect(verifiedWebDelegationAnswer(observed)).toBeUndefined();
+    expect(f.store.capacity(1).total.used).toBe(1);
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+    expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(0);
   } finally { f.cleanup(); }
 });
 
