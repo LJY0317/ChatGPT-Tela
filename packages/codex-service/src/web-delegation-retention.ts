@@ -28,6 +28,11 @@ function publicErrorKind(error: unknown): string {
   if (/owner|account/.test(message)) return "owner_resolution";
   return "other";
 }
+// The daemon's owned-session resolver reports this exact readiness state while
+// profiles are stopping or reconnecting. Other owner/proof errors remain failures.
+function ownerTemporarilyUnavailable(error: unknown): boolean {
+  return error instanceof Error && error.message === "Web cleanup profile unavailable";
+}
 function statePath(adapters: WebDelegationAdapters, record: WebDelegationRecord): string {
   // Thread IDs originate from acknowledged Native creation, not user-selected filenames.
   if (!/^[a-f0-9-]{36}$/i.test(record.threadId!)) throw Error("Invalid managed thread ID");
@@ -91,6 +96,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
       finally { await rpc.close(); }
     } catch (error) {
       if (input.signal.aborted) throw error;
+      if (ownerTemporarilyUnavailable(error)) continue;
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_failed", { failure_class: diagnosticFailureClass(error) });
     }
   }
@@ -267,6 +273,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
       } finally { /* Shared owner connection closes after the pass. */ }
     } catch (error) {
       if (input.signal.aborted) throw error;
+      if (publicOperation === "owner_resolution" && ownerTemporarilyUnavailable(error)) continue;
       skipped("public_metadata_or_retention_error", "unknown", error);
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_failed", {
         failure_class: diagnosticFailureClass(error), kind: publicErrorKind(error), next_action: publicOperation,

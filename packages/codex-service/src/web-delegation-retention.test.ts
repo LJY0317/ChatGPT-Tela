@@ -75,6 +75,27 @@ function fixture() {
   return { root, store, record, native, calls, origin, adapters, run, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
+test("profile reconnect defers retention without losing due work; other owner failures stay observable", async () => {
+  const f = fixture();
+  try {
+    f.store.collect(f.record.id, f.origin);
+    let ready = false;
+    const adapters = { ...f.adapters, owner: async (slot: number) => {
+      if (!ready) throw Error("Web cleanup profile unavailable");
+      return f.adapters.owner(slot);
+    } };
+    await settleWebDelegationRetention(adapters, { now: f.origin + 2 * DAY, signal: new AbortController().signal });
+    expect(f.native.archived).toBe(false);
+    expect(f.store.threadRetention(f.record)).toBeUndefined();
+    ready = true;
+    await settleWebDelegationRetention(adapters, { now: f.origin + 2 * DAY, signal: new AbortController().signal });
+    expect(f.native.archived).toBe(true);
+    const broken = { ...f.adapters, owner: async () => { throw Error("Authenticated selected ChatGPT login and routing are unavailable"); } };
+    await settleWebDelegationRetention(broken, { now: f.origin + 3 * DAY, signal: new AbortController().signal });
+    expect(f.store.threadRetention(f.record)?.state).toBe("archived");
+  } finally { f.cleanup(); }
+});
+
 test("first result collection starts 24h clock, repeated reads do not extend it, auto archive deletes thirty days later", async () => {
   const f = fixture();
   try {
