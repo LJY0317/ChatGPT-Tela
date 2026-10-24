@@ -126,9 +126,10 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
     ...(bytes.complete&&body.complete&&protocol.complete&&bytes.total!==body.total+protocol.total?['composer_byte_partition_mismatch']:[]),...(repeatActivations?['repeated_send_boundary']:[]),...(at('native_tool_result_error').length?['tool_reported_error']:[])];
   return {
     diagnosis:{ firstFailure:failure?{at:failure.ts,stage:failure.stage,reason:failure.first_reason_class??failure.reason_class??failure.stage,
-      phase:failure.phase,plannerStage:preparationFailure?.planner_stage}:undefined,
+      errorKind:failure.error_kind,phase:failure.phase,plannerStage:preparationFailure?.planner_stage}:undefined,
       preparation:preparationFailure?{phase:preparationFailure.phase,plannerStage:preparationFailure.planner_stage,
-        reason:preparationFailure.reason_class,requiredEstimate:preparationFailure.required_estimate,fitBudget:preparationFailure.fit_budget}:undefined,
+        reason:preparationFailure.reason_class,errorKind:preparationFailure.error_kind,
+        requiredEstimate:preparationFailure.required_estimate,fitBudget:preparationFailure.fit_budget}:undefined,
       checkpointPlan:checkpointPlan?{estimateKind:'conservative_upper_bound',modelCalls:checkpointPlan.planned_model_calls,
         inputEstimate:checkpointPlan.planned_transfer_estimate,callBudget:checkpointPlan.model_call_budget,inputBudget:checkpointPlan.transfer_budget,
         sourceBytes:checkpointPlan.source_bytes,fragments:checkpointPlan.fragment_count,completedReceipts:checkpointPlan.completed_receipt_count}:undefined,
@@ -211,6 +212,7 @@ export function startTurnDiagnosticSummary(scope: string, turn: string, request?
         disconnect_count:s.transport.disconnects,tool_queued_count:s.tools.queued,tool_result_count:s.tools.results,tool_release_count:s.tools.released,
         summary_attempt_count:s.context.summaryAttempts,summary_reuse_count:s.context.summaryReused,
         ...(s.submission.firstFailure?{first_reason_class:String(s.submission.firstFailure)}:{}),
+        ...(s.diagnosis.firstFailure?.errorKind?{first_error_kind:s.diagnosis.firstFailure.errorKind}:{}),
         context_settled:s.context.settled,composer_measured:s.cost.composer.complete,protocol_measured:s.cost.protocol.complete,
         composer_wire_bytes:s.cost.composer.total,context_wire_bytes:s.cost.context.total,protocol_wire_bytes:s.cost.protocol.total,
         task_composer_measured:s.cost.taskComposer.complete, task_composer_wire_bytes:s.cost.taskComposer.total,

@@ -1226,7 +1226,7 @@ test("context planner stage is recorded only as a verified enum on failed prepar
     const rows=readFileSync(file,"utf8").trim().split("\n").map(line=>JSON.parse(line));
     const failure=rows.find(row=>row.stage==="web_preparation_failed");
     expect(structuralDiagnosticEvent(failure)).toMatchObject({
-      phase:"context_plan",planner_stage:"native_continuity",reason_class:"unclassified",
+      phase:"context_plan",planner_stage:"native_continuity",reason_class:"unclassified",error_kind:"error",
     });
     expect(readFileSync(file,"utf8")).not.toContain(primary.message);
   } finally {

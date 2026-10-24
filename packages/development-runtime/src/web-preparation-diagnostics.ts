@@ -1,5 +1,20 @@
 import { webContextFitFailureReason } from "@chatgpt-tela/core";
 
+/** Closed exception-shape categories for structural diagnostics; never emit error names or codes. */
+export function classifyWebPreparationErrorKind(error: unknown): string {
+  if (!(error instanceof Error)) return "non_error";
+  if (error.name === "AbortError") return "abort";
+  if (error.name === "TimeoutError") return "timeout";
+  if (error.name === "TypeError") return "type_error";
+  if (error.name === "RangeError") return "range_error";
+  if (error.name === "SyntaxError") return "syntax_error";
+  if (error.name === "ReferenceError") return "reference_error";
+  if (error.name === "URIError") return "uri_error";
+  if (error.name === "AggregateError") return "aggregate_error";
+  if (typeof (error as Error & { readonly code?: unknown }).code === "string") return "coded_error";
+  return error.name === "Error" ? "error" : "other_error";
+}
+
 /** Fixed categories for Tela-owned preparation errors. Never return exception prose or identifiers. */
 export function classifyWebPreparationFailure(error: unknown): string {
   const fit = webContextFitFailureReason(error);

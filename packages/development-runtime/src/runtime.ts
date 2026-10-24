@@ -11,7 +11,7 @@ import {
   type WebPhysicalContext,
 } from "@chatgpt-tela/chatgpt";
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
-import { classifyWebPreparationFailure } from "./web-preparation-diagnostics";
+import { classifyWebPreparationErrorKind, classifyWebPreparationFailure } from "./web-preparation-diagnostics";
 import { failedNativeRequestFingerprint, type NativeProjectionError } from "./native-projection-diagnostics";
 import {
   startLocalResponsesServer,
@@ -425,6 +425,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           });
           emitDiagnosticEvent("chatgpt_tela_work", "web_preparation_failed", {
             phase: preparationPhase, reason_class: classifyWebPreparationFailure(error),
+            error_kind: classifyWebPreparationErrorKind(error),
             ...(error instanceof Error ? (error as NativeProjectionError).projectionEvidence : {}),
             web_send_count: 0, web_accept_count: 0, local_final_committed: false,
             browser_observed_for_request: false,

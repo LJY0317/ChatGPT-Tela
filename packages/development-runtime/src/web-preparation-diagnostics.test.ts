@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
-import { classifyWebPreparationFailure } from "./web-preparation-diagnostics";
+import { classifyWebPreparationErrorKind, classifyWebPreparationFailure } from "./web-preparation-diagnostics";
+test("preparation exception shape is reduced to a closed structural category", () => {
+  expect(classifyWebPreparationErrorKind(new TypeError("private details"))).toBe("type_error");
+  expect(classifyWebPreparationErrorKind(Object.assign(new Error("private details"), { code: "PRIVATE_CODE" }))).toBe("coded_error");
+  expect(classifyWebPreparationErrorKind(new Error("private details"))).toBe("error");
+  expect(classifyWebPreparationErrorKind({ name: "TypeError", message: "private details" })).toBe("non_error");
+});
 test("preparation diagnostics classify known boundaries without returning arbitrary exception prose", () => {
   expect(classifyWebPreparationFailure(new NativeHistoryBootstrapRequired())).toBe("history_bootstrap_required");
   expect(classifyWebPreparationFailure(new NativeHistoryBootstrapRequired("unindexed_history")))

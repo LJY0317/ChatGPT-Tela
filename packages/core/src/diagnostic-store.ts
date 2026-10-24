@@ -14,6 +14,7 @@ const SAFE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const FORBIDDEN = /(prompt|path|url|uri|secret|email|content|command|output|argument|authorization|cookie|raw_|token|workspace_id|account_id|user_id|session_id|turn_id|thread_id)/i;
 const FINGERPRINT = /^[a-f0-9]{24}$/;
 const SAFE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const SAFE_ERROR_KINDS = new Set(["abort", "timeout", "type_error", "range_error", "syntax_error", "reference_error", "uri_error", "aggregate_error", "coded_error", "error", "non_error", "other_error"]);
 const SAFE_PROOF_STAGES = new Set(["account", "model-discovery", "connector", "readiness"]);
 const RETAINED_KINDS = new Set(["system", "developer", "user", "assistant", "tool-call", "tool-result", "steering", "end"]);
 /** Closed, payload-free substage vocabulary for a failed Native-to-Web context plan. */
@@ -77,6 +78,10 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
     }
     if (key === "planner_stage") {
       if (isWebContextPlannerStage(field)) safe[key] = field;
+      continue;
+    }
+    if (key === "error_kind" || key === "first_error_kind") {
+      if (typeof field === "string" && SAFE_ERROR_KINDS.has(field)) safe[key] = field;
       continue;
     }
     if (Object.hasOwn(PROJECTION_ENUMS, key)) {
