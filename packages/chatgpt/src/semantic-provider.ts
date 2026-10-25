@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   BROWSER_PAGE_AUTOMATION,
   BROWSER_INPUT_OWNERSHIP,
+  BROWSER_DOCUMENT_LIFETIME,
   captureBrowserDiagnosticEvidence,
   captureBrowserDiagnosticCheckpoint,
   type BrowserSurfaceLease,
@@ -1310,6 +1311,22 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     });
     const expectedFingerprint = fingerprint(text);
     const inputOwner = surface.capability(BROWSER_INPUT_OWNERSHIP);
+    const documentLifetime = surface.capability(BROWSER_DOCUMENT_LIFETIME);
+    const diagnosticBoundary: NonNullable<TurnOwnership["diagnosticBoundary"]> = () => {
+      const document = documentLifetime?.current();
+      const input = inputOwner?.current();
+      const observation = inputOwner?.observationCurrent?.();
+      return {
+        documentGeneration: document?.generation ?? -1,
+        documentRevoked: document?.signal.aborted ?? false,
+        inputRevision: input?.revision ?? -1,
+        inputAvailable: input?.available ?? false,
+        inputRevoked: input?.signal.aborted ?? false,
+        observationRevision: observation?.revision ?? -1,
+        observationPending: observation?.pending ?? false,
+        observationSource: observation ? "inspection_input" : "unavailable",
+      };
+    };
     // Capture before consequential input, never infer exclusivity from missing support.
     const inputBaseline = inputOwner?.current();
     const observationBaseline = inputOwner?.observationCurrent?.();
@@ -1595,6 +1612,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           acceptance.combined.throwIfAborted();
           await captureBrowserDiagnosticCheckpoint(surface, "turn_accepted");
           if (causalReceipt) assertCausalInputUnchanged!();
+          const acceptedBoundary = diagnosticBoundary();
+          const leaseFingerprint = diagnosticFingerprint(surface.leaseId);
           this.#turns.set(surface, {
             handle,
             surfaceLeaseId: surface.leaseId,
@@ -1602,6 +1621,12 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             acceptedUserFingerprint: acceptedFingerprint,
             ...(inputUnchanged ? { inputUnchanged } : {}),
             ...(observationInputState ? { observationInputState } : {}),
+            diagnosticBoundary,
+            diagnosticLeaseFingerprint: leaseFingerprint,
+            acceptedDocumentGeneration: acceptedBoundary.documentGeneration,
+            acceptedInputRevision: acceptedBoundary.inputRevision,
+            acceptedObservationRevision: acceptedBoundary.observationRevision,
+            acceptedObservationSource: acceptedBoundary.observationSource,
             acceptedUserCharacters: text.length,
             diagnosticLineage: {
               operation_fingerprint: diagnosticFingerprint([request.nativeTaskId, request.nativeTurnId, request.webEpochId].join("\n")),
@@ -1631,6 +1656,18 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_accepted", {
             operation_fingerprint: diagnosticFingerprint([request.nativeTaskId, request.nativeTurnId,
               request.webEpochId].join("\n")),
+            lease_fingerprint: leaseFingerprint,
+            accepted_document_generation: acceptedBoundary.documentGeneration,
+            document_generation: acceptedBoundary.documentGeneration,
+            document_revoked: acceptedBoundary.documentRevoked,
+            accepted_input_revision: acceptedBoundary.inputRevision,
+            input_revision: acceptedBoundary.inputRevision,
+            input_available: acceptedBoundary.inputAvailable,
+            input_revoked: acceptedBoundary.inputRevoked,
+            accepted_observation_revision: acceptedBoundary.observationRevision,
+            observation_revision: acceptedBoundary.observationRevision,
+            observation_pending: acceptedBoundary.observationPending,
+            observation_source: acceptedBoundary.observationSource,
             route_kind: acceptedRoute.pathname === "/" ? "initial"
               : isChatGptProvisionalConversationUrl(snapshot.url) ? "provisional"
               : /^\/c\/[^/]+$/.test(acceptedRoute.pathname) ? "conversation" : "other",

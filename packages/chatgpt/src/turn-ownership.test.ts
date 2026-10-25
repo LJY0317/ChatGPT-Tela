@@ -75,6 +75,43 @@ test("ownership rejection distinguishes a payload mismatch with unchanged or una
   } finally { stop?.(); }
 });
 
+test("ownership witness correlates accepted lease and document/input/observation boundary changes without changing lineage", () => {
+  const events: StructuralDiagnosticEvent[] = [];
+  const stop = observeDiagnosticEvents(row => events.push(row));
+  let boundary = { documentGeneration: 3, documentRevoked: false, inputRevision: 7, inputAvailable: true,
+    inputRevoked: false, observationRevision: 4, observationPending: false, observationSource: "inspection_input" as const };
+  const tracked: TurnOwnership = { ...owner(), diagnosticLeaseFingerprint: diagnosticFingerprint("lease"),
+    acceptedDocumentGeneration: 3, acceptedInputRevision: 7, acceptedObservationRevision: 4,
+    acceptedObservationSource: "inspection_input", diagnosticBoundary: () => boundary };
+  try {
+    expect(resolveAssistantLineage(snapshot([user, answer]), tracked).assistants).toEqual([answer]);
+    boundary = { ...boundary, observationRevision: 5 };
+    expect(resolveAssistantLineage(snapshot([user, answer]), tracked).assistants).toEqual([answer]);
+    const observed = events.filter(row => row.stage === "web_turn_ownership_observed");
+    expect(observed.at(-1)).toMatchObject({ lease_fingerprint: diagnosticFingerprint("lease"),
+      accepted_document_generation: 3, document_generation: 3, document_generation_changed: false,
+      accepted_input_revision: 7, input_revision: 7, input_revision_changed: false,
+      accepted_observation_revision: 4, observation_revision: 5, observation_revision_changed: true,
+      observation_source: "inspection_input", accepted_observation_source: "inspection_input" });
+    boundary = { ...boundary, documentGeneration: 4, documentRevoked: true, inputAvailable: false, inputRevoked: true };
+    expect(resolveAssistantLineage(snapshot([user, answer]), tracked).assistants).toEqual([answer]);
+    expect(events.filter(row => row.stage === "web_turn_ownership_observed").at(-1)).toMatchObject({
+      document_generation_changed: true, document_revoked: true, input_available: false, input_revoked: true,
+    });
+    // A long-lived request must retain its later transitions, while identical observations coalesce.
+    for (let revision = 6; revision <= 75; revision++) {
+      boundary = { ...boundary, observationRevision: revision };
+      resolveAssistantLineage(snapshot([user, answer]), tracked);
+    }
+    const count = events.filter(row => row.stage === "web_turn_ownership_observed").length;
+    resolveAssistantLineage(snapshot([user, answer]), tracked);
+    expect(events.filter(row => row.stage === "web_turn_ownership_observed")).toHaveLength(count);
+    expect(events.filter(row => row.stage === "web_turn_ownership_observed").at(-1)).toMatchObject({
+      observation_revision: 75, witness_count: 73,
+    });
+  } finally { stop?.(); }
+});
+
 test("a proven viewing gesture preserves accepted causality across canonical hydration, pending or unknown input never does", () => {
   let state: "pending" | "unchanged" | "changed" = "pending";
   const tracked: TurnOwnership = { ...owner(), conversationRoute: "https://chatgpt.com/c/local-chatgpt:00000000-0000-4000-8000-000000000000",

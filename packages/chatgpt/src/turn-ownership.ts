@@ -27,6 +27,22 @@ export interface TurnOwnership {
    * requires renewed visible author proof; it does not cancel observation. */
   readonly inputUnchanged?: () => boolean;
   readonly observationInputState?: () => "unchanged" | "pending" | "changed";
+  /** Payload-free live state used to correlate accepted lineage with host view/document events. */
+  readonly diagnosticBoundary?: () => {
+    readonly documentGeneration: number;
+    readonly documentRevoked: boolean;
+    readonly inputRevision: number;
+    readonly inputAvailable: boolean;
+    readonly inputRevoked: boolean;
+    readonly observationRevision: number;
+    readonly observationPending: boolean;
+    readonly observationSource: "inspection_input" | "unavailable";
+  };
+  readonly diagnosticLeaseFingerprint?: string;
+  readonly acceptedDocumentGeneration?: number;
+  readonly acceptedInputRevision?: number;
+  readonly acceptedObservationRevision?: number;
+  readonly acceptedObservationSource?: "inspection_input" | "unavailable";
   readonly acceptedUserCharacters?: number;
   /** Privacy-safe request lineage captured when the accepted Web turn was created. */
   readonly diagnosticLineage?: {
@@ -117,15 +133,39 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
   const proofReason = current?.userPayloadReason;
   const reasonClass = proofReason && ["author_payload", "author_root_missing", "ambiguous_author_root", "author_payload_empty", "author_payload_budget"].includes(proofReason)
     ? proofReason : "unclassified";
-  // One bounded witness per structural transition, never text, raw identifiers or polling.
+  let boundary: ReturnType<NonNullable<TurnOwnership["diagnosticBoundary"]>> | undefined;
+  try { boundary = tracked.diagnosticBoundary?.(); } catch { /* Diagnostic state never authorizes ownership. */ }
+  const boundaryFields = {
+    ...(tracked.diagnosticLeaseFingerprint ? { lease_fingerprint: tracked.diagnosticLeaseFingerprint } : {}),
+    accepted_document_generation: tracked.acceptedDocumentGeneration ?? -1,
+    document_generation: boundary?.documentGeneration ?? -1,
+    document_generation_changed: boundary !== undefined && tracked.acceptedDocumentGeneration !== undefined
+      && boundary.documentGeneration !== tracked.acceptedDocumentGeneration,
+    document_revoked: boundary?.documentRevoked ?? false,
+    accepted_input_revision: tracked.acceptedInputRevision ?? -1,
+    input_revision: boundary?.inputRevision ?? -1,
+    input_revision_changed: boundary !== undefined && tracked.acceptedInputRevision !== undefined
+      && boundary.inputRevision !== tracked.acceptedInputRevision,
+    input_available: boundary?.inputAvailable ?? false,
+    input_revoked: boundary?.inputRevoked ?? false,
+    accepted_observation_revision: tracked.acceptedObservationRevision ?? -1,
+    observation_revision: boundary?.observationRevision ?? -1,
+    observation_revision_changed: boundary !== undefined && tracked.acceptedObservationRevision !== undefined
+      && boundary.observationRevision !== tracked.acceptedObservationRevision,
+    observation_pending: boundary?.observationPending ?? false,
+    observation_source: boundary?.observationSource ?? "unavailable",
+    accepted_observation_source: tracked.acceptedObservationSource ?? "unavailable",
+  };
+  // Coalesce identical observations; shared byte/age retention owns stored evidence.
   const witness = JSON.stringify([payloadState, renderedState, anchorState, reasonClass, users.length, route === tracked.conversationRoute,
     inputState, tracked.navigationSuspended === true,
-    snapshot.turns.filter(item => item.role === "assistant").length]);
+    snapshot.turns.filter(item => item.role === "assistant").length, ...Object.values(boundaryFields)]);
   if (tracked.ownershipWitness !== witness) {
     tracked.ownershipWitness = witness;
     const count = tracked.ownershipWitnessCount = (tracked.ownershipWitnessCount ?? 0) + 1;
-    if (count <= 64) emitDiagnosticEvent("chatgpt_tela_work", "web_turn_ownership_observed", {
+    emitDiagnosticEvent("chatgpt_tela_work", "web_turn_ownership_observed", {
       contract_version: 1, payload_state: payloadState, anchor_state: anchorState,
+      ...boundaryFields,
       rendered_payload_state: renderedState,
       accepted_key_count: users.length, route_matches: route === tracked.conversationRoute,
       reason_class: reasonClass,
@@ -144,7 +184,6 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
       ...current?.userPayloadProbe,
       witness_count: count,
     });
-    else if (count === 65) emitDiagnosticEvent("chatgpt_tela_work", "web_turn_ownership_budget_reached", { witness_count: 64 });
   }
   if (users.length > 1 || anchorState === "changed") {
     emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rejected", {

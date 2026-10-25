@@ -9,6 +9,7 @@ export interface DiagnosticContext {
   readonly storage_fingerprint?: string;
   readonly partition_fingerprint?: string;
   readonly surface_fingerprint?: string;
+  readonly lease_fingerprint?: string;
   readonly rpc_fingerprint?: string;
   readonly parent_fingerprint?: string;
   readonly turn_fingerprint?: string;
@@ -19,7 +20,7 @@ export function diagnosticContext(): DiagnosticContext { return context.getStore
 export function withDiagnosticContext<T>(fields: DiagnosticContext, action: () => T, inherit = true): T {
   const safe: Record<string, string> = {};
   for (const [key, value] of Object.entries(fields)) {
-    if (["request_fingerprint", "operation_fingerprint", "scope_fingerprint", "profile_fingerprint", "storage_fingerprint", "partition_fingerprint", "rpc_fingerprint", "parent_fingerprint", "turn_fingerprint", "surface_fingerprint"].includes(key)
+    if (["request_fingerprint", "operation_fingerprint", "scope_fingerprint", "profile_fingerprint", "storage_fingerprint", "partition_fingerprint", "rpc_fingerprint", "parent_fingerprint", "turn_fingerprint", "surface_fingerprint", "lease_fingerprint"].includes(key)
       && typeof value === "string" && /^[a-f0-9]{24}$/.test(value)) safe[key] = value;
   }
   return context.run(inherit ? { ...diagnosticContext(), ...safe } : safe, action);

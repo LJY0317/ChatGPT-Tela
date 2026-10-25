@@ -21,6 +21,8 @@ private struct TelaMaintenanceResult: Decodable {
 private struct TelaMaintenanceStatus: Decodable {
   let installedVersion: String
   let pendingTransition: String
+  let cancellationReviewAvailable: Bool?
+  let appReopenState: String?
 }
 private struct TelaMaintenanceProcess: Decodable {
   let workspaceId: String
@@ -281,21 +283,32 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       return (process.terminationStatus, data.count <= 1_048_576 ? data : Data())
     } catch { return (1, Data()) }
   }
-  private func loadStatus() async {
+  private func loadStatus(preservingOutcome: Bool = false) async {
     let path = launcher
     let result = await Task.detached { Self.execute(path, ["maintenance", "status"]) }.value
     if result.0 == 0, let status = try? JSONDecoder().decode(TelaMaintenanceStatus.self, from: result.1) {
       version.stringValue = "Installed: \(status.installedVersion)"
-      if status.pendingTransition == "upgrade", !operations.contains("cancel-upgrade") {
+      if status.pendingTransition == "upgrade", status.cancellationReviewAvailable != false, !operations.contains("cancel-upgrade") {
         operations.append("cancel-upgrade"); picker.addItem(withTitle: "Cancel unfinished update")
-      } else if status.pendingTransition != "upgrade", let index = operations.firstIndex(of: "cancel-upgrade") {
+      } else if (status.pendingTransition != "upgrade" || status.cancellationReviewAvailable == false),
+        let index = operations.firstIndex(of: "cancel-upgrade") {
         picker.selectItem(at: 0); picker.removeItem(at: index); operations.remove(at: index); review = nil
         planText.stringValue = "Review changes before applying them."
       }
       if status.pendingTransition != "none" {
-        message.stringValue = status.pendingTransition == "upgrade"
-          ? "An update is unfinished. Resume with its update package, or review cancellation with the installed-version package."
-          : "An earlier repair is unfinished. Select its matching package to resume it."
+        let recovery: String
+        if status.pendingTransition == "upgrade" {
+          let relaunch = status.appReopenState == "not-attempted"
+            ? "The update stopped before the control center relaunch was attempted. "
+            : "The update is unfinished; the control center relaunch is not verified. "
+          recovery = relaunch + "Resume with the original update package."
+            + (status.cancellationReviewAvailable == false ? " Cancellation is unavailable after payload replacement begins."
+              : " Before replacement, you may also review cancellation with the installed-version package.")
+        } else {
+          recovery = "An earlier repair is unfinished. Select its matching package to resume it."
+        }
+        message.stringValue = preservingOutcome && !message.stringValue.isEmpty
+          ? message.stringValue + "\n" + recovery : recovery
       }
     } else { version.stringValue = "Installation status unavailable" }
     updateControls()
@@ -391,12 +404,12 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
           blockers.joined(separator: "\n") + "\nMaintenance did not complete. Resolve the blocker, then review again."
         } else if applied.success { removing ? "Tela removed. Preserved resources: \(applied.preservedCount). You can close this window."
           : operation == "cancel-upgrade" ? "Update cancelled. The installed version was kept and previously running services were restored."
-          : "Changes verified. Reopen Tela to load the updated control center."
+          : "Changes verified. Tela control center refresh completed."
         } else {
           "Some changes couldn't finish. Failed resources: \(applied.failedCount). Preserved resources: \(applied.preservedCount). Review again to recover."
         }
-      } else { message.stringValue = "Changes couldn't complete or the reviewed plan changed. Review again before retrying. An interrupted update or repair may require its matching package." }
-      await loadStatus(); updateControls()
+      } else { message.stringValue = "Changes couldn't complete or the reviewed plan changed. Check the unfinished transition status and review with its matching package before resuming or cancelling. Running services may still need recovery." }
+      await loadStatus(preservingOutcome: true); updateControls()
     }
   }
   func windowShouldClose(_ sender: NSWindow) -> Bool {

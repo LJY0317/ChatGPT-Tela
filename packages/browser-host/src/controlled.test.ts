@@ -7,7 +7,9 @@ describe("controlled browser host", () => {
     let release!: () => void;
     const ready = new Promise<void>(resolve => { release = resolve; });
     let created = 0;
-    const host = new ControlledBrowserHost(async () => {
+    let factoryLeaseId: string | undefined;
+    const host = new ControlledBrowserHost(async input => {
+      factoryLeaseId = input.leaseId;
       created += 1;
       await ready;
       return { async navigate() {}, async reveal() {}, async hide() {}, async close() {} };
@@ -18,7 +20,8 @@ describe("controlled browser host", () => {
     );
     release();
     try {
-      await first;
+      const lease = await first;
+      expect(factoryLeaseId).toBe(lease.leaseId);
       expect(await duplicate).toBe("rejected");
       expect(created).toBe(1);
     } finally { await host.close(); }

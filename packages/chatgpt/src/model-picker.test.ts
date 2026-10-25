@@ -231,6 +231,54 @@ test("duplicate visible composers cannot select even a unique model control", as
 });
 
 for (const scenario of [
+  { name: "opacity exclusion", selectorMatches: true },
+  { name: "selector mismatch", selectorMatches: false },
+]) test(`missing picker diagnostics distinguish ${scenario.name} from absent menu candidates`, async () => {
+  const observed: Record<string, number | boolean> [] = [];
+  class Element {
+    constructor(readonly kind: string) {}
+    getClientRects() { return [{}]; }
+    getBoundingClientRect() { return { left: 0, top: 0, width: 10, height: 10 }; }
+    getAttribute() { return null; }
+    closest() { return form; }
+    querySelectorAll(selector: string) {
+      if (this.kind !== "form") return [];
+      if (selector.includes('data-tone')) return scenario.selectorMatches ? [control] : [];
+      if (selector.includes('aria-haspopup')) return [control];
+      return [];
+    }
+  }
+  const form = new Element("form"), composer = new Element("composer"), control = new Element("control");
+  const page: BrowserPageAutomation = {
+    async evaluate(source) {
+      const result = runInNewContext(`(${source})()`, {
+        HTMLElement: Element,
+        getComputedStyle: (element: Element) => ({ display: "block", visibility: "visible",
+          opacity: element === control && scenario.selectorMatches ? "0" : "1" }),
+        document: {
+          querySelectorAll: (selector: string) => selector.includes("prompt-textarea") ? [composer]
+            : selector.includes('data-tone') && scenario.selectorMatches ? [control] : [],
+          getElementById: () => null, elementFromPoint: () => null,
+          hidden: true, readyState: "complete", hasFocus: () => false, activeElement: null,
+        },
+      }) as { diagnostic: Record<string, number | boolean> };
+      observed.push(result.diagnostic);
+      throw Error("fixture observation captured");
+    },
+    async pressKey() {}, async pointerClick() {}, async typeFocusedEditable() {}, async clearFocusedEditable() {},
+    async mutationRevision() { return 0; }, async waitForDomMutation() { return 1; },
+  };
+  await expect(selectChatGptWebModel(pickerSurface(page), { familyKey: chatGptWebFamilyKey("Fixture"), effort: "low" }))
+    .rejects.toThrow("fixture observation captured");
+  expect(observed[0]).toMatchObject({ probe_available: true,
+    raw_global_control_count: scenario.selectorMatches ? 1 : 0,
+    raw_form_control_count: scenario.selectorMatches ? 1 : 0,
+    global_excluded_opacity: scenario.selectorMatches ? 1 : 0,
+    form_excluded_opacity: scenario.selectorMatches ? 1 : 0,
+    generic_form_menu_candidate_count: 1 });
+});
+
+for (const scenario of [
   { name: "omitted aria-hidden", hidden: null, visible: true, count: 1, expected: true },
   { name: "explicit exposed", hidden: "false", visible: true, count: 1, expected: true },
   { name: "explicit hidden", hidden: "true", visible: true, count: 1, expected: false },

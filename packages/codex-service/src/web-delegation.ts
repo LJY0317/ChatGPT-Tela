@@ -102,6 +102,8 @@ export interface WebDelegationRecord {
   readonly turnId?: string;
   /** Last observed public summary, not proof of liveness or a blocked classification. */
   readonly progress?: WebDelegationProgress;
+  /** Last on-demand Native observation, distinct from the durable job state. */
+  readonly reconciliation?: "native-in-progress" | "unproven";
   /** Model execution completion does not attest requested-task success. */
   readonly taskOutcome?: "unassessed";
   readonly finalEvidence?: WebFinalEvidence;
@@ -648,7 +650,10 @@ export class WebDelegationStore {
     }
   }
   save(record: WebDelegationRecord): WebDelegationRecord {
-    if (this.#terminal(record)) { const { progress: _progress, ...settled } = record; record = settled; }
+    if (this.#terminal(record)) {
+      const { progress: _progress, reconciliation: _reconciliation, ...settled } = record;
+      record = settled;
+    }
     const current = this.get(record.id);
     if (!current) throw Error("Web job was not reserved");
     const upgradedFailedFinal = current.state === "failed" && current.failure === "turn_failed"
@@ -1182,10 +1187,12 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
     if (turn.status === "inProgress") {
       const progress = Array.isArray(turn.items) && turn.items.length <= 120
         ? indexedWebDelegationProgress(turn.items, Date.now()) : undefined;
-      if (progress) {
-        record = adapters.store.save({ ...record, progress });
-        adapters.changed?.(record);
-      }
+      const { failureStage: _stage, failureClass: _class, failureNativeCode: _code,
+        failureIncidentRef: _incident, failureIncidentState: _incidentState,
+        failureNextAction: _action, ...active } = record;
+      record = adapters.store.save({ ...active, reconciliation: "native-in-progress",
+        ...(progress ? { progress } : {}) });
+      adapters.changed?.(record);
       return record;
     }
     if (turn.status !== "completed" && turn.status !== "failed" && turn.status !== "interrupted") {
@@ -1202,20 +1209,27 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
       toolResultCoverage: record.toolResultCoverage ?? "history-summary",
     } as const : {};
     if (turn.status === "failed" || turn.status === "interrupted") {
-      return adapters.store.save({ ...record, ...observations, state: "failed", failure: "turn_failed",
+      const settled = adapters.store.save({ ...record, ...observations, state: "failed", failure: "turn_failed",
         ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
           ...(record.turnId ? { turnId: record.turnId } : {}), stage: "turn_complete", error: new Error("Web job turn failed"), nativeCode: nativeTurnFailureCode(turn) }),
         ...(turn.status === "failed" && final?.finalEvidence === "explicit-final-phase"
           ? { ...final, taskOutcome: "unassessed" as const } : {}) });
+      adapters.changed?.(settled);
+      return settled;
     }
     // Both live and recovery paths release the permit only after the exact
     // completed turn's bounded indexed items prove no deliverable final.
-    if (!final) return adapters.store.save({ ...record, ...observations, state: "failed", failure: "result_unavailable",
-      ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
-        ...(record.turnId ? { turnId: record.turnId } : {}), stage: "reconcile_result", error: new Error("Web job completed without a proven final answer") }) });
+    if (!final) {
+      const settled = adapters.store.save({ ...record, ...observations, state: "failed", failure: "result_unavailable",
+        ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
+          ...(record.turnId ? { turnId: record.turnId } : {}), stage: "reconcile_result", error: new Error("Web job completed without a proven final answer") }) });
+      adapters.changed?.(settled);
+      return settled;
+    }
     const { failure: _failure, failureStage: _stage, failureClass: _class, failureNativeCode: _code,
       failureIncidentRef: _incident, failureIncidentState: _incidentState, failureNextAction: _action, ...resolved } = record;
-    const settled = adapters.store.save({ ...resolved, ...observations, state: "completed", taskOutcome: "unassessed", ...final });
+    const { reconciliation: _reconciliation, ...completedRecord } = resolved;
+    const settled = adapters.store.save({ ...completedRecord, ...observations, state: "completed", taskOutcome: "unassessed", ...final });
     adapters.changed?.(settled);
     return settled;
   } finally { try { await rpc.close(); } catch { /* Preserve a proven recovery result. */ } }
@@ -1225,8 +1239,8 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
       const stage = failureStage(error, "reconcile_history");
       const metadata = failureMetadata({ id: current.id, ...(current.threadId ? { threadId: current.threadId } : {}),
         ...(current.turnId ? { turnId: current.turnId } : {}), stage, error });
-      adapters.store.save({ ...current, ...metadata });
-      adapters.changed?.({ ...current, ...metadata });
+      const observed = adapters.store.save({ ...current, ...metadata, reconciliation: "unproven" });
+      adapters.changed?.(observed);
     }
     throw error;
   }

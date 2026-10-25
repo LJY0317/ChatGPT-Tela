@@ -242,6 +242,49 @@ test('cycle closure archives sparse context evidence locally without private pro
  }finally{observer.finish();if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;rmSync(root,{recursive:true,force:true});}
 });
 
+test('browser lineage and picker state transitions survive the canonical incident timeline',()=>{
+ const root=mkdtempSync(join(tmpdir(),'tela-browser-lineage-summary-')),file=join(root,'events.jsonl');
+ const prior=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+ const lease='5'.repeat(24),surface='6'.repeat(24),operation='7'.repeat(24);
+ const state=(stage:string,fields:Record<string,unknown>)=>emitDiagnosticEvent('chatgpt_tela_work',stage,fields as Record<string,string|number|boolean>);
+ const ctx={scope_fingerprint:scope,turn_fingerprint:turn,request_fingerprint:request,operation_fingerprint:operation,
+   lease_fingerprint:lease,surface_fingerprint:surface};
+ const observer=startTurnDiagnosticSummary(scope,turn,request)!;
+ try{
+  withDiagnosticContext(ctx,()=>{
+   state('web_turn_identity_accepted',{document_generation:3,input_revision:7,observation_revision:4,observation_source:'inspection_input'});
+   state('web_turn_ownership_observed',{accepted_document_generation:3,document_generation:3,document_generation_changed:false,
+    accepted_input_revision:7,input_revision:7,input_revision_changed:false,accepted_observation_revision:4,observation_revision:4,
+    observation_revision_changed:false,observation_source:'inspection_input',accepted_observation_source:'inspection_input'});
+   state('inspection_window_action',{action:'reveal',document_generation:3,input_revision:7,observation_revision:4,observation_pending:false});
+   state('web_turn_ownership_observed',{accepted_document_generation:3,document_generation:3,document_generation_changed:false,
+    accepted_input_revision:7,input_revision:7,input_revision_changed:false,accepted_observation_revision:4,observation_revision:5,
+    observation_revision_changed:true,observation_source:'inspection_input',accepted_observation_source:'inspection_input'});
+   state('inspection_window_action',{action:'hide',document_generation:3,input_revision:7,observation_revision:5,observation_pending:false});
+   state('web_turn_ownership_observed',{accepted_document_generation:3,document_generation:4,document_generation_changed:true,
+    document_revoked:true,accepted_input_revision:7,input_revision:8,input_revision_changed:true,accepted_observation_revision:4,
+    observation_revision:6,observation_revision_changed:true,observation_source:'inspection_input',accepted_observation_source:'inspection_input'});
+   state('web_model_picker_failed',{phase:'selection',reason_class:'family_rows_missing',operation_fingerprint:operation,surface_fingerprint:surface});
+   state('web_model_picker_owner_observed',{phase:'selection',document_generation:4,document_revoked:true,input_revision:8,
+    input_available:false,input_revoked:true,observation_revision:6,observation_pending:false});
+   state('native_outcome_committed',{outcome:'final'});
+  });
+  observer.finish();
+  const incidents=listDiagnosticIncidents(join(root,'diagnostics'));
+  expect(incidents).toHaveLength(1);
+  const incident=readDiagnosticIncident(join(root,'diagnostics'),incidents[0]!.ref) as {timeline:StructuralDiagnosticEvent[]};
+  const timeline=incident.timeline;
+  expect(timeline.filter(row=>row.stage==='web_turn_ownership_observed')).toHaveLength(3);
+  expect(timeline.filter(row=>row.stage==='inspection_window_action').map(row=>row.action)).toEqual(['reveal','hide']);
+  expect(timeline.find(row=>row.stage==='web_turn_ownership_observed'&&row.document_generation_changed===true)).toMatchObject({
+   lease_fingerprint:lease,surface_fingerprint:surface,accepted_document_generation:3,document_generation:4,document_revoked:true,
+   accepted_input_revision:7,input_revision:8,accepted_observation_revision:4,observation_revision:6,observation_source:'inspection_input'});
+  expect(timeline.find(row=>row.stage==='web_model_picker_failed')).toMatchObject({operation_fingerprint:operation,surface_fingerprint:surface,phase:'selection',reason_class:'family_rows_missing'});
+  expect(timeline.find(row=>row.stage==='web_model_picker_owner_observed')).toMatchObject({document_generation:4,input_revision:8,observation_revision:6});
+  expect(JSON.stringify(timeline)).not.toMatch(/private prompt|https?:|cookie_value|raw URL/i);
+ }finally{observer.finish();if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;rmSync(root,{recursive:true,force:true});}
+});
+
 test('cycle incident retains checkpoint selection and distinct request decisions after log rotation',()=>{
  const root=mkdtempSync(join(tmpdir(),'tela-context-cycle-')),file=join(root,'events.jsonl');
  const prior=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;

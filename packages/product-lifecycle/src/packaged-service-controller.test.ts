@@ -203,6 +203,20 @@ describe("packaged platform service controller", () => {
       }
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+
+  test("macOS transitional xpcproxy evidence survives a failed start deadline", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-launchd-transition-"));
+    try {
+      const built = blueprint(root, "darwin");
+      const path = built.services.find(entry => entry.service === "chat")!.resource.identity!.definitionPath!;
+      const runner: ServiceRegistrationCommandRunner = { async run(_command, args) {
+        return { exitCode: 0, stdout: `job = {\n path = ${path}\n state = ${args[0] === "print" ? "xpcproxy" : "not running"}\n}\n`, stderr: "" };
+      } };
+      const controller = new PackagedPlatformServiceController({ blueprint: built, runner, userId: 501,
+        shutdownService: async () => {}, transitionTimeoutMs: 100 });
+      await expect(controller.resume("chat")).rejects.toThrow("job state=xpcproxy");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 });
 
 test("service refusal never authorizes an OS kill/stop on any platform", async () => {

@@ -184,12 +184,45 @@ const OBSERVE_MODEL_PICKER = String.raw`function () {
   }
   let diagnostic = { probe_available: false };
   try {
+    // Diagnose a missing selector without changing the visibility/ownership proof.
+    // Mutually exclusive rejection counts avoid exporting DOM attributes or text.
+    const rawGlobal = controls.length === 0 ? [...document.querySelectorAll(${JSON.stringify(CHATGPT_MODEL_CONTROL_SELECTOR)})] : [];
+    const rawForm = controls.length === 0 && form ? [...form.querySelectorAll(${JSON.stringify(CHATGPT_MODEL_CONTROL_SELECTOR)})] : [];
+    const rejected = elements => {
+      const counts = { non_element: 0, display: 0, visibility: 0, opacity: 0, geometry: 0 };
+      for (const element of elements) {
+        if (!(element instanceof HTMLElement)) { counts.non_element++; continue; }
+        const style = getComputedStyle(element);
+        if (style.display === 'none') counts.display++;
+        else if (style.visibility === 'hidden') counts.visibility++;
+        else if (style.opacity === '0') counts.opacity++;
+        else if (element.getClientRects().length === 0) counts.geometry++;
+      }
+      return counts;
+    };
+    const globalExcluded = rejected(rawGlobal);
+    const formExcluded = rejected(rawForm);
+    const genericCandidates = controls.length === 0 && form
+      ? [...form.querySelectorAll('button[aria-haspopup="menu"], button[data-testid*="model"], button[data-composer-navigation-target="reasoning"]')] : [];
     const linkedId = control?.getAttribute('aria-controls');
     const rect = menu?.getBoundingClientRect();
     const target = point(control);
     const hit = target ? document.elementFromPoint(target.x, target.y) : undefined;
     diagnostic = {
       probe_available: true,
+      ...(controls.length === 0 ? { raw_global_control_count: rawGlobal.length,
+      raw_form_control_count: rawForm.length,
+      global_excluded_display: globalExcluded.display,
+      global_excluded_visibility: globalExcluded.visibility,
+      global_excluded_opacity: globalExcluded.opacity,
+      global_excluded_geometry: globalExcluded.geometry,
+      global_excluded_non_element: globalExcluded.non_element,
+      form_excluded_display: formExcluded.display,
+      form_excluded_visibility: formExcluded.visibility,
+      form_excluded_opacity: formExcluded.opacity,
+      form_excluded_geometry: formExcluded.geometry,
+      form_excluded_non_element: formExcluded.non_element,
+      generic_form_menu_candidate_count: genericCandidates.length } : {}),
       document_hidden: document.hidden,
       document_focused: document.hasFocus(),
       document_loading: document.readyState === 'loading',

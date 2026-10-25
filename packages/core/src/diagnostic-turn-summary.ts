@@ -4,7 +4,7 @@ import { DIAGNOSTIC_LIMITS, structuralDiagnosticEvent, writeDiagnosticIncident, 
 
 const fp = (x: unknown): x is string => typeof x === 'string' && /^[a-f0-9]{24}$/.test(x);
 const number = (x: unknown): x is number => Number.isSafeInteger(x) && Number(x) >= 0;
-const relevant = (stage: string) => /^(native_|web_turn_|web_context_|web_retained_context_|web_send_|web_tool_bridge_|web_public_progress_|web_model_picker_|public_progress_|mcp_rpc_|mcp_native_inventory_|mcp_chat_inventory_|web_preparation_failed|browser_message_prepared|context_checkpoint_|checkpoint_(transfer_|response_|json_|operation_)|http_transport_|inspection_ownership_revoked|tool_started|tool_settled|tool_failed|tool_error|web_media_upload_started|mcp_native_result_projected|approval_turn_resolution)/.test(stage);
+const relevant = (stage: string) => /^(native_|web_turn_|web_context_|web_retained_context_|web_send_|web_tool_bridge_|web_public_progress_|web_model_picker_|public_progress_|mcp_rpc_|mcp_native_inventory_|mcp_chat_inventory_|web_preparation_failed|browser_message_prepared|context_checkpoint_|checkpoint_(transfer_|response_|json_|operation_)|http_transport_|inspection_(?:window_action|owner_disposed|ownership_revoked)|tool_started|tool_settled|tool_failed|tool_error|web_media_upload_started|mcp_native_result_projected|approval_turn_resolution)/.test(stage);
 
 /** A Native interrupted status proves the turn ended, but never who pressed Stop.
  * Transport closure proves even less. Later cleanup cannot replace the first
@@ -193,8 +193,9 @@ export function startTurnDiagnosticSummary(scope: string, turn: string, request?
     const direct=fp(row.scope_fingerprint)&&fp(row.turn_fingerprint);
     if(direct?(row.scope_fingerprint!==scope||row.turn_fingerprint!==turn):!fp(row.request_fingerprint)||!requests.has(row.request_fingerprint))return;
     if(fp(row.request_fingerprint)&&requests.size<64)requests.add(row.request_fingerprint);
-    if (/^(web_turn_plan|web_retained_context_.*|web_context_settled|web_send_activation_started|native_seed_authority_observed|checkpoint_transfer_planned|checkpoint_operation_observed|checkpoint_response_rejected|checkpoint_json_parse_failed|native_checkpoint_efficiency_settled|native_checkpoint_model_started|native_checkpoint_model_failed|context_checkpoint_provider_invoked|native_visible_prefix_stage_settled|native_working_checkpoint_(selected|advanced)|web_model_picker_timeout|native_execution_failed|native_tool_request_rejected|web_preparation_failed)$/.test(row.stage)) {
-      const key=JSON.stringify([row.stage,row.request_fingerprint,row.operation_fingerprint,row.phase]);
+    if (/^(web_turn_plan|web_turn_identity_(?:accepted|rejected)|web_turn_ownership_observed|web_turn_observation_(?:suspended|resumed)|web_retained_context_.*|web_context_settled|web_send_activation_started|native_seed_authority_observed|checkpoint_transfer_planned|checkpoint_operation_observed|checkpoint_response_rejected|checkpoint_json_parse_failed|native_checkpoint_efficiency_settled|native_checkpoint_model_started|native_checkpoint_model_failed|context_checkpoint_provider_invoked|native_visible_prefix_stage_settled|native_working_checkpoint_(selected|advanced)|web_model_picker_(?:started|failed|owner_observed|timeout|action_failed|completed|observed|step|action)|inspection_(?:window_action|owner_disposed|ownership_revoked)|native_execution_failed|native_tool_request_rejected|web_preparation_failed)$/.test(row.stage)) {
+      const key=JSON.stringify([row.stage,row.request_fingerprint,row.operation_fingerprint,row.phase,row.surface_fingerprint,row.lease_fingerprint,
+        row.action,row.document_generation,row.input_revision,row.observation_revision,row.observation_pending,row.reason_class]);
       if(durable.has(key)||durable.size<DIAGNOSTIC_LIMITS.timeline-1)durable.set(key,row);
     }
     if(rows.length>=512){clipped=true;rows.shift();}rows.push(row);

@@ -18,6 +18,7 @@ export interface BrowserSurfaceController {
 export type BrowserSurfaceControllerFactory = (input: {
   readonly taskId: string;
   readonly epochId: string;
+  readonly leaseId: string;
 }) => Promise<BrowserSurfaceController>;
 
 interface OwnedSurface {
@@ -72,7 +73,8 @@ export class ControlledBrowserHost implements BrowserHost {
     }
 
     // Reserve the key before the platform factory starts. Shutdown owns pending creations too.
-    const creation = Promise.resolve().then(() => this.#factory(input));
+    const id = leaseId();
+    const creation = Promise.resolve().then(() => this.#factory({ ...input, leaseId: id }));
     this.#creating.set(key, creation);
     let controller: BrowserSurfaceController;
     try {
@@ -81,7 +83,6 @@ export class ControlledBrowserHost implements BrowserHost {
     } finally {
       this.#creating.delete(key);
     }
-    const id = leaseId();
     const lease: BrowserSurfaceLease = Object.freeze({
       leaseId: id,
       taskId: input.taskId,

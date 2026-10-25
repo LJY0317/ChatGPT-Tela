@@ -217,6 +217,7 @@ for (const supported of [true, false]) test(`maintenance cancellation review bin
     const journal = readFileSync(journalPath);
     const status = await runMaintenanceCommand(["maintenance", "status"], options) as any;
     expect(status.pendingTransition).toBe("upgrade");
+    expect(status.cancellationReviewAvailable).toBe(true);
     const args = ["--payload", f.first, ];
     if (!supported) {
       await expect(runMaintenanceCommand(["maintenance", "review", "cancel-upgrade", ...args], options)).rejects.toThrow("does not declare");

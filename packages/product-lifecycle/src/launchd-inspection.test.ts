@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test";
-import { launchdJobField } from "./launchd-inspection";
+import { launchdJobField, launchdJobFailureEvidence } from "./launchd-inspection";
+
+test("launchd failure evidence reads only direct bounded fields", () => {
+  const output = `job = {\n state = xpcproxy\n pid = 0\n last exit reason = OS_REASON_CODESIGNING\n last exit code = 0x1\n spawn failed = true\n resource coalition = {\n last exit reason = PRIVATE_DETAIL\n pid = 999\n }\n}`;
+  expect(launchdJobFailureEvidence(output)).toEqual({ state: "xpcproxy", process: "absent",
+    lastExitReason: "OS_REASON_CODESIGNING", lastExitCode: "0x1", spawnFailed: "yes" });
+  expect(launchdJobFailureEvidence(`job = {\n state = not running\n resource coalition = {\n last exit reason = OS_REASON_CODESIGNING\n }\n}`))
+    .toEqual({ state: "not running", process: "unknown", lastExitReason: "unknown", lastExitCode: "unknown", spawnFailed: "unknown" });
+});
 
 test("launchd inspection ignores nested requirement dictionaries using arrow syntax", () => {
   const output = `gui/501/example = {

@@ -1,4 +1,4 @@
-import { assertLaunchdJobDefinition, launchdJobField } from "./launchd-inspection";
+import { assertLaunchdJobDefinition, launchdJobFailureEvidence } from "./launchd-inspection";
 import type { PackagedInstallBlueprint } from "./packaged-install";
 import {
   applyPackagedRepairFromPayload,
@@ -46,11 +46,16 @@ function exactRegistrationId(blueprint: PackagedServiceControlIdentity, service:
   return entry.resource.registrationId;
 }
 
-function parseLaunchdState(stdout: string): "running" | "stopped" {
-  const state = launchdJobField(stdout, "state").toLowerCase();
-  if (state === "running") return "running";
-  if (state === "not running" || state === "exited") return "stopped";
-  throw new Error(`launchd service state is unsupported: ${state}`);
+function describeLaunchdFailure(evidence: ReturnType<typeof launchdJobFailureEvidence>): string {
+  return `job state=${evidence.state}, process=${evidence.process}, last exit reason=${evidence.lastExitReason}, last exit code=${evidence.lastExitCode}, spawn failed=${evidence.spawnFailed}`;
+}
+
+/** Includes only bounded, parsed OS evidence; safe to project through maintenance results. */
+export class PackagedServiceTransitionError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "PackagedServiceTransitionError";
+  }
 }
 
 function parseSystemdState(result: ServiceRegistrationCommandResult): "running" | "stopped" {
@@ -99,34 +104,54 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
     this.#userId = input.userId ?? (typeof process.getuid === "function" ? process.getuid() : undefined);
   }
 
-  async inspect(service: TelaServiceId): Promise<"running" | "stopped"> {
+  async #observe(service: TelaServiceId): Promise<{ state: "running" | "stopped" | "starting"; detail: string }> {
     const registrationId = exactRegistrationId(this.#blueprint, service);
     if (this.#blueprint.platform === "linux") {
-      return parseSystemdState(await this.#runner.run("systemctl", ["--user", "is-active", registrationId]));
+      const state = parseSystemdState(await this.#runner.run("systemctl", ["--user", "is-active", registrationId]));
+      return { state, detail: `last state: ${state}` };
     }
     if (this.#blueprint.platform === "win32") {
       const script = "$t=Get-ScheduledTask -TaskName $args[0] -TaskPath '\\' -ErrorAction Stop; $t.State.ToString()";
-      return parseWindowsState(await this.#runner.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script, registrationId]));
+      const state = parseWindowsState(await this.#runner.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script, registrationId]));
+      return { state, detail: `last state: ${state}` };
     }
     if (this.#userId === undefined) throw new Error("macOS packaged service control requires a user id");
     const target = `gui/${this.#userId}/${registrationId}`;
     const result = await this.#runner.run("/bin/launchctl", ["print", target]);
-    if (result.exitCode !== 0) throw commandFailure("launchd service status", result);
+    if (result.exitCode !== 0) throw new Error(`launchd service status failed (exit code ${result.exitCode})`);
     assertLaunchdJobDefinition(result.stdout, this.#blueprint.services.find(entry => entry.service === service)?.resource.identity?.definitionPath);
-    return parseLaunchdState(result.stdout);
+    const evidence = launchdJobFailureEvidence(result.stdout);
+    const detail = describeLaunchdFailure(evidence);
+    if (evidence.state === "running") return { state: "running", detail };
+    if (evidence.state === "not running" || evidence.state === "exited") return { state: "stopped", detail };
+    if (evidence.state === "xpcproxy") return { state: "starting", detail };
+    throw new Error(`launchd service state is unsupported (${detail})`);
+  }
+
+  async inspect(service: TelaServiceId): Promise<"running" | "stopped"> {
+    const observed = await this.#observe(service);
+    if (observed.state === "starting") throw new Error("launchd service state is transitional: xpcproxy");
+    return observed.state;
   }
 
   async #waitFor(service: TelaServiceId, expected: "running" | "stopped", deadline = Date.now() + this.#transitionTimeoutMs): Promise<void> {
     let lastError: unknown;
+    let lastObservation = "unknown";
     while (Date.now() < deadline) {
       try {
-        if (await this.inspect(service) === expected) return;
+        const observed = await this.#observe(service);
+        lastObservation = observed.detail;
+        lastError = undefined;
+        if (observed.state === expected) return;
       } catch (error) {
         lastError = error;
+        lastObservation = error instanceof Error ? error.message : "inspection failed";
       }
       await sleep(POLL_INTERVAL_MS);
     }
-    throw new Error(`packaged ${service} service did not become ${expected}`, lastError ? { cause: lastError } : undefined);
+    const message = `packaged ${service} service did not become ${expected} (${lastObservation})`;
+    if (this.#blueprint.platform === "darwin") throw new PackagedServiceTransitionError(message, lastError);
+    throw new Error(message, lastError ? { cause: lastError } : undefined);
   }
 
   /** Check every participant before stopping the first; admission is still rechecked by shutdown. */
@@ -171,7 +196,9 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
 
   async resume(service: TelaServiceId): Promise<void> {
     const deadline = Date.now() + this.#transitionTimeoutMs;
-    if (await this.inspect(service) === "running") {
+    const initial = await this.#observe(service);
+    if (initial.state !== "stopped") {
+      if (initial.state === "starting") await this.#waitFor(service, "running", deadline);
       await this.#ready(service, deadline);
       return;
     }
@@ -186,7 +213,14 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
       if (this.#userId === undefined) throw new Error("macOS packaged service control requires a user id");
       result = await this.#runner.run("/bin/launchctl", ["kickstart", `gui/${this.#userId}/${registrationId}`]);
     }
-    if (result.exitCode !== 0) throw commandFailure(`normal start for ${service}`, result);
+    if (result.exitCode !== 0) {
+      if (this.#blueprint.platform === "darwin") {
+        let observation = "OS state unavailable";
+        try { observation = (await this.#observe(service)).detail; } catch { /* A failed print cannot change start failure. */ }
+        throw new PackagedServiceTransitionError(`normal start for ${service} failed (launchctl exit code ${result.exitCode}; ${observation})`);
+      }
+      throw commandFailure(`normal start for ${service}`, result);
+    }
     await this.#waitFor(service, "running", deadline);
     await this.#ready(service, deadline);
   }

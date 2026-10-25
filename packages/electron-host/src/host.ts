@@ -247,7 +247,7 @@ export function createElectronBrowserHost(input: {
   const profile = electronProfileIdentity(input.profileId);
   const initialUrl = input.initialUrl ? supportedNavigation(input.initialUrl).href : undefined;
 
-  return new ControlledBrowserHost(async ({ taskId, epochId }) => {
+  return new ControlledBrowserHost(async ({ taskId, epochId, leaseId }) => {
     const window = await input.createWindow({
       show: false,
       width: input.window?.width ?? 1200,
@@ -267,7 +267,7 @@ export function createElectronBrowserHost(input: {
       throw new Error("Electron window factory returned a destroyed surface");
     }
 
-    const origin = { ...diagnosticContext(), profile_fingerprint: diagnosticFingerprint(input.profileId),
+    const origin = { ...diagnosticContext(), lease_fingerprint: diagnosticFingerprint(leaseId), profile_fingerprint: diagnosticFingerprint(input.profileId),
       partition_fingerprint: diagnosticFingerprint(profile.partition),
       ...(input.storageFingerprint ? { storage_fingerprint: input.storageFingerprint } : {}),
       surface_fingerprint: diagnosticFingerprint(JSON.stringify([input.profileId, taskId, epochId])) };
@@ -384,6 +384,9 @@ export function createElectronBrowserHost(input: {
     const recordInspection = (action: string) => withDiagnosticContext(origin, () =>
       emitDiagnosticEvent("chatgpt_tela_browser", "inspection_window_action", {
         action, owned_document_live: !documentController.signal.aborted, document_generation: documentGeneration,
+        observation_revision: inspection.observationCurrent().revision,
+        observation_pending: inspection.observationCurrent().pending,
+        input_revision: inspection.current().revision,
       }));
     // Inspection visibility is independent from the Native-owned document lifetime.
     const hideListeners = new Set<() => void>();

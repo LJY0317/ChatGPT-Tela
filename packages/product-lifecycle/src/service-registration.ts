@@ -1,4 +1,4 @@
-import { assertLaunchdJobDefinition } from "./launchd-inspection";
+import { assertLaunchdJobDefinition, launchdJobField } from "./launchd-inspection";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -345,6 +345,13 @@ function writeDefinitionFile(path: string, content: string): void {
   renameSync(temporary, path);
 }
 
+interface ServiceRegistrationInstallInput {
+  readonly manifestPath: string;
+  readonly manifest: OwnershipManifest;
+  readonly resource: ServiceRegistrationResource;
+  readonly definition: ServiceRegistrationDefinition;
+}
+
 export class ServiceRegistrationInstaller {
   readonly #runner: ServiceRegistrationCommandRunner;
   readonly #platform: NodeJS.Platform;
@@ -389,12 +396,7 @@ export class ServiceRegistrationInstaller {
     return loaded && enabled ? "owned" : "missing";
   }
 
-  async install(input: {
-    readonly manifestPath: string;
-    readonly manifest: OwnershipManifest;
-    readonly resource: ServiceRegistrationResource;
-    readonly definition: ServiceRegistrationDefinition;
-  }): Promise<{ readonly created: boolean; readonly detail: string }> {
+  async install(input: ServiceRegistrationInstallInput): Promise<{ readonly created: boolean; readonly detail: string }> {
     const identity = input.resource.identity;
     if (!identity) throw new Error("service registration resource has no ownership identity");
     if (identity.platform !== this.#platform || input.definition.platform !== identity.platform) {
@@ -484,6 +486,36 @@ export class ServiceRegistrationInstaller {
     return Object.freeze({ created: mutated, detail: mutated
       ? "service registration installed and verified"
       : "service registration recovered and verified" });
+  }
+
+  /** Unload the exact owned, quiesced job before refreshing the executable registration. */
+  async unloadForPayloadReplacement(input: ServiceRegistrationInstallInput): Promise<void> {
+    const identity = input.resource.identity;
+    if (this.#platform !== "darwin" || identity?.platform !== "darwin" || input.definition.platform !== "darwin") {
+      throw new Error("launchd refresh requires a macOS service registration");
+    }
+    const expected = serviceRegistrationResourceForDefinition({
+      resourceId: input.resource.id, owner: input.resource.owner, registrationId: input.resource.registrationId,
+      markerPath: identity.markerPath, ...(identity.definitionPath ? { definitionPath: identity.definitionPath } : {}),
+      definition: input.definition,
+    });
+    if (JSON.stringify(expected) !== JSON.stringify(input.resource) || !exactMarker(input.resource, input.manifest)
+      || fileFingerprint(identity.definitionPath!) !== identity.definitionFingerprint) {
+      throw new Error("launchd refresh requires an exact owned service definition");
+    }
+    const uid = process.getuid?.();
+    if (uid === undefined) throw new Error("macOS service refresh requires a user id");
+    const target = `gui/${uid}/${input.resource.registrationId}`;
+    const loaded = await this.#runner.run("/bin/launchctl", ["print", target]);
+    if (loaded.exitCode === 0) {
+      assertLaunchdJobDefinition(loaded.stdout, identity.definitionPath);
+      const state = launchdJobField(loaded.stdout, "state").toLowerCase();
+      if (state !== "not running" && state !== "exited") {
+        throw new Error(`cannot refresh a launchd service that is not quiesced: ${state}`);
+      }
+      const stopped = await this.#runner.run("/bin/launchctl", ["bootout", target]);
+      if (stopped.exitCode !== 0) throw new Error(`launchd registration unload failed: ${stopped.stderr.trim().slice(0, 240)}`);
+    }
   }
 }
 

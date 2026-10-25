@@ -16,6 +16,12 @@ separate incident-count cap. Chat tool incidents share 4 MiB / 30 days across wo
 
 ## Browser request and provider failures
 
+Accepted Web requests and inspection-window actions share a concrete lease fingerprint. Ownership
+observations retain the accepted and current document generation, input revision and inspection revision,
+so a later lineage refusal can be compared with opening or hiding the same browser. Identical observations
+coalesce; shared byte/age retention applies without a per-request witness-count cutoff. These fields are
+diagnostic evidence, not additional execution conditions or proof that inspection caused a failure.
+
 The renderer records failed XHR/fetch or WebSocket requests and HTTP responses >=400.
 Owned provider-API POST completions also record status as `renderer_api_request_completed`;
 HTTP completion does not prove JavaScript consumption or semantic stream completion.

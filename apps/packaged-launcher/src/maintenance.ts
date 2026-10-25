@@ -4,7 +4,7 @@ import { chmodSync, copyFileSync, lstatSync, mkdtempSync, readFileSync, readdirS
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { readOwnershipManifest, resolveProductPaths, readPackagedUpgradeJournal, readPackagedRepairJournal,
-  packagedUpgradeJournalPath, packagedRepairJournalPath, PackagedServiceShutdownNotStartedError,
+  packagedUpgradeJournalPath, packagedRepairJournalPath, PackagedServiceShutdownNotStartedError, PackagedServiceTransitionError,
   PackagedUpgradeRecoveryError } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { parsePackagedLifecycleCommand, runPackagedLifecycleCommand, type PackagedLifecycleOptions } from "./lifecycle";
@@ -42,9 +42,15 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
     ...(options.home ? { home: options.home } : {}), ...(options.environment ? { environment: options.environment } : {}) });
   if (args[1] === "status" && args.length === 2) {
     const ownership = readOwnershipManifest(paths.installManifest);
+    const upgrade = readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths));
     return { installedVersion: ownership?.productVersion ?? "Not installed", pendingTransition:
-      readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths)) ? "upgrade"
-      : readPackagedRepairJournal(packagedRepairJournalPath(paths)) ? "repair" : "none" };
+      upgrade ? "upgrade" : readPackagedRepairJournal(packagedRepairJournalPath(paths)) ? "repair" : "none",
+      ...(upgrade ? {
+        cancellationReviewAvailable: ["prepared", "quiescing", "quiesced", "restoring-source"].includes(upgrade.phase),
+        ...((options.platform ?? process.platform) === "darwin" ? { appReopenState:
+          upgrade.phase === "manifest-updated" && upgrade.resumeServices.every(service => upgrade.resumedServices.includes(service))
+            ? "unverified" : "not-attempted" } : {}),
+      } : {}) };
   }
   if (args[1] === "processes" && args.length === 2) {
     const client = await maintenanceChatClient(options);
@@ -96,11 +102,14 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
     } catch (error) {
       const blockerMessage = error instanceof PackagedServiceShutdownNotStartedError ? error.message
         : error instanceof PackagedUpgradeRecoveryError && error.recoveryState === "source-restored"
-          && error.cause instanceof PackagedServiceShutdownNotStartedError ? error.message : undefined;
+          && error.cause instanceof PackagedServiceShutdownNotStartedError ? error.message
+          : error instanceof PackagedUpgradeRecoveryError ? error.message : undefined;
       if (!blockerMessage) throw error;
+      const osFailure = error instanceof PackagedUpgradeRecoveryError && error.cause instanceof PackagedServiceTransitionError
+        ? error.cause.message : undefined;
       return { operation, success: false, removedCount: 0, preservedCount: 0, failedCount: 0,
         productVersion: readOwnershipManifest(paths.installManifest)?.productVersion ?? null,
-        blockers: [blockerMessage] };
+        blockers: osFailure ? [blockerMessage, osFailure] : [blockerMessage] };
     }
     const failed = Number(result.failedCount ?? 0) + (Array.isArray(result.shutdownFailures) ? result.shutdownFailures.length : 0);
     const preservedRepair = operation === "repair" && (result.payload === "preserved" || result.services?.some((s: any) => s.outcome === "preserved"));

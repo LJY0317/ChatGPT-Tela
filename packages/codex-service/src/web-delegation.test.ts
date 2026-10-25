@@ -1002,10 +1002,58 @@ test("on-demand status keeps a genuinely in-progress Native turn running and its
     f.store.save({ ...f.store.get(f.id)!, state: "running" });
     const observed = await f.inspect();
     expect(observed).toMatchObject({ state: "running", progress: { source: "native-indexed-summary" } });
+    expect(observed.reconciliation).toBe("native-in-progress");
     expect(verifiedWebDelegationAnswer(observed)).toBeUndefined();
     expect(f.store.capacity(1).total.used).toBe(1);
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
     expect(f.calls.filter(call => call.method === "thread/name/set")).toHaveLength(0);
+  } finally { f.cleanup(); }
+});
+test("on-demand settlement publishes terminal changes and never replays a completed Native turn", async () => {
+  const f = await fixture({ silent: true, disconnect: true });
+  try {
+    await expect(f.run()).rejects.toThrow("connection lost");
+    f.store.save({ ...f.store.get(f.id)!, state: "running" });
+    const result = await f.inspect();
+    expect(result.state).toBe("completed");
+    expect(result.reconciliation).toBeUndefined();
+    expect(f.changes.at(-1)).toMatchObject({ state: "completed", answer: "verified recovered design" });
+    expect(f.store.capacity(f.slot, f.root).total.used).toBe(0);
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+test("status and result inspection settle an exact failed provider turn without replay or claiming task effects", async () => {
+  const f = await fixture({ silent: true, disconnect: true, failedTurn: true,
+    nativeFailureCode: "tela_web_provider_response_failed", answer: "" });
+  try {
+    await expect(f.run()).rejects.toThrow("connection lost");
+    f.store.save({ ...f.store.get(f.id)!, state: "running" });
+    const observed = await f.inspect();
+    expect(observed).toMatchObject({ state: "failed", failure: "turn_failed",
+      failureNativeCode: "tela_web_provider_response_failed" });
+    expect(observed.taskOutcome).toBeUndefined();
+    expect(observed.reconciliation).toBeUndefined();
+    expect(f.store.capacity(f.slot, f.root).total.used).toBe(0);
+    await expect(f.collect()).rejects.toThrow("No verified final result");
+    expect(f.store.get(f.id)).toEqual(observed);
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+    expect(f.calls.filter(call => call.method === "thread/turns/list")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+test("unproven Native recovery preserves running lease and publishes saved failure boundary", async () => {
+  const f = await fixture({ silent: true, disconnect: true });
+  try {
+    await expect(f.run()).rejects.toThrow("connection lost");
+    f.store.save({ ...f.store.get(f.id)!, state: "running" });
+    const adapters = { ...f.adapters, connect: async () => ({
+      close: async () => {}, request: async () => { throw Error("Native indexed history unavailable"); },
+    }) };
+    const result = await inspectWebDelegationResult(adapters, f.id);
+    expect(result).toMatchObject({ state: "running", reconciliation: "unproven",
+      failureStage: "reconcile_history" });
+    expect(f.changes.at(-1)).toEqual(f.store.get(f.id));
+    expect(f.store.capacity(f.slot, f.root).total.used).toBe(1);
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
   } finally { f.cleanup(); }
 });
 
