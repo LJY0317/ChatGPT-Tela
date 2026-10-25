@@ -309,7 +309,7 @@ export async function startNativeFirstProductProfileRuntime(
       slot: config.slot, state, request_count: webRequests, turn_count: turns.size,
       account_browser_blocked: accountBrowserBlocked, account_browser_open: !!accountBrowser,
       account_browser_opening: !!accountBrowserOpening, account_browser_settling: !!accountBrowserSettling,
-      preparing: !!preparation, account_invalidating: !!accountInvalidation, shutdown_pending: shutdownPending, during_stop: duringStop,
+      preparing: !!preparation, account_invalidating: !!accountInvalidation, shutdown_pending: shutdownPending,
     });
     return ready ? "ready" : "blocked";
   };
