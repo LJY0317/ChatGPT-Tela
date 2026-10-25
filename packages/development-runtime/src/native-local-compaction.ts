@@ -91,6 +91,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
     let state: "new" | "coalesced" | "cached" = "new";
     let operationId: string | undefined;
     let scope: string | undefined;
+    let turn: string | undefined;
     let sourceMatches: boolean | undefined;
     let wireMatches: boolean | undefined;
     try {
@@ -99,6 +100,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
       phase = "binding";
       const { claim, evidence: activeOwner } = await bindNativeCompactionRequest(body, input.source);
       scope = diagnosticFingerprint(claim.threadId);
+      turn = diagnosticFingerprint(claim.turnId);
       phase = "identity";
       const key = JSON.stringify([claim.threadId, claim.turnId]);
       const sourceDigest = digest({ source: nativeRequestContentSource(body), browserModel,
@@ -126,7 +128,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
         input.settlePendingToolResult?.(claim.threadId, claim.turnId, body);
         const id = randomUUID(); operationId = id;
         const startedAt = Date.now();
-        const result = withDiagnosticContext({ operation_fingerprint: diagnosticFingerprint(id), scope_fingerprint: diagnosticFingerprint(claim.threadId) }, async () => {
+        const result = withDiagnosticContext({ operation_fingerprint: diagnosticFingerprint(id), scope_fingerprint: scope, turn_fingerprint: turn }, async () => {
           let operationPhase: CompactionPhase = "watch";
           let watch: Awaited<ReturnType<NonNullable<typeof input.source.watchTurn>>>;
           let primaryFailure = false;
@@ -242,7 +244,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
         void result.finally(() => { saved.settled = true; }).catch(() => {});
       }
       emitDiagnosticEvent("chatgpt_tela_work", "compaction_operation_observed", {
-        state, operation_fingerprint: diagnosticFingerprint(operation.id), scope_fingerprint: scope,
+        state, operation_fingerprint: diagnosticFingerprint(operation.id), scope_fingerprint: scope, turn_fingerprint: turn,
         ...(sourceMatches === undefined ? {} : { source_matches: sourceMatches, wire_matches: wireMatches! }),
       });
       const summary = await operation.result;
@@ -266,6 +268,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
         kind: diagnosticFailureClass(rejected.cause),
         ...(operationId ? { operation_fingerprint: diagnosticFingerprint(operationId) } : {}),
         ...(scope ? { scope_fingerprint: scope } : {}),
+        ...(turn ? { turn_fingerprint: turn } : {}),
         ...(sourceMatches === undefined ? {} : { source_matches: sourceMatches, wire_matches: wireMatches! }),
       });
       if (requiresRecovery) {

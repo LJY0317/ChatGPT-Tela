@@ -121,7 +121,7 @@ test("changing request settings cannot replay an accepted canonical user message
   await f.gateway.close();
 });
 
-test("three appended Native user messages cannot start a cycle with only two fresh input witnesses", async () => {
+test("canonical appended messages do not require a public input notification for each message", async () => {
   const f = fixture();
   try {
     const first = await f.gateway.handle(f.request());

@@ -272,6 +272,10 @@ transition, terminal/failure classification, and the gap between
 observations. A long elapsed gap does **not** prove the card remained
 visible for that entire period; current browser status stays
 `not_verified`. Missing/truncated sources are reported explicitly.
+Historical and live thread inspection also reuse canonical incident timelines
+after rotating logs expire. The common reader filters the same time window,
+test origins and duplicate events; source-fit evidence includes the retained
+input estimates, limits and item-byte accounting without source text.
 For a Web identity rejection, the historical inspector also gives a
 time-bounded structural sequence of renderer unresponsiveness, input
 ownership revocation, input classification, and later Native failure,
@@ -1045,6 +1049,7 @@ source/model/environment is rejected without another model call. Failed results 
 and wire, linked by the disposable operation fingerprint. `compaction_source_observed` records logical
 and transfer estimates, the current provider source limit and fit result. `compaction_rejected` preserves
 the original failure phase/reason even for a cached failure, plus HTTP status and fixed failure class.
+Once binding succeeds, these events carry the exact Native thread and turn fingerprints.
 Binding reasons distinguish malformed claims, absent/changed owners, lineage/agent changes and failed
 owner reads. `compaction_release_failed` records cleanup separately; it cannot erase the primary
 failure or publish a successful operation before cleanup. Oversized source still needs a verified

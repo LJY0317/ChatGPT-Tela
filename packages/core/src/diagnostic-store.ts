@@ -155,7 +155,7 @@ export function readDiagnosticTail(path: string, maxBytes = DIAGNOSTIC_LIMITS.ta
   finally { if (fd !== undefined) closeSync(fd); }
 }
 
-export function readDiagnosticSources(paths: readonly string[], window?: DiagnosticWindow) {
+export function readDiagnosticSources(paths: readonly string[], window?: DiagnosticWindow, incidentRoots: readonly string[] = []) {
   const selected = [...new Set(paths)];
   let remaining = DIAGNOSTIC_LIMITS.scanBytes;
   const sources = selected.map((path, index) => {
@@ -164,6 +164,25 @@ export function readDiagnosticSources(paths: readonly string[], window?: Diagnos
     remaining -= coverage.bytesRead;
     return { index, coverage, events };
   });
+  // Canonical incidents outlive rotated logs. Reuse their structural timelines
+  // under the same window, origin filtering and deduplication as log evidence.
+  const archived: StructuralDiagnosticEvent[] = [];
+  let incidentsRead = 0, incidentsUnavailable = 0;
+  for (const root of new Set(incidentRoots)) {
+    try {
+      for (const item of listDiagnosticIncidents(root, true)) {
+        try {
+          const record = readDiagnosticIncident(root, item.ref) as { timeline?: unknown };
+          if (!Array.isArray(record.timeline)) { incidentsUnavailable++; continue; }
+          incidentsRead++;
+          for (const row of record.timeline) {
+            const event = structuralDiagnosticEvent(row);
+            if (event && (!window || Date.parse(event.ts) >= window.fromMs && Date.parse(event.ts) <= window.toMs)) archived.push(event);
+          }
+        } catch { incidentsUnavailable++; }
+      }
+    } catch { incidentsUnavailable++; }
+  }
   const excluded = new Set<string>();
   for (const parent of new Set(selected.map(path=>dirname(path)))) {
     try {
@@ -176,12 +195,14 @@ export function readDiagnosticSources(paths: readonly string[], window?: Diagnos
   }
   const seen = new Set<string>();
   let excludedTestEvents=0;
-  const events = sources.flatMap(source => source.events).sort((a,b) => a.ts.localeCompare(b.ts)).filter(event => {
+  const events = [...sources.flatMap(source => source.events), ...archived].sort((a,b) => a.ts.localeCompare(b.ts)).filter(event => {
     if(event.environment==="test" || excluded.has(String(event.instance_fingerprint))) { excludedTestEvents++;return false; }
-    const key = JSON.stringify(event); if (seen.has(key)) return false; seen.add(key); return true;
+    const key = JSON.stringify(Object.entries(event).sort(([a], [b]) => a.localeCompare(b)));
+    if (seen.has(key)) return false; seen.add(key); return true;
   });
   const coverage = sources.map(({ index, coverage }) => ({ source: index, ...coverage }));
-  return { events, excludedTestEvents, coverage, sourceLimitReached: false, byteLimitReached: coverage.some(source => source.truncated || source.state === "not_scanned") };
+  return { events, excludedTestEvents, coverage, incidentsRead, incidentsUnavailable,
+    archivedEvents: archived.length, sourceLimitReached: false, byteLimitReached: coverage.some(source => source.truncated || source.state === "not_scanned") };
 }
 
 export const HOST_SYMPTOMS = ["stream-failure", "connection-interrupted", "response-stalled", "additional-review", "response-recovered", "approval-stalled", "tool-review-blocked", "missing-models", "startup-stalled", "ui-anomaly", "unknown"] as const;

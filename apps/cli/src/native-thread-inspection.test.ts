@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { diagnosticFingerprint } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, writeDiagnosticIncident } from "@chatgpt-tela/core";
 import { inspectNativeThread, inspectNativeThreadHistoricalEvidence } from "./native-thread-inspection";
 
 const THREAD = "11111111-2222-7333-8444-555555555555";
@@ -38,6 +38,24 @@ function fixtureReader(overrides: {
 }
 
 describe("one read-only conversation inspection by exact Native ID", () => {
+  test("historical inspection exposes archived source-fit evidence after its log rotated", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-archived-fit-")), path = join(root, "events.jsonl");
+    const ts = new Date(NOW).toISOString();
+    writeFileSync(path, "");
+    writeDiagnosticIncident(join(root, "diagnostics"), { stage: "native_context_source_rejected", observedAt: ts,
+      timeline: [{ ts, event: "chatgpt_tela_codex", stage: "native_context_source_rejected",
+        scope_fingerprint: diagnosticFingerprint(THREAD), turn_fingerprint: diagnosticFingerprint(TURN),
+        reason_class: "source_exceeds_single_message", source_estimate: 131919, input_budget: 98905,
+        source_item_count: 72, largest_item_bytes: 109910, entry_class: "mcp_tool_call" }] });
+    try {
+      const result = inspectNativeThreadHistoricalEvidence({ threadId: THREAD, turnId: TURN,
+        diagnosticPaths: [path], nowMs: NOW });
+      expect(result.coverage).toMatchObject({ incidentsRead: 1, eventsMatched: 1 });
+      expect(result.contextPreparationEvidence[0]).toMatchObject({ source_estimate: 131919,
+        input_budget: 98905, largest_item_bytes: 109910, entry_class: "mcp_tool_call" });
+      expect(result.mutating).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("exact-turn evidence retains all inventory rows and excludes other turns from summaries", () => {
     const dir = mkdtempSync(join(tmpdir(), "tela-exact-evidence-")), path = join(dir, "events.jsonl");
     const scope_fingerprint = diagnosticFingerprint(THREAD), turn_fingerprint = diagnosticFingerprint(TURN);

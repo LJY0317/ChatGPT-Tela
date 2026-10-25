@@ -1,5 +1,5 @@
 import { analyzeDiagnosticEvents, DIAGNOSTIC_LIMITS, HOST_SYMPTOMS, HOST_REPORT_ORIGINS, listDiagnosticIncidents, readDiagnosticIncident,
-  readDiagnosticSources, setPrivateDiagnosticCapture, writeDiagnosticIncident, structuralDiagnosticEvent, type HostSymptom, type HostReportOrigin } from "./diagnostic-store";
+  readDiagnosticSources, setPrivateDiagnosticCapture, writeDiagnosticIncident, type HostSymptom, type HostReportOrigin } from "./diagnostic-store";
 import { join } from "node:path";
 import { summarizeContextContinuity } from "./diagnostic-context-continuity";
 
@@ -22,17 +22,8 @@ export function diagnosticCenter(root: string, paths: readonly string[], command
     if (!Number.isFinite(atMs) || !Number.isInteger(minutes) || minutes < 1 || minutes > 120) throw Error("invalid context report window");
     const view=option("--view")??"full",limit=Number(option("--limit")??(view==="summary"?8:64));
     if(!["full","summary"].includes(view)||!Number.isInteger(limit)||limit<1||limit>64)throw Error("invalid context report view or limit");
-    const source = readDiagnosticSources(paths, { fromMs: atMs - minutes * 60000, toMs: atMs });
-    const archived = listDiagnosticIncidents(root, true).filter(record=>record.stage==='native_cycle_summary').flatMap(record=>{
-      const incident=readDiagnosticIncident(root,record.ref);
-      const timeline=incident&&typeof incident==='object'&&'timeline' in incident&&Array.isArray(incident.timeline)?incident.timeline:[];
-      return timeline.flatMap((row:unknown)=>{
-        const safe=structuralDiagnosticEvent(row);
-        return safe&&Date.parse(safe.ts)>=atMs-minutes*60000&&Date.parse(safe.ts)<=atMs?[safe]:[];
-      });
-    });
-    const merged=[...new Map([...source.events,...archived].map(row=>[
-      JSON.stringify(Object.entries(row).sort(([a],[b])=>a.localeCompare(b))),row])).values()].sort((a,b)=>a.ts.localeCompare(b.ts));
+    const source = readDiagnosticSources(paths, { fromMs: atMs - minutes * 60000, toMs: atMs }, [root]);
+    const merged = source.events;
     // A scoped audit must not lose its sparse archive to another chat's traffic
     // before the report's event budget is applied. Keep correlated owners too,
     // so ambiguous request/operation attribution remains visible.
@@ -46,7 +37,9 @@ export function diagnosticCenter(root: string, paths: readonly string[], command
     return { ...report,view,selection:{turnLimit:limit,turnsOmitted:report.turns.length-selected.length},
       turns:view==="full"?selected:selected.map(t=>({scopeFingerprint:t.scopeFingerprint,turnFingerprint:t.turnFingerprint,
         outcome:t.outcome,completionEvidence:t.completionEvidence,summary:t.summary,cycleReceipts:t.cycleReceipts.slice(-1)})),
-      sourceCoverage: source.coverage, archivedCycleEvents:archived.length, sourceLimitReached: source.sourceLimitReached, byteLimitReached: source.byteLimitReached, excludedTestEvents: source.excludedTestEvents };
+      sourceCoverage: source.coverage, archivedCycleEvents:source.archivedEvents,
+      incidentsRead:source.incidentsRead, incidentsUnavailable:source.incidentsUnavailable,
+      sourceLimitReached: source.sourceLimitReached, byteLimitReached: source.byteLimitReached, excludedTestEvents: source.excludedTestEvents };
   }
   if (command === "capture") {
     const mode = option("--mode"), minutes = option("--minutes");

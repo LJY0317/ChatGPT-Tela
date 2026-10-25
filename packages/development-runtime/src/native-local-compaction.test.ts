@@ -1,4 +1,4 @@
-import {observeDiagnosticEvents,structuralDiagnosticEvent} from "@chatgpt-tela/core";
+import {observeDiagnosticEvents,structuralDiagnosticEvent,diagnosticFingerprint} from "@chatgpt-tela/core";
 import {expect,test} from 'bun:test';
 import {chatGptWebModelId,chatGptWebFamilyKey} from '@chatgpt-tela/chatgpt';
 import type {CanonicalCurrentTurnEvidence} from '@chatgpt-tela/codex';
@@ -317,6 +317,7 @@ test('compaction diagnostics preserve original failure phase across metadata-onl
   expect(rejected[0]).toMatchObject({phase:'summary',reason_class:'stage_failed',state:'new'});
   expect(rejected[1]).toMatchObject({phase:'summary',reason_class:'stage_failed',state:'cached',source_matches:true,wire_matches:false});
   expect(rejected[1].operation_fingerprint).toBe(rejected[0].operation_fingerprint);
+  expect(events.every(row=>row.turn_fingerprint===diagnosticFingerprint(canonical.turnId))).toBe(true);
   expect(structuralDiagnosticEvent(rejected[1])).toEqual(rejected[1]);
   expect(JSON.stringify(events)).not.toMatch(/PRIVATE_|Observed old result|Summarize the task/);
  }finally{stop?.()}

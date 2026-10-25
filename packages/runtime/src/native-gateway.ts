@@ -254,8 +254,7 @@ export class NativeResponsesGateway {
       // internally accepted Goal continuation; absence is not a replay proof.
       if (finalIndex < 0 || !newMessages.length || newMessages.some(message => message.hash === "unproven")
         || lifetime.requestHash === requestHash(body)) {
-        // Failure-triggered structural evidence distinguishes an absent final anchor,
-        // no new user message, and an absent/mismatched canonical input witness.
+        // Distinguish missing final/input, unsupported message shape and replay.
         withDiagnosticContext({ scope_fingerprint: diagnosticFingerprint(identity.threadId), turn_fingerprint: diagnosticFingerprint(identity.turnId) }, () => {
           emitDiagnosticEvent("chatgpt_tela_work", "native_cycle_proof_rejected", {
             reason_class: finalIndex < 0 ? "prior_final_missing" : !newMessages.length ? "new_input_missing"

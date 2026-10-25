@@ -13,6 +13,23 @@ function fixture() { const root = mkdtempSync(join(tmpdir(),"tela-diagnostics-te
 afterEach(async () => { await new Promise<void>(resolve => setImmediate(resolve)); if (original) process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=original; else delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE; for (const root of directories.splice(0)) rmSync(root,{recursive:true,force:true}); });
 const fp = (value: string) => diagnosticFingerprint(value);
 const event = (stage: string, extra: Record<string,unknown> = {}, at = "2026-10-05T00:00:00.000Z") => structuralDiagnosticEvent({ts:at,event:"chatgpt_tela_test",stage,...extra})!;
+test("canonical evidence survives log rotation with common window, privacy, origin and duplicate filtering", () => {
+  const root = fixture(), center = join(root, "diagnostics"), path = join(root, "events.jsonl");
+  const at = Date.now(), ts = new Date(at).toISOString();
+  const row = event("native_context_source_rejected", { source_estimate: 131919,
+    input_budget: 98905, content: "PRIVATE SOURCE" }, ts);
+  writeDiagnosticIncident(center, { stage: row.stage, observedAt: ts, timeline: [row,
+    event("test_failed", { environment: "test" }, ts), event("test_failed", {}, new Date(at - 60000).toISOString())] });
+  writeFileSync(path, JSON.stringify(Object.fromEntries(Object.entries(row).reverse())) + "\n");
+  const window = { fromMs: at - 1000, toMs: at + 1000 };
+  const merged = readDiagnosticSources([path], window, [center]);
+  expect(merged.events).toEqual([row]);
+  expect(merged.incidentsRead).toBe(1);
+  expect(merged.excludedTestEvents).toBe(1);
+  expect(JSON.stringify(merged)).not.toContain("PRIVATE SOURCE");
+  writeFileSync(path, "");
+  expect(readDiagnosticSources([path], window, [center]).events).toEqual([row]);
+});
 test("preparation provenance survives emitted failure and canonical incident inspection", async () => {
   const root = fixture(), file = join(root, "events.jsonl");
   process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;

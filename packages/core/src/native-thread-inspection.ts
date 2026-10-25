@@ -1,5 +1,8 @@
 import { diagnosticFingerprint } from "./diagnostic-events";
 import { readDiagnosticSources } from "./diagnostic-store";
+import { dirname, join } from "node:path";
+
+const incidentRoots = (paths: readonly string[]) => [...new Set(paths.map(path => join(dirname(path), "diagnostics")))];
 
 const THREAD_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const TURN_STATUS = new Set(["inProgress", "completed", "failed", "interrupted"]);
@@ -274,7 +277,7 @@ export async function inspectNativeThread(input: {
   const logs = readDiagnosticSources(input.diagnosticPaths, {
     fromMs: nowMs - minutes * 60_000,
     toMs: nowMs,
-  });
+  }, incidentRoots(input.diagnosticPaths));
   const correlated = logs.events.filter(event => event.scope_fingerprint === fingerprint
     && (event.event === "chatgpt_tela_work" || event.event === "chatgpt_tela_codex"));
   const last = (stage: string) => correlated.filter(event => event.stage === stage).at(-1);
@@ -324,7 +327,9 @@ export async function inspectNativeThread(input: {
   const coverage = {
     sourcesRead: logs.coverage.filter(item => item.state === "read").length,
     sourcesUnavailable: logs.coverage.filter(item => item.state !== "read").length,
-    limited: logs.byteLimitReached || logs.sourceLimitReached || logs.coverage.some(item =>
+    incidentsRead: logs.incidentsRead,
+    incidentsUnavailable: logs.incidentsUnavailable,
+    limited: logs.incidentsUnavailable > 0 || logs.byteLimitReached || logs.sourceLimitReached || logs.coverage.some(item =>
       item.truncated || item.eventLimitReached),
     eventsMatched: correlated.length,
   };
@@ -401,7 +406,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
   const fingerprint = diagnosticFingerprint(input.threadId);
   const logs = readDiagnosticSources(input.diagnosticPaths, {
     fromMs: nowMs - minutes * 60_000, toMs: nowMs,
-  });
+  }, incidentRoots(input.diagnosticPaths));
   const allEvents = logs.events as readonly EvidenceRow[];
   const turnFingerprint = input.turnId ? diagnosticFingerprint(input.turnId) : undefined;
   const events = logs.events.filter(event => event.scope_fingerprint === fingerprint
@@ -411,7 +416,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
     threadFingerprint: fingerprint,
     turnFingerprint,
     allEvents,
-    limited: logs.byteLimitReached || logs.sourceLimitReached || logs.coverage.some(item => item.truncated || item.eventLimitReached),
+    limited: logs.incidentsUnavailable > 0 || logs.byteLimitReached || logs.sourceLimitReached || logs.coverage.some(item => item.truncated || item.eventLimitReached),
   }) : undefined;
   const last = (stage: string) => events.filter(event => event.stage === stage).at(-1);
   const pending = events.filter(event => event.stage === "approval_wait_transition"
@@ -478,8 +483,10 @@ export function inspectNativeThreadHistoricalEvidence(input: {
     coverage: {
       sourcesRead: logs.coverage.filter(item => item.state === "read").length,
       sourcesUnavailable: logs.coverage.filter(item => item.state !== "read").length,
-      limited: logs.byteLimitReached || logs.sourceLimitReached || logs.coverage.some(item => item.truncated || item.eventLimitReached),
+      limited: logs.incidentsUnavailable > 0 || logs.byteLimitReached || logs.sourceLimitReached || logs.coverage.some(item => item.truncated || item.eventLimitReached),
       eventsMatched: events.length,
+      incidentsRead: logs.incidentsRead,
+      incidentsUnavailable: logs.incidentsUnavailable,
     },
     lastObservedAt: observedUntil,
     approval: {
@@ -521,6 +528,8 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       isError: event.is_error ?? null, bodyPresent: event.body_present ?? null,
     })),
     ...(toolDeliveryEvidence ? { toolDeliveryEvidence } : {}),
+    contextPreparationEvidence: events.filter(event => ["native_context_source_rejected",
+      "native_checkpoint_preparation_planned", "compaction_source_observed"].includes(event.stage)),
     recentEvents: events.slice(-MAX_TIMELINE).map(event => ({
       at: event.ts, stage: event.stage,
       ...(typeof event.reason_class === "string" ? { reasonClass: event.reason_class } : {}),
