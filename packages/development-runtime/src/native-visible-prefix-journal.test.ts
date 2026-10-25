@@ -146,7 +146,7 @@ test("completed receipt snapshots are immutable reads and never admit a pending 
   expect(await journal.pendingOperations()).toHaveLength(0);
 }));
 
-test("published checkpoint rotation preserves the newest head per distinct scope and refuses cross-scope eviction", () => fixture(async options => {
+test("published checkpoint rotation retains unique recovery heads beyond 32 scopes", () => fixture(async options => {
   const journal = new FileNativeVisiblePrefixStageJournal(options);
   const publish = async (scope: number, revision: number) => {
     const sourceRootDigest = hash(`root-${scope}-${revision}`);
@@ -169,7 +169,8 @@ test("published checkpoint rotation preserves the newest head per distinct scope
   expect(await journal.publishedCheckpoints(hash("published-0"))).toHaveLength(1);
   expect((await journal.publishedCheckpoints(hash("published-0")))[0]?.content).toContain("summary 0-1");
   expect(await journal.publishedCheckpoints(hash("published-31"))).toHaveLength(1);
-  await expect(publish(32, 0)).rejects.toThrow("capacity exhausted");
+  await publish(32, 0);
   expect(await journal.publishedCheckpoints(hash("published-0"))).toHaveLength(1);
   expect(await journal.publishedCheckpoints(hash("published-31"))).toHaveLength(1);
+  expect(await journal.publishedCheckpoints(hash("published-32"))).toHaveLength(1);
 }), 30_000);

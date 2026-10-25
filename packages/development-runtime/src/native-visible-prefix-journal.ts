@@ -13,7 +13,6 @@ const MAX_BYTES = 16 * 1024 * 1024;
 const MAX_RECORDS = 64;
 const RESERVED_ENTRY_BYTES = 32 * 1024 * 6 + 1024;
 const RETENTION_MS = 28 * 24 * 60 * 60 * 1000;
-const MAX_WORKING_CHECKPOINTS = 32;
 const MAX_WORKING_CHECKPOINT_BYTES = 40 * 1024;
 const queues = new Map<string, Promise<unknown>>();
 interface Entry extends NativeVisiblePrefixStageIdentity {
@@ -62,7 +61,7 @@ function validate(value: unknown): State {
     throw new Error("Invalid Native checkpoint execution journal");
   }
   if (state.checkpoints !== undefined) {
-    if (!Array.isArray(state.checkpoints) || state.checkpoints.length > MAX_WORKING_CHECKPOINTS) {
+    if (!Array.isArray(state.checkpoints)) {
       throw Error("Invalid published Web checkpoint journal");
     }
     const keys = new Set<string>();
@@ -268,20 +267,18 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
       const checkpoints = (state.checkpoints ?? []).filter(item =>
         item.scopeFingerprint !== input.scopeFingerprint || item.revisionId !== input.revisionId);
       checkpoints.push({ ...input, contentHash: sha(input.content), updatedAt: Date.now() });
-      // Do not evict the only recoverable head of an unrelated active task.
-      // Discard an older alternative only where a scope retains a newer
-      // checkpoint. If there are too many distinct scopes, refuse publication
-      // without altering a completed receipt or the previous published heads.
-      while (checkpoints.length > MAX_WORKING_CHECKPOINTS) {
-        const counts = new Map<string, number>();
-        for (const checkpoint of checkpoints) counts.set(checkpoint.scopeFingerprint,
-          (counts.get(checkpoint.scopeFingerprint) ?? 0) + 1);
-        const disposable = checkpoints.findIndex(item =>
-          (counts.get(item.scopeFingerprint) ?? 0) > 1);
-        if (disposable < 0) {
-          throw Error("Native checkpoint journal publication capacity exhausted by distinct active scopes");
-        }
-        checkpoints.splice(disposable, 1);
+      // The journal has a real byte bound. A fixed scope-count limit was
+      // rejecting small, independently recoverable checkpoints long before
+      // that bound was reached. Keep one newest pointer per scope and discard
+      // only redundant alternatives; never discard a unique recovery head.
+      const newest = new Set<string>();
+      for (let i = checkpoints.length - 1; i >= 0; i--) {
+        const scope = checkpoints[i]!.scopeFingerprint;
+        if (newest.has(scope)) checkpoints.splice(i, 1);
+        else newest.add(scope);
+      }
+      if (Buffer.byteLength(JSON.stringify({ ...state, checkpoints }), "utf8") > MAX_BYTES) {
+        throw Error("Native checkpoint journal publication byte capacity exhausted");
       }
       state.checkpoints = checkpoints;
       await this.#write(state);
