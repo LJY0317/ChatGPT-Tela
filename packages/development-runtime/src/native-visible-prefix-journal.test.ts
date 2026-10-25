@@ -165,12 +165,12 @@ test("published checkpoint rotation retains unique recovery heads beyond 32 scop
       estimatedTokens: Math.ceil(Buffer.byteLength(content, "utf8") / 4) });
   };
   for (let scope = 0; scope < 32; scope++) await publish(scope, 0);
-  await publish(0, 1); // Old alternative in the same scope is disposable.
-  expect(await journal.publishedCheckpoints(hash("published-0"))).toHaveLength(1);
-  expect((await journal.publishedCheckpoints(hash("published-0")))[0]?.content).toContain("summary 0-1");
+  await publish(0, 1); // Both source-bound revisions may serve edited branches.
+  expect(await journal.publishedCheckpoints(hash("published-0"))).toHaveLength(2);
+  expect((await journal.publishedCheckpoints(hash("published-0")))[0]?.content).toContain("summary 0-0");
   expect(await journal.publishedCheckpoints(hash("published-31"))).toHaveLength(1);
   await publish(32, 0);
-  expect(await journal.publishedCheckpoints(hash("published-0"))).toHaveLength(1);
+  expect(await journal.publishedCheckpoints(hash("published-0"))).toHaveLength(2);
   expect(await journal.publishedCheckpoints(hash("published-31"))).toHaveLength(1);
   expect(await journal.publishedCheckpoints(hash("published-32"))).toHaveLength(1);
 }), 30_000);

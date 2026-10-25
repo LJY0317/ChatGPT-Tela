@@ -196,9 +196,7 @@ test("rolling derived context stays bounded across long archives, repeated physi
     const published = await prefix.journal.publishedCheckpoints!(
       (await import("./native-working-context")).nativeWorkingCheckpointScope(
         prefix.accountNamespace, "task", { familyKey: chatGptWebFamilyKey("Working Set Fixture"), effort: "high" }));
-    // Earlier same-scope alternatives are superseded by the latest durable
-    // head; the stage receipts still enable exact completed-stage reuse.
-    expect(published).toHaveLength(1);
+    expect(published.length).toBe(calls);
     const beforeRestart = calls;
     rmSync(cacheDir, { recursive: true, force: true });
     const restarted = createNativeRequestDevelopmentWebTurnPlanner({

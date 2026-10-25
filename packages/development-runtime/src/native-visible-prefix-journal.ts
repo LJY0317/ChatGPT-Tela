@@ -267,16 +267,8 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
       const checkpoints = (state.checkpoints ?? []).filter(item =>
         item.scopeFingerprint !== input.scopeFingerprint || item.revisionId !== input.revisionId);
       checkpoints.push({ ...input, contentHash: sha(input.content), updatedAt: Date.now() });
-      // The journal has a real byte bound. A fixed scope-count limit was
-      // rejecting small, independently recoverable checkpoints long before
-      // that bound was reached. Keep one newest pointer per scope and discard
-      // only redundant alternatives; never discard a unique recovery head.
-      const newest = new Set<string>();
-      for (let i = checkpoints.length - 1; i >= 0; i--) {
-        const scope = checkpoints[i]!.scopeFingerprint;
-        if (newest.has(scope)) checkpoints.splice(i, 1);
-        else newest.add(scope);
-      }
+      // Bound durable summaries by bytes, not scope count. Different revisions
+      // can serve different edited branches, so keep their source-bound heads.
       if (Buffer.byteLength(JSON.stringify({ ...state, checkpoints }), "utf8") > MAX_BYTES) {
         throw Error("Native checkpoint journal publication byte capacity exhausted");
       }
