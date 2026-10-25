@@ -20,12 +20,15 @@ export interface GatewayIngressStatus {
   readonly cause: string;
   readonly detail: string;
   readonly exposureKind?: string;
-  readonly observationScope?: "this-machine";
+  readonly localAvailability?: "ready" | "unavailable";
+  readonly publicAvailability?: "ready" | "unavailable" | "not-checked";
+  readonly observationScope?: "this-machine" | "this-machine-via-public-dns";
   readonly externalClientReachability?: "not-observed";
 }
 
 export type GatewayIngressStatusResolver = (
   signal?: AbortSignal,
+  options?: { readonly publicTransport: boolean },
 ) => GatewayIngressStatus | Promise<GatewayIngressStatus>;
 
 export interface GatewayService {
@@ -131,7 +134,7 @@ export async function startGatewayService(input: {
           } satisfies GatewayIngressStatus);
         }
         try {
-          return Response.json(await input.resolveIngressStatus(request.signal));
+          return Response.json(await input.resolveIngressStatus(request.signal, { publicTransport: url.searchParams.get("public") === "1" }));
         } catch {
           return Response.json({
             contractVersion: 1,

@@ -90,4 +90,26 @@ describe("Tela Gateway service isolation", () => {
       await gateway.close();
     }
   });
+  test("public connection checks are explicit and do not stop healthy local services", async () => {
+    let publicChecks = 0, recovered = false;
+    const gateway = await startGatewayService({ resolveBackend: () => undefined,
+      resolveIngressStatus(_signal, options) {
+        if (options?.publicTransport) publicChecks++;
+        return { contractVersion: 1, availability: !options?.publicTransport || recovered ? "ready" : "unavailable",
+          localAvailability: "ready", publicAvailability: options?.publicTransport ? recovered ? "ready" : "unavailable" : "not-checked",
+          cause: options?.publicTransport && !recovered ? "public-transport-unreachable" : "ready", detail: "fixture" };
+      },
+    });
+    const read = async (path: string) => (await fetch(new URL(path, gateway.endpoint), { headers: { authorization: `Bearer ${gateway.bearerToken}` } })).json();
+    try {
+      expect(await read("v1/ingress")).toMatchObject({ availability: "ready", publicAvailability: "not-checked" });
+      expect(publicChecks).toBe(0);
+      expect(await read("v1/ingress?public=1")).toMatchObject({ availability: "unavailable", localAvailability: "ready", publicAvailability: "unavailable" });
+      expect((await gateway.status()).service.state).toBe("ready");
+      recovered = true;
+      expect(await read("v1/ingress?public=1")).toMatchObject({ availability: "ready", publicAvailability: "ready" });
+      expect(publicChecks).toBe(2);
+    } finally { await gateway.close(); }
+  });
+
 });

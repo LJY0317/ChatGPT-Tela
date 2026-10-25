@@ -741,7 +741,9 @@ async function manageIngress(
     // Explicit support probe only; never a startup, tool-admission or health gate.
     if (flag("--public")) {
       const transport = await diagnosePublicIngress(new URL(config.exposure.publicUrl),
-        option("--public-dns-url") ?? "https://dns.google/resolve", new SystemTailscaleCommandRunner(config.exposure.tailscaleCli));
+        option("--public-dns-url") ?? "https://dns.google/resolve", new SystemTailscaleCommandRunner(config.exposure.tailscaleCli), {
+          verify: (fetch, signal) => (config.publicMcpAbi === "stable" ? probePublicMcp : probeUnifiedDevelopmentMcp)(new URL(config.exposure.publicUrl), signal, fetch),
+        });
       status.publicTransport = transport;
       if (transport.state === "unavailable") Object.assign(status, { state: "unavailable",
         cause: "public-transport-unreachable", detail: "The explicit public-DNS transport probe failed; inspect publicTransport for its boundary" });

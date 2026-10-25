@@ -49,6 +49,15 @@ describe("public ChatGPT Tela Gateway exposure", () => {
         exposureKind: "stable-fixture",
         publicEndpoint: "https://example.test/chatgpt-tela",
       });
+      const methods: string[] = [];
+      const verified = await probePublicMcp(new URL("https://public.invalid/mcp"), AbortSignal.timeout(2000), async (url, init) => {
+        expect(String(url)).toBe("https://public.invalid/mcp");
+        methods.push(init?.method ?? "GET");
+        return fetch(gateway.publicMcp.local.endpointUrl, init);
+      });
+      expect(verified.ready).toBe(true);
+      expect(methods).toContain("POST");
+      expect(methods).toContain("DELETE");
       expect(gateway.publicMcp.local.activeSessionCount).toBe(0);
     } finally {
       await gateway.close();

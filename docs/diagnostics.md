@@ -1208,34 +1208,28 @@ Existing Tailscale status reads also record self-online observation, health-warn
 peer/active-peer counts and exit-node selection. No peer identities, warning text, addresses
 or extra polling are retained. These local facts alone cannot prove public relay health.
 
-Run `chatgpt-tela ingress status --public` when a connector fails before ingress. This
-explicit diagnostic compares the existing local/schema report with public-DNS IPv4
-relay connections, preserving the original Host, TLS SNI and certificate validation.
-It reports DNS, TCP, TLS and HTTP boundaries per relay without returning addresses,
-response bodies or credentials. An HTTP response proves transport only; it does not
-prove MCP tool access or a cloud client's reachability. The default JSON DNS resolver
-is `https://dns.google/resolve`, which receives the endpoint hostname; override it with
-`--public-dns-url <DNS-JSON-URL>`. No background probe, restart or admission gate is added. The installed launcher also
-saves the structural report as a bounded incident for later inspection. For managed
-Tailscale, it samples `peerapi_ingress` immediately before and after the relay probe.
-The report distinguishes an unavailable counter and a counter reset from a zero delta.
-These shared-daemon counters do not identify individual requests. They are diagnostic
-observations, with no service restart or background sampling. The same explicit probe snapshots
-backend state, online/health/ingress-peer counts, enabled Funnel count and a route fingerprint.
-Status/route inspection failures are recorded independently and never prevent the relay probe.
-No status bodies, peer identities, route targets or health prose enter the structural report.
+Run `chatgpt-tela ingress status --public` when a connector fails before ingress.
+The explicit check uses public DNS rather than the machine's possible MagicDNS route,
+retains Host/SNI and certificate verification, and reuses the existing MCP client to
+verify the configured tool contract over a responsive public relay. A partial relay
+failure is recorded without declaring every route unavailable. An HTTP response alone
+is transport evidence; `mcpContract: verified` additionally proves the MCP probe.
+Neither proves that a particular cloud client received a response.
 
-Each explicit public probe now has one `probeFingerprint`, shared by DNS failure,
-local-state, relay and completion events. Relay fingerprints survive DNS answer
-reordering, so partial relay failures can be compared across attempts without keeping
-addresses. The report records numeric Tailscale version components and network
-interface/address-set fingerprints before and after the probe, with IPv4/IPv6 counts.
-These are correlation signals: a changed fingerprint does not identify a Wi-Fi name
-or prove that a network change caused a failure. No SSID or interface address is logged.
-Run this probe while the failure is present and again after an intentional recovery;
-an external request that never reaches this machine cannot trigger local collection.
-MacLagMonitor can independently retain bounded DHCP/network-transition and Tailscale
-control events during its incidents; it remains optional and is not a Tela dependency.
+The menu/control-center status check requests `v1/ingress?public=1` when open. Background
+local checks remain separate: **Local ready**, **Ready** after public MCP verification,
+or **Connection issue** on a failed public check. No timer, automatic retry/restart,
+or tool-admission gate is added. The DNS-JSON resolver receives the public hostname;
+the CLI defaults to `https://dns.google/resolve` and supports `--public-dns-url`.
+
+The same probe fingerprint joins DNS/TCP/TLS/HTTP/MCP outcomes, normalized error codes,
+network fingerprints and before/after Tailscale backend, online, ingress-peer and route
+snapshots. Aggregate failures create incidents using the existing byte/age retention;
+no log count cap, raw addresses, SSIDs, credentials or response bodies are stored.
+`peerapi_ingress` before/after deltas are shared-daemon evidence, not request ownership.
+Recovery events can be compared by endpoint and relay fingerprints; recovery after a
+reconnect does not by itself prove the reconnect fixed the cause. External failures
+before ingress require this explicit local probe or an external client report.
 
 Distinguish pre-ingress failures from MCP admission errors. A local HTTP 400 is not
 evidence that Funnel TLS failed: the request reached the server. Pre-session rejection

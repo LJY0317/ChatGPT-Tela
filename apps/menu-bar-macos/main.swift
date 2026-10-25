@@ -13,6 +13,7 @@ private struct ServiceStatus: Decodable {
 }
 
 private struct IngressStatus: Decodable {
+  let publicAvailability: String?
   let contractVersion: Int
   let availability: String
   let cause: String
@@ -512,7 +513,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private func inspectIngress() async -> IngressStatus? {
     do {
       guard let descriptor = try readDescriptor("gateway") else { return nil }
-      let data = try await request(descriptor, path: "v1/ingress")
+      let data = try await request(descriptor, path: menuOpen ? "v1/ingress?public=1" : "v1/ingress")
       let status = try JSONDecoder().decode(IngressStatus.self, from: data)
       guard status.contractVersion == 1,
             ["ready", "unavailable", "unconfigured"].contains(status.availability),
@@ -539,11 +540,11 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     let chatState = await chat
     let codexState = await codex
     let ingressStatus = await ingress
-    let connectionReady = gatewayState == "Ready" && ingressStatus?.availability == "ready"
-    let chatReady = connectionReady && chatState == "Ready"
+    let connection = TelaIngressPresentation(localReady: gatewayState == "Ready" && chatState == "Ready",
+      availability: ingressStatus?.availability, publicAvailability: ingressStatus?.publicAvailability)
     return MenuSnapshot(
       services: [
-        ("Chat", chatReady ? "Ready" : (chatState == "Stopped" ? "Off" : "Needs attention"))
+        ("Chat", chatState == "Stopped" ? "Off" : connection.status)
       ],
       runtimeReady: gatewayState == "Ready" && chatState == "Ready" && codexState == "Ready",
       workInventory: workInventory

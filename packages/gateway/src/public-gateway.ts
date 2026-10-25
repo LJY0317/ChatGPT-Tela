@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { Transport, FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   CHATGPT_TELA_SCHEMA_FINGERPRINT,
   ExistingHttpsExposure,
@@ -32,8 +32,9 @@ export interface PublicGateway {
 export async function probePublicMcp(
   url: URL,
   signal?: AbortSignal,
+  fetch?: FetchLike,
 ): Promise<{ readonly ready: boolean; readonly detail?: string }> {
-  const transport = new StreamableHTTPClientTransport(url);
+  const transport = new StreamableHTTPClientTransport(url, fetch ? { fetch } : undefined);
   const client = new Client({ name: "chatgpt-tela-gateway-probe", version: "1.0.0" }, { capabilities: {} });
   try {
     await client.connect(transport as unknown as Transport, signal ? { signal } : undefined);

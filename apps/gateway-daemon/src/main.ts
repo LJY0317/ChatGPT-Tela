@@ -17,6 +17,7 @@ import {
 } from "@chatgpt-tela/service-protocol";
 import {
   createTailscaleFunnelLease,
+  diagnosePublicIngress,
   SystemTailscaleCommandRunner,
   tailscaleDiagnosisDetail,
   TailscaleFunnelExposure,
@@ -89,7 +90,7 @@ async function main(): Promise<void> {
     ? probeUnifiedDevelopmentMcp
     : probePublicMcp;
   const resolveIngressStatus = publicConfig
-    ? async (signal?: AbortSignal): Promise<GatewayIngressStatus> => {
+    ? async (signal?: AbortSignal, options?: { readonly publicTransport: boolean }): Promise<GatewayIngressStatus> => {
         if (tailscaleManager && tailscaleLease) {
           const diagnosis = await tailscaleManager.diagnose(tailscaleLease, signal);
           if (diagnosis.availability !== "ready") {
@@ -112,9 +113,24 @@ async function main(): Promise<void> {
             contractVersion: 1 as const,
             availability: "unavailable" as const,
             cause: "local-mcp-unreachable",
+            localAvailability: "unavailable" as const,
+            publicAvailability: "not-checked" as const,
             detail: "The local Tela Gateway MCP listener is not reachable",
             exposureKind: tailscaleManager ? "tailscale-funnel" : "existing-https",
           });
+        }
+        if (options?.publicTransport) {
+          const transport = await diagnosePublicIngress(new URL(publicConfig.publicUrl), "https://dns.google/resolve",
+            tailscaleManager ? new SystemTailscaleCommandRunner(process.env.CHATGPT_TELA_TAILSCALE_CLI?.trim() || "tailscale") : undefined,
+            { ...(signal ? { signal } : {}), verify: (fetch, deadline) => publicProbe(new URL(publicConfig.publicUrl), deadline, fetch) });
+          const ready = transport.mcpContract === "verified";
+          return { contractVersion: 1, availability: ready ? "ready" : "unavailable",
+            cause: ready ? "ready" : transport.mcpContract === "failed" ? "public-mcp-unreachable" : "public-transport-unreachable",
+            detail: ready ? "Public-DNS MCP contract verified from this machine; cloud-client access is not independently observed"
+              : "Local Tela is ready, but the public connection check failed",
+            localAvailability: "ready", publicAvailability: ready ? "ready" : "unavailable",
+            observationScope: "this-machine-via-public-dns", externalClientReachability: "not-observed",
+            exposureKind: tailscaleManager ? "tailscale-funnel" : "existing-https" };
         }
         const publicHealth = await publicProbe(new URL(publicConfig.publicUrl), signal);
         return publicHealth.ready
@@ -122,6 +138,8 @@ async function main(): Promise<void> {
               contractVersion: 1 as const,
               availability: "ready" as const,
               cause: "ready",
+              localAvailability: "ready" as const,
+              publicAvailability: "not-checked" as const,
               detail: "The configured MCP endpoint responds from this machine; public client access is not independently verified",
               observationScope: "this-machine" as const,
               externalClientReachability: "not-observed" as const,
@@ -131,6 +149,8 @@ async function main(): Promise<void> {
               contractVersion: 1 as const,
               availability: "unavailable" as const,
               cause: "public-mcp-unreachable",
+              localAvailability: "ready" as const,
+              publicAvailability: "not-checked" as const,
               detail: "Local MCP is ready, but the configured public MCP endpoint is not reachable",
               exposureKind: tailscaleManager ? "tailscale-funnel" : "existing-https",
             });

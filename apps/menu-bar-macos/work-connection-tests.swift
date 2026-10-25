@@ -126,4 +126,10 @@ recoveryInventory.loaded([stoppedProfile])
 precondition(stopFailure.resolved(in: recoveryInventory, operationInProgress: false))
 print("launch notices, shared presentation, connection recovery and stale read exclusion passed")
 
+precondition(TelaIngressPresentation(localReady: true, availability: "ready", publicAvailability: nil).status == "Local ready")
+precondition(TelaIngressPresentation(localReady: true, availability: "unavailable", publicAvailability: "unavailable").status == "Connection issue")
+precondition(TelaIngressPresentation(localReady: true, availability: "ready", publicAvailability: "ready").status == "Ready")
+precondition(TelaIngressPresentation(localReady: false, availability: "ready", publicAvailability: "ready").status == "Needs attention")
+precondition(TelaRequestBudget.seconds(path: "v1/ingress?public=1", method: "GET") == 30)
+
 } }

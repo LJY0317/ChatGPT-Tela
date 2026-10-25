@@ -168,6 +168,7 @@ struct TelaProfileConnectionFailure {
 enum TelaRequestBudget {
   static func seconds(path: String, method: String) -> TimeInterval {
     if method == "POST" && path.hasPrefix("v1/codex/profiles/") { return 320 }
+    if path.hasPrefix("v1/ingress?") { return 30 }
     if path.hasSuffix("/account-display") { return 25 }
     return path == "v1/codex/profiles" ? 30 : 4
   }
@@ -219,5 +220,18 @@ struct TelaProfilePresentation {
     busy = localProgress != nil || (inventoryError == nil && (profile.connectionInProgress == true
       || (profile.connected && profile.webState == "preparing" && profile.accountManagementActive != true)))
     label = localProgress ?? (busy ? (profile.connected ? profile.connectionLabel : "Connecting…") : (inventoryError == nil ? profile.connectionLabel : "Connection status unavailable"))
+  }
+}
+
+// Local service readiness does not attest the public connector route.
+struct TelaIngressPresentation {
+  let localReady: Bool
+  let availability: String?
+  let publicAvailability: String?
+  var status: String {
+    guard localReady else { return "Needs attention" }
+    if publicAvailability == "unavailable" { return "Connection issue" }
+    guard availability == "ready" else { return "Needs attention" }
+    return publicAvailability == "ready" ? "Ready" : "Local ready"
   }
 }

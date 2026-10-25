@@ -21,6 +21,7 @@ private struct ControlCenterServiceStatus: Decodable {
 }
 
 private struct ControlCenterIngressStatus: Decodable, Equatable {
+  let publicAvailability: String?
   let contractVersion: Int
   let availability: String
   let cause: String
@@ -696,10 +697,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     stack.setCustomSpacing(22, after: header)
   }
 
-  private var connectorReady: Bool {
-    serviceStates["gateway"] == "Ready" && ingressStatus?.availability == "ready"
-  }
-
   private var activityMessage: String? {
     if changingServices { return serviceAction }
     if changingProfile { return profileProgress ?? "Connecting…" }
@@ -734,8 +731,12 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let profileReady = !needsProfile || (workInventory.error == nil && profiles.contains {
       $0.connected && $0.connectionInProgress != true
     })
-    return (needsProfile || connectorReady) && serviceStates[service] == "Ready" && profileReady
-      ? "Available" : "Needs attention"
+    if !needsProfile {
+      let connection = TelaIngressPresentation(localReady: serviceStates["gateway"] == "Ready" && serviceStates[service] == "Ready",
+        availability: ingressStatus?.availability, publicAvailability: ingressStatus?.publicAvailability)
+      return connection.status == "Ready" ? "Available" : connection.status
+    }
+    return serviceStates[service] == "Ready" && profileReady ? "Available" : "Needs attention"
   }
 
   private func renderCurrentPage() {
@@ -2016,7 +2017,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private func loadIngressStatus() async -> ControlCenterIngressStatus? {
     do {
       guard let descriptor = try readDescriptor("gateway") else { return nil }
-      let value = try JSONDecoder().decode(ControlCenterIngressStatus.self, from: await request(descriptor, path: "v1/ingress"))
+      let value = try JSONDecoder().decode(ControlCenterIngressStatus.self, from: await request(descriptor, path: window?.isVisible == true ? "v1/ingress?public=1" : "v1/ingress"))
       guard value.contractVersion == 1,
             ["ready", "unavailable", "unconfigured"].contains(value.availability),
             !value.cause.isEmpty,
