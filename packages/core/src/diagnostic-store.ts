@@ -93,7 +93,7 @@ export function structuralDiagnosticEvent(value: unknown): StructuralDiagnosticE
       if (isWebContextPlannerStage(field)) safe[key] = field;
       continue;
     }
-    if (key === "planner_substage") {
+    if (key === "planner_substage" || key === "first_planner_substage") {
       if (isWebContextPlannerSubstage(field)) safe[key] = field;
       continue;
     }

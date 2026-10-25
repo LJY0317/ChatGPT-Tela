@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {mkdtempSync,readFileSync,rmSync} from 'node:fs';import{join}from'node:path';import{tmpdir}from'node:os';
 import {summarizeTurnDiagnostics,startTurnDiagnosticSummary} from './diagnostic-turn-summary';
 import {emitDiagnosticEvent} from './diagnostic-events';import{withDiagnosticContext}from'./diagnostic-context';
-import {listDiagnosticIncidents,readDiagnosticIncident} from './diagnostic-store';
+import {listDiagnosticIncidents,readDiagnosticIncident,readDiagnosticTail} from './diagnostic-store';
 import type{StructuralDiagnosticEvent}from'./diagnostic-store';
 const scope='1'.repeat(24),turn='2'.repeat(24),request='3'.repeat(24),op='4'.repeat(24);
 let tick=0;
@@ -92,6 +92,7 @@ test('cycle receipt includes preparation before generic execution failure',()=>{
   expect(rows.find(x=>x.stage==='native_cycle_summary').first_reason_class).toBe('unclassified');
    expect(rows.find(x=>x.stage==='native_cycle_summary').first_error_kind).toBe('type_error');
    expect(rows.find(x=>x.stage==='native_cycle_summary').first_planner_substage).toBe('working_checkpoint_publication_read');
+   expect(readDiagnosticTail(file).events.find(x=>x.stage==='native_cycle_summary')?.first_planner_substage).toBe('working_checkpoint_publication_read');
     expect(summarizeTurnDiagnostics(rows).diagnosis.firstFailure).toMatchObject({reason:'unclassified',errorKind:'type_error',plannerSubstage:'working_checkpoint_publication_read'});
   expect(summarizeTurnDiagnostics(rows).diagnosis.certainty).toBe('insufficient_evidence');
  }finally{observer.finish();if(old===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=old;rmSync(root,{recursive:true,force:true});}
