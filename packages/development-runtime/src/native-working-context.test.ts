@@ -11,6 +11,41 @@ import { FileContextCheckpointCache } from "./context-cache";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 import { createNativeRequestDevelopmentWebTurnPlanner, projectNativeRequestContext } from "./native-request-planner";
 import { nativeCompactionPhysicalContext, nativeWorkingCheckpointScope, withExactCurrentInstructions } from "./native-working-context";
+import { selectNativeWorkingCheckpoint } from "./native-working-context";
+import { CheckpointPreparationBudget } from "./checkpoint-preparation-budget";
+
+test("indexed historical steering cannot split a Native turn's call/result evidence at a fitted checkpoint", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "tela-import-boundary-"));
+  try {
+    const items = Array.from({ length: 3 }, (_, index) => [
+      { turnId: `past-${index}`, item: { type: "userMessage", id: `user-${index}`, content: [] } },
+      { turnId: `past-${index}`, item: { type: "dynamicToolCall", id: `call-${index}`, arguments: "A".repeat(500) } },
+      { turnId: `past-${index}`, item: { type: "userMessage", id: `steer-${index}`, content: [] } },
+      { turnId: `past-${index}`, item: { type: "functionCallOutput", id: `result-${index}`, output: "R".repeat(12_000) } },
+    ]).flat();
+    const projection = projectNativeRequestContext("task", { input: [{ role: "user", content: "Current work" }] },
+      JSON.stringify({ type: "tela_native_visible_prefix_v1", items }));
+    let calls = 0;
+    const result = await selectNativeWorkingCheckpoint({ projection, currentTurnId: "current",
+      cache: new FileContextCheckpointCache({ directory: join(directory, "cache") }),
+      visiblePrefix: { accountNamespace: "account", journal: new FileNativeVisiblePrefixStageJournal({ directory: join(directory, "ledger"), initializationPath: join(directory, "init") }) },
+      browserModel: { familyKey: "Fixture", effort: "high" },
+      policy: { ...webWorkingContextPolicy("high"), checkpointSourceTokens: 5_000, suffixTargetTokens: 100 },
+      preparationBudget: new CheckpointPreparationBudget(5_000),
+      producer: async request => {
+        calls++;
+        const segments = JSON.parse(request.physicalContext.segments[0]!.content).source.items;
+        const included: string[] = [];
+        for (const segment of segments) {
+          try { const entry = JSON.parse(segment.content); if (entry.item) included.push(entry.item.id); } catch { /* Historical header. */ }
+        }
+        expect(included).toEqual(["user-0", "call-0", "steer-0", "result-0"]);
+        return { nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId, content: "Sealed complete historical turn" };
+      },
+    });
+    expect(result.produced).toBe(true); expect(calls).toBe(1);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("checkpoint projection injects each exact current instruction revision only once", () => {
   const projection = projectNativeRequestContext("task", {

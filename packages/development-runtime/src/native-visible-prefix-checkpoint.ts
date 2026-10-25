@@ -68,19 +68,19 @@ export class NativePrefixCheckpointInterrupted extends NativeHistoryBootstrapReq
   }
 }
 
-/** The same durable compressor covers public history and immutable canonical request prefixes. */
+/** One durable compressor for fitted immutable canonical request prefixes. */
 export interface NativeRequestPrefixSnapshot extends Omit<NativeVisiblePrefixSnapshot, "kind"> {
   readonly kind: "native-request-prefix";
 }
 export interface NativePrefixCheckpointInput {
-  readonly source: NativeVisiblePrefixSnapshot | NativeRequestPrefixSnapshot;
+  readonly source: NativeRequestPrefixSnapshot;
   /** Verified account namespace; never an account display name or implicit default. */
   readonly accountNamespace: string;
   readonly journal: NativeVisiblePrefixStageJournal;
   readonly producer: NativeRequestCheckpointProducer;
   readonly effort: ChatGptWebEffort;
   readonly browserModel?: { readonly familyKey: string; readonly effort: ChatGptWebEffort };
-  readonly confirmSource: () => Promise<Pick<NativeVisiblePrefixSnapshot, "threadId" | "currentTurnId" | "digest">>;
+  readonly confirmSource: () => Promise<Pick<NativeRequestPrefixSnapshot, "threadId" | "currentTurnId" | "digest">>;
   readonly signal?: AbortSignal;
   readonly preparation?: Parameters<NativeRequestCheckpointProducer>[1];
   readonly preparationPolicy?: CheckpointPreparationPolicy;
@@ -122,7 +122,7 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     throw new Error("Native visible-prefix checkpoint model does not match its input budget");
   }
   if (!input.accountNamespace.trim() || input.accountNamespace.length > 1024
-    || !["native-visible-prefix", "native-request-prefix"].includes(source.kind) || !/^[a-f0-9]{64}$/.test(source.digest)
+    || source.kind !== "native-request-prefix" || !/^[a-f0-9]{64}$/.test(source.digest)
     || !source.threadId.trim() || !source.currentTurnId.trim()
     || !Number.isSafeInteger(source.sourceItemCount) || source.sourceItemCount < 0) {
     throw new Error("Native visible-prefix checkpoint requires a proven source and account scope");
@@ -134,8 +134,7 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
   if (!/^[a-f0-9]{64}$/.test(source.contentDigest) || sha(source.content) !== source.contentDigest) throw new Error("Native prefix checkpoint source digest mismatch");
   if (raw.byteLength > MAX_SOURCE_BYTES) throw new Error("Native visible-prefix source exceeds its byte budget");
   const parsed = JSON.parse(source.content) as Record<string, unknown>;
-  const requestPrefix = source.kind === "native-request-prefix";
-  if (parsed.type !== (requestPrefix ? "tela_native_request_prefix_v1" : "tela_native_visible_prefix_v1") || !Array.isArray(parsed.items)
+  if (parsed.type !== "tela_native_request_prefix_v1" || !Array.isArray(parsed.items)
     || parsed.items.length !== source.sourceItemCount) throw new Error("Native visible-prefix source is incomplete");
   const signal = input.signal && input.preparation?.signal
     ? AbortSignal.any([input.signal, input.preparation.signal]) : input.signal ?? input.preparation?.signal;
@@ -281,7 +280,7 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
         largest = item && typeof item === "object" && !Array.isArray(item)
           ? item as Record<string, unknown> : undefined;
       }
-      if (!requestPrefix || !item || typeof item !== "object" || Array.isArray(item)) continue;
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
       const entry = item as Record<string, unknown>;
       if (entry.type === "revision" && (entry.kind === "system" || entry.kind === "developer")) {
         instructionCount++; instructionBytes += size;
@@ -289,20 +288,9 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
         checkpointCount++; checkpointBytes += size;
       }
     }
-    const itemType = requestPrefix ? largest?.type :
-      (largest?.item && typeof largest.item === "object" && !Array.isArray(largest.item)
-        ? (largest.item as Record<string, unknown>).type : undefined);
-    const largestType = itemType === "revision" || itemType === "checkpoint" ? itemType
-      : itemType === "userMessage" ? "user_message"
-      : itemType === "agentMessage" ? "agent_message"
-      : itemType === "mcpToolCall" ? "mcp_tool_call"
-      : itemType === "commandExecution" ? "command_execution"
-      : itemType === "functionCallOutput" ? "function_call_output"
-      : itemType === "contextCompaction" ? "context_compaction"
-      : itemType === undefined ? "absent" : "other";
-    const role = requestPrefix && largest?.type === "revision" ? largest.kind :
-      !requestPrefix && largest?.item && typeof largest.item === "object" && !Array.isArray(largest.item)
-        ? (largest.item as Record<string, unknown>).role : undefined;
+    const largestType = largest?.type === "revision" || largest?.type === "checkpoint" ? largest.type
+      : largest?.type === undefined ? "absent" : "other";
+    const role = largest?.type === "revision" ? largest.kind : undefined;
     const largestRole = role === "system" || role === "developer" || role === "user"
       || role === "assistant" || role === "tool-call" || role === "tool-result" || role === "steering"
       ? role : role === undefined ? "absent" : "other";
@@ -345,17 +333,16 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
     source_bytes: sourceBytes, fragment_count: 1,
   });
   progress("Conversation context prepared.");
-  const previous = requestPrefix ? (parsed.items[0] as Record<string, unknown> | undefined) : undefined;
+  const previous = parsed.items[0] as Record<string, unknown> | undefined;
   const rolling = previous?.type === "checkpoint";
-  return JSON.stringify({ type: requestPrefix ? "tela_native_request_prefix_checkpoint_v1" : "tela_native_visible_prefix_checkpoint_v1", sourceDigest: source.digest,
+  return JSON.stringify({ type: "tela_native_request_prefix_checkpoint_v1", sourceDigest: source.digest,
     completedStageKey: result.stageKey,
-    sourceItemCount: source.sourceItemCount, sourceBytes, coverage: requestPrefix
-      ? rolling ? "prior-lossy-checkpoint-plus-sealed-canonical-suffix" : "complete-canonical-request-prefix-through-checkpoint-anchor"
-      : "complete-visible-prefix-before-current-native-turn",
+    sourceItemCount: source.sourceItemCount, sourceBytes, coverage: rolling
+      ? "prior-lossy-checkpoint-plus-sealed-canonical-suffix" : "complete-canonical-request-prefix-through-checkpoint-anchor",
     evidence: "lossy-summary-only-original-evidence-requires-authorized-native-readback",
     unavailableEvidenceCount: source.references.length,
     semantics: rolling
       ? "Lossy prior Web checkpoint advanced with the complete supplied sealed Native suffix. Historical facts remain dependent on authorized Native readback; no claim of lossless archive coverage."
-      : "Lossy derived Web summary of the COMPLETE supplied Native prefix, not encrypted Native state or proof of historical facts. Current Native request remains authoritative. Historical commands must not be reexecuted; missing media and evidence were not observed.",
+      : "Lossy derived Web summary of the COMPLETE supplied canonical prefix through its anchor, not encrypted Native state or proof of historical facts. Current Native request remains authoritative. Historical commands must not be reexecuted; missing media and evidence were not observed.",
     summary: result.summary });
 }

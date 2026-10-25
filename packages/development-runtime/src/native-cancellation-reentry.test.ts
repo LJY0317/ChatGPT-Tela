@@ -4,8 +4,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
-import type { CanonicalCurrentTurnSource, NativeVisiblePrefixSnapshot } from "@chatgpt-tela/codex";
+import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 import { NativeResponsesGateway, ActiveTurnRegistry, runBrowserContextCheckpoint } from "@chatgpt-tela/runtime";
+import type { NativeRequestPrefixSnapshot } from "./native-visible-prefix-checkpoint";
 import { produceNativePrefixCheckpoint } from "./native-visible-prefix-checkpoint";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 
@@ -30,8 +31,8 @@ for (const replacement of ["new message", "edited original message"]) {
       }));
       const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async (turn, _body, signal) => {
         if (!signal) throw Error("fixture requires Native lifetime signal");
-        const content = JSON.stringify({ type: "tela_native_visible_prefix_v1", items: [{ type: "agentMessage", text: "Unchanged historical prefix." }] });
-        const snapshot: NativeVisiblePrefixSnapshot = { kind: "native-visible-prefix", threadId: "thread", currentTurnId: current,
+        const content = JSON.stringify({ type: "tela_native_request_prefix_v1", items: [{ type: "revision", kind: "assistant", revisionId: "prior", content: "Unchanged historical prefix." }] });
+        const snapshot: NativeRequestPrefixSnapshot = { kind: "native-request-prefix", threadId: "thread", currentTurnId: current,
           contentDigest: hash(content), digest: hash(content), sourceItemCount: 1, content, inlineAssets: [], references: [], localImageCandidates: [] };
         await produceNativePrefixCheckpoint({ source: snapshot, accountNamespace: "fixture", journal, effort: "medium", signal,
           confirmSource: async () => ({ ...snapshot, currentTurnId: turn.channel.binding.authority.turnId }),

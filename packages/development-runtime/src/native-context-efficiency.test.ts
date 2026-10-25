@@ -3,16 +3,16 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NativeVisiblePrefixSnapshot } from "@chatgpt-tela/codex";
+import type { NativeRequestPrefixSnapshot } from "./native-visible-prefix-checkpoint";
 import { produceNativePrefixCheckpoint, type NativePrefixCheckpointInput } from "./native-visible-prefix-checkpoint";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
 import { runBrowserContextCheckpoint } from "@chatgpt-tela/runtime";
 
 const hash=(s:string)=>createHash("sha256").update(s).digest("hex");
-function source(text:string):NativeVisiblePrefixSnapshot {
-  const content=JSON.stringify({type:"tela_native_visible_prefix_v1",items:[{turnId:"prior",item:{type:"agentMessage",text}}]});
-  return {kind:"native-visible-prefix",threadId:"thread",currentTurnId:"active",contentDigest: hash(content), digest:hash(content),sourceItemCount:1,
+function source(text:string):NativeRequestPrefixSnapshot {
+  const content=JSON.stringify({type:"tela_native_request_prefix_v1",items:[{type:"revision",kind:"assistant",revisionId:"prior",content:text}]});
+  return {kind:"native-request-prefix",threadId:"thread",currentTurnId:"active",contentDigest: hash(content), digest:hash(content),sourceItemCount:1,
     content,inlineAssets:[],references:[],localImageCandidates:[]};
 }
 
@@ -148,7 +148,7 @@ test("unscoped modern pending blocks changed keys but completed exact receipts r
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
-test("public AppServer snapshot flows through the production checkpoint contract",async()=>{
+test("public AppServer snapshot enters ordered projection without a bootstrap summary",async()=>{
  const {AppServerCompactionHistorySource}=await import("@chatgpt-tela/codex");
  const rpc={async request(method:string){
   if(method==="thread/read")return {thread:{id:"thread",status:{type:"active"},historyMode:"paginated",cwd:"/fixture",source:"appServer",environments:[]}};
@@ -160,10 +160,20 @@ test("public AppServer snapshot flows through the production checkpoint contract
  expect(snapshot.contentDigest).toBe(hash(snapshot.content));expect(snapshot.digest).not.toBe(snapshot.contentDigest);
  const root=await mkdtemp(join(tmpdir(),"tela-public-source-"));let sends=0;
  try{
-  const result=await produceNativePrefixCheckpoint({source:snapshot,accountNamespace:"account",effort:"medium",
-   journal:new FileNativeVisiblePrefixStageJournal({directory:join(root,"journal"),initializationPath:join(root,"receipt")}),
-   confirmSource:async()=>snapshot,producer:async r=>{sends++;return {...r,content:"verified public summary"};}});
-  expect(JSON.parse(result).sourceDigest).toBe(snapshot.digest);expect(sends).toBe(1);
+  const {resolveNativeContextContinuity,nativeOpaqueCompaction}=await import("./native-context-continuity");
+  const {projectNativeRequestContext}=await import("./native-request-planner");
+  const {defineNativeTurnAuthority}=await import("@chatgpt-tela/core");
+  const body={input:[{type:"compaction",encrypted_content:"opaque"},{role:"user",content:"current request"}]};
+  const continuity=await resolveNativeContextContinuity({threadId:"thread",currentTurnId:"active",
+   authority:defineNativeTurnAuthority({threadId:"thread",turnId:"active",cwd:"/fixture",workspaceRoots:["/fixture"],sandbox:{kind:"read-only",network:"restricted"}}),
+   opaque:nativeOpaqueCompaction(body),options:{
+    visiblePrefix:{accountNamespace:"account",journal:new FileNativeVisiblePrefixStageJournal({directory:join(root,"journal"),initializationPath:join(root,"receipt")}),read:async()=>snapshot},
+    checkpointProducer:async()=>{sends++;throw Error("unnecessary bootstrap summary");},
+   }});
+  const projected=projectNativeRequestContext("thread",body,continuity.visibleHistory,continuity.inlineHistoryAssets,continuity.historyReferences);
+  expect(projected.revisions.some(item=>item.content.includes("verified public history"))).toBe(true);
+  expect(projected.revisions.at(-1)?.content).toBe("current request");
+  expect(sends).toBe(0);
  }finally{await rm(root,{recursive:true,force:true});}
 });
 

@@ -22,7 +22,7 @@ import type { ContextCheckpointCache } from "./context-cache";
 import { readNativeHistoryCheckpoint, maybeProduceNativeHistoryCheckpoint } from "./native-history-checkpoint";
 import { manualHandoffText, recentManualHandoff, storeManualHandoff } from "./native-manual-handoff-cache";
 import type { NativeRequestCheckpointProducer } from "./native-request-planner";
-import { produceNativePrefixCheckpoint, type NativeVisiblePrefixStageJournal } from "./native-visible-prefix-checkpoint";
+import type { NativeVisiblePrefixStageJournal } from "./native-visible-prefix-checkpoint";
 
 /** The public adapter may initially return a bounded source without resolved local media. */
 export type NativeHistorySource = Pick<NativeCompactionHistoryProjection,
@@ -58,7 +58,7 @@ export interface NativeContinuitySources {
 export type NativeContinuityMode =
   | "current-input" | "retained" | "readable-checkpoint" | "cached-handoff"
   | "explicit-handoff" | "bounded-source" | "produced-checkpoint"
-  | "visible-prefix-checkpoint";
+  | "visible-prefix";
 
 export interface NativeContinuityDecision {
   readonly mode: NativeContinuityMode;
@@ -69,6 +69,9 @@ export interface NativeContinuityDecision {
   readonly checkpointProduced: boolean;
   readonly manualHandoff: boolean;
 }
+
+export type NativeRetainedHistory = Pick<NativeContinuityDecision,
+  "inlineHistoryAssets" | "historyReferences"> & { readonly visibleHistory: string };
 
 export interface NativeOpaqueCompaction {
   readonly count: number;
@@ -104,7 +107,7 @@ function resolved(mode: NativeContinuityMode, visibleHistory?: string,
     ...(historyReferences !== undefined ? { historyReferences } : {}),
     checkpointReused: mode === "retained" || mode === "readable-checkpoint"
       || mode === "cached-handoff",
-    checkpointProduced: mode === "produced-checkpoint" || mode === "visible-prefix-checkpoint",
+    checkpointProduced: mode === "produced-checkpoint",
     manualHandoff: mode === "explicit-handoff",
   });
 }
@@ -126,7 +129,7 @@ export async function resolveNativeContextContinuity(input: {
   readonly authority: NativeTurnAuthority;
   readonly opaque: NativeOpaqueCompaction;
   /** Validated by the caller against active retained lineage, route and Web epoch pressure. */
-  readonly retainedHistory?: string;
+  readonly retainedHistory?: NativeRetainedHistory;
   readonly effort?: ChatGptWebEffort;
   readonly browserModel?: { readonly familyKey: string; readonly effort: ChatGptWebEffort };
   readonly options: NativeContinuitySources;
@@ -175,7 +178,8 @@ export async function resolveNativeContextContinuity(input: {
   }
   if (opaque.count === 0) return resolved("current-input");
   if (opaque.count !== 1) throw new Error("Native compaction history has ambiguous encrypted checkpoints");
-  if (input.retainedHistory !== undefined) return resolved("retained", input.retainedHistory);
+  if (input.retainedHistory) return resolved("retained", input.retainedHistory.visibleHistory,
+    input.retainedHistory.inlineHistoryAssets, input.retainedHistory.historyReferences);
 
   const cache = options.historyCheckpointCache;
   const fingerprint = opaque.fingerprint;
@@ -270,24 +274,16 @@ export async function resolveNativeContextContinuity(input: {
   if (options.visiblePrefix) {
     const handoff = await manual();
     if (handoff) return handoff;
-    if (!options.checkpointProducer || !input.effort) throw new NativeHistoryBootstrapRequired();
     const sourceAdapter = options.visiblePrefix;
     const source = await probe("visible_prefix", () => sourceAdapter.read(threadId, currentTurnId, signal));
     if (source.threadId !== threadId || source.currentTurnId !== currentTurnId) {
       throw new Error("Native visible prefix belongs to a different current turn");
     }
-    const previousCalls = preparationBudget.modelCalls;
-    const checkpoint = await produceNativePrefixCheckpoint({
-      source, accountNamespace: sourceAdapter.accountNamespace,
-      preparationBudget,
-      journal: sourceAdapter.journal, producer: options.checkpointProducer,
-      effort: input.effort,
-      ...(input.browserModel ? { browserModel: input.browserModel } : {}),
-      confirmSource: () => sourceAdapter.read(threadId, currentTurnId, signal),
-      ...(signal ? { signal } : {}), ...(preparation ? { preparation } : {}),
-    });
-    return Object.freeze({ ...resolved("visible-prefix-checkpoint", checkpoint, [], source.references),
-      checkpointProduced: preparationBudget.modelCalls > previousCalls, checkpointReused: preparationBudget.modelCalls === previousCalls });
+    // Source acquisition is not a second compaction engine. The ordinary working
+    // planner selects a fitted prefix and keeps its complete successor exact.
+    // A small import needs no model call; a large import shares the same one-call
+    // preparation budget as every other fresh Web request.
+    return resolved("visible-prefix", source.content, source.inlineAssets, source.references);
   }
 
   let anchor: NativeReadableHistoryAnchor | undefined;

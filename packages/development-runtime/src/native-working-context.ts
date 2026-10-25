@@ -41,7 +41,13 @@ export function nativeWorkingCheckpointScope(account: string, taskId: string,
 export function workingCheckpointAnchor(projection: NativeRequestContextProjection): ProjectedNativeRevision | undefined {
   let latestUser = -1;
   for (let index = projection.revisions.length - 1; index >= 0; index--) {
-    if (projection.revisions[index]!.revision.kind === "user") { latestUser = index; break; }
+    const item = projection.revisions[index]!;
+    if (item.revision.kind === "user") {
+      latestUser = index;
+      while (latestUser > 0 && item.historicalTurnId
+        && projection.revisions[latestUser - 1]!.historicalTurnId === item.historicalTurnId) latestUser--;
+      break;
+    }
   }
   const boundary = latestUser >= 0 ? latestUser : projection.revisions.length - 1;
   return boundary > 0 ? projection.revisions[boundary - 1] : undefined;
@@ -336,7 +342,9 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     const firstWorkIndex = projection.revisions.findIndex((item, index) => index > selectedIndex
       && item.revision.kind !== "system" && item.revision.kind !== "developer");
     const boundaries = projection.revisions.flatMap((item, index) =>
-      item.revision.kind === "user" && index - 1 >= firstWorkIndex
+      (item.historicalTurnId ? projection.revisions[index - 1]?.historicalTurnId !== undefined
+        && projection.revisions[index - 1]!.historicalTurnId !== item.historicalTurnId : item.revision.kind === "user")
+        && index - 1 >= firstWorkIndex
         && index - 1 > selectedIndex && index - 1 < anchorIndex
         ? [index - 1] : []);
     let low = 0, high = boundaries.length - 1, fitted = -1;
@@ -353,6 +361,20 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     anchorIndex = fitted;
     anchor = projection.revisions[anchorIndex]!;
     physical = sourceAt(anchorIndex);
+  }
+  // Even a zero-length summary cannot fit an exact successor this large. Do
+  // not spend the one preparation call on a prefix that cannot unblock Web.
+  const exactSuccessorTokens = projection.revisions.slice(anchorIndex + 1)
+    .reduce((sum, item) => sum + item.revision.estimatedTokens, 0)
+    + projection.revisions.slice(0, anchorIndex + 1).filter(item =>
+      item.revision.kind === "system" || item.revision.kind === "developer")
+      .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
+  if (exactSuccessorTokens + input.policy.outputReserveTokens >= input.policy.hard.contextWindowTokenLimit) {
+    emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_rejected", {
+      phase: "successor_fit", reason_class: "source_exceeds_web_budget",
+      source_estimate: exactSuccessorTokens, input_budget: input.policy.hard.contextWindowTokenLimit,
+    });
+    throw new NativeHistoryBootstrapRequired("source_budget");
   }
   // Only the selected prefix is summarized. Media in the exact successor stays intact.
   const sealed = projection.revisions.slice(selectedIndex + 1, anchorIndex + 1);

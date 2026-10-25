@@ -2033,21 +2033,25 @@ test('retention decisions explain answer mismatch without changing reconstructio
  }finally{stop?.();}
 });
 
-test('cold Native compaction uses its one completed source summary without a second optional maintenance call', async () => {
+test('oversized indexed Native history uses one fitted common checkpoint, exact tail and retained continuation', async () => {
   const directory = scratch();
   try {
     const model = chatGptWebModelId(chatGptWebFamilyKey('Fixture'));
     const sourceContent = JSON.stringify({
       type: 'tela_native_visible_prefix_v1',
-      items: [{ turnId: 'prior-native', item: { type: 'agentMessage', text: 'Sealed historical task state' } }],
+      items: Array.from({ length: 12 }, (_, index) => [
+        { turnId: `prior-${index}`, item: { type: 'userMessage', id: `user-${index}`, content: [{ type: 'text', text: `Historical request ${index}` }] } },
+        { turnId: `prior-${index}`, item: { type: 'agentMessage', id: `answer-${index}`, text: `Verified state ${index}: ` + 'H'.repeat(34_000) } },
+      ]).flat(),
     });
     const digest = createHash('sha256').update(sourceContent).digest('hex');
     const source = {
       kind: 'native-visible-prefix' as const,
       threadId: 'thread-1', currentTurnId: 'turn-2', content: sourceContent,
-      contentDigest: digest, digest, sourceItemCount: 1,
+      contentDigest: digest, digest, sourceItemCount: 24,
       inlineAssets: [], references: [], localImageCandidates: [],
     };
+    let visibleSource = source;
     let sourceReads = 0;
     const payloads: any[] = [];
     const observed: any[] = [];
@@ -2057,21 +2061,22 @@ test('cold Native compaction uses its one completed source summary without a sec
         || row.stage === 'native_working_checkpoint_selected') observed.push(row);
     });
     try {
-      const planner = createNativeRequestDevelopmentWebTurnPlanner({
+      const options: Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0] = {
         checkpointCache: new FileContextCheckpointCache({ directory: join(directory, 'cache') }),
         visiblePrefix: {
           accountNamespace: 'fixture-account',
           journal: new FileNativeVisiblePrefixStageJournal({
             directory: join(directory, 'ledger'), initializationPath: join(directory, 'ledger-init'),
           }),
-          async read() { sourceReads++; return source; },
+          async read() { sourceReads++; return visibleSource; },
         },
         checkpointProducer: async input => {
           payloads.push(JSON.parse(input.physicalContext.segments[0]!.content));
           return { nativeTaskId: input.nativeTaskId, sourceRevisionId: input.sourceRevisionId,
             content: 'Bounded, source-bound historical state; verify old details in Native.' };
         },
-      });
+      };
+      const planner = createNativeRequestDevelopmentWebTurnPlanner(options);
       const initial = await planner(registered(), {
         model, reasoning: { effort: 'medium' },
         instructions: 'Earlier current instructions.',
@@ -2081,7 +2086,7 @@ test('cold Native compaction uses its one completed source summary without a sec
         surfaceLeaseId: 'original-page', answer: 'Earlier response.' });
       const canonicalSuffix = Array.from({ length: 8 }, (_, index) => ([
         { role: 'user', content: `Sealed request ${index}` },
-        { role: 'assistant', content: 'Historical response ' + 'R'.repeat(14_000) },
+        { role: 'assistant', content: 'Historical response ' + 'R'.repeat(500) },
       ])).flat();
       const current = 'Work on the exact newest request; preserve the original Native task.';
       const request = {
@@ -2094,18 +2099,93 @@ test('cold Native compaction uses its one completed source summary without a sec
         ],
       };
       const result = await planner(registered('turn-2'), request);
-      expect(sourceReads).toBeGreaterThanOrEqual(2);
+      expect(sourceReads).toBe(1);
       expect(payloads.map(item => item.mode)).toEqual(['snapshot']);
-      expect(payloads[0]?.source?.type).toBe('tela_native_visible_prefix_v1');
+      expect(payloads[0]?.source?.type).toBe('tela_native_request_prefix_v1');
+      const sourceItems = payloads[0].source.items;
+      expect(sourceItems.some((item: any) => item.content.includes('Historical request 0'))).toBe(true);
+      expect(sourceItems.some((item: any) => item.content.includes('Verified state 11'))).toBe(false);
+      expect(result.physicalContext.segments.some(item => item.content.includes('Verified state 11: ' + 'H'.repeat(34_000)))).toBe(true);
       expect(result.physicalContext.segments.at(-1)).toMatchObject({ kind: 'user', content: current });
       expect(result.physicalContext.segments.some(item => item.content.includes('source-bound historical state'))).toBe(true);
       expect(observed).toContainEqual(expect.objectContaining({
         stage: 'web_retained_context_decision', reason_class: 'input_head_missing',
       }));
       expect(observed.filter(item => item.stage === 'native_checkpoint_preparation_rejected')).toHaveLength(0);
-      result.settle?.({ status: 'failed' });
+      result.settle?.({ status: 'completed', documentGeneration: 1, surfaceLeaseId: 'imported-page', answer: 'Imported work completed.' });
+      const followup = await planner(registered('turn-3'), { ...request, input: [...request.input,
+        { role: 'assistant', content: 'Imported work completed.' }, { role: 'user', content: 'Next exact task.' }] });
+      expect(followup.retainedSurfaceLeaseId).toBe('imported-page');
+      expect(followup.physicalContext.mode).toBe('retained-delta');
+      expect(sourceReads).toBe(1);
+      expect(payloads).toHaveLength(1);
+      followup.settle?.({ status: 'failed' });
+      const extendedContent = JSON.stringify({ type: 'tela_native_visible_prefix_v1', items: [
+        ...JSON.parse(source.content).items,
+        { turnId: 'turn-2', item: { type: 'userMessage', id: 'last-user', content: [{ type: 'text', text: current }] } },
+        { turnId: 'turn-2', item: { type: 'agentMessage', id: 'last-answer', text: 'Imported work completed.' } },
+      ] });
+      visibleSource = { ...source, currentTurnId: 'turn-3', content: extendedContent, sourceItemCount: 26,
+        digest: createHash('sha256').update(extendedContent).digest('hex'), contentDigest: createHash('sha256').update(extendedContent).digest('hex') };
+      const restarted = await createNativeRequestDevelopmentWebTurnPlanner(options)(registered('turn-3'), { ...request,
+        input: [...request.input, { role: 'assistant', content: 'Imported work completed.' }, { role: 'user', content: 'Next exact task.' }] });
+      expect(sourceReads).toBe(2);
+      expect(payloads).toHaveLength(1);
+      expect(restarted.physicalContext.mode).toBe('checkpoint-delta');
+      restarted.settle?.({ status: 'failed' });
+      // A much larger untouched archive cannot fit in one summary plus an exact
+      // successor. Refuse before a costly, predictably useless preparation call.
+      const tooLarge = { ...source, sourceItemCount: 96,
+        content: JSON.stringify({ type: 'tela_native_visible_prefix_v1', items: Array.from({ length: 48 }, (_, index) => [
+          { turnId: `past-${index}`, item: { type: 'userMessage', id: `question-${index}`, content: [] } },
+          { turnId: `past-${index}`, item: { type: 'agentMessage', id: `reply-${index}`, text: 'Z'.repeat(48_000) } },
+        ]).flat() }) };
+      await expect(createNativeRequestDevelopmentWebTurnPlanner({ ...options,
+        visiblePrefix: { ...options!.visiblePrefix!, read: async () => tooLarge },
+      })(registered('turn-2'), request)).rejects.toMatchObject({ recoveryReason: 'source_budget' });
+      expect(payloads).toHaveLength(1);
     } finally { stop?.(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('small indexed cold import needs no preparation, keeps old authority inert and retains media provenance', async () => {
+  const root = scratch();
+  try {
+    const inline = decodeNativeInlineEvidence('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9RwvWgAAAABJRU5ErkJggg==');
+    const evidence = nativeEvidenceRef({ threadId: 'thread-1', itemKey: 'prior:old-question', partKey: '1',
+      kind: 'image', origin: 'historical-user', source: 'native_thread_read', sha256: inline.sha256, bytes: inline.bytes.byteLength });
+    const content = JSON.stringify({ type: 'tela_native_visible_prefix_v1', items: [
+      { turnId: 'prior', item: { type: 'userMessage', id: 'old-question', content: [{ type: 'text', text: 'Old task' }, evidence] } },
+      { turnId: 'prior', item: { type: 'hookPrompt', id: 'old-hook', text: 'Historical instruction only' } },
+      { turnId: 'prior', item: { type: 'mcpToolCall', id: 'old-tool', arguments: { action: 'write' }, result: { saved: true } } },
+    ] });
+    const digest = createHash('sha256').update(content).digest('hex');
+    const planner = createNativeRequestDevelopmentWebTurnPlanner({
+      visiblePrefix: { accountNamespace: 'fixture-account',
+        journal: new FileNativeVisiblePrefixStageJournal({ directory: join(root, 'ledger'), initializationPath: join(root, 'init') }),
+        async read() { return { kind: 'native-visible-prefix', threadId: 'thread-1', currentTurnId: 'turn-1',
+          content, contentDigest: digest, digest, sourceItemCount: 3,
+          inlineAssets: [{ evidence, mimeType: inline.mimeType, bytes: inline.bytes }], references: [evidence], localImageCandidates: [] }; } },
+      checkpointProducer: async () => { throw Error('A small import must not invoke a summarizer'); },
+    });
+    const request = { model: chatGptWebModelId(chatGptWebFamilyKey('Fixture')), reasoning: { effort: 'medium' },
+      instructions: 'Current exact authority', input: [{ type: 'compaction', encrypted_content: 'opaque' }, { role: 'user', content: 'New task' }] };
+    const result = await planner(registered(), request);
+    expect(result.physicalContext.mode).toBe('full');
+    expect(result.physicalContext.segments.filter(item => item.type === 'revision' && item.kind === 'system')
+      .map(item => item.content)).toEqual(['Current exact authority']);
+    expect(result.physicalContext.segments.find(item => item.content.includes('Historical instruction only'))).toMatchObject({ kind: 'tool-result' });
+    expect(result.physicalContext.segments.find(item => item.content.includes('old-tool'))!.content).toContain('"saved":true');
+    expect(result.physicalContext.segments.at(-1)).toMatchObject({ kind: 'user', content: 'New task' });
+    expect(result.media).toHaveLength(1);
+    result.settle?.({ status: 'completed', surfaceLeaseId: 'media-page', documentGeneration: 1, answer: 'Finished' });
+    const next = await planner(registered('turn-2'), { ...request, input: [...request.input,
+      { role: 'assistant', content: 'Finished' }, { role: 'user', content: 'Continue' }] });
+    expect(next.retainedSurfaceLeaseId).toBe('media-page');
+    expect(next.physicalContext.mode).toBe('retained-delta');
+    expect(next.media).toBeUndefined();
+    next.settle?.({ status: 'failed' });
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('retained boundary denial reports bounded revision order without source prose', async () => {

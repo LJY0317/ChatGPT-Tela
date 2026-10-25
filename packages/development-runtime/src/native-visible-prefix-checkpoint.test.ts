@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readDiagnosticTail } from "@chatgpt-tela/core";
-import type { NativeVisiblePrefixSnapshot } from "@chatgpt-tela/codex";
+import type { NativeRequestPrefixSnapshot } from "./native-visible-prefix-checkpoint";
 import { chatGptCheckpointInputTokens, chatGptWebCheckpointSourceTokenLimit } from "@chatgpt-tela/chatgpt";
 import {
  produceNativePrefixCheckpoint, NativePrefixCheckpointInterrupted,
@@ -33,8 +33,8 @@ class Journal implements NativeVisiblePrefixStageJournal {
  }
 }
 function fixture(text='visible prior answer') {
- const content=JSON.stringify({type:'tela_native_visible_prefix_v1',items:[{turnId:'prior',item:{id:'old',type:'agentMessage',text}}]});
- const source:NativeVisiblePrefixSnapshot={kind:'native-visible-prefix',threadId:'thread',currentTurnId:'current',
+ const content=JSON.stringify({type:'tela_native_request_prefix_v1',items:[{type:'revision',kind:'assistant',revisionId:'old',content:text}]});
+ const source:NativeRequestPrefixSnapshot={kind:'native-request-prefix',threadId:'thread',currentTurnId:'current',
   contentDigest: createHash('sha256').update(content).digest('hex'), digest:createHash('sha256').update(content).digest('hex'),sourceItemCount:1,content,
   inlineAssets:[],references:[],localImageCandidates:[]};
  const calls:any[]=[];
@@ -181,16 +181,6 @@ test('oversized source diagnostic fields persist through privacy and file readba
    instruction_item_count:1,instruction_bytes:Buffer.byteLength(JSON.stringify(items[1])),
    checkpoint_item_count:1,checkpoint_bytes:Buffer.byteLength(JSON.stringify(items[0])),
    largest_item_bytes:Buffer.byteLength(JSON.stringify(items[2])),entry_class:'revision',request_role:'user',
-  });
-  const visible=JSON.stringify({type:'tela_native_visible_prefix_v1',items:[
-   {turnId:'old',item:{type:'mcpToolCall',role:'untrusted-role',result:'x'.repeat(500_000)}}]});
-  const visibleDigest=createHash('sha256').update(visible).digest('hex');
-  await expect(produceNativePrefixCheckpoint({...f.input,source:{...f.source,content:visible,
-   contentDigest:visibleDigest,digest:visibleDigest,sourceItemCount:1},
-   confirmSource:async()=>({threadId:f.source.threadId,currentTurnId:f.source.currentTurnId,digest:visibleDigest})}))
-   .rejects.toMatchObject({recoveryReason:'source_budget'});
-  expect(readDiagnosticTail(process.env.CHATGPT_TELA_DIAGNOSTIC_FILE).events.filter(e=>e.stage==='native_context_source_rejected').at(-1)).toMatchObject({
-   entry_class:'mcp_tool_call',request_role:'other',largest_item_bytes:Buffer.byteLength(JSON.stringify(JSON.parse(visible).items[0])),
   });
  } finally {
   if(before===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;

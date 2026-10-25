@@ -79,14 +79,29 @@ canonical request, not a Native parent/child relationship or a public fork-point
 It reuses derived prose only; it neither reads another branch's suffix nor transfers its
 execution, tool or physical-session ownership.
 
-If one fitted prefix plus its exact remaining suffix cannot support the cold request,
-preserve it and return explicit checkpoint/handoff recovery. Paginated current Native
-history is supported history, not legacy merely because it is large. The opaque-history
-bootstrap still requires whole-prefix coverage; bounded partial coverage for that path is
-not yet implemented. Do not launch repeated fragment/merge requests,
-raise a hidden retry allowance, silently omit history, or claim a one-pass recovery that
-did not occur. Existing oversized archives may need an explicit Native checkpoint before
-switching back to Web; the preventive working-set policy does not retroactively shrink them.
+Indexed opaque-history recovery imports the complete public source as ordered historical
+revisions, then uses the ordinary working-checkpoint selector. It no longer requires a
+separate whole-history summary first. Historical Native turn boundaries permit one fitted prefix;
+the complete successor, current request and current authority remain exact. Old public
+hook/instruction items remain historical evidence, never current system/developer authority.
+A small import needs no preparation. A compatible working checkpoint may avoid preparation;
+a fresh page needing maintenance shares the normal one-call budget. A healthy retained
+page keeps the frozen source and media provenance without repeating import or uploads.
+The disposable frozen-source cache is bounded by both entries and total source/media bytes.
+
+Native canonical history, its derived Web working context and the resident browser epoch
+remain separate. A proven summary prefix does not prove page residency or grant execution
+authority. Unknown overlap between public history and canonical Responses input is retained;
+text similarity is not sufficient evidence to remove historical items.
+
+If one fitted prefix plus its exact successor cannot fit Web, preserve it and return explicit
+checkpoint/handoff recovery, before a summary known to be useless. This remains a supported
+large-history limitation, not a reason to revive legacy replay or truncate evidence. A
+smaller seed with deferred original ranges requires a real authenticated Tela Chat body-read
+capability first. Current structural Native inspection is not that reader. Reuse indexed
+public Native paging for that future boundary; do not duplicate the archive, add a search
+engine or promise readback that Web cannot perform. No background Native summaries, automatic
+paid Native fallback or fragment/merge chain is authorized by this policy.
 
 ## Durable reuse and ownership
 
@@ -170,12 +185,17 @@ It makes no browser/model calls and does not validate real model quality, Deskto
 provider billing, or production automatic pressure. A successful manual fallback is
 reported separately from the observed automatic-compaction count.
 
-[CodexGPTWeb compaction](https://github.com/miuuyy/codex-chatgpt-web/blob/cdfceafd51df9ab6f19818c145eac5a99c593a3d/src/responses/compaction.ts)
-and [Native forwarding](https://github.com/miuuyy/codex-chatgpt-web/blob/cdfceafd51df9ab6f19818c145eac5a99c593a3d/src/native-passthrough.ts)
-show the same useful contract boundary: standard remote compaction and provider-owned
-summary decoding. Its model usage estimates and experimental multipart policy are
-project choices, not proof of ChatGPT capacity or Tela billing. Tela does not adopt
-opaque-history omission or automatic fragment/merge recovery.
+[CodexGPTWeb compaction](https://github.com/miuuyy/codex-chatgpt-web/blob/0901b9fb1976b4a984c7e9b4082c2868767bbf7c/src/responses/compaction.ts)
+separates Native compaction output from provider-readable summaries. Its unknown encrypted
+history becomes an unreadable-history note; its optional multipart transport and compaction
+fit trimming are not Tela's preservation policy. It does not establish lossless cold Native
+history transfer or provider billing/capacity guarantees.
+
+[Chat on Steroids handoff](https://github.com/totec448-spec/chat-on-steroids/blob/ccead536f29d566927d63e8f508104cd8e1c3071/src/main/session/handoff-prompt.ts)
+asks the existing Web conversation to write its own brief, then continues in a fresh chat.
+Its durable local session can outlive a physical chat, but that Web-resident source differs
+from Tela's first import of opaque Native state. Adopt the separation and on-demand history
+principle, not another Goal/session engine or an assumption that Native state is portable.
 
 [Codex Proxy](https://github.com/icebear0828/codex-proxy/tree/f824033a88e28d82f25db562e22758c383bfc177)
 uses a standard compact endpoint and an optional official app-server bridge, but relays

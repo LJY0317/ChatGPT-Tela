@@ -44,44 +44,29 @@ function input(overrides: Partial<Parameters<typeof resolveNativeContextContinui
     ...overrides };
 }
 
-test("marker-free opaque continuity consumes complete public prefix, revalidates and resumes durable stages", async () => {
+test("indexed opaque continuity acquires ordered source without a separate summary operation", async () => {
   const directory = mkdtempSync(join(tmpdir(), "native-prefix-continuity-"));
   try {
     const content = JSON.stringify({ type: "tela_native_visible_prefix_v1", items: [
-      { turnId: "prior", item: { type: "agentMessage", id: "prior-answer", text: "한글 visible historical tool result ".repeat(450) } },
+      { turnId: "prior", item: { type: "agentMessage", id: "prior-answer", text: "Historical evidence" } },
     ] });
+    const digest = createHash("sha256").update(content).digest("hex");
     const source: NativeVisiblePrefixSnapshot = { kind: "native-visible-prefix", threadId: "task-1", currentTurnId: "web-current",
-      contentDigest: createHash("sha256").update(content).digest("hex"), digest: createHash("sha256").update(content).digest("hex"), sourceItemCount: 1, content,
+      contentDigest: digest, digest, sourceItemCount: 1, content,
       inlineAssets: [], references: [], localImageCandidates: [] };
-    const journalOptions = { directory: join(directory, "ledger"), initializationPath: join(directory, "receipt") };
+    const journal = new FileNativeVisiblePrefixStageJournal({ directory: join(directory, "ledger"), initializationPath: join(directory, "receipt") });
     let reads = 0, calls = 0;
-    const options = {
-      checkpointPreparationPolicy:{maxModelCalls:128,maxInputTokens:20_000_000,maxElapsedMs:600_000},
-      historyCheckpointCache: new FileContextCheckpointCache({ directory: join(directory, "cache") }),
-      visiblePrefix: { accountNamespace: "verified-fixture-account", journal: new FileNativeVisiblePrefixStageJournal(journalOptions),
-        read: async () => { reads++; return source; } },
-      checkpointProducer: async (request: import("./native-request-planner").NativeRequestCheckpointProductionRequest) => {
-        calls++; expect(request.browserModel).toEqual({ familyKey: "discovered-family", effort: "medium" });
-        return { nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId, content: "Source-bound derived fixture checkpoint." };
-      },
-      compactionAnchor: async () => { throw Error("UI markers are not required by this source contract"); },
-    };
-    const first = await resolveNativeContextContinuity(input({ options, effort: "medium", browserModel: { familyKey: "discovered-family", effort: "medium" } }));
-    expect(first.mode).toBe("visible-prefix-checkpoint"); expect(first.checkpointProduced).toBe(true);
-    expect(calls).toBe(1); expect(reads).toBe(3);
-    const previousCalls = calls;
-    const again = await resolveNativeContextContinuity(input({ options: { ...options,
-      visiblePrefix: { ...options.visiblePrefix, journal: new FileNativeVisiblePrefixStageJournal(journalOptions) },
-    }, effort: "medium", browserModel: { familyKey: "discovered-family", effort: "medium" } }));
-    expect(again.visibleHistory).toBe(first.visibleHistory); expect(calls).toBe(previousCalls);
-    expect(again.checkpointReused).toBe(true); expect(again.checkpointProduced).toBe(false);
-    expect(reads).toBe(6);
-    const envelope = JSON.parse(first.visibleHistory!);
-    expect(envelope.sourceDigest).toBe(source.digest);
-    expect(envelope.coverage).toBe("complete-visible-prefix-before-current-native-turn");
-    expect(envelope).not.toHaveProperty("compactionItemId");
+    const first = await resolveNativeContextContinuity(input({ options: {
+      visiblePrefix: { accountNamespace: "fixture-account", journal, read: async () => { reads++; return source; } },
+      checkpointProducer: async () => { calls++; throw Error("Source acquisition must not invoke a model"); },
+    } }));
+    expect(first.mode).toBe("visible-prefix");
+    expect(first.visibleHistory).toBe(content);
+    expect(first.checkpointProduced).toBe(false);
+    expect(calls).toBe(0); expect(reads).toBe(1);
+    expect(await journal.pendingOperations()).toHaveLength(0);
   } finally { rmSync(directory, { recursive: true, force: true }); }
-}, 30_000);
+});
 
 test("foreign turn or thread cannot select retained, current or cached Native-to-Web context", async () => {
   let touches = 0;
@@ -97,10 +82,10 @@ test("foreign turn or thread cannot select retained, current or cached Native-to
   const cases = [
     input({ currentTurnId: "foreign-turn",
       opaque: nativeOpaqueCompaction({ input: [] }), options }),
-    input({ threadId: "foreign-thread", retainedHistory: "private retained history", options }),
+    input({ threadId: "foreign-thread", retainedHistory: { visibleHistory: "private retained history", inlineHistoryAssets: [] }, options }),
     input({ currentTurnId: "foreign-turn", options }),
     input({ authority: { ...authority, source: "untrusted-request" as "native-current-turn" },
-      retainedHistory: "private retained history", options }),
+      retainedHistory: { visibleHistory: "private retained history", inlineHistoryAssets: [] }, options }),
   ];
   for (const candidate of cases) {
     await expect(resolveNativeContextContinuity(candidate))
@@ -127,7 +112,7 @@ test("readable Native input never scans opaque history or invokes a checkpoint m
 test("a proven retained Web page skips every cold Native read and carries exactly its existing history", async () => {
   let calls = 0;
   const out = await resolveNativeContextContinuity(input({
-    retainedHistory: "Existing source-bound Web history",
+    retainedHistory: { visibleHistory: "Existing source-bound Web history", inlineHistoryAssets: [] },
     options: {
       compactionHistory: async () => { calls++; throw Error("Unexpected historical download"); },
       compactionAnchor: async () => { calls++; throw Error("Unexpected anchor read"); },
@@ -384,7 +369,7 @@ test("an explicitly requested Native handoff needs no legacy transcript projecto
  expect(out.visibleHistory).toContain(answer.limitations);
 });
 
-test("continuity cannot reset an earlier phase's preparation budget",async()=>{
+test("source acquisition neither consumes nor resets an earlier preparation budget",async()=>{
  const {CheckpointPreparationBudget}=await import("./checkpoint-preparation-budget");
  const directory=mkdtempSync(join(tmpdir(),"native-shared-preparation-"));
  const content=JSON.stringify({type:"tela_native_visible_prefix_v1",items:[]});
@@ -395,10 +380,12 @@ test("continuity cannot reset an earlier phase's preparation budget",async()=>{
  const budget=new CheckpointPreparationBudget(100000,{maxModelCalls:1,maxInputTokens:100000,maxElapsedMs:60000});
  budget.recordInvocation(1);let sends=0;
  try{
-  await expect(resolveNativeContextContinuity(input({effort:"medium",preparationBudget:budget,options:{
+  const result = await resolveNativeContextContinuity(input({effort:"medium",preparationBudget:budget,options:{
    visiblePrefix:{accountNamespace:"account",journal,read:async()=>source},
    checkpointProducer:async r=>{sends++;return {...r,content:"unreachable"};},
-  }}))).rejects.toMatchObject({recoveryReason:"source_budget",budgetReason:"model_calls"});
+  }}));
+  expect(result.mode).toBe("visible-prefix");
+  expect(budget.modelCalls).toBe(1);
   expect(sends).toBe(0);expect(await journal.pendingOperations()).toHaveLength(0);
  }finally{rmSync(directory,{recursive:true,force:true});}
 });
@@ -433,7 +420,7 @@ test("unexpected source probe failure retains phase but never private exception 
 });
 
 
-test("cold recovery distinguishes missing handoff and cache from oversized readable source without model work", async () => {
+test("oversized indexed source reaches the common planner without an early whole-history budget rejection", async () => {
   const root = mkdtempSync(join(tmpdir(), "native-recovery-evidence-"));
   const rows: StructuralDiagnosticEvent[] = [];
   const stop = observeDiagnosticEvents(row => { if (row.event === "chatgpt_tela_codex") rows.push(row); });
@@ -443,7 +430,7 @@ test("cold recovery distinguishes missing handoff and cache from oversized reada
   const digest = createHash("sha256").update(content).digest("hex");
   let sends = 0;
   try {
-    await expect(resolveNativeContextContinuity(input({ effort: "medium", options: {
+    const result = await resolveNativeContextContinuity(input({ effort: "medium", options: {
       historyCheckpointCache: new FileContextCheckpointCache({ directory: join(root, "cache") }),
       nativeWebHandoff: async () => undefined,
       verifyNativeWebHandoff: async () => undefined,
@@ -453,13 +440,14 @@ test("cold recovery distinguishes missing handoff and cache from oversized reada
         content, digest, contentDigest: digest, sourceItemCount: 1, inlineAssets: [], references: [], localImageCandidates: [],
       }) },
       checkpointProducer: async () => { sends++; throw Error("must not send"); },
-    } }))).rejects.toMatchObject({ recoveryReason: "source_budget" });
+    } }));
+    expect(result.visibleHistory).toBe(content);
+    expect(result.checkpointProduced).toBe(false);
     expect(rows.find(row => row.stage === "native_history_cache_probed")).toMatchObject({ candidate_count: 0, history_candidate_count: 0 });
     expect(rows.find(row => row.stage === "native_handoff_cache_probed")).toMatchObject({ outcome: "absent" });
     expect(rows.filter(row => row.stage === "native_context_source_probed").map(row => [row.phase, row.outcome]))
       .toEqual([["handoff", "absent"], ["visible_prefix", "available"]]);
-    expect(rows.find(row => row.stage === "native_context_source_rejected" && row.phase === "checkpoint_budget"))
-      .toMatchObject({ source_kind: "native-visible-prefix", completed_receipt_count: 0, matching_receipt_present: false });
+    expect(rows.some(row => row.stage === "native_context_source_rejected")).toBe(false);
     expect(JSON.stringify(rows)).not.toContain("private historical body");
     expect(sends).toBe(0);
   } finally { stop?.(); rmSync(root, { recursive: true, force: true }); }
