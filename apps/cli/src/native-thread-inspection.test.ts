@@ -38,6 +38,24 @@ function fixtureReader(overrides: {
 }
 
 describe("one read-only conversation inspection by exact Native ID", () => {
+  test("exact-turn evidence retains all inventory rows and excludes other turns from summaries", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tela-exact-evidence-")), path = join(dir, "events.jsonl");
+    const scope_fingerprint = diagnosticFingerprint(THREAD), turn_fingerprint = diagnosticFingerprint(TURN);
+    writeFileSync(path, [
+      ...Array.from({ length: 65 }, () => ({ ts: "2026-10-17T08:19:00Z", event: "chatgpt_tela_work",
+        stage: "native_tool_inventory_queried", scope_fingerprint, turn_fingerprint, count: 1 })),
+      { ts: "2026-10-17T08:19:01Z", event: "chatgpt_tela_codex", stage: "native_execution_failed",
+        scope_fingerprint, turn_fingerprint: diagnosticFingerprint("other-turn"), reason_class: "other_failure" },
+    ].map((row, i) => JSON.stringify({ ...row, duration_ms: i })).join("\n"));
+    try {
+      const result = inspectNativeThreadHistoricalEvidence({ threadId: THREAD, turnId: TURN,
+        diagnosticPaths: [path], nowMs: NOW });
+      expect(result.toolDeliveryEvidence?.inventoryRequests).toHaveLength(65);
+      expect(result.lastNativeFailure).toBeNull();
+      expect(result.coverage.eventsMatched).toBe(65);
+      expect(result.toolDeliveryEvidence?.coverage.limited).toBe(false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   test("latest request keeps old approval and another operation out of its delivery boundary", async () => {
     const dir = mkdtempSync(join(tmpdir(), "tela-current-boundary-"));
     const path = join(dir, "events.jsonl");

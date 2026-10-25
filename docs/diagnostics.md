@@ -261,7 +261,7 @@ If the selected Native owner is stopped, orphaned, or its public status
 cannot be verified, use the **offline historical-only** fallback:
 
 ```sh
-bun run cli thread evidence --thread <Native-conversation-UUID> --minutes 180
+bun run cli thread evidence --thread <Native-conversation-UUID> --turn <Native-turn-UUID> --minutes 180
 ```
 
 This deliberately performs no Native RPC or browser navigation, does not

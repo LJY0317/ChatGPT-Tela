@@ -5,7 +5,6 @@ const THREAD_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[
 const TURN_STATUS = new Set(["inProgress", "completed", "failed", "interrupted"]);
 const MAX_TURNS = 4;
 const MAX_TIMELINE = 24;
-const MAX_TOOL_EVIDENCE_ITEMS = 64;
 const TOOL_EVIDENCE_STAGES = new Set([
   "native_tool_inventory_queried", "native_tool_queued", "native_tool_result_received",
   "native_tool_result_released", "native_tool_result_error", "native_tool_bridge_invoke_started",
@@ -125,7 +124,7 @@ function projectTurnToolEvidence(input: {
   const exactTurnEvents = input.allEvents.filter(event => event.scope_fingerprint === input.threadFingerprint
     && event.turn_fingerprint === input.turnFingerprint && TOOL_EVIDENCE_STAGES.has(event.stage));
   const inventoryRows = exactTurnEvents.filter(event => event.stage === "native_tool_inventory_queried");
-  const inventoryRequests = inventoryRows.slice(0, MAX_TOOL_EVIDENCE_ITEMS).map(event => {
+  const inventoryRequests = inventoryRows.map(event => {
     const rpcFingerprint = diagnosticFingerprintField(event.rpc_fingerprint);
     const correlation = correlateMcpRpc(rpcFingerprint, input.allEvents);
     return Object.freeze({
@@ -136,7 +135,7 @@ function projectTurnToolEvidence(input: {
       itemCount: typeof event.count === "number" && Number.isSafeInteger(event.count) && event.count >= 0 ? event.count : null,
       goalOnly: typeof event.goal_only === "boolean" ? event.goal_only : null,
       mcpCorrelation: correlation.status,
-      mcpEvents: correlation.events.slice(0, 12).map(row => projectToolEvidenceEvent(
+      mcpEvents: correlation.events.map(row => projectToolEvidenceEvent(
         row, input.turnFingerprint, correlation.status)),
       modelReceipt: "not_proven_by_server_side_diagnostics" as const,
     });
@@ -153,7 +152,7 @@ function projectTurnToolEvidence(input: {
     rows.push(event);
     groupedCalls.set(key, rows);
   }
-  const calls = [...groupedCalls.entries()].slice(0, MAX_TOOL_EVIDENCE_ITEMS).map(([key, rows]) => {
+  const calls = [...groupedCalls.entries()].map(([key, rows]) => {
     const [operationFingerprint, rawRpcFingerprint] = JSON.parse(key) as [string, string | null];
     const rpcFingerprint = rawRpcFingerprint ?? undefined;
     const returned = rows.filter(event => event.stage === "native_tool_bridge_invoke_returned").at(-1);
@@ -182,9 +181,9 @@ function projectTurnToolEvidence(input: {
       resultProjection: projection
         ? projectToolEvidenceEvent(projection, input.turnFingerprint, projectionStatus) : null,
       mcpCorrelation: correlation.status,
-      mcpEvents: correlation.events.slice(0, 12).map(row => projectToolEvidenceEvent(
+      mcpEvents: correlation.events.map(row => projectToolEvidenceEvent(
         row, input.turnFingerprint, correlation.status)),
-      nativeEvents: rows.slice(-16).map(row => projectToolEvidenceEvent(
+      nativeEvents: rows.map(row => projectToolEvidenceEvent(
         row, input.turnFingerprint, "exact_turn_and_operation_fingerprint")),
       modelReceipt: "not_proven_by_server_side_diagnostics" as const,
     });
@@ -198,7 +197,7 @@ function projectTurnToolEvidence(input: {
       turnScopedEventsMatched: exactTurnEvents.length,
       inventoryRequestsMatched: inventoryRows.length,
       callsMatched: groupedCalls.size,
-      limited: input.limited || inventoryRows.length > MAX_TOOL_EVIDENCE_ITEMS || groupedCalls.size > MAX_TOOL_EVIDENCE_ITEMS,
+      limited: input.limited,
       modelReceiptObserved: false,
     }),
     limitation: "A local MCP transport send receipt proves the server send returned; it does not prove model receipt or interpretation.",
@@ -404,11 +403,13 @@ export function inspectNativeThreadHistoricalEvidence(input: {
     fromMs: nowMs - minutes * 60_000, toMs: nowMs,
   });
   const allEvents = logs.events as readonly EvidenceRow[];
+  const turnFingerprint = input.turnId ? diagnosticFingerprint(input.turnId) : undefined;
   const events = logs.events.filter(event => event.scope_fingerprint === fingerprint
+    && (turnFingerprint === undefined || event.turn_fingerprint === turnFingerprint)
     && ["chatgpt_tela_work", "chatgpt_tela_codex", "chatgpt_tela_browser"].includes(event.event));
-  const toolDeliveryEvidence = input.turnId ? projectTurnToolEvidence({
+  const toolDeliveryEvidence = turnFingerprint ? projectTurnToolEvidence({
     threadFingerprint: fingerprint,
-    turnFingerprint: diagnosticFingerprint(input.turnId),
+    turnFingerprint,
     allEvents,
     limited: logs.byteLimitReached || logs.sourceLimitReached || logs.coverage.some(item => item.truncated || item.eventLimitReached),
   }) : undefined;
