@@ -1219,6 +1219,18 @@ backend state, online/health/ingress-peer counts, enabled Funnel count and a rou
 Status/route inspection failures are recorded independently and never prevent the relay probe.
 No status bodies, peer identities, route targets or health prose enter the structural report.
 
+Each explicit public probe now has one `probeFingerprint`, shared by DNS failure,
+local-state, relay and completion events. Relay fingerprints survive DNS answer
+reordering, so partial relay failures can be compared across attempts without keeping
+addresses. The report records numeric Tailscale version components and network
+interface/address-set fingerprints before and after the probe, with IPv4/IPv6 counts.
+These are correlation signals: a changed fingerprint does not identify a Wi-Fi name
+or prove that a network change caused a failure. No SSID or interface address is logged.
+Run this probe while the failure is present and again after an intentional recovery;
+an external request that never reaches this machine cannot trigger local collection.
+MacLagMonitor can independently retain bounded DHCP/network-transition and Tailscale
+control events during its incidents; it remains optional and is not a Tela dependency.
+
 Public progress extraction also records counts and visibility of assistant markdown
 bodies, whether the selected body lies outside the progress shell, animation presence
 and block count. These bounded, deduplicated facts expose prose excluded by the adapter
