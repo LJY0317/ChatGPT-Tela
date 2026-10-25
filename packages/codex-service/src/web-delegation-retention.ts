@@ -73,7 +73,9 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     const path = statePath(adapters, record);
     try {
       const read = object(await rpc.request("thread/read", { threadId: key.threadId, includeTurns: false }, input.signal));
-      if (object(read?.thread)?.id === key.threadId) save(path, { state: "excluded" });
+      // A missing list entry is not a user opt-out. Only a stale deletion
+      // receipt must relinquish deletion authority when the thread still exists.
+      if (object(read?.thread)?.id === key.threadId && load(path)?.state === "deleted") save(path, { state: "excluded" });
       return;
     } catch (error) {
       if (!isExactDeletedNativeThreadAbsent(error, key.threadId)) throw error;
@@ -137,7 +139,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
       try {
         // Native read metadata does not expose archive state. Read both official
         // list partitions (metadata only) and require complete pagination.
-        const scope = JSON.stringify([record.slot, record.owner.accountFingerprint, record.cwd]);
+        const scope = scopeConnection;
         let listed = inventories.get(scope);
         if (!listed) {
           listed = new Map<string, { archived: boolean; thread: Record<string, any> }>();
@@ -147,7 +149,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           do {
             publicOperation = "thread_list";
             const page = object(await rpc.request("thread/list", {
-              archived, cwd: record.cwd, limit: 100, ...(cursor ? { cursor } : {}),
+              archived, limit: 100, ...(cursor ? { cursor } : {}),
             }, input.signal));
             if (!Array.isArray(page?.data)) throw Error("Native thread inventory unavailable");
             for (const raw of page.data) {
@@ -216,59 +218,34 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           save(path, { state: "excluded" }); continue;
         }
         if (due > now) continue;
-        publicOperation = "thread_turns_list";
-        const tail = object(await rpc.request("thread/turns/list", {
-          threadId: record.threadId, limit: 1, sortDirection: "desc", itemsView: "summary",
-        }, input.signal));
-        const latest = Array.isArray(tail?.data) ? object(tail.data[0]) : undefined;
-        if (!latest || !["completed", "failed", "interrupted"].includes(latest.status)
-          || present.thread.status?.type === "active") { skipped("active_or_unresolved_tail", latest && jobs.some(job => job.turnId === latest.id) ? "managed" : "unknown"); continue; }
-        publicOperation = "managed_turn_comparison";
-        if (!jobs.some(job => job.turnId === latest.id)) {
-          // The user continued the thread outside the managed journal.
-          const archiveDue = collected !== undefined ? Math.max(collected, activity) + DAY : activity + 7 * DAY;
-          if (Number.isFinite(archiveDue)) next = Math.min(next, archiveDue);
-          if (due <= now) emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_skipped", {
-            reason_class: "latest_turn_unmanaged", due_at: archiveDue, kind: "unmanaged",
-            policy: collected !== undefined ? "collection_and_activity" : "native_activity",
-            next_action: publicOperation,
-          });
-          save(path, { state: "excluded" }); continue;
+        // Archive is reversible and needs current idle/queue proof, not a
+        // readable execution rollout or an exact journal entry for every turn.
+        if (present.thread.status?.type === "active"
+          || jobs.some(job => !["completed", "failed", "linked"].includes(job.state))) {
+          skipped("active_or_unresolved_tail"); continue;
         }
         publicOperation = "thread_queue_list";
         const queue = object(await rpc.request("thread/queue/list", { threadId: record.threadId, limit: 1 }, input.signal));
         if (!Array.isArray(queue?.data)) throw Error("Native queued work inventory unavailable");
         if (queue.data.length || queue.nextCursor != null) { skipped("queued_work", "managed"); continue; }
-        if (!retained) {
-          const lastActivity = Math.max(record.createdAt, updatedAt * 1000);
-          const archiveDue = collected !== undefined ? Math.max(collected, lastActivity) + DAY : lastActivity + 7 * DAY;
-          if (archiveDue > now) { next = Math.min(next, archiveDue); continue; }
-        }
-        // Session authority may change during metadata reads. Reuse the same
-        // public account proof before performing either irreversible effect.
+        // Recheck the account before changing Native conversation state.
         publicOperation = "owner_recheck";
         if (!sameAccountOwner(record, await adapters.owner(record.slot))) { skipped("owner_changed_before_mutation", "managed"); continue; }
-        try {
-          if (retained?.state === "archived") {
-            publicOperation = "thread_delete";
-            await rpc.request("thread/delete", { threadId: record.threadId }, input.signal);
-            publicOperation = "thread_read_after_delete";
-            await confirmAbsent(record, rpc);
-          } else {
-            publicOperation = "thread_archive";
-            await rpc.request("thread/archive", { threadId: record.threadId }, input.signal);
-            publicOperation = "thread_read_after_archive";
-            const read = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }, input.signal));
-            const archivedUpdatedAt = object(read?.thread)?.updatedAt;
-            if (!Number.isFinite(archivedUpdatedAt)) throw Error("Archived thread receipt unavailable");
-            save(path, { state: "archived", archivedAt: now, updatedAt: archivedUpdatedAt });
-            next = Math.min(next, now + 30 * DAY);
-          }
-        } catch (error) {
-          // Unknown mutation outcomes are not permission to repeat a request.
-          // Keep the Native conversation and relinquish automatic management.
-          if (load(path)?.state !== "deleted") save(path, { state: "excluded" });
-          throw error;
+        // On an error, retain the receipt and observe public state next pass.
+        if (retained?.state === "archived") {
+          publicOperation = "thread_delete";
+          await rpc.request("thread/delete", { threadId: record.threadId }, input.signal);
+          publicOperation = "thread_read_after_delete";
+          await confirmAbsent(record, rpc);
+        } else {
+          publicOperation = "thread_archive";
+          await rpc.request("thread/archive", { threadId: record.threadId }, input.signal);
+          publicOperation = "thread_read_after_archive";
+          const read = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }, input.signal));
+          const archivedUpdatedAt = object(read?.thread)?.updatedAt;
+          if (!Number.isFinite(archivedUpdatedAt)) throw Error("Archived thread receipt unavailable");
+          save(path, { state: "archived", archivedAt: now, updatedAt: archivedUpdatedAt });
+          next = Math.min(next, now + 30 * DAY);
         }
       } finally { /* Shared owner connection closes after the pass. */ }
     } catch (error) {

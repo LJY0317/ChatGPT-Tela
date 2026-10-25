@@ -228,7 +228,7 @@ export interface NativeThreadOwnershipEvidence {
   readonly createdAt: number;
   readonly accountFingerprint: string;
   readonly threadId: string;
-  readonly turnId: string;
+  readonly turnId?: string;
 }
 
 /** A proven final can be retrieved even when the Native turn itself failed.
@@ -579,7 +579,7 @@ export class WebDelegationStore {
   link(record: WebDelegationRecord): void {
     if (record.state !== "linked" || record.origin !== "native-thread-link"
       || !UUID.test(record.id) || !record.threadId || !UUID.test(record.threadId)
-      || !record.turnId || !UUID.test(record.turnId)
+      || record.turnId !== undefined && !UUID.test(record.turnId)
       || this.records().some(existing => existing.slot === record.slot && existing.threadId === record.threadId)) {
       throw Error("Invalid or already managed Native thread link");
     }
@@ -889,14 +889,14 @@ export async function linkNativeThreadForRetention(adapters: WebDelegationAdapte
     || typeof evidence.cwd !== "string" || !isAbsolute(evidence.cwd)
     || !Number.isSafeInteger(evidence.createdAt) || evidence.createdAt <= 0
     || !/^[a-f0-9]{64}$/.test(evidence.accountFingerprint)
-    || !UUID.test(evidence.threadId) || !UUID.test(evidence.turnId)
-    || realpathSync(evidence.cwd) !== evidence.cwd || !lstatSync(evidence.cwd).isDirectory())
+    || !UUID.test(evidence.threadId) || evidence.turnId !== undefined && !UUID.test(evidence.turnId))
     throw Error("Native link creation evidence invalid");
   const current = await adapters.owner(evidence.slot);
   const record: WebDelegationRecord = {
     id: randomUUID(), slot: evidence.slot, cwd: evidence.cwd, createdAt: evidence.createdAt,
     state: "linked", owner: { ...current.binding, accountFingerprint: evidence.accountFingerprint },
-    session: current.session, threadId: evidence.threadId, turnId: evidence.turnId,
+    session: current.session, threadId: evidence.threadId,
+    ...(evidence.turnId !== undefined ? { turnId: evidence.turnId } : {}),
     origin: "native-thread-link",
   };
   if (!sameAccountOwner(record, current)) throw Error("Native link account owner mismatch");
@@ -904,12 +904,20 @@ export async function linkNativeThreadForRetention(adapters: WebDelegationAdapte
   try {
     const response = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }, signal));
     const thread = object(response?.thread);
-    if (!thread || thread.id !== record.threadId || thread.cwd !== evidence.cwd || thread.historyMode !== "paginated") throw Error("Native link thread mismatch");
-    if (!await findDelegatedTurn(rpc, record.threadId!, record.turnId!, signal)) throw Error("Native link turn not indexed");
+    if (!thread || thread.id !== record.threadId || thread.cwd !== evidence.cwd) throw Error("Native link thread mismatch");
     if (!sameAccountOwner(record, await adapters.owner(evidence.slot))) throw Error("Native link owner changed");
-    adapters.store.link(record);
-    adapters.changed?.(record);
-    return record;
+    // Explicit user/coordinator adoption restores cleanup authority without
+    // recreating an execution workspace or requiring deleted rollout history.
+    const existing = adapters.store.recordsForThread({ slot: record.slot,
+      accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! })
+      .sort((a, b) => a.createdAt - b.createdAt).at(-1);
+    const linked = existing ?? record;
+    if (!existing) adapters.store.link(record);
+    const path = webDelegationRetentionPath(adapters.store.root, { slot: record.slot,
+      accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! });
+    if (adapters.store.threadRetention(linked)?.state === "excluded") unlinkSync(path);
+    adapters.changed?.(linked);
+    return linked;
   } finally { await rpc.close(); }
 }
 

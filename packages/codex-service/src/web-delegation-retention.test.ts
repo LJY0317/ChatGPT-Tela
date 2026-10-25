@@ -24,7 +24,7 @@ test("exact Native creation ACK links once without sending or reserving a task",
     expect(f.store.get(linked.id)?.origin).toBe("native-thread-link");
     expect(f.store.get(linked.id)?.state).toBe("linked");
     expect(f.store.capacity(2, f.root).total.used).toBe(0);
-    await expect(linkNativeThreadForRetention(adapters, receipt, new AbortController().signal)).rejects.toThrow("already managed");
+    expect((await linkNativeThreadForRetention(adapters, receipt, new AbortController().signal)).id).toBe(linked.id);
     await expect(linkNativeThreadForRetention(adapters, { ...receipt, accountFingerprint: "f".repeat(64) }, new AbortController().signal)).rejects.toThrow("owner mismatch");
   } finally { f.cleanup(); }
 });
@@ -45,7 +45,8 @@ function fixture() {
       calls.push({ method, params });
       if (method === "thread/list") {
         return { data: native.exists && (params as any).archived === native.archived
-          ? [{ id: record.threadId, cwd: root, name: native.title, updatedAt: native.updatedAt, status: { type: native.status } }] : [], nextCursor: null };
+          && (!(params as any).cwd || (params as any).cwd === native.cwd)
+          ? [{ id: record.threadId, cwd: native.cwd, name: native.title, updatedAt: native.updatedAt, status: { type: native.status } }] : [], nextCursor: null };
       }
       if (method === "thread/turns/list") return { data: [{ id: native.tailId, status: native.turnStatus }] };
       if (method === "thread/queue/list") return { data: native.queued ? [{ id: "queued" }] : [], nextCursor: null };
@@ -74,6 +75,64 @@ function fixture() {
   };
   return { root, store, record, native, calls, origin, adapters, run, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
+
+test("explicit adoption works without an execution directory or rollout and reclaims a known exclusion", async () => {
+  const f = fixture();
+  try {
+    const threadId = randomUUID(), cwd = join(f.root, "removed-worktree");
+    const evidence = { slot: 2, cwd, threadId, createdAt: f.origin,
+      accountFingerprint: f.record.owner.accountFingerprint };
+    const rpc = { async close() {}, async request(method: string) {
+      if (method === "thread/read") return { thread: { id: threadId, cwd } };
+      throw Error(`Unexpected rollout read or mutation ${method}`);
+    } };
+    const adapters = { ...f.adapters, connect: async () => rpc as any };
+    const linked = await linkNativeThreadForRetention(adapters, evidence, new AbortController().signal);
+    const path = join(f.root, `thread-2-${evidence.accountFingerprint}-${threadId}.retention`);
+    writeFileSync(path, JSON.stringify({ state: "excluded" }));
+    expect((await linkNativeThreadForRetention(adapters, evidence, new AbortController().signal)).id).toBe(linked.id);
+    expect(f.store.threadRetention(linked)).toBeUndefined();
+    expect(f.store.recordsForThread({ slot: 2, accountFingerprint: evidence.accountFingerprint, threadId })).toHaveLength(1);
+    expect(f.store.capacity(2, cwd).total.used).toBe(0);
+  } finally { f.cleanup(); }
+});
+
+test("idle owned threads archive and expire without a readable rollout; unresolved jobs remain protected", async () => {
+  const f = fixture();
+  try {
+    const child = { ...f.record, id: randomUUID(), turnId: randomUUID(), parentJobId: f.record.id,
+      createdAt: f.origin, state: "running" as const };
+    f.store.reserve(child);
+    f.store.save(child);
+    const rpc = await f.adapters.connect();
+    const adapters = { ...f.adapters, connect: async () => ({ ...rpc, request: async (method: string, params: any, signal?: AbortSignal) => {
+      if (method === "thread/turns/list") throw Error("missing source rollout");
+      return rpc.request(method, params, signal);
+    } }) };
+    await settleWebDelegationRetention(adapters, { now: f.origin + 8 * DAY, signal: new AbortController().signal });
+    expect(f.native.archived).toBe(false);
+    f.store.save({ ...child, state: "failed", failure: "turn_failed" });
+    await settleWebDelegationRetention(adapters, { now: f.origin + 8 * DAY, signal: new AbortController().signal });
+    expect(f.native.archived).toBe(true);
+    await settleWebDelegationRetention(adapters, { now: f.origin + 38 * DAY, signal: new AbortController().signal });
+    expect(f.native.exists).toBe(false);
+    expect(f.calls.some(c => c.method === "thread/turns/list")).toBe(false);
+  } finally { f.cleanup(); }
+});
+
+test("temporary inventory omission never becomes a permanent user exclusion", async () => {
+  const f = fixture();
+  try {
+    const rpc = await f.adapters.connect();
+    const adapters = { ...f.adapters, connect: async () => ({ ...rpc, request: async (method: string, params: any, signal?: AbortSignal) =>
+      method === "thread/list" ? { data: [], nextCursor: null } : rpc.request(method, params, signal) }) };
+    await settleWebDelegationRetention(adapters, { now: f.origin + 8 * DAY, signal: new AbortController().signal });
+    expect(f.store.threadRetention(f.record)).toBeUndefined();
+    expect(f.native.archived).toBe(false);
+    await f.run(f.origin + 9 * DAY);
+    expect(f.native.archived).toBe(true);
+  } finally { f.cleanup(); }
+});
 
 test("profile reconnect defers retention without losing due work; other owner failures stay observable", async () => {
   const f = fixture();
@@ -177,8 +236,7 @@ test("active or queued work is protected and settles on the next actual job chan
   const f = fixture();
   try {
     f.native.status = "active"; await f.run(f.origin + 8 * DAY);
-    f.native.status = "idle"; f.native.turnStatus = "inProgress"; await f.run(f.origin + 8 * DAY);
-    f.native.turnStatus = "completed"; f.native.queued = true; await f.run(f.origin + 8 * DAY);
+    f.native.status = "idle"; f.native.queued = true; await f.run(f.origin + 8 * DAY);
     expect(f.native.archived).toBe(false);
     f.native.queued = false; await f.run(f.origin + 8 * DAY);
     expect(f.native.archived).toBe(true);
@@ -197,7 +255,7 @@ test("manual archive, restore, activity and delete relinquish automatic ownershi
       await f.run(f.origin + 37 * DAY);
       await f.run(f.origin + 40 * DAY);
       expect(f.calls.filter(c => c.method === "thread/delete")).toHaveLength(0);
-      expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(action === "restore" || action === "activity" ? 1 : 0);
+      expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(action === "restore" || action === "activity" || action === "direct-turn" ? 1 : 0);
     } finally { f.cleanup(); }
   }
 });
@@ -427,23 +485,16 @@ test("cleanup uses the authoritative terminal receipt when a base snapshot preda
   } finally { f.cleanup(); }
 });
 
-test("cwd-filter absence preserves relocated Native thread and its local answer", async () => {
+test("cleanup follows the account and thread ID when its execution cwd changes", async () => {
   const f = fixture();
   try {
     f.native.cwd = join(f.root, "moved");
-    const rpc = f.adapters.connect;
-    const adapters = { ...f.adapters, connect: async (endpoint: string) => {
-      const original = await rpc();
-      return { ...original, request: async (method: string, params: any, signal?: AbortSignal) => {
-        if (method === "thread/list") return { data: [], nextCursor: null };
-        return original.request(method as any, params, signal);
-      } };
-    } };
-    await settleWebDelegationRetention(adapters, { now: f.origin + 8 * DAY, signal: new AbortController().signal });
+    await f.run(f.origin + 8 * DAY);
     expect(f.store.get(f.record.id)?.answer).toBe("result");
     expect(f.native.exists).toBe(true);
     expect(f.calls.some(c => c.method === "thread/delete")).toBe(false);
-    expect(f.store.threadRetention(f.record)?.state).toBe("excluded");
+    expect(f.store.threadRetention(f.record)?.state).toBe("archived");
+    expect(f.calls.filter(c => c.method === "thread/list").every(c => c.params.cwd === undefined)).toBe(true);
   } finally { f.cleanup(); }
 });
 
@@ -490,7 +541,7 @@ test("post-delete read still present keeps local answer", async () => {
     } };
     await settleWebDelegationRetention(adapters, { now: f.origin + 40 * DAY, signal: new AbortController().signal });
     expect(f.store.get(f.record.id)?.answer).toBe("result");
-    expect(f.store.threadRetention(f.record)?.state).toBe("excluded");
+    expect(f.store.threadRetention(f.record)?.state).toBe("archived");
   } finally { f.cleanup(); }
 });
 

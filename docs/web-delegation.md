@@ -4,21 +4,22 @@
 
 Direct Native RPC conversations are outside the managed Web delegation journal by default.
 The coordinator can explicitly call `linkNativeThreadForRetention` with compact
-ownership evidence: slot, canonical checkout path, creation timestamp,
-authenticated account fingerprint, and exact thread/turn IDs. Use original creation
+ownership evidence: slot, Native-reported workspace path, creation timestamp,
+authenticated account fingerprint, and exact thread ID (turn ID when available). Use original creation
 authority, or an explicit user request to adopt existing delegated threads with
 their coordinator acknowledgements and current account proof. Readability alone
 never opts personal threads in, and current proof must not be presented as historical proof.
 No build verification report or external receipt file
 is required. The link rechecks the authenticated account and exact public
-`thread/read` (including paginated history) and indexed turn metadata, then adds one `linked` journal
-entry without acquiring a work permit or sending a model request. Duplicate
-thread links are refused. Existing retention lifecycle reads the same journal.
+`thread/read`, then adds one `linked` journal entry without acquiring a work permit
+or sending a model request. An execution directory or readable rollout is not
+required for cleanup ownership. Re-adoption reuses the existing record and clears
+its exclusion only through this explicit call. Existing retention lifecycle reads the same journal.
 
 For live acceptance, the Native coordinator must first read the original
 delegation evidence and account/profile ownership proof, confirm the target thread
 is deliberately opted in, then inspect its current `thread/read`, both
-`thread/list` archive partitions, last indexed turn and `thread/queue/list`.
+`thread/list` archive partitions and `thread/queue/list`.
 Only then may it deliberately invoke the link on a non-production fixture or
 an explicitly authorized target. Verify the journal link and next retention
 decision on demand, observe archive metadata and its receipt after expiry,
@@ -341,20 +342,22 @@ round-trip results.
 ## Managed conversation retention
 
 The Codex daemon archives managed Web-delegation conversations 24 hours after
-an explicit result retrieval, or seven days after real Native activity when no
-result was retrieved. A subsequent managed continuation starts its own clock.
+the later of explicit result retrieval and real Native activity, or seven days
+after real Native activity when no result was retrieved. A subsequent managed continuation starts its own clock.
 The daemon deletes its own automatically archived conversations 30 days later.
 Result receipts and local workspace files remain intact. Status reads do not
 extend either period. These rules cover journal-owned `web-delegate` threads;
 chats created directly by another Native client are not discovered or adopted.
 
-Retention uses the Native `thread/list`, `thread/turns/list`, `thread/queue/list`,
-`thread/archive`, `thread/read` and `thread/delete` contracts. Active turns and
-queued work are protected. Observed manual archive/restore, an outside-journal
-continuation, or changes while archived relinquish automatic management.
-Missing conversations are reconciled without recreating them. Unknown mutation
-outcomes relinquish management rather than repeating a potentially completed
-operation. Transient manual changes entirely between observations cannot be
+Retention lists both Native archive partitions once per account connection,
+using thread identity rather than execution cwd. Current Native activity,
+unsettled managed jobs and queued work protect a conversation. Archive/delete
+use current public metadata and do not require readable rollout history or a
+journal entry for the latest Native turn. Observed manual archive/restore or
+changes while archived relinquish automatic management. Missing conversations
+are reconciled without recreating them or treating list omission as user opt-out.
+Mutation errors preserve the existing receipt; a subsequent lifecycle pass
+observes public state before acting. Transient manual changes entirely between observations cannot be
 reconstructed from the public metadata.
 
 One next-expiry timer runs in the existing daemon. Journal writes, profile
