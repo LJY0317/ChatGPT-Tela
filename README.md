@@ -964,7 +964,9 @@ binary. Package upgrades and repairs refresh the installed menu bar through its 
 **Quit Tela Menu** closes only the UI; background services, browser sessions and delegated work continue.
 
 The menu exposes a Tela connection switch for each detected ChatGPT profile; single-profile
-installs show one switch. The switch reflects verified live connection state, not service availability.
+installs show one switch. The switch preserves the user's connection choice; a short status reports
+actual readiness and offers Try Again or Reopen with Tela when needed. Turning off an unattached
+profile cancels that choice without closing the ordinary ChatGPT app.
 Connecting an already-running ordinary app requires an explicit restart confirmation. Profile discovery
 errors retain the last known list with disabled controls and a refresh message rather than claiming no
 profiles exist. Background activity controls are under Settings → Tela in the Control Center. Stopping services requires interruption confirmation. Connection and approval switches use the native small control size.

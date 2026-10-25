@@ -43,13 +43,6 @@ struct TelaWorkProfile: Decodable, Equatable {
   var needsWebSignIn: Bool { connected && webState == "login-required" }
   var canReconnectWeb: Bool { connected && (webState == "failed" || webState == "ready") }
   var connected: Bool { controlState == "running" && targetSessionState == "ready" }
-  var webModelsStatus: String {
-    if !connected { return connectionInProgress == true ? "Connecting…" : "Off" }
-    if accountManagementActive == true { return "Paused" }
-    if webState == "preparing" { return "Connecting…" }
-    if webState == "ready" && webModelsReady != false { return "Ready" }
-    return "Unavailable"
-  }
   var action: String { connected ? "stop" : (targetState == "running" || controlState == "restart-required" ? "restart" : "start") }
   var connectionLabel: String {
     if connected && accountManagementActive == true { return "Finish account management" }
@@ -58,6 +51,33 @@ struct TelaWorkProfile: Decodable, Equatable {
     if connected && webState == "failed" { return "Connection failed" }
     if connected && webState == "ready" && webModelsReady != false { return "Connected" }
     return connected && webModelsReady == false ? "Models unavailable" : connected ? "Connected" : (action == "restart" ? "Reconnect required" : "Off")
+  }
+}
+
+// Saved intent controls the switch; observed readiness controls the short status.
+struct TelaWebConnectionPresentation {
+  let enabled: Bool
+  let status: String
+  let buttonTitle: String?
+  var menuStatus: String { ["Off", "Ready", "Paused"].contains(status) ? "Web models: \(status)" : status }
+
+  init(profile: TelaWorkProfile, wantedTargets: [String], failed: Bool = false) {
+    enabled = profile.connected || profile.targetId.map { wantedTargets.contains($0) } == true
+    if profile.connectionInProgress == true || (profile.webState == "preparing" && profile.accountManagementActive != true) {
+      status = "Connecting…"; buttonTitle = nil
+    } else if profile.accountManagementActive == true {
+      status = "Paused"; buttonTitle = nil
+    } else if profile.needsWebSignIn {
+      status = "Sign-in required"; buttonTitle = nil
+    } else if failed || profile.webState == "failed" || (profile.connected && (profile.webState != "ready" || profile.webModelsReady == false)) {
+      status = "Connection failed"; buttonTitle = "Try Again"
+    } else if profile.connected {
+      status = "Ready"; buttonTitle = nil
+    } else if enabled {
+      status = "Reconnect required"; buttonTitle = profile.action == "restart" ? "Reopen with Tela" : "Try Again"
+    } else {
+      status = "Off"; buttonTitle = nil
+    }
   }
 }
 

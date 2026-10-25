@@ -806,14 +806,25 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
         let toggle = NSSwitch()
         toggle.controlSize = .small
-        toggle.state = profile.connected ? .on : .off
+        let connection = webConnectionPresentation(for: profile)
+        toggle.state = connection.enabled ? .on : .off
         toggle.target = self
         toggle.action = #selector(toggleProfile(_:))
         toggle.tag = profile.slot
         toggle.isEnabled = workInventory.error == nil && !operationInProgress && profile.connectionInProgress != true
         toggle.setAccessibilityLabel("Connect \(profile.targetDisplayName) to Tela")
-        let modelsState = workInventory.error != nil ? "Status unavailable" : profile.webModelsStatus
-        row("Web models", subtitle: modelsState, control: toggle, in: profileCard)
+        let connectionControls = NSStackView()
+        connectionControls.orientation = .horizontal
+        connectionControls.spacing = 8
+        if let title = connection.buttonTitle {
+          let retry = actionButton(title, action: #selector(retryProfileConnection(_:)))
+          retry.tag = profile.slot
+          retry.isEnabled = toggle.isEnabled
+          connectionControls.addArrangedSubview(retry)
+        }
+        connectionControls.addArrangedSubview(toggle)
+        row("Web models", subtitle: workInventory.error != nil ? "Status unavailable" : connection.status,
+            control: connectionControls, in: profileCard)
         let help = DelegationHelpButton(title: "?", target: nil, action: nil)
         help.target = help
         help.action = #selector(DelegationHelpButton.showHelp(_:))
@@ -1539,7 +1550,46 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   @objc private func toggleProfile(_ sender: NSSwitch) {
     sender.state = sender.state == .on ? .off : .on
-    changeConnection(slot: sender.tag)
+    toggleConnection(slot: sender.tag)
+  }
+
+  func webConnectionPresentation(for profile: TelaWorkProfile) -> TelaWebConnectionPresentation {
+    let wanted = (try? TelaPreferencesStore.read(at: preferencesURL))?.workProfileConnections ?? []
+    return TelaWebConnectionPresentation(profile: profile, wantedTargets: wanted,
+      failed: profileConnectionFailure?.slot == profile.slot && profileConnectionFailure?.goal == .connected)
+  }
+
+  private func setConnectionWanted(_ profile: TelaWorkProfile, enabled: Bool) throws {
+    guard let target = profile.targetId else { throw NSError(domain: "TelaConnection", code: 1) }
+    var preferences = try TelaPreferencesStore.read(at: preferencesURL)
+    var wanted = Set(preferences.workProfileConnections ?? [])
+    if enabled { wanted.insert(target) } else { wanted.remove(target) }
+    preferences.workProfileConnections = wanted.sorted()
+    try TelaPreferencesStore.write(preferences, at: preferencesURL)
+  }
+
+  private func toggleConnection(slot: Int) {
+    guard !operationInProgress, workInventory.error == nil,
+          let profile = profiles.first(where: { $0.slot == slot }), profile.connectionInProgress != true else { return }
+    // Cancelling saved intent for an unattached app must not close that app or reconnect it.
+    if webConnectionPresentation(for: profile).enabled && !profile.connected {
+      do {
+        try setConnectionWanted(profile, enabled: false)
+        profileConnectionFailure = nil
+        profileFailure = nil
+      } catch { profileFailure = "Couldn't save the Web models setting." }
+      renderCurrentPage()
+      onPreferencesChanged?()
+    } else { changeConnection(slot: slot) }
+  }
+
+  @objc private func retryProfileConnection(_ sender: NSButton) { retryConnection(slot: sender.tag) }
+
+  func retryConnection(slot: Int) {
+    selectedPage = .work
+    show()
+    if profiles.first(where: { $0.slot == slot })?.connected == true { reconnectWeb(slot: slot) }
+    else { changeConnection(slot: slot) }
   }
 
   @objc private func openProfileButton(_ sender: NSButton) { openProfile(slot: sender.tag) }
@@ -1653,7 +1703,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       profileProgress = nil
       if let error = workInventory.error { profileFailure = error }
       renderCurrentPage()
-      changeConnection(slot: slot)
+      toggleConnection(slot: slot)
     }
   }
 
@@ -1680,6 +1730,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       onDecisionStateChanged?(answer == .alertFirstButtonReturn
         ? "decision_\(decision)_accepted" : "decision_\(decision)_deferred", slot, decisionId)
       guard answer == .alertFirstButtonReturn else { return }
+    }
+    if action != "stop" {
+      do { try setConnectionWanted(profile, enabled: true) }
+      catch { profileFailure = "Couldn't save the Web models setting."; renderCurrentPage(); return }
     }
     connectionProfileSlot = slot
     changingProfile = true

@@ -293,11 +293,12 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       if let profile = workInventory.profiles.first(where: { $0.slot == slot }) {
         let presentation = TelaProfilePresentation(profile: profile, inventoryError: workInventory.error,
           localProgress: controlCenter.connectionProgressSlot == slot ? connectionProgress : nil)
-        let state = presentation.busy ? presentation.label : "Web models: \(profile.webModelsStatus)"
+        let connection = controlCenter.webConnectionPresentation(for: profile)
+        let state = workInventory.error != nil ? "Status unavailable" : presentation.busy ? "Connecting…" : connection.menuStatus
         item.title = "\(profile.targetDisplayName) — \(state)"
-        item.state = profile.connected ? .on : .off
+        item.state = connection.enabled ? .on : .off
         profileToggleRows[slot]?.update(title: item.title,
-          on: profile.connected, enabled: workInventory.error == nil && !controlCenter.connectionOperationInProgress
+          on: connection.enabled, enabled: workInventory.error == nil && !controlCenter.connectionOperationInProgress
             && profile.connectionInProgress != true, busy: presentation.busy)
       }
       item.isEnabled = workInventory.error == nil && !controlCenter.connectionOperationInProgress
@@ -602,13 +603,14 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       }
       menu.addItem(.separator())
       for profile in workInventory.profiles {
+        let connection = controlCenter.webConnectionPresentation(for: profile)
         let item = actionItem(profile.targetDisplayName, action: #selector(toggleWorkProfile(_:)))
         item.tag = profile.slot
-        item.state = profile.connected ? .on : .off
+        item.state = connection.enabled ? .on : .off
         item.image = profileIcon(profile)
         item.isEnabled = snapshot.workInventory.error == nil && !controlCenter.connectionOperationInProgress
         profileConnectionItems[profile.slot] = item
-        let row = TelaMenuToggleRow(title: item.title, image: item.image, on: profile.connected)
+        let row = TelaMenuToggleRow(title: item.title, image: item.image, on: connection.enabled)
         row.action = { [weak self, weak item] in
           guard let self, let item else { return }
           self.toggleWorkProfile(item)
@@ -617,8 +619,15 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         profileToggleRows[profile.slot] = row
         menu.addItem(item)
         addProfileOpen(profile.slot, name: profile.targetDisplayName, to: menu)
+        if let title = connection.buttonTitle {
+          let retry = actionItem(title, action: #selector(retryWorkProfile(_:)))
+          retry.tag = profile.slot
+          retry.isEnabled = item.isEnabled && profile.connectionInProgress != true
+          menu.addItem(retry)
+        }
         let web = TelaWebPresentation(profile: profile)
-        if profile.webState != "ready" || profile.webModelsReady == false || profile.accountManagementActive == true,
+        if connection.buttonTitle == nil,
+           profile.webState != "ready" || profile.webModelsReady == false || profile.accountManagementActive == true,
            let title = web.buttonTitle {
           let selector: Selector
           switch web.action {
@@ -668,6 +677,11 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   @objc private func toggleWorkProfile(_ sender: NSMenuItem) {
     statusMenu.cancelTracking()
     controlCenter.connectFromMenu(slot: sender.tag)
+  }
+
+  @objc private func retryWorkProfile(_ sender: NSMenuItem) {
+    statusMenu.cancelTracking()
+    controlCenter.retryConnection(slot: sender.tag)
   }
 
   @objc private func openControlCenter() {
