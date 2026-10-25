@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { diagnosticFingerprint } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, structuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -184,6 +184,37 @@ test("backend ownership refusal occurs before any backend executable can be spaw
   expect(events.at(-1)).toMatchObject({ stage: "desktop_start_failed", fields: { phase: "backend_ownership" } });
   expect(events.some(e => e.fields.phase === "backend")).toBe(false);
   expect(JSON.stringify(events)).not.toContain("private");
+});
+
+(process.platform === "win32" ? test.skip : test)("failed Desktop connection records exit evidence before rollback changes it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-startup-exit-"));
+  const backend = join(root, "backend"), desktop = join(root, "desktop");
+  const events: { stage: string; fields: any }[] = [];
+  executable(backend, `#!/usr/bin/env bun
+const s=Bun.serve({hostname:"127.0.0.1",port:0,fetch(r,s){return s.upgrade(r)?undefined:new Response(null,{status:400})},websocket:{message(w,m){const r=JSON.parse(String(m));if(r.method==="initialize")w.send(JSON.stringify({id:r.id,result:{}}));}}});
+console.error("codex app-server (WebSockets)");console.error("  listening on: ws://127.0.0.1:"+s.port);
+await new Promise(()=>{});
+`);
+  executable(desktop, "#!/usr/bin/env bun\nprocess.exit(42);\n");
+  try {
+    await expect(startDefaultDesktopTargetRuntime({
+      installation: { platform: "linux", chatGptExecutable: desktop, codexExecutable: backend,
+        codexHome: join(root, "home"), userDataDir: join(root, "data"), normalQuitSupported: true },
+      route: createDefaultDesktopResponsesRoute({ baseUrl: "http://127.0.0.1:18741/v1", envKey: "TEST_KEY", credential: "s".repeat(48) }),
+      credential: "s".repeat(48), processIds: async () => [],
+      onDiagnostic: (stage, fields) => events.push({ stage, fields }),
+    })).rejects.toThrow("exited before connecting");
+    expect(events.find(e => e.stage === "desktop_rollback_begin")?.fields).toMatchObject({
+      phase: "connecting", desktop_exit_code: 42, desktop_exit_observed: true, desktop_signaled: false,
+      backend_exit_observed: false, backend_signaled: false, proxy_connection_count: 0,
+    });
+    const rollback = events.find(e => e.stage === "desktop_rollback_begin")!;
+    expect(structuralDiagnosticEvent({ ts: new Date().toISOString(), event: "chatgpt_tela_codex", stage: rollback.stage,
+      ...rollback.fields })).toMatchObject({ desktop_exit_code: 42, desktop_exit_observed: true,
+        backend_exit_observed: false, proxy_connection_count: 0 });
+    expect(JSON.stringify(events)).not.toContain(root);
+    expect(JSON.stringify(events)).not.toContain("s".repeat(48));
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("startup refusal emits a payload-free checking phase without launching processes",async()=>{

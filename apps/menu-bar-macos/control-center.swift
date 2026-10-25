@@ -1364,6 +1364,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     }
   }
 
+  // The installed login item owns startup; service registrations remain on demand.
+  // Await the existing lifecycle before reading profiles or deciding launch notices.
+  func startServicesAtLaunch() async {
+    guard installedServiceControlsAvailable(),
+          let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"] else { return }
+    _ = await Task.detached { Self.runLauncher(launcher, arguments: ["services", "start"]) }.value
+  }
+
   @objc private func startServices() { changeBackgroundServices(start: true) }
   func startTelaFromMenu() {
     show()

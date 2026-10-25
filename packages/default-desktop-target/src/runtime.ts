@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { diagnosticFingerprint, emitDiagnosticEvent, type DiagnosticScalar, type NativeIngressMediaRegistry, type NativeLiveTurnRegistry } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, diagnosticFailureFields, emitDiagnosticEvent, type DiagnosticScalar, type NativeIngressMediaRegistry, type NativeLiveTurnRegistry } from "@chatgpt-tela/core";
 import { execFile, spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
 import { dirname, join } from "node:path";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -403,7 +403,16 @@ export async function startDefaultDesktopTargetRuntime(input: {
     });
   } catch (error) {
     try { backendOwnership?.cancelBeforeSpawn(); } catch { /* Keep the checkpoint on uncertainty. */ }
-    diagnostic("desktop_rollback_begin");
+    diagnostic("desktop_rollback_begin", {
+      ...diagnosticFailureFields(error),
+      desktop_exit_observed: desktop?.exitCode !== null && desktop?.exitCode !== undefined,
+      ...(desktop?.exitCode !== null && desktop?.exitCode !== undefined ? { desktop_exit_code: desktop.exitCode } : {}),
+      desktop_signaled: desktop?.signalCode !== null && desktop?.signalCode !== undefined,
+      backend_exit_observed: backend.exitCode !== null,
+      ...(backend.exitCode !== null ? { backend_exit_code: backend.exitCode } : {}),
+      backend_signaled: backend.signalCode !== null,
+      proxy_connection_count: proxy?.activeConnectionCount ?? 0,
+    });
     const failures: unknown[] = [error];
     if (desktop && alive(desktop)) {
       try {

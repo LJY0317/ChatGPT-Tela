@@ -223,7 +223,10 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
                  NSWorkspace.didTerminateApplicationNotification] {
       notifications.addObserver(self, selector: #selector(workspaceChanged(_:)), name: name, object: nil)
     }
-    Task { await refreshNow() }
+    Task {
+      await controlCenter.startServicesAtLaunch()
+      await refreshNow()
+    }
     Task { await controlCenter.showFirstUseIfNeeded() }
     // Only the installed launcher supplies this acknowledgement destination.
     if let path = ProcessInfo.processInfo.environment["CHATGPT_TELA_MENU_BAR_READY_FILE"],
