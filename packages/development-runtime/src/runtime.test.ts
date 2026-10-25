@@ -1206,7 +1206,10 @@ test.each(['native_watch','context_plan'] as const)('preparation failure at %s i
     rmSync(root,{recursive:true,force:true});
   }
 });
-test("context planner stage is recorded only as a verified enum on failed preparation", async () => {
+test.each([
+  { stage: "native_continuity" as const, substage: undefined },
+  { stage: "checkpoint_lookup" as const, substage: "working_checkpoint_journal_publish" as const },
+])("context planner failure retains verified stage and journal publication substage ($stage)", async ({stage,substage}) => {
   const root=mkdtempSync(join(tmpdir(),"tela-planner-substage-"));
   const file=join(root,"events.jsonl"), previous=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
   process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
@@ -1216,7 +1219,8 @@ test("context planner stage is recorded only as a verified enum on failed prepar
     browserHost:new ControlledBrowserHost(async()=>{ throw Error("browser must not start"); }),
     mcp:{kind:"external",abi:"stable"},
     planWebTurn(_turn,_request,preparation) {
-      preparation?.onPlannerStage?.("native_continuity");
+      preparation?.onPlannerStage?.(stage);
+      if (substage) preparation?.onPlannerSubstage?.(substage);
       throw primary;
     },
   });
@@ -1226,7 +1230,8 @@ test("context planner stage is recorded only as a verified enum on failed prepar
     const rows=readFileSync(file,"utf8").trim().split("\n").map(line=>JSON.parse(line));
     const failure=rows.find(row=>row.stage==="web_preparation_failed");
     expect(structuralDiagnosticEvent(failure)).toMatchObject({
-      phase:"context_plan",planner_stage:"native_continuity",reason_class:"unclassified",error_kind:"error",
+      phase:"context_plan",planner_stage:stage,reason_class:"unclassified",error_kind:"error",
+      ...(substage ? { planner_substage:substage } : {}),
     });
     expect(readFileSync(file,"utf8")).not.toContain(primary.message);
   } finally {
