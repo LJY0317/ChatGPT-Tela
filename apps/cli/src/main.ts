@@ -900,7 +900,7 @@ async function main(): Promise<void> {
   }
   if (command === "thread") {
     if (!["inspect", "evidence"].includes(process.argv[3] ?? "")) {
-      throw new Error("usage: chatgpt-tela thread inspect --thread UUID [--slot N] [--minutes 1-120] | thread evidence --thread UUID [--minutes 1-360]");
+      throw new Error("usage: chatgpt-tela thread inspect --thread UUID [--slot N] [--minutes 1-120] | thread evidence --thread UUID [--turn UUID] [--minutes 1-360]");
     }
     const threadId = option("--thread");
     if (!threadId) throw new Error("thread inspect requires --thread UUID");
@@ -908,7 +908,8 @@ async function main(): Promise<void> {
       // Historical logs are useful after Native termination, and cannot prove
       // current profile ownership. Never connect, act, or show content here.
       console.log(JSON.stringify(inspectNativeThreadHistoricalEvidence({
-        threadId, diagnosticPaths: diagnosticSourcePaths(productPaths.logsRoot),
+        threadId, ...(option("--turn") ? { turnId: option("--turn")! } : {}),
+        diagnosticPaths: diagnosticSourcePaths(productPaths.logsRoot),
         ...(option("--minutes") ? { minutes: Number(option("--minutes")) } : {}),
       }), null, 2));
       return;
