@@ -11,7 +11,7 @@ import type {
   NativeRequestCheckpointProducer, NativeRequestContextProjection, ProjectedNativeRevision,
 } from "./native-request-planner";
 import {
-  produceNativePrefixCheckpoint, type NativeRequestPrefixSnapshot,
+  nativePrefixStageContext, produceNativePrefixCheckpoint, type NativeRequestPrefixSnapshot,
   type NativeVisiblePrefixStageJournal, type PublishedNativeWorkingCheckpoint,
 } from "./native-visible-prefix-checkpoint";
 import type { WebWorkingContextPolicy } from "./web-working-context-policy";
@@ -184,8 +184,8 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     try { input.onSubstage?.(value); } catch { /* Diagnostics never replace the primary operation. */ }
   };
   substage("working_checkpoint_scope");
-  const anchor = workingCheckpointAnchor(projection);
-  const anchorIndex = anchor ? projection.revisions.findIndex(item => item.revision.id === anchor.revision.id) : -1;
+  let anchor = workingCheckpointAnchor(projection);
+  let anchorIndex = anchor ? projection.revisions.indexOf(anchor) : -1;
   const scope = input.visiblePrefix && input.browserModel
     ? nativeWorkingCheckpointScope(input.visiblePrefix.accountNamespace, projection.nativeTaskId, input.browserModel)
     : undefined;
@@ -283,8 +283,6 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
   const sealedTokens = anchorIndex < 0 ? 0 : projection.revisions.slice(selectedIndex + 1, anchorIndex + 1)
     .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
-  const activeTokens = projection.revisions.slice(anchorIndex + 1)
-    .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
   const summaryTokens = selected?.checkpoint.estimatedTokens ?? 0;
   const suffixIds = new Set(projection.revisions.slice(selectedIndex + 1).map(item => item.revision.id));
   const currentInstructionsTokens = exactCurrentInstructions(projection)
@@ -311,35 +309,57 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     return Object.freeze({ ...(selected ? { checkpoint: selected } : {}),
       produced: false, reused: selected !== undefined, pendingSuffixTokens });
   }
+  const sourceAt = (index: number): WebPhysicalContext => {
+    const sealed = projection.revisions.slice(selectedIndex + 1, index + 1);
+    const segments: WebPhysicalContext["segments"] = Object.freeze([
+      ...(selected ? [{ type: "checkpoint" as const, checkpointId: selected.checkpoint.id,
+        sourceRevisionId: selected.checkpoint.revisionId, content: selected.content }] : []),
+      ...sealed.map(item => Object.freeze({
+        type: "revision" as const, revisionId: item.revision.id, kind: item.revision.kind,
+        content: item.content, ...(item.evidence?.length ? { evidence: item.evidence } : {}),
+      })),
+    ]);
+    const estimate = summaryTokens + sealed.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
+    return Object.freeze({ mode: "full", headRevisionId: projection.revisions[index]!.revision.id,
+      activeRequestRevisionId: projection.revisions[index]!.revision.id,
+      logicalTokens: estimate, transferTokens: estimate, segments });
+  };
+  const sourceFits = (physical: WebPhysicalContext): boolean => {
+    const source = nativeRequestPrefixSnapshot(projection.nativeTaskId, input.currentTurnId, physical);
+    return chatGptCheckpointInputTokens(nativePrefixStageContext(JSON.parse(source.content), ""))
+      <= input.policy.checkpointSourceTokens;
+  };
+  let physical = sourceAt(anchorIndex);
+  if (!sourceFits(physical)) {
+    // Summarize one fitted historical prefix, leaving its entire successor exact.
+    // Completed exchanges are boundaries; never split a user/tool execution chain.
+    const firstWorkIndex = projection.revisions.findIndex((item, index) => index > selectedIndex
+      && item.revision.kind !== "system" && item.revision.kind !== "developer");
+    const boundaries = projection.revisions.flatMap((item, index) =>
+      item.revision.kind === "user" && index - 1 >= firstWorkIndex
+        && index - 1 > selectedIndex && index - 1 < anchorIndex
+        ? [index - 1] : []);
+    let low = 0, high = boundaries.length - 1, fitted = -1;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = sourceAt(boundaries[middle]!);
+      if (sourceFits(candidate)) {
+        fitted = boundaries[middle]!;
+        low = middle + 1;
+      } else high = middle - 1;
+    }
+    if (fitted < 0) return Object.freeze({ ...(selected ? { checkpoint: selected } : {}),
+      produced: false, reused: selected !== undefined, pendingSuffixTokens });
+    anchorIndex = fitted;
+    anchor = projection.revisions[anchorIndex]!;
+    physical = sourceAt(anchorIndex);
+  }
+  // Only the selected prefix is summarized. Media in the exact successor stays intact.
   const sealed = projection.revisions.slice(selectedIndex + 1, anchorIndex + 1);
-  // Inline media is not presently supported in durable fragment summaries. Never
-  // replace it with a textual hint and claim original evidence was carried over.
   if (projection.media.some(item => sealed.some(entry => entry.revision.id === item.revisionId))) {
     throw new NativeHistoryBootstrapRequired("source_budget");
   }
-  const segments: WebPhysicalContext["segments"] = Object.freeze([
-    ...(selected ? [{ type: "checkpoint" as const, checkpointId: selected.checkpoint.id,
-      sourceRevisionId: selected.checkpoint.revisionId, content: selected.content }] : []),
-    ...sealed.map(item => Object.freeze({
-      type: "revision" as const, revisionId: item.revision.id, kind: item.revision.kind,
-      content: item.content, ...(item.evidence?.length ? { evidence: item.evidence } : {}),
-    })),
-  ]);
-  const physical: WebPhysicalContext = Object.freeze({
-    mode: "full", headRevisionId: anchor!.revision.id, activeRequestRevisionId: anchor!.revision.id,
-    logicalTokens: sealedTokens + summaryTokens, transferTokens: sealedTokens + summaryTokens, segments,
-  });
   const source = nativeRequestPrefixSnapshot(projection.nativeTaskId, input.currentTurnId, physical);
-  // The steady-state maintenance operation is ONE fitted summary input. A large
-  // previously unmaintained/cold source follows the existing explicit recovery path.
-  if (chatGptCheckpointInputTokens(physical) > input.policy.checkpointSourceTokens) {
-    // An oversized *optional* maintenance source must not reject a request
-    // which can still use its retained Web page or an earlier checkpoint.
-    // The ordinary physical fit decides whether that request is executable.
-    // Preserve the last proven summary rather than retrying this source.
-    return Object.freeze({ ...(selected ? { checkpoint: selected } : {}),
-      produced: false, reused: selected !== undefined, pendingSuffixTokens });
-  }
   input.signal?.throwIfAborted();
   const previousCalls = input.preparationBudget.modelCalls;
   substage("working_checkpoint_model_production");
@@ -385,12 +405,16 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     if (!input.visiblePrefix.journal.publishCheckpoint) throw Error("Web checkpoint cache could not publish its completed summary");
   }
   emitDiagnosticEvent("chatgpt_tela_codex", "native_working_checkpoint_advanced", {
-    summary_estimate: published.estimatedTokens, sealed_suffix_estimate: sealedTokens,
+    summary_estimate: published.estimatedTokens, sealed_suffix_estimate: physical.transferTokens - summaryTokens,
+    covered_revision_count: anchorIndex + 1, source_revision_count: projection.revisions.length,
+    source_estimate: chatGptCheckpointInputTokens(nativePrefixStageContext(JSON.parse(source.content), "")),
+    input_budget: input.policy.checkpointSourceTokens,
     newly_invoked_stages: input.preparationBudget.modelCalls - previousCalls,
     completed_reuse: previousCalls === input.preparationBudget.modelCalls,
   });
   return Object.freeze({ checkpoint,
     produced: input.preparationBudget.modelCalls > previousCalls,
     reused: input.preparationBudget.modelCalls === previousCalls,
-    pendingSuffixTokens: activeTokens });
+    pendingSuffixTokens: projection.revisions.slice(anchorIndex + 1)
+      .reduce((sum, item) => sum + item.revision.estimatedTokens, 0) });
 }

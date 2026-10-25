@@ -1291,14 +1291,10 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // history) is atomic transport context. Provider-level assistant
     // presentation trimming must not sever its provenance or limitations.
     stage("physical_context_fit");
-    // Tool results are original evidence, not merely settled assistant style.
-    // The shared checkpoint may summarize a sealed prefix with readback caveats,
-    // but the fresh execution presenter must not quietly shorten unsummarized proof.
-    const protectedNativeEvidence = Object.freeze([
-      ...projection.protectedRevisionIds,
-      ...projection.revisions.filter(item => item.revision.kind === "tool-result")
-        .map(item => item.revision.id),
-    ]);
+    // A checkpoint is the only lossy boundary. Every unsealed Native revision
+    // remains exact; provider presentation trimming must not create another,
+    // untracked summary or underestimate the context that a later rollover needs.
+    const protectedNativeEvidence = Object.freeze(projection.revisions.map(item => item.revision.id));
     const withInstructions = withExactCurrentInstructions(prepared.physicalContext, projection);
     const providerProjection = physicalLimits
       ? fitFreshWebPhysicalContext(withInstructions, {

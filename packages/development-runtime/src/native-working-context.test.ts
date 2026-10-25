@@ -118,7 +118,7 @@ test("checkpoint lookup reports the failed publication-read substage without rep
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("rolling derived context stays bounded across long archives, repeated physical rollovers and cache-loss restart", async () => {
+test.each([44_000, 140_000])("rolling derived context stays bounded across long archives, repeated physical rollovers and cache-loss restart (%i bytes per answer)", async (answerBytes) => {
   const directory = root();
   try {
     const cacheDir = join(directory, "cache");
@@ -165,11 +165,20 @@ test("rolling derived context stays bounded across long archives, repeated physi
         expect(task.contextAttachment).toBeUndefined();
         if (index > 0) {
           // A new physical generation must not preload the growing Native archive.
-          expect(task.physicalContext.transferTokens).toBeLessThan(24_000);
+          expect(task.physicalContext.transferTokens).toBeLessThan(answerBytes === 44_000 ? 24_000 : 95_000);
           expect(task.physicalContext.segments[0]).toMatchObject({
             type: "revision", kind: "system", content: instructions,
           });
           expect(task.physicalContext.segments.some(item => item.type === "checkpoint")).toBe(true);
+          const checkpoint = task.physicalContext.segments.find(item => item.type === "checkpoint")!;
+          const projection = projectNativeRequestContext("task", { model, instructions, input });
+          const anchor = projection.revisions.findIndex(item => item.revision.id === checkpoint.sourceRevisionId);
+          expect(anchor).toBeGreaterThanOrEqual(0);
+          for (const revision of projection.revisions.slice(anchor + 1)) {
+            expect(task.physicalContext.segments).toContainEqual(expect.objectContaining({
+              type: "revision", revisionId: revision.revision.id, content: revision.content,
+            }));
+          }
         }
         initialTransfer ??= task.physicalContext.transferTokens;
       } else {
@@ -178,7 +187,7 @@ test("rolling derived context stays bounded across long archives, repeated physi
         expect(task.physicalContext.transferTokens).toBeLessThan(2_000);
       }
       expect(task.physicalContext.segments.at(-1)!.content).toBe(`Perform step ${index}.`);
-      const answer = `Completed step ${index}: ` + "R".repeat(44_000);
+      const answer = `Completed step ${index}: ` + "R".repeat(answerBytes);
       task.settle?.({ status: "completed", documentGeneration: 1,
         surfaceLeaseId: priorPhysical!, answer });
       input.push({ type: "message", role: "assistant", content: answer });
@@ -208,7 +217,7 @@ test("rolling derived context stays bounded across long archives, repeated physi
       model, reasoning: { effort: "high" }, instructions, input,
     });
     expect(cold.physicalContext.mode).toBe("checkpoint-delta");
-    expect(cold.physicalContext.transferTokens).toBeLessThan(24_000);
+    expect(cold.physicalContext.transferTokens).toBeLessThan(answerBytes === 44_000 ? 24_000 : 95_000);
     expect(cold.physicalContext.segments.at(-1)!.content).toBe("Perform step 31.");
     // A newly appended suffix may require one legitimate maintenance stage.
     // Earlier sealed stages remain reusable after the disposable cache is lost.
@@ -217,17 +226,23 @@ test("rolling derived context stays bounded across long archives, repeated physi
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }, 60_000);
 
-test("irreducible current user request refuses before any summary model call or page replacement", async () => {
+test.each(["current request", "single historical exchange"])("irreducible %s refuses before any summary model call or page replacement", async (kind) => {
   const directory = root();
   try {
     let calls = 0;
     const planner = createNativeRequestDevelopmentWebTurnPlanner({
       checkpointCache: new FileContextCheckpointCache({ directory }),
-      checkpointProducer: async () => { calls++; throw Error("must not summarize active request"); },
+      visiblePrefix: { accountNamespace: "verified-fixture-account",
+        journal: new FileNativeVisiblePrefixStageJournal({ directory: join(directory, "ledger"), initializationPath: join(directory, "init") }),
+        async read(): Promise<never> { throw Error("request is already readable"); } },
+      checkpointProducer: async () => { calls++; throw Error("must not summarize irreducible input"); },
     });
     await expect(planner(registered("turn-large"), {
       model, reasoning: { effort: "high" },
-      input: [{ role: "user", content: "X".repeat(550_000) }],
+      input: kind === "current request" ? [{ role: "user", content: "X".repeat(550_000) }]
+        : [{ role: "user", content: "First request" },
+          { role: "assistant", content: "X".repeat(550_000) },
+          { role: "user", content: "Continue" }],
     })).rejects.toThrow("requires a verified checkpoint");
     expect(calls).toBe(0);
   } finally { rmSync(directory, { recursive: true, force: true }); }

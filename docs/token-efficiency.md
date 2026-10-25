@@ -9,8 +9,9 @@ or replay an uncertain operation to save tokens.
 1. Reuse the exact owned conversation and send its canonical suffix when lineage is proven.
 2. Reuse a compatible completed checkpoint before producing one. Maintain the previous
    working summary plus only its newly sealed canonical suffix, not the original archive.
-3. Prepare a complete fitted working snapshot in **one** model operation. Automatic source
-   fragmentation, intermediate acknowledgement conversations and merge trees are unsupported.
+3. Prepare one fitted historical prefix in **one** model operation and retain its complete
+   successor verbatim. Automatic source fragmentation, intermediate acknowledgement
+   conversations and merge trees are unsupported.
 4. Keep current user work and exact system/developer instructions outside lossy historical
    summaries. Reattach only missing instruction revisions; identical prose alone is not identity.
    Apply this to global and project instructions in standalone Chat and delegation alike:
@@ -49,10 +50,13 @@ a maintained checkpoint of roughly 8,000 and a bounded recent suffix. These are 
 targets, distinct from the hard input limit and output headroom. Count accumulated Web
 assistant/tool output as residency; do not confuse newly transferred deltas with total use.
 
-Maintain the working state before sealed history outgrows its single-input summarizer.
-Existing tests exercise long incremental archives, repeated physical rollover, cache-loss
-restart and a maintained-summary-plus-new-suffix source. Original archives stay in Native;
-they are not repeatedly injected into a new Web conversation after compaction.
+At rollover, advance the working summary through complete historical exchanges that fit
+one summarizer input; do not require the entire sealed suffix to fit that operation. Keep
+the remaining suffix exact rather than trimming assistant prose for presentation. Admission
+and production share the same source envelope and transfer estimate. Existing tests exercise
+long incremental archives, large answers crossing the summary limit, repeated physical
+rollover, cache-loss restart and a maintained-summary-plus-new-suffix source. Original
+archives stay in Native; they are not repeatedly injected after compaction.
 
 A fresh exact request may exceed the soft seed target if irreducible authority/current
 work still fits the hard window. Do not repeatedly rotate and resend that same seed.
@@ -75,8 +79,11 @@ canonical request, not a Native parent/child relationship or a public fork-point
 It reuses derived prose only; it neither reads another branch's suffix nor transfers its
 execution, tool or physical-session ownership.
 
-If the complete cold source cannot fit one summary input, preserve it and return the
-explicit checkpoint/handoff recovery. Do not launch repeated fragment/merge requests,
+If one fitted prefix plus its exact remaining suffix cannot support the cold request,
+preserve it and return explicit checkpoint/handoff recovery. Paginated current Native
+history is supported history, not legacy merely because it is large. The opaque-history
+bootstrap still requires whole-prefix coverage; bounded partial coverage for that path is
+not yet implemented. Do not launch repeated fragment/merge requests,
 raise a hidden retry allowance, silently omit history, or claim a one-pass recovery that
 did not occur. Existing oversized archives may need an explicit Native checkpoint before
 switching back to Web; the preventive working-set policy does not retroactively shrink them.

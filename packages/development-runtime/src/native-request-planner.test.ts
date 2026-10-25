@@ -1271,14 +1271,19 @@ describe("Native request development Web planner", () => {
     expect(second.webEpochId).not.toBe(first.webEpochId);
     expect(second.physicalContext.mode).not.toBe("retained-delta");
     expect(second.physicalContext.logicalTokens).toBeGreaterThan(95_000);
-    expect(second.physicalContext.transferTokens).toBeLessThan(second.physicalContext.logicalTokens);
+    expect(second.physicalContext.segments).toContainEqual(expect.objectContaining({
+      type: "revision", kind: "assistant", content: largeAnswer,
+    }));
+    expect(second.physicalContext.transferTokens).toBe(second.physicalContext.logicalTokens);
     expect(second.diagnostics).toMatchObject({
       physical_rollover: true,
       provider_projection: true,
       prior_settlement_present: true,
       fresh_seed_target: 24_000,
-      fresh_seed_exceeds_target: false,
-      fresh_seed_exceeds_rollover: false,
+      fresh_seed_exceeds_target: true,
+      fresh_seed_exceeds_rollover: true,
+      projection_truncated_assistant: 0,
+      projection_omitted_assistant: 0,
     });
     const seedByteFields = ['seed_authority_bytes','seed_user_bytes','seed_checkpoint_bytes','seed_protected_tool_bytes','seed_other_bytes'];
     expect(seedByteFields.reduce((sum,key)=>sum+Number(second.diagnostics?.[key]),0))
