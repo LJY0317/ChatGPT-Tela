@@ -868,7 +868,7 @@ export async function startCodexService(input: {
             title = nativeThreadDisplayTitle(response, row.taskId);
           } catch { /* Missing metadata uses this surface's own fallback label. */ }
         }
-        surfaces.push({ id: row.id, label: `Web session ${index + 1}`, ...(title ? { title } : {}) });
+        surfaces.push({ id: row.id, label: row.label, ...(title ? { title } : {}) });
       }
       await rpc?.close().catch(() => {});
       return { contractVersion: 1 as const, slot, revision: result.revision, surfaces };
