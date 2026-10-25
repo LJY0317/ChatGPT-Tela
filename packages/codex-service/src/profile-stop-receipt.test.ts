@@ -30,27 +30,30 @@ import {startCodexBridgeMcpHttpServer} from ${JSON.stringify(mcp)};
 const lifecycle=await createProfileSupervisorLifecycle();
 const mcp=await startCodexBridgeMcpHttpServer({bridge:{inventory(){return []},async invoke(){throw Error('unused')}},authentication:{kind:'bearer',token:process.env.CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN}});
 const preview=await startProfileBridgePreviewServer({slot:1,bearerToken:process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN,async observe(){return{activeSurfaceCount:0}},shutdownReadiness(){return 'ready'},async shutdownProfile(){if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).refuse)throw Error('synthetic normal quit refusal');await fetch(process.env.FIXTURE_CLOSED);return{responsesRouteFingerprint:'a'.repeat(64)}}});
-await lifecycle.publishReady({stage:'product-profile-ready',runtimeProcessId:process.pid,slot:1,routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:'default',nativeTargetKind:'default-desktop',targetProcessId:123,nativeReady:true,webState:'preparing',profileId:'fixture',internalMcpUrl:mcp.endpointUrl.href,bridgePreviewUrl:preview.endpoint.href,terminalEndpoint:'ws://127.0.0.1:1234/',responsesUrl:'http://127.0.0.1:1234/',responsesRouteFingerprint:'a'.repeat(64)});
+await lifecycle.publishReady({stage:'product-profile-ready',runtimeProcessId:process.pid,slot:1,routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:'default',nativeTargetKind:'default-desktop',targetProcessId:123,nativeReady:true,webState:'preparing',profileId:'fixture',internalMcpUrl:mcp.endpointUrl.href,bridgePreviewUrl:preview.endpoint.href,terminalEndpoint:process.env.FIXTURE_APP_SERVER_ENDPOINT,responsesUrl:'http://127.0.0.1:1234/',responsesRouteFingerprint:'a'.repeat(64)});
 await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecycle.dispose();`);
   const built = await Bun.build({ entrypoints: [child], target: "bun", outdir: root, naming: "child.mjs" });
   expect(built.success).toBe(true);
   const target = { slot: 1, adapterKind: "default-desktop" as const, id: "default", displayName: "Fixture", state: "stopped", managed: true };
-  const session = () => ({ targetId: "default", state: active ? "ready" : "available",
-    ...(active ? { desktopProcessId: 123, endpoint: `ws://127.0.0.1:${appServer.port}/` } : {}) });
+  // The real default adapter intentionally has no app-server endpoint.
+  const session = () => ({ targetId: "default", state: active ? "restart-required" : "available",
+    ...(active ? { desktopProcessId: 123 } : {}) });
   const adapter: CodexNativeTargetAdapter = {
     kind: "default-desktop", async profiles() { return [{ target, session: session() }]; },
     async resolve() { return { target, session: session() }; }, async session() { return session(); },
     async quit() { parentQuits++; active = false; return session(); },
-    profileRuntimeEnvironment() { active = true; return { FIXTURE_STATE: state, FIXTURE_CLOSED: closed.url.href }; },
+    profileRuntimeEnvironment() { active = true; return { FIXTURE_STATE: state, FIXTURE_CLOSED: closed.url.href,
+      FIXTURE_APP_SERVER_ENDPOINT: `ws://127.0.0.1:${appServer.port}/` }; },
   };
   const service = await startCodexService({ config: {}, profileRuntimeCommand: [process.execPath, join(root, "child.mjs")], nativeTargetAdapter: adapter });
   try {
     const started = await service.startProfile(1);
+    expect(await service.shutdownReadiness()).toBe("ready");
     await expect(service.close()).rejects.toThrow("normally stop");
     expect(service.activeProfileCount).toBe(1); expect(active).toBe(true); expect(closes).toBe(0); expect(parentQuits).toBe(0);
     expect((await service.profiles())[0]?.controlState).toBe("running");
     expect((await service.profiles())[0]?.childProcessId).toBe(started.childProcessId);
-    expect((await service.terminalSession(1)).endpoint).toBe("ws://127.0.0.1:1234/");
+    expect((await service.terminalSession(1)).endpoint).toBe(`ws://127.0.0.1:${appServer.port}/`);
     writeFileSync(state, JSON.stringify({ refuse: false }));
     await service.close();
     expect(service.activeProfileCount).toBe(0); expect(active).toBe(false); expect(closes).toBe(1); expect(parentQuits).toBe(0);

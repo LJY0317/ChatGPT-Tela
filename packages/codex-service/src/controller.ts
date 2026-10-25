@@ -361,8 +361,10 @@ export async function startCodexService(input: {
       || profile.child.exitCode !== null || profile.child.signalCode !== null) return blocked("profile_transition");
     const session = await targets.session(profile.target.id);
     if (!ownsNativeTargetSession(profile.target, session, profile)) return blocked("native_owner_changed");
-    if (!session.endpoint) return blocked("native_endpoint_unavailable");
-    if (await countLoadedAppServerActiveTurns(session.endpoint, input.signal ? { signal: input.signal } : {}) > 0) return blocked("native_work");
+    // The built-in Desktop adapter reports process identity, not the routed
+    // app-server. Use the same owned endpoint as terminalSession for all targets.
+    if (!profile.terminalEndpoint) return blocked("native_endpoint_unavailable");
+    if (await countLoadedAppServerActiveTurns(profile.terminalEndpoint, input.signal ? { signal: input.signal } : {}) > 0) return blocked("native_work");
     const response = await fetch(new URL("v1/shutdown-readiness", profile.bridgePreviewUrl), {
       headers: { authorization: `Bearer ${profile.uiToken}` },
       signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000),
