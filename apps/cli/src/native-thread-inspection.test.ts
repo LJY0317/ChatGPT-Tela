@@ -97,6 +97,82 @@ describe("one read-only conversation inspection by exact Native ID", () => {
       expect(JSON.stringify(result)).not.toContain("PRIVATE");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+  test("historical tool evidence selects the exact turn and joins unique MCP RPC metadata without payloads", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tela-tool-delivery-evidence-"));
+    const path = join(dir, "events.jsonl");
+    const scope_fingerprint = diagnosticFingerprint(THREAD);
+    const turn_fingerprint = diagnosticFingerprint(TURN);
+    const otherTurn = diagnosticFingerprint("bbbbbbbb-cccc-7ddd-8eee-ffffffffffff");
+    const operation_fingerprint = diagnosticFingerprint("target-operation");
+    const otherOperation = diagnosticFingerprint("other-operation");
+    const rpc_fingerprint = diagnosticFingerprint("target-rpc");
+    const connection_fingerprint = diagnosticFingerprint("target-connection");
+    writeFileSync(path, [
+      {ts:"2026-10-17T08:18:00Z",event:"chatgpt_tela_work",stage:"native_tool_inventory_queried",scope_fingerprint,turn_fingerprint,
+        operation_fingerprint,rpc_fingerprint,query_empty:true,count:4,discovery_count:2,gateway_count:1,goal_only:false},
+      {ts:"2026-10-17T08:18:01Z",event:"chatgpt_tela_work",stage:"native_tool_bridge_invoke_started",scope_fingerprint,turn_fingerprint,
+        operation_fingerprint,rpc_fingerprint},
+      {ts:"2026-10-17T08:18:02Z",event:"chatgpt_tela_work",stage:"native_tool_bridge_invoke_returned",scope_fingerprint,turn_fingerprint,
+        operation_fingerprint,rpc_fingerprint,is_error:false,kind:"string",body_present:true,body_size_known:true,body_bytes:91,
+        content:"PRIVATE TOOL RESULT"},
+      {ts:"2026-10-17T08:18:00Z",event:"chatgpt_tela_mcp",stage:"mcp_rpc_received",scope_fingerprint,turn_fingerprint,
+        rpc_fingerprint,connection_fingerprint,method_class:"tools_call",kind:"codex_inventory"},
+      {ts:"2026-10-17T08:18:00Z",event:"chatgpt_tela_mcp",stage:"mcp_native_inventory_returned",scope_fingerprint,rpc_fingerprint,
+        connection_fingerprint,query_empty:true,count:4,discovery_count:2,gateway_count:1},
+      {ts:"2026-10-17T08:18:00Z",event:"chatgpt_tela_mcp",stage:"mcp_rpc_emitted",scope_fingerprint,rpc_fingerprint,
+        connection_fingerprint,delivery:"transport_send_returned",error_result:false,part_count:1,kind:"text",body_bytes:132,result_bytes:160},
+      {ts:"2026-10-17T08:18:03Z",event:"chatgpt_tela_work",stage:"native_tool_inventory_queried",scope_fingerprint,turn_fingerprint:otherTurn,
+        operation_fingerprint:otherOperation,rpc_fingerprint:diagnosticFingerprint("other-rpc"),query_empty:true,count:99,goal_only:false},
+      {ts:"2026-10-17T08:18:04Z",event:"chatgpt_tela_work",stage:"native_tool_bridge_invoke_returned",scope_fingerprint,
+        turn_fingerprint:otherTurn,operation_fingerprint:otherOperation,rpc_fingerprint:diagnosticFingerprint("other-rpc"),
+        is_error:true,kind:"string",body_present:false,content:"FOREIGN PRIVATE RESULT"},
+      {ts:"2026-10-17T08:18:02Z",event:"chatgpt_tela_mcp",stage:"mcp_rpc_emitted",scope_fingerprint,
+        rpc_fingerprint:diagnosticFingerprint("other-rpc"),connection_fingerprint,delivery:"transport_send_returned",error_result:true,part_count:0,kind:"empty"},
+    ].map(row=>JSON.stringify(row)).join("\n")+"\n");
+    try {
+      const result = inspectNativeThreadHistoricalEvidence({threadId:THREAD,turnId:TURN,diagnosticPaths:[path],nowMs:NOW});
+      expect(result.toolDeliveryEvidence).toMatchObject({
+        turnFingerprint:turn_fingerprint,inventoryObservation:"observed",
+        inventoryRequests:[{rpcFingerprint:rpc_fingerprint,queryEmpty:true,itemCount:4,goalOnly:false,
+          mcpCorrelation:"rpc_fingerprint_unambiguous_in_available_events",
+          mcpEvents:[
+            {stage:"mcp_rpc_received",methodClass:"tools_call"},
+            {stage:"mcp_native_inventory_returned",count:4,discoveryCount:2,gatewayCount:1},
+            {stage:"mcp_rpc_emitted",delivery:"transport_send_returned",partCount:1,kind:"text",bodyBytes:132,resultBytes:160},
+          ],modelReceipt:"not_proven_by_server_side_diagnostics"}],
+        calls:[{operationFingerprint:operation_fingerprint,rpcFingerprint:rpc_fingerprint,
+          result:{stage:"native_tool_bridge_invoke_returned",isError:false,bodyPresent:true,bodyBytes:91},
+          resultProjectionCorrelation:"projection_not_observed_for_operation_rpc",
+          modelReceipt:"not_proven_by_server_side_diagnostics"}],
+      });
+      expect(result.toolDeliveryEvidence!.calls).toHaveLength(1);
+      expect(JSON.stringify(result)).not.toMatch(/PRIVATE|FOREIGN|PRIVATE TOOL RESULT/);
+    } finally { rmSync(dir,{recursive:true,force:true}); }
+  });
+  test("historical MCP evidence refuses an RPC fingerprint reused across Native turns", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tela-tool-delivery-ambiguous-"));
+    const path = join(dir, "events.jsonl");
+    const scope_fingerprint = diagnosticFingerprint(THREAD);
+    const turn_fingerprint = diagnosticFingerprint(TURN);
+    const otherTurn = diagnosticFingerprint("bbbbbbbb-cccc-7ddd-8eee-ffffffffffff");
+    const rpc_fingerprint = diagnosticFingerprint("reused-rpc");
+    const connection_fingerprint = diagnosticFingerprint("same-connection");
+    writeFileSync(path, [
+      {ts:"2026-10-17T08:18:00Z",event:"chatgpt_tela_work",stage:"native_tool_inventory_queried",scope_fingerprint,turn_fingerprint,
+        rpc_fingerprint,query_empty:true,count:1},
+      {ts:"2026-10-17T08:18:01Z",event:"chatgpt_tela_work",stage:"native_tool_inventory_queried",scope_fingerprint,
+        turn_fingerprint:otherTurn,rpc_fingerprint,query_empty:true,count:7},
+      {ts:"2026-10-17T08:18:02Z",event:"chatgpt_tela_mcp",stage:"mcp_rpc_emitted",scope_fingerprint,
+        rpc_fingerprint,connection_fingerprint,delivery:"transport_send_returned",error_result:false,part_count:1,kind:"text"},
+    ].map(row=>JSON.stringify(row)).join("\n")+"\n");
+    try {
+      const result = inspectNativeThreadHistoricalEvidence({threadId:THREAD,turnId:TURN,diagnosticPaths:[path],nowMs:NOW});
+      expect(result.toolDeliveryEvidence!.inventoryRequests).toMatchObject([{
+        rpcFingerprint:rpc_fingerprint,mcpCorrelation:"rpc_fingerprint_reused_across_turns",mcpEvents:[],
+      }]);
+      expect(result.toolDeliveryEvidence!.coverage.modelReceiptObserved).toBe(false);
+    } finally { rmSync(dir,{recursive:true,force:true}); }
+  });
   test("offline evidence correlates one UUID after owner loss without claiming a live approval", () => {
     const dir = mkdtempSync(join(tmpdir(), "tela-thread-evidence-"));
     const path = join(dir, "events.jsonl");

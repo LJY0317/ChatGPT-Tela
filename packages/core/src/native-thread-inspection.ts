@@ -5,8 +5,40 @@ const THREAD_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[
 const TURN_STATUS = new Set(["inProgress", "completed", "failed", "interrupted"]);
 const MAX_TURNS = 4;
 const MAX_TIMELINE = 24;
+const MAX_TOOL_EVIDENCE_ITEMS = 64;
+const TOOL_EVIDENCE_STAGES = new Set([
+  "native_tool_inventory_queried", "native_tool_queued", "native_tool_result_received",
+  "native_tool_result_released", "native_tool_result_error", "native_tool_bridge_invoke_started",
+  "native_tool_bridge_invoke_returned", "mcp_native_inventory_returned", "mcp_native_result_projected",
+  "tool_started", "tool_settled", "tool_failed", "tool_error", "mcp_rpc_received", "mcp_rpc_emitted",
+]);
+const MCP_TOOL_EVIDENCE_STAGES = new Set([
+  "mcp_native_inventory_returned", "tool_started", "tool_settled", "tool_failed", "tool_error",
+  "mcp_rpc_received", "mcp_rpc_emitted",
+]);
+const TURN_OPERATION_STAGES = new Set([
+  "native_tool_inventory_queried", "native_tool_queued", "native_tool_result_received",
+  "native_tool_result_released", "native_tool_result_error", "native_tool_bridge_invoke_started",
+  "native_tool_bridge_invoke_returned",
+]);
+const CALL_EVIDENCE_STAGES = new Set([
+  "native_tool_queued", "native_tool_result_received", "native_tool_result_released",
+  "native_tool_result_error", "native_tool_bridge_invoke_started", "native_tool_bridge_invoke_returned",
+]);
+const SAFE_EVIDENCE_KINDS = new Set([
+  "function", "freeform", "discovery", "gateway", "other", "text", "image", "mixed", "empty",
+  "tools_list", "rpc_result", "rpc_error", "string", "array", "object", "null", "undefined",
+  "number", "boolean",
+]);
+const SAFE_EVIDENCE_DELIVERY = new Set(["transport_send_returned", "mcp_callback_returned", "mcp_callback_thrown"]);
+const SAFE_EVIDENCE_PHASE = new Set(["tools_list", "rpc_result", "rpc_error", "returned_error", "thrown_error", "inventory_result"]);
+const SAFE_EVIDENCE_OUTCOME = new Set(["completed", "failed"]);
+const SAFE_EVIDENCE_METHOD = new Set(["initialize", "initialized", "tools_list", "tools_call", "ping", "other"]);
+const SAFE_EVIDENCE_STATUS = new Set(["active", "complete", "paused", "blocked", "unknown", "absent"]);
 
 type Json = Record<string, unknown>;
+type EvidenceValue = string | number | boolean | null;
+type EvidenceRow = Json & { readonly ts: string; readonly event: string; readonly stage: string };
 type ThreadReader = {
   request(method: string, params: unknown, signal?: AbortSignal): Promise<unknown>;
 };
@@ -14,6 +46,163 @@ type ThreadReader = {
 function object(value: unknown): Json | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Json : undefined;
+}
+
+function diagnosticFingerprintField(value: unknown): string | undefined {
+  return typeof value === "string" && /^[a-f0-9]{24}$/.test(value) ? value : undefined;
+}
+
+function projectToolEvidenceEvent(event: EvidenceRow, turnFingerprint: string, correlation: string) {
+  const projected: Record<string, EvidenceValue> = {
+    at: event.ts,
+    stage: event.stage,
+    turnFingerprint,
+    correlation,
+  };
+  const fingerprints = [
+    ["rpc_fingerprint", "rpcFingerprint"],
+    ["operation_fingerprint", "operationFingerprint"],
+    ["connection_fingerprint", "connectionFingerprint"],
+  ] as const;
+  for (const [source, target] of fingerprints) {
+    const value = diagnosticFingerprintField(event[source]);
+    if (value) projected[target] = value;
+  }
+  const numbers = [
+    ["count", "count"], ["discovery_count", "discoveryCount"], ["gateway_count", "gatewayCount"],
+    ["request_bytes", "requestBytes"], ["result_bytes", "resultBytes"], ["body_bytes", "bodyBytes"],
+    ["part_count", "partCount"], ["text_bytes", "textBytes"], ["text_characters", "textCharacters"],
+    ["image_bytes", "imageBytes"], ["duration_ms", "durationMs"],
+  ] as const;
+  for (const [source, target] of numbers) {
+    const value = event[source];
+    if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) projected[target] = value;
+  }
+  const booleans = [
+    ["query_empty", "queryEmpty"], ["goal_only", "goalOnly"], ["text_measurement_complete", "textMeasurementComplete"],
+    ["body_present", "bodyPresent"], ["body_size_known", "bodySizeKnown"], ["is_error", "isError"],
+    ["error_result_reported", "errorResultReported"], ["error_result", "errorResult"], ["abort_observed", "abortObserved"],
+  ] as const;
+  for (const [source, target] of booleans) {
+    const value = event[source];
+    if (typeof value === "boolean") projected[target] = value;
+  }
+  if (typeof event.kind === "string" && SAFE_EVIDENCE_KINDS.has(event.kind)) projected.kind = event.kind;
+  if (typeof event.delivery === "string" && SAFE_EVIDENCE_DELIVERY.has(event.delivery)) projected.delivery = event.delivery;
+  if (typeof event.phase === "string" && SAFE_EVIDENCE_PHASE.has(event.phase)) projected.phase = event.phase;
+  if (typeof event.outcome === "string" && SAFE_EVIDENCE_OUTCOME.has(event.outcome)) projected.outcome = event.outcome;
+  if (typeof event.method_class === "string" && SAFE_EVIDENCE_METHOD.has(event.method_class)) projected.methodClass = event.method_class;
+  if (typeof event.status === "string" && SAFE_EVIDENCE_STATUS.has(event.status)) projected.status = event.status;
+  return Object.freeze(projected);
+}
+
+function correlateMcpRpc(rpcFingerprint: string | undefined, allEvents: readonly EvidenceRow[]) {
+  if (!rpcFingerprint) return { status: "rpc_fingerprint_missing" as const, events: [] as EvidenceRow[] };
+  const nativeOwners = new Set(allEvents.filter(event => TURN_OPERATION_STAGES.has(event.stage)
+    && event.rpc_fingerprint === rpcFingerprint
+    && diagnosticFingerprintField(event.scope_fingerprint)
+    && diagnosticFingerprintField(event.turn_fingerprint))
+    .map(event => `${event.scope_fingerprint}:${event.turn_fingerprint}`));
+  if (nativeOwners.size > 1) return { status: "rpc_fingerprint_reused_across_turns" as const, events: [] as EvidenceRow[] };
+  const rows = allEvents.filter(event => event.event === "chatgpt_tela_mcp"
+    && MCP_TOOL_EVIDENCE_STAGES.has(event.stage) && event.rpc_fingerprint === rpcFingerprint);
+  if (rows.length === 0) return { status: "mcp_rpc_events_not_observed" as const, events: rows };
+  const connections = new Set(rows.map(event => diagnosticFingerprintField(event.connection_fingerprint)).filter(Boolean));
+  const singletons = ["mcp_rpc_received", "mcp_rpc_emitted", "tool_started", "tool_settled", "mcp_native_inventory_returned"];
+  const repeatedStage = singletons.some(stage => rows.filter(event => event.stage === stage).length > 1);
+  if (connections.size > 1 || repeatedStage) {
+    return { status: "rpc_fingerprint_ambiguous_in_available_events" as const, events: [] as EvidenceRow[] };
+  }
+  return { status: "rpc_fingerprint_unambiguous_in_available_events" as const, events: rows };
+}
+
+function projectTurnToolEvidence(input: {
+  readonly threadFingerprint: string;
+  readonly turnFingerprint: string;
+  readonly allEvents: readonly EvidenceRow[];
+  readonly limited: boolean;
+}) {
+  const exactTurnEvents = input.allEvents.filter(event => event.scope_fingerprint === input.threadFingerprint
+    && event.turn_fingerprint === input.turnFingerprint && TOOL_EVIDENCE_STAGES.has(event.stage));
+  const inventoryRows = exactTurnEvents.filter(event => event.stage === "native_tool_inventory_queried");
+  const inventoryRequests = inventoryRows.slice(0, MAX_TOOL_EVIDENCE_ITEMS).map(event => {
+    const rpcFingerprint = diagnosticFingerprintField(event.rpc_fingerprint);
+    const correlation = correlateMcpRpc(rpcFingerprint, input.allEvents);
+    return Object.freeze({
+      at: event.ts,
+      turnFingerprint: input.turnFingerprint,
+      rpcFingerprint: rpcFingerprint ?? null,
+      queryEmpty: typeof event.query_empty === "boolean" ? event.query_empty : null,
+      itemCount: typeof event.count === "number" && Number.isSafeInteger(event.count) && event.count >= 0 ? event.count : null,
+      goalOnly: typeof event.goal_only === "boolean" ? event.goal_only : null,
+      mcpCorrelation: correlation.status,
+      mcpEvents: correlation.events.slice(0, 12).map(row => projectToolEvidenceEvent(
+        row, input.turnFingerprint, correlation.status)),
+      modelReceipt: "not_proven_by_server_side_diagnostics" as const,
+    });
+  });
+
+  const callRows = exactTurnEvents.filter(event => CALL_EVIDENCE_STAGES.has(event.stage)
+    && diagnosticFingerprintField(event.operation_fingerprint));
+  const groupedCalls = new Map<string, EvidenceRow[]>();
+  for (const event of callRows) {
+    const operationFingerprint = diagnosticFingerprintField(event.operation_fingerprint)!;
+    const rpcFingerprint = diagnosticFingerprintField(event.rpc_fingerprint);
+    const key = JSON.stringify([operationFingerprint, rpcFingerprint ?? null]);
+    const rows = groupedCalls.get(key) ?? [];
+    rows.push(event);
+    groupedCalls.set(key, rows);
+  }
+  const calls = [...groupedCalls.entries()].slice(0, MAX_TOOL_EVIDENCE_ITEMS).map(([key, rows]) => {
+    const [operationFingerprint, rawRpcFingerprint] = JSON.parse(key) as [string, string | null];
+    const rpcFingerprint = rawRpcFingerprint ?? undefined;
+    const returned = rows.filter(event => event.stage === "native_tool_bridge_invoke_returned").at(-1);
+    const correlation = correlateMcpRpc(rpcFingerprint, input.allEvents);
+    const owners = new Set(input.allEvents.filter(event => event.stage === "native_tool_bridge_invoke_started"
+      || event.stage === "native_tool_bridge_invoke_returned")
+      .filter(event => event.operation_fingerprint === operationFingerprint && event.rpc_fingerprint === rpcFingerprint
+        && diagnosticFingerprintField(event.scope_fingerprint) && diagnosticFingerprintField(event.turn_fingerprint))
+      .map(event => `${event.scope_fingerprint}:${event.turn_fingerprint}`));
+    const projections = input.allEvents.filter(event => event.stage === "mcp_native_result_projected"
+      && event.operation_fingerprint === operationFingerprint && event.rpc_fingerprint === rpcFingerprint);
+    const projectionStatus = !rpcFingerprint ? "rpc_fingerprint_missing"
+      : owners.size !== 1 || !owners.has(`${input.threadFingerprint}:${input.turnFingerprint}`)
+        ? "operation_rpc_pair_ambiguous_across_turns"
+        : projections.length === 1 ? "operation_and_rpc_fingerprint_matched"
+          : projections.length === 0 ? "projection_not_observed_for_operation_rpc"
+            : "multiple_projections_for_operation_rpc";
+    const projection = projectionStatus === "operation_and_rpc_fingerprint_matched" ? projections[0] : undefined;
+    return Object.freeze({
+      operationFingerprint,
+      rpcFingerprint: rpcFingerprint ?? null,
+      startedAt: rows.find(event => event.stage === "native_tool_bridge_invoke_started")?.ts ?? null,
+      returnedAt: returned?.ts ?? null,
+      result: returned ? projectToolEvidenceEvent(returned, input.turnFingerprint, "exact_turn_and_operation_fingerprint") : null,
+      resultProjectionCorrelation: projectionStatus,
+      resultProjection: projection
+        ? projectToolEvidenceEvent(projection, input.turnFingerprint, projectionStatus) : null,
+      mcpCorrelation: correlation.status,
+      mcpEvents: correlation.events.slice(0, 12).map(row => projectToolEvidenceEvent(
+        row, input.turnFingerprint, correlation.status)),
+      nativeEvents: rows.slice(-16).map(row => projectToolEvidenceEvent(
+        row, input.turnFingerprint, "exact_turn_and_operation_fingerprint")),
+      modelReceipt: "not_proven_by_server_side_diagnostics" as const,
+    });
+  });
+  return Object.freeze({
+    turnFingerprint: input.turnFingerprint,
+    inventoryObservation: inventoryRows.length > 0 ? "observed" as const : "not_observed_in_available_diagnostic_window" as const,
+    inventoryRequests,
+    calls,
+    coverage: Object.freeze({
+      turnScopedEventsMatched: exactTurnEvents.length,
+      inventoryRequestsMatched: inventoryRows.length,
+      callsMatched: groupedCalls.size,
+      limited: input.limited || inventoryRows.length > MAX_TOOL_EVIDENCE_ITEMS || groupedCalls.size > MAX_TOOL_EVIDENCE_ITEMS,
+      modelReceiptObserved: false,
+    }),
+    limitation: "A local MCP transport send receipt proves the server send returned; it does not prove model receipt or interpretation.",
+  });
 }
 
 /** The only entry for reading an exact, owner-selected Native conversation.
@@ -193,11 +382,15 @@ export async function inspectNativeThread(input: {
  */
 export function inspectNativeThreadHistoricalEvidence(input: {
   readonly threadId: string;
+  readonly turnId?: string;
   readonly diagnosticPaths: readonly string[];
   readonly minutes?: number;
   readonly nowMs?: number;
 }) {
   if (!THREAD_ID.test(input.threadId)) throw new Error("historical evidence requires an exact Native UUID");
+  if (input.turnId !== undefined && !THREAD_ID.test(input.turnId)) {
+    throw new Error("historical evidence turn filter requires an exact Native UUID");
+  }
   const minutes = input.minutes ?? 30;
   // Unlike live Native inspection, this bounded local-log query may need
   // to span a long approval wait after the original profile has retired.
@@ -210,8 +403,15 @@ export function inspectNativeThreadHistoricalEvidence(input: {
   const logs = readDiagnosticSources(input.diagnosticPaths, {
     fromMs: nowMs - minutes * 60_000, toMs: nowMs,
   });
+  const allEvents = logs.events as readonly EvidenceRow[];
   const events = logs.events.filter(event => event.scope_fingerprint === fingerprint
     && ["chatgpt_tela_work", "chatgpt_tela_codex", "chatgpt_tela_browser"].includes(event.event));
+  const toolDeliveryEvidence = input.turnId ? projectTurnToolEvidence({
+    threadFingerprint: fingerprint,
+    turnFingerprint: diagnosticFingerprint(input.turnId),
+    allEvents,
+    limited: logs.byteLimitReached || logs.sourceLimitReached || logs.coverage.some(item => item.truncated || item.eventLimitReached),
+  }) : undefined;
   const last = (stage: string) => events.filter(event => event.stage === stage).at(-1);
   const pending = events.filter(event => event.stage === "approval_wait_transition"
     && event.phase === "pending").at(-1);
@@ -319,6 +519,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       action: event.action ?? "unknown", status: event.status ?? "unknown",
       isError: event.is_error ?? null, bodyPresent: event.body_present ?? null,
     })),
+    ...(toolDeliveryEvidence ? { toolDeliveryEvidence } : {}),
     recentEvents: events.slice(-MAX_TIMELINE).map(event => ({
       at: event.ts, stage: event.stage,
       ...(typeof event.reason_class === "string" ? { reasonClass: event.reason_class } : {}),

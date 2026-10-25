@@ -314,8 +314,9 @@ export function createChatToolRuntime(input: {
           workspaces.get(text(args.workspace_id, "workspace_id"));
           const threadId = text(args.thread_id, "thread_id");
           const minutes = optionalInteger(args.minutes, "minutes") ?? 180;
+          const turnId = optionalText(args.turn_id, "turn_id");
           return inspectNativeThreadHistoricalEvidence({
-            threadId, minutes, diagnosticPaths: input.historicalDiagnosticPaths!,
+            threadId, ...(turnId === undefined ? {} : { turnId }), minutes, diagnosticPaths: input.historicalDiagnosticPaths!,
           });
         }
         case "export_file":

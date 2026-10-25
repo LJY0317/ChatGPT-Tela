@@ -45,10 +45,11 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   },
   {
     capability: "inspect_native_evidence",
-    description: "Read-only, exact-UUID historical Tela diagnostic evidence for one Native conversation, even when its profile is stopped. Requires an opened workspace. Returns bounded structural approval wait, failure and input-classification events only, with missing-log coverage; no content, shell, service credentials, current Native/browser ownership claims, approval click, retry, or mutation. An older pending log does not prove a card is visible now.",
+    description: "Read-only, exact-UUID historical Tela diagnostic evidence for one Native conversation, even when its profile is stopped. Requires an opened workspace. Optionally filter by exact turn_id to return bounded inventory, tool-result, MCP RPC and transport shape/size/error metadata joined only through unique recorded fingerprints. No bodies, arguments, credentials, current ownership claims, approval click, retry, or mutation. Server-side send evidence does not prove model receipt.",
     inputSchema: object({
       workspace_id: workspaceId,
       thread_id: Object.freeze({ type: "string", format: "uuid", maxLength: 36 }),
+      turn_id: Object.freeze({ type: "string", format: "uuid", maxLength: 36 }),
       minutes: integer(1, 360),
     }, ["workspace_id", "thread_id"]),
   },
