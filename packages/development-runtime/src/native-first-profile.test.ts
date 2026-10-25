@@ -12,6 +12,7 @@ import type { ElectronProfileSetupRuntime } from "./profile-setup";
 import { writeWebModelDisplayCache } from "./web-model-display-cache";
 import { startNativeFirstProductProfileRuntime, type NativeFirstProfileOptions, type NativeFirstProfileRuntime } from "./native-first-profile";
 import { FileContextCheckpointCache } from "./context-cache";
+import { observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 
 function deferred<T>() {
@@ -634,19 +635,24 @@ test("Web reconnection cannot dispose a browser with an active streaming turn", 
 
 test("admitted Web waits for one engine refresh while Native stays usable", async () => {
   const gate = deferred<void>(); let calls = 0;
+  const events: StructuralDiagnosticEvent[] = [];
+  const detach = observeDiagnosticEvents(event => { if (event.stage === "shutdown_blocked") events.push(event); });
   const f = await fixture({ catalogRefresh: async () => { calls++; await gate.promise; } });
   try {
     // Wait for the explicit event without changing installed services or engine state.
     for (let attempt = 0; !calls && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 1));
     expect(calls).toBe(1);
     expect(f.runtime.webState).toBe("preparing");
+    expect(f.runtime.shutdownReadiness()).toBe("blocked");
+    expect(events.at(-1)).toMatchObject({ state: "preparing", request_count: 0, turn_count: 0, preparing: true });
     expect((await f.post("native-fixture")).status).toBe(200);
     expect(f.nativeStops).toBe(0);
     gate.resolve(); await f.runtime.waitForWeb();
     expect(f.runtime.webState).toBe("ready");
+    expect(f.runtime.shutdownReadiness()).toBe("ready");
     expect(calls).toBe(1);
     await f.runtime.waitForWeb(); expect(calls).toBe(1);
-  } finally { gate.resolve(); await f.cleanup(); }
+  } finally { detach?.(); gate.resolve(); await f.cleanup(); }
 });
 test("engine refresh failure revokes Web but preserves Native", async () => {
   const f = await fixture({ catalogRefresh: async () => { throw new Error("catalog unavailable"); } });

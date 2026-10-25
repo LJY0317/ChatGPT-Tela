@@ -119,7 +119,7 @@ test("maintenance review and apply surface a newly blocked shutdown without stop
     const applied = await runMaintenanceCommand(["maintenance", "apply", "upgrade", ...args,
       "--review-token", reviewed.reviewToken], liveOptions) as any;
     expect(applied).toMatchObject({ success: false, failedCount: 0,
-      blockers: ["chat: active work is still running. Finish it before maintenance."] });
+      blockers: ["chat: not ready to stop. Finish active work or check the service status before maintenance."] });
     expect(f.runner.running).toEqual(new Set(["chatgpt-tela-gateway.service", "chatgpt-tela-codex.service", "chatgpt-tela-chat.service"]));
     expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("1.0.0");
     expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))).toBeUndefined();
@@ -136,9 +136,9 @@ test("maintenance review and apply surface a newly blocked shutdown without stop
 
     mode = "always";
     const directBlocked = await runPackagedLifecycleCommand(["upgrade", "--dry-run", ...args], liveOptions) as any;
-    expect(directBlocked.shutdownBlockers).toEqual(["chat: active work is still running. Finish it before maintenance."]);
+    expect(directBlocked.shutdownBlockers).toEqual(["chat: not ready to stop. Finish active work or check the service status before maintenance."]);
     const blockedReview = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...args], liveOptions) as any;
-    expect(blockedReview.blockers).toEqual(["chat: active work is still running. Finish it before maintenance."]);
+    expect(blockedReview.blockers).toEqual(["chat: not ready to stop. Finish active work or check the service status before maintenance."]);
   } finally { removeFixture(root); }
 });
 

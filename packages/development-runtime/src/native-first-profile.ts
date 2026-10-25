@@ -300,11 +300,19 @@ export async function startNativeFirstProductProfileRuntime(
   let accountBrowserOpening: Promise<void> | undefined;
   let accountBrowserSettling: Promise<void> | undefined;
   const isClosed = () => state === "closed";
-  const shutdownReadiness = (duringStop = false): "ready" | "blocked" =>
-    !isClosed() && state !== "preparing" && !webRequests && !turns.size
+  const shutdownReadiness = (duringStop = false): "ready" | "blocked" => {
+    const ready = !isClosed() && state !== "preparing" && !webRequests && !turns.size
       && !accountBrowserBlocked && !accountBrowser && !accountBrowserOpening
       && !accountBrowserSettling && !preparation && !accountInvalidation
-      && (!shutdownPending || duringStop) ? "ready" : "blocked";
+      && (!shutdownPending || duringStop);
+    if (!ready) emitDiagnosticEvent("chatgpt_tela_profile_startup", "shutdown_blocked", {
+      slot: config.slot, state, request_count: webRequests, turn_count: turns.size,
+      account_browser_blocked: accountBrowserBlocked, account_browser_open: !!accountBrowser,
+      account_browser_opening: !!accountBrowserOpening, account_browser_settling: !!accountBrowserSettling,
+      preparing: !!preparation, account_invalidating: !!accountInvalidation, shutdown_pending: shutdownPending, during_stop: duringStop,
+    });
+    return ready ? "ready" : "blocked";
+  };
   const setState = (next: NativeFirstWebState) => {
     if (next !== "ready") void stopDeletedThreadObservation();
     state = next;

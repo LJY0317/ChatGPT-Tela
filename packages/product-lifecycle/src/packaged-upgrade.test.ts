@@ -194,7 +194,7 @@ test("a late no-admission receipt restores stopped peers and leaves the refusing
     f.services.settleQuiescence = async () => false;
     await expect(applyPackagedUpgradeWithRecovery({ plan: f.plan, payloadSourcePath: f.target, services: f.services, ...f.options })).rejects.toMatchObject({
       recoveryState: "source-restored",
-      message: expect.stringContaining("chat: active work is still running. Finish it before maintenance. The previous version was restored and previously running services were resumed."),
+      message: expect.stringContaining("chat: not ready to stop. Finish active work or check the service status before maintenance. The previous version was restored and previously running services were resumed."),
     });
     expect(f.services.events).toEqual(["stop:gateway", "stop:codex", "start:codex", "start:gateway"]);
     expect([...f.services.states.values()]).toEqual(["running", "running", "running"]);

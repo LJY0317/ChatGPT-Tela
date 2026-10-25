@@ -1,4 +1,4 @@
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { connectCodexAppServerWebSocket, readDynamicWebModelCatalog, countLoadedAppServerActiveTurns, interruptLoadedAppServerTurns } from "@chatgpt-tela/codex";
 import { ProfileConnectionError, type ProfileConnectionPhase, type ProfileStartOptions } from "./profile-operation";
 import { parseCodexTerminalSessionContract, type CodexTerminalSessionContract } from "@chatgpt-tela/service-protocol";
@@ -353,22 +353,26 @@ export async function startCodexService(input: {
   };
 
   const profileShutdownReadiness = async (profile: OwnedProfile, duringStop = false): Promise<"ready" | "blocked"> => {
+    const blocked = (reason_class: string) => {
+      emitDiagnosticEvent("chatgpt_tela_codex", "profile_shutdown_blocked", { slot: profile.slot, reason_class });
+      return "blocked" as const;
+    };
     if ((!duringStop && (profile.stopping || stoppingProfiles.has(profile.slot) || starting.has(profile.slot)))
-      || profile.child.exitCode !== null || profile.child.signalCode !== null) return "blocked";
+      || profile.child.exitCode !== null || profile.child.signalCode !== null) return blocked("profile_transition");
     const session = await targets.session(profile.target.id);
-    if (!ownsNativeTargetSession(profile.target, session, profile)) return "blocked";
-    if (!session.endpoint) return "blocked";
-    if (await countLoadedAppServerActiveTurns(session.endpoint, input.signal ? { signal: input.signal } : {}) > 0) return "blocked";
+    if (!ownsNativeTargetSession(profile.target, session, profile)) return blocked("native_owner_changed");
+    if (!session.endpoint) return blocked("native_endpoint_unavailable");
+    if (await countLoadedAppServerActiveTurns(session.endpoint, input.signal ? { signal: input.signal } : {}) > 0) return blocked("native_work");
     const response = await fetch(new URL("v1/shutdown-readiness", profile.bridgePreviewUrl), {
       headers: { authorization: `Bearer ${profile.uiToken}` },
       signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000),
     });
-    if (!response.ok) return "blocked";
+    if (!response.ok) return blocked("runtime_readiness_unavailable");
     const web = await response.json() as { contractVersion?: unknown; slot?: unknown; shutdownReadiness?: unknown };
-    if (web.contractVersion !== 1 || web.slot !== profile.slot || web.shutdownReadiness !== "ready") return "blocked";
+    if (web.contractVersion !== 1 || web.slot !== profile.slot || web.shutdownReadiness !== "ready") return blocked("runtime_not_ready");
     if (input.webDelegationCapacity) {
       const capacity = input.webDelegationCapacity(profile.slot);
-      if (capacity.uncertain > 0 || capacity.total.used > 0) return "blocked";
+      if (capacity.uncertain > 0 || capacity.total.used > 0) return blocked("delegation_reservation");
     }
     return "ready";
   };
@@ -380,7 +384,8 @@ export async function startCodexService(input: {
         if (await profileShutdownReadiness(profile, duringClose) !== "ready") return "blocked";
       }
       return "ready";
-    } catch {
+    } catch (error) {
+      emitDiagnosticEvent("chatgpt_tela_codex", "shutdown_observation_failed", { failure_class: diagnosticFailureClass(error) });
       return "blocked";
     }
   };
