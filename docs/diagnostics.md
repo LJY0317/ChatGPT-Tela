@@ -11,8 +11,8 @@ failure stays `unavailable`; only an explicit 401 or unauthenticated session sha
 Ordinary overwrite/insert renewal stays in structural events and does not create a removal incident.
 Provider-side revocation reasons and storage changes made outside the observed Electron session remain unknowable.
 
-Service JSONL is bounded to 32 MiB per service; incident records are bounded by 16 MiB and 30 days without a
-separate incident-count cap. Raw private capture remains opt-in, local and separately bounded.
+Service JSONL shares a 32 MiB / 30-day budget across the log directory; incident records are bounded by 16 MiB and 30 days without a
+separate incident-count cap. Chat tool incidents share 4 MiB / 30 days across workspaces. Raw private capture remains opt-in, local and separately bounded.
 
 ## Browser request and provider failures
 

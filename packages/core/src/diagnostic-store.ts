@@ -1,14 +1,41 @@
 import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 const LOG_FILE_BYTES = 4 * 1024 * 1024;
 const LOG_TOTAL_BYTES = 32 * 1024 * 1024;
 export const DIAGNOSTIC_LIMITS = Object.freeze({ tailBytes: 4 * 1024 * 1024, scanBytes: 96 * 1024 * 1024, timeline: 128,
-  logFileBytes: LOG_FILE_BYTES, logBytes: LOG_TOTAL_BYTES, logSegments: Math.ceil(LOG_TOTAL_BYTES / LOG_FILE_BYTES),
+  logFileBytes: LOG_FILE_BYTES, logBytes: LOG_TOTAL_BYTES, logAgeMs: 30 * 86400000,
   incidentBytes: 16 * 1024 * 1024, incidentAgeMs: 30 * 86400000,
   privateBytes: 64 * 1024 * 1024, privateFileBytes: 8 * 1024 * 1024, privateAgeMs: 7 * 86400000 });
+/** Active logs plus owned historical segments, without a file-count retention limit. */
+export function diagnosticLogPaths(path: string): string[] {
+  const name = basename(path), root = dirname(path);
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^${escaped}\\.(?:[0-9]+|[0-9]+-[a-f0-9-]+)$`);
+  try {
+    return [path, ...readdirSync(root).filter(n => pattern.test(n)).map(n => join(root, n))
+      .filter(p => { const s = lstatSync(p); return s.isFile() && !s.isSymbolicLink(); })
+      .sort((a,b) => lstatSync(b).mtimeMs-lstatSync(a).mtimeMs)];
+  } catch { return [path]; }
+}
+
+/** One event-driven directory budget shared by the service logs. Active files stay open. */
+export function pruneDiagnosticLogs(path: string, now = Date.now()): void {
+  const root = dirname(path), bases = new Set([basename(path), ...["gateway","chat","codex"]
+    .flatMap(service => [`${service}.diagnostics.jsonl`, `${service}.log.diagnostics.jsonl`])]);
+  const files = [...bases].flatMap(base => diagnosticLogPaths(join(root, base))).flatMap(p => {
+    try { const s = lstatSync(p); return s.isFile() && !s.isSymbolicLink() ? [{path:p, size:s.size, time:s.mtimeMs, active:bases.has(basename(p))}] : []; }
+    catch { return []; }
+  });
+  let bytes = files.filter(f=>f.active).reduce((n,f)=>n+f.size,0);
+  for (const file of files.filter(f=>!f.active).sort((a,b)=>b.time-a.time)) {
+    if (now-file.time>DIAGNOSTIC_LIMITS.logAgeMs || bytes+file.size>DIAGNOSTIC_LIMITS.logBytes) rmSync(file.path);
+    else bytes+=file.size;
+  }
+}
+
 export interface StructuralDiagnosticEvent { readonly ts: string; readonly event: string; readonly stage: string; readonly [key: string]: string | number | boolean; }
 const SAFE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const FORBIDDEN = /(prompt|path|url|uri|secret|email|content|command|output|argument|authorization|cookie|raw_|token|workspace_id|account_id|user_id|session_id|turn_id|thread_id)/i;

@@ -13,8 +13,7 @@ import {
 import { join, resolve } from "node:path";
 import { DIAGNOSTIC_FAILURE_CLASSES, diagnosticFailureClass, type DiagnosticFailureClass } from "@chatgpt-tela/core";
 
-const MAX_INCIDENTS_PER_WORKSPACE = 32;
-const MAX_INCIDENTS_TOTAL = 128;
+const INCIDENT_TOTAL_BYTES = 4 * 1024 * 1024;
 const INCIDENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_INCIDENT_SERIALIZED_BYTES = 4 * 1024;
 
@@ -174,17 +173,12 @@ export class ChatIncidentStore {
     for (const record of records) {
       if (now - Date.parse(record.observedAt) > INCIDENT_RETENTION_MS) remove.add(record.incidentRef);
     }
-    const byWorkspace = new Map<string, ChatIncidentRecord[]>();
-    for (const record of records.filter(record => !remove.has(record.incidentRef))) {
-      const list = byWorkspace.get(record.workspaceFingerprint) ?? [];
-      list.push(record);
-      byWorkspace.set(record.workspaceFingerprint, list);
+    let bytes = 0;
+    for (const record of records.filter(record => !remove.has(record.incidentRef)).reverse()) {
+      const size = lstatSync(this.#path(record.incidentRef)).size;
+      if (bytes + size > INCIDENT_TOTAL_BYTES) remove.add(record.incidentRef);
+      else bytes += size;
     }
-    for (const list of byWorkspace.values()) {
-      while (list.length > MAX_INCIDENTS_PER_WORKSPACE) remove.add(list.shift()!.incidentRef);
-    }
-    const remaining = records.filter(record => !remove.has(record.incidentRef));
-    while (remaining.length > MAX_INCIDENTS_TOTAL) remove.add(remaining.shift()!.incidentRef);
     for (const ref of remove) rmSync(this.#path(ref), { force: true });
 
     for (const entry of readdirSync(this.#root)) {

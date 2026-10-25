@@ -199,7 +199,7 @@ only when they start/restart.
 
 Service diagnostics live under the platform-standard Tela logs root. Source supervision writes
 `<service>.log.diagnostics.jsonl`; installed packaged services write `<service>.diagnostics.jsonl`. Both use the
-same bounded payload-free event format with a 32 MiB per-service byte budget. Coalesced incidents use a separate
+same bounded payload-free event format with a shared 32 MiB / 30-day byte budget. Coalesced incidents use a separate
 16 MiB/30-day budget. The CLI diagnostics summary reads only file metadata and deliberately omits absolute paths
 and event contents.
 

@@ -35,18 +35,18 @@ describe("Tela Chat privacy-safe incidents", () => {
     }
   });
 
-  test("retention stays bounded per workspace and globally", () => {
+  test("small incidents are retained without per-workspace or global count caps", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-chat-incidents-bound-"));
     try {
       const store = new ChatIncidentStore({ root });
       for (let i = 0; i < 40; i += 1) {
         store.captureFailure({ capability: "read", workspaceId: "chatws_one", error: new Error(`raw-${i}`) });
       }
-      expect(store.list("chatws_one", 100)).toHaveLength(32);
+      expect(store.list("chatws_one", 100)).toHaveLength(40);
       for (let i = 0; i < 120; i += 1) {
         store.captureFailure({ capability: "read", workspaceId: `chatws_${i + 10}`, error: new Error("raw") });
       }
-      expect(readdirSync(root).filter(name => name.endsWith(".json")).length).toBeLessThanOrEqual(128);
+      expect(readdirSync(root).filter(name => name.endsWith(".json")).length).toBe(160);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

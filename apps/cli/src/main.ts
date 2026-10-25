@@ -1,4 +1,4 @@
-import { DIAGNOSTIC_LIMITS, diagnosticCenter, diagnosticSourcePaths } from "@chatgpt-tela/core";
+import { DIAGNOSTIC_LIMITS, diagnosticLogPaths, diagnosticCenter, diagnosticSourcePaths } from "@chatgpt-tela/core";
 import {
   existsSync,
   lstatSync,
@@ -178,10 +178,8 @@ function diagnosticsSummary(productPaths: ReturnType<typeof resolveProductPaths>
     const packagedDiagnostics = join(productPaths.logsRoot, `${id}.diagnostics.jsonl`);
     return Object.freeze({
       serviceLog: diagnosticFileMetadata(raw),
-      sourceDiagnostics: Array.from({ length: DIAGNOSTIC_LIMITS.logSegments }, (_, index) =>
-        diagnosticFileMetadata(index ? `${sourceDiagnostics}.${index}` : sourceDiagnostics)),
-      packagedDiagnostics: Array.from({ length: DIAGNOSTIC_LIMITS.logSegments }, (_, index) =>
-        diagnosticFileMetadata(index ? `${packagedDiagnostics}.${index}` : packagedDiagnostics)),
+      sourceDiagnostics: diagnosticLogPaths(sourceDiagnostics).map(diagnosticFileMetadata),
+      packagedDiagnostics: diagnosticLogPaths(packagedDiagnostics).map(diagnosticFileMetadata),
     });
   };
   return Object.freeze({

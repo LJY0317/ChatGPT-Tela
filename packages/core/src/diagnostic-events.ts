@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { diagnosticContext, DIAGNOSTIC_INSTANCE } from "./diagnostic-context";
-import { structuralDiagnosticEvent, writeDiagnosticIncident, readDiagnosticIncident, diagnosticFailureIncidentRef, DIAGNOSTIC_LIMITS, type StructuralDiagnosticEvent } from "./diagnostic-store";
+import { structuralDiagnosticEvent, writeDiagnosticIncident, readDiagnosticIncident, diagnosticFailureIncidentRef, DIAGNOSTIC_LIMITS, pruneDiagnosticLogs, type StructuralDiagnosticEvent } from "./diagnostic-store";
 
 export type DiagnosticScalar = string | number | boolean;
 export interface DiagnosticEventOptions { readonly scheduleIncident?: boolean; }
@@ -178,7 +178,7 @@ export function configuredDiagnosticRoot(): string | undefined {
 function diagnosticMaxFileBytes(): number {
   const parsed = Number(process.env.CHATGPT_TELA_DIAGNOSTIC_MAX_BYTES ?? "");
   if (!Number.isSafeInteger(parsed) || parsed < 64 * 1024) return DEFAULT_MAX_FILE_BYTES;
-  return Math.min(parsed, DIAGNOSTIC_LIMITS.logBytes / DIAGNOSTIC_LIMITS.logSegments);
+  return Math.min(parsed, DEFAULT_MAX_FILE_BYTES);
 }
 
 function appendConfiguredDiagnosticFile(line: string): void {
@@ -193,22 +193,12 @@ function appendConfiguredDiagnosticFile(line: string): void {
         const stat = lstatSync(path);
         if (!stat.isFile() || stat.isSymbolicLink()) return;
         if (stat.size > diagnosticMaxFileBytes()) {
-          // Rotate a fixed chain, newest first on read, with no background housekeeping.
-          rmSync(`${path}.${DIAGNOSTIC_LIMITS.logSegments - 1}`, { force: true });
-          for (let index = DIAGNOSTIC_LIMITS.logSegments - 2; index >= 0; index--) {
-            const source = index === 0 ? path : `${path}.${index}`;
-            const destination = `${path}.${index + 1}`;
-            try {
-              const stat = lstatSync(source);
-              if (!stat.isFile() || stat.isSymbolicLink()) return;
-              renameSync(source, destination);
-              try { chmodSync(destination, 0o600); } catch { /* Windows ACLs own permissions there. */ }
-            } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-          }
+          renameSync(path, `${path}.${Date.now()}-${randomUUID()}`);
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;
       }
+      pruneDiagnosticLogs(path);
     }
     try {
       const stat = lstatSync(path);

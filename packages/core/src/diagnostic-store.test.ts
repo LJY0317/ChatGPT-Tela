@@ -6,7 +6,7 @@ import { diagnosticFingerprint, emitDiagnosticEvent, emitDiagnosticIncident } fr
 import { diagnosticContext, withDiagnosticContext } from "./diagnostic-context";
 import { traceDiagnosticToolCall } from "./diagnostic-trace";
 import { analyzeDiagnosticEvents, DIAGNOSTIC_LIMITS, listDiagnosticIncidents, privateDiagnosticCaptureEnabled, readDiagnosticIncident,
-  readDiagnosticSources, readDiagnosticTail, setPrivateDiagnosticCapture, structuralDiagnosticEvent, writeDiagnosticIncident, writePrivateDiagnosticArtifact } from "./diagnostic-store";
+  diagnosticLogPaths, pruneDiagnosticLogs, readDiagnosticSources, readDiagnosticTail, setPrivateDiagnosticCapture, structuralDiagnosticEvent, writeDiagnosticIncident, writePrivateDiagnosticArtifact } from "./diagnostic-store";
 const directories: string[] = [];
 const original = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
 function fixture() { const root = mkdtempSync(join(tmpdir(),"tela-diagnostics-test-")); directories.push(root); return root; }
@@ -326,4 +326,23 @@ test("a burst of more than 32 distinct failures keeps every canonical incident w
     if (before === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
     else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = before;
   }
+});
+
+test("log retention keeps many small segments and shares bytes across services", () => {
+  const root=fixture(), current=join(root,"gateway.diagnostics.jsonl"), now=Date.now();
+  writeFileSync(current,"active");
+  for(let i=0;i<20;i++) writeFileSync(`${current}.${now}-${i.toString(16)}`,"small");
+  const expired=`${current}.0`;writeFileSync(expired,"expired");utimesSync(expired,new Date(now-31*86400000),new Date(now-31*86400000));
+  const unrelated=join(root,"personal.txt");writeFileSync(unrelated,"preserve");
+  pruneDiagnosticLogs(current,now);
+  expect(diagnosticLogPaths(current).length).toBe(21);
+  expect(readdirSync(root)).not.toContain("gateway.diagnostics.jsonl.0");
+  // An archive from another service competes for the same directory byte budget.
+  const large=join(root,`chat.diagnostics.jsonl.${now}-abc`);
+  writeFileSync(large,Buffer.alloc(DIAGNOSTIC_LIMITS.logBytes));
+  utimesSync(large,new Date(now-1000),new Date(now-1000));
+  pruneDiagnosticLogs(current,now);
+  expect(readdirSync(root)).not.toContain(large.split("/").at(-1)!);
+  expect(readFileSync(current,"utf8")).toBe("active");
+  expect(readFileSync(unrelated,"utf8")).toBe("preserve");
 });
