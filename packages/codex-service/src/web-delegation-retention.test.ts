@@ -28,7 +28,7 @@ test("exact Native creation ACK links once without sending or reserving a task",
     await expect(linkNativeThreadForRetention(adapters, { ...receipt, accountFingerprint: "f".repeat(64) }, new AbortController().signal)).rejects.toThrow("owner mismatch");
   } finally { f.cleanup(); }
 });
-function fixture() {
+function fixture(statusShape: "object" | "string" = "object") {
   const root = mkdtempSync(join(tmpdir(), "tela-retention-")), store = new WebDelegationStore(root);
   const origin = 1_700_000_000_000;
   const record: WebDelegationRecord = { id: randomUUID(), slot: 2, cwd: root, createdAt: origin,
@@ -46,7 +46,8 @@ function fixture() {
       if (method === "thread/list") {
         return { data: native.exists && (params as any).archived === native.archived
           && (!(params as any).cwd || (params as any).cwd === native.cwd)
-          ? [{ id: record.threadId, cwd: native.cwd, name: native.title, updatedAt: native.updatedAt, status: { type: native.status } }] : [], nextCursor: null };
+          ? [{ id: record.threadId, cwd: native.cwd, name: native.title, updatedAt: native.updatedAt,
+            status: statusShape === "string" ? native.status : { type: native.status } }] : [], nextCursor: null };
       }
       if (method === "thread/turns/list") return { data: [{ id: native.tailId, status: native.turnStatus }] };
       if (method === "thread/queue/list") return { data: native.queued ? [{ id: "queued" }] : [], nextCursor: null };
@@ -232,8 +233,8 @@ test("uncollected results use seven actual idle days, polling never resets activ
     await f.run(f.origin + 8 * DAY); expect(f.native.archived).toBe(true);
   } finally { f.cleanup(); }
 });
-test("active or queued work is protected and settles on the next actual job change", async () => {
-  const f = fixture();
+test.each(["object", "string"] as const)("active or queued work is protected with %s Native status", async statusShape => {
+  const f = fixture(statusShape);
   try {
     f.native.status = "active"; await f.run(f.origin + 8 * DAY);
     f.native.status = "idle"; f.native.queued = true; await f.run(f.origin + 8 * DAY);

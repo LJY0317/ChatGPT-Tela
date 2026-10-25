@@ -173,6 +173,8 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           await confirmAbsent(record, rpc);
           continue;
         }
+        const nativeState = typeof present.thread.status === "string"
+          ? present.thread.status : present.thread.status?.type;
         const updatedAt = present.thread.updatedAt;
         if (!Number.isFinite(updatedAt)) throw Error("Native thread activity time unavailable");
         const activity = Math.max(record.createdAt, Number(updatedAt) * 1000);
@@ -194,7 +196,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           }, input.signal));
           const latest = Array.isArray(tail?.data) ? object(tail.data[0]) : undefined;
           if (!latest || !["completed", "failed", "interrupted"].includes(latest.status)
-            || present.thread.status?.type === "active" || !jobs.some(job => job.turnId === latest.id)) continue;
+            || nativeState === "active" || !jobs.some(job => job.turnId === latest.id)) continue;
           publicOperation = "thread_queue_list";
           const queue = object(await rpc.request("thread/queue/list", { threadId: record.threadId, limit: 1 }, input.signal));
           if (!Array.isArray(queue?.data) || queue.data.length || queue.nextCursor != null) continue;
@@ -220,7 +222,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
         if (due > now) continue;
         // Archive is reversible and needs current idle/queue proof, not a
         // readable execution rollout or an exact journal entry for every turn.
-        if (present.thread.status?.type === "active"
+        if (nativeState === "active"
           || jobs.some(job => !["completed", "failed", "linked"].includes(job.state))) {
           skipped("active_or_unresolved_tail"); continue;
         }
