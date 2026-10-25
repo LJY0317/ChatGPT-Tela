@@ -5,6 +5,8 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   NativeToolInventory,
   defineNativeTurnAuthority,
+  observeDiagnosticEvents,
+  diagnosticFingerprint,
 } from "@chatgpt-tela/core";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
 import {
@@ -54,6 +56,36 @@ function binding(): NativeTurnBinding {
     },
   };
 }
+
+test("pre-session rejection identifies the MCP boundary without invoking or retaining private arguments", async () => {
+  const rows: Record<string, string | number | boolean>[] = [];
+  const stop = observeDiagnosticEvents(row => rows.push(row));
+  const server = await startDevelopmentMcpHttpServer({ turns: new ActiveTurnRegistry() });
+  const headers = { authorization: `Bearer ${server.bearerToken}`, "content-type": "application/json",
+    accept: "application/json, text/event-stream" };
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 101, method: "tools/call", params: {
+    name: CHATGPT_TELA_CODEX_TOOL_INVENTORY, arguments: { turn_capability: "private-credential" },
+    _meta: { "openai/session": "private-client-scope", "io.modelcontextprotocol/protocolVersion": "2026-07-28" } } });
+  try {
+    const missing = await fetch(server.endpointUrl, { method: "POST", headers: { ...headers, "mcp-protocol-version": "2026-07-28" }, body });
+    expect(missing.status).toBe(400);
+    expect(rows.find(row => row.stage === "mcp_rpc_received")).toMatchObject({
+      method_class: "tools_call", kind: "codex_inventory", connection_observed: false,
+      rpc_fingerprint: diagnosticFingerprint("101"), scope_fingerprint: diagnosticFingerprint("private-client-scope"),
+      protocol_year: 2026, protocol_month: 7, protocol_day: 28 });
+    expect(rows.find(row => row.reason_class === "missing_connection")).toMatchObject({
+      http_status: 400, connection_header_present: false, protocol_header_present: true });
+    const unknown = await fetch(server.endpointUrl, { method: "POST", headers: { ...headers, "mcp-session-id": "private-unknown" }, body });
+    expect(unknown.status).toBe(404);
+    expect(rows.find(row => row.reason_class === "unknown_connection")).toMatchObject({
+      http_status: 404, connection_header_present: true });
+    const invalid = await fetch(server.endpointUrl, { method: "POST", headers, body: "{" });
+    expect(invalid.status).toBe(400);
+    expect(rows.some(row => row.reason_class === "invalid_json")).toBe(true);
+    expect(server.activeSessionCount).toBe(0);
+    expect(JSON.stringify(rows)).not.toMatch(/private-credential|private-client-scope|private-unknown/);
+  } finally { stop?.(); await server.stop(); }
+});
 
 describe("development MCP Streamable HTTP server", () => {
   test("owned Native tool image survives authenticated MCP HTTP without text flattening", async () => {

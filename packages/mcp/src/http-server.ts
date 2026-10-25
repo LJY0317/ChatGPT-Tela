@@ -263,6 +263,8 @@ async function startMcpHttpServer(input: {
         try {
           parsedBody = await request.json();
         } catch {
+          emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_http_rejected", { reason_class: "invalid_json", http_status: 400,
+            connection_observed: false, connection_header_present: sessionId !== undefined });
           return errorResponse(400, "MCP request body must be valid JSON");
         }
       }
@@ -270,13 +272,19 @@ async function startMcpHttpServer(input: {
       if (sessionId) {
         const entry = sessions.get(sessionId);
         if (!entry || entry.closed) {
-          emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_http_rejected", { reason_class: "unknown_connection", http_status: 404 });
+          if (request.method === "POST") observeMcpEnvelope(parsedBody, undefined, "received");
+          emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_http_rejected", { reason_class: "unknown_connection", http_status: 404,
+            connection_observed: false, connection_header_present: true });
           return errorResponse(404, "Unknown or closed MCP session");
         }
         return handleOwnedSessionRequest(sessionId, entry, request, parsedBody);
       }
 
       if (request.method !== "POST" || !isInitializeRequest(parsedBody)) {
+        if (request.method === "POST") observeMcpEnvelope(parsedBody, undefined, "received");
+        emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_http_rejected", { reason_class: "missing_connection", http_status: 400,
+          connection_observed: false, connection_header_present: request.headers.has("mcp-session-id"),
+          protocol_header_present: request.headers.has("mcp-protocol-version") });
         return errorResponse(400, "MCP request requires a valid session or initialize request");
       }
 

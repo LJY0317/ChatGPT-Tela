@@ -5,6 +5,7 @@ import {
 } from "./public-abi";
 
 const methods: Readonly<Record<string, string>> = {
+  "server/discover": "server_discover",
   initialize: "initialize", "notifications/initialized": "initialized",
   "tools/list": "tools_list", "tools/call": "tools_call", ping: "ping",
 };
@@ -16,14 +17,20 @@ const tools: Readonly<Record<string, string>> = {
 };
 
 /** Observe protocol envelopes only; never retain params, arbitrary names or response bodies. */
-export function observeMcpEnvelope(value: unknown, connection: string, direction: "received" | "emitted"): void {
+export function observeMcpEnvelope(value: unknown, connection: string | undefined, direction: "received" | "emitted"): void {
   try {
     if (!value || typeof value !== "object" || Array.isArray(value)) return;
     const row = value as Record<string, any>;
-    const fields: Record<string, string | number | boolean> = { connection_fingerprint: connection };
+    const fields: Record<string, string | number | boolean> = { connection_observed: connection !== undefined,
+      ...(connection ? { connection_fingerprint: connection } : {}) };
     if ((typeof row.id === "string" && row.id.length > 0 && row.id.length <= 16384)
       || (typeof row.id === "number" && Number.isSafeInteger(row.id))) fields.rpc_fingerprint = diagnosticFingerprint(String(row.id));
     if (direction === "received") {
+      const scope = row.params?._meta?.["openai/session"];
+      if (typeof scope === "string" && scope.length <= 16384) fields.scope_fingerprint = diagnosticFingerprint(scope);
+      const version = row.params?._meta?.["io.modelcontextprotocol/protocolVersion"];
+      const date = typeof version === "string" ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(version) : undefined;
+      if (date) { fields.protocol_year = Number(date[1]); fields.protocol_month = Number(date[2]); fields.protocol_day = Number(date[3]); }
       fields.method_class = typeof row.method === "string" && Object.hasOwn(methods, row.method) ? methods[row.method]! : "other";
       if (row.method === "tools/call") {
         const name = row.params?.name;

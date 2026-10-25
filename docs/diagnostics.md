@@ -1231,6 +1231,19 @@ an external request that never reaches this machine cannot trigger local collect
 MacLagMonitor can independently retain bounded DHCP/network-transition and Tailscale
 control events during its incidents; it remains optional and is not a Tela dependency.
 
+Distinguish pre-ingress failures from MCP admission errors. A local HTTP 400 is not
+evidence that Funnel TLS failed: the request reached the server. Pre-session rejection
+now records `invalid_json`, `missing_connection` or `unknown_connection`, session-header
+presence, and the rejected envelope's method, RPC/scope fingerprints and numeric body
+protocol date, without recording credentials or arguments. Discovery is classified as
+`server_discover`. An unbound envelope has `connection_observed=false`; it does not
+establish connection or execution ownership. Rejection still prevents tool invocation.
+The current transport requires the older initialize/session contract; a modern
+per-request request is not made compatible by deleting an admission check. Compare
+the requested protocol with the supported transport before changing that contract.
+Some clients legitimately probe the modern protocol before falling back, so a nearby
+400 alone cannot be attributed to a failed tool call.
+
 Public progress extraction also records counts and visibility of assistant markdown
 bodies, whether the selected body lies outside the progress shell, animation presence
 and block count. These bounded, deduplicated facts expose prose excluded by the adapter
