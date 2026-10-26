@@ -19,7 +19,7 @@ function redact(value: unknown, depth=0): unknown {
   return typeof value==="number" || typeof value==="boolean" || value===null ? value : undefined;
 }
 /** Explicit private capture only. Redaction is best effort; these files remain sensitive. */
-export function capturePrivateDiagnosticValue(phase: "tool_request" | "tool_result" | "web_context" | "web_preparation_failure" | "web_execution_failure" | "native_turn_failure" | "native_backend_failure" | "context_preload_failure" | "retained_body_mismatch", value: unknown): void {
+export function capturePrivateDiagnosticValue(phase: "tool_request" | "tool_result" | "tool_failure" | "web_context" | "web_preparation_failure" | "web_execution_failure" | "native_turn_failure" | "native_backend_failure" | "context_preload_failure" | "retained_body_mismatch", value: unknown): void {
   const failure = /failure|mismatch/.test(phase);
   // Trace capture stays quiet when disabled. A failed operation needs to explain
   // why its private evidence is absent without exposing the evidence itself.

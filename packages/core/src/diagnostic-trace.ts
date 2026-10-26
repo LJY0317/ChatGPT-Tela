@@ -28,8 +28,9 @@ export async function traceDiagnosticToolCall<T>(tool: string, arguments_: unkno
     emit("tool_started", { ...(requestBytes === undefined ? {} : { request_bytes: requestBytes }), abort_observed: aborted });
     metadata.signal?.addEventListener("abort",onAbort,{once:true});
     try {
-      const result=await invoke(); capturePrivateDiagnosticValue("tool_result",result); resultBytes=diagnosticSerializedBytes(result);
+      const result=await invoke(); resultBytes=diagnosticSerializedBytes(result);
       errorResult=Boolean(result && typeof result === "object" && (result as {isError?:unknown}).isError === true);
+      capturePrivateDiagnosticValue(errorResult ? "tool_failure" : "tool_result",result);
       if (errorResult) emit("tool_error",{phase:"returned_error",error_result:true, reason_class:"unknown", delivery:"mcp_callback_returned"});
       return result;
     } catch (error) {

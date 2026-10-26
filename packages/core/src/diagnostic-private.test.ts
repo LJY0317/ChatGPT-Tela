@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { capturePrivateDiagnosticValue, privateDiagnosticFailureGuidance } from "./diagnostic-private";
 import { diagnosticFingerprint } from "./diagnostic-events";
 import { withDiagnosticContext } from "./diagnostic-context";
+import { traceDiagnosticToolCall } from "./diagnostic-trace";
 import { readDiagnosticTail, setPrivateDiagnosticCapture } from "./diagnostic-store";
 const original = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
 const roots: string[] = [];
@@ -74,4 +75,16 @@ test("current capture settings cannot erase or certify evidence from an earlier 
   setPrivateDiagnosticCapture(f.center,1);
   expect(privateDiagnosticFailureGuidance(f.center)).toMatchObject({capture:"enabled",evidence:"unverified"});
   expect(JSON.stringify(disabled)).not.toContain("PRIVATE");
+});
+
+
+test.each([false,true])("explicit tool error results keep failure evidence only with opt-in=%s",async enabled=>{
+  const f=fixture(enabled),result={isError:true,content:[{type:"text",text:"PRIVATE tool failure"}]};
+  expect(await withDiagnosticContext(context,()=>traceDiagnosticToolCall("goal_control",{}, {},async()=>result))).toBe(result);
+  const metadata=readdirSync(join(f.center,"private")).filter(name=>name.endsWith(".meta.json"))
+    .map(name=>JSON.parse(readFileSync(join(f.center,"private",name),"utf8")));
+  expect(metadata.filter(item=>item.evidenceClass==="failure")).toHaveLength(enabled ? 1 : 0);
+  expect(readDiagnosticTail(f.file).events).toContainEqual(expect.objectContaining({phase:"tool_failure",
+    stage:enabled ? "private_capture_recorded" : "private_capture_omitted"}));
+  expect(readFileSync(f.file,"utf8")).not.toContain("PRIVATE tool failure");
 });
