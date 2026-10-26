@@ -2,10 +2,10 @@ import { expect, test, spyOn } from "bun:test";
 import * as https from "node:https";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { observeDiagnosticEvents } from "@chatgpt-tela/core";
+import { observeDiagnosticEvents, listDiagnosticIncidents, readDiagnosticIncident } from "@chatgpt-tela/core";
 import { diagnosePublicIngress } from "./public-ingress-diagnostics";
 
 test("on-demand ingress snapshot keeps only structural local state and never gates DNS evidence", async () => {
@@ -78,8 +78,12 @@ test("public failure retains TLS cause and aggregate incident; mixed relays and 
     const persisted = readFileSync(process.env.CHATGPT_TELA_DIAGNOSTIC_FILE!, "utf8");
     expect(persisted).toContain('"failure_class":"err_socket_closed"');
     expect(persisted).toContain('"stage":"public_ingress_probe_failed"');
-    const incidentFiles = readdirSync(join(root, "diagnostics", "incidents"));
-    expect(incidentFiles.some(file => readFileSync(join(root, "diagnostics", "incidents", file), "utf8").includes('public_ingress_probe_failed'))).toBe(true);
+    const incidents = listDiagnosticIncidents(join(root, "diagnostics"));
+    const incident = incidents.find(row => row.stage === "public_ingress_probe_failed");
+    expect(incident).toBeDefined();
+    expect(readDiagnosticIncident(join(root, "diagnostics"), incident!.ref)).toMatchObject({
+      stage: "public_ingress_probe_failed", failure: { phase: "tls", responsive_count: 0 },
+    });
     expect(persisted).not.toMatch(/private-host|private-body|private socket|192\.0\.2/);
     failAll = false;
     const mixed = await diagnosePublicIngress(new URL("https://private-host.invalid/mcp"), "https://resolver.invalid", runner);
