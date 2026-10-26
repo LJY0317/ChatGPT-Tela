@@ -67,6 +67,33 @@ test.each(['disclosure','popup','missing-region','duplicate-region','editable-re
   expect(f.gate.observationCurrent().revision).toBe(before.revision+(mode==='disclosure'?0:1));
   expect(f.gate.observationCurrent().pending).toBe(false); f.gate.dispose();
 });
+test.each(['authored', 'unmarked', 'outside'])("unlinked author disclosure preserves viewing ownership only inside its published message: %s", async mode => {
+  const f = fixture(); f.gate.setInteractive(true);
+  const author = { querySelector: () => null };
+  const parent = {
+    querySelectorAll: (selector: string) => selector === '[data-search-result-target]' ? [author] : [],
+    contains: (node: unknown) => node === author,
+  };
+  const button = {
+    parentElement: parent, textContent: 'Localized disclosure', hasAttribute: () => false,
+    closest: (selector: string): unknown => selector.startsWith('button') ? button
+      : selector === '[data-user-message-bubble]' && mode !== 'outside' ? parent : null,
+    getAttribute: (name: string) => name === 'aria-expanded' ? 'false'
+      : name === 'data-markdown-copy' && mode !== 'unmarked' ? 'exclude' : null,
+    matches: () => true,
+  };
+  f.contents.executeJavaScript = async (code?: string) => runInNewContext(code!, {
+    document: { elementFromPoint: () => button, querySelectorAll: () => [], dispatchEvent() {} },
+    Event: class {}, getComputedStyle: () => ({ userSelect: 'none' }),
+  });
+  const before = f.gate.observationCurrent();
+  f.contents.sendInputEvent(down); f.contents.sendInputEvent(up); await flush();
+  expect(f.sent).toEqual([down, up]);
+  expect(f.gate.observationCurrent().revision).toBe(before.revision + (mode === 'authored' ? 0 : 1));
+  expect(f.gate.observationCurrent().pending).toBe(false);
+  f.gate.dispose();
+});
+
 test("viewing keyboard scrolls the main overflow pane when body has no scroll range", async () => {
   const f=fixture(); f.gate.setInteractive(false);
   class Pane { scrollHeight=800;clientHeight=800;scrollTop=0;parentElement:Pane|null=null; children:Pane[]=[];

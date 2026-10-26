@@ -207,8 +207,14 @@ export class InspectionInput {
           const ids = id ? [...document.querySelectorAll('[id]')] : [];
           if (ids.length > 2048) return decide(false, 'region_budget');
           const regions = ids.filter(item => item.id === id);
+          // Authored-message disclosures may have no aria-controls/labelledby.
+          // Their copy-excluded control only reveals the local, non-editable author root.
+          const authorRoots = button.getAttribute('data-markdown-copy') === 'exclude'
+            && button.closest('[data-user-message-bubble]')
+            ? [...(local?.querySelectorAll('[data-search-result-target]') || [])] : [];
           const region = id ? (regions.length === 1 ? regions[0] : undefined)
-            : labels.length === 1 && local?.querySelectorAll('button[aria-expanded]').length === 1 ? local : undefined;
+            : labels.length === 1 && local?.querySelectorAll('button[aria-expanded]').length === 1 ? local
+              : authorRoots.length === 1 ? authorRoots[0] : undefined;
           const expanded = button.getAttribute('aria-expanded');
           if (region && button.parentElement?.contains(region) && ['true','false'].includes(expanded)
             && !region.querySelector('form,input,textarea,select,[contenteditable]:not([contenteditable="false"])')) return decide(true, 'linked_disclosure');
