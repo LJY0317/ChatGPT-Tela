@@ -1653,7 +1653,7 @@ describe("ChatGPT semantic provider", () => {
       };
       const abort = new AbortController();
       const handoff = provider.armToolContinuation(surface.lease, submitted.value, "call", abort.signal);
-      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      for (let step = 0; step < 20 && !waiting; step++) await Promise.resolve();
       expect(waiting).toBe(true);
       abort.abort(new Error("Native stopped"));
       await expect(handoff).rejects.toThrow("Native stopped");
@@ -3068,6 +3068,49 @@ test.each(["owned", "changed_author"] as const)("public cancellation aborts pend
 
 
 describe("completed browser answer awaiting Native delivery", () => {
+  test.each([false, true])("unmounted user captures the first pending boundary once, opt-in=%s", async enabled => {
+    const scratch = mkdtempSync(join(tmpdir(), "tela-pending-entry-"));
+    const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    const file = join(scratch, "events.jsonl");
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+    if (enabled) setPrivateDiagnosticCapture(join(scratch, "diagnostics"), 1);
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const surface = await leaseFor(driver, undefined, capability => capability === BROWSER_PAGE_AUTOMATION ? {
+      async evaluate() { return { capture_safe: true, html: "<article>PRIVATE_PENDING_ENTRY</article>" }; },
+    } : undefined);
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "off" });
+    try {
+      const submission = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const accepted = await submission;
+      if (accepted.state !== "proven") throw Error("expected accepted turn");
+      const user = driver.current.turns.find(turn => turn.role === "user")!;
+      driver.current = { ...driver.current, revision: "user-unmounted", turns: [
+        { key: "thinking", role: "assistant", parentUserTurnKey: user.key, phase: "streaming" },
+        { key: "tool", role: "assistant", parentUserTurnKey: user.key, phase: "tool-wait" },
+      ], approval: recognizedApproval };
+      for (let i = 0; i < 3; i++) expect((await provider.observeTurn(surface.lease, accepted.value)).state).toBe("probable");
+      const events = readDiagnosticTail(file).events;
+      const entries = events.filter(row => row.stage === "web_identity_pending_capture");
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ assistant_count: 2, complete_assistant_count: 0,
+        accepted_user_present: false, approval_card_count: 1, current_authority_proven: false });
+      expect(events.filter(row => row.stage === "web_completed_answer_deferred_anomaly")).toHaveLength(0);
+      expect(events.filter(row => row.stage === "browser_snapshot_observed" && row.reason_class === "completion_deferred"))
+        .toHaveLength(enabled ? 1 : 0);
+      expect(readFileSync(file, "utf8")).not.toContain("PRIVATE_PENDING_ENTRY");
+      const privateDir = join(scratch, "diagnostics", "private");
+      const captures = existsSync(privateDir) ? readdirSync(privateDir).filter(name => name.endsWith(".html")) : [];
+      expect(captures.some(name => readFileSync(join(privateDir, name), "utf8").includes("PRIVATE_PENDING_ENTRY"))).toBe(enabled);
+      expect(driver.approvalCalls).toBe(0);
+    } finally {
+      await surface.host.close();
+      if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
   test("a card already present before submission cannot defer a different completed request", async () => {
     const driver = new FixtureDriver({ ...fixture("ready-new-chat"), approval: recognizedApproval });
     const surface = await leaseFor(driver);

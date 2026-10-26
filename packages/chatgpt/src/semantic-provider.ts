@@ -490,8 +490,15 @@ async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: T
   const completed = snapshot.turns.filter(turn => turn.role === "assistant" && turn.phase === "complete"
     && (reason !== "identity_pending" ? turn.parentUserTurnKey === tracked.userTurnKey
       : !turn.parentUserTurnKey || !tracked.baselineUserLineageKeys.has(turn.parentUserTurnKey)));
-  if (!completed.length || tracked.deferredCompletionEvidence?.has(reason)) return;
-  (tracked.deferredCompletionEvidence ??= new Set()).add(reason);
+  // The first identity loss is evidence even if no assistant has completed yet.
+  // A later completed answer gets its own structural receipt without another raw capture.
+  const firstPending = reason === "identity_pending"
+    && !tracked.deferredCompletionEvidence?.has("identity_pending_entry");
+  const firstCompletion = completed.length > 0 && !tracked.deferredCompletionEvidence?.has(reason);
+  if (!firstPending && !firstCompletion) return;
+  const recorded = tracked.deferredCompletionEvidence ??= new Set<string>();
+  if (firstPending) recorded.add("identity_pending_entry");
+  if (firstCompletion) recorded.add(reason);
   try {
     await withDiagnosticContext({
       scope_fingerprint: diagnosticFingerprint(tracked.handle.nativeTaskId),
@@ -499,7 +506,11 @@ async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: T
         tracked.handle.webEpochId].join("\n")),
       turn_fingerprint: diagnosticFingerprint(tracked.handle.nativeTurnId),
     }, async () => {
-      emitDiagnosticEvent("chatgpt_tela_work", reason === "identity_pending"
+      if (firstPending) emitDiagnosticEvent("chatgpt_tela_work", "web_identity_pending_capture", {
+        ...turnObservationFields(snapshot, tracked), reason_class: "identity_pending",
+        current_authority_proven: false,
+      });
+      if (firstCompletion) emitDiagnosticEvent("chatgpt_tela_work", reason === "identity_pending"
         ? "web_completed_answer_deferred_anomaly" : "web_completed_answer_deferred", {
         ...turnObservationFields(snapshot, tracked),
         ...(completed.length === 1 ? retainedBoundaryFields(completed[0]) : {}),
@@ -510,9 +521,11 @@ async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: T
         // A visible card has surface scope; its owner is not proven by the assistant lineage.
         current_authority_proven: false,
       });
-      // Reuse local opt-in HTML/screenshot retention. This is an uncommitted
-      // observation, never an answer receipt or permission to replay the task.
-      await captureBrowserDiagnosticCheckpoint(surface, "completion_deferred");
+      // One opt-in checkpoint at the first identity loss. For approval/ambiguity,
+      // retain the existing completed-answer checkpoint. Neither authorizes delivery.
+      if (firstPending || reason !== "identity_pending") {
+        await captureBrowserDiagnosticCheckpoint(surface, "completion_deferred");
+      }
     });
   } catch { /* Evidence collection cannot change delivery or task execution. */ }
 }
@@ -1731,6 +1744,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     this.#tracked(surface, turn);
     tracked.revision = snapshot.revision;
     const state = stateFromSnapshot(snapshot, tracked);
+    if (tracked.identityPending) await recordDeferredCompletion(surface, tracked, snapshot, "identity_pending");
     if (!tracked.identityPending) {
       const assistants = assistantFor(snapshot, tracked.userTurnKey);
       this.#observeApproval(surface, tracked, snapshot, assistants.length === 1 ? assistants[0] : undefined);
