@@ -44,7 +44,8 @@ The package directory defaults to the directory containing this launcher. Use --
 Internal runtime commands:
   chatgpt-tela service <gateway|chat|codex>
   chatgpt-tela menu-bar
-  chatgpt-tela maintenance-open [--operation <repair|upgrade|cancel-upgrade> --payload <package>]
+  chatgpt-tela maintenance stage-update --payload <package>
+  chatgpt-tela maintenance-open [--staged-update | --operation <repair|upgrade|cancel-upgrade> --payload <package>]
 `;
 
 function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat" | "codex" {

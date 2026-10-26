@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { PackagedProductInstallSpec, PackagedServiceLaunchSpec } from "./packaged-install";
 import type { TelaServiceId } from "./layout";
@@ -237,6 +237,18 @@ export function readPackagedProductManifest(payloadSourcePath: string): Packaged
 
 export function packagedInstallSpecFromPayload(payloadSourcePath: string): PackagedProductInstallSpec {
   const manifest = readPackagedProductManifest(payloadSourcePath);
+  const requiredFiles = [
+    ...Object.values(manifest.services).map(service => service.executable),
+    manifest.launcher?.executable, manifest.menuBar?.executable,
+    manifest.profileRuntime?.executable, manifest.profileRuntime?.entrypoint,
+    manifest.profileRuntime?.setupEntrypoint, manifest.nativeEngine?.executable,
+    manifest.workspaceFiles?.executable,
+  ];
+  for (const file of requiredFiles) {
+    if (file && (!existsSync(join(payloadSourcePath, file)) || !statSync(join(payloadSourcePath, file)).isFile())) {
+      throw new Error(`packaged required file is missing: ${file}`);
+    }
+  }
   const services: PackagedServiceLaunchSpec[] = (["gateway", "chat", "codex"] as const).map(serviceId => {
     const entry = manifest.services[serviceId];
     if (manifest.launcher) {

@@ -52,6 +52,8 @@ describe("packaged product manifest", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-package-manifest-"));
     try {
       writeFileSync(join(root, PACKAGED_PRODUCT_MANIFEST), `${JSON.stringify(manifest())}\n`);
+      expect(() => packagedInstallSpecFromPayload(root)).toThrow("required file is missing");
+      mkdirSync(join(root, "runtime")); writeFileSync(join(root, "runtime/tela"), "fixture");
       const spec = packagedInstallSpecFromPayload(root);
       expect(spec.services.map(service => service.service)).toEqual(["gateway", "chat", "codex"]);
       expect(spec.productVersion).toBe("1.2.3");
@@ -84,6 +86,11 @@ describe("packaged product manifest", () => {
     expect(parsePackagedProductManifest(signed).menuBar?.executable).toBe("ui/chatgpt-tela-menu-bar");
     const root = mkdtempSync(join(tmpdir(), "tela-package-menu-bar-"));
     try {
+      for (const path of [...Object.values(signed.services).map(service => service.executable),
+        signed.launcher.executable, signed.profileRuntime.executable, signed.profileRuntime.entrypoint, signed.menuBar.executable]) {
+        const target = join(root, path);
+        mkdirSync(join(target, ".."), { recursive: true }); writeFileSync(target, "fixture");
+      }
       writeFileSync(join(root, PACKAGED_PRODUCT_MANIFEST), `${JSON.stringify(signed)}\n`);
       expect(packagedInstallSpecFromPayload(root).menuBar).toEqual({
         executableRelativePath: "chatgpt-tela",

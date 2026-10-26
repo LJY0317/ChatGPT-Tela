@@ -1,3 +1,4 @@
+import { readStagedUpdate, stageUpdate } from "./staged-update";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chmodSync, copyFileSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -40,10 +41,13 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
   if (args[0] !== "maintenance") throw new Error("expected maintenance command");
   const paths = resolveProductPaths({ platform: options.platform ?? process.platform,
     ...(options.home ? { home: options.home } : {}), ...(options.environment ? { environment: options.environment } : {}) });
+  if (args[1] === "stage-update" && args.length === 4 && args[2] === "--payload") {
+    return stageUpdate(args[3]!, options, payload => runPackagedLifecycleCommand(["upgrade", "--dry-run", "--payload", payload], options));
+  }
   if (args[1] === "status" && args.length === 2) {
     const ownership = readOwnershipManifest(paths.installManifest);
     const upgrade = readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths));
-    return { installedVersion: ownership?.productVersion ?? "Not installed", pendingTransition:
+    return { installedVersion: ownership?.productVersion ?? "Not installed", update: readStagedUpdate(options), pendingTransition:
       upgrade ? "upgrade" : readPackagedRepairJournal(packagedRepairJournalPath(paths)) ? "repair" : "none",
       ...(upgrade ? {
         cancellationReviewAvailable: ["prepared", "quiescing", "quiesced", "restoring-source"].includes(upgrade.phase),
@@ -196,7 +200,14 @@ export async function resolveMaintenanceWindowSource(payloadRoot: string, launch
 export async function openMaintenanceWindow(payloadRoot: string, launcherExecutablePath: string, repairSourceArguments: readonly string[] = []) {
   if (process.platform !== "darwin") throw new Error("maintenance window requires macOS");
   // Damaged installs use a separately signed repair package, never unproven installed UI bytes.
-  const verify = () => resolveMaintenanceWindowSource(payloadRoot, launcherExecutablePath, repairSourceArguments);
+  const staged = repairSourceArguments.length === 1 && repairSourceArguments[0] === "--staged-update"
+    ? readStagedUpdate() : null;
+  if (repairSourceArguments.includes("--staged-update") && !staged) throw Error("No prepared update is available");
+  const supplied = staged ? ["--operation", "upgrade", "--payload", staged.payload] : [...repairSourceArguments];
+  const operationIndex = supplied.indexOf("--operation"), payloadIndex = supplied.indexOf("--payload");
+  const operation = operationIndex >= 0 ? supplied[operationIndex + 1] : "upgrade";
+  const selectedPayload = payloadIndex >= 0 ? supplied[payloadIndex + 1] : undefined;
+  const verify = () => resolveMaintenanceWindowSource(payloadRoot, launcherExecutablePath, staged ? [] : repairSourceArguments);
   const verified = await verify();
   const root = stageMaintenanceWindow(verified);
   try {
@@ -205,7 +216,8 @@ export async function openMaintenanceWindow(payloadRoot: string, launcherExecuta
     if (digest(readFileSync(verified.launcher)) !== snapshot.files.launcher
       || digest(readFileSync(verified.ui)) !== snapshot.files["maintenance-ui"]) throw new Error("verified executables changed while staging");
     const child = spawn(join(root, "maintenance-ui"), ["--maintenance-only"], { detached: true, stdio: "ignore",
-      env: { ...process.env, CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE: join(root, "launcher"), CHATGPT_TELA_MAINTENANCE_WORKSPACE: root } });
+      env: { ...process.env, CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE: join(root, "launcher"), CHATGPT_TELA_MAINTENANCE_WORKSPACE: root,
+        CHATGPT_TELA_MAINTENANCE_OPERATION: operation, CHATGPT_TELA_MAINTENANCE_PAYLOAD: selectedPayload } });
     await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
     child.unref();
     return { opened: true };

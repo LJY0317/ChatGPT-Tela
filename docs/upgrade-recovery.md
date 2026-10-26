@@ -197,3 +197,19 @@ recorded only when actually supplied. Unknown codes, absent receipts and externa
 host failures remain unproven. No automatic model resend or switch is introduced.
 See [diagnostics](diagnostics.md) for bounded capture and privacy rules. These
 source changes are not evidence that the installed client emitted the new events.
+
+### Prepared updates
+
+`chatgpt-tela maintenance stage-update --payload <package>` verifies and copies one
+candidate into Tela's owned update cache. Preparing a package does not close apps
+or install it. The menu shows **Updates…**, or **Install Update…** with an arrow
+badge when a candidate is ready. Settings uses the same status and offers manual
+package selection. Clicking Install opens the existing review/apply lifecycle;
+active work and unfinished transitions keep their normal protection.
+
+Preparing another candidate replaces the previous cached package under the existing
+installer writer lock. At most one ready package and its temporary replacement are
+stored; cache removal is part of owned uninstall. Status reads metadata rather than
+hashing the payload repeatedly. Installation revalidates package bytes. Release-feed
+lookup and automatic download are not implemented; development packages can use
+this same prepared-package entry point without an agent workspace dependency.

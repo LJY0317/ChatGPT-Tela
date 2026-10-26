@@ -254,3 +254,27 @@ for (const supported of [true, false]) test(`maintenance cancellation review bin
     expect(readFileSync(paths.installManifest)).toEqual(manifest);
   } finally { removeFixture(root); }
 });
+
+
+test("prepared update survives removal of its source and uses the existing reviewed lifecycle", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-prepared-update-"));
+  try {
+    const f = fixture(root), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner };
+    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first], options);
+    await runMaintenanceCommand(["maintenance", "stage-update", "--payload", f.second], options);
+    rmSync(join(f.second, "services", "chat"));
+    await expect(runMaintenanceCommand(["maintenance", "stage-update", "--payload", f.second], options)).rejects.toThrow();
+    rmSync(f.second, { recursive: true });
+    const status = await runMaintenanceCommand(["maintenance", "status"], options) as any;
+    expect(status.update.productVersion).toBe("2.0.0");
+    expect(status.update.payload.startsWith(resolveProductPaths(options).cacheRoot)).toBe(true);
+    const args = ["--payload", status.update.payload];
+    const review = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...args], options) as any;
+    expect((await runMaintenanceCommand(["maintenance", "apply", "upgrade", ...args, "--review-token", review.reviewToken], options) as any).success).toBe(true);
+    expect((await runMaintenanceCommand(["maintenance", "status"], options) as any).update).toBeNull();
+    await runMaintenanceCommand(["maintenance", "stage-update", "--payload", f.first], options);
+    const removal = await runMaintenanceCommand(["maintenance", "review", "uninstall"], options) as any;
+    await runMaintenanceCommand(["maintenance", "apply", "uninstall", "--review-token", removal.reviewToken], options);
+    expect(existsSync(resolveProductPaths(options).cacheRoot + "/updates")).toBe(false);
+  } finally { removeFixture(root); }
+});

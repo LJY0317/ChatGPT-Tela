@@ -149,6 +149,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     return true
   }
   private var statusItem: NSStatusItem!
+  private var updateWatch: DispatchSourceFileSystemObject?
   private var statusMenu: NSMenu!
   private var connectionSpinner: NSProgressIndicator?
   private var connectionProgress: String?
@@ -199,6 +200,12 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         button.title = "T"
       }
     }
+    controlCenter.onUpdateStatusChanged = { [weak self] in
+      guard let self else { return }
+      self.updateStatusIcon()
+      if !self.menuOpen { self.rebuildMenu(loading: self.snapshot == nil) }
+    }
+    watchUpdateCache()
     controlCenter.workState.onChange = { [weak self] in
       guard let self else { return }
       self.controlCenter.workInventoryDidChange()
@@ -253,7 +260,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     guard let button = statusItem.button else { return }
     let visibleProgress = message ?? (refreshing ? "Checking status…" : nil) ?? (workInventory.error == nil && workInventory.profiles.contains { $0.connectionInProgress == true || ($0.connected && $0.webState == "preparing") } ? "Connecting ChatGPT…" : nil)
     button.toolTip = visibleProgress ?? "ChatGPT Tela"
-    button.setAccessibilityLabel(visibleProgress.map { "Tela: \($0)" } ?? "ChatGPT Tela")
+    button.setAccessibilityLabel(visibleProgress.map { "Tela: \($0)" } ?? (controlCenter.updateStatus?.update == nil ? "ChatGPT Tela" : "ChatGPT Tela, update available"))
     if visibleProgress != nil {
       if connectionSpinner == nil {
         let spinner = NSProgressIndicator()
@@ -526,6 +533,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   }
 
   private func inspect() async -> MenuSnapshot {
+    await controlCenter.refreshUpdateStatus()
     async let gateway = inspectService("gateway")
     async let chat = inspectService("chat")
     async let codex = inspectService("codex")
@@ -651,9 +659,58 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       addProfileOpen(1, name: "ChatGPT", to: menu)
     }
     menu.addItem(.separator())
+    if let update = controlCenter.updateStatus?.update, controlCenter.updateStatus?.pendingTransition == "none" {
+      let item = actionItem("Install Update…", action: #selector(installPreparedUpdate))
+      item.toolTip = "Version \(update.productVersion)"
+      item.isEnabled = controlCenter.updateStatus?.pendingTransition == "none" && !controlCenter.connectionOperationInProgress
+      menu.addItem(item)
+    } else {
+      menu.addItem(actionItem("Updates…", action: #selector(openUpdates)))
+    }
     menu.addItem(actionItem("Open Tela…", action: #selector(openControlCenter), keyEquivalent: "o"))
     menu.addItem(actionItem("Quit Tela Menu", action: #selector(quitMenuBar), keyEquivalent: "q"))
     updateProfileProgress()
+  }
+
+  private func updateStatusIcon() {
+    guard let base = NSImage(systemSymbolName: "network", accessibilityDescription: "ChatGPT Tela") else { return }
+    guard controlCenter.updateStatus?.update != nil else { statusItem.button?.image = base; return }
+    let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { rect in
+      base.draw(in: NSRect(x: 0, y: 3, width: 17, height: 17))
+      NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: nil)?
+        .draw(in: NSRect(x: 11, y: 0, width: 9, height: 9))
+      return true
+    }
+    image.isTemplate = true
+    statusItem.button?.image = image
+    statusItem.button?.setAccessibilityLabel("ChatGPT Tela, update available")
+  }
+
+  private func watchUpdateCache() {
+    updateWatch?.cancel(); updateWatch = nil
+    let cache = home.appendingPathComponent("Library/Caches/ChatGPT Tela")
+    let updates = cache.appendingPathComponent("updates")
+    let directory = fileManager.fileExists(atPath: updates.path) ? updates : cache
+    let descriptor = open(directory.path, O_EVTONLY)
+    guard descriptor >= 0 else { return }
+    let watch = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: [.write, .rename, .delete], queue: .main)
+    watch.setCancelHandler { close(descriptor) }
+    watch.setEventHandler { [weak self] in
+      guard let self else { return }
+      self.watchUpdateCache()
+      Task { await self.controlCenter.refreshUpdateStatus() }
+    }
+    updateWatch = watch; watch.resume()
+  }
+
+  @objc private func openUpdates() {
+    statusMenu.cancelTracking()
+    controlCenter.showUpdates()
+  }
+
+  @objc private func installPreparedUpdate() {
+    statusMenu.cancelTracking()
+    controlCenter.installUpdate()
   }
 
   @objc private func startTela() {
