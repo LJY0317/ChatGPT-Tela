@@ -3355,3 +3355,34 @@ test("default delivery deadline is four hours and repeated observation does not 
     expect(driver.activated).toHaveLength(1);
   } finally { clock?.mockRestore(); await surface.host.close(); }
 });
+
+test("delivery timeout stays bounded when the final browser observation hangs", async () => {
+  const driver = new FixtureDriver(fixture("ready-new-chat"));
+  const surface = await leaseFor(driver);
+  const provider = new ChatGptSemanticProvider({ deliveryWaitTimeoutMs: 10 });
+  try {
+    const sending = provider.submitTurn(surface.lease, request());
+    while (driver.current.revision === "r1") await Promise.resolve();
+    driver.queued.push(acceptedSnapshot(driver));
+    const submitted = await sending;
+    if (submitted.state !== "proven") throw Error("fixture submit");
+    const originalObserve = driver.observe.bind(driver);
+    let observations = 0;
+    driver.observe = (async (signal?: AbortSignal) => {
+      if (++observations === 1) return originalObserve();
+      return new Promise<ChatGptSurfaceSnapshot>((_, reject) => {
+        if (signal?.aborted) { reject(signal.reason); return; }
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }) as unknown as typeof driver.observe;
+    driver.waitForChange = (async (_revision: string, signal?: AbortSignal) => new Promise<ChatGptSurfaceSnapshot>((_, reject) => {
+      if (signal?.aborted) { reject(signal.reason); return; }
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    })) as unknown as typeof driver.waitForChange;
+    const started = Date.now();
+    await expect(provider.waitForTurnEvent(surface.lease, submitted.value))
+      .rejects.toMatchObject({ code: "tela_web_observation_unproven", reason: "response_wait_timeout", retryable: false });
+    expect(Date.now() - started).toBeLessThan(6_000);
+    expect(driver.activated).toHaveLength(1);
+  } finally { await surface.host.close(); }
+}, 7_000);

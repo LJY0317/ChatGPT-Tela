@@ -579,8 +579,34 @@ async function waitForDeliveryChange(driver: ChatGptSurfaceDriver, tracked: Trac
       timer.unref?.();
     })]);
     signal?.throwIfAborted();
-    // One final read resolves completion/tool/approval races before declaring a timeout.
-    return snapshot ?? await driver.observe(signal);
+    if (snapshot) return snapshot;
+
+    // Recheck completion races once, with a bound of its own so a hung renderer cannot
+    // make the response-delivery deadline unbounded again.
+    const observationAbort = new AbortController();
+    const observationSignal = AbortSignal.any([observationAbort.signal, ...(signal ? [signal] : [])]);
+    let observationTimer: ReturnType<typeof setTimeout> | undefined;
+    const unavailable = { unavailable: true as const };
+    const finalObservation = driver.observe(observationSignal).then(value => ({ value }), () => unavailable);
+    const timeout = new Promise<typeof unavailable>(resolve => {
+      observationTimer = setTimeout(() => { observationAbort.abort(); resolve(unavailable); }, 5_000);
+      observationTimer.unref?.();
+    });
+    try {
+      const result = await Promise.race([finalObservation, timeout]);
+      signal?.throwIfAborted();
+      if (!("value" in result)) {
+        emitDiagnosticEvent("chatgpt_tela_work", "web_delivery_wait_timeout", {
+          ...tracked.diagnosticLineage, deadline_ms: tracked.deliveryWaitTimeoutMs,
+          final_observation: "unavailable", remote_outcome: "unknown", retryable: false,
+        });
+        throw new WebObservationUnproven("response_wait_timeout");
+      }
+      return result.value;
+    } finally {
+      if (observationTimer) clearTimeout(observationTimer);
+      observationAbort.abort();
+    }
   } finally {
     if (timer) clearTimeout(timer);
     abort.abort(); // Only this DOM waiter; never the browser or a tool process.
