@@ -210,11 +210,11 @@ export type CodexAppServerRpcFactory = (
 
 type LoadedAppServerTurn = { readonly threadId: string; readonly turnId: string };
 
-/** Observe active turns through the app-server's bounded public read contract. */
-async function loadedAppServerActiveTurns(
+/** Maintenance admission needs current activity, not historical turn proof. */
+async function loadedAppServerActiveThreads(
   rpc: CodexAppServerRpc,
   signal?: AbortSignal,
-): Promise<readonly LoadedAppServerTurn[]> {
+): Promise<readonly { threadId: string; thread: Record<string, unknown> }[]> {
   const loaded: string[] = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
@@ -241,10 +241,8 @@ async function loadedAppServerActiveTurns(
     if (page === 7) throw new Error("Codex app-server loaded-thread list exceeds the bounded lifecycle scan");
   }
 
-  const active: LoadedAppServerTurn[] = [];
+  const active: { threadId: string; thread: Record<string, unknown> }[] = [];
   for (const threadId of loaded) {
-    // Idle loaded conversations can have large histories. Status alone is sufficient to skip
-    // them; retrieve turn history only when Native reports an active thread.
     const statusResponse = record(await rpc.request("thread/read", {
       threadId, includeTurns: false,
     }, signal));
@@ -253,6 +251,15 @@ async function loadedAppServerActiveTurns(
       throw new Error("Codex app-server returned a different loaded thread");
     }
     if (record(statusThread.status)?.type !== "active") continue;
+    active.push({ threadId, thread: statusThread });
+  }
+  return active;
+}
+
+/** Interruption additionally requires the exact turn; admission never does. */
+async function loadedAppServerActiveTurns(rpc: CodexAppServerRpc, signal?: AbortSignal): Promise<readonly LoadedAppServerTurn[]> {
+  const active: LoadedAppServerTurn[] = [];
+  for (const { threadId, thread: statusThread } of await loadedAppServerActiveThreads(rpc, signal)) {
     // A shallow Legacy turns/list can still reconstruct the entire rollout
     // inside the Native app-server. Never infer idleness when active ownership
     // cannot be proved with indexed, bounded history.
@@ -289,7 +296,7 @@ export async function countLoadedAppServerActiveTurns(
     ?? (signal => connectCodexAppServerWebSocket(endpoint, { ...(signal ? { signal } : {}) }));
   const rpc = await connect(options.signal);
   try {
-    return (await loadedAppServerActiveTurns(rpc, options.signal)).length;
+    return (await loadedAppServerActiveThreads(rpc, options.signal)).length;
   } finally {
     await rpc.close();
   }

@@ -839,25 +839,21 @@ test("normal shutdown scans idle thread status without downloading history", asy
   expect(reads).toEqual([{ threadId: "idle-thread", includeTurns: false }]);
 });
 
-test("read-only lifecycle observation counts an exact active Native turn without interrupting it", async () => {
+for (const historyMode of ["paginated", "legacy"]) test(`lifecycle admission uses ${historyMode} activity without reading or interrupting turns`, async () => {
   const calls: string[] = [];
   const rpc: CodexAppServerRpc = {
     async request(method, params) {
       calls.push(method);
       if (method === "thread/loaded/list") return { data: ["thread-active"], nextCursor: null };
       if (method === "thread/read") return { thread: activeThread({
-        id: "thread-active", historyMode: "paginated", turns: undefined,
+        id: "thread-active", historyMode, turns: undefined,
       }) };
-      if (method === "thread/turns/list") return { data: [
-        { id: "turn-active", status: "inProgress", itemsView: "notLoaded", items: [] },
-      ], nextCursor: null };
       throw new Error(`unexpected RPC method: ${method}`);
     },
     async close() { calls.push("close"); },
   };
   expect(await countLoadedAppServerActiveTurns("ws://127.0.0.1:1", { connect: async () => rpc })).toBe(1);
-  expect(calls).not.toContain("turn/interrupt");
-  expect(calls.at(-1)).toBe("close");
+  expect(calls).toEqual(["thread/loaded/list", "thread/read", "close"]);
 });
 
 describe("Native turn termination observation", () => {

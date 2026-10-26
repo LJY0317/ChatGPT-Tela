@@ -29,6 +29,8 @@ It reuses the existing cancellation journal and service controller.
 
 - Before replacement: cancel/restore only after stop settlement is proven.
 - Uncertain shutdown: preserve the journal and report `settlement-required`.
+- If Gateway's own stop was acknowledged, restore that ingress while preserving
+  the uncertain backend stop. A backend is never restarted on this evidence.
 - After replacement: report `resume-required`; never restore old files.
 - Restoration failure: retain `restoring-source` for reconciliation.
 - Successful restoration: report `source-restored` as an **upgrade failure**,
@@ -116,6 +118,13 @@ This observer runs only during an explicit lifecycle operation and adds no idle 
 Service readiness does not prove that every profile's Web model has completed a request.
 
 ## Stop evidence
+
+Maintenance admission reads current loaded-thread activity without requesting historical
+turn pages. An active thread blocks maintenance regardless of its history format;
+only explicit interruption needs an exact indexed turn identity. Profile shutdown
+stops at the first failure, restores profiles it already closed through the normal
+start path, and preserves the refused profile's owner. Failure diagnostics identify
+the profile and stop phase without recording conversation text.
 
 The default Desktop target settles canonically proven active Native turns through the public
 app-server protocol before asking Desktop to quit or closing its proxy/backend. Unproven active

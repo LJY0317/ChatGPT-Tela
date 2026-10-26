@@ -566,7 +566,7 @@ async function applyPackagedUpgradeWithRecoveryOwned(input: Parameters<typeof ap
   assertPackagedUpgradeRecoveryArtifact(input.plan, input.recovery);
   const paths = input.plan.targetBlueprint.paths;
   const restore = async (failure: unknown): Promise<never> => {
-    const journal = readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths));
+    let journal = readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths));
     if (!journal || !sameUpgrade(journal, input.plan)) throw failure;
     if (!["prepared", "quiescing", "quiesced", "restoring-source"].includes(journal.phase)) {
       throw new PackagedUpgradeRecoveryError("resume-required", failure);
@@ -577,7 +577,21 @@ async function applyPackagedUpgradeWithRecoveryOwned(input: Parameters<typeof ap
       // Explicit null is an acknowledged stop boundary, not missing legacy evidence.
       let settled = journal.stopEvidenceVersion === 1 && journal.pendingStop === null;
       if (!settled) try { settled = await input.services.settleQuiescence?.() === true; } catch { /* Unknown stays protected. */ }
-      if (!settled) throw new PackagedUpgradeRecoveryError("settlement-required", failure);
+      if (!settled) {
+        // Keep ingress available for inspection/recovery. Its acknowledged stop
+        // is independent of the uncertain backend; do not restart that backend.
+        if (journal.quiescedServices.includes("gateway") && !journal.resumedServices.includes("gateway")) {
+          try {
+            await input.services.resume("gateway");
+            journal = updateJournal(packagedUpgradeJournalPath(paths), journal, {
+              resumedServices: Object.freeze([...journal.resumedServices, "gateway"]),
+            });
+          } catch (error) {
+            throw new PackagedUpgradeRecoveryError("settlement-required", new AggregateError([failure, error], "acknowledged service restoration failed"));
+          }
+        }
+        throw new PackagedUpgradeRecoveryError("settlement-required", failure);
+      }
     }
     try {
       await cancelPackagedUpgradeOwned({ sourcePayloadPath: input.recovery.sourcePayloadPath,

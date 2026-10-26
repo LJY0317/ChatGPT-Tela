@@ -396,20 +396,24 @@ export async function startCodexService(input: {
   const stopOwned = async (profile: OwnedProfile, interruptTurns = false): Promise<void> => {
     if (profile.stopping) return profile.stopping;
     stoppingProfiles.add(profile.slot);
+    let phase = "ownership";
     profile.stopping = (async () => {
       // Startup cancellation must not cancel normal cleanup of already-owned resources.
       const session = await targets.session(profile.target.id);
       const ownsTargetRoute = ownsNativeTargetSession(profile.target, session, profile);
       if (ownsTargetRoute && profile.target.adapterKind === "multi-profile") {
+        phase = "native_work_settlement";
         if (interruptTurns) await interruptNativeTurns(profile.slot, session);
         else if (await profileShutdownReadiness(profile, true) !== "ready") {
           throw new Error("Tela Codex profile has active or unverifiable Native/Web work; finish it before shutdown");
         }
+        phase = "normal_quit";
         const afterQuit = await targets.quit(profile.target.id);
         if (afterQuit.state === "ready") throw new Error("native target remained ready after normal quit");
       }
       // Process exit alone cannot attest successful Desktop cleanup. Keep the
       // exact control/supervision owner until its authenticated runtime receipt.
+      phase = "runtime_cleanup";
       const response = await fetch(new URL("v1/profile-stop", profile.bridgePreviewUrl), {
         method: "POST", headers: { authorization: `Bearer ${profile.uiToken}` },
         signal: AbortSignal.timeout(CHILD_STOP_TIMEOUT_MS),
@@ -423,6 +427,7 @@ export async function startCodexService(input: {
       profile.unmount();
       await profile.bridge.close().catch(() => {});
       await profile.supervisor.close();
+      phase = "child_exit";
       if (!await waitForExit(profile.child, CHILD_STOP_TIMEOUT_MS)) {
         throw new Error(`Tela Codex profile ${profile.slot} child did not exit after its target closed`);
       }
@@ -432,6 +437,9 @@ export async function startCodexService(input: {
       await profile.supervisor.close().catch(() => {});
       owned.delete(profile.slot);
     })().catch(error => {
+      emitDiagnosticEvent("chatgpt_tela_codex", "profile_stop_failed", {
+        slot: profile.slot, phase, failure_class: diagnosticFailureClass(error),
+      });
       profile.stopping = undefined;
       throw error;
     }).finally(() => {
@@ -492,7 +500,7 @@ export async function startCodexService(input: {
     return value;
   }
 
-  return Object.freeze({
+  const service: CodexService = Object.freeze({
     instanceId,
     config: input.config,
     tools: routedBridge,
@@ -957,25 +965,33 @@ export async function startCodexService(input: {
     },
     close() {
       if (closing) return closing;
+      const stoppedSlots: number[] = [];
       closing = (async () => {
         stopping = true;
         if (await shutdownReadiness(true) !== "ready") throw new CodexShutdownNotStartedError();
         // Admission is closed before taking this snapshot. An already-admitted
         // start may publish its child late; drain it before enumerating owners.
         await Promise.all([...starting.values()]);
-        const failures: unknown[] = [];
         for (const profile of [...owned.values()]) {
-          try { await stopOwned(profile, false); }
-          catch (error) { failures.push(error); }
+          await stopOwned(profile, false);
+          stoppedSlots.push(profile.slot);
         }
-        if (failures.length > 0) throw new AggregateError(failures, "Tela Codex could not normally stop every profile");
-      })().catch(error => {
-        closing = undefined;
+      })().catch(async error => {
         stopping = false;
+        const failures: unknown[] = [error];
+        // Restore only profiles this shutdown finished closing, through the same
+        // normal start path. The refused/uncertain profile keeps its owner.
+        for (const slot of stoppedSlots) {
+          try { await service.startProfile(slot); }
+          catch (failure) { failures.push(failure); }
+        }
+        closing = undefined;
+        if (failures.length > 1) throw new AggregateError(failures, "Profile shutdown failed and restoration is incomplete");
         throw error;
       });
       return closing;
     },
     get activeProfileCount() { return owned.size; },
   });
+  return service;
 }

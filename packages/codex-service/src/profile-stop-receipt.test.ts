@@ -9,7 +9,9 @@ test("refused default Desktop cleanup keeps authenticated child, route and servi
   const root = mkdtempSync(join(tmpdir(), "tela-stop-receipt-")), state = join(root, "stop.json");
   writeFileSync(state, JSON.stringify({ refuse: true }));
   let active = false, closes = 0, parentQuits = 0;
-  const closed = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { closes++; active = false; return new Response(null, { status: 204 }); } });
+  const closedSlots: number[] = [];
+  let onClosed = (_slot: number) => {};
+  const closed = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) { const slot = Number(new URL(request.url).searchParams.get("slot") ?? 1); closedSlots.push(slot); onClosed(slot); closes++; active = false; return new Response(null, { status: 204 }); } });
   const appServer = Bun.serve({ hostname: "127.0.0.1", port: 0,
     fetch(request, server) { return server.upgrade(request) ? undefined : new Response(null, { status: 400 }); },
     websocket: { message(socket, data) {
@@ -27,10 +29,11 @@ test("refused default Desktop cleanup keeps authenticated child, route and servi
 import {createProfileSupervisorLifecycle} from ${JSON.stringify(supervision)};
 import {startProfileBridgePreviewServer} from ${JSON.stringify(preview)};
 import {startCodexBridgeMcpHttpServer} from ${JSON.stringify(mcp)};
+const slot=Number(process.env.CHATGPT_TELA_PRODUCT_PROFILE_SLOT);
 const lifecycle=await createProfileSupervisorLifecycle();
 const mcp=await startCodexBridgeMcpHttpServer({bridge:{inventory(){return []},async invoke(){throw Error('unused')}},authentication:{kind:'bearer',token:process.env.CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN}});
-const preview=await startProfileBridgePreviewServer({slot:1,bearerToken:process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN,async observe(){return{activeSurfaceCount:0}},shutdownReadiness(){return 'ready'},async shutdownProfile(){if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).refuse)throw Error('synthetic normal quit refusal');await fetch(process.env.FIXTURE_CLOSED);return{responsesRouteFingerprint:'a'.repeat(64)}}});
-await lifecycle.publishReady({stage:'product-profile-ready',runtimeProcessId:process.pid,slot:1,routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:'default',nativeTargetKind:'default-desktop',targetProcessId:123,nativeReady:true,webState:'preparing',profileId:'fixture',internalMcpUrl:mcp.endpointUrl.href,bridgePreviewUrl:preview.endpoint.href,terminalEndpoint:process.env.FIXTURE_APP_SERVER_ENDPOINT,responsesUrl:'http://127.0.0.1:1234/',responsesRouteFingerprint:'a'.repeat(64)});
+const preview=await startProfileBridgePreviewServer({slot,bearerToken:process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN,async observe(){return{activeSurfaceCount:0}},shutdownReadiness(){return 'ready'},async shutdownProfile(){const state=JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8'));if(state.refuse||state.refuseSlot===slot)throw Error('synthetic normal quit refusal');await fetch(process.env.FIXTURE_CLOSED);return{responsesRouteFingerprint:'a'.repeat(64)}}});
+await lifecycle.publishReady({stage:'product-profile-ready',runtimeProcessId:process.pid,slot,routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:slot===1?'default':'fixture-'+slot,nativeTargetKind:'default-desktop',targetProcessId:123,nativeReady:true,webState:'preparing',profileId:'fixture',internalMcpUrl:mcp.endpointUrl.href,bridgePreviewUrl:preview.endpoint.href,terminalEndpoint:process.env.FIXTURE_APP_SERVER_ENDPOINT,responsesUrl:'http://127.0.0.1:1234/',responsesRouteFingerprint:'a'.repeat(64)});
 await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecycle.dispose();`);
   const built = await Bun.build({ entrypoints: [child], target: "bun", outdir: root, naming: "child.mjs" });
   expect(built.success).toBe(true);
@@ -50,7 +53,7 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
   try {
     const started = await service.startProfile(1);
     expect(await service.shutdownReadiness()).toBe("ready");
-    await expect(service.close()).rejects.toThrow("normally stop");
+    await expect(service.close()).rejects.toThrow("Profile normal shutdown was not acknowledged");
     expect(service.activeProfileCount).toBe(1); expect(active).toBe(true); expect(closes).toBe(0); expect(parentQuits).toBe(0);
     expect((await service.profiles())[0]?.controlState).toBe("running");
     expect((await service.profiles())[0]?.childProcessId).toBe(started.childProcessId);
@@ -88,6 +91,49 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
       await starting.catch(() => {});
       await closing.catch(() => {});
       await late.close();
+    }
+    // A failed first profile must leave later profiles untouched, rather than
+    // continuing a shutdown which can no longer install the update.
+    const activeSlots = new Set<number>();
+    const targets = [target, { ...target, slot: 2, id: "fixture-2" }];
+    const multiSession = (id: string) => {
+      const slot = targets.find(t => t.id === id)!.slot;
+      return { targetId: id, state: activeSlots.has(slot) ? "restart-required" : "available",
+        ...(activeSlots.has(slot) ? { desktopProcessId: 123 } : {}) };
+    };
+    const multiple = await startCodexService({ config: {}, profileRuntimeCommand: [process.execPath, join(root, "child.mjs")],
+      nativeTargetAdapter: { ...adapter,
+        async profiles() { return targets.map(target => ({ target, session: multiSession(target.id) })); },
+        async resolve(slot) { const target = targets[slot - 1]!; return { target, session: multiSession(target.id) }; },
+        async session(id) { return multiSession(id); },
+        async quit(id) { activeSlots.delete(targets.find(t => t.id === id)!.slot); return multiSession(id); },
+        profileRuntimeEnvironment(target) {
+          activeSlots.add(target.slot);
+          return { FIXTURE_STATE: state, FIXTURE_CLOSED: closed.url.href + '?slot=' + target.slot,
+            FIXTURE_APP_SERVER_ENDPOINT: `ws://127.0.0.1:${appServer.port}/` };
+        },
+      } });
+    onClosed = slot => { activeSlots.delete(slot); };
+    try {
+      await multiple.startProfile(1); await multiple.startProfile(2);
+      closedSlots.length = 0;
+      writeFileSync(state, JSON.stringify({ refuse: true }));
+      await expect(multiple.close()).rejects.toThrow("Profile normal shutdown was not acknowledged");
+      expect(multiple.activeProfileCount).toBe(2);
+      expect(closedSlots).toEqual([]);
+      expect(activeSlots.size).toBe(2);
+      writeFileSync(state, JSON.stringify({ refuseSlot: 2 }));
+      const priorSecond = (await multiple.profiles()).find(p => p.slot === 2)!.childProcessId;
+      await expect(multiple.close()).rejects.toThrow("Profile normal shutdown was not acknowledged");
+      expect(closedSlots).toEqual([1]);
+      expect(multiple.activeProfileCount).toBe(2);
+      expect(activeSlots.size).toBe(2);
+      expect((await multiple.profiles()).find(p => p.slot === 2)!.childProcessId).toBe(priorSecond);
+      writeFileSync(state, JSON.stringify({ refuse: false }));
+      await multiple.close();
+      expect(closedSlots).toEqual([1, 2, 1]);
+    } finally {
+      writeFileSync(state, JSON.stringify({ refuse: false })); await multiple.close();
     }
   } finally {
     writeFileSync(state, JSON.stringify({ refuse: false }));

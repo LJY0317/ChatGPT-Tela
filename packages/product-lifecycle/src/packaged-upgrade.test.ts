@@ -277,6 +277,8 @@ for (const evidence of ["pending", "absent"] as const) test(`resumed shutdown ${
     f.services.settleQuiescence = async () => false;
     const invoke = () => applyPackagedUpgradeWithRecovery({ plan: f.plan, payloadSourcePath: f.target, services: f.services, ...f.options });
     await expect(invoke()).rejects.toMatchObject({ recoveryState: "settlement-required" });
+    expect(f.services.states.get("gateway")).toBe("running");
+    expect(f.services.states.get("codex")).toBe("stopped"); // Uncertain stop is never restarted.
     const path = packagedUpgradeJournalPath(f.plan.targetBlueprint.paths);
     expect(readPackagedUpgradeJournal(path)).toMatchObject({ stopEvidenceVersion: 1, pendingStop: "codex" });
     if (evidence === "absent") {
@@ -660,7 +662,7 @@ for(const boundary of ['restore','uncertain','post-replacement','restoration-int
    if(boundary==='uncertain'){
     await expect(invoke()).rejects.toMatchObject({recoveryState:'settlement-required'});
     expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))?.phase).toBe('quiescing');
-    expect(services.events.filter(x=>x.startsWith('start:'))).toHaveLength(0);
+    expect(services.events.filter(x=>x.startsWith('start:'))).toEqual(['start:gateway']);
    }else if(boundary==='post-replacement'){
     await expect(invoke()).rejects.toMatchObject({recoveryState:'resume-required'});
     expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe('2.0.0');
