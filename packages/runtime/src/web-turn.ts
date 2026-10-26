@@ -1,4 +1,4 @@
-import { WebProviderResponseFailed, WebContextFitFailed, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
+import { WebProviderResponseFailed, WebContextFitFailed, NativeWebHandoffUnproven, webObservationFailureReason } from "@chatgpt-tela/core";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { capturePrivateDiagnosticValue, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
@@ -200,6 +200,10 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       ...(input.media ? { media: input.media } : {}),
       ...(input.toolBridge ? { toolBridge: input.toolBridge } : {}),
       ...(input.chatTools ? { chatTools: input.chatTools } : {}),
+      isToolExecutionPending: () => {
+        const state = input.channel.state();
+        return !!state.outstandingToolCallId && !state.nativeResultReady;
+      },
     }, input.signal));
     validateHandle(input, handle);
     acceptedHandle = handle;
@@ -297,7 +301,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
     if (acceptedPhase(input.channel.phase)) {
       try { input.channel.markIndeterminate(error); } catch { /* Preserve the first failure. */ }
     }
-    if (acceptedHandle && input.provider.cancelTurn) {
+    if (acceptedHandle && input.provider.cancelTurn && webObservationFailureReason(error) !== "response_wait_timeout") {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         // Provider cancellation owns fresh surface/turn proof and a bounded stop

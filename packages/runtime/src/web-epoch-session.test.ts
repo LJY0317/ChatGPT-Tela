@@ -185,3 +185,29 @@ describe("retained browser epoch registry", () => {
     expect(next.reused).toBe(false);
   });
 });
+
+
+test("delivery timeout preserves a viewable surface, but never reuses its uncertain context", async () => {
+  let now = 1000, closes = 0;
+  const host = new ControlledBrowserHost(async () => ({
+    async navigate() {}, async reveal() {}, async hide() {}, async close() { closes++; },
+  }));
+  const registry = new RetainedBrowserEpochRegistry(host, { now: () => now });
+  try {
+    const original = await registry.acquire("task", "epoch");
+    await registry.complete("task", "epoch");
+    await registry.acquire("task", "epoch");
+    await registry.fail("task", "epoch", true);
+    expect(closes).toBe(0);
+    expect(registry.size).toBe(1);
+    const next = await registry.acquire("task", "epoch");
+    expect(next.reused).toBe(false);
+    expect(next.surface.leaseId).not.toBe(original.surface.leaseId);
+    expect(closes).toBe(1);
+    await registry.fail("task", "epoch", true);
+    now += 7 * 24 * 60 * 60 * 1000;
+    await registry.retireExpired();
+    expect(closes).toBe(2);
+    expect(registry.size).toBe(0);
+  } finally { registry.dispose(); await host.close(); }
+});

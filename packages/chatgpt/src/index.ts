@@ -80,6 +80,8 @@ export interface WebTurnRequest {
   readonly media?: readonly import("./turn-media").WebTurnMedia[];
   /** Independent work tools, optionally carrying a Goal-only control capability. */
   readonly chatTools?: { readonly defaultProfileSlot?: number; readonly nativeGoalControl?: string };
+  /** Local execution lifecycle only; never serialized into the Web prompt. */
+  readonly isToolExecutionPending?: () => boolean;
   readonly toolBridge?: WebToolBridgeContext;
 }
 

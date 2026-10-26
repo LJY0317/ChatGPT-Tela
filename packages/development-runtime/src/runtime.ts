@@ -1,3 +1,4 @@
+import { webObservationFailureReason } from "@chatgpt-tela/core";
 import { WebContextFitFailed } from "@chatgpt-tela/core";
 import { BROWSER_DOCUMENT_LIFETIME, captureBrowserDiagnosticEvidence, type BrowserHost } from "@chatgpt-tela/browser-host";
 import { classifyNetworkFailure, diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, observeDiagnosticInventory, observeDiagnosticContextPressure, capturePrivateDiagnosticValue, isWebContextPlannerStage, isWebContextPlannerSubstage, type WebContextPlannerStage, type WebContextPlannerSubstage } from "@chatgpt-tela/core";
@@ -380,7 +381,8 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           plan.settle?.({ status: rejectedBeforeAcquisition ? "preflight-rejected" : "failed" });
           if (acquired) {
             try {
-              await browserEpochs.fail(plan.nativeTaskId, plan.webEpochId);
+              await browserEpochs.fail(plan.nativeTaskId, plan.webEpochId,
+                webObservationFailureReason(error) === "response_wait_timeout");
             } catch (releaseError) {
               throw new AggregateError(
                 [error, releaseError],

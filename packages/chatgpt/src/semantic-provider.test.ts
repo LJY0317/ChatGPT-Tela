@@ -3247,3 +3247,111 @@ describe("completed browser answer awaiting Native delivery", () => {
     }
   });
 });
+
+
+describe("bounded response delivery wait", () => {
+  test.each(["timeout", "completion-at-deadline", "cancel"] as const)("%s preserves accepted submission ownership", async outcome => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ deliveryWaitTimeoutMs: 15 });
+    const owner = new AbortController();
+    try {
+      const sending = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await sending;
+      if (submitted.state !== "proven") throw Error("fixture submit");
+      const user = driver.current.turns[0]!;
+      const answer = { key: "answer", role: "assistant" as const, parentUserTurnKey: user.key,
+        phase: "complete" as const, text: "preserved final answer" };
+      driver.current = { ...driver.current, revision: "unresolved", turns: [answer] };
+      const observe = driver.observe.bind(driver);
+      let reads = 0;
+      driver.observe = async () => {
+        // Initial observation is unresolved; the expiry read can restore the exact request.
+        if (++reads > 1 && outcome === "completion-at-deadline")
+          driver.current = { ...driver.current, revision: "recovered", turns: [user, answer] };
+        return observe();
+      };
+      const wait = driver.waitForChange.bind(driver);
+      let noise = 0;
+      driver.waitForChange = async (revision: string, signal?: AbortSignal) => {
+        if (noise++ < 3) { // Repeated UI changes do not renew the deadline.
+          driver.current = { ...driver.current, revision: "noise-" + noise };
+          return observe();
+        }
+        if (outcome === "cancel") owner.abort(new Error("Native cancellation"));
+        return new Promise<ChatGptSurfaceSnapshot>((_, reject) => {
+          if (signal?.aborted) { reject(signal.reason); return; }
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      };
+      const result = provider.waitForTurnEvent(surface.lease, submitted.value, owner.signal);
+      if (outcome === "completion-at-deadline") {
+        expect(await result).toMatchObject({ state: "proven", value: { kind: "completed", answer: answer.text } });
+      } else if (outcome === "timeout") {
+        await expect(result).rejects.toMatchObject({ code: "tela_web_observation_unproven", reason: "response_wait_timeout", retryable: false });
+      } else await expect(result).rejects.toThrow("Native cancellation");
+      expect(driver.activated).toHaveLength(1);
+      expect(driver.approvalCalls).toBe(0);
+      driver.waitForChange = wait;
+    } finally { await surface.host.close(); }
+  });
+
+  test.each(["generation", "approval", "native-tool"] as const)("%s is not bounded by response delivery time", async activity => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ deliveryWaitTimeoutMs: 10, approvalAutomationMode: "off" });
+    let toolPending = activity === "native-tool";
+    try {
+      const sending = provider.submitTurn(surface.lease, { ...request(), isToolExecutionPending: () => toolPending });
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await sending;
+      if (submitted.state !== "proven") throw Error("fixture submit");
+      const user = driver.current.turns[0]!;
+      driver.current = { ...driver.current, revision: "active", turns: [user,
+        ...(activity === "generation" ? [{ key: "answer", role: "assistant" as const,
+          parentUserTurnKey: user.key, phase: "streaming" as const }] : [])],
+        ...(activity === "approval" ? { approval: recognizedApproval } : {}) };
+      await provider.observeTurn(surface.lease, submitted.value);
+      const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 5 * 60 * 60 * 1000);
+      try {
+        await expect(provider.observeTurn(surface.lease, submitted.value)).resolves.toBeDefined();
+        toolPending = false;
+        const { approval: _approval, ...cleared } = driver.current;
+        driver.current = { ...cleared, revision: "done", turns: [user,
+          { key: "answer", role: "assistant", parentUserTurnKey: user.key, phase: "complete", text: "done" }] };
+        let completed;
+        for (let i = 0; i < 3; i++) {
+          const event = await provider.waitForTurnEvent(surface.lease, submitted.value);
+          if (event.state === "proven" && event.value.kind === "completed") { completed = event; break; }
+        }
+        expect(completed).toMatchObject({ state: "proven", value: { kind: "completed", answer: "done" } });
+      } finally { clock.mockRestore(); }
+    } finally { await surface.host.close(); }
+  });
+});
+
+
+test("default delivery deadline is four hours and repeated observation does not extend it", async () => {
+  const driver = new FixtureDriver(fixture("ready-new-chat"));
+  const surface = await leaseFor(driver);
+  const provider = new ChatGptSemanticProvider();
+  let clock: ReturnType<typeof spyOn> | undefined;
+  try {
+    const sending = provider.submitTurn(surface.lease, request());
+    while (driver.current.revision === "r1") await Promise.resolve();
+    driver.queued.push(acceptedSnapshot(driver));
+    const submitted = await sending;
+    if (submitted.state !== "proven") throw Error("fixture submit");
+    let now = Date.now();
+    clock = spyOn(Date, "now").mockImplementation(() => now);
+    await provider.observeTurn(surface.lease, submitted.value);
+    now += 4 * 60 * 60 * 1000 - 1;
+    await expect(provider.observeTurn(surface.lease, submitted.value)).resolves.toBeDefined();
+    now++;
+    await expect(provider.observeTurn(surface.lease, submitted.value)).rejects.toMatchObject({ reason: "response_wait_timeout" });
+    expect(driver.activated).toHaveLength(1);
+  } finally { clock?.mockRestore(); await surface.host.close(); }
+});

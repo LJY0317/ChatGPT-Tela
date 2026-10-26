@@ -1,4 +1,4 @@
-import { WebSubmissionUnproven, webProviderFailureReason, type WebSubmissionProofReason } from "@chatgpt-tela/core";
+import { WebObservationUnproven, WebSubmissionUnproven, webProviderFailureReason, type WebSubmissionProofReason } from "@chatgpt-tela/core";
 import { authorFingerprint, assistantFor, baselineUserLineageKeys, resolveAssistantLineage, type TurnOwnership, type AssistantLineageResolution } from "./turn-ownership";
 import { createHash } from "node:crypto";
 import {
@@ -48,6 +48,9 @@ interface TrackedTurn extends TurnOwnership {
   readonly surfaceLeaseId: string;
   readonly preSubmitApprovalRevision?: string;
   revision: string;
+  readonly deliveryWaitTimeoutMs: number;
+  readonly isToolExecutionPending?: () => boolean;
+  deliveryWaitDeadline?: number;
   continuationBoundary?: {
     readonly callId: string;
     readonly assistantFingerprint: string;
@@ -102,6 +105,8 @@ export interface ChatGptSemanticProviderOptions {
   readonly approvalAutomationDelayMs?: number;
   /** Require the first send on each leased surface to start in a fresh Temporary Chat. */
   readonly requireTemporaryChat?: boolean;
+  /** Bound only unproductive response delivery, not model generation or the whole Goal. */
+  readonly deliveryWaitTimeoutMs?: number;
 }
 
 export interface ChatGptConnectorObservation {
@@ -528,16 +533,70 @@ async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: T
   } catch { /* Evidence collection cannot change delivery or task execution. */ }
 }
 
+/** A single deadline only while response identity/delivery is unresolved.
+ * Provider generation, approvals and exact Native tool work suspend it; DOM noise does not renew it.
+ */
+function deliveryLineage(snapshot: ChatGptSurfaceSnapshot, tracked: TrackedTurn): AssistantLineageResolution {
+  const lineage = resolveAssistantLineage(snapshot, tracked);
+  const active = tracked.isToolExecutionPending?.() || pendingApproval(snapshot, tracked)?.cardCount
+    || snapshot.turns.some(turn => turn.role === "assistant"
+      && (turn.phase === "streaming" || turn.phase === "tool-wait" || turn.progressProbe?.stopVisible));
+  const assistant = lineage.assistants.length === 1 ? lineage.assistants[0] : undefined;
+  const terminal = !lineage.identityPending && !lineage.ambiguous && assistant
+    && (assistant.phase === "complete" || assistant.phase === "failed")
+    && (!tracked.continuationBoundary || assistantFingerprint(assistant) !== tracked.continuationBoundary.assistantFingerprint);
+  const blocked = !active && !terminal;
+  if (!blocked) {
+    if (tracked.deliveryWaitDeadline !== undefined) emitDiagnosticEvent("chatgpt_tela_work", "web_delivery_wait_resumed", {
+      ...tracked.diagnosticLineage, deadline_ms: tracked.deliveryWaitTimeoutMs,
+    });
+    delete tracked.deliveryWaitDeadline;
+  } else if (tracked.deliveryWaitDeadline === undefined) {
+    tracked.deliveryWaitDeadline = Date.now() + tracked.deliveryWaitTimeoutMs;
+    emitDiagnosticEvent("chatgpt_tela_work", "web_delivery_wait_started", {
+      ...tracked.diagnosticLineage, deadline_ms: tracked.deliveryWaitTimeoutMs,
+      reason_class: lineage.identityPending ? "identity_pending" : assistant ? "response_unsettled" : "assistant_missing",
+    });
+  } else if (Date.now() >= tracked.deliveryWaitDeadline) {
+    emitDiagnosticEvent("chatgpt_tela_work", "web_delivery_wait_timeout", {
+      ...tracked.diagnosticLineage, deadline_ms: tracked.deliveryWaitTimeoutMs,
+      ...turnObservationFields(snapshot, tracked), remote_outcome: "unknown", retryable: false,
+    });
+    throw new WebObservationUnproven("response_wait_timeout");
+  }
+  return lineage;
+}
+
+async function waitForDeliveryChange(driver: ChatGptSurfaceDriver, tracked: TrackedTurn,
+  revision: string, signal?: AbortSignal): Promise<ChatGptSurfaceSnapshot> {
+  if (tracked.deliveryWaitDeadline === undefined) return driver.waitForChange(revision, signal);
+  const abort = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const changed = driver.waitForChange(revision, AbortSignal.any([abort.signal, ...(signal ? [signal] : [])]));
+    const snapshot = await Promise.race([changed, new Promise<undefined>(resolve => {
+      timer = setTimeout(() => resolve(undefined), Math.max(0, tracked.deliveryWaitDeadline! - Date.now()));
+      timer.unref?.();
+    })]);
+    signal?.throwIfAborted();
+    // One final read resolves completion/tool/approval races before declaring a timeout.
+    return snapshot ?? await driver.observe(signal);
+  } finally {
+    if (timer) clearTimeout(timer);
+    abort.abort(); // Only this DOM waiter; never the browser or a tool process.
+  }
+}
+
 async function waitForLineage(
   surface: BrowserSurfaceLease, driver: ChatGptSurfaceDriver, tracked: TrackedTurn, signal?: AbortSignal,
 ): Promise<{ snapshot: ChatGptSurfaceSnapshot; lineage: AssistantLineageResolution }> {
   let snapshot = await driver.observe(signal);
   for (;;) {
     signal?.throwIfAborted();
-    const lineage = resolveAssistantLineage(snapshot, tracked);
+    const lineage = deliveryLineage(snapshot, tracked);
     if (!lineage.identityPending) return { snapshot, lineage };
     await recordDeferredCompletion(surface, tracked, snapshot, "identity_pending");
-    snapshot = await driver.waitForChange(snapshot.revision, signal);
+    snapshot = await waitForDeliveryChange(driver, tracked, snapshot.revision, signal);
   }
 }
 
@@ -632,7 +691,7 @@ function stateFromSnapshot(
   snapshot: ChatGptSurfaceSnapshot,
   tracked: TrackedTurn,
 ): SemanticObservation<WebTurnState> {
-  const lineage = resolveAssistantLineage(snapshot, tracked);
+  const lineage = deliveryLineage(snapshot, tracked);
   const assistants = lineage.assistants;
   if (lineage.identityPending) return {
     state: "probable", value: { providerTurnId: tracked.handle.providerTurnId, phase: "accepted" },
@@ -687,6 +746,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
   readonly #approvalAutomationMode: ChatGptApprovalAutomationMode;
   readonly #approvalAutomationDelayMs: number;
   readonly #requireTemporaryChat: boolean;
+  readonly #deliveryWaitTimeoutMs: number;
   readonly #temporaryChatSurfaces = new WeakSet<BrowserSurfaceLease>();
   readonly #completedBySurface = new WeakMap<BrowserSurfaceLease, {
     readonly userTurnKey: string;
@@ -797,6 +857,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     }
     this.#approvalAutomationDelayMs = approvalDelayMs;
     this.#requireTemporaryChat = options.requireTemporaryChat ?? false;
+    this.#deliveryWaitTimeoutMs = options.deliveryWaitTimeoutMs ?? 4 * 60 * 60 * 1000;
+    if (!Number.isSafeInteger(this.#deliveryWaitTimeoutMs) || this.#deliveryWaitTimeoutMs < 1) {
+      throw new Error("response delivery wait must be a positive millisecond duration");
+    }
   }
 
   #assertTemporaryChatSurface(surface: BrowserSurfaceLease, snapshot: ChatGptSurfaceSnapshot): void {
@@ -1629,6 +1693,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           this.#turns.set(surface, {
             handle,
             surfaceLeaseId: surface.leaseId,
+            deliveryWaitTimeoutMs: this.#deliveryWaitTimeoutMs,
+            ...(request.isToolExecutionPending ? { isToolExecutionPending: request.isToolExecutionPending } : {}),
             userTurnKey: userTurn.key,
             acceptedUserFingerprint: acceptedFingerprint,
             ...(inputUnchanged ? { inputUnchanged } : {}),
@@ -1659,6 +1725,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             conversationRoute: new URL(snapshot.url).origin + new URL(snapshot.url).pathname,
             baselineUserLineageKeys: preSubmitUserLineageKeys,
             revision: snapshot.revision,
+            observeAgain: true,
             ...(filled.approval?.cardCount === 1 && typeof filled.approval.revisionFingerprint === "string"
               ? { preSubmitApprovalRevision: filled.approval.revisionFingerprint } : {}),
             approvalObservation: new ChatGptApprovalObservation(),
@@ -1933,14 +2000,14 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
 
     for (;;) {
       const snapshot = await waitOwned(signal, () => tracked.observeAgain
-        ? driver.observe(signal) : driver.waitForChange(tracked.revision, signal));
+        ? driver.observe(signal) : waitForDeliveryChange(driver, tracked, tracked.revision, signal));
       signal?.throwIfAborted();
       this.#tracked(surface, turn);
       tracked.observeAgain = false;
       tracked.revision = snapshot.revision;
       tracked.waitSnapshotCount = Math.min((tracked.waitSnapshotCount ?? 0) + 1, Number.MAX_SAFE_INTEGER);
       tracked.lastWaitSnapshotAt = Date.now();
-      const lineage = resolveAssistantLineage(snapshot, tracked);
+      const lineage = deliveryLineage(snapshot, tracked);
       if (lineage.identityPending) {
         await recordDeferredCompletion(surface, tracked, snapshot, "identity_pending");
         continue;

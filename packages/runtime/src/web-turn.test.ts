@@ -12,12 +12,13 @@ import type {
 } from "@chatgpt-tela/chatgpt";
 import { createChatGptContextAttachment } from "@chatgpt-tela/chatgpt";
 import {
+  WebObservationUnproven,
   NativeToolInventory,
   defineNativeTurnAuthority,
 } from "@chatgpt-tela/core";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
 import { RuntimeTurnChannel } from "./turn-channel";
-import { runBrowserTurn } from "./web-turn";
+import { runBrowserTurnOnSurface, runBrowserTurn } from "./web-turn";
 
 const physicalContext = {
   headRevisionId: "r1",
@@ -600,4 +601,25 @@ test("provider failed event retains its owned classification and still releases 
     channel: new RuntimeTurnChannel(binding()), nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext }))
     .rejects.toMatchObject({ code: "tela_web_provider_response_failed", message: "Web turn failed: Error in message stream" });
   expect(released).toEqual(["surface-1"]);
+});
+
+
+test("delivery timeout revokes final authority without Stop, release, resend or completing the Goal", async () => {
+  const released: string[] = [];
+  const host = browserHost(released);
+  const surface = await host.acquire({ taskId: "task-1", epochId: "epoch-1" });
+  const channel = new RuntimeTurnChannel(binding());
+  const fixture = provider(new EventQueue());
+  let sends = 0, stops = 0;
+  const error = new WebObservationUnproven("response_wait_timeout");
+  const wrapped: WebConversationProvider = { ...fixture,
+    async submitTurn(...args) { sends++; expect(args[1].isToolExecutionPending?.()).toBe(false); return fixture.submitTurn(...args); },
+    async waitForTurnEvent() { throw error; },
+    async cancelTurn() { stops++; },
+  };
+  await expect(runBrowserTurnOnSurface({ surface, provider: wrapped, channel,
+    nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext })).rejects.toBe(error);
+  expect(sends).toBe(1); expect(stops).toBe(0); expect(released).toEqual([]);
+  expect(channel.phase).toBe("indeterminate-after-acceptance");
+  expect(() => channel.complete("late answer")).toThrow();
 });

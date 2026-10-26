@@ -15,7 +15,7 @@ const IDLE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
  * Own one physical browser conversation per Native task/Web epoch.
  *
  * A completed turn keeps the surface idle for exact retained continuation. Any failed/ambiguous
- * turn retires the physical surface so later work can never inherit uncertain browser state. A new
+ * turn cannot be reused. A delivery timeout keeps its surface viewable under idle retention. A new
  * epoch for the same Native task first retires the previous physical conversation.
  */
 export class RetainedBrowserEpochRegistry {
@@ -94,7 +94,7 @@ export class RetainedBrowserEpochRegistry {
     }
     this.#acquiring.add(taskId);
     try {
-      if (current && current.epochId === epochId) {
+      if (current && current.epochId === epochId && current.lastCompleted > 0) {
         current.busy = true;
         delete current.idleSince;
         this.#schedule();
@@ -134,9 +134,16 @@ export class RetainedBrowserEpochRegistry {
     }
   }
 
-  async fail(taskId: string, epochId: string): Promise<void> {
+  async fail(taskId: string, epochId: string, preserveSurface = false): Promise<void> {
     const current = this.#byTask.get(taskId);
     if (!current || current.epochId !== epochId) return;
+    if (preserveSurface) {
+      current.busy = false;
+      current.lastCompleted = 0; // Viewable, never a committed context for reuse.
+      current.idleSince = this.#now();
+      this.#schedule();
+      return;
+    }
     await this.#release(taskId, current);
   }
 

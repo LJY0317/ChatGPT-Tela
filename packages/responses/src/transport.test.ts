@@ -922,3 +922,32 @@ test("activity restriction and unknown provider failures keep the same terminal 
     } finally { await gateway.close(); }
   }
 });
+
+
+test("delivery timeout ends HTTP/SSE once, with the shared natural error and no repeated execution", async () => {
+  for (const streaming of [false, true]) {
+    let sends = 0;
+    const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async turn => {
+      sends++; turn.channel.markSubmitted(); turn.channel.markAccepted();
+      if (streaming) turn.channel.publishProgress("Earlier work observed");
+      throw new WebObservationUnproven("response_wait_timeout");
+    });
+    try {
+      const response = await handleNativeResponsesHttp(post(body()), gateway);
+      let error;
+      if (streaming) {
+        const frames = (await response.text()).split("\n").filter(line => line.startsWith("data: {"))
+          .map(line => JSON.parse(line.slice(6)));
+        const failures = frames.filter(frame => frame.type === "response.failed");
+        expect(failures).toHaveLength(1);
+        expect(frames.some(frame => frame.type === "response.completed")).toBe(false);
+        error = failures[0].response.error;
+      } else { expect(response.status).toBe(400); error = (await response.json() as any).error; }
+      expect(error).toMatchObject({ code: "tela_web_observation_unproven", reason: "response_wait_timeout", retryable: false });
+      expect(error.message).toContain("응답 확인 시간이 초과되어 대기를 중단했습니다");
+      const replay = await handleNativeResponsesHttp(post(body()), gateway);
+      expect((await replay.json() as any).error).toEqual(error);
+      expect(sends).toBe(1);
+    } finally { await gateway.close(); }
+  }
+});
