@@ -1646,15 +1646,15 @@ describe("ChatGPT semantic provider", () => {
       const submitted = await submitting;
       if (submitted.state !== "proven") throw new Error("fixture");
       driver.current = { ...driver.current, revision: "loading", turns: [] };
-      let waiting = false;
+      let enteredWait!: () => void;
+      const waiting = new Promise<void>(resolve => { enteredWait = resolve; });
       driver.waitForChange = async (_revision: string, signal?: AbortSignal) => {
-        waiting = true;
+        enteredWait();
         return await new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
       };
       const abort = new AbortController();
       const handoff = provider.armToolContinuation(surface.lease, submitted.value, "call", abort.signal);
-      for (let step = 0; step < 20 && !waiting; step++) await Promise.resolve();
-      expect(waiting).toBe(true);
+      await waiting;
       abort.abort(new Error("Native stopped"));
       await expect(handoff).rejects.toThrow("Native stopped");
     } finally { await surface.host.close(); }
@@ -3097,7 +3097,15 @@ describe("completed browser answer awaiting Native delivery", () => {
       expect(entries[0]).toMatchObject({ assistant_count: 2, complete_assistant_count: 0,
         accepted_user_present: false, approval_card_count: 1, current_authority_proven: false });
       expect(events.filter(row => row.stage === "web_completed_answer_deferred_anomaly")).toHaveLength(0);
-      expect(events.filter(row => row.stage === "browser_snapshot_observed" && row.reason_class === "completion_deferred"))
+      expect(events.filter(row => row.stage === "browser_snapshot_observed" && row.reason_class === "identity_pending"))
+        .toHaveLength(enabled ? 1 : 0);
+      driver.current = { ...driver.current, revision: "completed-unmounted", turns: [
+        { key: "answer", role: "assistant", parentUserTurnKey: user.key, phase: "complete", text: "PRIVATE_COMPLETED_ANSWER" },
+      ] };
+      for(let i=0;i<3;i++)expect((await provider.observeTurn(surface.lease,accepted.value)).state).toBe("probable");
+      const completedEvents=readDiagnosticTail(file).events;
+      expect(completedEvents.filter(row=>row.stage==="web_completed_answer_deferred_anomaly")).toHaveLength(1);
+      expect(completedEvents.filter(row=>row.stage==="browser_snapshot_observed" && row.reason_class==="completion_deferred"))
         .toHaveLength(enabled ? 1 : 0);
       expect(readFileSync(file, "utf8")).not.toContain("PRIVATE_PENDING_ENTRY");
       const privateDir = join(scratch, "diagnostics", "private");

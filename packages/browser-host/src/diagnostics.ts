@@ -139,7 +139,7 @@ export const DIAGNOSTIC_DOM_CAPTURE = String.raw`function(privateCapture) {
   return result;
 }`;
 
-async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_picker_failed" | "web_preparation_failed" | "turn_failure" | "approval_anomaly" | "surface_anomaly" | "completion_deferred" | "progress_description_missing" | "progress_prose_unmapped" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
+async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_picker_failed" | "web_preparation_failed" | "turn_failure" | "approval_anomaly" | "surface_anomaly" | "completion_deferred" | "identity_pending" | "progress_description_missing" | "progress_prose_unmapped" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
   const root=configuredDiagnosticRoot(); if (!root) return;
   const operation=diagnosticContext().operation_fingerprint ?? diagnosticFingerprint([surface.taskId,surface.epochId].join("\n"));
   const key=operation+reason; const now=Date.now();
@@ -187,7 +187,7 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_pick
     let retained=0, omitted=0;
     // A stuck delivery boundary must not lose its renderer evidence to routine tool traces.
     // Reuse the existing failure-priority retention, with the same byte/age budget.
-    const failure = reason === "completion_deferred" ? { evidenceClass: "failure" as const } : {};
+    const failure = (reason === "completion_deferred" || reason === "identity_pending") ? { evidenceClass: "failure" as const } : {};
     const record=(ref: string | undefined)=>{ if(ref) retained++; else omitted++; };
     if (typeof snapshot.html==="string") record(writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.html),operationFingerprint:operation,captureScope:"document", ...failure }));
     if (typeof snapshot.focus_html==="string") record(writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.focus_html),operationFingerprint:operation,captureScope:"latest_turn_shell", ...failure }));
@@ -208,11 +208,11 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_pick
 }
 
 /** Diagnostic failure never changes the browser turn result or approval policy. */
-export async function captureBrowserDiagnosticEvidence(surface: BrowserSurfaceLease, reason: "model_picker_failed" | "web_preparation_failed" | "turn_failure" | "approval_anomaly" | "surface_anomaly" | "completion_deferred" | "progress_description_missing" | "progress_prose_unmapped" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
+export async function captureBrowserDiagnosticEvidence(surface: BrowserSurfaceLease, reason: "model_picker_failed" | "web_preparation_failed" | "turn_failure" | "approval_anomaly" | "surface_anomaly" | "completion_deferred" | "identity_pending" | "progress_description_missing" | "progress_prose_unmapped" | "before_submit" | "turn_accepted" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
   try { await captureEvidence(surface, reason); } catch { /* Best effort, including missing capabilities. */ }
 }
 
-export async function captureBrowserDiagnosticCheckpoint(surface: BrowserSurfaceLease, reason: "before_submit" | "turn_accepted" | "surface_anomaly" | "completion_deferred" | "progress_description_missing" | "progress_prose_unmapped" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
+export async function captureBrowserDiagnosticCheckpoint(surface: BrowserSurfaceLease, reason: "before_submit" | "turn_accepted" | "surface_anomaly" | "completion_deferred" | "identity_pending" | "progress_description_missing" | "progress_prose_unmapped" | "approval_pending" | "approval_resolution" | "approval_preparation_failed"): Promise<void> {
   const root=configuredDiagnosticRoot();
   if (root && privateDiagnosticCaptureEnabled(root)) await captureBrowserDiagnosticEvidence(surface,reason);
 }

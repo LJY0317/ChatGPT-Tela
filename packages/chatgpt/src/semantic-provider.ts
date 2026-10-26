@@ -521,11 +521,9 @@ async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: T
         // A visible card has surface scope; its owner is not proven by the assistant lineage.
         current_authority_proven: false,
       });
-      // One opt-in checkpoint at the first identity loss. For approval/ambiguity,
-      // retain the existing completed-answer checkpoint. Neither authorizes delivery.
-      if (firstPending || reason !== "identity_pending") {
-        await captureBrowserDiagnosticCheckpoint(surface, "completion_deferred");
-      }
+      // Capture each distinct boundary once, sharing one snapshot if they coincide.
+      // Neither snapshot authorizes delivery.
+      await captureBrowserDiagnosticCheckpoint(surface, firstCompletion ? "completion_deferred" : "identity_pending");
     });
   } catch { /* Evidence collection cannot change delivery or task execution. */ }
 }
