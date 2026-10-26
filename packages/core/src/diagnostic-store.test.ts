@@ -350,3 +350,22 @@ test("log retention keeps many small segments and shares bytes across services",
   expect(readFileSync(current,"utf8")).toBe("active");
   expect(readFileSync(unrelated,"utf8")).toBe("preserve");
 });
+
+
+test("one long browser operation expires old artifact pairs without erasing its latest evidence", () => {
+  const root=fixture();setPrivateDiagnosticCapture(root,"until-disabled");
+  const bytes=Buffer.alloc(DIAGNOSTIC_LIMITS.privateFileBytes,1);
+  const operationFingerprint=fp("one-long-browser-operation"), refs:string[]=[];
+  for(let index=0;index<7;index++){
+    const ref=writePrivateDiagnosticArtifact(root,{kind:"html",bytes,operationFingerprint,evidenceClass:"failure"})!;
+    expect(ref).toBeDefined();refs.push(ref);
+    const earlier=new Date(Date.now()-(8-index)*1000);
+    for(const suffix of [".html",".meta.json"])utimesSync(join(root,"private",ref+suffix),earlier,earlier);
+  }
+  const latest=writePrivateDiagnosticArtifact(root,{kind:"html",bytes,operationFingerprint,evidenceClass:"failure"});
+  expect(latest).toBeDefined();
+  const names=readdirSync(join(root,"private"));
+  expect(names).toContain(`${latest}.html`);expect(names).toContain(`${latest}.meta.json`);
+  expect(names).not.toContain(`${refs[0]}.html`);expect(names).not.toContain(`${refs[0]}.meta.json`);
+  expect(names.reduce((sum,name)=>sum+readFileSync(join(root,"private",name)).byteLength,0)).toBeLessThanOrEqual(DIAGNOSTIC_LIMITS.privateBytes);
+});

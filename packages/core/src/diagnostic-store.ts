@@ -362,9 +362,7 @@ function files(root: string, type: "incidents" | "private") {
         proofs.set(proofName, proof);
       }
       if (!proof) return [];
-      return [{ name, bytes: stat.size, time: stat.mtimeMs, proof,
-        operation: type === "private" && FINGERPRINT.test(proof.operationFingerprint)
-          && (proof.kind === "html" || proof.kind === "jpg" || proof.evidenceClass === "failure") ? proof.operationFingerprint as string : undefined }];
+      return [{ name, bytes: stat.size, time: stat.mtimeMs, proof }];
     } catch { return []; }
   }).sort((a,b) => b.time - a.time);
 }
@@ -375,9 +373,9 @@ function prune(root: string, type: "incidents" | "private", now = Date.now(), en
   const age = type === "incidents" ? DIAGNOSTIC_LIMITS.incidentAgeMs : DIAGNOSTIC_LIMITS.privateAgeMs;
   const groups = new Map<string, ReturnType<typeof files>>();
   for (const item of entries) {
-    // One operation's HTML, screenshots, error details and their metadata expire together.
-    // Older metadata without an operation fingerprint retains artifact-pair ownership.
-    const key = type === "private" ? item.operation ?? item.name.slice(0,45) : item.name;
+    // Keep each artifact and its metadata atomic. One long operation must not
+    // exceed the whole budget and erase even its newest failure evidence.
+    const key = type === "private" ? item.name.slice(0,45) : item.name;
     const group = groups.get(key) ?? []; group.push(item); groups.set(key,group);
   }
   // Tool request/result JSON can churn many times during one browser turn. Keep
