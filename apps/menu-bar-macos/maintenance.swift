@@ -46,6 +46,7 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
   private let planText = NSTextField(wrappingLabelWithString: "Review an operation before applying it.")
   private let packageLabel = NSTextField(labelWithString: "No package selected")
   private let picker = NSPopUpButton()
+  private let pluginManagement = NSButton(title: "Open ChatGPT Plugins", target: nil, action: nil)
   private let removeData = NSButton(checkboxWithTitle: "Also remove Tela settings, saved logins, and credentials", target: nil, action: nil)
   private let reviewButton = NSButton(title: "Review changes", target: nil, action: nil)
   private let applyButton = NSButton(title: "Apply…", target: nil, action: nil)
@@ -123,7 +124,11 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     ])
     content.addArrangedSubview(packageSection)
     removeData.target = self; removeData.action = #selector(selectionChanged); removeData.state = .off
-    configureSection(removalSection, title: "Saved data", views: [removeData])
+    pluginManagement.bezelStyle = .rounded
+    pluginManagement.target = self; pluginManagement.action = #selector(openChatGPTPlugins)
+    let pluginHelp = NSTextField(wrappingLabelWithString: "Removing Tela from this computer does not remove its ChatGPT plugin. You can remove that separately in ChatGPT.")
+    pluginHelp.textColor = .secondaryLabelColor
+    configureSection(removalSection, title: "Removal", views: [removeData, pluginHelp, pluginManagement])
     content.addArrangedSubview(removalSection)
     planText.font = .systemFont(ofSize: 13)
     content.addArrangedSubview(section("Changes to review", views: [planText]))
@@ -242,7 +247,9 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     applyButton.isEnabled = !busy && review != nil && review?.blockers.isEmpty == true && !completedRemoval
     processPicker.isEnabled = !busy && !unresolvedProcesses.isEmpty
     cancelProcessButton.isEnabled = !busy && !unresolvedProcesses.isEmpty
-    if busy || completedRemoval {
+    if completedRemoval {
+      nextStep.stringValue = "If you also want to remove the ChatGPT plugin, open ChatGPT Plugins."
+    } else if busy {
       nextStep.stringValue = ""
     } else if let review {
       nextStep.stringValue = review.blockers.isEmpty
@@ -260,6 +267,10 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     message.isHidden = message.stringValue.isEmpty
     if busy { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
   }
+  @objc private func openChatGPTPlugins() {
+    NSWorkspace.shared.open(telaChatGPTPluginsURL)
+  }
+
   @objc private func selectionChanged() {
     review = nil; planText.stringValue = "Review changes before applying them."; message.stringValue = ""; updateControls()
   }
@@ -402,7 +413,7 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
         completedRemoval = removing && applied.success
         message.stringValue = if let blockers = applied.blockers, !blockers.isEmpty {
           blockers.joined(separator: "\n") + "\nMaintenance did not complete. Resolve the blocker, then review again."
-        } else if applied.success { removing ? "Tela removed. Preserved resources: \(applied.preservedCount). You can close this window."
+        } else if applied.success { removing ? "Tela removed from this computer. Preserved resources: \(applied.preservedCount)."
           : operation == "cancel-upgrade" ? "Update cancelled. The installed version was kept and previously running services were restored."
           : "Changes verified. Tela control center refresh completed."
         } else {

@@ -15,7 +15,7 @@ test('account-only observation needs no composer, submits nothing and releases i
   expect(created).toBe(1);await control.close();
 });
 
-function fixture(options: {failReadiness?: boolean; failCleanup?: boolean; retryCatalog?: boolean; cancelAfterConnector?: boolean} = {}) {
+function fixture(options: {failReadiness?: boolean; failCleanup?: boolean; retryCatalog?: boolean; missingConnector?: boolean; cancelAfterConnector?: boolean} = {}) {
   const controller = new AbortController();
   const order: string[] = [];
   let created = 0, closed = 0, attempts = 0;
@@ -28,6 +28,7 @@ function fixture(options: {failReadiness?: boolean; failCleanup?: boolean; retry
     async probeConnector(surface) {
       connectorLease=surface.leaseId;order.push('connector');attempts++;
       if (options.retryCatalog && attempts===1) throw new ChatGptConnectorCatalogUnavailableError();
+      if (options.missingConnector && attempts===1) throw Error('connector not available');
       if (options.failCleanup) throw Error('cleanup failed');
       order.push('cleanup-complete');
       if(options.cancelAfterConnector)controller.abort();
@@ -47,6 +48,18 @@ test('connection proof checks readiness after connector cleanup on one hidden su
   expect(r.capabilities.observed.has('send')).toBe(false);
   expect(f.order).toEqual(['connector','cleanup-complete','connector-proven','readiness','close']);
   expect(f.created).toBe(1);expect(f.closed).toBe(1);await f.control.close();expect(f.closed).toBe(1);
+});
+
+test('an unavailable plugin is not silently repaired and an explicit later check can reuse the profile',async()=>{
+  const f=fixture({missingConnector:true});
+  await expect(f.control.probeChatGptConnection()).rejects.toThrow('connector not available');
+  expect(f.order).toEqual(['connector','close']);
+  expect(f.created).toBe(1);
+  // Simulate the user restoring the plugin; the existing control must not cache its absence.
+  const restored=await f.control.probeChatGptConnection();
+  expect(restored.connector.connectorName).toBe('fixture');
+  expect(f.created).toBe(2);expect(f.closed).toBe(2);
+  await f.control.close();
 });
 
 test('unproven same-surface readiness rejects admission and closes its page',async()=>{

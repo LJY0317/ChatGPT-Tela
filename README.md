@@ -567,6 +567,13 @@ unmarked data and replaced resources are preserved and reported. Original ChatGP
 conversations and user projects remain outside this ownership boundary. Consumer signing/notarization and
 the guided installer/updater are still release work.
 
+ChatGPT plugin removal is separate from removing Tela from your computer. Use ChatGPT's Plugins page
+to uninstall the plugin and disconnect any separately configured MCP integration. Tela's Settings
+provides **ChatGPT plugin → Manage…**; the removal window keeps **Open ChatGPT Plugins** available
+after local removal. Removing a plugin does not uninstall the local app, and local removal does not
+remove the account plugin. Local maintenance reports account cleanup as not performed. A normal
+reinstall preserves retained Tela settings; restore the ChatGPT connection explicitly if you removed it.
+
 ## Developer preview
 
 ChatGPT Tela is not yet packaged as an end-user product. The Tela Codex bridge has passed live

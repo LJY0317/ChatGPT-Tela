@@ -84,6 +84,12 @@ test("review -> repair -> upgrade -> keep-data removal uses fake OS manager and 
     expect(removed.success).toBe(true); expect(removed.preservedCount).toBeGreaterThan(0);
     expect(existsSync(binary.path)).toBe(false); expect(readFileSync(sentinel, "utf8")).toBe("untouched project");
     expect(readFileSync(join(paths.configRoot, "saved-settings.json"), "utf8")).toBe("preserve settings");
+    expect(removed.accountCleanup).toMatchObject({ status: "not-performed" });
+    // Reinstall uses retained Tela data; it must not require erasing settings or user projects.
+    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.second], options);
+    expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("2.0.0");
+    expect(readFileSync(join(paths.configRoot, "saved-settings.json"), "utf8")).toBe("preserve settings");
+    expect(readFileSync(sentinel, "utf8")).toBe("untouched project");
   } finally { removeFixture(root); }
 });
 

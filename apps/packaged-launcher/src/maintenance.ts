@@ -116,7 +116,11 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
     const preserved = operation === "repair" ? Number(result.payload === "preserved") + (result.services?.filter((s: any) => s.outcome === "preserved").length ?? 0) : result.preservedCount ?? 0;
     return { operation, success: failed === 0 && !preservedRepair,
       removedCount: result.removedCount ?? 0, preservedCount: preserved, failedCount: failed,
-      productVersion: result.toVersion ?? result.productVersion ?? null };
+      productVersion: result.toVersion ?? result.productVersion ?? null,
+      ...(operation === "uninstall" ? { accountCleanup: {
+        status: "not-performed",
+        message: "Local removal does not remove the ChatGPT plugin or separately connected MCP integrations. Manage them in ChatGPT if needed.",
+      } } : {}) };
   }
   const resources: { name: string; action: string }[] = [];
   if (operation === "uninstall") {

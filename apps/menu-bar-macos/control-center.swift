@@ -774,7 +774,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       addTelaControl()
       if installedServiceControlsAvailable() && serviceStates["codex"] == "Ready" && (profiles.isEmpty || settingUp || setupMessage != nil) {
         let setup = card("Sign in and connect ChatGPT")
-        append(secondary("Sign in in Tela's login window. In ChatGPT, enable Developer mode and create an MCP connection named ChatGPT Tela using the address below. Then close the login window to verify, and turn on the profile connection."), to: setup)
+        append(secondary("Sign in in Tela's login window. Open ChatGPT Plugins and connect ChatGPT Tela using the address below. Reuse an existing connection when available. Then finish setup in the login window."), to: setup)
+        setup.addArrangedSubview(actionButton("Open ChatGPT Plugins", action: #selector(openChatGPTPlugins)))
         if let connectorURL {
           let address = secondary(connectorURL)
           address.isSelectable = true
@@ -1085,11 +1086,17 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         row("Background activity", subtitle: changingServices ? "Updating…" : nil, control: button, in: background)
       }
       let support = card()
+      row("ChatGPT plugin", subtitle: "Manage or remove the plugin in ChatGPT. Tela stays installed on this computer.",
+          control: actionButton("Manage…", action: #selector(openChatGPTPlugins)), in: support)
       let maintain = actionButton("Open…", action: #selector(openMaintenance))
       maintain.isEnabled = !operationInProgress && installedServiceControlsAvailable()
       row("Updates & maintenance", subtitle: launchingMaintenance ? "Opening…" : nil, control: maintain, in: support)
       stack.addArrangedSubview(actionButton("Refresh details", action: #selector(refreshPage)))
     }
+  }
+
+  @objc private func openChatGPTPlugins() {
+    NSWorkspace.shared.open(telaChatGPTPluginsURL)
   }
 
   private func installedServiceControlsAvailable() -> Bool {
