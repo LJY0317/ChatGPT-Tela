@@ -238,6 +238,8 @@ for (const supported of [true, false]) test(`maintenance cancellation review bin
     expect(readFileSync(journalPath)).toEqual(journal);
     const source = await resolveMaintenanceWindowSource("unused", "unused", ["--operation", "cancel-upgrade", ...args], options);
     expect(source.launcher).toBe(realpathSync(join(f.first, "chatgpt-tela")));
+    expect(source.operation).toBe("cancel-upgrade");
+    expect(source.payload).toBe(realpathSync(f.first));
     expect(source.ui).toBe(realpathSync(join(f.first, readPackagedProductManifest(f.first).menuBar!.executable)));
     expect((await resolveMaintenanceWindowSource("unused", "unused", ["--operation", "upgrade", "--payload", f.second, ], options)).launcher)
       .toBe(realpathSync(join(f.second, "chatgpt-tela")));

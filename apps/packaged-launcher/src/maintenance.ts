@@ -179,7 +179,7 @@ export function cleanupMaintenanceWindow(root: string): void {
 export async function resolveMaintenanceWindowSource(payloadRoot: string, launcherExecutablePath: string, repairSourceArguments: readonly string[] = [], options: PackagedLifecycleOptions = {}) {
     if (repairSourceArguments.length === 0) {
       const verified = resolvePackagedMenuBarLaunch({ payloadRoot, launcherExecutablePath });
-      return { launcher: launcherExecutablePath, ui: verified.executable };
+      return { launcher: launcherExecutablePath, ui: verified.executable, operation: "upgrade", payload: undefined };
     }
     const sourceArgs = [...repairSourceArguments];
     const operationIndex = sourceArgs.indexOf("--operation");
@@ -194,7 +194,7 @@ export async function resolveMaintenanceWindowSource(payloadRoot: string, launch
     await runPackagedLifecycleCommand(args, options);
     const source = realpathSync(parsed.payloadSourcePath), manifest = readPackagedProductManifest(source);
     if (!manifest.launcher || !manifest.menuBar) throw new Error("repair package has no maintenance UI");
-    return { launcher: join(source, manifest.launcher.executable), ui: join(source, manifest.menuBar.executable) };
+    return { launcher: join(source, manifest.launcher.executable), ui: join(source, manifest.menuBar.executable), operation, payload: source };
 }
 
 export async function openMaintenanceWindow(payloadRoot: string, launcherExecutablePath: string, repairSourceArguments: readonly string[] = []) {
@@ -203,10 +203,6 @@ export async function openMaintenanceWindow(payloadRoot: string, launcherExecuta
   const staged = repairSourceArguments.length === 1 && repairSourceArguments[0] === "--staged-update"
     ? readStagedUpdate() : null;
   if (repairSourceArguments.includes("--staged-update") && !staged) throw Error("No prepared update is available");
-  const supplied = staged ? ["--operation", "upgrade", "--payload", staged.payload] : [...repairSourceArguments];
-  const operationIndex = supplied.indexOf("--operation"), payloadIndex = supplied.indexOf("--payload");
-  const operation = operationIndex >= 0 ? supplied[operationIndex + 1] : "upgrade";
-  const selectedPayload = payloadIndex >= 0 ? supplied[payloadIndex + 1] : undefined;
   const verify = () => resolveMaintenanceWindowSource(payloadRoot, launcherExecutablePath, staged ? [] : repairSourceArguments);
   const verified = await verify();
   const root = stageMaintenanceWindow(verified);
@@ -217,7 +213,7 @@ export async function openMaintenanceWindow(payloadRoot: string, launcherExecuta
       || digest(readFileSync(verified.ui)) !== snapshot.files["maintenance-ui"]) throw new Error("verified executables changed while staging");
     const child = spawn(join(root, "maintenance-ui"), ["--maintenance-only"], { detached: true, stdio: "ignore",
       env: { ...process.env, CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE: join(root, "launcher"), CHATGPT_TELA_MAINTENANCE_WORKSPACE: root,
-        CHATGPT_TELA_MAINTENANCE_OPERATION: operation, CHATGPT_TELA_MAINTENANCE_PAYLOAD: selectedPayload } });
+        CHATGPT_TELA_MAINTENANCE_OPERATION: verified.operation, CHATGPT_TELA_MAINTENANCE_PAYLOAD: staged?.payload ?? verified.payload } });
     await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
     child.unref();
     return { opened: true };
