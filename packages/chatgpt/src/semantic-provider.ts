@@ -1298,10 +1298,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         request.webEpochId].join("\n")),
       context_mode: request.physicalContext.mode,
       epoch_fingerprint: diagnosticFingerprint(request.webEpochId),
-      message_fingerprint: diagnosticFingerprint(text),
+      message_fingerprint: diagnosticFingerprint(fingerprint(text)),
       ...(activeRevision?.type === "revision" ? {
         active_revision_fingerprint: diagnosticFingerprint(activeRevision.revisionId),
-        active_input_fingerprint: diagnosticFingerprint(activeRevision.content),
+        active_input_fingerprint: diagnosticFingerprint(fingerprint(activeRevision.content)),
         request_role: activeRevision.kind,
       } : {}),
       kind: sourceUpload ? "source_file" : request.contextAttachment ? "preloaded_reference" : "inline",

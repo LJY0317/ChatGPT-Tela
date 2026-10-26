@@ -2672,7 +2672,7 @@ test("prepared input diagnostics survive emission and sanitized readback without
  const stop=observeDiagnosticEvents(row=>{if(row.stage==="browser_message_prepared")seen.push(row);});
  try {
   const payload=request();
-  const source="PRIVATE_SYNTHETIC_한글";
+  const source="PRIVATE_SYNTHETIC_한글".repeat(1000);
   const context={...payload.physicalContext,segments:[
    {...payload.physicalContext.segments[0]!,content:source},
    {type:"revision" as const,revisionId:"r2",kind:"developer" as const,content:source},
@@ -2688,11 +2688,11 @@ test("prepared input diagnostics survive emission and sanitized readback without
    source_file_bytes:0,attachment_count:0,operation_fingerprint:operation,
    epoch_fingerprint:diagnosticFingerprint(payload.webEpochId),
    active_revision_fingerprint:diagnosticFingerprint("rev-1"),
-   active_input_fingerprint:diagnosticFingerprint(source),request_role:"user"};
+   active_input_fingerprint:diagnosticFingerprint(hash(source)),request_role:"user"};
   expect(seen).toEqual([expect.objectContaining(expected)]);
   expect(recorded).toEqual([expect.objectContaining(expected)]);
   expect(recorded[0]!.composer_wire_bytes).toBeGreaterThan(recorded[0]!.context_wire_bytes as number);
-  expect(recorded[0]!.message_fingerprint).toBe(diagnosticFingerprint(formatWebPhysicalContext(context, undefined)));
+  expect(recorded[0]!.message_fingerprint).toBe(diagnosticFingerprint(hash(formatWebPhysicalContext(context, undefined))));
   expect(readDiagnosticTail(file).events.find(row=>row.stage==="web_turn_identity_accepted")?.operation_fingerprint).toBe(operation);
   expect(readFileSync(file,"utf8")).not.toContain(source);
   // Identical text in a new Native request is valid; correlate it without suppressing it.
