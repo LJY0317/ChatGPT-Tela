@@ -70,6 +70,7 @@ export function isWebContextPlannerSubstage(value: unknown): value is WebContext
 }
 const STRINGS = new Set(["observation_failure", "failure_class", "failure_stage", "service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "result_kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "route_class", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "request_role", "browser_response", "next_action", "probe_kind", "auth_state", "entry_class", "removal_cause", "expiry_class", "domain_class", "storage_state", "observation_source", "accepted_observation_source"]);
 const PROJECTION_ENUMS: Readonly<Record<string, readonly string[]>> = {
+  provider_reason: ["unusual_activity"],
   input_container_kind: ["array", "string", "absent", "null", "record", "scalar"],
   input_item_kind: ["none", "array", "string", "absent", "null", "record", "scalar"],
   input_type_class: ["absent", "invalid", "unknown", "message", "agent_message", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "tool_search_call", "tool_search_output", "mcp_tool_call_output", "context_compaction", "compaction", "compaction_summary", "reasoning", "additional_tools"],

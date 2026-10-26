@@ -13,6 +13,10 @@ function fixture() { const root = mkdtempSync(join(tmpdir(),"tela-diagnostics-te
 afterEach(async () => { await new Promise<void>(resolve => setImmediate(resolve)); if (original) process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=original; else delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE; for (const root of directories.splice(0)) rmSync(root,{recursive:true,force:true}); });
 const fp = (value: string) => diagnosticFingerprint(value);
 const event = (stage: string, extra: Record<string,unknown> = {}, at = "2026-10-05T00:00:00.000Z") => structuralDiagnosticEvent({ts:at,event:"chatgpt_tela_test",stage,...extra})!;
+test("provider restriction classification survives structural projection without arbitrary error text", () => {
+  expect(event("web_delegation_failed", { provider_reason: "unusual_activity" }).provider_reason).toBe("unusual_activity");
+  expect(event("web_delegation_failed", { provider_reason: "private_error_text" })).not.toHaveProperty("provider_reason");
+});
 test("canonical evidence survives log rotation with common window, privacy, origin and duplicate filtering", () => {
   const root = fixture(), center = join(root, "diagnostics"), path = join(root, "events.jsonl");
   const at = Date.now(), ts = new Date(at).toISOString();
