@@ -499,7 +499,8 @@ async function recordDeferredCompletion(surface: BrowserSurfaceLease, tracked: T
         tracked.handle.webEpochId].join("\n")),
       turn_fingerprint: diagnosticFingerprint(tracked.handle.nativeTurnId),
     }, async () => {
-      emitDiagnosticEvent("chatgpt_tela_work", "web_completed_answer_deferred", {
+      emitDiagnosticEvent("chatgpt_tela_work", reason === "identity_pending"
+        ? "web_completed_answer_deferred_anomaly" : "web_completed_answer_deferred", {
         ...turnObservationFields(snapshot, tracked),
         ...(completed.length === 1 ? retainedBoundaryFields(completed[0]) : {}),
         reason_class: reason, assistant_phase: "complete", assistant_count: completed.length,

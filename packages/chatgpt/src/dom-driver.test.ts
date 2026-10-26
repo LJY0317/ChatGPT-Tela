@@ -1924,6 +1924,11 @@ describe("current ChatGPT DOM surface driver", () => {
   test("approval appearance and replacement wake the semantic observer without message changes", async () => {
     const page = new FakePage();
     const driver = new ChatGptDomSurfaceDriver(page);
+    const observed: string[] = [];
+    const stop = observeDiagnosticEvents(event => {
+      if (event.stage.startsWith("web_observation_change_")) observed.push(event.stage);
+    });
+    try {
     const before = await driver.observe();
     page.mutations.push(() => { page.approval = {cardCount:1,denyCount:1,allowCount:0,allowOnceCount:1,alwaysAllowCount:1,unknownCount:0,cardKey:"card1",proofKey:"proof1"}; });
     const appeared = await driver.waitForChange(before.revision);
@@ -1935,6 +1940,9 @@ describe("current ChatGPT DOM surface driver", () => {
     page.mutations.push(() => { page.approval.cardCount = 0; });
     const removed = await driver.waitForChange(replaced.revision);
     expect(removed.approval).toBeUndefined();
+    expect(observed).toContain("web_observation_change_waiting");
+    expect(observed.filter(stage => stage === "web_observation_change_resolved")).toHaveLength(3);
+    } finally { stop?.(); }
   });
 
   test("uses narrow fill/send actions and waits on DOM mutations instead of polling", async () => {

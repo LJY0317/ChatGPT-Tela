@@ -3319,9 +3319,27 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
 
   async waitForChange(afterRevision: string, signal?: AbortSignal): Promise<ChatGptSurfaceSnapshot> {
     let domRevision = await this.page.mutationRevision(signal);
+    let waitingReported = false;
     for (;;) {
       const snapshot = await this.observe(signal);
-      if (snapshot.revision !== afterRevision) return snapshot;
+      if (snapshot.revision !== afterRevision) {
+        emitDiagnosticEvent("chatgpt_tela_work", "web_observation_change_resolved", {
+          assistant_count: snapshot.turns.filter(turn => turn.role === "assistant").length,
+          complete_assistant_count: snapshot.turns.filter(turn => turn.role === "assistant" && turn.phase === "complete").length,
+          user_count: snapshot.turns.filter(turn => turn.role === "user").length,
+          approval_card_count: snapshot.approval?.cardCount ?? 0,
+        });
+        return snapshot;
+      }
+      if (!waitingReported) {
+        waitingReported = true;
+        emitDiagnosticEvent("chatgpt_tela_work", "web_observation_change_waiting", {
+          assistant_count: snapshot.turns.filter(turn => turn.role === "assistant").length,
+          complete_assistant_count: snapshot.turns.filter(turn => turn.role === "assistant" && turn.phase === "complete").length,
+          user_count: snapshot.turns.filter(turn => turn.role === "user").length,
+          approval_card_count: snapshot.approval?.cardCount ?? 0,
+        });
+      }
       domRevision = await this.page.waitForDomMutation(domRevision, signal);
     }
   }

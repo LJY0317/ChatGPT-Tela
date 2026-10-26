@@ -3153,7 +3153,8 @@ describe("completed browser answer awaiting Native delivery", () => {
       }
       expect(completed).toMatchObject({ kind: "completed", answer: "PRIVATE_COMPLETED_ANSWER" });
       const events = readDiagnosticTail(file).events;
-      const deferred = events.filter(row => row.stage === "web_completed_answer_deferred");
+      const deferred = events.filter(row => row.stage === (reason === "identity_pending"
+        ? "web_completed_answer_deferred_anomaly" : "web_completed_answer_deferred"));
       expect(deferred).toHaveLength(1);
       expect(deferred[0]).toMatchObject({ reason_class: reason, assistant_phase: "complete",
         assistant_count: reason === "multiple_assistants" ? 2 : 1,
