@@ -1,4 +1,4 @@
-import { WebSubmissionUnproven, type WebSubmissionProofReason } from "@chatgpt-tela/core";
+import { WebSubmissionUnproven, webProviderFailureReason, type WebSubmissionProofReason } from "@chatgpt-tela/core";
 import { authorFingerprint, assistantFor, baselineUserLineageKeys, resolveAssistantLineage, type TurnOwnership, type AssistantLineageResolution } from "./turn-ownership";
 import { createHash } from "node:crypto";
 import {
@@ -73,21 +73,12 @@ interface TrackedTurn extends TurnOwnership {
   retirement?: Promise<void>;
 }
 
-/** Classify the already proven provider failure without retaining UI text. */
-function providerFailureReason(detail: string | undefined): string {
-  const normalized = detail?.trim().toLowerCase();
-  return normalized === "failed to fetch" ? "fetch_failed"
-    : normalized?.includes("message stream") ? "message_stream_failed"
-      : normalized && /message\s+you\s+submitted\s+was\s+too\s+long/.test(normalized) ? "message_too_long"
-      : normalized ? "other_provider_error" : "detail_unavailable";
-}
-
 function observeProviderFailure(detail: string | undefined): void {
   // Keep only shape evidence when the provider's rendered error differs from its
   // underlying failure. Never retain the displayed error text.
   const normalized = detail?.trim().toLowerCase() ?? "";
   emitDiagnosticEvent("chatgpt_tela_work", "web_provider_failure_detail_classified", {
-    reason_class: providerFailureReason(detail),
+    reason_class: webProviderFailureReason(detail),
     detail_chars: detail?.length ?? 0,
     contains_length_term: /\b(long|length|large|limit)\b/.test(normalized),
     contains_submission_term: /\b(message|submitted|prompt)\b/.test(normalized),
@@ -1966,7 +1957,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         };
       }
       const assistant = assistants[0];
-      if (assistant?.phase === "failed" && providerFailureReason(assistant.failureDetail) !== "message_too_long"
+      if (assistant?.phase === "failed" && webProviderFailureReason(assistant.failureDetail) === "message_stream_failed"
         && !tracked.responseRetryState && driver.retryFailedResponse) {
         // Record dispatch before awaiting input: a thrown click may already have reached the page.
         tracked.responseRetryState = "dispatched";

@@ -1,5 +1,5 @@
 import { isNativeGoalTool } from "@chatgpt-tela/core";
-import { WebProviderResponseFailed } from "@chatgpt-tela/core";
+import { WebProviderResponseFailed, type WebProviderFailureReason } from "@chatgpt-tela/core";
 import { WebContextFitFailed, webContextFitFailureReason, type WebContextFitReason } from "@chatgpt-tela/core";
 import { WebObservationUnproven, webObservationFailureReason, type WebObservationReason } from "@chatgpt-tela/core";
 import { WebSubmissionUnproven, webSubmissionFailureReason, type WebSubmissionProofReason } from "@chatgpt-tela/core";
@@ -62,7 +62,7 @@ export class ActiveTurnRegistry {
   readonly #nativeCallIdsByTurn = new Map<string, Set<string>>();
   readonly #capabilityByTurn = new Map<string, string>();
   // A fixed recovery classification only; never retain raw exceptions or request content.
-  readonly #retiredTurns = new Map<string, true | "provider_response_failed" | "handoff_probable" | "handoff_ambiguous" | "projection_unsupported" | NativeHistoryBootstrapRequired["recoveryReason"] | { readonly retainedContext: WebRetainedContextReason } | { readonly submission: WebSubmissionProofReason } | { readonly observation: WebObservationReason } | { readonly contextFit: WebContextFitReason }>();
+  readonly #retiredTurns = new Map<string, true | "handoff_probable" | "handoff_ambiguous" | "projection_unsupported" | NativeHistoryBootstrapRequired["recoveryReason"] | { readonly providerFailureReason: WebProviderFailureReason } | { readonly retainedContext: WebRetainedContextReason } | { readonly submission: WebSubmissionProofReason } | { readonly observation: WebObservationReason } | { readonly contextFit: WebContextFitReason }>();
   static readonly MAX_RETIRED_TURNS = 256;
   readonly #routeId: string | undefined;
 
@@ -100,11 +100,11 @@ export class ActiveTurnRegistry {
 
   retiredError(threadId: string, turnId: string): Error {
     const reason = this.#retiredTurns.get(threadId + "\u0000" + turnId);
+    if (reason && typeof reason === "object" && "providerFailureReason" in reason) return new WebProviderResponseFailed(undefined, reason.providerFailureReason);
     if (reason && typeof reason === "object" && "contextFit" in reason) return new WebContextFitFailed(reason.contextFit);
     if (reason && typeof reason === "object") return "observation" in reason ? new WebObservationUnproven(reason.observation) : "submission" in reason
       ? new WebSubmissionUnproven(reason.submission) : new WebRetainedContextUnproven(reason.retainedContext);
     if (reason === "handoff_probable" || reason === "handoff_ambiguous") return new NativeWebHandoffUnproven(reason === "handoff_ambiguous" ? "ambiguous" : "probable");
-    if (reason === "provider_response_failed") return new WebProviderResponseFailed();
     if (reason === "projection_unsupported") return new NativeProjectionUnsupported();
     return reason !== undefined && reason !== true
       ? new NativeHistoryBootstrapRequired(reason) : new NativeTurnAlreadyRetired();
@@ -176,7 +176,7 @@ export class ActiveTurnRegistry {
     const contextFit = webContextFitFailureReason(failure);
     this.#retiredTurns.set(key, contextFit ? { contextFit } : observation ? { observation } : submission ? { submission } : retainedContext ? { retainedContext } : error?.code === "native_history_bootstrap_required"
       ? NativeHistoryBootstrapRequired.normalizeRecoveryReason(error.recoveryReason)
-      : error?.code === "tela_web_provider_response_failed" ? "provider_response_failed"
+      : error?.code === "tela_web_provider_response_failed" ? { providerFailureReason: failure instanceof WebProviderResponseFailed ? failure.reasonClass : "detail_unavailable" }
       : error?.code === "native_projection_unsupported" ? "projection_unsupported"
       : error?.code === "native_web_handoff_unproven" ? error.proofState === "ambiguous" ? "handoff_ambiguous" : "handoff_probable" : true);
     while (this.#retiredTurns.size > ActiveTurnRegistry.MAX_RETIRED_TURNS) {

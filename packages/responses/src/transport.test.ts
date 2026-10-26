@@ -892,3 +892,28 @@ test("provider-declared failure has the same safe cause before progress, after p
     } finally { stop?.(); await gateway.close(); }
   }
 });
+
+test("activity restriction and unknown provider failures keep the same terminal HTTP/SSE contract", async () => {
+  for (const detail of ["Our systems have detected unusual activity coming from your system. Please try again later.", "Unknown provider failure"]) {
+    let sends = 0;
+    const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async turn => {
+      sends++; turn.channel.markSubmitted(); turn.channel.markAccepted();
+      turn.channel.publishProgress("Earlier work was observed");
+      throw new WebProviderResponseFailed(detail);
+    });
+    try {
+      const response = await handleNativeResponsesHttp(post(body()), gateway);
+      const wire = await response.text();
+      const frames = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      const errors = frames.filter(frame => frame.type === "response.failed");
+      expect(errors).toHaveLength(1);
+      expect(frames.some(frame => frame.type === "response.completed")).toBe(false);
+      const reason = detail.startsWith("Our systems") ? "unusual_activity" : "other_provider_error";
+      expect(errors[0].response.error).toMatchObject({ code: "tela_web_provider_response_failed", reason_class: reason, retryable: false });
+      expect(wire).not.toContain(detail);
+      const replay = await handleNativeResponsesHttp(post(body()), gateway);
+      expect((await replay.json() as any).error).toEqual(errors[0].response.error);
+      expect(sends).toBe(1);
+    } finally { await gateway.close(); }
+  }
+});

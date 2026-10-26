@@ -123,6 +123,7 @@ export interface WebDelegationRecord {
   readonly failureStage?: WebDelegationFailureStage;
   readonly failureClass?: ReturnType<typeof diagnosticFailureClass>;
   readonly failureNativeCode?: string;
+  readonly failureProviderReason?: "unusual_activity";
   readonly failureIncidentRef?: string;
   readonly failureIncidentState?: "recorded" | "unavailable";
   readonly failureNextAction?: "inspect_job" | "reconcile_exact_turn" | "inspect_diagnostics";
@@ -160,6 +161,14 @@ function nativeTurnFailureCode(turn: Record<string, unknown> | undefined): strin
   }
   return typeof code === "string" && /^tela_[a-z_]{1,64}$/.test(code) ? code : undefined;
 }
+function nativeTurnProviderReason(turn: Record<string, unknown> | undefined): "unusual_activity" | undefined {
+  const failure = object(turn?.error);
+  let reason = failure?.reason_class;
+  if (reason === undefined && typeof failure?.message === "string") {
+    try { reason = object(object(JSON.parse(failure.message))?.error)?.reason_class; } catch { /* Non-JSON is not a classification. */ }
+  }
+  return reason === "unusual_activity" ? reason : undefined;
+}
 
 function failureMetadata(input: {
   readonly id: string;
@@ -168,6 +177,7 @@ function failureMetadata(input: {
   readonly stage: WebDelegationFailureStage;
   readonly error: unknown;
   readonly nativeCode?: string | undefined;
+  readonly providerReason?: "unusual_activity" | undefined;
 }) {
   const reasonClass = diagnosticFailureClass(input.error);
   const operationFingerprint = diagnosticFingerprint(input.id);
@@ -175,6 +185,7 @@ function failureMetadata(input: {
     operation_fingerprint: operationFingerprint,
     failure_class: reasonClass,
     ...(input.nativeCode ? { reason_class: input.nativeCode } : {}),
+    ...(input.providerReason ? { provider_reason: input.providerReason } : {}),
     failure_stage: input.stage,
     next_action: input.stage === "turn_submit" || input.stage === "turn_observe"
       ? "reconcile_exact_turn" : input.stage === "final_result" ? "inspect_job" : "inspect_diagnostics",
@@ -186,6 +197,7 @@ function failureMetadata(input: {
     failureStage: input.stage,
     failureClass: reasonClass,
     ...(input.nativeCode ? { failureNativeCode: input.nativeCode } : {}),
+    ...(input.providerReason ? { failureProviderReason: input.providerReason } : {}),
     failureIncidentState: incident.state,
     ...(incident.ref ? { failureIncidentRef: incident.ref } : {}),
     failureNextAction: (input.stage === "turn_submit" || input.stage === "turn_observe"
@@ -961,6 +973,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
   let reserved = false;
   let turnSubmissionAttempted = false;
   let reportedNativeCode: string | undefined;
+  let reportedProviderReason: "unusual_activity" | undefined;
   let failureStageHint: WebDelegationFailureStage = "admission";
   let unsubscribe: (() => void) | undefined;
   try {
@@ -1073,6 +1086,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
         if (turn?.id !== turnId) return;
         reportedStatus = typeof turn.status === "string" ? turn.status : undefined;
         reportedNativeCode = nativeTurnFailureCode(turn);
+        reportedProviderReason = nativeTurnProviderReason(turn);
         if (turn.status === "completed") resolveDone(); else rejectDone(Error("Web job turn failed"));
       }
     };
@@ -1138,7 +1152,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       delegationBoundary(record.id, "execution_failed", { failure_stage: stage, thread_linked: Boolean(record.threadId) });
       const failedRecord: WebDelegationRecord = { ...record, state, failure: turnFailed ? "turn_failed" : resultUnavailable ? "result_unavailable" : "transport_or_ack",
         ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
-          ...(record.turnId ? { turnId: record.turnId } : {}), stage, error, nativeCode: reportedNativeCode }) };
+          ...(record.turnId ? { turnId: record.turnId } : {}), stage, error, nativeCode: reportedNativeCode, providerReason: reportedProviderReason }) };
       // Persist the failure evidence before any coordinator side effect. Keep
       // the receipt mutable until the Queue acknowledgement has been journaled.
       record = adapters.store.save({ ...failedRecord, state: "uncertain" }); adapters.changed?.(record);
@@ -1211,7 +1225,7 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
     if (turn.status === "failed" || turn.status === "interrupted") {
       const settled = adapters.store.save({ ...record, ...observations, state: "failed", failure: "turn_failed",
         ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
-          ...(record.turnId ? { turnId: record.turnId } : {}), stage: "turn_complete", error: new Error("Web job turn failed"), nativeCode: nativeTurnFailureCode(turn) }),
+          ...(record.turnId ? { turnId: record.turnId } : {}), stage: "turn_complete", error: new Error("Web job turn failed"), nativeCode: nativeTurnFailureCode(turn), providerReason: nativeTurnProviderReason(turn) }),
         ...(turn.status === "failed" && final?.finalEvidence === "explicit-final-phase"
           ? { ...final, taskOutcome: "unassessed" as const } : {}) });
       adapters.changed?.(settled);

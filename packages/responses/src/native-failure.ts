@@ -1,3 +1,4 @@
+import { WebProviderResponseFailed } from "@chatgpt-tela/core";
 import { webContextFitRecovery } from "./web-context-fit-recovery";
 import { nativeHandoffRecovery } from "./native-handoff-recovery";
 import { nativeHistoryRecovery } from "./native-history-recovery";
@@ -12,7 +13,7 @@ const TERMINAL_FAILURES = {
       reuse_verified_context_first: true, prior_execution_settled: "unknown" },
   },
   tela_web_provider_response_failed: {
-    message: "The Web provider reported a failed response after submission. Repeating this turn cannot resume it. Check existing work before continuing in the same conversation with a new authorized turn.",
+    message: "ChatGPT에서 응답이 중단됐습니다. 원래 요청은 아직 완료되지 않았습니다.",
     recovery: { kind: "reconcile_accepted_web_turn", requires_user_action: true,
       requires_new_native_turn: true, requires_new_conversation: false,
       original_history_preserved: true, reuse_verified_context_first: true, prior_execution_settled: "unknown" },
@@ -39,7 +40,9 @@ export function nativeFailure(error: unknown) {
   const code = error !== null && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
   if (typeof code === "string" && Object.hasOwn(TERMINAL_FAILURES, code)) return {
     error: { type: "invalid_request_error", code, retryable: false,
-      ...TERMINAL_FAILURES[code as keyof typeof TERMINAL_FAILURES] },
+      ...TERMINAL_FAILURES[code as keyof typeof TERMINAL_FAILURES],
+      ...(error instanceof WebProviderResponseFailed ? { reason_class: error.reasonClass,
+        ...(error.reasonClass === "unusual_activity" ? { message: "ChatGPT에서 활동 제한 안내와 함께 응답이 중단됐습니다. 원래 요청은 아직 완료되지 않았습니다." } : {}) } : {}) },
   };
   return { error: { type: "invalid_request_error", retryable: false,
     ...(code === "tela_web_model_unavailable" ? { code } : {}),
