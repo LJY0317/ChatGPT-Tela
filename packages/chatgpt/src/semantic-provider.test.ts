@@ -1054,7 +1054,10 @@ describe("ChatGPT semantic provider", () => {
     expect(payload).toContain('"nativeGoalControl":"opaque-goal-only-control"');
     expect(payload).toContain("goal_control_inventory");
     expect(payload).toContain("goal_control_call");
-    expect(payload).toContain("verify its full objective");
+    expect(payload).toContain("actual results prove the full objective");
+    expect(payload).toContain("three consecutive Goal turns");
+    expect(payload).toContain("use blocked");
+    expect(payload).toContain("Automatic Goal continuations do not authorize redoing settled work");
     expect(payload).not.toContain('"toolBridge"');
     expect(payload).not.toContain('"turnCapability"');
   });
@@ -2682,12 +2685,33 @@ test("prepared input diagnostics survive emission and sanitized readback without
   const operation=diagnosticFingerprint([payload.nativeTaskId,payload.nativeTurnId,payload.webEpochId].join("\n"));
   const expected={kind:"inline",source_segment_count:2,duplicate_source_segment_count:1,
    source_bytes:2*Buffer.byteLength(source),duplicate_source_bytes:Buffer.byteLength(source),
-   source_file_bytes:0,attachment_count:0,operation_fingerprint:operation};
+   source_file_bytes:0,attachment_count:0,operation_fingerprint:operation,
+   epoch_fingerprint:diagnosticFingerprint(payload.webEpochId),
+   active_revision_fingerprint:diagnosticFingerprint("rev-1"),
+   active_input_fingerprint:diagnosticFingerprint(source),request_role:"user"};
   expect(seen).toEqual([expect.objectContaining(expected)]);
   expect(recorded).toEqual([expect.objectContaining(expected)]);
   expect(recorded[0]!.composer_wire_bytes).toBeGreaterThan(recorded[0]!.context_wire_bytes as number);
+  expect(recorded[0]!.message_fingerprint).toBe(diagnosticFingerprint(formatWebPhysicalContext(context, undefined)));
   expect(readDiagnosticTail(file).events.find(row=>row.stage==="web_turn_identity_accepted")?.operation_fingerprint).toBe(operation);
   expect(readFileSync(file,"utf8")).not.toContain(source);
+  // Identical text in a new Native request is valid; correlate it without suppressing it.
+  const nextDriver=new FixtureDriver(fixture("ready-new-chat")),nextSurface=await leaseFor(nextDriver);
+  try {
+   const nextContext={...context,headRevisionId:"rev-2",activeRequestRevisionId:"rev-2",
+    segments:context.segments.map((segment,index)=>index===0?{...segment,revisionId:"rev-2"}:segment)};
+   const next=new ChatGptSemanticProvider().submitTurn(nextSurface.lease,{...payload,nativeTurnId:"turn-2",physicalContext:nextContext});
+   while(nextDriver.current.revision==="r1")await Promise.resolve();
+   nextDriver.queued.push(acceptedSnapshot(nextDriver));
+   expect((await next).state).toBe("proven");
+   const evidence=readDiagnosticTail(file).events.filter(row=>row.stage==="browser_message_prepared");
+   expect(evidence).toHaveLength(2);
+   expect(evidence[1]!.active_input_fingerprint).toBe(evidence[0]!.active_input_fingerprint);
+   expect(evidence[1]!.active_revision_fingerprint).not.toBe(evidence[0]!.active_revision_fingerprint);
+   expect(evidence[1]!.operation_fingerprint).not.toBe(evidence[0]!.operation_fingerprint);
+   expect(nextDriver.activated).toHaveLength(1);
+  }finally{await nextSurface.host.close();}
+
  }finally{
   stop?.();await surface.host.close();
   if(old===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;

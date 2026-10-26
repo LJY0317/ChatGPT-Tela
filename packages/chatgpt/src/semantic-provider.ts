@@ -404,7 +404,7 @@ function formatWebPhysicalContextParts(
       "This Web task uses Tela Chat tools only. Do not use Native Codex inventory, Native call tools, or a Native turn capability, including for delegation.",
       ...(chatTools.nativeGoalControl ? [
         "Copy the current context header's nativeGoalControl VALUE unchanged into goal_control for Tela Chat goal_control_inventory and goal_control_call; the field name itself is not a capability. These invoke only the original Native Goal tools, using their actual schemas, and do not grant Native work tools.",
-        "Before marking the Goal complete, verify its full objective against actual results. Completion must use the original Native Goal update tool; prose, shell scripts and completion markers do not complete a Goal. After its result, return your final answer and stop.",
+        "Settle the original Native Goal through its update tool: complete only when actual results prove the full objective. If the same genuine blocker prevents meaningful progress for at least three consecutive Goal turns, use blocked and report the dependency; a resumed blocked Goal starts a fresh audit. Repeating status, searches or passing tests without changing the next action is not progress. Automatic Goal continuations do not authorize redoing settled work. Pause only at the user's explicit request. After a complete, blocked or explicitly requested paused update succeeds, return your final answer and stop. Prose, scripts and completion markers do not settle a Goal.",
       ] : ["Finish the assigned objective and report its result and remaining limits. Goal mutation is not exposed in this turn; the Native coordinator must settle it through the official Goal API."]),
     ] : [
       "No Native Codex tool bridge is attached to this response. Do not claim fresh local inspection or mutation unless it is already present as prior task evidence.",
@@ -1291,10 +1291,19 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       if (seenSources.has(segment.content)) { duplicateSourceBytes += bytes; duplicateSourceCount++; }
       else seenSources.add(segment.content);
     }
+    const activeRevision = request.physicalContext.segments.find(segment => segment.type === "revision"
+      && segment.revisionId === request.physicalContext.activeRequestRevisionId);
     emitDiagnosticEvent("chatgpt_tela_work", "browser_message_prepared", {
       operation_fingerprint: diagnosticFingerprint([request.nativeTaskId, request.nativeTurnId,
         request.webEpochId].join("\n")),
       context_mode: request.physicalContext.mode,
+      epoch_fingerprint: diagnosticFingerprint(request.webEpochId),
+      message_fingerprint: diagnosticFingerprint(text),
+      ...(activeRevision?.type === "revision" ? {
+        active_revision_fingerprint: diagnosticFingerprint(activeRevision.revisionId),
+        active_input_fingerprint: diagnosticFingerprint(activeRevision.content),
+        request_role: activeRevision.kind,
+      } : {}),
       kind: sourceUpload ? "source_file" : request.contextAttachment ? "preloaded_reference" : "inline",
       source_segment_count: request.physicalContext.segments.length,
       duplicate_source_segment_count: duplicateSourceCount,
