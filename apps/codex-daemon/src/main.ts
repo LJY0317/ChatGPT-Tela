@@ -8,7 +8,7 @@ import {
 import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import { createLocalNativeAccountProof, type TrustedNativeProfileSession } from "../../../packages/codex-service/src/cross-profile-account-proof";
 import { startWebDelegationRetention } from "../../../packages/codex-service/src/web-delegation-retention";
-import { WebDelegationStore } from "../../../packages/codex-service/src/web-delegation";
+import { WebDelegationStore, reconcileWebDelegationCapacity } from "../../../packages/codex-service/src/web-delegation";
 import { approvalDelayMilliseconds, consumeSavedChatAcceptance, readProductPreferences, setWorkProfileConnection, webDelegationLimit } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
@@ -42,7 +42,7 @@ async function main(): Promise<void> {
       : {},
     profileRuntimeCommand: [runtimeExecutable, runtimeEntrypoint],
     environment: process.env,
-    webDelegationCapacity: slot => delegationStore.capacity(slot),
+    webDelegationCapacity: slot => reconcileWebDelegationCapacity(delegationAdapters, slot, lifecycle.signal),
     onProfileConnectionChanged: (...args) => { setWorkProfileConnection(...args); retention?.wake(); },
     profileRuntimeEnvironment: slot => {
       const preferences = readProductPreferences();
@@ -88,11 +88,12 @@ async function main(): Promise<void> {
       responsesRouteFingerprint: profile.responsesRouteFingerprint, terminalEndpoint: terminal.endpoint };
   };
   const proof = createLocalNativeAccountProof({ resolveOwnedSession: ownedSession, fingerprintKey: delegationStore.fingerprintKey });
-  retention = startWebDelegationRetention({
+  const delegationAdapters = {
     store: delegationStore,
-    owner: async slot => ({ binding: await proof(slot), session: await ownedSession(slot) }),
-    connect: endpoint => connectCodexAppServerWebSocket(endpoint, { signal: lifecycle.signal }),
-  }, lifecycle.signal);
+    owner: async (slot: number) => ({ binding: await proof(slot), session: await ownedSession(slot) }),
+    connect: (endpoint: string) => connectCodexAppServerWebSocket(endpoint, { signal: lifecycle.signal }),
+  };
+  retention = startWebDelegationRetention(delegationAdapters, lifecycle.signal);
 
   let stopping: Promise<void> | undefined;
   const stop = () => {

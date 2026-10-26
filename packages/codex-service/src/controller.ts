@@ -319,7 +319,8 @@ export async function startCodexService(input: {
   readonly profileRuntimeEnvironment?: (slot: number) => Readonly<Record<string, string | undefined>>;
   readonly nativeTargetAdapter?: CodexNativeTargetAdapter;
   readonly onProfileConnectionChanged?: (targetId: string, enabled: boolean) => void;
-  readonly webDelegationCapacity?: (slot: number) => { readonly total: { readonly used: number }; readonly uncertain: number };
+  readonly webDelegationCapacity?: (slot: number) => { readonly total: { readonly used: number }; readonly uncertain: number }
+    | Promise<{ readonly total: { readonly used: number }; readonly uncertain: number }>;
   readonly signal?: AbortSignal;
 }): Promise<CodexService> {
   const instanceId = randomUUID();
@@ -373,7 +374,7 @@ export async function startCodexService(input: {
     const web = await response.json() as { contractVersion?: unknown; slot?: unknown; shutdownReadiness?: unknown };
     if (web.contractVersion !== 1 || web.slot !== profile.slot || web.shutdownReadiness !== "ready") return blocked("runtime_not_ready");
     if (input.webDelegationCapacity) {
-      const capacity = input.webDelegationCapacity(profile.slot);
+      const capacity = await input.webDelegationCapacity(profile.slot);
       if (capacity.uncertain > 0 || capacity.total.used > 0) return blocked("delegation_reservation");
     }
     return "ready";

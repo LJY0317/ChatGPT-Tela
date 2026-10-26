@@ -45,7 +45,8 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
     profileRuntimeEnvironment() { active = true; return { FIXTURE_STATE: state, FIXTURE_CLOSED: closed.url.href,
       FIXTURE_APP_SERVER_ENDPOINT: `ws://127.0.0.1:${appServer.port}/` }; },
   };
-  const service = await startCodexService({ config: {}, profileRuntimeCommand: [process.execPath, join(root, "child.mjs")], nativeTargetAdapter: adapter });
+  const service = await startCodexService({ config: {}, profileRuntimeCommand: [process.execPath, join(root, "child.mjs")],
+    nativeTargetAdapter: adapter, webDelegationCapacity: async () => ({ total: { used: 0 }, uncertain: 0 }) });
   try {
     const started = await service.startProfile(1);
     expect(await service.shutdownReadiness()).toBe("ready");

@@ -772,6 +772,19 @@ async function notifyFailureCoordinator(adapters: WebDelegationAdapters, record:
     return updated;
   }
 }
+/** Maintenance reuses exact-turn recovery; a lost observer cannot pin a completed job forever. */
+export async function reconcileWebDelegationCapacity(adapters: WebDelegationAdapters, slot: number, signal: AbortSignal): Promise<WebDelegationCapacity> {
+  if (adapters.store.capacity(slot).total.used) {
+    for (const record of adapters.store.records()) {
+      if (record.slot !== slot || !record.threadId || !record.turnId
+        || record.state !== "running" && record.state !== "uncertain") continue;
+      try { await reconcileWebDelegation(adapters, record.id, signal); }
+      catch { /* Unproven operations retain their existing reservation and failure evidence. */ }
+    }
+  }
+  return adapters.store.capacity(slot);
+}
+
 /** Inspect the journal after one on-demand recovery of an unfinished exact turn.
  * The observer process may have exited after Native completed its turn. */
 export async function inspectWebDelegationResult(adapters: WebDelegationAdapters, id: string, confirmUncertainTitleRetry = false): Promise<WebDelegationRecord> {

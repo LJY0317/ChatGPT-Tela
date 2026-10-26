@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { observeDiagnosticEvents, diagnosticFingerprint, readDiagnosticTail, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
-import { runWebDelegation, inspectWebDelegationResult, collectWebDelegationResult, WebDelegationStore, reconcileWebDelegation, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
+import { runWebDelegation, inspectWebDelegationResult, collectWebDelegationResult, WebDelegationStore, reconcileWebDelegation, reconcileWebDelegationCapacity, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
 async function fixture(options: { nativeFailureCode?: string; nativeFailureJson?: boolean; titleReadFails?: boolean; titleReadAfterSetFails?: boolean; titleSetFails?: boolean; titleSetAckLost?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; latestStatus?: "failed" | "interrupted"; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
@@ -409,6 +409,29 @@ test("an acknowledged job with lost completion events is recovered from its exac
     expect(f.store.get(f.id)?.answer).toBe("verified recovered design");
   } finally { f.cleanup(); }
 });
+test.each([false, true])("maintenance capacity settles completed observers but preserves live Native work: %s", async indexedProgress => {
+  const f = await fixture({ silent: true, disconnect: true, indexedProgress });
+  try {
+    await expect(f.run()).rejects.toThrow("connection lost");
+    f.store.save({ ...f.store.get(f.id)!, state: "running" });
+    const capacity = await reconcileWebDelegationCapacity(f.adapters, 1, AbortSignal.timeout(1000));
+    expect(capacity.total.used).toBe(indexedProgress ? 1 : 0);
+    expect(f.store.get(f.id)?.state).toBe(indexedProgress ? "running" : "completed");
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
+test("unreachable Native owner cannot release maintenance reservations", async () => {
+  const f = await fixture({ silent: true, disconnect: true });
+  try {
+    await expect(f.run()).rejects.toThrow("connection lost");
+    const capacity = await reconcileWebDelegationCapacity({ ...f.adapters,
+      connect: async () => { throw Error("Native unavailable"); } }, 1, AbortSignal.timeout(1000));
+    expect(capacity.total.used).toBe(1);
+    expect(f.store.get(f.id)?.state).toBe("uncertain");
+  } finally { f.cleanup(); }
+});
+
 test.each(["inspect", "collect"] as const)("on-demand %s settles an orphaned running journal from its original Native turn", async action => {
   const f = await fixture({ silent: true, disconnect: true });
   try {
