@@ -128,7 +128,7 @@ test("delivery-boundary census preserves independent composer and answer facts i
   const shown={disabled:false,getClientRects:()=>[{}]}, hidden={disabled:false,getClientRects:()=>[]};
   const result=runInNewContext(`(${DIAGNOSTIC_DOM_CAPTURE})(false)`,{
     document:{forms:[{}],querySelectorAll(selector:string){
-      if(selector==='form [data-testid="send-button"], form button[type="submit"]')return[shown];
+      if(selector==='form [data-testid="send-button"], form button[type="submit"]')return[shown,{...shown,disabled:true}];
       if(selector==='form [data-testid="stop-button"]')return[hidden];
       if(selector==='[data-markdown-text-style="assistant-message"]')return[shown,hidden];
       return[];
@@ -141,6 +141,6 @@ test("delivery-boundary census preserves independent composer and answer facts i
   }} as unknown as BrowserSurfaceLease;
   await captureBrowserDiagnosticEvidence(surface,"completion_deferred");
   expect(readDiagnosticTail(join(root,"events.jsonl")).events.find(row=>row.stage==="browser_snapshot_observed"))
-    .toMatchObject({composer_send_count:1,composer_stop_count:0,assistant_body_count:2,visible_assistant_body_count:1,private_capture:false});
+    .toMatchObject({composer_send_count:2,enabled_composer_send_count:1,composer_stop_count:0,assistant_body_count:2,visible_assistant_body_count:1,private_capture:false});
   expect(result.html).toBeUndefined();
 });

@@ -21,8 +21,9 @@ export const DIAGNOSTIC_DOM_CAPTURE = String.raw`function(privateCapture) {
   // They do not prove task ownership or authorize completion or approval.
   const visible = node => node.getClientRects().length > 0
     && getComputedStyle(node).display !== 'none' && getComputedStyle(node).visibility !== 'hidden';
-  result.composer_send_count = [...document.querySelectorAll('form [data-testid="send-button"], form button[type="submit"]')]
-    .filter(node => !node.disabled && visible(node)).length;
+  const sends = [...document.querySelectorAll('form [data-testid="send-button"], form button[type="submit"]')].filter(visible);
+  result.composer_send_count = sends.length;
+  result.enabled_composer_send_count = sends.filter(node => !node.disabled).length;
   result.composer_stop_count = [...document.querySelectorAll('form [data-testid="stop-button"]')].filter(visible).length;
   const bodies = [...document.querySelectorAll('[data-markdown-text-style="assistant-message"]')];
   result.assistant_body_count = bodies.length;
@@ -153,7 +154,7 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_pick
     const snapshot=await page.evaluate<boolean,Record<string,unknown>>(DIAGNOSTIC_DOM_CAPTURE,enabled,controller.signal);
     if (controller.signal.aborted) return;
     const fields: Record<string,number|boolean|string>={ reason_class:reason };
-    for (const key of ["element_count","dialog_count","button_count","enabled_button_count","form_count","resource_count","resource_status_observed_count","resource_failed_count","resource_slow_count","resource_inflight_count", "keyed_turn_count", "composer_send_count", "composer_stop_count", "assistant_body_count", "visible_assistant_body_count", "turn_scroll_above_px", "turn_scroll_below_px", "turn_viewport_height_px",
+    for (const key of ["element_count","dialog_count","button_count","enabled_button_count","form_count","resource_count","resource_status_observed_count","resource_failed_count","resource_slow_count","resource_inflight_count", "keyed_turn_count", "composer_send_count", "enabled_composer_send_count", "composer_stop_count", "assistant_body_count", "visible_assistant_body_count", "turn_scroll_above_px", "turn_scroll_below_px", "turn_viewport_height_px",
       ...["user_bubble", "user_author", "user_conversation", "user_markdown"].flatMap(name => [name + "_count", name + "_keyed_count", name + "_group_self_count"])]) {
       const value=snapshot[key]; if (typeof value==="number" && Number.isSafeInteger(value) && value>=0) fields[key]=value;
     }
