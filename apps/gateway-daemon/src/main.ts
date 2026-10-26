@@ -91,6 +91,21 @@ async function main(): Promise<void> {
     : probePublicMcp;
   const resolveIngressStatus = publicConfig
     ? async (signal?: AbortSignal, options?: { readonly publicTransport: boolean }): Promise<GatewayIngressStatus> => {
+        if (options?.publicTransport) {
+          const local = await publicProbe(new URL(`http://127.0.0.1:${publicConfig.localPort}/mcp`), signal);
+          signal?.throwIfAborted();
+          const transport = await diagnosePublicIngress(new URL(publicConfig.publicUrl), "https://dns.google/resolve",
+            tailscaleManager ? new SystemTailscaleCommandRunner(process.env.CHATGPT_TELA_TAILSCALE_CLI?.trim() || "tailscale") : undefined,
+            { ...(signal ? { signal } : {}), verify: (fetch, deadline) => publicProbe(new URL(publicConfig.publicUrl), deadline, fetch) });
+          const ready = transport.mcpContract === "verified";
+          return { contractVersion: 1, availability: ready ? "ready" : "unavailable",
+            cause: ready ? "ready" : transport.mcpContract === "failed" ? "public-mcp-unreachable" : "public-transport-unreachable",
+            detail: ready ? "Public-DNS MCP contract verified from this machine; cloud-client access is not independently observed"
+              : "The independent public connection check failed",
+            localAvailability: local.ready ? "ready" : "unavailable", publicAvailability: ready ? "ready" : "unavailable",
+            observationScope: "this-machine-via-public-dns", externalClientReachability: "not-observed",
+            exposureKind: tailscaleManager ? "tailscale-funnel" : "existing-https" };
+        }
         if (tailscaleManager && tailscaleLease) {
           const diagnosis = await tailscaleManager.diagnose(tailscaleLease, signal);
           if (diagnosis.availability !== "ready") {
@@ -118,19 +133,6 @@ async function main(): Promise<void> {
             detail: "The local Tela Gateway MCP listener is not reachable",
             exposureKind: tailscaleManager ? "tailscale-funnel" : "existing-https",
           });
-        }
-        if (options?.publicTransport) {
-          const transport = await diagnosePublicIngress(new URL(publicConfig.publicUrl), "https://dns.google/resolve",
-            tailscaleManager ? new SystemTailscaleCommandRunner(process.env.CHATGPT_TELA_TAILSCALE_CLI?.trim() || "tailscale") : undefined,
-            { ...(signal ? { signal } : {}), verify: (fetch, deadline) => publicProbe(new URL(publicConfig.publicUrl), deadline, fetch) });
-          const ready = transport.mcpContract === "verified";
-          return { contractVersion: 1, availability: ready ? "ready" : "unavailable",
-            cause: ready ? "ready" : transport.mcpContract === "failed" ? "public-mcp-unreachable" : "public-transport-unreachable",
-            detail: ready ? "Public-DNS MCP contract verified from this machine; cloud-client access is not independently observed"
-              : "Local Tela is ready, but the public connection check failed",
-            localAvailability: "ready", publicAvailability: ready ? "ready" : "unavailable",
-            observationScope: "this-machine-via-public-dns", externalClientReachability: "not-observed",
-            exposureKind: tailscaleManager ? "tailscale-funnel" : "existing-https" };
         }
         const publicHealth = await publicProbe(new URL(publicConfig.publicUrl), signal);
         return publicHealth.ready

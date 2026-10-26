@@ -97,11 +97,13 @@
         "@chatgpt-tela/core": "workspace:*",
         "@chatgpt-tela/default-desktop-target": "workspace:*",
         "@chatgpt-tela/development-runtime": "workspace:*",
+        "@chatgpt-tela/gateway": "workspace:*",
         "@chatgpt-tela/product-config": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
         "@chatgpt-tela/product-uninstall": "workspace:*",
         "@chatgpt-tela/service-protocol": "workspace:*",
         "@chatgpt-tela/service-supervisor": "workspace:*",
+        "@chatgpt-tela/tailscale-ingress": "workspace:*",
       },
     },
     "apps/profile-runtime": {
@@ -289,6 +291,7 @@
       "name": "@chatgpt-tela/responses",
       "version": "0.0.0",
       "dependencies": {
+        "@chatgpt-tela/codex": "workspace:*",
         "@chatgpt-tela/core": "workspace:*",
         "@chatgpt-tela/runtime": "workspace:*",
       },

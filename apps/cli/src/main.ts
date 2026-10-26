@@ -746,7 +746,7 @@ async function manageIngress(
         });
       status.publicTransport = transport;
       if (transport.state === "unavailable") Object.assign(status, { state: "unavailable",
-        cause: "public-transport-unreachable", detail: "The explicit public-DNS transport probe failed; inspect publicTransport for its boundary" });
+        cause: transport.mcpContract === "failed" ? "public-mcp-unreachable" : "public-transport-unreachable", detail: "The explicit public-DNS connection probe failed; inspect publicTransport for its boundary" });
     }
     console.log(JSON.stringify(status, null, 2));
     return;

@@ -49,7 +49,7 @@ test("public failure retains TLS cause and aggregate incident; mixed relays and 
   const dns = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => Response.json({ Status: 0, Answer: [
     { type: 1, data: "192.0.2.1" }, { type: 1, data: "192.0.2.2" },
   ] }), { preconnect: globalThis.fetch.preconnect }));
-  let failAll = true, verifiedCalls = 0, snapshots = 0;
+  let failAll = true, failFirst = true, verifiedCalls = 0, snapshots = 0;
   const mock = spyOn(https, "request").mockImplementation(((url: URL, options: any, callback: any) => {
     let address: string | undefined;
     options.lookup(url.hostname, {}, (_error: unknown, value: string) => { address = value; });
@@ -58,7 +58,7 @@ test("public failure retains TLS cause and aggregate incident; mixed relays and 
     const req = new EventEmitter() as any;
     req.end = () => { queueMicrotask(() => {
       const socket = new EventEmitter(); req.emit("socket", socket); socket.emit("connect");
-      if (failAll || address === "192.0.2.1") { req.emit("error", Object.assign(new Error("private socket detail"), { code: "ERR_SOCKET_CLOSED" })); return; }
+      if (failAll || failFirst && address === "192.0.2.1") { req.emit("error", Object.assign(new Error("private socket detail"), { code: "ERR_SOCKET_CLOSED" })); return; }
       socket.emit("secureConnect");
       const response = Readable.from(["private-body"]) as any;
       response.statusCode = 400; response.headers = { "content-type": "application/json" };
@@ -100,11 +100,47 @@ test("public failure retains TLS cause and aggregate incident; mixed relays and 
     expect(mismatch).toMatchObject({ state: "unavailable", stage: "mcp", mcpContract: "failed" });
     expect(verifiedCalls).toBe(1);
     expect(snapshots).toBe(6);
+    failFirst = false;
+    let attempts = 0;
+    const recovered = await diagnosePublicIngress(new URL("https://private-host.invalid/mcp"), "https://resolver.invalid", undefined, {
+      async verify() { return { ready: ++attempts === 2 }; },
+    });
+    expect(recovered).toMatchObject({ state: "http-responsive", responsiveCount: 2, mcpContract: "verified" });
+    expect(attempts).toBe(2);
   } finally {
     mock.mockRestore(); dns.mockRestore();
     if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE; else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
     // Deferred incident writes must finish before removing the isolated store.
     await new Promise(resolve => setImmediate(resolve));
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("caller cancellation during DNS, relay or MCP observation does not create an outage", async () => {
+  for (const phase of ["dns", "relay", "mcp"]) {
+    const controller = new AbortController(), rows: Record<string, unknown>[] = [];
+    const stop = observeDiagnosticEvents(row => rows.push(row));
+    const dns = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => {
+      if (phase === "dns") { controller.abort(); throw controller.signal.reason; }
+      return Response.json({ Status: 0, Answer: [{ type: 1, data: "192.0.2.1" }] });
+    }, { preconnect: globalThis.fetch.preconnect }));
+    const mock = spyOn(https, "request").mockImplementation(((_url: URL, _options: unknown, callback: any) => {
+      const req = new EventEmitter() as any;
+      req.end = () => { queueMicrotask(() => {
+        if (phase === "relay") { controller.abort(); req.emit("error", new Error("cancelled")); return; }
+        const response = Readable.from([]) as any;
+        response.statusCode = 400; response.headers = {};
+        callback(response);
+      }); return req; };
+      return req;
+    }) as typeof https.request);
+    try {
+      await expect(diagnosePublicIngress(new URL("https://fixture.invalid/mcp"), "https://resolver.invalid", undefined, {
+        signal: controller.signal,
+        async verify() { controller.abort(); return { ready: false }; },
+      })).rejects.toThrow();
+      expect(rows.some(row => row.stage === "public_relay_failed" || row.stage === "public_ingress_probe_failed")).toBe(false);
+    } finally { mock.mockRestore(); dns.mockRestore(); stop?.(); }
   }
 });

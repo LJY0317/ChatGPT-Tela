@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@chatgpt-tela/gateway": "workspace:*",
+    "@chatgpt-tela/tailscale-ingress": "workspace:*",
     "@chatgpt-tela/core": "workspace:*",
     "@chatgpt-tela/development-runtime": "workspace:*",
     "@chatgpt-tela/product-config": "workspace:*",

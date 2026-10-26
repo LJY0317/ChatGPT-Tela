@@ -26,10 +26,10 @@ export interface IngressCounterEvidence {
   readonly counterResetObserved?: boolean;
 }
 
-async function ingressCounter(runner?: TailscaleCommandRunner): Promise<number | undefined> {
+async function ingressCounter(runner?: TailscaleCommandRunner, signal?: AbortSignal): Promise<number | undefined> {
   if (!runner) return undefined;
   try {
-    const result = await runner.run(["debug", "metrics"], AbortSignal.timeout(4000));
+    const result = await runner.run(["debug", "metrics"], signal ? AbortSignal.any([signal, AbortSignal.timeout(4000)]) : AbortSignal.timeout(4000));
     const match = /^peerapi_ingress ([0-9]+)$/m.exec(result.stdout);
     const value = match ? Number(match[1]) : NaN;
     return Number.isSafeInteger(value) ? value : undefined;
@@ -37,9 +37,11 @@ async function ingressCounter(runner?: TailscaleCommandRunner): Promise<number |
 }
 
 /** Fixed-field local snapshot only; never log status bodies, peers, routes or health text. */
-async function localIngressState(runner: TailscaleCommandRunner, probeFingerprint: string, phase: "before" | "after" = "before"): Promise<Record<string, string | number | boolean>> {
-  const results = await Promise.allSettled([runner.run(["status", "--json"], AbortSignal.timeout(4000)),
-    runner.run(["funnel", "status", "--json"], AbortSignal.timeout(4000))]);
+async function localIngressState(runner: TailscaleCommandRunner, probeFingerprint: string, phase: "before" | "after" = "before", signal?: AbortSignal): Promise<Record<string, string | number | boolean>> {
+  const deadline = signal ? AbortSignal.any([signal, AbortSignal.timeout(4000)]) : AbortSignal.timeout(4000);
+  const results = await Promise.allSettled([runner.run(["status", "--json"], deadline),
+    runner.run(["funnel", "status", "--json"], deadline)]);
+  signal?.throwIfAborted();
   const state: Record<string, string | number | boolean> = { status_observed: false, routes_observed: false };
   try {
     if (results[0]!.status === "fulfilled") {
@@ -103,15 +105,17 @@ export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string, 
   readonly signal?: AbortSignal;
   readonly verify?: (fetch: PublicIngressFetch, signal: AbortSignal) => Promise<{ readonly ready: boolean }>;
 } = {}): Promise<Record<string, unknown> & { localIngress?: IngressCounterEvidence }> {
+  options.signal?.throwIfAborted();
   const probeFingerprint = diagnosticFingerprint(randomUUID()), networkBefore = networkSnapshot();
   const identity = { probe_fingerprint: probeFingerprint, endpoint_fingerprint: diagnosticFingerprint(endpoint.origin + endpoint.pathname) };
   emitDiagnosticEvent("chatgpt_tela_ingress", "public_ingress_probe_started", { ...identity, ...networkBefore });
   const resolver = new URL(resolverUrl);
   resolver.searchParams.set("name", endpoint.hostname);
   resolver.searchParams.set("type", "A");
-  const localState = runner ? await localIngressState(runner, probeFingerprint) : undefined;
+  const localState = runner ? await localIngressState(runner, probeFingerprint, "before", options.signal) : undefined;
   const scope = { probeFingerprint, networkBefore, ...(localState ? { localState } : {}), observationScope: "this-machine-via-public-dns", externalClientReachability: "not-observed" };
   const finish = (report: Record<string, unknown>) => {
+    options.signal?.throwIfAborted();
     const networkAfter = networkSnapshot();
     emitDiagnosticEvent("chatgpt_tela_ingress", report.state === "unavailable" ? "public_ingress_probe_failed" : "public_ingress_probe_finished", { ...identity, ...networkAfter,
       ...(networkBefore.network_observed && networkAfter.network_observed
@@ -132,9 +136,11 @@ export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string, 
     addresses = [...new Set((dns.Answer ?? []).filter(row => row.type === 1 && isIP(row.data) === 4).map(row => row.data))].slice(0, 8);
     if (dns.Status !== 0 || !addresses.length) return finish({ state: "unavailable", stage: "dns", dnsStatus: dns.Status, addressCount: addresses.length });
   } catch (error) {
+    options.signal?.throwIfAborted();
     return finish({ state: "unavailable", stage: "dns", errorName: error instanceof Error ? error.name : "unknown" });
   }
-  const before = await ingressCounter(runner);
+  const before = await ingressCounter(runner, options.signal);
+  options.signal?.throwIfAborted();
   const relays = await Promise.all(addresses.map((address, index) => new Promise<Record<string, unknown>>(resolve => {
     const started = performance.now();
     let tcpConnected = false, tlsConnected = false, settled = false;
@@ -142,7 +148,7 @@ export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string, 
       if (settled) return;
       settled = true;
       const durationMs = Math.round(performance.now() - started);
-      emitDiagnosticEvent("chatgpt_tela_ingress", result.state === "unavailable" ? "public_relay_failed" : "public_relay_observed", {
+      if (!options.signal?.aborted) emitDiagnosticEvent("chatgpt_tela_ingress", result.state === "unavailable" ? "public_relay_failed" : "public_relay_observed", {
         ...identity, relay_fingerprint: diagnosticFingerprint(address), relay_index: index, tcp_connected: tcpConnected, tls_connected: tlsConnected, duration_ms: durationMs,
         phase: String(result.stage), ...(typeof result.httpStatus === "number" ? { http_status: result.httpStatus } : {}),
         ...(typeof result.errorCode === "string" ? { failure_class: result.errorCode.toLowerCase() } : {}),
@@ -168,13 +174,20 @@ export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string, 
   const responsive = relays.filter(row => row.state === "http-response");
   const failed = relays.find(row => row.state === "unavailable");
   let mcpContract = "not-probed";
+  options.signal?.throwIfAborted();
   if (options.verify && responsive.length) {
-    const address = addresses[responsive[0]!.index as number]!;
-    const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(4000)]) : AbortSignal.timeout(4000);
-    try { mcpContract = (await options.verify(publicFetch(endpoint, address, signal), signal)).ready ? "verified" : "failed"; }
-    catch { mcpContract = "failed"; }
+    mcpContract = "failed";
+    for (const relay of responsive) {
+      const address = addresses[relay.index as number]!;
+      // MCP initialization and tool discovery span several HTTP exchanges. Use the caller's operation budget.
+      const signal = options.signal ?? AbortSignal.timeout(30_000);
+      try { if ((await options.verify(publicFetch(endpoint, address, signal), signal)).ready) mcpContract = "verified"; }
+      catch { /* Other responsive relays can still serve the public MCP contract. */ }
+      options.signal?.throwIfAborted();
+      if (mcpContract === "verified") break;
+    }
   }
-  const after = await ingressCounter(runner);
+  const after = await ingressCounter(runner, options.signal);
   const observed = before !== undefined && after !== undefined;
   const localIngress: IngressCounterEvidence = { observed,
     ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}),
@@ -183,7 +196,7 @@ export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string, 
     ...identity, observed, ...(observed ? { count_before: before, count_after: after, counter_reset_observed: after < before,
       ...(after >= before ? { count_delta: after - before } : {}) } : {}),
   });
-  const localStateAfter = runner ? await localIngressState(runner, probeFingerprint, "after") : undefined;
+  const localStateAfter = runner ? await localIngressState(runner, probeFingerprint, "after", options.signal) : undefined;
   const available = responsive.length > 0 && mcpContract !== "failed";
   return finish({ ...(runner ? { localIngress, localStateAfter } : {}), state: available ? "http-responsive" : "unavailable",
     ...(!available ? { stage: mcpContract === "failed" ? "mcp" : failed?.stage ?? "tcp" } : {}),
