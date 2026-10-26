@@ -7,9 +7,9 @@ export function privateDiagnosticFailureGuidance(root = configuredDiagnosticRoot
   if (privateDiagnosticCaptureStatus(root).enabled) {
     return { capture: "enabled", evidence: "unverified", reason: "artifact_receipt_unverified" } as const;
   }
-  return { capture: "off", evidence: "not_collected", reason: "capture_disabled",
+  return { capture: "off", evidence: "unverified", reason: "current_capture_disabled",
     nextAction: "offer_optional_capture_on_recurrence",
-    note: "상세 원문 진단이 꺼져 있어 이번 오류의 원문 증거는 수집되지 않았습니다. 원하면 Tela 설정에서 다음 재발에 대비해 잠시 켤 수 있습니다. 원인 확인이 보장되지는 않습니다." } as const;
+    note: "현재 상세 진단이 꺼져 있습니다. 다음 재발에 대비해 Tela 설정에서 켤 수 있습니다. 이번 오류의 원문 보존 여부와 원인은 별도 확인이 필요합니다." } as const;
 }
 function redact(value: unknown, depth=0): unknown {
   if (depth>8) return "[DEPTH LIMIT]";

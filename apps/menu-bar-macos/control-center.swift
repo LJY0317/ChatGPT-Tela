@@ -1980,7 +1980,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let previousChatFoldersAvailable = chatFoldersAvailable
     await loadChatFolders()
     if selectedPage == .settings { await loadDiagnosticCaptureStatus() }
-    if selectedPage == .settings { await loadDiagnosticCaptureStatus() }
     let previousProfileError = workInventory.error
     let previousServices = serviceStates
     let previousIngress = ingressStatus

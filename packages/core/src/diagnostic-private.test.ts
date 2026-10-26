@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { capturePrivateDiagnosticValue } from "./diagnostic-private";
+import { capturePrivateDiagnosticValue, privateDiagnosticFailureGuidance } from "./diagnostic-private";
 import { diagnosticFingerprint } from "./diagnostic-events";
 import { withDiagnosticContext } from "./diagnostic-context";
 import { readDiagnosticTail, setPrivateDiagnosticCapture } from "./diagnostic-store";
@@ -59,4 +59,19 @@ test("oversized raw evidence records the byte omission without publishing conten
   expect(readDiagnosticTail(f.file).events).toMatchObject([{ ...context, stage: "private_capture_omitted", reason_class: "byte_budget" }]);
   expect(readFileSync(f.file, "utf8")).not.toContain("PRIVATE");
   expect(readdirSync(join(f.center, "private"))).toHaveLength(0);
+});
+
+
+test("current capture settings cannot erase or certify evidence from an earlier failure", () => {
+  const f=fixture();
+  withDiagnosticContext(context,()=>capturePrivateDiagnosticValue("web_execution_failure",{detail:"PRIVATE prior failure"}));
+  const artifacts=readdirSync(join(f.center,"private"));
+  expect(artifacts.length).toBeGreaterThan(0);
+  setPrivateDiagnosticCapture(f.center,0);
+  const disabled=privateDiagnosticFailureGuidance(f.center);
+  expect(disabled).toMatchObject({capture:"off",evidence:"unverified",reason:"current_capture_disabled"});
+  expect(readdirSync(join(f.center,"private"))).toEqual(artifacts);
+  setPrivateDiagnosticCapture(f.center,1);
+  expect(privateDiagnosticFailureGuidance(f.center)).toMatchObject({capture:"enabled",evidence:"unverified"});
+  expect(JSON.stringify(disabled)).not.toContain("PRIVATE");
 });
