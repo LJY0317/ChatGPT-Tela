@@ -526,17 +526,7 @@ async function waitForLineage(
     const lineage = resolveAssistantLineage(snapshot, tracked);
     if (!lineage.identityPending) return { snapshot, lineage };
     await recordDeferredCompletion(surface, tracked, snapshot, "identity_pending");
-    emitDiagnosticEvent("chatgpt_tela_work", "web_lineage_change_wait_started", {
-      assistant_count: snapshot.turns.filter(item => item.role === "assistant").length,
-      complete_assistant_count: snapshot.turns.filter(item => item.role === "assistant" && item.phase === "complete").length,
-      user_count: snapshot.turns.filter(item => item.role === "user").length,
-      approval_card_count: snapshot.approval?.cardCount ?? 0,
-    });
     snapshot = await driver.waitForChange(snapshot.revision, signal);
-    emitDiagnosticEvent("chatgpt_tela_work", "web_lineage_change_wait_resolved", {
-      assistant_count: snapshot.turns.filter(item => item.role === "assistant").length,
-      complete_assistant_count: snapshot.turns.filter(item => item.role === "assistant" && item.phase === "complete").length,
-    });
   }
 }
 
@@ -1930,18 +1920,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     }
 
     for (;;) {
-      emitDiagnosticEvent("chatgpt_tela_work", "web_turn_event_wait_started", {
-        observation_source: tracked.observeAgain ? "observe" : "mutation",
-        identity_pending: tracked.identityPending === true,
-        pending_completion: tracked.pendingCompletedAnswer !== undefined,
-      });
       const snapshot = await waitOwned(signal, () => tracked.observeAgain
         ? driver.observe(signal) : driver.waitForChange(tracked.revision, signal));
-      emitDiagnosticEvent("chatgpt_tela_work", "web_turn_event_wait_resolved", {
-        observation_source: tracked.observeAgain ? "observe" : "mutation",
-        assistant_count: snapshot.turns.filter(item => item.role === "assistant").length,
-        complete_assistant_count: snapshot.turns.filter(item => item.role === "assistant" && item.phase === "complete").length,
-      });
       signal?.throwIfAborted();
       this.#tracked(surface, turn);
       tracked.observeAgain = false;

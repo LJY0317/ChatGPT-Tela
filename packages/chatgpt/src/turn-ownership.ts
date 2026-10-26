@@ -290,7 +290,9 @@ export function resolveAssistantLineage(
 ): AssistantLineageResolution {
   // A host hit-test is in flight. No stale author/route evidence may authorize delivery.
   if (tracked.observationInputState?.() === "pending") {
-    if (!tracked.identityPending) emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_pending", { reason_class: "inspection_input_pending" });
+    if (!tracked.identityPending) emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_pending", {
+      reason_class: "inspection_input_pending", ...(tracked.diagnosticLineage ?? {}),
+    });
     tracked.identityPending = true;
     return { assistants: [], ambiguous: false, identityPending: true };
   }
@@ -327,13 +329,16 @@ export function resolveAssistantLineage(
     tracked.identityPending = identityPending;
     if (identityPending) emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_pending", {
       reason_class: routeProven ? "user_not_rendered" : "canonical_route_pending",
+      ...(tracked.diagnosticLineage ?? {}),
       assistant_count: snapshot.turns.filter(item => item.role === "assistant").length,
       complete_assistant_count: snapshot.turns.filter(item => item.role === "assistant" && item.phase === "complete").length,
       accepted_user_present: acceptedUserPresent,
       anchored_assistant_present: anchored,
       approval_card_count: snapshot.approval?.cardCount ?? 0,
     });
-    else emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_resumed", { contract_version: 1 });
+    else emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_resumed", {
+      contract_version: 1, ...(tracked.diagnosticLineage ?? {}),
+    });
   }
   if (!routeProven) return { assistants: [], ambiguous: false, identityPending: true };
   if (identityPending) {

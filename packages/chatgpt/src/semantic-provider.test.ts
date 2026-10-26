@@ -3156,6 +3156,26 @@ describe("completed browser answer awaiting Native delivery", () => {
       const deferred = events.filter(row => row.stage === (reason === "identity_pending"
         ? "web_completed_answer_deferred_anomaly" : "web_completed_answer_deferred"));
       expect(deferred).toHaveLength(1);
+      expect(events.filter(row => row.stage === "web_turn_event_wait_started"
+        || row.stage === "web_turn_event_wait_resolved"
+        || row.stage === "web_lineage_change_wait_started"
+        || row.stage === "web_lineage_change_wait_resolved")).toHaveLength(0);
+      if (reason === "identity_pending") {
+        const pending = events.filter(row => row.stage === "web_turn_identity_pending");
+        expect(pending).toHaveLength(1);
+        expect(pending[0]).toMatchObject({
+          reason_class: "canonical_route_pending",
+          operation_fingerprint: diagnosticFingerprint([
+            taskRequest.nativeTaskId, taskRequest.nativeTurnId, taskRequest.webEpochId,
+          ].join("\n")),
+          native_turn_fingerprint: diagnosticFingerprint(taskRequest.nativeTurnId),
+          complete_assistant_count: 1,
+          accepted_user_present: false,
+        });
+        expect(events.filter(row => row.stage === "web_turn_identity_resumed")).toHaveLength(1);
+        expect(events.find(row => row.stage === "web_turn_identity_resumed")?.operation_fingerprint)
+          .toBe(pending[0]?.operation_fingerprint);
+      }
       expect(deferred[0]).toMatchObject({ reason_class: reason, assistant_phase: "complete",
         assistant_count: reason === "multiple_assistants" ? 2 : 1,
         complete_assistant_count: reason === "multiple_assistants" ? 2 : 1,
