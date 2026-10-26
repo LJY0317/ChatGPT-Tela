@@ -17,6 +17,16 @@ export const DIAGNOSTIC_DOM_CAPTURE = String.raw`function(privateCapture) {
   // from a changed renderer marker without exposing text, attributes or turn identifiers.
   const groups = [...document.querySelectorAll('[data-turn-key]')];
   result.keyed_turn_count = groups.length;
+  // Independent renderer facts help diagnose a stalled phase/lineage projection.
+  // They do not prove task ownership or authorize completion or approval.
+  const visible = node => node.getClientRects().length > 0
+    && getComputedStyle(node).display !== 'none' && getComputedStyle(node).visibility !== 'hidden';
+  result.composer_send_count = [...document.querySelectorAll('form [data-testid="send-button"], form button[type="submit"]')]
+    .filter(node => !node.disabled && visible(node)).length;
+  result.composer_stop_count = [...document.querySelectorAll('form [data-testid="stop-button"]')].filter(visible).length;
+  const bodies = [...document.querySelectorAll('[data-markdown-text-style="assistant-message"]')];
+  result.assistant_body_count = bodies.length;
+  result.visible_assistant_body_count = bodies.filter(visible).length;
   const userMarkers = {
     user_bubble: '[data-user-message-bubble]',
     user_author: '[data-message-author-role="user"]',
@@ -143,7 +153,7 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_pick
     const snapshot=await page.evaluate<boolean,Record<string,unknown>>(DIAGNOSTIC_DOM_CAPTURE,enabled,controller.signal);
     if (controller.signal.aborted) return;
     const fields: Record<string,number|boolean|string>={ reason_class:reason };
-    for (const key of ["element_count","dialog_count","button_count","enabled_button_count","form_count","resource_count","resource_status_observed_count","resource_failed_count","resource_slow_count","resource_inflight_count", "keyed_turn_count", "turn_scroll_above_px", "turn_scroll_below_px", "turn_viewport_height_px",
+    for (const key of ["element_count","dialog_count","button_count","enabled_button_count","form_count","resource_count","resource_status_observed_count","resource_failed_count","resource_slow_count","resource_inflight_count", "keyed_turn_count", "composer_send_count", "composer_stop_count", "assistant_body_count", "visible_assistant_body_count", "turn_scroll_above_px", "turn_scroll_below_px", "turn_viewport_height_px",
       ...["user_bubble", "user_author", "user_conversation", "user_markdown"].flatMap(name => [name + "_count", name + "_keyed_count", name + "_group_self_count"])]) {
       const value=snapshot[key]; if (typeof value==="number" && Number.isSafeInteger(value) && value>=0) fields[key]=value;
     }
@@ -174,13 +184,16 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_pick
     }
     if (!enabled || snapshot.capture_safe!==true) return;
     let retained=0, omitted=0;
+    // A stuck delivery boundary must not lose its renderer evidence to routine tool traces.
+    // Reuse the existing failure-priority retention, with the same byte/age budget.
+    const failure = reason === "completion_deferred" ? { evidenceClass: "failure" as const } : {};
     const record=(ref: string | undefined)=>{ if(ref) retained++; else omitted++; };
-    if (typeof snapshot.html==="string") record(writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.html),operationFingerprint:operation,captureScope:"document" }));
-    if (typeof snapshot.focus_html==="string") record(writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.focus_html),operationFingerprint:operation,captureScope:"latest_turn_shell" }));
+    if (typeof snapshot.html==="string") record(writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.html),operationFingerprint:operation,captureScope:"document", ...failure }));
+    if (typeof snapshot.focus_html==="string") record(writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.focus_html),operationFingerprint:operation,captureScope:"latest_turn_shell", ...failure }));
     const preview=surface.capability(BROWSER_READ_ONLY_PREVIEW);
     if (preview) {
       const bytes=await preview.captureJpeg();
-      if (!controller.signal.aborted) record(writePrivateDiagnosticArtifact(root,{kind:"jpg",bytes,operationFingerprint:operation}));
+      if (!controller.signal.aborted) record(writePrivateDiagnosticArtifact(root,{kind:"jpg",bytes,operationFingerprint:operation,...failure}));
     }
     const stage=retained ? "private_capture_recorded" : "private_capture_omitted";
     emitDiagnosticEvent("chatgpt_tela_browser",stage,{...fields,retained_count:retained,omitted_count:omitted});

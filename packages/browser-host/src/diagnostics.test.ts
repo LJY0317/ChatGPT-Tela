@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -40,7 +40,7 @@ test("failure viewport evidence reads bounded geometry without scrolling or raw 
   expect(result).toMatchObject({turn_viewport_observed:true,turn_scroll_above_px:1300,turn_scroll_below_px:100,turn_viewport_height_px:600});
   expect(result.html).toBeUndefined();
 });
-test.each(["approval_anomaly", "approval_preparation_failed", "progress_description_missing", "progress_prose_unmapped"] as const)("%s DOM/screenshot require opt-in and auth-safe surface; duplicate failure is coalesced",async reason=>{
+test.each(["approval_anomaly", "approval_preparation_failed", "progress_description_missing", "progress_prose_unmapped", "completion_deferred"] as const)("%s DOM/screenshot require opt-in and auth-safe surface; duplicate failure is coalesced",async reason=>{
   const root=mkdtempSync(join(tmpdir(),"tela-browser-diagnostics-"));roots.push(root);process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=join(root,"events.jsonl");
   let evaluations=0, previews=0;const privateFlags:unknown[]=[];let safe=true;
   const surface={taskId:"task",epochId:"epoch",leaseId:"lease",async navigate(){},async reveal(){},async hide(){},capability(cap:unknown){
@@ -51,6 +51,9 @@ test.each(["approval_anomaly", "approval_preparation_failed", "progress_descript
   await capture("off");expect(privateFlags).toEqual([false]);expect(previews).toBe(0);
   setPrivateDiagnosticCapture(join(root,"diagnostics"),1);safe=false;await capture("auth");expect(previews).toBe(0);expect(readdirSync(join(root,"diagnostics","private"))).toHaveLength(0);
   safe=true;await capture("enabled");await capture("enabled");expect(previews).toBe(1);expect(evaluations).toBe(3);expect(readdirSync(join(root,"diagnostics","private"))).toHaveLength(4);
+  const metadata = readdirSync(join(root,"diagnostics","private")).filter(name => name.endsWith(".meta.json"))
+    .map(name => JSON.parse(readFileSync(join(root,"diagnostics","private",name),"utf8")));
+  expect(metadata.every(item => item.evidenceClass === "failure")).toBe(reason === "completion_deferred");
   const retained=readDiagnosticTail(join(root,"events.jsonl")).events.filter(row=>row.stage==="private_capture_recorded");
   expect(retained).toHaveLength(1);
   expect(retained[0]).toMatchObject({retained_count:2,omitted_count:0,operation_fingerprint:diagnosticFingerprint("enabled")});
@@ -115,5 +118,29 @@ test("progress branch census locates visible sibling paragraphs without reading 
   expect(result.progress_branch_probe_available).toBe(true);
   expect(result.progress_branches).toHaveLength(3);
   expect(result.progress_branches[2]).toMatchObject({depth:0,child_index:2,paragraph_count:1,rendered_paragraph_count:1,contains_start:false});
+  expect(result.html).toBeUndefined();
+});
+
+
+test("delivery-boundary census preserves independent composer and answer facts in structural logs", async () => {
+  const root=mkdtempSync(join(tmpdir(),"tela-delivery-census-"));roots.push(root);
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=join(root,"events.jsonl");
+  const shown={disabled:false,getClientRects:()=>[{}]}, hidden={disabled:false,getClientRects:()=>[]};
+  const result=runInNewContext(`(${DIAGNOSTIC_DOM_CAPTURE})(false)`,{
+    document:{forms:[{}],querySelectorAll(selector:string){
+      if(selector==='form [data-testid="send-button"], form button[type="submit"]')return[shown];
+      if(selector==='form [data-testid="stop-button"]')return[hidden];
+      if(selector==='[data-markdown-text-style="assistant-message"]')return[shown,hidden];
+      return[];
+    },get documentElement():never{throw Error("Raw capture disabled");}},
+    location:{pathname:"/c/fixture"},performance:{getEntriesByType:()=>[]},
+    getComputedStyle:()=>({display:"block",visibility:"visible"}),
+  });
+  const surface={taskId:"delivery-census",epochId:"epoch",capability(cap:unknown){
+    if(cap===BROWSER_PAGE_AUTOMATION)return{async evaluate(){return result;}};
+  }} as unknown as BrowserSurfaceLease;
+  await captureBrowserDiagnosticEvidence(surface,"completion_deferred");
+  expect(readDiagnosticTail(join(root,"events.jsonl")).events.find(row=>row.stage==="browser_snapshot_observed"))
+    .toMatchObject({composer_send_count:1,composer_stop_count:0,assistant_body_count:2,visible_assistant_body_count:1,private_capture:false});
   expect(result.html).toBeUndefined();
 });
