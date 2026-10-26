@@ -350,6 +350,10 @@ test("owner-bound account browser close revalidates Web without OS accessibility
 });
 
 test("user-close and owner-close share the same single in-flight account revalidation", async () => {
+  const events: StructuralDiagnosticEvent[] = [];
+  const detach = observeDiagnosticEvents(event => {
+    if (event.stage === "web_account_browser_settled") events.push(event);
+  });
   const f = await fixture();
   try {
     await f.runtime.waitForWeb();
@@ -359,10 +363,15 @@ test("user-close and owner-close share the same single in-flight account revalid
     expect(f.runtime.webState).toBe("ready");
     expect(f.accountBrowserCloses).toBe(1);
     expect(f.nativeStops).toBe(0);
-  } finally { await f.cleanup(); }
+    expect(events).toMatchObject([{ outcome: "completed" }]);
+  } finally { detach?.(); await f.cleanup(); }
 });
 
 test("owner-bound account browser close refuses stale Web after account mismatch but preserves Native", async () => {
+  const events: StructuralDiagnosticEvent[] = [];
+  const detach = observeDiagnosticEvents(event => {
+    if (event.stage === "web_account_browser_settle_failed") events.push(event);
+  });
   const f = await fixture();
   try {
     await f.runtime.waitForWeb();
@@ -375,7 +384,8 @@ test("owner-bound account browser close refuses stale Web after account mismatch
     expect(f.nativeStops).toBe(0);
     expect((await f.post("native-fixture")).status).toBe(200);
     expect((await f.post(model)).status).toBe(400);
-  } finally { await f.cleanup(); }
+    expect(events).toMatchObject([{ phase: "web_reconnection" }]);
+  } finally { detach?.(); await f.cleanup(); }
 });
 
 test("running Native profile opens one account browser, blocks Web submissions, and re-proves after human close", async () => {

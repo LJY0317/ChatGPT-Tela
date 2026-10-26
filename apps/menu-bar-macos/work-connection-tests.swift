@@ -108,6 +108,12 @@ let startFailure = TelaProfileConnectionFailure(slot: 1, targetId: "default", go
 var recoveryInventory = TelaWorkInventory(); recoveryInventory.loaded([recoveredProfile])
 precondition(startFailure.resolved(in: recoveryInventory, operationInProgress: false))
 precondition(!startFailure.resolved(in: recoveryInventory, operationInProgress: true))
+var accountManagementProfile = recoveredProfile; accountManagementProfile.accountManagementActive = true
+recoveryInventory.loaded([accountManagementProfile])
+precondition(!startFailure.resolved(in: recoveryInventory, operationInProgress: false))
+accountManagementProfile.accountManagementActive = false
+recoveryInventory.loaded([accountManagementProfile])
+precondition(startFailure.resolved(in: recoveryInventory, operationInProgress: false))
 recoveryInventory.failed(NSError(domain: "fixture", code: 1))
 precondition(!startFailure.resolved(in: recoveryInventory, operationInProgress: false))
 var nativeOnlyProfile = recoveredProfile; nativeOnlyProfile.webState = "login-required"; nativeOnlyProfile.webModelsReady = false

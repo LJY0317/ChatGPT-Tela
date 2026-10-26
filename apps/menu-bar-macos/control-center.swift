@@ -1310,18 +1310,21 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   func finishWebAccount(slot: Int) {
     guard !operationInProgress, workInventory.error == nil,
-          profiles.contains(where: { $0.slot == slot && $0.connected && $0.accountManagementActive == true }) else { return }
+          let profile = profiles.first(where: { $0.slot == slot && $0.connected && $0.accountManagementActive == true }) else { return }
     connectionProfileSlot = slot
     profileFailure = nil
     changingProfile = true
-    profileProgress = "Checking account…"
+    profileProgress = "Finishing account management…"
     renderCurrentPage()
     Task {
       do {
         guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "TelaWork", code: 11) }
         _ = try await request(descriptor, path: "v1/codex/profiles/\(slot)/account-browser-close", method: "POST")
       } catch {
-        profileFailure = "Couldn’t verify the account. Try again."
+        profileFailure = "Couldn’t finish account management. Check Web status and try again."
+        if let targetId = profile.targetId {
+          profileConnectionFailure = TelaProfileConnectionFailure(slot: slot, targetId: targetId, goal: .connected)
+        }
       }
       profileProgress = nil
       changingProfile = false

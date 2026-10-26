@@ -674,11 +674,27 @@ export async function startNativeFirstProductProfileRuntime(
             // User-close or explicitly authenticated owner-close takes exactly
             // the same path. Never resubmit or replace the Native owner.
             const operation = (async () => {
-              await owned.close();
-              await fallbackOwner?.stop();
-              if (isClosed()) return;
-              await result.invalidateWebAccount();
-              if (!isClosed()) await result.reconnectWeb();
+              let phase = "browser_close";
+              const startedAt = Date.now();
+              emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_account_browser_settle_started", { slot: config.slot });
+              try {
+                await owned.close();
+                await fallbackOwner?.stop();
+                if (isClosed()) return;
+                phase = "account_invalidation";
+                await result.invalidateWebAccount();
+                phase = "web_reconnection";
+                if (!isClosed()) await result.reconnectWeb();
+                emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_account_browser_settled", {
+                  slot: config.slot, outcome: "completed", duration_ms: Date.now() - startedAt,
+                });
+              } catch (error) {
+                emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_account_browser_settle_failed", {
+                  slot: config.slot, phase, network_kind: classifyNetworkFailure(error),
+                  duration_ms: Date.now() - startedAt,
+                });
+                throw error;
+              }
             })();
             accountBrowserSettling = operation;
             void operation.finally(() => {
@@ -687,11 +703,7 @@ export async function startNativeFirstProductProfileRuntime(
             return operation;
           };
           const detach = owned.onUserHide(() => {
-            void settle().catch(() => {
-              emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_account_browser_settled", {
-                outcome: "reconnection_failed",
-              });
-            });
+            void settle().catch(() => {}); // Both close paths report through settle().
           });
           accountBrowser = { surface: owned, detach, settle,
             ...(fallbackOwner ? { fallback: fallbackOwner } : {}) };
