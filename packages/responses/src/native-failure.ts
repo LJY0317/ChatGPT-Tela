@@ -1,4 +1,4 @@
-import { WebProviderResponseFailed } from "@chatgpt-tela/core";
+import { WebProviderResponseFailed, privateDiagnosticFailureGuidance } from "@chatgpt-tela/core";
 import { webContextFitRecovery } from "./web-context-fit-recovery";
 import { nativeHandoffRecovery } from "./native-handoff-recovery";
 import { nativeHistoryRecovery } from "./native-history-recovery";
@@ -28,9 +28,10 @@ const TERMINAL_FAILURES = {
 
 /** One public failure projection for HTTP, late SSE failure and retired replays. */
 export function nativeFailure(error: unknown) {
+  const diagnostics = privateDiagnosticFailureGuidance();
   const fit = webContextFitRecovery(error), handoff = nativeHandoffRecovery(error), projection = nativeProjectionRecovery(error);
   const recovery = fit ?? handoff ?? projection ?? webContinuityRecovery(error) ?? nativeHistoryRecovery(error);
-  if (recovery) return { error: recovery, recoveryReason: fit ? "physical_context_fit_failed"
+  if (recovery) return { error: { ...recovery, diagnostics }, recoveryReason: fit ? "physical_context_fit_failed"
     : recovery.code === "tela_web_observation_unproven" ? "web_observation_unproven"
     : recovery.code === "tela_native_context_checkpoint_required" ? "source_exceeds_web_budget"
     : recovery.code === "tela_web_submission_unproven" ? "web_submission_unproven"
@@ -40,11 +41,11 @@ export function nativeFailure(error: unknown) {
   const code = error !== null && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
   if (typeof code === "string" && Object.hasOwn(TERMINAL_FAILURES, code)) return {
     error: { type: "invalid_request_error", code, retryable: false,
-      ...TERMINAL_FAILURES[code as keyof typeof TERMINAL_FAILURES],
+      ...TERMINAL_FAILURES[code as keyof typeof TERMINAL_FAILURES], diagnostics,
       ...(error instanceof WebProviderResponseFailed ? { reason_class: error.reasonClass,
         ...(error.reasonClass === "unusual_activity" ? { message: "ChatGPT에서 활동 제한 안내와 함께 응답이 중단됐습니다. 원래 요청은 아직 완료되지 않았습니다." } : {}) } : {}) },
   };
-  return { error: { type: "invalid_request_error", retryable: false,
+  return { error: { type: "invalid_request_error", retryable: false, diagnostics,
     ...(code === "tela_web_model_unavailable" ? { code } : {}),
     message: error instanceof Error ? error.message : String(error) } };
 }

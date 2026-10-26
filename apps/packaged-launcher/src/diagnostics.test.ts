@@ -46,11 +46,13 @@ test("packaged diagnostics rejects malformed capture without changing capture po
       ["diagnostics", "unknown"],
     ]) expect(() => runPackagedDiagnosticsCommand(args, { logsRoot })).toThrow();
     expect(existsSync(join(logsRoot, "diagnostics", "capture-policy.json"))).toBe(false);
+    expect(runPackagedDiagnosticsCommand(["diagnostics", "capture-status"], { logsRoot })).toMatchObject({ enabled: false, mode: "off", privacy: "private-local-only" });
     runPackagedDiagnosticsCommand(["diagnostics", "capture", "--minutes", "2"], { logsRoot });
     expect(privateDiagnosticCaptureEnabled(join(logsRoot, "diagnostics"))).toBe(true);
     const result=runPackagedDiagnosticsCommand(["diagnostics", "capture", "--mode", "until-disabled"], { logsRoot });
     expect(result).toMatchObject({ enabled:true, mode:"until-disabled", privacy:"private-local-only" });
     expect(privateDiagnosticCaptureEnabled(join(logsRoot, "diagnostics"))).toBe(true);
+    expect(runPackagedDiagnosticsCommand(["diagnostics", "capture-status"], { logsRoot })).toMatchObject({ enabled: true, mode: "until-disabled" });
     runPackagedDiagnosticsCommand(["diagnostics", "capture"], { logsRoot });
     expect(privateDiagnosticCaptureEnabled(join(logsRoot, "diagnostics"))).toBe(false);
   } finally { rmSync(logsRoot, { recursive: true, force: true }); }

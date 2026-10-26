@@ -8,7 +8,7 @@ import type { LocalProfileBinding } from "./cross-profile-thread-relay";
 import type { TrustedNativeProfileSession } from "./cross-profile-account-proof";
 import { selectDelegationWebModel, webDelegationTurnSettings, type DelegationWebModel } from "./web-delegation-model";
 import { indexedWebDelegationProgress, WebDelegationProgressProjection, type WebDelegationProgress } from "./web-delegation-progress";
-import { decodeNativeInlineEvidence, diagnosticFailureClass, diagnosticFailureIncidentRef, diagnosticFingerprint, emitDiagnosticEvent, emitDiagnosticIncident, structuralDiagnosticEvent } from "@chatgpt-tela/core";
+import { decodeNativeInlineEvidence, diagnosticFailureClass, diagnosticFailureIncidentRef, diagnosticFingerprint, emitDiagnosticEvent, emitDiagnosticIncident, structuralDiagnosticEvent, privateDiagnosticFailureGuidance } from "@chatgpt-tela/core";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RESULT_BYTES = 512 * 1024;
@@ -127,6 +127,7 @@ export interface WebDelegationRecord {
   readonly failureIncidentRef?: string;
   readonly failureIncidentState?: "recorded" | "unavailable";
   readonly failureNextAction?: "inspect_job" | "reconcile_exact_turn" | "inspect_diagnostics";
+  readonly failureDiagnostics?: ReturnType<typeof privateDiagnosticFailureGuidance>;
   readonly coordinator?: { readonly slot: number; readonly threadId: string; readonly accountFingerprint: string };
   readonly coordinatorClientUserMessageId?: string;
   readonly coordinatorQueueItemId?: string;
@@ -178,6 +179,7 @@ function failureMetadata(input: {
   readonly error: unknown;
   readonly nativeCode?: string | undefined;
   readonly providerReason?: "unusual_activity" | undefined;
+  readonly diagnosticRoot?: string | undefined;
 }) {
   const reasonClass = diagnosticFailureClass(input.error);
   const operationFingerprint = diagnosticFingerprint(input.id);
@@ -194,6 +196,7 @@ function failureMetadata(input: {
   } as const;
   const incident = emitDiagnosticIncident("chatgpt_tela_codex", "web_delegation_failed", fields);
   return Object.freeze({
+    failureDiagnostics: privateDiagnosticFailureGuidance(input.diagnosticRoot),
     failureStage: input.stage,
     failureClass: reasonClass,
     ...(input.nativeCode ? { failureNativeCode: input.nativeCode } : {}),
@@ -713,6 +716,7 @@ export interface WebDelegationAdapters {
   owner(slot: number): Promise<{ binding: LocalProfileBinding; session: TrustedNativeProfileSession }>;
   connect(endpoint: string): Promise<CodexAppServerRpc>;
   store: WebDelegationStore;
+  diagnosticRoot?: string;
   changed?(record: WebDelegationRecord): void;
 }
 
@@ -852,7 +856,7 @@ export async function collectWebDelegationResult(adapters: WebDelegationAdapters
     return answer;
   } catch (error) {
     failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
-      ...(record.turnId ? { turnId: record.turnId } : {}), stage: "reconcile_result", error });
+      ...(record.turnId ? { turnId: record.turnId } : {}), stage: "reconcile_result", error, diagnosticRoot: adapters.diagnosticRoot });
     throw error;
   }
 }
@@ -1165,7 +1169,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       delegationBoundary(record.id, "execution_failed", { failure_stage: stage, thread_linked: Boolean(record.threadId) });
       const failedRecord: WebDelegationRecord = { ...record, state, failure: turnFailed ? "turn_failed" : resultUnavailable ? "result_unavailable" : "transport_or_ack",
         ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
-          ...(record.turnId ? { turnId: record.turnId } : {}), stage, error, nativeCode: reportedNativeCode, providerReason: reportedProviderReason }) };
+          ...(record.turnId ? { turnId: record.turnId } : {}), stage, error, nativeCode: reportedNativeCode, providerReason: reportedProviderReason, diagnosticRoot: adapters.diagnosticRoot }) };
       // Persist the failure evidence before any coordinator side effect. Keep
       // the receipt mutable until the Queue acknowledgement has been journaled.
       record = adapters.store.save({ ...failedRecord, state: "uncertain" }); adapters.changed?.(record);
@@ -1178,7 +1182,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       adapters.changed?.(record);
     } else {
       failureMetadata({ id: input.id, ...(record?.threadId ? { threadId: record.threadId } : {}),
-        ...(record?.turnId ? { turnId: record.turnId } : {}), stage: failureStage(error, "admission"), error });
+        ...(record?.turnId ? { turnId: record.turnId } : {}), stage: failureStage(error, "admission"), error, diagnosticRoot: adapters.diagnosticRoot });
     }
     throw error;
   } finally { unsubscribe?.(); try { await rpc?.close(); } catch { /* Preserve the saved outcome. */ } }
@@ -1216,7 +1220,7 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
         ? indexedWebDelegationProgress(turn.items, Date.now()) : undefined;
       const { failureStage: _stage, failureClass: _class, failureNativeCode: _code,
         failureIncidentRef: _incident, failureIncidentState: _incidentState,
-        failureNextAction: _action, ...active } = record;
+        failureNextAction: _action, failureDiagnostics: _diagnostics, ...active } = record;
       record = adapters.store.save({ ...active, reconciliation: "native-in-progress",
         ...(progress ? { progress } : {}) });
       adapters.changed?.(record);
@@ -1238,7 +1242,7 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
     if (turn.status === "failed" || turn.status === "interrupted") {
       const settled = adapters.store.save({ ...record, ...observations, state: "failed", failure: "turn_failed",
         ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
-          ...(record.turnId ? { turnId: record.turnId } : {}), stage: "turn_complete", error: new Error("Web job turn failed"), nativeCode: nativeTurnFailureCode(turn), providerReason: nativeTurnProviderReason(turn) }),
+          ...(record.turnId ? { turnId: record.turnId } : {}), stage: "turn_complete", error: new Error("Web job turn failed"), nativeCode: nativeTurnFailureCode(turn), providerReason: nativeTurnProviderReason(turn), diagnosticRoot: adapters.diagnosticRoot }),
         ...(turn.status === "failed" && final?.finalEvidence === "explicit-final-phase"
           ? { ...final, taskOutcome: "unassessed" as const } : {}) });
       adapters.changed?.(settled);
@@ -1249,12 +1253,12 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
     if (!final) {
       const settled = adapters.store.save({ ...record, ...observations, state: "failed", failure: "result_unavailable",
         ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
-          ...(record.turnId ? { turnId: record.turnId } : {}), stage: "reconcile_result", error: new Error("Web job completed without a proven final answer") }) });
+          ...(record.turnId ? { turnId: record.turnId } : {}), stage: "reconcile_result", error: new Error("Web job completed without a proven final answer"), diagnosticRoot: adapters.diagnosticRoot }) });
       adapters.changed?.(settled);
       return settled;
     }
     const { failure: _failure, failureStage: _stage, failureClass: _class, failureNativeCode: _code,
-      failureIncidentRef: _incident, failureIncidentState: _incidentState, failureNextAction: _action, ...resolved } = record;
+      failureIncidentRef: _incident, failureIncidentState: _incidentState, failureNextAction: _action, failureDiagnostics: _diagnostics, ...resolved } = record;
     const { reconciliation: _reconciliation, ...completedRecord } = resolved;
     const settled = adapters.store.save({ ...completedRecord, ...observations, state: "completed", taskOutcome: "unassessed", ...final });
     adapters.changed?.(settled);
@@ -1265,7 +1269,7 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
     if (current && !verifiedWebDelegationAnswer(current) && current.state !== "completed") {
       const stage = failureStage(error, "reconcile_history");
       const metadata = failureMetadata({ id: current.id, ...(current.threadId ? { threadId: current.threadId } : {}),
-        ...(current.turnId ? { turnId: current.turnId } : {}), stage, error });
+        ...(current.turnId ? { turnId: current.turnId } : {}), stage, error, diagnosticRoot: adapters.diagnosticRoot });
       const observed = adapters.store.save({ ...current, ...metadata, reconciliation: "unproven" });
       adapters.changed?.(observed);
     }

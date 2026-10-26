@@ -96,7 +96,12 @@ describe("Native Responses HTTP transport", () => {
       const response = await withDiagnosticContext(context, () => handleNativeResponsesHttp(post(body([], false)), gateway));
       expect(response.status).toBe(400);
       expect(readDiagnosticTail(path).events.filter(row => row.stage === "native_response_body_closed")).toHaveLength(0);
-      if (reason === "drained") expect((await response.json() as { error?: unknown }).error).toBeDefined();
+      if (reason === "drained") {
+        const failure = await response.json() as { error: { diagnostics?: unknown } };
+        expect(failure.error).toBeDefined();
+        expect(failure.error.diagnostics).toBeDefined();
+        expect(JSON.stringify(failure.error.diagnostics)).not.toContain("PRIVATE_EXECUTION_FAILURE");
+      }
       else await response.body!.cancel();
       const readback = readDiagnosticTail(path).events;
       const rows = readback.filter(row => row.stage === "native_response_body_closed");

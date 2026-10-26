@@ -491,13 +491,26 @@ export function setPrivateDiagnosticCapture(root: string, duration: number | "un
     next: mode === "until-disabled" ? "Capture remains enabled until explicitly disabled; retention stays bounded. No background sampler runs."
       : "Capture expires without a timer or restart. No background sampler runs." };
 }
+/** Read-only consumer view of the existing capture-policy.json; never creates a policy. */
+export function privateDiagnosticCaptureStatus(root: string): {
+  readonly enabled: boolean; readonly mode: "off" | "timed" | "until-disabled"; readonly minutesRemaining: number | null;
+} {
+  const off = { enabled: false, mode: "off", minutesRemaining: null } as const;
+  try {
+    const path = join(root,"capture-policy.json"), stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024) return off;
+    const record = JSON.parse(readFileSync(path,"utf8"));
+    if (record.owner !== OWNER) return off;
+    if (record.mode === "until-disabled") return record.enabledUntil === 0
+      ? { enabled: true, mode: "until-disabled", minutesRemaining: null } : off;
+    if (record.mode !== undefined && record.mode !== "timed") return off;
+    const remaining = record.enabledUntil - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 60 * 60000) return off;
+    return { enabled: true, mode: "timed", minutesRemaining: Math.ceil(remaining / 60000) };
+  } catch { return off; }
+}
 export function privateDiagnosticCaptureEnabled(root: string): boolean {
-  try { const path = join(root,"capture-policy.json"); const stat=lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink() || stat.size>1024) return false;
-    const record=JSON.parse(readFileSync(path,"utf8"));
-    if (record.owner !== OWNER) return false;
-    if (record.mode === "until-disabled") return record.enabledUntil === 0;
-    if (record.mode !== undefined && record.mode !== "timed") return false;
-    return Number.isFinite(record.enabledUntil) && record.enabledUntil>Date.now() && record.enabledUntil<=Date.now()+60*60000; } catch { return false; }
+  return privateDiagnosticCaptureStatus(root).enabled;
 }
 export function writePrivateDiagnosticArtifact(root: string, input: { kind: "html" | "jpg" | "json"; bytes: Uint8Array; operationFingerprint: string; captureScope?: "document" | "latest_turn_shell"; evidenceClass?: "failure" | "trace" }) {
   if (!privateDiagnosticCaptureEnabled(root) || !FINGERPRINT.test(input.operationFingerprint)) return;

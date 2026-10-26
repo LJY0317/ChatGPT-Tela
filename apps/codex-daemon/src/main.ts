@@ -90,6 +90,7 @@ async function main(): Promise<void> {
   const proof = createLocalNativeAccountProof({ resolveOwnedSession: ownedSession, fingerprintKey: delegationStore.fingerprintKey });
   const delegationAdapters = {
     store: delegationStore,
+    diagnosticRoot: join(paths.logsRoot, "diagnostics"),
     owner: async (slot: number) => ({ binding: await proof(slot), session: await ownedSession(slot) }),
     connect: (endpoint: string) => connectCodexAppServerWebSocket(endpoint, { signal: lifecycle.signal }),
   };

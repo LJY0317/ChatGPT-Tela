@@ -85,6 +85,11 @@ private struct ControlCenterBridgePreview: Decodable {
 }
 
 private struct TelaChatFolderStatus: Decodable { let roots: [String]; let applied: Bool }
+private struct TelaDiagnosticCaptureStatus: Decodable {
+  let enabled: Bool
+  let mode: String
+  let minutesRemaining: Int?
+}
 
 private struct TelaBootstrapStatus: Decodable {
   let configuration: String
@@ -325,13 +330,16 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var portDraft = "18743"
   private var exposureDraft = "existing-https"
   private var consentDraft = false
+  private var diagnosticCaptureStatus: TelaDiagnosticCaptureStatus?
+  private var diagnosticCaptureMessage = ""
+  private var changingDiagnosticCapture = false
   private var chatFolders: [String] = []
   private var chatFoldersAvailable = false
   private var chatFoldersApplied = false
   private var chatFolderMessage = ""
   private var changingChatFolders = false
   private var launchingMaintenance = false
-  private var operationInProgress: Bool { changingProfile || changingServices || changingChatFolders || savingConfiguration || settingUp || launchingMaintenance }
+  private var operationInProgress: Bool { changingDiagnosticCapture || changingProfile || changingServices || changingChatFolders || savingConfiguration || settingUp || launchingMaintenance }
   private var approvalAutomation = "off"
   private var approvalDelay = "instant"
   private var delegationLimits: [String: Int] = [:]
@@ -1017,6 +1025,21 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       stack.addArrangedSubview(actionButton("Refresh status", action: #selector(refreshPage)))
     case .settings:
       pageHeader("Make Tela work the way you want.")
+      let diagnostics = card("Detailed diagnostics")
+      append(secondary("Off by default. Private evidence may include conversation text, local paths, and browser screens. It stays on this device, up to 7 days / 64 MB. Capture cannot guarantee a diagnosis."), to: diagnostics)
+      let capturePicker = NSPopUpButton()
+      for (value, title) in [("off", "Off"), ("15", "15 minutes"), ("until-disabled", "Until turned off")] {
+        capturePicker.addItem(withTitle: title)
+        capturePicker.lastItem?.representedObject = value
+      }
+      capturePicker.selectItem(at: diagnosticCaptureStatus?.mode == "until-disabled" ? 2 : diagnosticCaptureStatus?.enabled == true ? 1 : 0)
+      capturePicker.target = self
+      capturePicker.action = #selector(changeDiagnosticCapture(_:))
+      capturePicker.isEnabled = !operationInProgress && installedServiceControlsAvailable() && diagnosticCaptureStatus != nil
+      row("Private capture", subtitle: diagnosticCaptureStatus == nil ? "Status unavailable" :
+          diagnosticCaptureStatus?.mode == "timed" ? "Expires in about \(diagnosticCaptureStatus?.minutesRemaining ?? 0) min" : nil,
+          control: capturePicker, in: diagnostics)
+      if !diagnosticCaptureMessage.isEmpty { append(secondary(diagnosticCaptureMessage), to: diagnostics) }
       let folders = card("Chat · Local folders")
       append(secondary("Choose folders ChatGPT may read and edit through Tela Chat. Your files remain yours."), to: folders)
       if !chatFoldersAvailable { append(secondary("Folder settings unavailable. Refresh details or update Tela."), to: folders) }
@@ -1092,6 +1115,44 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       maintain.isEnabled = !operationInProgress && installedServiceControlsAvailable()
       row("Updates & maintenance", subtitle: launchingMaintenance ? "Opening…" : nil, control: maintain, in: support)
       stack.addArrangedSubview(actionButton("Refresh details", action: #selector(refreshPage)))
+    }
+  }
+
+  private func loadDiagnosticCaptureStatus() async {
+    guard let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"] else {
+      diagnosticCaptureStatus = nil
+      return
+    }
+    let result = await Task.detached {
+      Self.runChatFolderCommand(launcher, ["diagnostics", "capture-status"])
+    }.value
+    diagnosticCaptureStatus = result.0 == 0
+      ? try? JSONDecoder().decode(TelaDiagnosticCaptureStatus.self, from: result.1) : nil
+  }
+
+  @objc private func changeDiagnosticCapture(_ sender: NSPopUpButton) {
+    guard !operationInProgress,
+          let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"],
+          let value = sender.selectedItem?.representedObject as? String else { return }
+    if value != "off" {
+      let alert = NSAlert()
+      alert.messageText = "Enable private diagnostics?"
+      alert.informativeText = "Diagnostic files may contain conversation text, browser screens and local paths. They remain on this device with bounded retention. Enabling capture cannot guarantee identifying the cause of a failure."
+      alert.addButton(withTitle: "Enable")
+      alert.addButton(withTitle: "Cancel")
+      if alert.runModal() != .alertFirstButtonReturn { renderCurrentPage(); return }
+    }
+    let args = value == "until-disabled" ? ["diagnostics", "capture", "--mode", "until-disabled"]
+      : ["diagnostics", "capture", "--minutes", value == "off" ? "0" : "15"]
+    changingDiagnosticCapture = true
+    diagnosticCaptureMessage = "Saving capture setting…"
+    renderCurrentPage()
+    Task {
+      let result = await Task.detached { Self.runChatFolderCommand(launcher, args) }.value
+      await loadDiagnosticCaptureStatus()
+      changingDiagnosticCapture = false
+      diagnosticCaptureMessage = result.0 == 0 ? "Capture setting saved." : "Couldn't change capture; check diagnostic settings."
+      renderCurrentPage()
     }
   }
 
@@ -1918,6 +1979,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let previousChatFoldersApplied = chatFoldersApplied
     let previousChatFoldersAvailable = chatFoldersAvailable
     await loadChatFolders()
+    if selectedPage == .settings { await loadDiagnosticCaptureStatus() }
+    if selectedPage == .settings { await loadDiagnosticCaptureStatus() }
     let previousProfileError = workInventory.error
     let previousServices = serviceStates
     let previousIngress = ingressStatus

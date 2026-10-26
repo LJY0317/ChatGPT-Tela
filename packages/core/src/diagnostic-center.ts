@@ -1,5 +1,5 @@
 import { analyzeDiagnosticEvents, DIAGNOSTIC_LIMITS, HOST_SYMPTOMS, HOST_REPORT_ORIGINS, listDiagnosticIncidents, readDiagnosticIncident,
-  readDiagnosticSources, diagnosticLogPaths, setPrivateDiagnosticCapture, writeDiagnosticIncident, type HostSymptom, type HostReportOrigin } from "./diagnostic-store";
+  readDiagnosticSources, diagnosticLogPaths, setPrivateDiagnosticCapture, privateDiagnosticCaptureStatus, writeDiagnosticIncident, type HostSymptom, type HostReportOrigin } from "./diagnostic-store";
 import { join } from "node:path";
 import { summarizeContextContinuity } from "./diagnostic-context-continuity";
 
@@ -15,6 +15,8 @@ export function diagnosticSourcePaths(logsRoot: string): readonly string[] {
 export function diagnosticCenter(root: string, paths: readonly string[], command: string | undefined,
   option: (name: string) => string | undefined): unknown {
   if (command === "list") return { privacy: "structural-only", incidents: listDiagnosticIncidents(root) };
+  if (command === "capture-status") return { ...privateDiagnosticCaptureStatus(root), privacy: "private-local-only",
+    retention: { days: DIAGNOSTIC_LIMITS.privateAgeMs / 86400000, bytes: DIAGNOSTIC_LIMITS.privateBytes } };
   if (command === "inspect") return readDiagnosticIncident(root, option("--ref") ?? "");
   if (command === "context") {
     const atMs = option("--at") ? Date.parse(option("--at")!) : Date.now();

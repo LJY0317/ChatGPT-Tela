@@ -47,7 +47,8 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   const owner = async (selected: number) => {
     return { binding: await binding(selected), session: await session(selected) };
   };
-  const adapters = { store, owner, connect: (endpoint: string) => connectCodexAppServerWebSocket(endpoint, { signal: AbortSignal.timeout(10_000) }) };
+  const adapters = { store, owner, diagnosticRoot: join(paths.logsRoot, "diagnostics"),
+    connect: (endpoint: string) => connectCodexAppServerWebSocket(endpoint, { signal: AbortSignal.timeout(10_000) }) };
   if (args.includes("--mode")) throw Error("--mode has been removed; each new task uses workspace-write authority");
   if (subcommand === "capacity") {
     console.log(JSON.stringify(store.capacity(profileSlotFromArguments(args)), null, 2));
@@ -59,7 +60,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
       console.log(await collectWebDelegationResult(adapters, id, args.includes("--confirm-title-retry")));
     } else {
       const record = await inspectWebDelegationResult(adapters, option("--job"), args.includes("--confirm-title-retry"));
-      console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", reconciliation: record.reconciliation ?? "not-observed", progress: record.progress, parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure, failureStage: record.failureStage, failureClass: record.failureClass, failureNativeCode: record.failureNativeCode, failureProviderReason: record.failureProviderReason, failureIncidentRef: record.failureIncidentRef, failureNextAction: record.failureNextAction, coordinatorWake: "unsupported_public_contract" }, null, 2));
+      console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", reconciliation: record.reconciliation ?? "not-observed", progress: record.progress, parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure, failureStage: record.failureStage, failureClass: record.failureClass, failureNativeCode: record.failureNativeCode, failureProviderReason: record.failureProviderReason, failureIncidentRef: record.failureIncidentRef, failureNextAction: record.failureNextAction, failureDiagnostics: record.failureDiagnostics, coordinatorWake: "unsupported_public_contract" }, null, 2));
     }
     return;
   }
@@ -99,7 +100,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     console.log(JSON.stringify({ jobId: record.id, state: record.state, toolItems: record.toolItems ?? 0,
       resultAvailable: Boolean(answer), failure: record.failure, failureStage: record.failureStage,
       failureClass: record.failureClass, failureNativeCode: record.failureNativeCode, failureProviderReason: record.failureProviderReason, failureIncidentRef: record.failureIncidentRef,
-      failureNextAction: record.failureNextAction,
+      failureNextAction: record.failureNextAction, failureDiagnostics: record.failureDiagnostics,
       coordinatorWake: "unsupported_public_contract", ...(answer ? { finalEvidence: record.finalEvidence, answer } : {}) }));
     return;
   }

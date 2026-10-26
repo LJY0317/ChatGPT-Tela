@@ -9,6 +9,7 @@ const OPTIONS: Readonly<Record<string, readonly string[]>> = {
   inspect: ["--ref"],
   context: ["--scope", "--at", "--minutes", "--view", "--limit"],
   capture: ["--minutes", "--mode"],
+  "capture-status": [],
   activity: ["--at", "--minutes", "--symptom", "--report-origin", "--operation", "--recovered-at", "--output-started-at"],
   record: ["--at", "--minutes", "--symptom", "--report-origin", "--operation", "--recovered-at", "--output-started-at"],
 };
@@ -18,7 +19,7 @@ export function runPackagedDiagnosticsCommand(args: readonly string[],
   paths: Pick<ReturnType<typeof resolveProductPaths>, "logsRoot"> = resolveProductPaths()): unknown {
   const command = args[1] ?? "list";
   if (args[0] !== "diagnostics" || !Object.hasOwn(OPTIONS, command)) {
-    throw new Error("usage: diagnostics [list|decisions|inspect|record|activity|context|capture]");
+    throw new Error("usage: diagnostics [list|decisions|inspect|record|activity|context|capture|capture-status]");
   }
   const flags = new Map<string, string>();
   for (let i = 2; i < args.length; i += 2) {

@@ -1,6 +1,16 @@
 import { diagnosticContext } from "./diagnostic-context";
 import { configuredDiagnosticRoot, diagnosticFingerprint, emitDiagnosticEvent } from "./diagnostic-events";
-import { privateDiagnosticCaptureEnabled, writePrivateDiagnosticArtifact } from "./diagnostic-store";
+import { privateDiagnosticCaptureEnabled, privateDiagnosticCaptureStatus, writePrivateDiagnosticArtifact } from "./diagnostic-store";
+/** Bounded failure advice for existing result contracts. It never reads raw evidence or enables capture. */
+export function privateDiagnosticFailureGuidance(root = configuredDiagnosticRoot()) {
+  if (!root) return { capture: "unavailable", evidence: "unverified", reason: "diagnostic_root_unavailable" } as const;
+  if (privateDiagnosticCaptureStatus(root).enabled) {
+    return { capture: "enabled", evidence: "unverified", reason: "artifact_receipt_unverified" } as const;
+  }
+  return { capture: "off", evidence: "not_collected", reason: "capture_disabled",
+    nextAction: "offer_optional_capture_on_recurrence",
+    note: "상세 원문 진단이 꺼져 있어 이번 오류의 원문 증거는 수집되지 않았습니다. 원하면 Tela 설정에서 다음 재발에 대비해 잠시 켤 수 있습니다. 원인 확인이 보장되지는 않습니다." } as const;
+}
 function redact(value: unknown, depth=0): unknown {
   if (depth>8) return "[DEPTH LIMIT]";
   if (typeof value==="string") return value.slice(0,16384).replace(/Bearer\s+[^\s"<>]+/gi,"Bearer [REDACTED]").replace(/\bsk-[A-Za-z0-9_-]{16,}/g,"[REDACTED]");
