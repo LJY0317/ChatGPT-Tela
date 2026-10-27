@@ -61,6 +61,9 @@ function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat"
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args[0] === "application-update") {
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE ??= join(resolveProductPaths().logsRoot, "update.diagnostics.jsonl");
+  }
   const lifecycleApply = ["install", "repair", "upgrade", "cancel-upgrade"].includes(args[0] ?? "")
     && parsePackagedLifecycleCommand(args).mode === "apply";
   if ((lifecycleApply || args[0] === "application-update" || args[0] === "maintenance" && args[1] === "apply")

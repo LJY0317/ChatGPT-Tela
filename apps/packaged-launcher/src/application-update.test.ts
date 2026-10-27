@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -42,6 +43,34 @@ async function fixture(root: string, application = true) {
 }
 
 // Synthetic launchd only; signature storage is separately tested with real codesign.
+test("update phases retain failure evidence and reject changed payloads before stopping services", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-update-phase-cost-"));
+  const events: StructuralDiagnosticEvent[] = [];
+  const unobserve = observeDiagnosticEvents(event => { if (event.event === "chatgpt_tela_update") events.push(event); });
+  try {
+    const f = await fixture(root);
+    await expect(runApplicationUpdate("prepare", { ...f.input, targetBuild: "2",
+      verifySignature() { throw Error("private failure detail must not be logged"); },
+    })).rejects.toThrow("private failure detail");
+    expect(events.find(event => event.stage === "application_update_phase_failed" && event.phase === "signature"))
+      .toMatchObject({ action: "prepare", outcome: "failed", duration_ms: expect.any(Number) });
+    expect(f.runner.calls).toEqual([]);
+    expect(JSON.stringify(events)).not.toContain("private failure detail");
+    const file = join(f.sourceRoot, "Contents/Resources/runtime.js");
+    writeFileSync(file, "changed payload");
+    await expect(runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" })).rejects.toThrow("ownership/receipt");
+    expect(events.find(event => event.stage === "application_update_phase_failed" && event.phase === "payload_verification"))
+      .toMatchObject({ action: "prepare", outcome: "failed", duration_ms: expect.any(Number) });
+    expect(f.runner.calls).toEqual([]);
+    writeFileSync(file, "fixture");
+    events.length = 0;
+    expect(await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" })).toMatchObject({ prepared: true });
+    expect(events.filter(event => event.phase === "service_stop" && event.stage === "application_update_phase_finished")
+      .map(event => event.service)).toEqual(["gateway", "chat"]);
+    expect(events.at(-1)).toMatchObject({ phase: "transition", outcome: "completed", duration_ms: expect.any(Number) });
+  } finally { unobserve?.(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("Sparkle replacement restores only prior running services and promotes external metadata", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-settlement-"));
   try {

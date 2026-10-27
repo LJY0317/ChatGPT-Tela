@@ -18,7 +18,8 @@ export interface DiagnosticEventOptions { readonly scheduleIncident?: boolean; }
 const SAFE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const FORBIDDEN_FIELD = /(prompt|path|url|uri|token|secret|email|content|command|output|argument|authorization|cookie|session|turn_capability|workspace_id|account_id|user_id)/i;
 const DEFAULT_MAX_FILE_BYTES = DIAGNOSTIC_LIMITS.logFileBytes;
-let emittedSinceRotationCheck = 0;
+// Short-lived lifecycle workers must enforce retention on their first write too.
+let emittedSinceRotationCheck = 63;
 const recent: StructuralDiagnosticEvent[] = [];
 const observers = new Set<(event: StructuralDiagnosticEvent) => void>();
 /** Local, sanitized observation only; bounded subscribers and isolated callback failures. */

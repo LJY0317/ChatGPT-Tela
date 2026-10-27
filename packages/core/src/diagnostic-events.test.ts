@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { diagnosticDurationMs, diagnosticFingerprint, emitDiagnosticEvent } from "./diagnostic-events";
-import { listDiagnosticIncidents } from "./diagnostic-store";
+import { diagnosticLogPaths, listDiagnosticIncidents } from "./diagnostic-store";
 
 const originalDiagnosticFile = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
 
@@ -14,6 +15,21 @@ afterEach(() => {
 });
 
 describe("privacy-safe diagnostic events", () => {
+  test("a short-lived worker rotates an oversized sink on its first event", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-short-lived-diagnostics-"));
+    const path = join(root, "update.diagnostics.jsonl");
+    try {
+      writeFileSync(path, "x".repeat(65_537));
+      const module = new URL("./diagnostic-events.ts", import.meta.url).href;
+      const result = spawnSync(process.execPath, ["--eval",
+        `import { emitDiagnosticEvent } from ${JSON.stringify(module)}; emitDiagnosticEvent("chatgpt_tela_update", "worker_started");`], {
+        env: { ...process.env, CHATGPT_TELA_DIAGNOSTIC_FILE: path, CHATGPT_TELA_DIAGNOSTIC_MAX_BYTES: "65536" },
+      });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(readFileSync(path, "utf8").trim()).stage).toBe("worker_started");
+      expect(diagnosticLogPaths(path).filter(file => file !== path).map(file => readFileSync(file).length)).toEqual([65_537]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("ordinary auth renewal stays in events while destructive removal retains an incident", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-auth-incident-"));
     process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = join(root, "events.jsonl");

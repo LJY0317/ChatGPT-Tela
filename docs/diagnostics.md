@@ -1,5 +1,22 @@
 # Diagnostic evidence
 
+## macOS update phase timing
+
+Packaged `application-update` workers write payload-free phase events to
+`update.diagnostics.jsonl` in the normal logs directory, unless a diagnostic sink
+was explicitly supplied. Match `instance_fingerprint` and `action` to follow one
+prepare, finish or cancel invocation. Each phase has a start and a timed finish
+or failure: signature, payload verification, per-service preparation/stop/resume,
+registration changes and recovery. An unfinished phase identifies where a live
+worker was last observed; it does not prove the worker failed.
+
+The menu's preparation start/end messages include the caller's overall wait;
+worker phase timings exclude launcher-copy and Sparkle-owned replacement time.
+Installed verification supplies its already-proven fingerprint; receipt recording
+after replacement retains its separate integrity check. Existing byte/age log
+retention also runs on the first write from short-lived workers. No polling,
+file contents, local paths or raw exception messages are added.
+
 ## Web profile authentication
 
 Web auth probes record only outcome, bounded reason class, HTTP status and duration. The Electron profile host

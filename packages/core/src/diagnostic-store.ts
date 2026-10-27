@@ -23,7 +23,7 @@ export function diagnosticLogPaths(path: string): string[] {
 
 /** One event-driven directory budget shared by the service logs. Active files stay open. */
 export function pruneDiagnosticLogs(path: string, now = Date.now()): void {
-  const root = dirname(path), bases = new Set([basename(path), ...["gateway","chat","codex"]
+  const root = dirname(path), bases = new Set([basename(path), "update.diagnostics.jsonl", ...["gateway","chat","codex"]
     .flatMap(service => [`${service}.diagnostics.jsonl`, `${service}.log.diagnostics.jsonl`])]);
   const files = [...bases].flatMap(base => diagnosticLogPaths(join(root, base))).flatMap(p => {
     try { const s = lstatSync(p); return s.isFile() && !s.isSymbolicLink() ? [{path:p, size:s.size, time:s.mtimeMs, active:bases.has(basename(p))}] : []; }

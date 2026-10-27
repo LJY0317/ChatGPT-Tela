@@ -11,6 +11,7 @@ import {
 import { interruptOwnedWork, ownedServiceShutdown } from "./service-shutdown";
 import type { PackagedLifecycleOptions } from "./lifecycle";
 import { verifyInstalledPackage } from "./runtime";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 
 const stopOrder: readonly TelaServiceId[] = ["gateway", "codex", "chat"];
 const startOrder: readonly TelaServiceId[] = ["chat", "codex", "gateway"];
@@ -22,6 +23,20 @@ export async function runApplicationUpdate(action: "prepare" | "finish" | "cance
   readBuild?: (path: string) => string;
 }) {
   const options = input.options ?? {}, paths = resolveProductPaths(options);
+  const step = async <T>(phase: string, run: () => T | Promise<T>, service?: TelaServiceId): Promise<T> => {
+    const started = performance.now();
+    const fields = { action, phase, ...(service ? { service } : {}) };
+    emitDiagnosticEvent("chatgpt_tela_update", "application_update_phase_started", fields);
+    let completed = false;
+    try {
+      const result = await run();
+      completed = true;
+      return result;
+    } finally {
+      emitDiagnosticEvent("chatgpt_tela_update", completed ? "application_update_phase_finished" : "application_update_phase_failed",
+        { ...fields, outcome: completed ? "completed" : "failed", duration_ms: Math.round(performance.now() - started) });
+    }
+  };
   const root = realpathSync(input.payloadRoot), spec = packagedInstallSpecFromPayload(root);
   const blueprint = createPackagedInstallBlueprint({ spec, ...options });
   if (blueprint.platform !== "darwin" || !blueprint.payload.resource.metadataRoot
@@ -42,16 +57,21 @@ export async function runApplicationUpdate(action: "prepare" | "finish" | "cance
     renameSync(path + ".pending", path);
     return state;
   };
-  return withPackagedTransitionOwner({ paths, installId: owner.installId }, async () => {
+  return step("transition", () => withPackagedTransitionOwner({ paths, installId: owner.installId }, async () => {
     const previous = readMacApplicationUpdate(paths);
     if (previous && previous.installId !== owner.installId) throw Error("application update belongs to another installation");
     if (action === "cancel" && !previous) return { ready: true, productVersion: spec.productVersion };
-    verifySignature(root);
-    const build = readBuild(root), fingerprint = packagedPayloadFingerprint(root);
+    await step("signature", () => verifySignature(root));
+    const build = readBuild(root);
+    // A prepared replacement has the old receipt until finish records its new bytes.
+    // Otherwise reuse the fingerprint already proven by ordinary installed verification.
+    const fingerprint = await step("payload_verification", () => previous ? packagedPayloadFingerprint(root)
+      : verifyInstalledPackage({ payloadRoot: root, pathOptions: options, menuBar: action === "finish" }).receipt.payloadFingerprint);
     const shutdown = ownedServiceShutdown(owner.installId, paths);
+    const prepare = options.prepareShutdownService ?? (options.shutdownService ? undefined : shutdown.prepare);
     const controller = new PackagedPlatformServiceController({ blueprint,
       shutdownService: options.shutdownService ?? shutdown,
-      prepareShutdownService: options.prepareShutdownService ?? (options.shutdownService ? undefined : shutdown.prepare),
+      prepareShutdownService: prepare ? service => step("service_prepare", () => prepare(service), service) : undefined,
       waitUntilReady: options.waitUntilReady ?? (options.shutdownService ? undefined : shutdown.ready),
       ...(options.runner ? { runner: options.runner } : {}), ...(options.userId === undefined ? {} : { userId: options.userId }),
     });
@@ -67,19 +87,19 @@ export async function runApplicationUpdate(action: "prepare" | "finish" | "cance
       if (!current || current.installId !== state.installId
         || ![state.sourceVersion, state.resumeVersion].includes(current.productVersion)) throw Error("application update ledger changed");
       state = save({ ...state, phase: "resuming", resumeVersion: spec.productVersion, resumeFingerprint: fingerprint });
-      recordInstalledApplicationPayload(blueprint.payload.resource, current, spec.productVersion, fingerprint);
-      const manifest = await mutateOwnershipManifest({ path: paths.installManifest, installId: current.installId,
-        productVersion: spec.productVersion, mutate(value) { return { ...value, productVersion: spec.productVersion, updatedAt: new Date().toISOString() }; } });
+      await step("payload_record", () => recordInstalledApplicationPayload(blueprint.payload.resource, current, spec.productVersion, fingerprint));
+      const manifest = await step("ownership_record", () => mutateOwnershipManifest({ path: paths.installManifest, installId: current.installId,
+        productVersion: spec.productVersion, mutate(value) { return { ...value, productVersion: spec.productVersion, updatedAt: new Date().toISOString() }; } }));
       // Unknown stop settlement never authorizes replacing a service owner. Restore only acknowledged peers.
       const admitted = state.pendingStop ? state.stoppedServices : startOrder;
       for (const service of admitted) {
         const entry = blueprint.services.find(entry => entry.service === service)!;
-        await installer.install({ manifestPath: paths.installManifest, manifest, resource: entry.resource, definition: entry.definition });
+        await step("registration_install", () => installer.install({ manifestPath: paths.installManifest, manifest, resource: entry.resource, definition: entry.definition }), service);
       }
       for (const service of startOrder) {
         if (!state.runningServices.includes(service) || state.resumedServices.includes(service)
           || state.pendingStop && !state.stoppedServices.includes(service)) continue;
-        await controller.resume(service);
+        await step("service_resume", () => controller.resume(service), service);
         state = save({ ...state, resumedServices: [...state.resumedServices, service] });
       }
       if (state.pendingStop) throw Error(`application update is postponed: ${state.pendingStop} shutdown has not been settled; acknowledged peers were restored`);
@@ -96,26 +116,24 @@ export async function runApplicationUpdate(action: "prepare" | "finish" | "cance
         return { ready: false, prepared: true, targetBuild: previous.targetBuild };
       }
       if (previous) return finish(previous);
-      verifyInstalledPackage({ payloadRoot: root, pathOptions: options, menuBar: true });
       return { ready: true, productVersion: spec.productVersion, buildVersion: build };
     }
     if (previous?.phase === "ready" && previous.targetBuild === input.targetBuild && previous.sourceFingerprint === fingerprint) {
       return { prepared: true, targetBuild: previous.targetBuild };
     }
     assertNoActivePackagedTransition(paths, "application update");
-    verifyInstalledPackage({ payloadRoot: root, pathOptions: options });
     if (!input.targetBuild || !/^\d+(\.\d+){0,2}$/.test(input.targetBuild) || input.targetBuild === build) throw Error("a different numeric target build is required");
     const running: TelaServiceId[] = [];
-    for (const service of stopOrder) if (await controller.inspect(service) === "running") running.push(service);
-    if (input.interruptWork) await interruptOwnedWork(owner.installId, paths, running);
-    await controller.prepare(stopOrder);
+    for (const service of stopOrder) if (await step("service_inspect", () => controller.inspect(service), service) === "running") running.push(service);
+    if (input.interruptWork) await step("work_interruption", () => interruptOwnedWork(owner.installId, paths, running));
+    await step("services_prepare", () => controller.prepare(stopOrder));
     let state = save({ version: 1, installId: owner.installId, sourceVersion: owner.productVersion, sourceBuild: build,
       targetBuild: input.targetBuild, applicationPath: root, sourceFingerprint: fingerprint, phase: "quiescing",
       runningServices: running, stoppedServices: [], resumedServices: [] });
     try {
       for (const service of running) {
         state = save({ ...state, pendingStop: service });
-        try { await controller.quiesce(service); }
+        try { await step("service_stop", () => controller.quiesce(service), service); }
         catch (error) {
           if (error instanceof PackagedServiceShutdownNotStartedError) state = save({ ...state, pendingStop: undefined });
           throw error;
@@ -123,16 +141,16 @@ export async function runApplicationUpdate(action: "prepare" | "finish" | "cance
         state = save({ ...state, pendingStop: undefined, stoppedServices: [...state.stoppedServices, service] });
       }
       // Unload registered jobs before Sparkle changes signed executable bytes; no cached launchd code identity survives.
-      for (const entry of blueprint.services) await installer.unloadForPayloadReplacement({ manifestPath: paths.installManifest, manifest: owner, resource: entry.resource, definition: entry.definition });
+      for (const entry of blueprint.services) await step("registration_unload", () => installer.unloadForPayloadReplacement({ manifestPath: paths.installManifest, manifest: owner, resource: entry.resource, definition: entry.definition }), entry.service);
       state = save({ ...state, phase: "ready" });
       return { prepared: true, targetBuild: state.targetBuild };
     } catch (error) {
-      if (state.pendingStop && await controller.settleQuiescence()) {
+      if (state.pendingStop && await step("shutdown_settlement", () => controller.settleQuiescence())) {
         state = save({ ...state, stoppedServices: [...state.stoppedServices, state.pendingStop], pendingStop: undefined });
       }
       try { await finish(state); }
       catch (recovery) { throw new AggregateError([error, recovery], "application update was postponed and needs service settlement"); }
       throw error;
     }
-  });
+  }));
 }

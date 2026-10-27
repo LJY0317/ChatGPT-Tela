@@ -123,7 +123,7 @@ export function verifyInstalledPackage(input: {
     throw new Error("packaged launcher payload ownership/receipt could not be re-proven");
   }
   assertPackagedLaunchAdmission({ paths, ownership, receipt: observed.receipt, ...(input.service ? { service: input.service } : {}), ...(input.menuBar ? { menuBar: true } : {}) });
-  return { payloadRoot, manifest, paths, ownership };
+  return { payloadRoot, manifest, paths, ownership, receipt: observed.receipt };
 }
 
 export function resolvePackagedServiceLaunch(input: {
