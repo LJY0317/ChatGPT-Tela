@@ -103,7 +103,11 @@ describe("packaged payload builder", () => {
       const input = fixture(root), output = join(root, "Tela.app");
       mkdirSync(join(input, "electron/Electron.app/Contents/MacOS"), { recursive: true });
       writeFileSync(join(input, "electron/Electron.app/Contents/MacOS/Electron"), "electron", { mode: 0o755 });
+      mkdirSync(join(input, "notices"));
+      writeFileSync(join(input, "notices/Electron.txt"), "electron notice");
+      writeFileSync(join(input, "notices/Codex-NOTICE.txt"), "codex notice");
       buildPackagedPayload({ outputPath: output, productVersion: "1.2.3", launcherSourcePath: join(input, "launcher"),
+        noticesSourcePath: join(input, "notices"),
         services: { gateway: { executableSourcePath: join(input, "gateway") }, chat: { executableSourcePath: join(input, "chat") }, codex: { executableSourcePath: join(input, "codex") } },
         profileRuntime: { electronBundleSourcePath: join(input, "electron"), electronExecutableRelativePath: "Electron.app/Contents/MacOS/Electron", entrypointSourcePath: join(input, "profile-runtime.cjs") },
         menuBarSourcePath: join(input, "menu-bar"), workspaceFilesSourcePath: join(input, "chat") });
@@ -127,6 +131,10 @@ describe("packaged payload builder", () => {
       expect(readFileSync(join(output, "Contents/Info.plist"), "utf8")).toContain("<key>CFBundleVersion</key><string>123</string>");
       expect(packagedPayloadFingerprint(output)).toBe(result.payloadFingerprint);
       expect(readdirSync(output)).toEqual(["Contents"]);
+      expect(readFileSync(join(output, "Contents/Resources/ThirdPartyNotices/Electron.txt"), "utf8")).toBe("electron notice");
+      expect(readFileSync(join(output, "Contents/Resources/ThirdPartyNotices/Codex-NOTICE.txt"), "utf8")).toBe("codex notice");
+      writeFileSync(join(output, "Contents/Resources/ThirdPartyNotices/Electron.txt"), "changed notice");
+      expect(packagedPayloadFingerprint(output)).not.toBe(result.payloadFingerprint);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

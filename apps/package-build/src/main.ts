@@ -2,11 +2,14 @@ import { assembleMacApplication } from "../../../packages/product-lifecycle/src/
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  copyFileSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -138,8 +141,20 @@ async function main(): Promise<void> {
       runBun(["run", "apps/menu-bar-macos/build.ts", "--output", menuBar]);
     }
 
+    const notices = join(temporary, "third-party-notices");
+    mkdirSync(notices);
+    copyFileSync(join(repoRoot, "LICENSE"), join(notices, "ChatGPT-Tela.txt"));
+    for (const name of ["LICENSE", "LICENSES.chromium.html"]) {
+      copyFileSync(join(electronBundle, name), join(notices, name === "LICENSE" ? "Electron.txt" : name));
+    }
+    if (menuBar) copyFileSync(join(temporary, "Sparkle-LICENSE.txt"), join(notices, "Sparkle.txt"));
+    if (nativeEngineMetadata) {
+      for (const name of ["Codex-LICENSE.txt", "Codex-NOTICE.txt"]) copyFileSync(join(repoRoot, "release/licenses", name), join(notices, name));
+      writeFileSync(join(notices, "Codex-build.txt"), `This is a modified OpenAI Codex build included by ChatGPT Tela.\nVersion: ${nativeEngineMetadata.version}\nUpstream commit: ${nativeEngineMetadata.upstreamCommit}\nTela patch SHA-256: ${nativeEngineMetadata.patchSha256}\nCapabilities: ${nativeEngineMetadata.capabilities.join(", ")}\nUpstream: https://github.com/openai/codex\n`);
+    }
     let built = buildPackagedPayload({
       outputPath,
+      noticesSourcePath: notices,
       productVersion,
       chatProcessStore: CURRENT_CHAT_PROCESS_STORE_COMPATIBILITY,
       lifecycle: CURRENT_PACKAGED_LIFECYCLE,
@@ -155,7 +170,7 @@ async function main(): Promise<void> {
         entrypointSourcePath: profileRuntime,
         setupEntrypointSourcePath: profileSetup,
       },
-      ...(menuBar ? { menuBarSourcePath: menuBar, menuBarFrameworkSourcePath: join(temporary, "Sparkle.framework"), menuBarLicenseSourcePath: join(temporary, "Sparkle-LICENSE.txt"), maintenanceUISourcePath: join(temporary, "chatgpt-tela-maintenance") } : {}),
+      ...(menuBar ? { menuBarSourcePath: menuBar, menuBarFrameworkSourcePath: join(temporary, "Sparkle.framework"), maintenanceUISourcePath: join(temporary, "chatgpt-tela-maintenance") } : {}),
       ...(workspaceFilesSourcePath ? { workspaceFilesSourcePath } : {}),
       ...(nativeEngineMetadata && nativeEnginePath ? { nativeEngine: {
         ...nativeEngineMetadata,

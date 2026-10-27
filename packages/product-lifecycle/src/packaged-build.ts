@@ -44,7 +44,7 @@ export interface PackagedPayloadBuildInput {
   readonly profileRuntime: PackagedPayloadBuildProfileRuntimeInput;
   readonly menuBarSourcePath?: string;
   readonly menuBarFrameworkSourcePath?: string;
-  readonly menuBarLicenseSourcePath?: string;
+  readonly noticesSourcePath?: string;
   readonly maintenanceUISourcePath?: string;
   readonly workspaceFilesSourcePath?: string;
   readonly chatProcessStore?: PackagedProductManifest["chatProcessStore"];
@@ -178,6 +178,7 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
     });
   }
 
+  if (input.noticesSourcePath) copyBundlePreservingInternalLinks(resolve(input.noticesSourcePath), join(outputPath, "third-party-notices"));
   const runtimeSource = resolve(input.profileRuntime.electronBundleSourcePath);
   const runtimeDestination = join(outputPath, "electron");
   copyBundlePreservingInternalLinks(runtimeSource, runtimeDestination);
@@ -206,8 +207,6 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
       mkdirSync(frameworks, { recursive: true });
       copyBundlePreservingInternalLinks(input.menuBarFrameworkSourcePath, join(frameworks, "Sparkle.framework"));
     }
-    if (input.menuBarLicenseSourcePath) copyFile(realRegularFile(input.menuBarLicenseSourcePath, "Sparkle license"),
-      join(outputPath, "ui/ChatGPT Tela.app/Contents/Resources/ThirdPartyNotices/Sparkle.txt"));
     writeFileSync(join(outputPath, "ui/ChatGPT Tela.app/Contents/Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
