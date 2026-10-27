@@ -5,23 +5,25 @@ import { dirname, join } from "node:path";
 import {
   applyPackagedInstallFromPayload, macApplicationUpdatePath, packagedProductManifestPath,
   PackagedServiceShutdownNotStartedError, planPackagedInstallFromPayload, readMacApplicationUpdate,
-  readOwnershipManifest, type TelaServiceId,
+  readOwnershipManifest, prepareOwnedDirectory, type TelaServiceId,
 } from "@chatgpt-tela/product-lifecycle";
 import { LaunchdUpgradeRunner } from "../../../tests/support/launchd-upgrade-runner";
+import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { runApplicationUpdate } from "./application-update";
 import { verifyInstalledPackage } from "./runtime";
 
-async function fixture(root: string) {
+async function fixture(root: string, application = true) {
+  const path = (value: string) => application ? value : value.replace(/^Contents\//, "");
   const source = join(root, "source.app"), home = join(root, "home");
   const manifest = { version: 1, product: "chatgpt-tela", productVersion: "1.0.0",
-    launcher: { executable: "Contents/MacOS/chatgpt-tela" }, menuBar: { executable: "Contents/MacOS/chatgpt-tela-menu-bar" },
-    profileRuntime: { executable: "Contents/Frameworks/Electron.app/Contents/MacOS/Electron", entrypoint: "Contents/Resources/runtime.js" },
-    services: Object.fromEntries(["gateway", "chat", "codex"].map(id => [id, { executable: `Contents/Helpers/${id}`, arguments: [] }])) };
+    launcher: { executable: path("Contents/MacOS/chatgpt-tela") }, menuBar: { executable: path("Contents/MacOS/chatgpt-tela-menu-bar") },
+    profileRuntime: { executable: path("Contents/Frameworks/Electron.app/Contents/MacOS/Electron"), entrypoint: path("Contents/Resources/runtime.js") },
+    services: Object.fromEntries(["gateway", "chat", "codex"].map(id => [id, { executable: path(`Contents/Helpers/${id}`), arguments: [] }])) };
   const files = [manifest.launcher.executable, manifest.menuBar.executable, manifest.profileRuntime.executable,
     manifest.profileRuntime.entrypoint, ...Object.values(manifest.services).map(service => service.executable)];
   for (const file of files) { mkdirSync(dirname(join(source, file)), { recursive: true }); writeFileSync(join(source, file), "fixture", { mode: 0o755 }); }
-  writeFileSync(join(source, "Contents/Info.plist"), "fixture-info");
-  writeFileSync(join(source, "Contents/Resources/build.txt"), "1");
+  writeFileSync(join(source, path("Contents/Info.plist")), "fixture-info");
+  writeFileSync(join(source, path("Contents/Resources/build.txt")), "1");
   writeFileSync(packagedProductManifestPath(source), JSON.stringify(manifest));
   const runner = new LaunchdUpgradeRunner(), options = { home, platform: "darwin" as const, environment: {}, runner };
   const planned = await planPackagedInstallFromPayload({ payloadSourcePath: source, ...options });
@@ -129,5 +131,33 @@ test("interrupted readiness resumes the target without re-stopping or restarting
     expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true, restored: true });
     expect(f.runner.calls.some(call => call.startsWith("bootout") || call.startsWith("kickstart"))).toBe(false);
     expect(existsSync(macApplicationUpdatePath(f.paths))).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("split-payload keep-data removal migrates to one app without a compatibility installer", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-sparkle-migration-"));
+  try {
+    const old = await fixture(root, false);
+    const owner = readOwnershipManifest(old.paths.installManifest)!;
+    await prepareOwnedDirectory({ manifestPath: old.paths.installManifest, installId: owner.installId,
+      productVersion: owner.productVersion, resource: { kind: "directory", id: "product-config",
+        owner: "product", path: old.paths.configRoot, dataClass: "config" } });
+    const saved = join(old.paths.configRoot, "saved-settings.json");
+    writeFileSync(saved, '{"keep":"exact bytes"}');
+    for (const job of old.runner.jobs.values()) job.running = false;
+    const removed = await runProductUninstall({ ...old.input.options, mode: "apply", removeData: false,
+      serviceRegistrationRunner: old.runner, executingBinaryPath: process.execPath });
+    expect(removed).toMatchObject({ failedCount: 0, manifestRemoved: false });
+    expect(existsSync(old.sourceRoot)).toBe(false);
+    expect(old.runner.jobs.size).toBe(0);
+    rmSync(join(root, "source.app"), { recursive: true });
+    const next = await fixture(root);
+    expect(next.sourceRoot).toBe(join(root, "home/Applications/ChatGPT Tela.app"));
+    expect(readOwnershipManifest(next.paths.installManifest)?.installId).toBe(owner.installId);
+    expect(readFileSync(saved, "utf8")).toBe('{"keep":"exact bytes"}');
+    expect(existsSync(join(next.sourceRoot, ".chatgpt-tela-owner.json"))).toBe(false);
+    expect(readOwnershipManifest(next.paths.installManifest)?.resources.filter(item => item.kind === "directory" && item.dataClass === "binary"))
+      .toHaveLength(1);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -250,7 +250,13 @@ Sparkle replacement remain unverified. The previous split-payload installation
 must be removed through its owned keep-data lifecycle before installing the new
 app; do not apply its legacy whole-payload updater to the new bundle. No compatibility
 shim or second macOS updater is retained to convert the old format automatically.
-The menu LaunchAgent's replacement/relaunch behavior also needs real-OS acceptance.
+A follow-up disposable app used the production Swift updater adapter with a synthetic
+lifecycle executable: its asynchronous `prepare` completed before actual AppKit
+termination, then Sparkle replaced build 1 and relaunched build 2. The same probe
+launched from a real, uniquely named test LaunchAgent; re-running that existing job
+executed the new launcher bytes without an added menu recovery path. This does not
+prove live Tela service/profile restoration. A synthetic split-payload keep-data
+removal followed by single-app installation preserved settings and install identity.
 
 References: [Sparkle setup](https://sparkle-project.org/documentation/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),

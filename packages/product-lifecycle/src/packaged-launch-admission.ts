@@ -35,14 +35,6 @@ export function assertPackagedLaunchAdmission(input: {
     let journal;
     try { journal = readPackagedUpgradeJournal(upgradePath); } catch { return refuse(); }
     if (!journal || journal.installId !== ownership.installId) return refuse();
-    if (input.menuBar) {
-      // UI replacement is the final participant. Its failure leaves this same
-      // journal resumable, without stopping or re-running restored services.
-      if (journal.phase !== "manifest-updated" || journal.toVersion !== ownership.productVersion
-        || journal.targetPayloadFingerprint !== receipt.payloadFingerprint
-        || !journal.resumeServices.every(id => journal.resumedServices.includes(id))) return refuse();
-      return;
-    }
     if (!service || !journal.resumeServices.includes(service)) return refuse();
     if (journal.phase === "restoring-source") {
       if (journal.fromVersion !== ownership.productVersion || journal.sourcePayloadFingerprint !== receipt.payloadFingerprint) return refuse();
