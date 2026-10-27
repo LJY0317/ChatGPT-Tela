@@ -98,9 +98,13 @@ If one fitted prefix plus its exact successor cannot fit Web, preserve it and re
 checkpoint/handoff recovery, before a summary known to be useless. This remains a supported
 large-history limitation, not a reason to revive legacy replay or truncate evidence. A
 smaller seed with deferred original ranges requires a real authenticated Tela Chat body-read
-capability first. Current structural Native inspection is not that reader. Reuse indexed
-public Native paging for that future boundary; do not duplicate the archive, add a search
-engine or promise readback that Web cannot perform. No background Native summaries, automatic
+capability first. Current structural Native inspection is not that reader. The Native history
+source shares the public `thread/items/list` page reader, including a selected `turnId` and
+exclusive item anchor; this is not yet exposed as a Web readback capability. Bind that future
+capability to the current account, branch and explicitly deferred ranges, not an arbitrary
+model-supplied profile or thread. Return readable original items rather than whole-turn replay
+or Base64 fragments. Do not duplicate the archive, add a search engine or promise readback
+that Web cannot perform. No background Native summaries, automatic
 paid Native fallback or fragment/merge chain is authorized by this policy.
 
 ## Durable reuse and ownership

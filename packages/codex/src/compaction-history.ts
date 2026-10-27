@@ -108,6 +108,32 @@ function record(value: unknown): Record<string, unknown> | undefined {
     ? value as Record<string, unknown> : undefined;
 }
 
+/** One public indexed page, optionally scoped to a turn/item anchor. No turn replay or encoding. */
+export async function readIndexedNativeItemsPage(
+  rpc: Pick<Awaited<ReturnType<CodexAppServerRpcFactory>>, "request">,
+  request: { threadId: string; turnId?: string; cursor?: string | { type: "item"; itemId: string };
+    limit?: number; sortDirection?: "asc" | "desc" },
+  signal: AbortSignal,
+) {
+  const limit = request.limit ?? 4;
+  const page = record(await rpc.request("thread/items/list", { ...request, limit }, signal));
+  if (!page || !Array.isArray(page.data) || page.data.length > limit
+    || (page.data.length === 0 && page.nextCursor != null)) {
+    throw new Error("Native indexed item page is incomplete");
+  }
+  const data = page.data.map(raw => {
+    const entry = record(raw), item = record(entry?.item);
+    if (!entry || typeof entry.turnId !== "string" || !entry.turnId.trim()
+      || request.turnId !== undefined && entry.turnId !== request.turnId
+      || !item || typeof item.id !== "string" || !item.id.trim()
+      || typeof item.type !== "string" || !item.type) {
+      throw new Error("Native indexed item page has incomplete or foreign item evidence");
+    }
+    return { turnId: entry.turnId, item: item as Record<string, unknown> & { id: string; type: string } };
+  });
+  return { data, nextCursor: page.nextCursor };
+}
+
 const READABLE_ITEM_TYPES = new Set([
   "userMessage", "agentMessage", "commandExecution", "fileChange", "mcpToolCall",
   "dynamicToolCall", "collabAgentToolCall", "webSearch", "plan", "enteredReviewMode", "exitedReviewMode",
@@ -398,14 +424,10 @@ export class AppServerCompactionHistorySource {
     // must not conceal a valid checkpoint. Bound actual bytes and elapsed time.
     for (;;) {
       signal.throwIfAborted();
-      const response = record(await rpc.request("thread/items/list", {
+      const response = await readIndexedNativeItemsPage(rpc, {
         threadId, sortDirection: "desc", limit: 4,
         ...(cursor ? { cursor } : {}),
-      }, signal));
-      if (!response || !Array.isArray(response.data) || response.data.length > 4
-        || (response.data.length === 0 && response.nextCursor != null)) {
-        throw new Error("Native indexed compaction item page is incomplete");
-      }
+      }, signal);
       const pageBytes = Buffer.byteLength(JSON.stringify(response.data), "utf8");
       totalBytes += pageBytes;
       pageCount++;
@@ -416,12 +438,9 @@ export class AppServerCompactionHistorySource {
         });
         throw new NativeHistoryBootstrapRequired();
       }
-      for (const raw of response.data) {
-        const entry = record(raw);
-        const item = record(entry?.item);
-        if (!entry || typeof entry.turnId !== "string" || !entry.turnId
-          || !item || typeof item.id !== "string" || !item.id
-          || typeof item.type !== "string" || ids.has(item.id)) {
+      for (const entry of response.data) {
+        const item = entry.item;
+        if (ids.has(item.id)) {
           throw new Error("Native indexed compaction has incomplete or duplicate item evidence");
         }
         ids.add(item.id);
@@ -627,23 +646,17 @@ export class AppServerCompactionHistorySource {
       let passedCurrent = false;
       for (;;) {
         active.throwIfAborted();
-        const response = record(await rpc.request("thread/items/list", {
+        const response = await readIndexedNativeItemsPage(rpc, {
           threadId, sortDirection: "desc", limit: 4, ...(cursor ? { cursor } : {}),
-        }, active));
-        if (!response || !Array.isArray(response.data) || response.data.length > 4) {
-          throw new Error("Native visible prefix item page is malformed");
-        }
+        }, active);
         const pageBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
         bytes += pageBytes;
         if (pageBytes > 2 * 1024 * 1024 || bytes > 8 * 1024 * 1024) {
           throw new NativeHistoryBootstrapRequired();
         }
-        for (const raw of response.data) {
-          const entry = record(raw);
-          const item = record(entry?.item);
-          if (!entry || typeof entry.turnId !== "string" || !entry.turnId.trim()
-            || !item || typeof item.id !== "string" || !item.id.trim()
-            || typeof item.type !== "string" || !item.type || ids.has(item.id)) {
+        for (const entry of response.data) {
+          const item = entry.item;
+          if (ids.has(item.id)) {
             throw new Error("Native visible prefix has incomplete or duplicate item evidence");
           }
           ids.add(item.id);

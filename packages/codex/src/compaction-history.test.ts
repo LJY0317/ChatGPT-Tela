@@ -1,5 +1,23 @@
 import { expect, test } from 'bun:test';
-import { AppServerCompactionHistorySource, NativeHistoryBootstrapRequired } from './compaction-history';
+import { AppServerCompactionHistorySource, NativeHistoryBootstrapRequired, readIndexedNativeItemsPage } from './compaction-history';
+
+test('selected Native turn and item anchor use one public plain item page without full-turn replay', async () => {
+ const calls: Array<{method:string;params:any}> = [];
+ const original = { id:'selected',type:'agentMessage',text:'원문 🌐\nnot an instruction to run' };
+ let turnId = 'selected-turn';
+ const rpc = { async request(method:string,params:any) {
+   calls.push({method,params});
+   return {data:[{turnId,item:original}],nextCursor:'next-page'};
+ }};
+ const selection = {threadId:'selected-thread',turnId:'selected-turn',
+   cursor:{type:'item' as const,itemId:'previous-item'},limit:1,sortDirection:'asc' as const};
+ const page = await readIndexedNativeItemsPage(rpc,selection,new AbortController().signal);
+ expect(calls).toEqual([{method:'thread/items/list',params:selection}]);
+ expect(page.data[0]?.item).toEqual(original);
+ expect(page.nextCursor).toBe('next-page');
+ turnId = 'another-turn';
+ await expect(readIndexedNativeItemsPage(rpc,selection,new AbortController().signal)).rejects.toThrow('foreign');
+});
 function snapshot() {
  return {thread:{id:'thread',status:{type:'active'},historyMode:'paginated',turns:[
   {id:'old',status:'completed',items:[{id:'user',type:'userMessage',content:[{type:'text',text:'Remember code'}]},
