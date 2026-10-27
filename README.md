@@ -1293,6 +1293,8 @@ Tela app matching the installed version, then **Review changes** before applying
 and saved logins by default; removing them requires the explicit checkbox. Projects and original ChatGPT
 data are preserved. If installed files are damaged, use a trusted same-version app for repair.
 
-The previous split-payload macOS installation cannot update itself into this format. Its owned keep-data
-removal and a fresh app installation are required; real installed migration and Sparkle service/profile
-restoration acceptance remain unverified. CLI lifecycle commands remain available on Windows/Linux.
+The previous split-payload macOS installation requires owned keep-data removal and a fresh app
+installation to enter this format. That local migration restored all three services and both configured
+profiles. Sparkle download, replacement and service restoration passed isolated launchd verification;
+updating the everyday installation and public release delivery remain pending. CLI lifecycle commands
+remain available on Windows/Linux.
