@@ -276,8 +276,6 @@ export function packagedInstallSpecFromPayload(payloadSourcePath: string): Packa
     ...(manifest.menuBar ? { menuBar: manifest.launcher
       ? { executableRelativePath: manifest.launcher.executable, arguments: Object.freeze(["menu-bar"]) }
       : { executableRelativePath: manifest.menuBar.executable } } : {}),
-    ...(manifest.menuBar?.executable.startsWith("ui/ChatGPT Tela.app/Contents/MacOS/")
-      ? { menuBarApp: { sourceRelativePath: "ui/ChatGPT Tela.app" as const } } : {}),
     services: Object.freeze(services),
   });
 }

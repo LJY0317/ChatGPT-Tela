@@ -36,4 +36,3 @@ export class LaunchdUpgradeRunner implements ServiceRegistrationCommandRunner {
     throw Error(`unexpected launchctl arguments: ${args.join(" ")}`);
   }
 }
-

@@ -33,7 +33,6 @@ export interface PackagedProductInstallSpec {
     readonly executableRelativePath: string;
     readonly arguments?: readonly string[];
   };
-  readonly menuBarApp?: { readonly sourceRelativePath: "ui/ChatGPT Tela.app" };
 }
 
 export interface PackagedServiceBlueprint {
@@ -54,7 +53,6 @@ export interface PackagedInstallBlueprint {
   readonly payloadFingerprint: string;
   readonly services: readonly PackagedServiceBlueprint[];
   readonly menuBar?: PackagedMenuBarBlueprint;
-  readonly menuBarApp?: PackagedPayloadSpec;
   readonly desiredResources: readonly OwnedResource[];
 }
 
@@ -283,16 +281,6 @@ export function createPackagedInstallBlueprint(input: {
     if (!seen.has(required)) throw new Error(`packaged install requires a ${required} service spec`);
   }
   let menuBar: PackagedMenuBarBlueprint | undefined;
-  const menuBarApp: PackagedPayloadSpec | undefined = platform === "darwin" && input.spec.menuBarApp
-    ? Object.freeze({
-        sourcePath: join(payload.sourcePath, input.spec.menuBarApp.sourceRelativePath),
-        resource: Object.freeze({
-          kind: "directory" as const, id: "menu-bar-app", owner: "product" as const,
-          path: join(home, "Applications", "ChatGPT Tela.app"), dataClass: "binary" as const,
-        }),
-        productVersion: payload.productVersion,
-      })
-    : undefined;
   if (platform === "darwin" && input.spec.menuBar) {
     const registrationId = "com.openai.chatgpt-tela.menu-bar";
     const executable = installedExecutable(paths.binaryRoot, input.spec.menuBar.executableRelativePath);
@@ -320,11 +308,9 @@ export function createPackagedInstallBlueprint(input: {
     payload,
     payloadFingerprint: packagedPayloadFingerprint(payload.sourcePath),
     services: Object.freeze(services),
-    ...(menuBarApp ? { menuBarApp } : {}),
     ...(menuBar ? { menuBar } : {}),
     desiredResources: Object.freeze([
       payloadResource,
-      ...(menuBarApp ? [menuBarApp.resource] : []),
       ...services.map(service => service.resource),
       ...(menuBar ? [menuBar.resource] : []),
     ]),
@@ -335,7 +321,6 @@ class PackagedInstallOperator {
   readonly #manifestPath: string;
   readonly #manifest: OwnershipManifest;
   readonly #payload: PackagedPayloadManager;
-  readonly #menuBarApp: PackagedPayloadManager | undefined;
   readonly #serviceInstaller: ServiceRegistrationInstaller;
   readonly #runner: ServiceRegistrationCommandRunner;
   readonly #platform: PackagedInstallBlueprint["platform"];
@@ -360,10 +345,6 @@ class PackagedInstallOperator {
       installId: input.manifest.installId,
       spec: input.blueprint.payload,
     });
-    this.#menuBarApp = input.blueprint.menuBarApp ? new PackagedPayloadManager({
-      manifestPath: this.#manifestPath, installId: input.manifest.installId,
-      spec: input.blueprint.menuBarApp,
-    }) : undefined;
     this.#serviceInstaller = new ServiceRegistrationInstaller({
       platform: input.blueprint.platform,
       runner: this.#runner,
@@ -376,7 +357,6 @@ class PackagedInstallOperator {
 
   observe = async (resource: OwnedResource, manifest: OwnershipManifest): Promise<OwnershipObservation> => {
     if (resource.id === this.#payload.resource.id) return this.#payload.observe(manifest);
-    if (resource.id === this.#menuBarApp?.resource.id) return this.#menuBarApp.observe(manifest);
     const registration = this.#registrations.get(resource.id);
     if (registration && resource.kind === "service-registration") {
       return this.#serviceInstaller.observeReady(registration.resource, manifest);
@@ -386,18 +366,11 @@ class PackagedInstallOperator {
 
   create = async (resource: OwnedResource, manifest: OwnershipManifest): Promise<{ readonly created: boolean; readonly detail: string }> => {
     if (resource.id === this.#payload.resource.id) return this.#payload.install(manifest);
-    if (resource.id === this.#menuBarApp?.resource.id) {
-      if (this.#payload.observe(manifest) !== "owned") throw new Error("macOS menu application requires its verified payload");
-      return this.#menuBarApp.install(manifest);
-    }
     const registration = this.#registrations.get(resource.id);
     if (!registration || resource.kind !== "service-registration") {
       return Object.freeze({ created: false, detail: "unsupported packaged resource" });
     }
     if (this.#payload.observe(manifest) !== "owned") throw new Error("packaged services cannot be registered before the binary payload is verified");
-    if (resource.id === this.#menuBarResourceId && this.#menuBarApp && this.#menuBarApp.observe(manifest) !== "owned") {
-      throw new Error("macOS menu registration requires its owned application bundle");
-    }
     const installed = await this.#serviceInstaller.install({
       manifestPath: this.#manifestPath,
       manifest,

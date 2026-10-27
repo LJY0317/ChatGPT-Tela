@@ -76,7 +76,6 @@ describe("packaged payload builder", () => {
       expect(info).toContain("<key>CFBundleIdentifier</key><string>com.openai.chatgpt-tela.menu-bar</string>");
       expect(packagedPayloadFingerprint(output)).toBe(built.payloadFingerprint);
       const spec = packagedInstallSpecFromPayload(output);
-      expect(spec.menuBarApp).toEqual({ sourceRelativePath: "ui/ChatGPT Tela.app" });
       expect(spec.services).toEqual([
         { service: "gateway", executableRelativePath: "chatgpt-tela", arguments: ["service", "gateway"] },
         { service: "chat", executableRelativePath: "chatgpt-tela", arguments: ["service", "chat"] },
@@ -115,7 +114,6 @@ describe("packaged payload builder", () => {
       rmSync(join(output, ".chatgpt-tela-owner.json"));
       const result = assembleMacApplication({ ...options, finalizeBundle(app) {
         const spec = packagedInstallSpecFromPayload(app);
-        expect(spec.menuBarApp).toBeUndefined();
         expect(spec.services[0]?.executableRelativePath).toBe("Contents/MacOS/chatgpt-tela");
         const blueprint = createPackagedInstallBlueprint({ spec, platform: "darwin", home: root, environment: {} });
         expect(blueprint.payload.resource.path).toBe(join(root, "Applications", "ChatGPT Tela.app"));

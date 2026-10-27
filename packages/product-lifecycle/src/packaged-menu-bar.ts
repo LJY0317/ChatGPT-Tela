@@ -4,7 +4,6 @@ import type { ProductPaths } from "./layout";
 import { PACKAGED_TRANSITION_TIMEOUT_MS } from "./service-shutdown";
 import type { PackagedInstallBlueprint } from "./packaged-install";
 import type { OwnershipManifest } from "./ownership";
-import { beginPackagedPayloadReplacement, observeInstalledPackagedPayload, PackagedPayloadManager, readPackagedPayloadReceipt } from "./packaged-payload";
 import { ServiceRegistrationInstaller, SystemServiceRegistrationCommandRunner, type ServiceRegistrationCommandRunner } from "./service-registration";
 
 export function packagedMenuBarReadyPath(paths: ProductPaths): string {
@@ -52,20 +51,6 @@ export async function refreshPackagedMenuBar(input: {
   const { blueprint, manifest } = input;
   if (!blueprint.menuBar) return;
   const menu = blueprint.menuBar;
-  if (blueprint.menuBarApp) {
-    const app = blueprint.menuBarApp;
-    const owner = new PackagedPayloadManager({ manifestPath: blueprint.paths.installManifest, installId: manifest.installId, spec: app });
-    if (owner.observe(manifest) !== "owned") {
-      const previous = readPackagedPayloadReceipt(app.resource);
-      if (previous) {
-        if (observeInstalledPackagedPayload(app.resource, manifest).state !== "owned") {
-          throw new Error("installed macOS app ownership changed during update");
-        }
-        beginPackagedPayloadReplacement({ resource: app.resource, manifest, expected: previous });
-      }
-      await owner.install(manifest);
-    }
-  }
   const existing = manifest.resources.find(resource => resource.id === menu.resource.id);
   if (existing && JSON.stringify(existing) !== JSON.stringify(menu.resource)) {
     throw new Error("menu bar registration ownership changed during installation");
