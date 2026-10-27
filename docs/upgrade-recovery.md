@@ -198,84 +198,61 @@ host failures remain unproven. No automatic model resend or switch is introduced
 See [diagnostics](diagnostics.md) for bounded capture and privacy rules. These
 source changes are not evidence that the installed client emitted the new events.
 
-### Prepared updates
+### macOS updates through Sparkle
 
-`chatgpt-tela maintenance stage-update --payload <package>` verifies and copies one
-candidate into Tela's owned update cache. Preparing a package does not close apps
-or install it. The menu shows **Updates…**, or **Version … available** with the
-native **Click to install** subtitle (macOS 14.4+) and an arrow badge when a
-candidate is ready. A separator divides updates from Open Tela and Quit. Settings
-uses the same status and offers manual package selection. Clicking Install opens the existing review/apply lifecycle;
-active work and unfinished transitions keep their normal protection.
+The macOS package is one signed `ChatGPT Tela.app`. It contains the launcher,
+Gateway/Chat/Codex services, Electron runtime, menu UI, an independent maintenance
+app and Sparkle 2.10.1. Mutable ownership markers, payload receipts, settings and
+update coordination stay outside the signed bundle. The old staged-update cache,
+cache watcher, extracted-package update picker and local-latest installation script
+are removed. The old whole-payload upgrade operator rejects macOS before reading
+source files or stopping services; Windows/Linux retain their platform lifecycle.
 
-Preparing another candidate replaces the previous cached package under the existing
-installer writer lock. At most one ready package and its temporary replacement are
-stored; cache removal is part of owned uninstall. Status reads metadata rather than
-hashing the payload repeatedly. Installation revalidates package bytes. Release-feed
-lookup and automatic download are not implemented; development packages can use
-this same prepared-package entry point without an agent workspace dependency.
+Menu **Check for Updates…** and Settings **Updates** use Sparkle's standard user
+interface and automatic-check preference. Sparkle owns discovery, downloads,
+EdDSA verification, extraction, app replacement and relaunch. Tela neither reads
+Sparkle's private cache nor performs a second payload replacement. Repair and
+removal stay in the small independent maintenance app. Unused sandbox XPC services
+are removed from the copied Sparkle framework; its remaining helpers and framework
+are signed inside out using Sparkle's documented distribution procedure.
 
-### Sparkle integration assessment (macOS)
+Tela's `application-update` command coordinates services through the existing
+mutation owner and authenticated shutdown/readiness contracts:
 
-Sparkle is not integrated. A menu-only integration would update the wrong boundary:
-`packaged-install.ts` owns both a separate product payload and an Applications menu
-bundle, while service/menu registrations execute from the product payload. The
-generated menu bundle also has a constant `CFBundleVersion` of `1`. Sparkle needs an
-increasing release build version; the current local labels are not a release scheme.
+- `prepare --target-build N` checks active work before stopping participants,
+  records the previously running services, and unloads their exact launchd jobs.
+  An AppKit termination veto prevents Sparkle from proceeding when preparation
+  fails. A partial refusal restores acknowledged peers without repeating shutdown.
+- `finish` verifies the installed app signature and prepared build, updates only
+  external ownership/receipt metadata, reinstalls service registrations and restores
+  the previously running services. Interrupted readiness resumes without another
+  stop or duplicate start. Ordinary startup runs after settlement and does not
+  override the restored service selection.
+- `cancel` restores services only while the signed source app is still present.
+  Unknown shutdown effects remain pending rather than authorizing replacement.
 
-Prefer evaluating one signed macOS app bundle containing the product executables,
-with mutable state outside it. Sparkle would own update discovery, signed download
-and bundle replacement; Tela would retain work admission, service/profile settlement,
-registration refresh and authenticated readiness. This is a packaging migration,
-not an adapter that can safely call the current full-payload apply after Sparkle
-replaces the menu app. Never give both installers ownership of the same bytes.
+A disposable Sparkle experiment replaced and relaunched a host from build 1 to 2
+with all 281 Tela payload files matching. Simulated active work prevented replacement;
+a one-byte archive modification failed EdDSA verification. Separate production-path
+checks cover external receipt storage with real codesign, refused/partial shutdown,
+abort and interrupted service restoration with a synthetic launchd manager. The
+package smoke builds the complete app, verifies its signature and launches its CLI;
+it does not operate real services or user conversations.
 
-The public updater delegate provides discovery/download events and a postponed
-relaunch callback. That callback is conditional, so it cannot be the only work
-protection. App termination and explicit installation must use the existing lifecycle
-admission. Download completion is not installed-service readiness. The download and
-extraction notifications supply an appcast item, not a documented extracted-payload
-handoff to `stage-update`; do not depend on Sparkle private cache paths or installers.
+Builds require an increasing numeric `--build-number`, `--update-feed-url`,
+`--update-public-key` and `--mac-codesign-identity`. Only HTTPS and loopback test
+feeds are accepted. Public releases still need an actual signed appcast/archive,
+Developer ID signing and notarization; smoke tests use disposable public keys and
+ad-hoc signatures. No production feed or private signing key is supplied here.
 
-Before runtime integration, prove a disposable whole-product bundle update: refuse
-active work before closing profiles, replace through one installer, refresh service
-registrations, reopen only previously running profiles, and recover after restart or
-failed readiness without ownership/fingerprint drift. Existing whole-payload recovery
-must be adapted to that boundary, not layered over Sparkle's replacement. Preserve
-the existing Windows/Linux lifecycle independently. No installed migration is proven.
+Installed migration and end-to-end service/profile restoration through the actual
+Sparkle replacement remain unverified. The previous split-payload installation
+must be removed through its owned keep-data lifecycle before installing the new
+app; do not apply its legacy whole-payload updater to the new bundle. No compatibility
+shim or second macOS updater is retained to convert the old format automatically.
+The menu LaunchAgent's replacement/relaunch behavior also needs real-OS acceptance.
 
-Use ordinary app updates if the bundle experiment succeeds. Sparkle package updates
-are a fallback only for demonstrated custom installation requirements: they require
-authorization and lose delta updates. Services alone do not require a package.
-Public delivery additionally needs a real appcast, release archives, an increasing
-build number, update signing and Developer ID/notarization. None is configured here;
-no feed, key access, new downloader or runtime dependency was added by this assessment.
-
-An isolated Sparkle 2.10.1 experiment subsequently replaced and relaunched a disposable
-host from build 1 to 2 with the existing complete Tela payload included. All 281
-payload files matched the source. A simulated active-work admission cancelled before
-replacement; a one-byte archive modification failed EdDSA verification and retained
-build 1. This used a loopback feed, disposable file-based signing key and ad-hoc app
-signatures, not release credentials. It did not run Tela services, prove production
-admission/profile restoration, implement migration, or update the installed product.
-
-References: [setup](https://sparkle-project.org/documentation/),
+References: [Sparkle setup](https://sparkle-project.org/documentation/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),
-[package tradeoffs](https://sparkle-project.org/documentation/package-updates/).
-
-The in-progress `--mac-app` package-build path assembles a disposable flat build into
-one app: executable entrypoints in `Contents/MacOS`, service/helper code in
-`Contents/Helpers`, Electron in `Contents/Frameworks`, and manifest/runtime data in
-`Contents/Resources`. It removes the duplicate menu app and Electron distribution
-wrapper. `--build-number`, `--update-feed-url` and `--update-public-key` are explicit
-build inputs; this is not a release feed or key provisioning implementation.
-The launcher derives the bundle root from its real executable, including when
-invoked through a symlink. Existing portable path containment remains enforced;
-the obsolete top-level-launcher-only restriction is removed.
-
-This path is not ready for installed migration: Sparkle linkage, external ownership
-metadata, service registration migration and startup/recovery settlement remain.
-Do not install it with the old directory-marker installer. Replace macOS staged
-package copying, custom update UI and payload replacement with Sparkle once that
-boundary is complete. Keep consumer work protection and service/profile settlement;
-retain Windows/Linux support through their appropriate platform paths.
+[package tradeoffs](https://sparkle-project.org/documentation/package-updates/),
+[signing and optional XPC removal](https://sparkle-project.org/documentation/sandboxing/).

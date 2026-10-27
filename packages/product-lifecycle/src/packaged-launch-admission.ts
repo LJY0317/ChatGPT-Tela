@@ -4,7 +4,7 @@ import type { OwnershipManifest } from "./ownership";
 import type { PackagedPayloadReceipt } from "./packaged-payload";
 import { readPackagedUpgradeJournal } from "./packaged-upgrade";
 import { readPackagedRepairJournal } from "./packaged-repair";
-import { assertNoPackagedUninstall, packagedRepairJournalPath, packagedUpgradeJournalPath } from "./packaged-transition";
+import { macApplicationUpdatePath, readMacApplicationUpdate, assertNoPackagedUninstall, packagedRepairJournalPath, packagedUpgradeJournalPath } from "./packaged-transition";
 
 /** Called only after the physical installed payload/receipt has been re-proven. */
 export function assertPackagedLaunchAdmission(input: {
@@ -17,6 +17,15 @@ export function assertPackagedLaunchAdmission(input: {
   assertNoPackagedUninstall(input.paths);
   const upgradePath = packagedUpgradeJournalPath(input.paths), repairPath = packagedRepairJournalPath(input.paths);
   const upgradeExists = existsSync(upgradePath), repairExists = existsSync(repairPath);
+  if (existsSync(macApplicationUpdatePath(input.paths))) {
+    const journal = readMacApplicationUpdate(input.paths);
+    if (upgradeExists || repairExists || !journal || journal.phase !== "resuming" || !input.service
+      || journal.installId !== input.ownership.installId || journal.resumeVersion !== input.ownership.productVersion
+      || journal.resumeFingerprint !== input.receipt.payloadFingerprint || !journal.runningServices.includes(input.service)) {
+      throw Error("application update has not admitted this service restart");
+    }
+    return;
+  }
   if (!upgradeExists && !repairExists) return;
   const refuse = () => { throw new Error("packaged service launch is blocked while an install transition journal is incomplete"); };
   if ((!input.service && !input.menuBar) || (upgradeExists && repairExists)) return refuse();

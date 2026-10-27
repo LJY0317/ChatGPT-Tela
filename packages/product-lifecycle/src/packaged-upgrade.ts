@@ -1,4 +1,3 @@
-import { refreshPackagedMenuBar } from "./packaged-menu-bar";
 import { retainPackagedRecoveryArtifact, reviewPackagedRecoveryArtifact } from "./recovery-artifact";
 import { withPackagedTransitionOwner } from "./transition-owner";
 import { PackagedServiceShutdownNotStartedError } from "./service-shutdown";
@@ -23,7 +22,7 @@ import {
 } from "./packaged-payload";
 import { mutateOwnershipManifest } from "./ownership-store";
 import { readOwnershipManifest, type OwnershipManifest } from "./ownership";
-import { ServiceRegistrationInstaller, ServiceRegistrationManager, SystemServiceRegistrationCommandRunner, type ServiceRegistrationCommandRunner } from "./service-registration";
+import { ServiceRegistrationInstaller, SystemServiceRegistrationCommandRunner, type ServiceRegistrationCommandRunner } from "./service-registration";
 import { resolveProductPaths, type TelaServiceId } from "./layout";
 import { assertNoConflictingPackagedTransition, packagedUpgradeJournalPath, readPackagedTransitionValue } from "./packaged-transition";
 
@@ -68,8 +67,6 @@ export interface PackagedUpgradeJournal {
   readonly phase: PackagedUpgradePhase;
   readonly resumeServices: readonly TelaServiceId[];
   readonly quiescedServices: readonly TelaServiceId[];
-  readonly refreshedServices?: readonly TelaServiceId[];
-  readonly unloadedServices?: readonly TelaServiceId[];
   readonly resumedServices: readonly TelaServiceId[];
   readonly stopEvidenceVersion?: 1;
   readonly pendingStop?: TelaServiceId | null;
@@ -117,8 +114,6 @@ function parseJournal(value: unknown): PackagedUpgradeJournal {
     phase: item.phase as PackagedUpgradePhase,
     resumeServices: services(item.resumeServices, "upgrade resume services"),
     quiescedServices: services(item.quiescedServices, "upgrade quiesced services"),
-    refreshedServices: services(item.refreshedServices ?? [], "upgrade refreshed services"),
-    unloadedServices: services(item.unloadedServices ?? [], "upgrade unloaded services"),
     resumedServices: services(item.resumedServices, "upgrade resumed services"),
   });
 }
@@ -146,7 +141,7 @@ function sameUpgrade(journal: PackagedUpgradeJournal, plan: PackagedUpgradePlan)
 }
 
 function updateJournal(path: string, current: PackagedUpgradeJournal, changes: Partial<Pick<PackagedUpgradeJournal,
-  "phase" | "resumeServices" | "quiescedServices" | "refreshedServices" | "unloadedServices" | "resumedServices" | "pendingStop">>): PackagedUpgradeJournal {
+  "phase" | "resumeServices" | "quiescedServices" | "resumedServices" | "pendingStop">>): PackagedUpgradeJournal {
   const next = parseJournal({ ...current, ...changes });
   writeJournal(path, next);
   return next;
@@ -169,18 +164,13 @@ async function assertStableServiceRegistrations(input: {
   readonly manifest: OwnershipManifest;
   readonly blueprint: PackagedInstallBlueprint;
   readonly runner?: ServiceRegistrationCommandRunner;
-  readonly allowUnloaded?: boolean;
 }): Promise<void> {
   const installer = new ServiceRegistrationInstaller({
     platform: input.blueprint.platform,
     runner: input.runner ?? new SystemServiceRegistrationCommandRunner(),
   });
-  const manager = input.allowUnloaded && input.blueprint.platform === "darwin"
-    ? new ServiceRegistrationManager({ platform: input.blueprint.platform, runner: input.runner ?? new SystemServiceRegistrationCommandRunner() })
-    : undefined;
   for (const service of input.blueprint.services) {
     const state = await installer.observeReady(service.resource, input.manifest);
-    if (state === "missing" && manager && await manager.observe(service.resource, input.manifest) === "owned") continue;
     if (state !== "owned") throw new Error(`packaged upgrade service registration is not exact-owned: ${service.service} (${state})`);
   }
 }
@@ -192,6 +182,7 @@ export async function planPackagedUpgradeFromPayload(input: {
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly runner?: ServiceRegistrationCommandRunner;
 }): Promise<PackagedUpgradePlan> {
+  if ((input.platform ?? process.platform) === "darwin") throw Error("macOS updates use Sparkle; choose Check for Updates in Tela");
   const spec = packagedInstallSpecFromPayload(input.payloadSourcePath);
   const blueprint = createPackagedInstallBlueprint({
     spec,
@@ -218,7 +209,6 @@ export async function planPackagedUpgradeFromPayload(input: {
     await assertStableServiceRegistrations({
       manifest,
       blueprint,
-      allowUnloaded: journal.phase === "payload-installed" || journal.phase === "manifest-updated",
       ...(input.runner ? { runner: input.runner } : {}),
     });
     return Object.freeze({
@@ -271,8 +261,6 @@ function initialJournal(plan: PackagedUpgradePlan): PackagedUpgradeJournal {
     pendingStop: null,
     resumeServices: Object.freeze([]),
     quiescedServices: Object.freeze([]),
-    refreshedServices: Object.freeze([]),
-    unloadedServices: Object.freeze([]),
     resumedServices: Object.freeze([]),
   });
 }
@@ -415,24 +403,6 @@ async function applyPackagedUpgradeOwned(input: {
       platform: blueprint.platform,
       runner: input.runner ?? new SystemServiceRegistrationCommandRunner(),
     });
-    if (blueprint.platform === "darwin") {
-      const unloaded = [...(journal.unloadedServices ?? [])];
-      const refreshed = [...(journal.refreshedServices ?? [])];
-      for (const service of QUIESCE_ORDER) {
-        if (unloaded.includes(service) || refreshed.includes(service) || journal.resumedServices.includes(service)) continue;
-        const entry = blueprint.services.find(candidate => candidate.service === service)!;
-        await installer.unloadForPayloadReplacement({ manifestPath, manifest, resource: entry.resource, definition: entry.definition });
-        unloaded.push(service);
-        journal = updateJournal(journalPath, journal, { unloadedServices: Object.freeze([...unloaded]) });
-      }
-      for (const service of QUIESCE_ORDER) {
-        if (refreshed.includes(service) || journal.resumedServices.includes(service)) continue;
-        const entry = blueprint.services.find(candidate => candidate.service === service)!;
-        await installer.install({ manifestPath, manifest, resource: entry.resource, definition: entry.definition });
-        refreshed.push(service);
-        journal = updateJournal(journalPath, journal, { refreshedServices: Object.freeze([...refreshed]) });
-      }
-    }
     for (const service of blueprint.services) {
       if (await installer.observeReady(service.resource, manifest) !== "owned") {
         throw new Error(`packaged upgrade service registration failed final verification: ${service.service}`);
@@ -447,7 +417,6 @@ async function applyPackagedUpgradeOwned(input: {
     }
   }
 
-  await refreshPackagedMenuBar({ blueprint, manifest, ...(input.runner ? { runner: input.runner } : {}) });
   rmSync(journalPath, { force: false });
   return Object.freeze({
     fromVersion: input.plan.fromVersion,

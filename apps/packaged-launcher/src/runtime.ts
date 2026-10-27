@@ -8,6 +8,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { readProductConfig, type ProductConfig } from "@chatgpt-tela/product-config";
 import {
   observeInstalledPackagedPayload,
+  ownedPackagedBinaryResource,
   readOwnershipManifest,
   readPackagedProductManifest,
   resolveProductPaths,
@@ -18,8 +19,6 @@ import {
   type ProductPathOptions,
   type TelaServiceId,
 } from "@chatgpt-tela/product-lifecycle";
-
-type DirectoryResource = Extract<NonNullable<ReturnType<typeof readOwnershipManifest>>["resources"][number], { readonly kind: "directory" }>;
 
 export interface ResolvedPackagedServiceLaunch {
   readonly service: TelaServiceId;
@@ -48,13 +47,6 @@ function regularPayloadFile(root: string, relativePath: string, field: string): 
   const stat = lstatSync(absolute);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${field} must be a real regular file`);
   return realpathSync(absolute);
-}
-
-function binaryResource(manifest: NonNullable<ReturnType<typeof readOwnershipManifest>>): DirectoryResource {
-  const matches = manifest.resources.filter((resource): resource is DirectoryResource =>
-    resource.kind === "directory" && resource.id === "product-binaries" && resource.dataClass === "binary");
-  if (matches.length !== 1) throw new Error("installed ownership manifest does not contain exactly one product binary resource");
-  return matches[0]!;
 }
 
 function derivedEnvironment(input: {
@@ -123,7 +115,8 @@ export function verifyInstalledPackage(input: {
   const ownership = readOwnershipManifest(paths.installManifest);
   if (!ownership) throw new Error("packaged launcher requires an installed ownership manifest");
   if (ownership.productVersion !== manifest.productVersion) throw new Error("installed product version does not match the packaged launcher payload");
-  const resource = binaryResource(ownership);
+  const resource = ownedPackagedBinaryResource(ownership);
+  if (!resource) throw Error("installed ownership manifest has no product binary resource");
   if (realpathSync(resource.path) !== payloadRoot) throw new Error("packaged launcher root does not match the owned binary resource");
   const observed = observeInstalledPackagedPayload(resource, ownership);
   if (observed.state !== "owned" || observed.receipt.productVersion !== manifest.productVersion) {

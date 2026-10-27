@@ -34,6 +34,14 @@ const PACKAGED_PAYLOAD_SIGNATURE = "chatgpt-tela-package-signature-v1.json";
 
 type DirectoryResource = Extract<OwnedResource, { readonly kind: "directory" }>;
 
+/** One source of installed binary location; UI and runtime never infer it from a default path. */
+export function ownedPackagedBinaryResource(manifest: OwnershipManifest): DirectoryResource | undefined {
+  const matches = manifest.resources.filter((resource): resource is DirectoryResource => resource.kind === "directory"
+    && resource.id === "product-binaries" && resource.dataClass === "binary");
+  if (matches.length > 1) throw Error("installed binary ownership is ambiguous");
+  return matches[0];
+}
+
 export interface PackagedPayloadSpec {
   readonly sourcePath: string;
   readonly resource: DirectoryResource;
@@ -229,6 +237,16 @@ function writeReceipt(resource: DirectoryResource, receipt: PackagedPayloadRecei
   writeFileSync(temporary, `${JSON.stringify(receipt, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
   try { chmodSync(temporary, 0o600); } catch { /* Windows ACLs own permissions there. */ }
   renameSync(temporary, path);
+}
+
+/** Refresh external metadata after Sparkle replaced an already owned signed app. */
+export function recordInstalledApplicationPayload(resource: DirectoryResource, manifest: OwnershipManifest, productVersion: string, fingerprint: string): void {
+  if (!resource.metadataRoot || new FilesystemOwnershipObserver().observe(resource, manifest) !== "owned"
+    || JSON.stringify(manifest.resources.find(item => item.id === resource.id)) !== JSON.stringify(resource)) {
+    throw Error("application record requires its existing external ownership");
+  }
+  if (packagedPayloadFingerprint(resource.path) !== fingerprint) throw Error("application changed before recording installed bytes");
+  writeReceipt(resource, { version: 1, installId: manifest.installId, resourceId: resource.id, productVersion, payloadFingerprint: fingerprint });
 }
 
 function clearIncompletePayload(resource: DirectoryResource): void {

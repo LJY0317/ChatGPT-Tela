@@ -9,13 +9,6 @@ private final class TelaControlCenterPanel: NSPanel {
   override var canBecomeMain: Bool { false }
 }
 
-struct TelaUpdateStatus: Decodable, Equatable {
-  struct Candidate: Decodable, Equatable { let productVersion: String }
-  let installedVersion: String
-  let pendingTransition: String
-  let update: Candidate?
-}
-
 private struct ControlCenterServiceDescriptor: Decodable {
   let service: String
   let endpoint: String
@@ -292,8 +285,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var selectedPage: ControlCenterPage = .home
   private var serviceStates: [String: String] = [:]
   private weak var updatesSection: NSView?
-  private(set) var updateStatus: TelaUpdateStatus?
-  var onUpdateStatusChanged: (() -> Void)?
+  var updater: TelaSparkleUpdater?
   private var ingressStatus: ControlCenterIngressStatus?
   let workState = TelaWorkState()
   private var workInventory: TelaWorkInventory {
@@ -1123,14 +1115,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           control: actionButton("Manage…", action: #selector(openChatGPTPlugins)), in: support)
       let updates = card("Updates")
       updatesSection = updates
-      let available = updateStatus?.update
-      let unfinished = updateStatus.map { $0.pendingTransition != "none" } ?? false
-      let install = actionButton(unfinished ? "Review…" : available == nil ? "Choose Update…" : "Install Update…",
-          action: unfinished ? #selector(openMaintenance) : #selector(installUpdate))
-      install.isEnabled = !operationInProgress && installedServiceControlsAvailable() && updateStatus != nil
-      row(unfinished ? "Installation needs attention" : (available.map { "Version \($0.productVersion) available" } ?? "ChatGPT Tela"),
-          subtitle: launchingMaintenance ? "Opening…" : updateStatus.map { "Installed: \($0.installedVersion)" } ?? "Version unavailable",
-          control: install, in: updates)
+      let check = actionButton("Check for Updates…", action: #selector(checkForUpdates))
+      check.isEnabled = updater?.canCheck == true && !operationInProgress
+      let installed = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+      row(updater?.availableVersion.map { "Version \($0) available" } ?? "ChatGPT Tela",
+          subtitle: updater?.problem ?? "Installed: \(installed)", control: check, in: updates)
+      let automatic = NSButton(checkboxWithTitle: "Automatically check for updates", target: self, action: #selector(setAutomaticUpdateChecks(_:)))
+      automatic.state = updater?.automaticallyChecksForUpdates == true ? .on : .off
+      updates.addArrangedSubview(automatic)
       let maintain = actionButton("Manage…", action: #selector(openMaintenance))
       maintain.isEnabled = !operationInProgress && installedServiceControlsAvailable()
       row("Repair or remove Tela", control: maintain, in: card("Maintenance"))
@@ -1177,7 +1169,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   @objc private func openChatGPTPlugins() {
-    NSWorkspace.shared.open(telaChatGPTPluginsURL)
+    NSWorkspace.shared.open(URL(string: "https://chatgpt.com/plugins")!)
   }
 
   private func installedServiceControlsAvailable() -> Bool {
@@ -1243,29 +1235,12 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       guard let section = self?.updatesSection else { return }
       section.scrollToVisible(section.bounds)
     }
-    Task { await refreshUpdateStatus() }
   }
 
-  func refreshUpdateStatus() async {
-    guard let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"] else { return }
-    let result = await Task.detached { Self.runLauncher(launcher, arguments: ["maintenance", "status"], capture: true) }.value
-    let observed = result.0 == 0 ? try? JSONDecoder().decode(TelaUpdateStatus.self, from: result.1) : nil
-    if observed != updateStatus {
-      updateStatus = observed
-      onUpdateStatusChanged?()
-      if selectedPage == .settings { renderCurrentPage() }
-    }
-  }
+  func updatePresentationChanged() { if selectedPage == .settings { renderCurrentPage() } }
 
-  @objc func installUpdate() {
-    guard !operationInProgress else { return }
-    if updateStatus?.update != nil { launchMaintenance(arguments: ["--staged-update"]); return }
-    let panel = NSOpenPanel()
-    panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false
-    panel.message = "Choose an extracted Tela update package."
-    guard panel.runModal() == .OK, let package = panel.url else { return }
-    launchMaintenance(arguments: ["--operation", "upgrade", "--payload", package.path])
-  }
+  @objc private func checkForUpdates() { updater?.checkForUpdates(nil) }
+  @objc private func setAutomaticUpdateChecks(_ sender: NSButton) { updater?.automaticallyChecksForUpdates = sender.state == .on }
 
   @objc private func openMaintenance() { launchMaintenance(arguments: []) }
 
@@ -1291,8 +1266,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func openMaintenanceFromRepairPackage(_ launcher: String) {
-    let package = NSOpenPanel(); package.canChooseFiles = false; package.canChooseDirectories = true
-    package.allowsMultipleSelection = false; package.message = "Select a repair package matching the installed Tela version."
+    let package = NSOpenPanel(); package.canChooseFiles = true; package.canChooseDirectories = false; package.allowedContentTypes = [.applicationBundle]
+    package.allowsMultipleSelection = false; package.message = "Select a Tela app matching the installed version."
     guard package.runModal() == .OK, let source = package.url else { return }
     launchingMaintenance = true; renderCurrentPage()
     Task {
@@ -2040,7 +2015,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let previousChatFoldersApplied = chatFoldersApplied
     let previousChatFoldersAvailable = chatFoldersAvailable
     await loadChatFolders()
-    if selectedPage == .settings { await loadDiagnosticCaptureStatus(); await refreshUpdateStatus() }
+    if selectedPage == .settings { await loadDiagnosticCaptureStatus() }
     let previousProfileError = workInventory.error
     let previousServices = serviceStates
     let previousIngress = ingressStatus

@@ -4,8 +4,8 @@ import { closeSync, existsSync, lstatSync, openSync, readSync, realpathSync } fr
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { readOwnershipManifest } from "./ownership";
 import { resolveProductPaths, type ProductPathOptions } from "./layout";
-import { observeInstalledPackagedPayload } from "./packaged-payload";
-import { PACKAGED_PRODUCT_MANIFEST, readPackagedProductManifest, type PackagedNativeEngine } from "./packaged-manifest";
+import { observeInstalledPackagedPayload, ownedPackagedBinaryResource } from "./packaged-payload";
+import { packagedProductManifestPath, readPackagedProductManifest, type PackagedNativeEngine } from "./packaged-manifest";
 
 /** Upstream Codex's install-context resolves this helper beside its executable. */
 export function nativeEngineHelperName(platform: NodeJS.Platform): string {
@@ -65,12 +65,8 @@ export function resolveOwnedNativeEngine(pathOptions?: ProductPathOptions, optio
   const paths = resolveProductPaths(pathOptions);
   const ownership = readOwnershipManifest(paths.installManifest);
   if (!ownership) return undefined;
-  const resources = ownership.resources.filter(resource => resource.kind === "directory"
-    && resource.id === "product-binaries" && resource.dataClass === "binary");
-  if (resources.length === 0) return undefined;
-  if (resources.length !== 1 || resources[0]!.kind !== "directory") throw new Error("Native engine binary ownership is ambiguous");
-  const resource = resources[0]!;
-  if (!existsSync(join(resource.path, PACKAGED_PRODUCT_MANIFEST))) return undefined;
+  const resource = ownedPackagedBinaryResource(ownership);
+  if (!resource || !existsSync(packagedProductManifestPath(resource.path))) return undefined;
   const manifest = readPackagedProductManifest(resource.path);
   if (!manifest.nativeEngine) return undefined;
   const observed = observeInstalledPackagedPayload(resource, ownership);

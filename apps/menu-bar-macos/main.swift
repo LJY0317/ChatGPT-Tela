@@ -144,12 +144,15 @@ private final class TelaMenuToggleRow: NSView {
 
 @MainActor
 final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    updater.applicationShouldTerminate(sender)
+  }
+
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
     controlCenter.show()
     return true
   }
   private var statusItem: NSStatusItem!
-  private var updateWatch: DispatchSourceFileSystemObject?
   private var statusMenu: NSMenu!
   private var connectionSpinner: NSProgressIndicator?
   private var connectionProgress: String?
@@ -173,6 +176,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private var launchNotice: (alert: NSAlert, slot: Int, pid: Int, decisionId: String)?
   private let decisionUiSession = UUID().uuidString
   private let controlCenter = TelaControlCenterController()
+  private let updater = TelaSparkleUpdater()
   private let fileManager = FileManager.default
   private let home = FileManager.default.homeDirectoryForCurrentUser
 
@@ -200,12 +204,13 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         button.title = "T"
       }
     }
-    controlCenter.onUpdateStatusChanged = { [weak self] in
+    controlCenter.updater = updater
+    updater.changed = { [weak self] in
       guard let self else { return }
       self.updateStatusIcon()
+      self.controlCenter.updatePresentationChanged()
       if !self.menuOpen { self.rebuildMenu(loading: self.snapshot == nil) }
     }
-    watchUpdateCache()
     controlCenter.workState.onChange = { [weak self] in
       guard let self else { return }
       self.controlCenter.workInventoryDidChange()
@@ -232,7 +237,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       notifications.addObserver(self, selector: #selector(workspaceChanged(_:)), name: name, object: nil)
     }
     Task {
-      await controlCenter.startServicesAtLaunch()
+      if await updater.start() { await controlCenter.startServicesAtLaunch() }
       await refreshNow()
     }
     Task { await controlCenter.showFirstUseIfNeeded() }
@@ -260,7 +265,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     guard let button = statusItem.button else { return }
     let visibleProgress = message ?? (refreshing ? "Checking status…" : nil) ?? (workInventory.error == nil && workInventory.profiles.contains { $0.connectionInProgress == true || ($0.connected && $0.webState == "preparing") } ? "Connecting ChatGPT…" : nil)
     button.toolTip = visibleProgress ?? "ChatGPT Tela"
-    button.setAccessibilityLabel(visibleProgress.map { "Tela: \($0)" } ?? (controlCenter.updateStatus?.update == nil ? "ChatGPT Tela" : "ChatGPT Tela, update available"))
+    button.setAccessibilityLabel(visibleProgress.map { "Tela: \($0)" } ?? (updater.availableVersion == nil ? "ChatGPT Tela" : "ChatGPT Tela, update available"))
     if visibleProgress != nil {
       if connectionSpinner == nil {
         let spinner = NSProgressIndicator()
@@ -533,7 +538,6 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   }
 
   private func inspect() async -> MenuSnapshot {
-    await controlCenter.refreshUpdateStatus()
     async let gateway = inspectService("gateway")
     async let chat = inspectService("chat")
     async let codex = inspectService("codex")
@@ -659,13 +663,16 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       addProfileOpen(1, name: "ChatGPT", to: menu)
     }
     menu.addItem(.separator())
-    if let update = controlCenter.updateStatus?.update, controlCenter.updateStatus?.pendingTransition == "none" {
-      let item = actionItem("Version \(update.productVersion) available", action: #selector(installPreparedUpdate))
-      if #available(macOS 14.4, *) { item.subtitle = "Click to install" }
-      item.isEnabled = !controlCenter.connectionOperationInProgress
+    if let version = updater.availableVersion {
+      let item = actionItem("Version \(version) available", action: #selector(openUpdates))
+      if #available(macOS 14.4, *) { item.subtitle = updater.downloaded ? "Click to install" : "Click to download" }
+      item.isEnabled = updater.canCheck && !controlCenter.connectionOperationInProgress
       menu.addItem(item)
     } else {
-      menu.addItem(actionItem("Updates…", action: #selector(openUpdates)))
+      let item = actionItem("Check for Updates…", action: #selector(openUpdates))
+      item.isEnabled = updater.canCheck
+      if #available(macOS 14.4, *), let problem = updater.problem { item.subtitle = problem }
+      menu.addItem(item)
     }
     menu.addItem(.separator())
     menu.addItem(actionItem("Open Tela…", action: #selector(openControlCenter), keyEquivalent: "o"))
@@ -675,7 +682,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
 
   private func updateStatusIcon() {
     guard let base = NSImage(systemSymbolName: "network", accessibilityDescription: "ChatGPT Tela") else { return }
-    guard controlCenter.updateStatus?.update != nil else { statusItem.button?.image = base; return }
+    guard updater.availableVersion != nil else { statusItem.button?.image = base; return }
     let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { rect in
       base.draw(in: NSRect(x: 0, y: 3, width: 17, height: 17))
       NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: nil)?
@@ -687,31 +694,9 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     statusItem.button?.setAccessibilityLabel("ChatGPT Tela, update available")
   }
 
-  private func watchUpdateCache() {
-    updateWatch?.cancel(); updateWatch = nil
-    let cache = home.appendingPathComponent("Library/Caches/ChatGPT Tela")
-    let updates = cache.appendingPathComponent("updates")
-    let directory = fileManager.fileExists(atPath: updates.path) ? updates : cache
-    let descriptor = open(directory.path, O_EVTONLY)
-    guard descriptor >= 0 else { return }
-    let watch = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: [.write, .rename, .delete], queue: .main)
-    watch.setCancelHandler { close(descriptor) }
-    watch.setEventHandler { [weak self] in
-      guard let self else { return }
-      self.watchUpdateCache()
-      Task { await self.controlCenter.refreshUpdateStatus() }
-    }
-    updateWatch = watch; watch.resume()
-  }
-
   @objc private func openUpdates() {
     statusMenu.cancelTracking()
-    controlCenter.showUpdates()
-  }
-
-  @objc private func installPreparedUpdate() {
-    statusMenu.cancelTracking()
-    controlCenter.installUpdate()
+    updater.checkForUpdates(nil)
   }
 
   @objc private func startTela() {
@@ -793,18 +778,9 @@ struct ChatGPTTelaMenuBarMain {
     // installed product launcher used by the packaged menu admission path.
     if Bundle.main.bundleIdentifier == "com.openai.chatgpt-tela.menu-bar",
        ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"] == nil {
-      let launcher = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/ChatGPT Tela/bin/chatgpt-tela").path
-      if FileManager.default.isExecutableFile(atPath: launcher) {
-        setenv("CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE", launcher, 0)
+      if let launcher = Bundle.main.url(forAuxiliaryExecutable: "chatgpt-tela") {
+        setenv("CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE", launcher.path, 0)
       }
-    }
-    if CommandLine.arguments.contains("--maintenance-only") {
-      let app = NSApplication.shared
-      let delegate = TelaMaintenanceController()
-      app.delegate = delegate
-      withExtendedLifetime(delegate) { app.run() }
-      return
     }
     let instance = TelaMenuBarInstanceLock()
     do {

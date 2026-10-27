@@ -18,6 +18,7 @@ import {
 } from "@chatgpt-tela/credential-store";
 import {
   readOwnershipManifest,
+  ownedPackagedBinaryResource,
   readPackagedProductManifest,
   resolveProductPaths,
 } from "@chatgpt-tela/product-lifecycle";
@@ -57,8 +58,10 @@ async function main(): Promise<void> {
     ...(credentialResolver ? { credentials: credentialResolver } : {}),
   });
   const ownerWorker = ownership?.installId === installId ? (() => {
-    const manifest = readPackagedProductManifest(paths.binaryRoot);
-    const executable = realpathSync(join(paths.binaryRoot, manifest.services.chat.executable));
+    const resource = ownedPackagedBinaryResource(ownership);
+    if (!resource) throw Error("the Chat owner-worker package is not installed");
+    const manifest = readPackagedProductManifest(resource.path);
+    const executable = realpathSync(join(resource.path, manifest.services.chat.executable));
     if (realpathSync(process.execPath) !== executable) {
       throw new Error("the running Chat executable does not match the installed owner-worker package");
     }

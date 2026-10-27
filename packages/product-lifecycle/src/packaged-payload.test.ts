@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureOwnershipManifest } from "./ownership-store";
-import { OWNERSHIP_MARKER, readOwnershipManifest, writeOwnershipManifest } from "./ownership";
+import { OWNERSHIP_MARKER, parseOwnedResource, readOwnershipManifest, writeOwnershipManifest } from "./ownership";
 import { PACKAGED_PAYLOAD_RECEIPT, PackagedPayloadManager, packagedPayloadFingerprint } from "./packaged-payload";
 
 function fixture(root: string): { source: string; target: string } {
@@ -72,6 +72,7 @@ describe("packaged binary payload ownership", () => {
       const manifestPath = join(root, "state/ownership-v1.json");
       const manifest = await ensureOwnershipManifest({ path: manifestPath, productVersion: "1.2.3" });
       const resource = { kind: "directory" as const, id: "product-binaries", owner: "product" as const, path: target, dataClass: "binary" as const, metadataRoot };
+      expect(() => parseOwnedResource({ ...resource, metadataRoot: join(target, "..metadata") })).toThrow("overlap");
       const manager = new PackagedPayloadManager({ manifestPath, installId: manifest.installId, spec: { sourcePath: source, productVersion: "1.2.3", resource } });
       await manager.install(manifest);
       expect(manager.observe(readOwnershipManifest(manifestPath)!)).toBe("owned");

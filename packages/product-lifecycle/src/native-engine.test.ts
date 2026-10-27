@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nativeEngineFileSha256, nativeEngineHelperName, resolveOwnedNativeEngine, verifyNativeEngineArtifact } from "./native-engine";
-import { parsePackagedNativeEngine, parsePackagedProductManifest, PACKAGED_PRODUCT_MANIFEST } from "./packaged-manifest";
+import { parsePackagedNativeEngine, parsePackagedProductManifest, packagedProductManifestPath, PACKAGED_PRODUCT_MANIFEST } from "./packaged-manifest";
 import { resolveProductPaths } from "./layout";
 import { ensureOwnershipManifest } from "./ownership-store";
 import { readOwnershipManifest } from "./ownership";
@@ -66,20 +66,25 @@ test("wrong bytes or platform never execute; version mismatch and escaping links
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("owned engine selection survives committed upgrade restoration, detects drift and preserves user data", async () => {
+for (const application of [false, true]) test(`owned engine selection survives restoration, detects drift and preserves data (app=${application})`, async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-owned-engine-"));
   try {
     const home = join(root, "home"); mkdirSync(home);
     const pathOptions = { home, environment: {} };
     expect(resolveOwnedNativeEngine(pathOptions)).toBeUndefined();
-    const paths = resolveProductPaths(pathOptions);
+    const defaults = resolveProductPaths(pathOptions);
+    const paths = { ...defaults, binaryRoot: application ? join(home, "Applications/Tela.app") : defaults.binaryRoot };
     const source = join(root, "payload"); mkdirSync(join(source, "native-engine"), { recursive: true });
     const executable = join(source, "native-engine/codex");
     writeFileSync(executable, '#!/bin/sh\nprintf "codex-cli 0.159.0\\n"\n', { mode: 0o755 });
     writeFileSync(join(source, "native-engine", nativeEngineHelperName(process.platform)), "helper", { mode: 0o755 });
     const original = join(root, "official-codex"); writeFileSync(original, "official unchanged");
     const userData = join(home, "conversation"); writeFileSync(userData, "keep conversation");
-    writeFileSync(join(source, PACKAGED_PRODUCT_MANIFEST), JSON.stringify({ version: 1, product: "chatgpt-tela",
+    if (application) {
+      mkdirSync(join(source, "Contents/Resources"), { recursive: true });
+      writeFileSync(join(source, "Contents/Info.plist"), "app fixture");
+    }
+    writeFileSync(packagedProductManifestPath(source), JSON.stringify({ version: 1, product: "chatgpt-tela",
       productVersion: "1.0.0", launcher: { executable: "tela" },
       profileRuntime: { executable: "electron", entrypoint: "runtime.cjs" },
       integrity: { signature: "ed25519-sha256-tree-v1", keyId: "fixture" }, nativeEngine: metadata(nativeEngineFileSha256(executable)),
@@ -88,7 +93,7 @@ test("owned engine selection survives committed upgrade restoration, detects dri
     const ownership = await ensureOwnershipManifest({ path: paths.installManifest, productVersion: "1.0.0" });
     const manager = new PackagedPayloadManager({ manifestPath: paths.installManifest, installId: ownership.installId,
       spec: { sourcePath: source, productVersion: "1.0.0", resource: { kind: "directory", id: "product-binaries",
-        owner: "product", path: paths.binaryRoot, dataClass: "binary" } } });
+        owner: "product", path: paths.binaryRoot, dataClass: "binary", ...(application ? { metadataRoot: join(paths.stateRoot, "install/application") } : {}) } } });
     await manager.install(ownership);
     const version = { readVersion: () => "codex-cli 0.159.0" };
     const committed = readOwnershipManifest(paths.installManifest)!;

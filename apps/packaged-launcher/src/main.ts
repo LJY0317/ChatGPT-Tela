@@ -1,3 +1,4 @@
+import { runApplicationUpdate } from "./application-update";
 import { diagnosePublicIngress, SystemTailscaleCommandRunner } from "@chatgpt-tela/tailscale-ingress";
 import { probePublicMcp, probeUnifiedDevelopmentMcp } from "@chatgpt-tela/gateway";
 import { readProductConfig } from "@chatgpt-tela/product-config";
@@ -44,8 +45,7 @@ The package directory defaults to the directory containing this launcher. Use --
 Internal runtime commands:
   chatgpt-tela service <gateway|chat|codex>
   chatgpt-tela menu-bar
-  chatgpt-tela maintenance stage-update --payload <package>
-  chatgpt-tela maintenance-open [--staged-update | --operation <repair|upgrade|cancel-upgrade> --payload <package>]
+  chatgpt-tela maintenance-open [--operation repair --payload <package>]
 `;
 
 function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat" | "codex" {
@@ -63,15 +63,26 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const lifecycleApply = ["install", "repair", "upgrade", "cancel-upgrade"].includes(args[0] ?? "")
     && parsePackagedLifecycleCommand(args).mode === "apply";
-  if ((lifecycleApply || args[0] === "maintenance" && args[1] === "apply")
+  if ((lifecycleApply || args[0] === "application-update" || args[0] === "maintenance" && args[1] === "apply")
     && process.env[LIFECYCLE_WORKER_ENV] !== "1") {
     const result = await runIndependentLifecycleProcess({ executable: process.execPath,
-      arguments: lifecycleApply && !args.includes("--payload")
+      arguments: (lifecycleApply || args[0] === "application-update") && !args.includes("--payload")
         ? [...args, "--payload", payloadRootForLauncherExecutable()] : args,
     });
     process.stdout.write(result.stdout);
     process.stderr.write(result.stderr);
     process.exitCode = result.code;
+    return;
+  }
+  if (args[0] === "application-update") {
+    const action = args[1], payloadIndex = args.indexOf("--payload"), targetIndex = args.indexOf("--target-build");
+    if (!(action === "prepare" || action === "finish" || action === "cancel") || payloadIndex < 0 || !args[payloadIndex + 1]
+      || args.length !== (action === "prepare" ? 6 : 4) || (action === "prepare" && (targetIndex < 0 || !args[targetIndex + 1]))) {
+      throw Error("usage: application-update <prepare --target-build N|finish|cancel> --payload app");
+    }
+    const result = await runApplicationUpdate(action, { payloadRoot: args[payloadIndex + 1]!,
+      ...(targetIndex >= 0 ? { targetBuild: args[targetIndex + 1]! } : {}) });
+    process.stdout.write(JSON.stringify(result) + "\n");
     return;
   }
   if (args[0] === "ingress") {

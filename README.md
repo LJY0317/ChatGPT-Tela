@@ -403,7 +403,11 @@ staging folders are preserved and further imports in that workspace stop until r
 delete folders based only on the `.tela-import-*` filename prefix. Uninstall with saved-data removal preserves
 pending recovery records and ownership state until recovery is resolved.
 
-On macOS, the package builder requires an explicit codesign identity. `-` is supported only for local
+On macOS, the package builder produces a single `.app` and requires `--output <name>.app`,
+`--build-number <increasing-number>`, `--update-feed-url <HTTPS-appcast>`,
+`--update-public-key <base64-Ed25519-public-key>` and an explicit codesign identity. Sparkle is pinned by
+Swift Package Manager and bundled with its license; it does not share another application's framework.
+`-` is supported only for local
 ad-hoc development proof; a public release still needs a Developer ID identity and notarization. The payload
 retains only **relative internal symlinks whose lexical and resolved targets remain inside the payload root**,
 because Electron frameworks require those links for a valid bundle. Absolute, broken/cyclic, or escaping
@@ -556,10 +560,12 @@ Background service buttons use the same verified installed launcher as `chatgpt-
 `chatgpt-tela services stop`. They validate the installed payload and service ownership before changes;
 replaced registrations are preserved. Stopping services can close connected ChatGPT profiles.
 
-Updates use the **new extracted package's** upgrade plan/apply commands. Saved connections, configuration and
-browser login state retain the same install identity. The update restores background services and relaunches
-the installed menu bar with the new UI. Stopped saved profiles can reconnect at service startup;
-already-running ordinary ChatGPT apps remain under user control.
+On macOS, **Check for Updates…** uses Sparkle to download, verify, replace and relaunch the complete app.
+Tela settles active work and restores previously running services around that replacement. Public feed,
+release signing and installed migration acceptance remain release work. Windows/Linux use the new package's
+upgrade plan/apply commands. Saved connections, configuration and browser login state remain outside product
+binaries. Stopped saved profiles can reconnect at service startup; already-running ordinary ChatGPT apps
+remain under user control.
 
 Removal uses a separately extracted launcher's uninstall dry-run/apply. The default keeps saved data and its
 ownership manifest for reinstall. `--remove-data` removes only proven Tela-owned data. Dirty worktrees,
@@ -1262,23 +1268,17 @@ ChatGPT Tela is an independent, unofficial project and is not affiliated with Op
 [MIT](LICENSE)
 
 
-### macOS maintenance preview
+### macOS updates and maintenance
 
-Open the control center → Settings → **Updates & maintenance → Open…** to update, repair, or remove Tela.
-For an update or repair, select an extracted package from a trusted source. Repair needs the installed
-version. This preview does not yet download updates automatically.
+Use the menu's **Check for Updates…** or Settings → **Updates** for Sparkle's standard update window.
+Settings also controls automatic update checks. Downloading does not end active work; an update that cannot
+settle active tasks is postponed. Release feeds and public signing are still being prepared.
 
-Choose **Review changes** to see the version change and the resources to replace, remove, or preserve.
-Reviewing or dismissing the confirmation applies no changes. Applying can close connected ChatGPT profiles; finish active
-work first. Removal keeps Tela settings and saved logins by default; removing them requires the explicit
-checkbox. Projects and original ChatGPT data are preserved.
+Settings → **Maintenance → Manage…** opens the independent repair/removal app. For repair, select a trusted
+Tela app matching the installed version, then **Review changes** before applying. Removal keeps settings
+and saved logins by default; removing them requires the explicit checkbox. Projects and original ChatGPT
+data are preserved. If installed files are damaged, use a trusted same-version app for repair.
 
-When an update is unfinished, **Cancel unfinished update** offers a separate review. It requires the
-retained package for the installed version and a launcher with
-cancellation support. Cancellation is available only before file replacement starts; it keeps the
-installed files and restores previously running services that stopped. Once replacement has begun,
-resume with the original update package instead. A changed recovery checkpoint requires a new review.
-
-The separate maintenance window stays open after the installed menu bar stops. If installed files are
-damaged, choose a signed same-version repair package when prompted. If the launcher itself is missing,
-use a separately extracted trusted installer. CLI lifecycle commands remain available on other platforms.
+The previous split-payload macOS installation cannot update itself into this format. Its owned keep-data
+removal and a fresh app installation are required; real installed migration and Sparkle service/profile
+restoration acceptance remain unverified. CLI lifecycle commands remain available on Windows/Linux.

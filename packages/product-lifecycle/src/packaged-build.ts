@@ -43,6 +43,9 @@ export interface PackagedPayloadBuildInput {
   readonly services: Readonly<Record<TelaServiceId, PackagedPayloadBuildServiceInput>>;
   readonly profileRuntime: PackagedPayloadBuildProfileRuntimeInput;
   readonly menuBarSourcePath?: string;
+  readonly menuBarFrameworkSourcePath?: string;
+  readonly menuBarLicenseSourcePath?: string;
+  readonly maintenanceUISourcePath?: string;
   readonly workspaceFilesSourcePath?: string;
   readonly chatProcessStore?: PackagedProductManifest["chatProcessStore"];
   readonly lifecycle?: PackagedProductManifest["lifecycle"];
@@ -198,6 +201,13 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
   const menuBarRelative = input.menuBarSourcePath ? "ui/ChatGPT Tela.app/Contents/MacOS/chatgpt-tela-menu-bar" : undefined;
   if (input.menuBarSourcePath && menuBarRelative) {
     copyFile(realRegularFile(input.menuBarSourcePath, "packaged menu bar source"), join(outputPath, ...menuBarRelative.split("/")));
+    if (input.menuBarFrameworkSourcePath) {
+      const frameworks = join(outputPath, "ui/ChatGPT Tela.app/Contents/Frameworks");
+      mkdirSync(frameworks, { recursive: true });
+      copyBundlePreservingInternalLinks(input.menuBarFrameworkSourcePath, join(frameworks, "Sparkle.framework"));
+    }
+    if (input.menuBarLicenseSourcePath) copyFile(realRegularFile(input.menuBarLicenseSourcePath, "Sparkle license"),
+      join(outputPath, "ui/ChatGPT Tela.app/Contents/Resources/ThirdPartyNotices/Sparkle.txt"));
     writeFileSync(join(outputPath, "ui/ChatGPT Tela.app/Contents/Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -210,6 +220,17 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
 <key>LSUIElement</key><true/>
 </dict></plist>
 `);
+  }
+
+  const maintenanceExecutable = input.maintenanceUISourcePath ? "ui/Tela Maintenance.app/Contents/MacOS/chatgpt-tela-maintenance" : undefined;
+  if (maintenanceExecutable) {
+    copyFile(realRegularFile(input.maintenanceUISourcePath!, "maintenance UI source"), join(outputPath, maintenanceExecutable));
+    writeFileSync(join(outputPath, "ui/Tela Maintenance.app/Contents/Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleExecutable</key><string>chatgpt-tela-maintenance</string>
+<key>CFBundleIdentifier</key><string>com.openai.chatgpt-tela.maintenance</string>
+<key>CFBundleName</key><string>Tela Maintenance</string><key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleVersion</key><string>1</string></dict></plist>\n`);
   }
 
   let nativeEngine: PackagedNativeEngine | undefined;
@@ -242,7 +263,7 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
       entrypoint: runtimeEntrypoint,
       ...(setupEntrypoint ? { setupEntrypoint } : {}),
     },
-    ...(menuBarRelative ? { menuBar: { executable: menuBarRelative } } : {}),
+    ...(menuBarRelative ? { menuBar: { executable: menuBarRelative, ...(maintenanceExecutable ? { maintenanceExecutable } : {}) } } : {}),
     ...(nativeEngine ? { nativeEngine } : {}),
     ...(workspaceFiles ? { workspaceFiles } : {}),
     ...(input.chatProcessStore ? { chatProcessStore: input.chatProcessStore } : {}),

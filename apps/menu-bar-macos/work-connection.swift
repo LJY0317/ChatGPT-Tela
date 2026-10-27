@@ -1,8 +1,5 @@
 import Foundation
 
-// Official host management entry point; account actions stay in ChatGPT.
-let telaChatGPTPluginsURL = URL(string: "https://chatgpt.com/plugins")!
-
 // Display-only, memory-only data from the authenticated local UI endpoint.
 struct TelaAccountDisplay: Decodable, Equatable {
   struct Account: Decodable, Equatable {

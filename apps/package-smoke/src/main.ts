@@ -1,5 +1,6 @@
 
 import { spawnSync } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -74,7 +75,7 @@ function smokeLauncher(path: string): void {
 async function main(): Promise<void> {
   ensureElectronDistribution();
   const root = mkdtempSync(join(tmpdir(), "chatgpt-tela-package-smoke-"));
-  const output = join(root, "payload");
+  const output = join(root, process.platform === "darwin" ? "ChatGPT Tela.app" : "payload");
 
   const workspaceFiles = join(repoRoot, "build", "workspace-files-target", "release", executableName("tela-workspace-files"));
   try {
@@ -85,7 +86,9 @@ async function main(): Promise<void> {
       "--version", "0.0.0-ci-smoke",
 
       ...(existsSync(workspaceFiles) ? ["--workspace-files", workspaceFiles] : []),
-      ...(process.platform === "darwin" ? ["--mac-codesign-identity", "-"] : []),
+      ...(process.platform === "darwin" ? ["--mac-codesign-identity", "-", "--build-number", "1",
+        "--update-feed-url", "http://127.0.0.1/appcast.xml", "--update-public-key",
+        generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).subarray(-32).toString("base64")] : []),
     ];
     run(process.execPath, arguments_);
 
@@ -100,10 +103,10 @@ async function main(): Promise<void> {
 
     const payloadFingerprint = packagedPayloadFingerprint(output);
 
-    const launcherPath = join(output, executableName("chatgpt-tela"));
+    const launcherPath = join(output, manifest.launcher.executable);
     regularFile(launcherPath, "packaged launcher");
     for (const service of ["gateway", "chat", "codex"] as const) {
-      regularFile(join(output, "services", executableName(service)), `packaged ${service} service`);
+      regularFile(join(output, manifest.services[service].executable), `packaged ${service} service`);
     }
     regularFile(join(output, ...manifest.profileRuntime.entrypoint.split("/")), "packaged profile runtime entrypoint");
     if (!manifest.profileRuntime.setupEntrypoint) throw new Error("package is missing the login setup entrypoint");
@@ -111,7 +114,15 @@ async function main(): Promise<void> {
     regularFile(join(output, ...manifest.profileRuntime.executable.split("/")), "packaged Electron executable");
     if (process.platform === "darwin") {
       if (!manifest.menuBar) throw new Error("macOS package smoke payload is missing menu bar metadata");
-      regularFile(join(output, ...manifest.menuBar.executable.split("/")), "packaged menu bar executable");
+      regularFile(join(output, manifest.menuBar.executable), "packaged menu bar executable");
+      if (!manifest.menuBar.maintenanceExecutable) throw Error("macOS app is missing its independent maintenance UI");
+      regularFile(join(output, manifest.menuBar.maintenanceExecutable), "packaged maintenance UI");
+      regularFile(join(output, "Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle"), "Sparkle framework");
+      if (existsSync(join(output, "Contents/Frameworks/Sparkle.framework/XPCServices"))
+        || existsSync(join(output, "Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices"))) {
+        throw Error("macOS package retains unused Sparkle sandbox services");
+      }
+      run("/usr/bin/codesign", ["--verify", "--strict", "--deep", output]);
     } else if (manifest.menuBar) {
       throw new Error("non-macOS package smoke payload unexpectedly contains menu bar metadata");
     }

@@ -1,11 +1,10 @@
-import { readStagedUpdate, stageUpdate } from "./staged-update";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { chmodSync, copyFileSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { readOwnershipManifest, resolveProductPaths, readPackagedUpgradeJournal, readPackagedRepairJournal,
-  packagedUpgradeJournalPath, packagedRepairJournalPath, PackagedServiceShutdownNotStartedError, PackagedServiceTransitionError,
+  packagedUpgradeJournalPath, packagedRepairJournalPath, readMacApplicationUpdate, PackagedServiceShutdownNotStartedError, PackagedServiceTransitionError,
   PackagedUpgradeRecoveryError } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { parsePackagedLifecycleCommand, runPackagedLifecycleCommand, type PackagedLifecycleOptions } from "./lifecycle";
@@ -41,19 +40,13 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
   if (args[0] !== "maintenance") throw new Error("expected maintenance command");
   const paths = resolveProductPaths({ platform: options.platform ?? process.platform,
     ...(options.home ? { home: options.home } : {}), ...(options.environment ? { environment: options.environment } : {}) });
-  if (args[1] === "stage-update" && args.length === 4 && args[2] === "--payload") {
-    return stageUpdate(args[3]!, options, payload => runPackagedLifecycleCommand(["upgrade", "--dry-run", "--payload", payload], options));
-  }
   if (args[1] === "status" && args.length === 2) {
     const ownership = readOwnershipManifest(paths.installManifest);
     const upgrade = readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths));
-    return { installedVersion: ownership?.productVersion ?? "Not installed", update: readStagedUpdate(options), pendingTransition:
-      upgrade ? "upgrade" : readPackagedRepairJournal(packagedRepairJournalPath(paths)) ? "repair" : "none",
+    return { installedVersion: ownership?.productVersion ?? "Not installed", pendingTransition:
+      readMacApplicationUpdate(paths) ? "application-update" : upgrade ? "upgrade" : readPackagedRepairJournal(packagedRepairJournalPath(paths)) ? "repair" : "none",
       ...(upgrade ? {
         cancellationReviewAvailable: ["prepared", "quiescing", "quiesced", "restoring-source"].includes(upgrade.phase),
-        ...((options.platform ?? process.platform) === "darwin" ? { appReopenState:
-          upgrade.phase === "manifest-updated" && upgrade.resumeServices.every(service => upgrade.resumedServices.includes(service))
-            ? "unverified" : "not-attempted" } : {}),
       } : {}) };
   }
   if (args[1] === "processes" && args.length === 2) {
@@ -141,20 +134,24 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
     interruptedConnections: operation === "cancel-upgrade" ? false : operation !== "uninstall" || (raw.removableCount ?? 0) > 0 };
 }
 
-/** Stage only previously verified product executables, outside the install's removal boundary. */
+function maintenanceApp(executable: string): string {
+  const directory = dirname(executable);
+  if (basename(directory) !== "MacOS" || basename(dirname(directory)) !== "Contents") throw Error("maintenance UI must be an application executable");
+  return dirname(dirname(directory));
+}
+
+/** Preserve a small, signed helper app outside the files being repaired or removed. */
 export function stageMaintenanceWindow(input: { launcher: string; ui: string; temporaryRoot?: string }) {
   const root = mkdtempSync(join(input.temporaryRoot ?? tmpdir(), "chatgpt-tela-maintenance-"));
   chmodSync(root, 0o700);
   try {
-    const files: Record<string, string> = {};
-    for (const [name, source] of [["launcher", input.launcher], ["maintenance-ui", input.ui]] as const) {
-      if (!lstatSync(source).isFile() || lstatSync(source).isSymbolicLink()) throw new Error("maintenance source must be a regular file");
-      const expected = digest(readFileSync(source));
-      copyFileSync(source, join(root, name)); chmodSync(join(root, name), 0o700);
-      if (digest(readFileSync(join(root, name))) !== expected) throw new Error("maintenance executable changed while staging");
-      files[name] = expected;
-    }
-    writeFileSync(join(root, OWNER), JSON.stringify({ version: 1, files }), { mode: 0o600 });
+    const app = maintenanceApp(input.ui);
+    const files = { launcher: digest(readFileSync(input.launcher)), "Maintenance.app": packagedPayloadFingerprint(app) };
+    copyFileSync(input.launcher, join(root, "launcher")); chmodSync(join(root, "launcher"), 0o700);
+    cpSync(app, join(root, "Maintenance.app"), { recursive: true, verbatimSymlinks: true });
+    if (digest(readFileSync(join(root, "launcher"))) !== files.launcher
+      || packagedPayloadFingerprint(join(root, "Maintenance.app")) !== files["Maintenance.app"]) throw Error("maintenance source changed while staging");
+    writeFileSync(join(root, OWNER), JSON.stringify({ version: 2, files }), { mode: 0o600 });
     return root;
   } catch (error) { rmSync(root, { recursive: true, force: true }); throw error; }
 }
@@ -162,30 +159,31 @@ export function stageMaintenanceWindow(input: { launcher: string; ui: string; te
 export function cleanupMaintenanceWindow(root: string): void {
   const absolute = resolve(root);
   if (!basename(absolute).startsWith("chatgpt-tela-maintenance-") || lstatSync(absolute).isSymbolicLink()
-    || realpathSync(dirname(absolute)) !== realpathSync(tmpdir())) throw new Error("unsafe maintenance workspace");
+    || realpathSync(dirname(absolute)) !== realpathSync(tmpdir())) throw Error("unsafe maintenance workspace");
   const stat = lstatSync(absolute), marker = lstatSync(join(absolute, OWNER));
   if (!stat.isDirectory() || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()
-    || !marker.isFile() || marker.isSymbolicLink()) throw new Error("unsafe maintenance ownership");
+    || !marker.isFile() || marker.isSymbolicLink()) throw Error("unsafe maintenance ownership");
   const owner = record(JSON.parse(readFileSync(join(absolute, OWNER), "utf8")));
-  if (owner.version !== 1 || canonical(Object.keys(owner.files ?? {}).sort()) !== canonical(["launcher", "maintenance-ui"])) throw new Error("unknown maintenance ownership");
-  if (readdirSync(absolute).sort().join(",") !== [OWNER, "launcher", "maintenance-ui"].sort().join(",")) throw new Error("maintenance workspace has unknown files");
-  for (const [name, expected] of Object.entries(owner.files)) {
-    const file = join(absolute, name);
-    if (!lstatSync(file).isFile() || lstatSync(file).isSymbolicLink() || digest(readFileSync(file)) !== expected) throw new Error("maintenance workspace ownership changed");
-  }
+  if (owner.version !== 2 || canonical(Object.keys(owner.files ?? {}).sort()) !== canonical(["Maintenance.app", "launcher"])) throw Error("unknown maintenance ownership");
+  if (readdirSync(absolute).sort().join(",") !== [OWNER, "launcher", "Maintenance.app"].sort().join(",")) throw Error("maintenance workspace has unknown files");
+  const launcher = join(absolute, "launcher");
+  if (!lstatSync(launcher).isFile() || lstatSync(launcher).isSymbolicLink() || digest(readFileSync(launcher)) !== owner.files.launcher
+    || packagedPayloadFingerprint(join(absolute, "Maintenance.app")) !== owner.files["Maintenance.app"]) throw Error("maintenance workspace ownership changed");
   rmSync(absolute, { recursive: true, force: false });
 }
 
 export async function resolveMaintenanceWindowSource(payloadRoot: string, launcherExecutablePath: string, repairSourceArguments: readonly string[] = [], options: PackagedLifecycleOptions = {}) {
     if (repairSourceArguments.length === 0) {
       const verified = resolvePackagedMenuBarLaunch({ payloadRoot, launcherExecutablePath });
-      return { launcher: launcherExecutablePath, ui: verified.executable, operation: "upgrade", payload: undefined };
+      const manifest = readPackagedProductManifest(payloadRoot);
+      return { launcher: launcherExecutablePath, ui: manifest.menuBar?.maintenanceExecutable
+        ? join(payloadRoot, manifest.menuBar.maintenanceExecutable) : verified.executable, operation: "repair", payload: undefined };
     }
     const sourceArgs = [...repairSourceArguments];
     const operationIndex = sourceArgs.indexOf("--operation");
     const operation = operationIndex < 0 ? "repair" : sourceArgs[operationIndex + 1];
-    if (!(operation === "repair" || operation === "upgrade" || operation === "cancel-upgrade")) {
-      throw new Error("maintenance source operation must be repair, upgrade, or cancel-upgrade");
+    if (operation !== "repair") {
+      throw new Error("maintenance window supports repair; updates use Sparkle");
     }
     if (operationIndex >= 0) sourceArgs.splice(operationIndex, 2);
     const args = [operation, "--dry-run", ...sourceArgs];
@@ -194,28 +192,30 @@ export async function resolveMaintenanceWindowSource(payloadRoot: string, launch
     await runPackagedLifecycleCommand(args, options);
     const source = realpathSync(parsed.payloadSourcePath), manifest = readPackagedProductManifest(source);
     if (!manifest.launcher || !manifest.menuBar) throw new Error("repair package has no maintenance UI");
-    return { launcher: join(source, manifest.launcher.executable), ui: join(source, manifest.menuBar.executable), operation, payload: source };
+    return { launcher: join(source, manifest.launcher.executable), ui: join(source, manifest.menuBar.maintenanceExecutable ?? manifest.menuBar.executable), operation, payload: source };
 }
 
 export async function openMaintenanceWindow(payloadRoot: string, launcherExecutablePath: string, repairSourceArguments: readonly string[] = []) {
   if (process.platform !== "darwin") throw new Error("maintenance window requires macOS");
   // Damaged installs use a separately signed repair package, never unproven installed UI bytes.
-  const staged = repairSourceArguments.length === 1 && repairSourceArguments[0] === "--staged-update"
-    ? readStagedUpdate() : null;
-  if (repairSourceArguments.includes("--staged-update") && !staged) throw Error("No prepared update is available");
-  const verify = () => resolveMaintenanceWindowSource(payloadRoot, launcherExecutablePath, staged ? [] : repairSourceArguments);
+  const verify = () => resolveMaintenanceWindowSource(payloadRoot, launcherExecutablePath, repairSourceArguments);
   const verified = await verify();
   const root = stageMaintenanceWindow(verified);
   try {
     await verify();
     const snapshot = record(JSON.parse(readFileSync(join(root, OWNER), "utf8")));
     if (digest(readFileSync(verified.launcher)) !== snapshot.files.launcher
-      || digest(readFileSync(verified.ui)) !== snapshot.files["maintenance-ui"]) throw new Error("verified executables changed while staging");
-    const child = spawn(join(root, "maintenance-ui"), ["--maintenance-only"], { detached: true, stdio: "ignore",
-      env: { ...process.env, CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE: join(root, "launcher"), CHATGPT_TELA_MAINTENANCE_WORKSPACE: root,
-        CHATGPT_TELA_MAINTENANCE_OPERATION: verified.operation, CHATGPT_TELA_MAINTENANCE_PAYLOAD: staged?.payload ?? verified.payload } });
-    await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
-    child.unref();
+      || packagedPayloadFingerprint(maintenanceApp(verified.ui)) !== snapshot.files["Maintenance.app"]) throw new Error("verified executables changed while staging");
+    const args = ["-n", "-a", join(root, "Maintenance.app"),
+      "--env", `CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE=${join(root, "launcher")}`,
+      "--env", `CHATGPT_TELA_MAINTENANCE_WORKSPACE=${root}`,
+      "--env", `CHATGPT_TELA_MAINTENANCE_OPERATION=${verified.operation}`,
+      ...(verified.payload ? ["--env", `CHATGPT_TELA_MAINTENANCE_PAYLOAD=${verified.payload}`] : []), "--args", "--maintenance-only"];
+    const child = spawn("/usr/bin/open", args, { detached: true, stdio: "ignore" });
+    await new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", code => code === 0 ? resolve() : reject(Error("maintenance app launch was refused")));
+    });
     return { opened: true };
   } catch (error) { cleanupMaintenanceWindow(root); throw error; }
 }

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { buildPackagedPayload, resolveProductPaths, readOwnershipManifest, prepareOwnedDirectory,
   packagedUpgradeJournalPath, readPackagedUpgradeJournal, readPackagedProductManifest, planPackagedUpgradeFromPayload, PackagedServiceShutdownNotStartedError,
   type PackagedUpgradeJournal, type ServiceRegistrationCommandRunner } from "@chatgpt-tela/product-lifecycle";
@@ -152,8 +152,11 @@ test("temporary maintenance binaries clean up only their exact owned snapshot", 
   const source = mkdtempSync(join(tmpdir(), "tela-maintenance-source-"));
   let staged: string | undefined;
   try {
-    writeFileSync(join(source, "launcher"), "launcher"); writeFileSync(join(source, "ui"), "ui");
-    staged = stageMaintenanceWindow({ launcher: join(source, "launcher"), ui: join(source, "ui") });
+    const ui = join(source, "Helper.app/Contents/MacOS/helper");
+    mkdirSync(dirname(ui), { recursive: true });
+    writeFileSync(join(source, "launcher"), "launcher"); writeFileSync(ui, "ui");
+    writeFileSync(join(source, "Helper.app/Contents/Info.plist"), "app metadata");
+    staged = stageMaintenanceWindow({ launcher: join(source, "launcher"), ui });
     writeFileSync(join(staged, "unrelated.txt"), "preserve");
     if (process.platform === "win32") {
       // This temporary signed UI is macOS-only. Windows has no POSIX uid proof;
@@ -236,13 +239,7 @@ for (const supported of [true, false]) test(`maintenance cancellation review bin
     expect(reviewed.interruptedConnections).toBe(false);
     expect(reviewed.toVersion).toBe("1.0.0");
     expect(readFileSync(journalPath)).toEqual(journal);
-    const source = await resolveMaintenanceWindowSource("unused", "unused", ["--operation", "cancel-upgrade", ...args], options);
-    expect(source.launcher).toBe(realpathSync(join(f.first, "chatgpt-tela")));
-    expect(source.operation).toBe("cancel-upgrade");
-    expect(source.payload).toBe(realpathSync(f.first));
-    expect(source.ui).toBe(realpathSync(join(f.first, readPackagedProductManifest(f.first).menuBar!.executable)));
-    expect((await resolveMaintenanceWindowSource("unused", "unused", ["--operation", "upgrade", "--payload", f.second, ], options)).launcher)
-      .toBe(realpathSync(join(f.second, "chatgpt-tela")));
+    await expect(resolveMaintenanceWindowSource("unused", "unused", ["--operation", "cancel-upgrade", ...args], options)).rejects.toThrow("updates use Sparkle");
     // Same phase/version/service list, but changed quiescence must invalidate review.
     writeFileSync(journalPath, JSON.stringify({ ...readPackagedUpgradeJournal(journalPath), quiescedServices: [] }));
     const changed = readFileSync(journalPath);
@@ -254,29 +251,5 @@ for (const supported of [true, false]) test(`maintenance cancellation review bin
     expect(f.runner.running.has("chatgpt-tela-chat.service")).toBe(true);
     expect(readPackagedUpgradeJournal(journalPath)).toBeUndefined();
     expect(readFileSync(paths.installManifest)).toEqual(manifest);
-  } finally { removeFixture(root); }
-});
-
-
-test("prepared update survives removal of its source and uses the existing reviewed lifecycle", async () => {
-  const root = mkdtempSync(join(tmpdir(), "tela-prepared-update-"));
-  try {
-    const f = fixture(root), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner };
-    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first], options);
-    await runMaintenanceCommand(["maintenance", "stage-update", "--payload", f.second], options);
-    rmSync(join(f.second, "services", "chat"));
-    await expect(runMaintenanceCommand(["maintenance", "stage-update", "--payload", f.second], options)).rejects.toThrow();
-    rmSync(f.second, { recursive: true });
-    const status = await runMaintenanceCommand(["maintenance", "status"], options) as any;
-    expect(status.update.productVersion).toBe("2.0.0");
-    expect(status.update.payload.startsWith(resolveProductPaths(options).cacheRoot)).toBe(true);
-    const args = ["--payload", status.update.payload];
-    const review = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...args], options) as any;
-    expect((await runMaintenanceCommand(["maintenance", "apply", "upgrade", ...args, "--review-token", review.reviewToken], options) as any).success).toBe(true);
-    expect((await runMaintenanceCommand(["maintenance", "status"], options) as any).update).toBeNull();
-    await runMaintenanceCommand(["maintenance", "stage-update", "--payload", f.first], options);
-    const removal = await runMaintenanceCommand(["maintenance", "review", "uninstall"], options) as any;
-    await runMaintenanceCommand(["maintenance", "apply", "uninstall", "--review-token", removal.reviewToken], options);
-    expect(existsSync(resolveProductPaths(options).cacheRoot + "/updates")).toBe(false);
   } finally { removeFixture(root); }
 });

@@ -35,7 +35,14 @@ export function assembleMacApplication(input: {
   move(previous.menuBar.executable, "Contents/MacOS/chatgpt-tela-menu-bar");
   move("services", "Contents/Helpers/services");
   move("electron/Electron.app", "Contents/Frameworks/Electron.app");
+  if (existsSync(join(root, "ui/ChatGPT Tela.app/Contents/Frameworks/Sparkle.framework"))) {
+    move("ui/ChatGPT Tela.app/Contents/Frameworks/Sparkle.framework", "Contents/Frameworks/Sparkle.framework");
+  }
   move("runtime", "Contents/Resources/runtime");
+  if (existsSync(join(root, "ui/ChatGPT Tela.app/Contents/Resources/ThirdPartyNotices"))) {
+    move("ui/ChatGPT Tela.app/Contents/Resources/ThirdPartyNotices", "Contents/Resources/ThirdPartyNotices");
+  }
+  if (previous.menuBar.maintenanceExecutable) move("ui/Tela Maintenance.app", "Contents/Helpers/Tela Maintenance.app");
   if (previous.nativeEngine) move("native-engine", "Contents/Helpers/native-engine");
   if (previous.workspaceFiles) move("helpers", "Contents/Helpers/helpers");
   // The product executable is now part of this app; remove its duplicate menu bundle.
@@ -44,7 +51,8 @@ export function assembleMacApplication(input: {
   const manifest = parsePackagedProductManifest({
     ...previous,
     launcher: { executable: "Contents/MacOS/chatgpt-tela" },
-    menuBar: { executable: "Contents/MacOS/chatgpt-tela-menu-bar" },
+    menuBar: { executable: "Contents/MacOS/chatgpt-tela-menu-bar",
+      ...(previous.menuBar.maintenanceExecutable ? { maintenanceExecutable: "Contents/Helpers/Tela Maintenance.app/Contents/MacOS/chatgpt-tela-maintenance" } : {}) },
     services: Object.fromEntries(Object.entries(previous.services).map(([id, service]) => [id, { ...service, executable: `Contents/Helpers/${service.executable}` }])),
     profileRuntime: {
       executable: previous.profileRuntime.executable.replace("electron/", "Contents/Frameworks/"),
@@ -62,7 +70,7 @@ export function assembleMacApplication(input: {
     CFBundleName: "ChatGPT Tela", CFBundlePackageType: "APPL", CFBundleVersion: input.buildVersion,
     CFBundleShortVersionString: manifest.productVersion, SUFeedURL: input.feedURL, SUPublicEDKey: input.publicKey,
   };
-  writeFileSync(join(contents, "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>${Object.entries(strings).map(([key, value]) => `<key>${key}</key><string>${xml(value)}</string>`).join("")}<key>LSUIElement</key><true/><key>SUEnableAutomaticChecks</key><false/><key>SUAllowsAutomaticUpdates</key><false/><key>SUVerifyUpdateBeforeExtraction</key><true/></dict></plist>\n`);
+  writeFileSync(join(contents, "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>${Object.entries(strings).map(([key, value]) => `<key>${key}</key><string>${xml(value)}</string>`).join("")}<key>LSUIElement</key><true/><key>SUEnableAutomaticChecks</key><true/><key>SUAllowsAutomaticUpdates</key><false/><key>SUVerifyUpdateBeforeExtraction</key><true/></dict></plist>\n`);
   input.finalizeBundle(root);
   // No mutable owner marker or installed receipt is written into the signed app.
   return { outputPath: root, manifest, payloadFingerprint: packagedPayloadFingerprint(root) };

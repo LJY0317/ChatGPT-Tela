@@ -62,18 +62,29 @@ function electronExecutableRelativePath(): string {
 }
 
 function macCodesign(outputPath: string, identity: string): void {
-  const sign = (path: string, deep = false) => {
-    execFileSync("/usr/bin/codesign", ["--force", ...(deep ? ["--deep"] : []), "--sign", identity, path], {
+  const sign = (path: string, flags: readonly string[] = []) => {
+    execFileSync("/usr/bin/codesign", ["--force", ...flags, "--sign", identity, path], {
       stdio: "inherit",
     });
-    execFileSync("/usr/bin/codesign", ["--verify", "--strict", ...(deep ? ["--deep"] : []), "--verbose=2", path], {
+    execFileSync("/usr/bin/codesign", ["--verify", "--strict", "--deep", "--verbose=2", path], {
       stdio: "inherit",
     });
   };
   sign(join(outputPath, "chatgpt-tela"));
   for (const service of ["gateway", "chat", "codex"] as const) sign(join(outputPath, "services", service));
   const menuBarApp = join(outputPath, "ui", "ChatGPT Tela.app");
+  const sparkle = join(menuBarApp, "Contents/Frameworks/Sparkle.framework");
+  if (existsSync(sparkle)) {
+    // This app does not use Sparkle's sandbox XPC services. Trim them before signing.
+    // Follow Sparkle's explicit inside-out signing contract, never --deep re-sign it.
+    rmSync(join(sparkle, "Versions/B/XPCServices"), { recursive: true, force: true });
+    rmSync(join(sparkle, "XPCServices"), { force: true });
+    for (const helper of ["Autoupdate", "Updater.app"]) sign(join(sparkle, "Versions/B", helper), ["--options", "runtime"]);
+    sign(sparkle, ["--options", "runtime"]);
+  }
   if (existsSync(menuBarApp)) sign(menuBarApp);
+  const maintenanceApp = join(outputPath, "ui", "Tela Maintenance.app");
+  if (existsSync(maintenanceApp)) sign(maintenanceApp);
   const workspaceFiles = join(outputPath, "helpers", "tela-workspace-files");
   if (existsSync(workspaceFiles)) sign(workspaceFiles);
   const nativeEngine = join(outputPath, "native-engine", "codex");
@@ -81,14 +92,14 @@ function macCodesign(outputPath: string, identity: string): void {
     sign(nativeEngine);
     sign(join(outputPath, "native-engine", "codex-code-mode-host"));
   }
-  sign(join(outputPath, "electron", "Electron.app"), true);
+  sign(join(outputPath, "electron", "Electron.app"), ["--deep"]);
 }
 
 async function main(): Promise<void> {
   const outputPath = resolve(requiredOption("--output"));
   const productVersion = requiredOption("--version");
-  const macApp = process.argv.includes("--mac-app");
-  if (macApp && (process.platform !== "darwin" || !outputPath.endsWith(".app"))) throw Error("--mac-app requires a macOS .app output");
+  const macApp = process.platform === "darwin";
+  if (macApp && !outputPath.endsWith(".app")) throw Error("macOS package builds require a .app output");
   const appOptions = macApp ? { buildVersion: requiredOption("--build-number"), feedURL: requiredOption("--update-feed-url"), publicKey: requiredOption("--update-public-key") } : undefined;
   const macCodesignIdentity = process.platform === "darwin" ? requiredOption("--mac-codesign-identity") : undefined;
   const workspaceFilesSourcePath = option("--workspace-files");
@@ -144,7 +155,7 @@ async function main(): Promise<void> {
         entrypointSourcePath: profileRuntime,
         setupEntrypointSourcePath: profileSetup,
       },
-      ...(menuBar ? { menuBarSourcePath: menuBar } : {}),
+      ...(menuBar ? { menuBarSourcePath: menuBar, menuBarFrameworkSourcePath: join(temporary, "Sparkle.framework"), menuBarLicenseSourcePath: join(temporary, "Sparkle-LICENSE.txt"), maintenanceUISourcePath: join(temporary, "chatgpt-tela-maintenance") } : {}),
       ...(workspaceFilesSourcePath ? { workspaceFilesSourcePath } : {}),
       ...(nativeEngineMetadata && nativeEnginePath ? { nativeEngine: {
         ...nativeEngineMetadata,

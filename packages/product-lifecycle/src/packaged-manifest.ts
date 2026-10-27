@@ -24,6 +24,7 @@ export interface PackagedProductManifestProfileRuntime {
 
 export interface PackagedProductManifestMenuBar {
   readonly executable: string;
+  readonly maintenanceExecutable?: string;
 }
 
 export interface PackagedNativeEngine {
@@ -130,9 +131,10 @@ function menuBar(value: unknown): PackagedProductManifestMenuBar | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("packaged menu bar must be an object");
   const item = value as Record<string, unknown>;
-  const extra = Object.keys(item).filter(key => key !== "executable");
+  const extra = Object.keys(item).filter(key => key !== "executable" && key !== "maintenanceExecutable");
   if (extra.length > 0) throw new Error(`packaged menu bar contains unknown fields: ${extra.join(", ")}`);
-  return Object.freeze({ executable: relativePayloadPath(item.executable, "packaged menu bar executable") });
+  return Object.freeze({ executable: relativePayloadPath(item.executable, "packaged menu bar executable"),
+    ...(item.maintenanceExecutable === undefined ? {} : { maintenanceExecutable: relativePayloadPath(item.maintenanceExecutable, "maintenance executable") }) });
 }
 
 export function parsePackagedNativeEngine(value: unknown): PackagedNativeEngine {
@@ -242,7 +244,7 @@ export function packagedInstallSpecFromPayload(payloadSourcePath: string): Packa
   const manifest = readPackagedProductManifest(payloadSourcePath);
   const requiredFiles = [
     ...Object.values(manifest.services).map(service => service.executable),
-    manifest.launcher?.executable, manifest.menuBar?.executable,
+    manifest.launcher?.executable, manifest.menuBar?.executable, manifest.menuBar?.maintenanceExecutable,
     manifest.profileRuntime?.executable, manifest.profileRuntime?.entrypoint,
     manifest.profileRuntime?.setupEntrypoint, manifest.nativeEngine?.executable,
     manifest.workspaceFiles?.executable,

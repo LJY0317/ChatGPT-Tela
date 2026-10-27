@@ -8,7 +8,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { TelaServiceId } from "./layout";
 
 export const OWNERSHIP_MARKER = ".chatgpt-tela-owner.json";
@@ -121,7 +121,8 @@ export function parseOwnedResource(value: unknown): OwnedResource {
       if (dataClass !== "binary") throw Error("external metadata is only supported for binary directories");
       const rel = relative(path, metadataRoot);
       const reverse = relative(metadataRoot, path);
-      if ((!rel.startsWith("..") && !isAbsolute(rel)) || (!reverse.startsWith("..") && !isAbsolute(reverse))) throw Error("binary metadata and payload must not overlap");
+      const contained = (value: string) => value === "" || value !== ".." && !value.startsWith(".." + sep) && !isAbsolute(value);
+      if (contained(rel) || contained(reverse)) throw Error("binary metadata and payload must not overlap");
     }
     return Object.freeze({ kind, id, owner: owner as "product" | TelaServiceId,
       path, dataClass: dataClass as DirectoryDataClass, ...(metadataRoot ? { metadataRoot } : {}) });

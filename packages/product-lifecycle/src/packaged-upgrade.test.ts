@@ -6,7 +6,7 @@ import { assertPackagedLaunchAdmission } from "./packaged-launch-admission";
 import { observeInstalledPackagedPayload } from "./packaged-payload";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { applyPackagedInstallFromPayload, planPackagedInstallFromPayload } from "./packaged-install";
 import { PACKAGED_PRODUCT_MANIFEST } from "./packaged-manifest";
 import {
@@ -65,91 +65,9 @@ class SystemdUpgradeRunner implements ServiceRegistrationCommandRunner {
   }
 }
 
-class LaunchdUpgradeRunner implements ServiceRegistrationCommandRunner {
-  readonly jobs = new Map<string, { path: string; running: boolean }>();
-  readonly calls: string[] = [];
-  failBootstrapOnce = false;
-  failAfterBootstrapOnce = false;
-  async run(command: string, args: readonly string[]): Promise<ServiceRegistrationCommandResult> {
-    if (command !== "/bin/launchctl") throw Error(`unexpected command: ${command}`);
-    this.calls.push(args.join(" "));
-    const target = args.at(-1)!;
-    if (args[0] === "bootstrap") {
-      if (this.failBootstrapOnce) { this.failBootstrapOnce = false; return { exitCode: 1, stdout: "", stderr: "interrupted reload" }; }
-      const label = basename(target, ".plist");
-      this.jobs.set(label, { path: target, running: false });
-      if (this.failAfterBootstrapOnce) {
-        this.failAfterBootstrapOnce = false;
-        throw Error("bootstrap acknowledged before journal write");
-      }
-      return { exitCode: 0, stdout: "", stderr: "" };
-    }
-    const label = target.split("/").at(-1)!;
-    const job = this.jobs.get(label);
-    if (args[0] === "print") return job
-      ? { exitCode: 0, stdout: `job = {\n path = ${job.path}\n state = ${job.running ? "running" : "not running"}\n}\n`, stderr: "" }
-      : { exitCode: 113, stdout: "", stderr: "not loaded" };
-    if (args[0] === "bootout") {
-      this.jobs.delete(label);
-      return { exitCode: 0, stdout: "", stderr: "" };
-    }
-    if (args[0] === "kickstart" && job) {
-      job.running = true;
-      return { exitCode: 0, stdout: "", stderr: "" };
-    }
-    throw Error(`unexpected launchctl arguments: ${args.join(" ")}`);
-  }
-}
 
-test("macOS upgrade recovers a bootout interrupted before bootstrap without repeating payload replacement", async () => {
-  const root = mkdtempSync(join(tmpdir(), "tela-upgrade-launchd-refresh-")), home = join(root, "home");
-  mkdirSync(home);
-  const runner = new LaunchdUpgradeRunner(), options = { platform: "darwin" as const, home, environment: {}, runner };
-  try {
-    const source = createPayload(root, "1.0.0", "source"), target = createPayload(root, "2.0.0", "target");
-    const installed = await planPackagedInstallFromPayload({ payloadSourcePath: source, ...options });
-    await applyPackagedInstallFromPayload({ planned: installed, payloadSourcePath: source, ...options });
-    const plan = await planPackagedUpgradeFromPayload({ payloadSourcePath: target, ...options });
-    const chatLabel = plan.targetBlueprint.services.find(entry => entry.service === "chat")!.resource.registrationId;
-    runner.jobs.get(chatLabel)!.running = true;
-    const controller = () => new PackagedPlatformServiceController({
-      blueprint: plan.targetBlueprint, runner, transitionTimeoutMs: 100,
-      async shutdownService(service: TelaServiceId) {
-        runner.jobs.get(plan.targetBlueprint.services.find(entry => entry.service === service)!.resource.registrationId)!.running = false;
-      },
-    });
-    const apply = (services: PackagedUpgradeServiceController) => applyPackagedUpgradeFromPayload({ plan, payloadSourcePath: target, services, ...options });
-    runner.failBootstrapOnce = true;
-    await expect(apply(controller())).rejects.toThrow("interrupted reload");
-    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(plan.targetBlueprint.paths))?.phase).toBe("manifest-updated");
-    expect(runner.jobs.has(plan.targetBlueprint.services.find(entry => entry.service === "gateway")!.resource.registrationId)).toBe(false);
-    await planPackagedUpgradeFromPayload({ payloadSourcePath: target, ...options });
-    expect((await apply(controller())).resumedServices).toEqual(["chat"]);
-    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(plan.targetBlueprint.paths))).toBeUndefined();
-    expect(readFileSync(join(plan.targetBlueprint.paths.binaryRoot, "tela"), "utf8")).toBe("target");
-    expect(runner.calls.filter(x => x.startsWith("bootout "))).toHaveLength(3);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-
-test("macOS resumed upgrade settles a completed bootstrap without unloading it again", async () => {
-  const root = mkdtempSync(join(tmpdir(), "tela-upgrade-bootstrap-commit-")), home = join(root, "home");
-  mkdirSync(home);
-  const runner = new LaunchdUpgradeRunner(), options = { platform: "darwin" as const, home, environment: {}, runner };
-  try {
-    const source = createPayload(root, "1.0.0", "source"), target = createPayload(root, "2.0.0", "target");
-    await applyPackagedInstallFromPayload({ planned: await planPackagedInstallFromPayload({ payloadSourcePath: source, ...options }), payloadSourcePath: source, ...options });
-    const plan = await planPackagedUpgradeFromPayload({ payloadSourcePath: target, ...options });
-    const services = new UpgradeServices([]);
-    runner.failAfterBootstrapOnce = true;
-    const run = () => applyPackagedUpgradeFromPayload({ plan, payloadSourcePath: target, services, ...options });
-    await expect(run()).rejects.toThrow("bootstrap acknowledged");
-    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(plan.targetBlueprint.paths))?.unloadedServices).toEqual(["gateway", "codex", "chat"]);
-    const unloaded = runner.calls.filter(call => call.startsWith("bootout ")).length;
-    await planPackagedUpgradeFromPayload({ payloadSourcePath: target, ...options });
-    await run();
-    expect(runner.calls.filter(call => call.startsWith("bootout "))).toHaveLength(unloaded);
-    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(plan.targetBlueprint.paths))).toBeUndefined();
-  } finally { rmSync(root, { recursive: true, force: true }); }
+test("macOS package replacement is retired before source reads or shutdown", async () => {
+  await expect(planPackagedUpgradeFromPayload({ payloadSourcePath: "/unused", platform: "darwin" })).rejects.toThrow("updates use Sparkle");
 });
 
 async function recoveryFixture() {
@@ -168,6 +86,7 @@ async function recoveryFixture() {
   const plan = await planPackagedUpgradeFromPayload({ payloadSourcePath: target, ...options });
   return { root, source, target, plan, options, services: new UpgradeServices(["gateway", "chat", "codex"]) };
 }
+
 
 test("a known participant blocker refuses the complete upgrade before any stop or journal", async () => {
   const f = await recoveryFixture();
