@@ -1,4 +1,5 @@
 import { ownedServiceShutdown } from "./service-shutdown";
+import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   PackagedPlatformServiceController, ServiceRegistrationManager, resolveProductPaths, withPackagedTransitionOwner,
   type ProductPathOptions, type ServiceRegistrationCommandRunner, type PackagedServiceControlIdentity, type TelaServiceId,
@@ -52,6 +53,7 @@ async function runPackagedServicesOwned(args: readonly string[], input: {
     ...(input.runner ? { runner: input.runner } : {}),
   });
   const services: Array<{ service: "gateway" | "chat" | "codex"; state: "running" | "stopped" | "failed" }> = [];
+  const stopped: TelaServiceId[] = [], restoredServices: TelaServiceId[] = [], restoreFailures: TelaServiceId[] = [];
   const order = chatRestart ? ["chat"] as const : action === "start" ? ["chat", "codex", "gateway"] as const : ["gateway", "codex", "chat"] as const;
   if (action !== "start") await controller.prepare(order);
   for (const service of order) {
@@ -59,16 +61,39 @@ async function runPackagedServicesOwned(args: readonly string[], input: {
       // Re-prove at each mutation as well as during preflight.
       const resource = blueprint.services.find(entry => entry.service === service)!.resource;
       if (await manager.observe(resource, ownership) !== "owned") throw new Error("registration changed");
+      const wasRunning = action === "stop" && await controller.inspect(service) === "running";
       if (chatRestart) { await controller.quiesce(service); await controller.resume(service); }
       else if (action === "start") await controller.resume(service);
       else await controller.quiesce(service);
+      if (wasRunning) stopped.push(service);
       services.push({ service, state: action === "start" || chatRestart ? "running" : "stopped" });
-    } catch {
-      // Peer cleanup/start remains independent. Diagnostics contain no command output.
+    } catch (error) {
+      emitDiagnosticEvent("chatgpt_tela_service", "service_control_failed", {
+        service, phase: action, ...diagnosticFailureFields(error),
+      });
       services.push({ service, state: "failed" });
+      if (action === "stop") {
+        // A refused/uncertain owner stays untouched. Restore only peers this
+        // request successfully stopped; never close later independent peers.
+        for (const peer of stopped.reverse()) {
+          try {
+            await controller.resume(peer); restoredServices.push(peer);
+            services.find(row => row.service === peer)!.state = "running";
+          }
+          catch (failure) {
+            restoreFailures.push(peer);
+            services.find(row => row.service === peer)!.state = "failed";
+            emitDiagnosticEvent("chatgpt_tela_service", "service_restore_failed", {
+              service: peer, phase: "restore", ...diagnosticFailureFields(failure),
+            });
+          }
+        }
+        break;
+      }
     }
   }
-  return { action, success: services.every(service => service.state !== "failed"), services };
+  return { action, success: services.every(service => service.state !== "failed"), services,
+    ...(action === "stop" ? { restoredServices, restoreFailures } : {}) };
 }
 
 export async function runPackagedServicesCommand(args: Parameters<typeof runPackagedServicesOwned>[0], input: Parameters<typeof runPackagedServicesOwned>[1]): ReturnType<typeof runPackagedServicesOwned> {

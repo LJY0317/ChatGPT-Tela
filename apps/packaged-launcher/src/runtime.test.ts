@@ -16,6 +16,7 @@ import {
   type ServiceRegistrationCommandRunner,
 } from "@chatgpt-tela/product-lifecycle";
 import { payloadRootForLauncherExecutable, resolvePackagedServiceLaunch } from "./runtime";
+import { runPackagedServicesCommand } from "./services";
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 
 const removeFixture = registerTemporaryFixtureCleanup();
@@ -23,10 +24,14 @@ const removeFixture = registerTemporaryFixtureCleanup();
 class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
   readonly loaded = new Set<string>();
   readonly enabled = new Set<string>();
+  readonly running = new Set<string>();
 
   async run(command: string, arguments_: readonly string[]): Promise<ServiceRegistrationCommandResult> {
     if (command !== "systemctl") throw new Error(`unexpected command ${command}`);
     const unit = arguments_.at(-1) ?? "";
+    if (arguments_.includes("is-active")) return { exitCode: this.running.has(unit) ? 0 : 3,
+      stdout: this.running.has(unit) ? "active\n" : "inactive\n", stderr: "" };
+    if (arguments_.includes("start")) { this.running.add(unit); return { exitCode: 0, stdout: "", stderr: "" }; }
     if (arguments_.includes("show")) {
       const present = this.loaded.has(unit);
       return { exitCode: present ? 0 : 1, stdout: present ? "loaded\n" : "not-found\n", stderr: "" };
@@ -74,6 +79,40 @@ function buildFixture(root: string, withFilePublisher = false) {
   });
   return { payload };
 }
+
+test("a failed service stop leaves later peers alone and restores only acknowledged running peers", async () => {
+  for (const [gatewayRunning, restoreFails] of [[true, false], [false, false], [true, true]] as const) {
+    const root = mkdtempSync(join(tmpdir(), "tela-service-stop-settlement-")), home = join(root, "home");
+    mkdirSync(home); const { payload } = buildFixture(root), runner = new SystemdFixtureRunner();
+    const pathOptions = { platform: "linux" as const, home, environment: {} };
+    try {
+      const planned = await planPackagedInstallFromPayload({ payloadSourcePath: payload, ...pathOptions, runner });
+      await applyPackagedInstallFromPayload({ planned, payloadSourcePath: payload, ...pathOptions, runner });
+      const units = Object.fromEntries(planned.blueprint.services.map(row => [row.service, row.resource.registrationId]));
+      for (const id of Object.values(units)) runner.running.add(id);
+      if (!gatewayRunning) runner.running.delete(units.gateway!);
+      const calls: string[] = [];
+      const result = await runPackagedServicesCommand(["services", "stop"], {
+        payloadRoot: resolveProductPaths(pathOptions).binaryRoot, pathOptions, runner,
+        async shutdownService(service) {
+          calls.push(`stop:${service}`);
+          if (service === "codex") throw Error("private quit failure detail");
+          runner.running.delete(units[service]!);
+        },
+        async waitUntilReady(service) { calls.push(`restore:${service}`); if (restoreFails) throw Error("private readiness failure detail"); },
+      });
+      expect(result.success).toBe(false);
+      expect(calls).toEqual(gatewayRunning ? ["stop:gateway", "stop:codex", "restore:gateway"] : ["stop:codex"]);
+      expect(runner.running.has(units.chat!)).toBe(true);
+      expect(runner.running.has(units.codex!)).toBe(true);
+      expect(result).toMatchObject({ restoredServices: gatewayRunning && !restoreFails ? ["gateway"] : [],
+        restoreFailures: restoreFails ? ["gateway"] : [] });
+      expect(result.services.find(row => row.service === "gateway")?.state)
+        .toBe(!gatewayRunning ? "stopped" : restoreFails ? "failed" : "running");
+      expect(JSON.stringify(result)).not.toContain("private");
+    } finally { removeFixture(root); }
+  }
+});
 
 test("launcher discovers one app root from a real macOS executable and its external symlink", () => {
   const root = mkdtempSync(join(tmpdir(), "tela-bundle-launcher-"));

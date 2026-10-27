@@ -3,6 +3,10 @@ import { describe, expect, test } from "bun:test";
 import { CodexShutdownNotStartedError, type CodexService } from "./controller";
 import { startCodexServiceHttpServer } from "./http-server";
 import { CodexServiceClient, ServiceShutdownNotStartedError } from "@chatgpt-tela/service-protocol/client";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
 
 function fixtureService(): CodexService {
   return {
@@ -134,6 +138,10 @@ describe("Tela Codex private HTTP server", () => {
     } finally { await client.close(); await server.close(); }
   });
   test("shutdown does not acknowledge or stop the service when child cleanup is refused", async () => {
+    const diagnosticFile = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    const root = mkdtempSync(join(tmpdir(), "tela-shutdown-evidence-")), capture = join(root, "diagnostics");
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = join(root, "events.jsonl");
+    setPrivateDiagnosticCapture(capture, 0);
     const service = fixtureService(); let refuse = true, calls = 0, signaled = false;
     service.close = async () => { calls++; if (refuse) throw Error("normal owned quit refused"); };
     const token = "q".repeat(48), server = await startCodexServiceHttpServer({ service, bearerToken: token });
@@ -142,11 +150,25 @@ describe("Tela Codex private HTTP server", () => {
     try {
       expect((await fetch(new URL("v1/shutdown", server.endpoint), { method: "POST", headers })).status).toBe(409);
       expect(calls).toBe(1); expect(signaled).toBe(false);
+      expect(readFileSync(join(root, "events.jsonl"), "utf8")).not.toContain("normal owned quit refused");
+      expect(readdirSync(join(capture, "private")).filter(name => name.endsWith(".json"))).toHaveLength(0);
+      setPrivateDiagnosticCapture(capture, "until-disabled");
+      expect((await fetch(new URL("v1/shutdown", server.endpoint), { method: "POST", headers })).status).toBe(409);
+      const privateBodies = readdirSync(join(capture, "private")).filter(name => name.endsWith(".json") && !name.endsWith(".meta.json"))
+        .map(name => readFileSync(join(capture, "private", name), "utf8")).join("\n");
+      expect(privateBodies).toContain("normal owned quit refused");
+      expect(privateBodies).not.toContain(token);
+      expect(readFileSync(join(root, "events.jsonl"), "utf8")).not.toContain("normal owned quit refused");
       expect((await fetch(new URL("v1/status", server.endpoint), { headers })).status).toBe(200);
       refuse = false;
       expect((await fetch(new URL("v1/shutdown", server.endpoint), { method: "POST", headers })).status).toBe(200);
-      await server.shutdownRequested; expect(signaled).toBe(true); expect(calls).toBe(2);
-    } finally { await server.close(); }
+      await server.shutdownRequested; expect(signaled).toBe(true); expect(calls).toBe(3);
+    } finally {
+      await server.close();
+      if (diagnosticFile === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = diagnosticFile;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
   test("synthetic cleanup rejects browser-origin callers and mismatched profile receipts", async () => {
     const service = fixtureService();

@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { diagnosticDurationMs, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { capturePrivateDiagnosticValue, diagnosticDurationMs, diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { startWebHttpServer, type WebHttpServer } from "@chatgpt-tela/http-host";
 import {
   parseCodexToolInventoryRequest,
@@ -356,6 +356,16 @@ export async function startCodexServiceHttpServer(input: {
         }
         return new Response(null, { status: 404 });
       } catch (cause) {
+        if (request.method === "POST" && url.pathname === "/v1/shutdown") {
+          emitDiagnosticEvent("chatgpt_tela_codex", "service_shutdown_failed", {
+            phase: "close", ...diagnosticFailureFields(cause),
+          });
+          capturePrivateDiagnosticValue("native_backend_failure", {
+            service: "codex", phase: "shutdown",
+            message: cause instanceof Error ? cause.message : String(cause),
+            ...(cause instanceof AggregateError ? { causes: cause.errors.map(error => error instanceof Error ? error.message : String(error)) } : {}),
+          });
+        }
         if (request.method === "POST" && url.pathname === "/v1/shutdown" && cause instanceof CodexShutdownNotStartedError) {
           return Response.json({ contractVersion: 1, service: "codex", instanceId: input.service.serviceStatus().instanceId,
             shutdown: "not-started", error: { type: "tela_codex_shutdown_blocked",
