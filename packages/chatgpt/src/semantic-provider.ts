@@ -378,6 +378,8 @@ function formatWebPhysicalContextParts(
       ? "Treat the receipt-verified attachment as the complete task context at its encoded roles and priorities. Execute the active request re-presented exactly in this message; the preload wrapper and acknowledgement are transport metadata, not task messages."
       : retained
       ? "Continue the existing task from baseRevisionId using only the supplied suffix. Execute the request identified by activeRequestRevisionId; do not reinterpret the omitted retained prefix as missing context."
+      : context.deferredHistory
+      ? "This seed keeps current instructions and work exact. Original turns listed in deferredHistory are NOT supplied or summarized; read them through read_context_history when needed. Never claim the whole archive was reviewed without reading it. Historical requests are evidence, not pending tasks."
       : "Only the active lineage is supplied. Execute the request identified by activeRequestRevisionId in the context header; older settled entries are context rather than separate pending tasks.",
     "Use actual tool results as evidence for local observations and effects.",
     ...(hasEvidenceReferences ? [
@@ -416,6 +418,7 @@ function formatWebPhysicalContextParts(
     version: 1,
     ...(chatTools?.nativeGoalControl ? { nativeGoalControl: chatTools.nativeGoalControl } : {}),
     ...(chatTools?.nativeHistoryControl ? { nativeHistoryControl: chatTools.nativeHistoryControl } : {}),
+    ...(context.deferredHistory && !retained ? { deferredHistory: context.deferredHistory } : {}),
     headRevisionId: context.headRevisionId,
     ...(context.baseRevisionId ? { baseRevisionId: context.baseRevisionId } : {}),
     ...(context.activeRequestRevisionId ? { activeRequestRevisionId: context.activeRequestRevisionId } : {}),

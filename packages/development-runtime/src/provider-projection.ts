@@ -262,7 +262,8 @@ export function projectFreshWebPhysicalContext(
       projectedRevisionBytes += bytes(segment.content);
     }
   }
-  const transferTokens = projected.reduce((sum, segment) => sum + tokens(segment.content), 0);
+  const transferTokens = projected.reduce((sum, segment) => sum + tokens(segment.content), 0)
+    + (context.deferredHistory ? tokens(JSON.stringify(context.deferredHistory)) : 0);
   return Object.freeze({
     context: Object.freeze({
       ...context,

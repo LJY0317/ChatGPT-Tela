@@ -56,8 +56,6 @@ export interface DevelopmentWebTurnPlan {
   readonly nativeTaskId: string;
   readonly webEpochId: string;
   readonly physicalContext: WebPhysicalContext;
-  /** Original turns explicitly selected by the context planner for on-demand readback. */
-  readonly historyTurnIds?: readonly string[];
   /** Exact physical owner of the committed prefix; required for retained-delta submission. */
   readonly retainedSurfaceLeaseId?: string;
   readonly retainedDocumentGeneration?: number;
@@ -265,7 +263,10 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           } : undefined;
           const nativeGoalControl = toolBridge ? undefined : turns.goalControl(turn.capability);
           const nativeHistoryControl = toolBridge ? undefined
-            : turns.historyControl(turn.capability, plan.historyTurnIds ?? [], signal);
+            : turns.historyControl(turn.capability, plan.physicalContext.deferredHistory?.turns.map(item => item.turnId) ?? [], signal);
+          if (plan.physicalContext.deferredHistory && !nativeHistoryControl) {
+            throw new Error("Deferred Native history requires its original readback source");
+          }
           const chatTools = {
             ...(input.profileSlot !== undefined ? { defaultProfileSlot: input.profileSlot } : {}),
             ...(nativeGoalControl ? { nativeGoalControl } : {}),

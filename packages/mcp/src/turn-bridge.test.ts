@@ -261,15 +261,18 @@ test("selected history reads use the original source without Native work invento
       mode: "structured", arguments: { turn_id: "past", cursor: { type: "item", itemId: "before" } } });
   } finally { await remote.close(); await server.stop(); }
   expect(calls).toEqual([{ turnId: "past", limit: 4, cursor: { type: "item", itemId: "before" } }]);
-  expect({ ...result, content: JSON.parse(result.content as string) }).toMatchObject({ callId: "read", isError: false, content: {
-    type: "native_history_page", role: "historical-evidence", nextCursor: "next-page",
+  const readback = JSON.parse(result.content as string);
+  expect({ ...result, content: readback }).toMatchObject({ callId: "read", isError: false, content: {
+    type: "native_history_page", role: "historical-evidence", continuation: { cursor: "next-page" },
   } });
+  expect(JSON.parse(readback.text)).toMatchObject({ data: expect.any(Array) });
   const text = JSON.stringify(result);
   expect(text).toContain("prior answer");
   expect(text).toContain("not_transferred");
   expect(text).not.toContain("/private/image.png");
   expect(text).not.toContain("private-reasoning");
   expect(owner.channel.state().toolRoundCount).toBe(0);
+  expect(owner.channel.releasedToolResultBytes).toBe(Buffer.byteLength(result.content as string));
   turns.retire(owner.capability);
   await expect(invoke(control, { turn_id: "past" })).rejects.toThrow("outside the selected");
 });

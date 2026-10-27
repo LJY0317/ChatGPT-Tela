@@ -243,6 +243,13 @@ export class RuntimeTurnChannel {
     return this.#releasedToolResultBytes;
   }
 
+  /** Include read-only context results in physical usage without creating Native tool work. */
+  recordReleasedToolResultBytes(bytes: number | undefined): void {
+    this.#releasedToolResultBytes = bytes !== undefined && Number.isSafeInteger(bytes) && bytes >= 0
+      && Number.isSafeInteger(this.#releasedToolResultBytes + bytes)
+      ? this.#releasedToolResultBytes + bytes : Number.MAX_SAFE_INTEGER;
+  }
+
   get stateRevision(): number {
     return this.#stateRevision;
   }
@@ -441,10 +448,7 @@ export class RuntimeTurnChannel {
       throw new Error("native tool result is not ready for Web release");
     }
     this.#toolEvidence("native_tool_result_released", pending);
-    const releasedBytes = diagnosticSerializedBytes(pending.result.content);
-    this.#releasedToolResultBytes = releasedBytes !== undefined
-      && Number.isSafeInteger(this.#releasedToolResultBytes + releasedBytes)
-      ? this.#releasedToolResultBytes + releasedBytes : Number.MAX_SAFE_INTEGER;
+    this.recordReleasedToolResultBytes(diagnosticSerializedBytes(pending.result.content));
     this.#pendingTool = undefined;
     pending.resolve(pending.result);
     this.#touchState();

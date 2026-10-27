@@ -2206,3 +2206,60 @@ test('retained boundary denial reports bounded revision order without source pro
   next.settle?.({status:'failed'});
  } finally { stop?.(); }
 });
+
+
+test('oversized indexed originals use a scoped exact seed and retain the same Web page without summary or body replay', async () => {
+  const { webWorkingContextPolicy } = await import('./web-working-context-policy');
+  const { formatWebPhysicalContext } = await import('@chatgpt-tela/chatgpt');
+  const root = scratch();
+  try {
+    const hard = webWorkingContextPolicy('medium').hard.contextWindowTokenLimit;
+    const items = Array.from({length: 6}, (_, index) => [
+      { turnId: `old-${index}`, item: { type: 'userMessage', id: `question-${index}`, content: [{ type: 'text', text: 'Old question' }] } },
+      { turnId: `old-${index}`, item: { type: 'agentMessage', id: `answer-${index}`, text: 'Z'.repeat(Math.ceil(hard * 4 / 3)) } },
+    ]).flat();
+    items.push({ turnId: 'recent', item: { type: 'agentMessage', id: 'recent-answer', text: 'Latest exact agreement' } });
+    const content = JSON.stringify({ type: 'tela_native_visible_prefix_v1', items });
+    const digest = createHash('sha256').update(content).digest('hex');
+    let sourceReads = 0, bodyReads = 0, summaries = 0;
+    const options: Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0] = {
+      visiblePrefix: { accountNamespace: 'fixture-account',
+        journal: new FileNativeVisiblePrefixStageJournal({ directory: join(root, 'ledger'), initializationPath: join(root, 'init') }),
+        async read(threadId, currentTurnId) { sourceReads++; return { kind: 'native-visible-prefix', threadId, currentTurnId,
+          content, digest, contentDigest: digest, sourceItemCount: items.length, inlineAssets: [], references: [], localImageCandidates: [] }; } },
+      checkpointProducer: async () => { summaries++; throw Error('No preparation call can cover this entire archive'); },
+    };
+    const request = { model: chatGptWebModelId(chatGptWebFamilyKey('Fixture')), reasoning: { effort: 'medium' },
+      instructions: 'Current exact authority', input: [{ type: 'compaction', encrypted_content: 'opaque' }, { role: 'user', content: 'Continue current task' }] };
+    const withReader = (turnId: string) => new ActiveTurnRegistry().register({ ...binding(turnId),
+      async readHistoryPage() { bodyReads++; return { data: [], nextCursor: null }; } });
+    const planner = createNativeRequestDevelopmentWebTurnPlanner(options);
+    const first = await planner(withReader('turn-1'), request);
+    const context = first.physicalContext;
+    expect(context.deferredHistory?.turns.map(item => item.turnId)).toEqual(items.filter(item => item.item.type === 'userMessage').map(item => item.turnId));
+    expect(context.segments.some(item => item.content.includes('Latest exact agreement'))).toBe(true);
+    expect(context.segments.at(-1)?.content).toBe('Continue current task');
+    expect(context.segments[0]?.content).toBe('Current exact authority');
+    expect(context.segments.some(item => item.type === 'checkpoint')).toBe(false);
+    expect(context.logicalTokens).toBeGreaterThan(hard);
+    expect(context.transferTokens).toBeLessThan(24_000);
+    const wire = formatWebPhysicalContext(context, undefined, undefined, [], { nativeHistoryControl: 'scoped-source' });
+    expect(wire).toContain('NOT supplied or summarized');
+    expect(wire).toContain('"deferredHistory"');
+    expect(wire).not.toContain('Z'.repeat(100));
+    first.settle?.({ status: 'completed', surfaceLeaseId: 'same-page', documentGeneration: 1, answer: 'Done' });
+    const next = await planner(withReader('turn-2'), { ...request, input: [...request.input,
+      { role: 'assistant', content: 'Done' }, { role: 'user', content: 'Next task' }] });
+    expect(next.physicalContext.mode).toBe('retained-delta');
+    expect(next.retainedSurfaceLeaseId).toBe('same-page');
+    expect(next.physicalContext.deferredHistory).toEqual(context.deferredHistory);
+    const deltaWire = formatWebPhysicalContext(next.physicalContext, undefined, undefined, [], { nativeHistoryControl: 'renewed-scope' });
+    expect(deltaWire).not.toContain('"deferredHistory"');
+    expect(deltaWire).toContain('renewed-scope');
+    expect(next.physicalContext.segments).toHaveLength(1);
+    expect(sourceReads).toBe(1); expect(bodyReads).toBe(0); expect(summaries).toBe(0);
+    next.settle?.({ status: 'failed' });
+    await expect(createNativeRequestDevelopmentWebTurnPlanner(options)(registered(), request)).rejects.toThrow();
+    expect(summaries).toBe(0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

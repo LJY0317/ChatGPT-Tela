@@ -106,9 +106,26 @@ of original turns can now enable Tela Chat `read_context_history` through the ex
 transport. Its response-cycle capability grants neither Native work tools nor another
 account/thread. Readback uses plain historical text; private reasoning and undelivered media
 contents are not exposed. Normal plans do not advertise this capability without an explicit
-scope. The deferred-range planner/seed adapter and oversized single-item readback remain
-unfinished: no original history is omitted on the assumption that these paths already work.
-Return readable original items rather than whole-turn replay or Base64 fragments. Do not duplicate the archive, add a search engine or promise readback
+scope. When a loaded indexed archive exceeds the Web window and its original reader is
+available, the planner keeps current work, authority and actual media exact and defers only
+whole historical turns. A source manifest names those turns and their original boundaries;
+it is not a summary or evidence that the archive was reviewed. A fitting maintained checkpoint
+still wins. Retained requests renew the read capability without repeating the manifest or
+historical bodies. Readback bytes contribute to the physical epoch estimate without starting
+Native tool work or inference.
+
+Each read returns at most 64 KiB of result JSON. Oversized original items continue in explicit
+UTF-8 byte ranges with a source digest; there is no total-history truncation. A changed original
+cannot be joined to an earlier slice. Native cursor encoding is not original content and does
+not invalidate unchanged bytes. The selected indexed page is read again for a continuation;
+no separate archive copy, cache engine or Base64 layer is added. Referenced media is still
+explicitly undelivered.
+
+Initial archive acquisition still has its existing full-prefix byte budgets. The next source
+adapter change must select recent bodies and explicit original-turn metadata without exhausting
+the entire archive first. This remains an unfinished cold-switch boundary, distinct from the
+now-connected deferred seed and text reader. Return readable original items rather than
+whole-turn replay or Base64 fragments. Do not duplicate the archive, add a search engine or promise readback
 that Web cannot perform. No background Native summaries, automatic
 paid Native fallback or fragment/merge chain is authorized by this policy.
 

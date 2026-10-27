@@ -1,3 +1,4 @@
+import { prepareDeferredNativeHistory } from "./native-history-seed";
 import { classifyWebPreparationFailure } from "./web-preparation-diagnostics";
 import { decodeTelaCompactionSummary, telaCompactionSummaryText } from "@chatgpt-tela/codex";
 import { CheckpointPreparationBudget } from "./checkpoint-preparation-budget";
@@ -247,6 +248,7 @@ interface CommittedRetainedContext {
   readonly estimatedResidentTokens: number;
   readonly oversizedFreshSeed: boolean;
   readonly physicalLimits?: ChatGptWebPhysicalLimits;
+  readonly deferredHistory?: WebPhysicalContext["deferredHistory"];
 }
 
 /** No upload bytes survive planner settlement; retained exact physical messages need only suffix media. */
@@ -410,6 +412,7 @@ function retainedDelta(
     baseRevisionId: assistant.revision.id,
     activeRequestRevisionId: activeRequest.revision.id,
     mode: "retained-delta" as const,
+    ...(committed.deferredHistory ? { deferredHistory: committed.deferredHistory } : {}),
     logicalTokens,
     transferTokens,
     segments: Object.freeze(delta.map(item => Object.freeze({
@@ -931,6 +934,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     readonly oversizedFreshSeed: boolean;
     readonly physicalLimits?: ChatGptWebPhysicalLimits;
     readonly hotHistory?: HotHistory;
+    readonly deferredHistory?: WebPhysicalContext["deferredHistory"];
   }) => (outcome: DevelopmentWebTurnSettlement): void => {
     if (pendingByTask.get(entry.threadId) !== entry.pending) return;
     pendingByTask.delete(entry.threadId);
@@ -973,6 +977,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       estimatedResidentTokens,
       oversizedFreshSeed: entry.oversizedFreshSeed,
       ...(entry.physicalLimits ? { physicalLimits: entry.physicalLimits } : {}),
+      ...(entry.deferredHistory ? { deferredHistory: entry.deferredHistory } : {}),
     }));
     if (entry.hotHistory) keepHotHistory(entry.threadId, entry.hotHistory);
     else hotHistoryByTask.delete(entry.threadId);
@@ -1119,6 +1124,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // A healthy page already owns the prefix. Select existing checkpoints, but
     // defer paid preparation until a fresh page or Native compaction needs it.
     stage("checkpoint_lookup");
+    const deferred = !healthyRetained && turn.channel.binding.readHistoryPage
+      ? prepareDeferredNativeHistory(projection, workingPolicy, freshBudgetTokens) : undefined;
     const working = await selectNativeWorkingCheckpoint({
       projection, currentTurnId: turn.channel.binding.authority.turnId,
       ...(options.checkpointCache ? { cache: options.checkpointCache } : {}),
@@ -1126,7 +1133,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       ...(checkpointProducer ? { producer: checkpointProducer } : {}),
       ...(browserModel ? { browserModel } : {}),
       policy: workingPolicy, preparationBudget,
-      allowMaintenance: !healthyRetained,
+      allowMaintenance: !healthyRetained && !deferred,
       ...(preparation ? { preparation, signal: preparation.signal } : {}),
       onSubstage: plannerSubstage,
     });
@@ -1168,6 +1175,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           outputReserveTokens: workingPolicy.outputReserveTokens,
           ...(physicalLimits ? { physicalLimits } : {}),
           ...(hotCandidate ? { hotHistory: hotCandidate } : {}),
+          ...(physicalContext.deferredHistory ? { deferredHistory: physicalContext.deferredHistory } : {}),
         }),
       });
     }
@@ -1205,6 +1213,17 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       ...(freshBudgetTokens !== undefined ? { budgetTokens: freshBudgetTokens } : {}),
       ...(selected ? { checkpoint: selected.checkpoint } : {}),
     });
+    if (prepared.status === "checkpoint-required" && deferred) {
+      prepared = deferred;
+      selected = undefined;
+      selectedContent.clear();
+      fitCheckpoint = false;
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_deferred_history_selected", {
+        count: deferred.physicalContext.deferredHistory!.turns.length,
+        source_estimate: deferred.physicalContext.logicalTokens,
+        transfer_estimate: deferred.physicalContext.transferTokens,
+      });
+    }
     if (prepared.status === "checkpoint-required"
       && options.checkpointCache
       && checkpointProducer) {
@@ -1455,6 +1474,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         outputReserveTokens: workingPolicy.outputReserveTokens,
         ...(physicalLimits ? { physicalLimits } : {}),
         ...(hotCandidate ? { hotHistory: hotCandidate } : {}),
+        ...(physicalContext.deferredHistory ? { deferredHistory: physicalContext.deferredHistory } : {}),
       }),
     });
     } catch (error) {

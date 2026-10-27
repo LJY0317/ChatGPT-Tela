@@ -49,6 +49,17 @@ export type WebPhysicalContextSegment =
       readonly evidence?: readonly import("@chatgpt-tela/core").NativeEvidenceReference[];
     };
 
+/** Exact originals left in Native history, not summarized or resident in the browser. */
+export interface DeferredNativeHistory {
+  readonly turns: readonly {
+    readonly turnId: string;
+    readonly firstRevisionId: string;
+    readonly lastRevisionId: string;
+    readonly itemCount: number;
+    readonly sourceDigest: string;
+  }[];
+}
+
 export interface WebPhysicalContext {
   readonly headRevisionId: string;
   /** Exact canonical revision already represented by a retained Web conversation. */
@@ -59,6 +70,7 @@ export interface WebPhysicalContext {
   readonly logicalTokens: number;
   readonly transferTokens: number;
   readonly segments: readonly WebPhysicalContextSegment[];
+  readonly deferredHistory?: DeferredNativeHistory;
 }
 
 export interface WebToolBridgeContext {

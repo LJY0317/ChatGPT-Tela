@@ -1395,3 +1395,50 @@ test("same Native turn continuation runs two settled Web cycles through the real
     rmSync(diagnosticDirectory, { recursive: true, force: true });
   }
 });
+
+
+test("runtime grants only the seed's original history scope and accounts its readback before Native completion", async () => {
+  const { McpTurnBridge } = await import('@chatgpt-tela/mcp');
+  const { CONTEXT_HISTORY_TOOL } = await import('@chatgpt-tela/core');
+  const host = new ControlledBrowserHost(async () => ({
+    async navigate() {}, async reveal() {}, async hide() {}, async close() {}, capability() { return undefined; },
+  }));
+  const provider = new RetainedFinalProvider();
+  let historyControl = '', bodyReads = 0, readBytes = 0;
+  const submit = provider.submitTurn.bind(provider), finish = provider.waitForTurnEvent.bind(provider);
+  provider.submitTurn = async (surface, request) => {
+    historyControl = request.chatTools?.nativeHistoryControl ?? '';
+    expect(historyControl).not.toBe(''); expect(request.toolBridge).toBeUndefined();
+    return submit(surface, request);
+  };
+  let runtime!: Awaited<ReturnType<typeof startDevelopmentRuntime>>;
+  provider.waitForTurnEvent = async (surface, turn) => {
+    const bridge = new McpTurnBridge(runtime.turns);
+    const result = await bridge.invoke(historyControl, { callId: 'original-read', wireName: CONTEXT_HISTORY_TOOL.wireName,
+      mode: 'structured', arguments: { turn_id: 'past' } });
+    expect(JSON.parse(result.content as string).text).toContain('original answer');
+    readBytes = runtime.turns.active('thread-1', 'turn-1')!.channel.releasedToolResultBytes;
+    expect(readBytes).toBeGreaterThan(0);
+    expect(runtime.turns.active('thread-1', 'turn-1')!.channel.toolRoundCount).toBe(0);
+    return finish(surface, turn);
+  };
+  runtime = await startDevelopmentRuntime({ browserHost: host, provider, mcp: { kind: 'external', abi: 'stable' },
+    currentTurnSource: { ...source, async readHistoryPage(owner, selection) {
+      bodyReads++; expect(owner.threadId).toBe('thread-1'); expect(selection.turnId).toBe('past');
+      return { data: [{ turnId: 'past', item: { type: 'agentMessage', id: 'old', text: 'original answer' } }], nextCursor: null };
+    } },
+    planWebTurn() { return { nativeTaskId: 'thread-1', webEpochId: 'scope-epoch', physicalContext: {
+      mode: 'full', headRevisionId: 'current', activeRequestRevisionId: 'current', logicalTokens: 100, transferTokens: 100,
+      segments: [{ type: 'revision', revisionId: 'current', kind: 'user', content: 'Current request' }],
+      deferredHistory: { turns: [{ turnId: 'past', firstRevisionId: 'old-start', lastRevisionId: 'old-end', itemCount: 1, sourceDigest: 'fixture-original' }] },
+    } }; },
+  });
+  try {
+    const response = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken,
+      nativeRequest([{ role: 'user', content: 'Current request' }]));
+    expect(await response.text()).toContain('done:turn-1');
+    expect(bodyReads).toBe(1); expect(readBytes).toBeGreaterThan(0);
+    await expect(runtime.turns.readHistoryPage(historyControl, { turnId: 'past' })).rejects.toThrow();
+    expect(bodyReads).toBe(1);
+  } finally { await runtime.stop(); }
+});

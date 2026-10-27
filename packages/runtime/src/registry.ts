@@ -6,14 +6,15 @@ import { WebSubmissionUnproven, webSubmissionFailureReason, type WebSubmissionPr
 import { randomBytes } from "node:crypto";
 import { NativeProjectionUnsupported, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
-import { NativeHistoryBootstrapRequired, projectNativeHistoryReadback, type NativeHistoryPageSelection } from "@chatgpt-tela/codex";
+import { NativeHistoryBootstrapRequired, projectNativeHistoryReadback } from "@chatgpt-tela/codex";
 import { WebRetainedContextUnproven, webRetainedContextFailureReason, type WebRetainedContextReason } from "@chatgpt-tela/core";
 import { RuntimeTurnChannel } from "./turn-channel";
+import { boundedNativeHistoryReadback, type HistoryReadSelection } from "./history-readback";
 
 export interface TurnCapabilityResolver {
   resolve(token: string): RuntimeTurnChannel;
   resolveGoalControl?(token: string): RuntimeTurnChannel | undefined;
-  readHistoryPage?(token: string, selection: NativeHistoryPageSelection): Promise<ReturnType<typeof projectNativeHistoryReadback>>;
+  readHistoryPage?(token: string, selection: HistoryReadSelection): Promise<ReturnType<typeof boundedNativeHistoryReadback>>;
 }
 
 export interface RegisteredTurn {
@@ -147,7 +148,7 @@ export class ActiveTurnRegistry {
     return control;
   }
 
-  async readHistoryPage(token: string, selection: NativeHistoryPageSelection) {
+  async readHistoryPage(token: string, selection: HistoryReadSelection) {
     const scope = this.#controls.get(token);
     if (scope?.kind !== "history" || !scope.turnIds.has(selection.turnId)) {
       throw new Error("history read is outside the selected original turns");
@@ -163,9 +164,13 @@ export class ActiveTurnRegistry {
       }
     };
     assertOwner();
-    const page = await channel.binding.readHistoryPage!({ ...selection, limit: 4 }, scope.signal);
+    const page = await channel.binding.readHistoryPage!({ turnId: selection.turnId, limit: 4,
+      ...(selection.cursor === undefined ? {} : { cursor: selection.cursor }) }, scope.signal);
     assertOwner();
-    return projectNativeHistoryReadback(page, channel.binding.authority.threadId, channel.binding.authority.turnId);
+    const result = boundedNativeHistoryReadback(
+      projectNativeHistoryReadback(page, channel.binding.authority.threadId, channel.binding.authority.turnId), selection);
+    channel.recordReleasedToolResultBytes(Buffer.byteLength(JSON.stringify(result)));
+    return result;
   }
 
   #releaseControls(owner: string): void {
