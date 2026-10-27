@@ -1280,6 +1280,7 @@ After the menu build, Sparkle's official tools are in
 `apps/menu-bar-macos/.build/artifacts/sparkle/Sparkle/bin/`. Run `generate_keys --account ChatGPT-Tela`
 once to store an update-signing key in your Keychain, then embed its printed **public** key with
 `--update-public-key`. Keep the private key backed up outside the repository and release assets.
+This repository's release public key is in `release/sparkle-public-key.txt`; it contains no private key.
 Use a stable HTTPS feed URL, such as `https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml`.
 For each release, archive the final app with `ditto -c -k --sequesterRsrc --keepParent`, then run
 `generate_appcast --account ChatGPT-Tela --download-url-prefix https://github.com/<owner>/<repo>/releases/download/<tag>/ <archives-directory>`.
