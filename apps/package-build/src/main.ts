@@ -144,7 +144,8 @@ async function main(): Promise<void> {
     const notices = join(temporary, "third-party-notices");
     mkdirSync(notices);
     copyFileSync(join(repoRoot, "LICENSE"), join(notices, "ChatGPT-Tela.txt"));
-    for (const name of ["LICENSE", "LICENSES.chromium.html"]) {
+    // Other platforms retain the complete Electron distribution, including its notices.
+    for (const name of macApp ? ["LICENSE", "LICENSES.chromium.html"] : []) {
       copyFileSync(join(electronBundle, name), join(notices, name === "LICENSE" ? "Electron.txt" : name));
     }
     if (menuBar) copyFileSync(join(temporary, "Sparkle-LICENSE.txt"), join(notices, "Sparkle.txt"));
