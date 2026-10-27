@@ -35,8 +35,6 @@ export async function runApplicationUpdate(action: "prepare" | "finish" | "cance
     execFileSync("/usr/bin/codesign", ["--verify", "--strict", "--deep", path], { stdio: "pipe" });
   });
   const readBuild = input.readBuild ?? (path => execFileSync("/usr/bin/plutil", ["-extract", "CFBundleVersion", "raw", "-o", "-", join(path, "Contents/Info.plist")], { encoding: "utf8" }).trim());
-  verifySignature(root);
-  const build = readBuild(root), fingerprint = packagedPayloadFingerprint(root);
   const path = macApplicationUpdatePath(paths);
   const save = (state: MacApplicationUpdate) => {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -45,6 +43,11 @@ export async function runApplicationUpdate(action: "prepare" | "finish" | "cance
     return state;
   };
   return withPackagedTransitionOwner({ paths, installId: owner.installId }, async () => {
+    const previous = readMacApplicationUpdate(paths);
+    if (previous && previous.installId !== owner.installId) throw Error("application update belongs to another installation");
+    if (action === "cancel" && !previous) return { ready: true, productVersion: spec.productVersion };
+    verifySignature(root);
+    const build = readBuild(root), fingerprint = packagedPayloadFingerprint(root);
     const shutdown = ownedServiceShutdown(owner.installId, paths);
     const controller = new PackagedPlatformServiceController({ blueprint,
       shutdownService: options.shutdownService ?? shutdown,
@@ -83,10 +86,7 @@ export async function runApplicationUpdate(action: "prepare" | "finish" | "cance
       rmSync(path);
       return { ready: true, restored: true, productVersion: spec.productVersion, buildVersion: build };
     };
-    const previous = readMacApplicationUpdate(paths);
-    if (previous && previous.installId !== owner.installId) throw Error("application update belongs to another installation");
-    if (action === "cancel") {
-      if (!previous) return { ready: true, productVersion: spec.productVersion, buildVersion: build };
+    if (action === "cancel" && previous) {
       if (fingerprint !== previous.sourceFingerprint) throw Error("a replaced application cannot be cancelled back to source");
       return finish(previous);
     }

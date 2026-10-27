@@ -105,10 +105,17 @@ test("an aborted Sparkle install restores the unchanged source without another s
   try {
     const f = await fixture(root);
     await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" });
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ prepared: true, ready: false });
     f.runner.calls.length = 0;
     expect(await runApplicationUpdate("cancel", f.input)).toMatchObject({ ready: true, productVersion: "1.0.0" });
     expect(f.runner.calls.some(call => call.startsWith("bootout"))).toBe(false);
     expect(existsSync(macApplicationUpdatePath(f.paths))).toBe(false);
+    f.runner.calls.length = 0;
+    expect(await runApplicationUpdate("cancel", { ...f.input,
+      verifySignature() { throw Error("no pending update must not reverify the app"); },
+      readBuild() { throw Error("no pending update must not read the build"); },
+    })).toMatchObject({ ready: true });
+    expect(f.runner.calls).toEqual([]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

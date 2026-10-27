@@ -116,7 +116,6 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) { pendingBuild = item.versionString }
 
   func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
-    guard pendingBuild != nil else { return }
     pendingBuild = nil
     preparingTermination = false
     Task {
