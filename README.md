@@ -1297,6 +1297,6 @@ data are preserved. If installed files are damaged, use a trusted same-version a
 
 The previous split-payload macOS installation requires owned keep-data removal and a fresh app
 installation to enter this format. That local migration restored all three services and both configured
-profiles. Sparkle download, replacement and service restoration passed isolated launchd verification;
-updating the everyday installation and public release delivery remain pending. CLI lifecycle commands
-remain available on Windows/Linux.
+profiles. Sparkle download, replacement and service restoration passed both isolated launchd verification
+and a local update of the everyday installation. Live acceptance of the new task-interruption choice
+and public release delivery remain pending. CLI lifecycle commands remain available on Windows/Linux.
