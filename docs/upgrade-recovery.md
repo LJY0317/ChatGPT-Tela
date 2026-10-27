@@ -248,21 +248,20 @@ EdDSA-signed archive. Developer ID signing and notarization provide Apple-truste
 distribution but are not prerequisites for Sparkle updates. Smoke tests use disposable
 public keys and ad-hoc signatures. No production feed or private signing key is supplied here.
 
-Installed migration and end-to-end service/profile restoration through the actual
-Sparkle replacement remain unverified. The previous split-payload installation
+Installed migration and existing user-profile restoration through the actual
+product UI remain unverified. The previous split-payload installation
 must be removed through its owned keep-data lifecycle before installing the new
 app; do not apply its legacy whole-payload updater to the new bundle. No compatibility
 shim or second macOS updater is retained to convert the old format automatically.
-A follow-up disposable app used the production Swift updater adapter with a synthetic
-lifecycle executable: its asynchronous `prepare` completed before actual AppKit
-termination, then Sparkle replaced build 1 and relaunched build 2. The same probe
-launched from a real, uniquely named test LaunchAgent; re-running that existing job
-executed the new launcher bytes without an added menu recovery path. A separate check ran the actual packaged Gateway, Chat and Codex daemons in an
-isolated home through authenticated shutdown/readiness. After replacement all three
-had new process identities, the target install ledger and a cleared transition.
-Its OS registration runner was synthetic; user profiles were not opened. This does
-not prove installed user-profile restoration. A synthetic split-payload keep-data
-removal followed by single-app installation preserved settings and install identity.
+A disposable integration check used the production Swift termination adapter and lifecycle,
+real Sparkle replacement/relaunch, actual packaged daemons and real launchd registrations.
+All three daemons stopped through authenticated shutdown and returned ready with new
+process identities; the target ledger was promoted and the transition cleared. The fixture
+translated registration names/definition paths and supplied an isolated home; its UI and
+lifecycle command transport were test adapters. User profiles were not opened. All test
+registrations and processes were removed. A separate synthetic split-payload keep-data
+removal/install check preserved settings and install identity. These checks do not establish
+existing user-profile restoration or first-run Gatekeeper acceptance of a downloaded app.
 
 References: [Sparkle setup](https://sparkle-project.org/documentation/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),
