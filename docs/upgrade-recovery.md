@@ -251,6 +251,14 @@ Public delivery additionally needs a real appcast, release archives, an increasi
 build number, update signing and Developer ID/notarization. None is configured here;
 no feed, key access, new downloader or runtime dependency was added by this assessment.
 
+An isolated Sparkle 2.10.1 experiment subsequently replaced and relaunched a disposable
+host from build 1 to 2 with the existing complete Tela payload included. All 281
+payload files matched the source. A simulated active-work admission cancelled before
+replacement; a one-byte archive modification failed EdDSA verification and retained
+build 1. This used a loopback feed, disposable file-based signing key and ad-hoc app
+signatures, not release credentials. It did not run Tela services, prove production
+admission/profile restoration, implement migration, or update the installed product.
+
 References: [setup](https://sparkle-project.org/documentation/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),
 [package tradeoffs](https://sparkle-project.org/documentation/package-updates/).
