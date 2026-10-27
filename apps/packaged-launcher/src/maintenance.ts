@@ -4,8 +4,7 @@ import { chmodSync, copyFileSync, cpSync, lstatSync, mkdtempSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { readOwnershipManifest, resolveProductPaths, readPackagedUpgradeJournal, readPackagedRepairJournal,
-  packagedUpgradeJournalPath, packagedRepairJournalPath, readMacApplicationUpdate, PackagedServiceShutdownNotStartedError, PackagedServiceTransitionError,
-  PackagedUpgradeRecoveryError } from "@chatgpt-tela/product-lifecycle";
+  packagedUpgradeJournalPath, packagedRepairJournalPath, readMacApplicationUpdate, PackagedServiceShutdownNotStartedError } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { parsePackagedLifecycleCommand, runPackagedLifecycleCommand, type PackagedLifecycleOptions } from "./lifecycle";
 import { packagedPayloadFingerprint, readPackagedProductManifest } from "@chatgpt-tela/product-lifecycle";
@@ -44,10 +43,7 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
     const ownership = readOwnershipManifest(paths.installManifest);
     const upgrade = readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths));
     return { installedVersion: ownership?.productVersion ?? "Not installed", pendingTransition:
-      readMacApplicationUpdate(paths) ? "application-update" : upgrade ? "upgrade" : readPackagedRepairJournal(packagedRepairJournalPath(paths)) ? "repair" : "none",
-      ...(upgrade ? {
-        cancellationReviewAvailable: ["prepared", "quiescing", "quiesced", "restoring-source"].includes(upgrade.phase),
-      } : {}) };
+      readMacApplicationUpdate(paths) ? "application-update" : upgrade ? "upgrade" : readPackagedRepairJournal(packagedRepairJournalPath(paths)) ? "repair" : "none" };
   }
   if (args[1] === "processes" && args.length === 2) {
     const client = await maintenanceChatClient(options);
@@ -61,8 +57,8 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
     finally { await client.close(); }
   }
   const mode = args[1], operation = args[2];
-  if (!(mode === "review" || mode === "apply") || !(operation === "upgrade" || operation === "repair" || operation === "cancel-upgrade" || operation === "uninstall")) {
-    throw new Error("usage: maintenance <review|apply> <upgrade|repair|cancel-upgrade|uninstall> [--payload folder] [--remove-data] [--review-token token]");
+  if (!(mode === "review" || mode === "apply") || !(operation === "repair" || operation === "uninstall")) {
+    throw new Error("usage: maintenance <review|apply> <repair|uninstall> [--payload folder] [--remove-data] [--review-token token]");
   }
   const rest = [...args.slice(3)];
   const tokenIndex = rest.indexOf("--review-token");
@@ -97,16 +93,10 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
         ? await runProductUninstall({ mode: "apply", removeData, ...options, ...(options.runner ? { serviceRegistrationRunner: options.runner } : {}) })
         : await runPackagedLifecycleCommand([operation, "--apply", ...rest], options));
     } catch (error) {
-      const blockerMessage = error instanceof PackagedServiceShutdownNotStartedError ? error.message
-        : error instanceof PackagedUpgradeRecoveryError && error.recoveryState === "source-restored"
-          && error.cause instanceof PackagedServiceShutdownNotStartedError ? error.message
-          : error instanceof PackagedUpgradeRecoveryError ? error.message : undefined;
-      if (!blockerMessage) throw error;
-      const osFailure = error instanceof PackagedUpgradeRecoveryError && error.cause instanceof PackagedServiceTransitionError
-        ? error.cause.message : undefined;
+      if (!(error instanceof PackagedServiceShutdownNotStartedError)) throw error;
       return { operation, success: false, removedCount: 0, preservedCount: 0, failedCount: 0,
         productVersion: readOwnershipManifest(paths.installManifest)?.productVersion ?? null,
-        blockers: osFailure ? [blockerMessage, osFailure] : [blockerMessage] };
+        blockers: [error.message] };
     }
     const failed = Number(result.failedCount ?? 0) + (Array.isArray(result.shutdownFailures) ? result.shutdownFailures.length : 0);
     const preservedRepair = operation === "repair" && (result.payload === "preserved" || result.services?.some((s: any) => s.outcome === "preserved"));
@@ -124,14 +114,12 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
     for (const step of raw.steps ?? []) resources.push({ name: step.resourceId, action: step.action });
   } else {
     resources.push({ name: "Tela files", action: raw.payload?.action ?? "review" });
-    for (const service of raw.services ?? []) resources.push(operation === "cancel-upgrade"
-      ? { name: service, action: "restore-if-stopped" }
-      : { name: service.service, action: service.action });
+    for (const service of raw.services ?? []) resources.push({ name: service.service, action: service.action });
   }
   return { operation, reviewToken, fromVersion: readOwnershipManifest(paths.installManifest)?.productVersion ?? "Not installed",
     toVersion: raw.toVersion ?? raw.productVersion ?? null, removeData, resources,
     blockers: [...(raw.activityBlockers ?? []), ...(raw.shutdownBlockers ?? [])],
-    interruptedConnections: operation === "cancel-upgrade" ? false : operation !== "uninstall" || (raw.removableCount ?? 0) > 0 };
+    interruptedConnections: operation !== "uninstall" || (raw.removableCount ?? 0) > 0 };
 }
 
 function maintenanceApp(executable: string): string {

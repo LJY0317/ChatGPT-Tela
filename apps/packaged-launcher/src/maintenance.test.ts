@@ -3,8 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildPackagedPayload, resolveProductPaths, readOwnershipManifest, prepareOwnedDirectory,
-  packagedUpgradeJournalPath, readPackagedUpgradeJournal, readPackagedProductManifest, planPackagedUpgradeFromPayload, PackagedServiceShutdownNotStartedError,
-  type PackagedUpgradeJournal, type ServiceRegistrationCommandRunner } from "@chatgpt-tela/product-lifecycle";
+  readPackagedProductManifest, PackagedServiceShutdownNotStartedError, type ServiceRegistrationCommandRunner } from "@chatgpt-tela/product-lifecycle";
 import { runPackagedLifecycleCommand } from "./lifecycle";
 import { cleanupMaintenanceWindow, runMaintenanceCommand, stageMaintenanceWindow, resolveMaintenanceWindowSource } from "./maintenance";
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
@@ -31,7 +30,7 @@ class FakeManager implements ServiceRegistrationCommandRunner {
   }
 }
 
-function fixture(root: string, supportsCancellation = true) {
+function fixture(root: string) {
   const input = join(root, "input"), home = join(root, "home");
   mkdirSync(join(input, "electron", "bin"), { recursive: true }); mkdirSync(home);
   for (const name of ["launcher", "gateway", "chat", "codex", "menu-bar", "maintenance"]) writeFileSync(join(input, name), name, { mode: 0o755 });
@@ -43,7 +42,6 @@ function fixture(root: string, supportsCancellation = true) {
     buildPackagedPayload({ outputPath: payload, productVersion: version, launcherSourcePath: join(input, "launcher"),
       menuBarSourcePath: join(input, "menu-bar"),
       maintenanceUISourcePath: join(input, "maintenance"),
-      ...(supportsCancellation ? { lifecycle: { transitionLaunch: 1 as const, sourceCancellation: 1 as const } } : {}),
       services: { gateway: { executableSourcePath: join(input, "gateway") }, chat: { executableSourcePath: join(input, "chat") }, codex: { executableSourcePath: join(input, "codex") } },
       profileRuntime: { electronBundleSourcePath: join(input, "electron"), electronExecutableRelativePath: "bin/electron", entrypointSourcePath: join(input, "profile.cjs") },});
     return payload;
@@ -51,7 +49,7 @@ function fixture(root: string, supportsCancellation = true) {
   return { home, first: build("1.0.0"), second: build("2.0.0"), runner: new FakeManager() };
 }
 
-test("review -> repair -> upgrade -> keep-data removal uses fake OS manager and preserves unrelated data", async () => {
+test("review -> repair -> keep-data removal uses fake OS manager and preserves unrelated data", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-maintenance-test-"));
   try {
     const f = fixture(root), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner, executingBinaryPath: join(root, "external-launcher") };
@@ -74,10 +72,6 @@ test("review -> repair -> upgrade -> keep-data removal uses fake OS manager and 
     const fresh = await runMaintenanceCommand(["maintenance", "review", "repair", ...repairArgs], options) as any;
     expect((await runMaintenanceCommand(["maintenance", "apply", "repair", ...repairArgs, "--review-token", fresh.reviewToken], options) as any).success).toBe(true);
     expect(readFileSync(damaged, "utf8")).toBe("chat");
-    const updateArgs = ["--payload", f.second, ];
-    const update = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...updateArgs], options) as any;
-    expect(update.fromVersion).toBe("1.0.0"); expect(update.toVersion).toBe("2.0.0");
-    expect((await runMaintenanceCommand(["maintenance", "apply", "upgrade", ...updateArgs, "--review-token", update.reviewToken], options) as any).success).toBe(true);
     const removal = await runMaintenanceCommand(["maintenance", "review", "uninstall"], options) as any;
     expect(removal.resources.some((r: any) => r.action === "preserve")).toBe(true);
     await expect(runMaintenanceCommand(["maintenance", "apply", "uninstall", "--review-token", removal.reviewToken], { ...options, executingBinaryPath: join(binary.path, "chatgpt-tela") })).rejects.toThrow("separately extracted");
@@ -97,55 +91,33 @@ test("review -> repair -> upgrade -> keep-data removal uses fake OS manager and 
 test("apply requires review and rejects unknown/ambiguous operation arguments", async () => {
   await expect(runMaintenanceCommand(["maintenance", "apply", "uninstall"])).rejects.toThrow("review");
   await expect(runMaintenanceCommand(["maintenance", "review", "uninstall", "--everything"])).rejects.toThrow("only accepts");
-  await expect(runMaintenanceCommand(["maintenance", "review", "upgrade"])).rejects.toThrow("explicit package");
+  await expect(runMaintenanceCommand(["maintenance", "review", "repair"])).rejects.toThrow("explicit package");
+  for (const operation of ["upgrade", "cancel-upgrade"]) {
+    await expect(runMaintenanceCommand(["maintenance", "review", operation])).rejects.toThrow("usage:");
+  }
 });
 
-test("maintenance review and apply surface a newly blocked shutdown without stopping services", async () => {
-  const root = mkdtempSync(join(tmpdir(), "tela-maintenance-shutdown-readiness-"));
+test("repair refusal leaves running services and damaged files unchanged", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-maintenance-blocked-repair-"));
   try {
     const f = fixture(root), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner };
     await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first], options);
-    const paths = resolveProductPaths(options);
-    for (const service of ["gateway", "codex", "chat"] as const) f.runner.running.add(`chatgpt-tela-${service}.service`);
-    let mode: "none" | "late" | "always" = "none", checks = 0;
-    const liveOptions = { ...options, async prepareShutdownService(service: "gateway" | "codex" | "chat") {
-      if (service !== "chat") return;
-      checks++;
-      if (mode === "always" || mode === "late" && checks >= 3) throw new PackagedServiceShutdownNotStartedError(service);
-    }, async shutdownService(service: "gateway" | "codex" | "chat") {
-      if (service === "chat") throw new PackagedServiceShutdownNotStartedError(service);
-      f.runner.running.delete(`chatgpt-tela-${service}.service`);
-    } };
-    const args = ["--payload", f.second];
-    const directReview = await runPackagedLifecycleCommand(["upgrade", "--dry-run", ...args], liveOptions) as any;
-    expect(directReview.shutdownBlockers).toEqual([]);
-    const reviewed = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...args], liveOptions) as any;
-    expect(reviewed.blockers).toEqual([]);
-
-    mode = "late";
-    const applied = await runMaintenanceCommand(["maintenance", "apply", "upgrade", ...args,
-      "--review-token", reviewed.reviewToken], liveOptions) as any;
-    expect(applied).toMatchObject({ success: false, failedCount: 0,
-      blockers: ["chat: not ready to stop. Finish active work or check the service status before maintenance."] });
-    expect(f.runner.running).toEqual(new Set(["chatgpt-tela-gateway.service", "chatgpt-tela-codex.service", "chatgpt-tela-chat.service"]));
-    expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("1.0.0");
-    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))).toBeUndefined();
-
-    mode = "none";
-    const raceReview = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...args], liveOptions) as any;
-    const raceApply = await runMaintenanceCommand(["maintenance", "apply", "upgrade", ...args,
-      "--review-token", raceReview.reviewToken], liveOptions) as any;
-    expect(raceApply).toMatchObject({ success: false, failedCount: 0, productVersion: "1.0.0" });
-    expect(raceApply.blockers[0]).toContain("The previous version was restored and previously running services were resumed.");
-    expect(f.runner.running).toEqual(new Set(["chatgpt-tela-gateway.service", "chatgpt-tela-codex.service", "chatgpt-tela-chat.service"]));
-    expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("1.0.0");
-    expect(readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths))).toBeUndefined();
-
-    mode = "always";
-    const directBlocked = await runPackagedLifecycleCommand(["upgrade", "--dry-run", ...args], liveOptions) as any;
-    expect(directBlocked.shutdownBlockers).toEqual(["chat: not ready to stop. Finish active work or check the service status before maintenance."]);
-    const blockedReview = await runMaintenanceCommand(["maintenance", "review", "upgrade", ...args], liveOptions) as any;
-    expect(blockedReview.blockers).toEqual(["chat: not ready to stop. Finish active work or check the service status before maintenance."]);
+    const paths = resolveProductPaths(options), owner = readOwnershipManifest(paths.installManifest)!;
+    const binary = owner.resources.find(r => r.kind === "directory" && r.id === "product-binaries")!;
+    if (binary.kind !== "directory") throw Error("fixture binaries missing");
+    const damaged = join(binary.path, "services/chat"); writeFileSync(damaged, "damaged");
+    f.runner.running.add("chatgpt-tela-chat.service");
+    let stops = 0;
+    const blocked = { ...options,
+      async prepareShutdownService(service: "gateway" | "codex" | "chat") { throw new PackagedServiceShutdownNotStartedError(service); },
+      async shutdownService() { stops++; },
+    };
+    const args = ["--payload", f.first];
+    const review = await runMaintenanceCommand(["maintenance", "review", "repair", ...args], blocked) as any;
+    const result = await runMaintenanceCommand(["maintenance", "apply", "repair", ...args, "--review-token", review.reviewToken], blocked) as any;
+    expect(result.success).toBe(false); expect(result.blockers.length).toBeGreaterThan(0);
+    expect(stops).toBe(0); expect(f.runner.running.has("chatgpt-tela-chat.service")).toBe(true);
+    expect(readFileSync(damaged, "utf8")).toBe("damaged");
   } finally { removeFixture(root); }
 });
 
@@ -203,53 +175,5 @@ test("explicit remove-data plan removes only owned settings and preserves a proj
     expect((await runMaintenanceCommand(["maintenance","apply","uninstall","--remove-data","--review-token",review.reviewToken],options) as any).success).toBe(true);
     expect(existsSync(paths.configRoot)).toBe(false);
     expect(readFileSync(join(f.home,"project.txt"),"utf8")).toBe("project");
-  } finally { removeFixture(root); }
-});
-
-for (const supported of [true, false]) test(`maintenance cancellation review binds source/checkpoint and supports recovery staging: ${supported}`, async () => {
-  const root = mkdtempSync(join(tmpdir(), "tela-maintenance-cancel-"));
-  try {
-    const f = fixture(root, supported), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner };
-    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first, ], options);
-    const paths = resolveProductPaths(options), manifest = readFileSync(paths.installManifest);
-    f.runner.running.add("chatgpt-tela-chat.service");
-    // Model a settled pre-replacement process interruption. Normal upgrades now
-    // recover automatically, so a refused shutdown is no longer a journal fixture.
-    const plan = await planPackagedUpgradeFromPayload({ ...options, payloadSourcePath: f.second,});
-    const journalPath = packagedUpgradeJournalPath(paths);
-    const checkpoint: PackagedUpgradeJournal = {
-      version: 1, installId: plan.installId, fromVersion: plan.fromVersion, toVersion: plan.toVersion,
-      sourcePayloadFingerprint: plan.sourcePayload.payloadFingerprint, targetPayloadFingerprint: plan.targetPayloadFingerprint,
-      phase: "quiescing", resumeServices: ["chat"], quiescedServices: ["gateway"], resumedServices: [],
-      stopEvidenceVersion: 1, pendingStop: null,
-    };
-    writeFileSync(journalPath, JSON.stringify(checkpoint));
-    const journal = readFileSync(journalPath);
-    const status = await runMaintenanceCommand(["maintenance", "status"], options) as any;
-    expect(status.pendingTransition).toBe("upgrade");
-    expect(status.cancellationReviewAvailable).toBe(true);
-    const args = ["--payload", f.first, ];
-    if (!supported) {
-      await expect(runMaintenanceCommand(["maintenance", "review", "cancel-upgrade", ...args], options)).rejects.toThrow("does not declare");
-      expect(readFileSync(journalPath)).toEqual(journal);
-      expect(readFileSync(paths.installManifest)).toEqual(manifest);
-      return;
-    }
-    const reviewed = await runMaintenanceCommand(["maintenance", "review", "cancel-upgrade", ...args], options) as any;
-    expect(reviewed.resources).toEqual([{ name: "Tela files", action: "preserve" }, { name: "chat", action: "restore-if-stopped" }]);
-    expect(reviewed.interruptedConnections).toBe(false);
-    expect(reviewed.toVersion).toBe("1.0.0");
-    expect(readFileSync(journalPath)).toEqual(journal);
-    // Same phase/version/service list, but changed quiescence must invalidate review.
-    writeFileSync(journalPath, JSON.stringify({ ...readPackagedUpgradeJournal(journalPath), quiescedServices: [] }));
-    const changed = readFileSync(journalPath);
-    await expect(runMaintenanceCommand(["maintenance", "apply", "cancel-upgrade", ...args, "--review-token", reviewed.reviewToken], options)).rejects.toThrow("changed");
-    expect(readFileSync(journalPath)).toEqual(changed);
-    expect(readFileSync(paths.installManifest)).toEqual(manifest);
-    const fresh = await runMaintenanceCommand(["maintenance", "review", "cancel-upgrade", ...args], options) as any;
-    expect((await runMaintenanceCommand(["maintenance", "apply", "cancel-upgrade", ...args, "--review-token", fresh.reviewToken], options) as any).success).toBe(true);
-    expect(f.runner.running.has("chatgpt-tela-chat.service")).toBe(true);
-    expect(readPackagedUpgradeJournal(journalPath)).toBeUndefined();
-    expect(readFileSync(paths.installManifest)).toEqual(manifest);
   } finally { removeFixture(root); }
 });
