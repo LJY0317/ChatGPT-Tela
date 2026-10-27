@@ -73,7 +73,7 @@ describe("packaged product manifest", () => {
       services: { ...base.services, chat: { ...base.services.chat, arguments: ["bad\narg"] } } })).toThrow("invalid");
   });
 
-  test("launcher layout is all-or-none and keeps the launcher at the payload root", () => {
+  test("launcher layout is all-or-none and permits portable nested executables", () => {
     const base = manifest();
     const signed = {
       ...base,
@@ -100,8 +100,8 @@ describe("packaged product manifest", () => {
       rmSync(root, { recursive: true, force: true });
     }
     expect(() => parsePackagedProductManifest({ ...base, launcher: signed.launcher })).toThrow("declared together");
-    expect(() => parsePackagedProductManifest({ ...signed, launcher: { executable: "runtime/chatgpt-tela" } }))
-      .toThrow("payload root");
+    expect(parsePackagedProductManifest({ ...signed, launcher: { executable: "Contents/MacOS/chatgpt-tela" } }).launcher)
+      .toEqual({ executable: "Contents/MacOS/chatgpt-tela" });
   });
 
   test("manifest file must be a real regular file", () => {

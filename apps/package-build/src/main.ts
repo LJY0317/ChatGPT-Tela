@@ -1,3 +1,4 @@
+import { assembleMacApplication } from "../../../packages/product-lifecycle/src/mac-application";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -86,6 +87,9 @@ function macCodesign(outputPath: string, identity: string): void {
 async function main(): Promise<void> {
   const outputPath = resolve(requiredOption("--output"));
   const productVersion = requiredOption("--version");
+  const macApp = process.argv.includes("--mac-app");
+  if (macApp && (process.platform !== "darwin" || !outputPath.endsWith(".app"))) throw Error("--mac-app requires a macOS .app output");
+  const appOptions = macApp ? { buildVersion: requiredOption("--build-number"), feedURL: requiredOption("--update-feed-url"), publicKey: requiredOption("--update-public-key") } : undefined;
   const macCodesignIdentity = process.platform === "darwin" ? requiredOption("--mac-codesign-identity") : undefined;
   const workspaceFilesSourcePath = option("--workspace-files");
   const nativeEnginePath = option("--native-engine");
@@ -123,7 +127,7 @@ async function main(): Promise<void> {
       runBun(["run", "apps/menu-bar-macos/build.ts", "--output", menuBar]);
     }
 
-    const built = buildPackagedPayload({
+    let built = buildPackagedPayload({
       outputPath,
       productVersion,
       chatProcessStore: CURRENT_CHAT_PROCESS_STORE_COMPATIBILITY,
@@ -150,6 +154,11 @@ async function main(): Promise<void> {
         ? { finalizeStagedPayload: ({ outputPath: staged }) => macCodesign(staged, macCodesignIdentity) }
         : {}),
     });
+
+    if (appOptions) built = assembleMacApplication({ payloadPath: outputPath, ...appOptions, finalizeBundle(appPath) {
+      execFileSync("/usr/bin/codesign", ["--force", "--sign", macCodesignIdentity!, appPath], { stdio: "inherit" });
+      execFileSync("/usr/bin/codesign", ["--verify", "--strict", "--deep", appPath], { stdio: "inherit" });
+    } });
 
     console.log(JSON.stringify({
       outputPath: built.outputPath,

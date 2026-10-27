@@ -15,7 +15,7 @@ import {
   type ServiceRegistrationCommandResult,
   type ServiceRegistrationCommandRunner,
 } from "@chatgpt-tela/product-lifecycle";
-import { resolvePackagedServiceLaunch } from "./runtime";
+import { payloadRootForLauncherExecutable, resolvePackagedServiceLaunch } from "./runtime";
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 
 const removeFixture = registerTemporaryFixtureCleanup();
@@ -74,6 +74,18 @@ function buildFixture(root: string, withFilePublisher = false) {
   });
   return { payload };
 }
+
+test("launcher discovers one app root from a real macOS executable and its external symlink", () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-bundle-launcher-"));
+  try {
+    const app = join(root, "Tela.app"), directory = join(app, "Contents/MacOS");
+    mkdirSync(directory, { recursive: true });
+    const executable = join(directory, "chatgpt-tela"), link = join(root, "launcher");
+    writeFileSync(executable, "launcher"); symlinkSync(executable, link);
+    expect(payloadRootForLauncherExecutable(executable)).toBe(realpathSync(app));
+    expect(payloadRootForLauncherExecutable(link)).toBe(realpathSync(app));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 describe("packaged service launcher", () => {
   test("only the recorded service can start at a proven final update or repair checkpoint", async () => {

@@ -262,3 +262,20 @@ admission/profile restoration, implement migration, or update the installed prod
 References: [setup](https://sparkle-project.org/documentation/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),
 [package tradeoffs](https://sparkle-project.org/documentation/package-updates/).
+
+The in-progress `--mac-app` package-build path assembles a disposable flat build into
+one app: executable entrypoints in `Contents/MacOS`, service/helper code in
+`Contents/Helpers`, Electron in `Contents/Frameworks`, and manifest/runtime data in
+`Contents/Resources`. It removes the duplicate menu app and Electron distribution
+wrapper. `--build-number`, `--update-feed-url` and `--update-public-key` are explicit
+build inputs; this is not a release feed or key provisioning implementation.
+The launcher derives the bundle root from its real executable, including when
+invoked through a symlink. Existing portable path containment remains enforced;
+the obsolete top-level-launcher-only restriction is removed.
+
+This path is not ready for installed migration: Sparkle linkage, external ownership
+metadata, service registration migration and startup/recovery settlement remain.
+Do not install it with the old directory-marker installer. Replace macOS staged
+package copying, custom update UI and payload replacement with Sparkle once that
+boundary is complete. Keep consumer work protection and service/profile settlement;
+retain Windows/Linux support through their appropriate platform paths.

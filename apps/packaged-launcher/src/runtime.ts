@@ -4,7 +4,7 @@ import {
   lstatSync,
   realpathSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { readProductConfig, type ProductConfig } from "@chatgpt-tela/product-config";
 import {
   observeInstalledPackagedPayload,
@@ -222,5 +222,7 @@ export async function runPackagedServiceLauncher(input: {
 }
 
 export function payloadRootForLauncherExecutable(executable = process.execPath): string {
-  return dirname(realpathSync(executable));
+  const directory = dirname(realpathSync(executable));
+  return basename(directory) === "MacOS" && basename(dirname(directory)) === "Contents"
+    ? dirname(dirname(directory)) : directory;
 }

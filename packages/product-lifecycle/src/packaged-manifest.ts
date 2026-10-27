@@ -110,7 +110,6 @@ function launcher(value: unknown): PackagedProductManifestLauncher | undefined {
   const extra = Object.keys(item).filter(key => key !== "executable");
   if (extra.length > 0) throw new Error(`packaged launcher contains unknown fields: ${extra.join(", ")}`);
   const executable = relativePayloadPath(item.executable, "packaged launcher executable");
-  if (executable.includes("/")) throw new Error("packaged launcher executable must live at the payload root");
   return Object.freeze({ executable });
 }
 
@@ -224,8 +223,12 @@ export function parsePackagedProductManifest(value: unknown): PackagedProductMan
   });
 }
 
+export function packagedProductManifestPath(payloadSourcePath: string): string {
+  return join(payloadSourcePath, ...(existsSync(join(payloadSourcePath, "Contents", "Info.plist")) ? ["Contents", "Resources"] : []), PACKAGED_PRODUCT_MANIFEST);
+}
+
 export function readPackagedProductManifest(payloadSourcePath: string): PackagedProductManifest {
-  const path = join(payloadSourcePath, PACKAGED_PRODUCT_MANIFEST);
+  const path = packagedProductManifestPath(payloadSourcePath);
   if (!existsSync(path)) throw new Error(`packaged product manifest is missing: ${path}`);
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("packaged product manifest path is unsafe or replaced");
