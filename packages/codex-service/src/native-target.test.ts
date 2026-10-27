@@ -39,6 +39,23 @@ function session(targetId: string): MultiProfileTargetSession {
 }
 
 describe("Multi-Profile native-target adapter", () => {
+  test("resolving one profile does not inspect unrelated sessions", async () => {
+    const inspected: string[] = [];
+    const adapter = new MultiProfileNativeTargetAdapter({
+      launcherCli: "/fixture/plura-desktop",
+      client: {
+        targets: async () => targets,
+        targetSession: async targetId => {
+          inspected.push(targetId);
+          if (targetId === "default") throw new Error("unrelated profile unavailable");
+          return session(targetId);
+        },
+        quitTarget: async targetId => session(targetId),
+      },
+    });
+    expect((await adapter.resolve(2)).session.desktopProcessId).toBe(4321);
+    expect(inspected).toEqual(["local.plura-desktop.profile2"]);
+  });
   test("keeps slot mapping inside the optional adapter instead of the Codex core", async () => {
     const adapter = new MultiProfileNativeTargetAdapter({
       launcherCli: "/fixture/plura-desktop",

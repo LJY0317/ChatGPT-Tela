@@ -287,11 +287,14 @@ export class MultiProfileNativeTargetAdapter implements CodexNativeTargetAdapter
     }
   }
 
-  async profiles(signal?: AbortSignal) {
+  async #targets(signal?: AbortSignal) {
     this.#assertLauncherAvailable();
-    const targets = await this.#client.targets(signal);
-    const mapped = targets.map(mappedTarget).filter((value): value is CodexNativeTarget => value !== undefined);
-    return Object.freeze(await Promise.all(mapped.map(async target => Object.freeze({
+    return (await this.#client.targets(signal)).map(mappedTarget)
+      .filter((value): value is CodexNativeTarget => value !== undefined);
+  }
+
+  async profiles(signal?: AbortSignal) {
+    return Object.freeze(await Promise.all((await this.#targets(signal)).map(async target => Object.freeze({
       target,
       session: mappedSession(await this.#client.targetSession(target.id, signal)),
     }))));
@@ -299,11 +302,12 @@ export class MultiProfileNativeTargetAdapter implements CodexNativeTargetAdapter
 
   async resolve(slotValue: number, signal?: AbortSignal) {
     const expected = slot(slotValue);
-    const matches = (await this.profiles(signal)).filter(item => item.target.slot === expected);
+    const matches = (await this.#targets(signal)).filter(target => target.slot === expected);
     if (matches.length !== 1) {
       throw new Error(`Multi-Profile adapter does not expose exactly one target for Tela profile slot ${expected}`);
     }
-    return matches[0]!;
+    const target = matches[0]!;
+    return Object.freeze({ target, session: mappedSession(await this.#client.targetSession(target.id, signal)) });
   }
 
   async session(targetId: string, signal?: AbortSignal): Promise<CodexNativeTargetSession> {
