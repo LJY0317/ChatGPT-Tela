@@ -1275,7 +1275,8 @@ Use the menu's **Check for Updates…** or Settings → **Updates** for Sparkle'
 Settings also controls automatic update checks. Downloading does not end active work; an update that cannot
 settle active tasks offers **Stop Tasks and Update** or **Later**. Stopping tasks uses normal cancellation
 and keeps conversations and saved files; unavailable or unsettled services still postpone installation.
-Checking again brings an existing Sparkle update back into focus. Release feeds are still being prepared.
+Checking again brings an existing Sparkle update back into focus. The macOS arm64 pre-alpha feed is
+available through [GitHub Releases](https://github.com/LJY0317/ChatGPT-Tela/releases/latest).
 
 GitHub Releases can host both the update archive and `appcast.xml`; a separate website is unnecessary.
 After the menu build, Sparkle's official tools are in
@@ -1301,5 +1302,5 @@ data are preserved. If installed files are damaged, use a trusted same-version a
 The previous split-payload macOS installation requires owned keep-data removal and a fresh app
 installation to enter this format. That local migration restored all three services and both configured
 profiles. Sparkle download, replacement and service restoration passed both isolated launchd verification
-and a local update of the everyday installation. Live acceptance of the new task-interruption choice
-and public release delivery remain pending. CLI lifecycle commands remain available on Windows/Linux.
+and a local update of the everyday installation. Public feed and archive downloads are available. Live acceptance of the new task-interruption choice
+remains pending. CLI lifecycle commands remain available on Windows/Linux.
