@@ -91,7 +91,10 @@ describe("packaged binary payload ownership", () => {
       const otherPath = join(root, "other/ownership.json");
       const other = await ensureOwnershipManifest({ path: otherPath, productVersion: "1.2.3" });
       const otherManager = new PackagedPayloadManager({ manifestPath: otherPath, installId: other.installId, spec: { sourcePath: source, productVersion: "1.2.3", resource } });
-      await expect(otherManager.install(other)).rejects.toThrow("different install");
+      const before = readFileSync(join(metadataRoot, ".chatgpt-tela-owner.json"), "utf8");
+      await expect(otherManager.install(other)).rejects.toThrow("ownership-drift");
+      expect(readFileSync(join(metadataRoot, ".chatgpt-tela-owner.json"), "utf8")).toBe(before);
+      expect(existsSync(target)).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

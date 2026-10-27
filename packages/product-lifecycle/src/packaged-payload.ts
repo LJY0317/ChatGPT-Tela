@@ -202,6 +202,7 @@ export function observeInstalledPackagedPayload(
   }
   const recorded = manifest.resources.find(candidate => candidate.id === resource.id);
   if (!recorded || JSON.stringify(recorded) !== JSON.stringify(resource)) return Object.freeze({ state: "ownership-drift" });
+  if (!existsSync(resource.path)) return Object.freeze({ state: "missing" });
   let receipt: PackagedPayloadReceipt | undefined;
   try { receipt = readPackagedPayloadReceipt(resource); }
   catch { return Object.freeze({ state: "ownership-drift" }); }
@@ -329,6 +330,7 @@ export class PackagedPayloadManager {
     if (ownership !== "owned") return ownership;
     const recorded = manifest.resources.find(resource => resource.id === this.#spec.resource.id);
     if (!recorded || JSON.stringify(recorded) !== JSON.stringify(this.#spec.resource)) return "ownership-drift";
+    if (!existsSync(this.#spec.resource.path)) return "missing";
     let receipt: PackagedPayloadReceipt | undefined;
     try { receipt = readPackagedPayloadReceipt(this.#spec.resource); }
     catch { return "ownership-drift"; }
@@ -353,6 +355,9 @@ export class PackagedPayloadManager {
 
   async install(manifest: OwnershipManifest): Promise<{ readonly created: boolean; readonly detail: string }> {
     if (manifest.installId !== this.#installId) throw new Error("packaged payload belongs to a different install instance");
+    const current = this.observe(manifest);
+    if (current === "owned") return Object.freeze({ created: false, detail: "exact packaged payload already installed" });
+    if (current !== "missing") throw new Error(`packaged binary target cannot be repaired from ${current} state`);
     const prepared = await prepareOwnedDirectory({
       manifestPath: this.#manifestPath,
       installId: this.#installId,
@@ -364,9 +369,6 @@ export class PackagedPayloadManager {
     }
     const refreshed = readOwnershipManifest(this.#manifestPath);
     if (!refreshed || refreshed.installId !== this.#installId) throw new Error("packaged payload ownership intent was not persisted");
-    const current = this.observe(refreshed);
-    if (current === "owned") return Object.freeze({ created: false, detail: "exact packaged payload already installed" });
-    if (current !== "missing") throw new Error(`packaged binary target cannot be repaired from ${current} state`);
 
     clearIncompletePayload(this.#spec.resource);
     copyPayload(this.#spec.sourcePath, this.#spec.resource.path);

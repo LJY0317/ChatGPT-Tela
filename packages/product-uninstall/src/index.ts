@@ -256,7 +256,7 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
           if (resource.metadataRoot && readdirSync(resource.metadataRoot).some(name => ![OWNERSHIP_MARKER, PACKAGED_PAYLOAD_RECEIPT].includes(name))) {
             return { removed: false, detail: "binary metadata contains files outside this resource" };
           }
-          rmSync(absolute, { recursive: true, force: false });
+          rmSync(absolute, { recursive: true, force: true });
           if (resource.metadataRoot) rmSync(resource.metadataRoot, { recursive: true, force: false });
           return { removed: true, detail: "exact marker-owned directory removed" };
         }

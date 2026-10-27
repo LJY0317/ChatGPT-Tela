@@ -194,9 +194,12 @@ export async function applyUninstallPlan(input: {
 export class FilesystemOwnershipObserver implements UninstallObserver {
   observe(resource: OwnedResource, manifest: OwnershipManifest): OwnershipObservation {
     if (resource.kind !== "directory") return "unknown";
-    if (!existsSync(resource.path)) return "missing";
-    const stat = lstatSync(resource.path);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) return "unsafe";
+    const present = [resource.path, ...(resource.metadataRoot ? [resource.metadataRoot] : [])].filter(path => existsSync(path));
+    if (present.length === 0) return "missing";
+    for (const path of present) {
+      const stat = lstatSync(path);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return "unsafe";
+    }
     let marker;
     try { marker = readOwnershipMarker(resource); }
     catch { return "unsafe"; }

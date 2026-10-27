@@ -203,7 +203,9 @@ source changes are not evidence that the installed client emitted the new events
 The macOS package is one signed `ChatGPT Tela.app`. It contains the launcher,
 Gateway/Chat/Codex services, Electron runtime, menu UI, an independent maintenance
 app and Sparkle 2.10.1. Mutable ownership markers, payload receipts, settings and
-update coordination stay outside the signed bundle. The old staged-update cache,
+update coordination stay outside the signed bundle. If the app is removed manually,
+reinstallation or owned removal settles its remaining external records without
+adopting another installation's metadata. The old staged-update cache,
 cache watcher, extracted-package update picker and local-latest installation script
 are removed. The old whole-payload upgrade operator rejects macOS before reading
 source files or stopping services; Windows/Linux retain their platform lifecycle.
@@ -254,8 +256,11 @@ A follow-up disposable app used the production Swift updater adapter with a synt
 lifecycle executable: its asynchronous `prepare` completed before actual AppKit
 termination, then Sparkle replaced build 1 and relaunched build 2. The same probe
 launched from a real, uniquely named test LaunchAgent; re-running that existing job
-executed the new launcher bytes without an added menu recovery path. This does not
-prove live Tela service/profile restoration. A synthetic split-payload keep-data
+executed the new launcher bytes without an added menu recovery path. A separate check ran the actual packaged Gateway, Chat and Codex daemons in an
+isolated home through authenticated shutdown/readiness. After replacement all three
+had new process identities, the target install ledger and a cleared transition.
+Its OS registration runner was synthetic; user profiles were not opened. This does
+not prove installed user-profile restoration. A synthetic split-payload keep-data
 removal followed by single-app installation preserved settings and install identity.
 
 References: [Sparkle setup](https://sparkle-project.org/documentation/),

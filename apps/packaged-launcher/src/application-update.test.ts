@@ -161,3 +161,23 @@ test("split-payload keep-data removal migrates to one app without a compatibilit
       .toHaveLength(1);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+for (const action of ['reinstall', 'remove'] as const) test(`manual app removal settles external ownership on ${action}`, async () => {
+  const root=mkdtempSync(join(tmpdir(),'tela-removed-app-'));
+  try {
+    const f=await fixture(root), metadata=join(f.paths.stateRoot,'install/application');
+    for(const job of f.runner.jobs.values())job.running=false;
+    rmSync(f.sourceRoot,{recursive:true}); // Finder/Trash removes the app, not its external receipts.
+    expect(existsSync(metadata)).toBe(true);
+    if(action==='reinstall') {
+      const options={...f.input.options,payloadSourcePath:join(root,'source.app')};
+      const planned=await planPackagedInstallFromPayload(options);
+      expect((await applyPackagedInstallFromPayload({...options,planned})).verify.ready).toBe(true);
+      expect(existsSync(join(f.sourceRoot,'.chatgpt-tela-owner.json'))).toBe(false);
+    } else {
+      expect(await runProductUninstall({...f.input.options,mode:'apply',removeData:false,
+        serviceRegistrationRunner:f.runner,executingBinaryPath:process.execPath})).toMatchObject({failedCount:0});
+      expect(existsSync(metadata)).toBe(false);
+    }
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
