@@ -1426,11 +1426,11 @@ test("runtime grants only the seed's original history scope and accounts its rea
     currentTurnSource: { ...source, async readHistoryPage(owner, selection) {
       bodyReads++; expect(owner.threadId).toBe('thread-1'); expect(selection.turnId).toBe('past');
       return { data: [{ turnId: 'past', item: { type: 'agentMessage', id: 'old', text: 'original answer' } }], nextCursor: null };
-    } },
+    }, async readHistoryIndex() { return { data: [{ turnId: 'past', status: 'completed' }], nextCursor: null }; } },
     planWebTurn() { return { nativeTaskId: 'thread-1', webEpochId: 'scope-epoch', physicalContext: {
       mode: 'full', headRevisionId: 'current', activeRequestRevisionId: 'current', logicalTokens: 100, transferTokens: 100,
       segments: [{ type: 'revision', revisionId: 'current', kind: 'user', content: 'Current request' }],
-      deferredHistory: { turns: [{ turnId: 'past', firstRevisionId: 'old-start', lastRevisionId: 'old-end', itemCount: 1, sourceDigest: 'fixture-original' }] },
+      deferredHistory: { scope: 'prior-native-history' },
     } }; },
   });
   try {

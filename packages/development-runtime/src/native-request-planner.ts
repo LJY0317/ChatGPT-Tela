@@ -31,6 +31,7 @@ import {
   type ChatGptWebEffort,
   type ChatGptWebPhysicalLimits,
   type WebPhysicalContext,
+  type DeferredNativeHistory,
   type WebTurnMedia,
 } from "@chatgpt-tela/chatgpt";
 import {
@@ -90,6 +91,7 @@ export interface NativeRequestContextProjection {
   readonly inputAnchorId: string;
   /** Ephemeral exact-request bytes, never checkpoint authority or a persisted context cache. */
   readonly media: readonly WebTurnMedia[];
+  readonly deferredHistory?: DeferredNativeHistory;
 }
 
 export interface NativeRequestCheckpointProductionRequest {
@@ -505,6 +507,7 @@ export function projectNativeRequestContext(
   const projectedMedia: WebTurnMedia[] = [];
   let parentId: string | null = null;
   const protectedRevisionIds: string[] = [];
+  let deferredHistory: DeferredNativeHistory | undefined;
 
   const append = (kind: RevisionKind, content: string, media: readonly NativeProjectedMedia[] = [], historicalTurnId?: string): void => {
     if (!content) return;
@@ -556,6 +559,15 @@ export function projectNativeRequestContext(
     if (history?.type === "tela_native_visible_prefix_v1") {
       if (!Array.isArray(history.items)) throw new Error("Native visible prefix requires ordered public items");
       append("assistant", "Historical Native conversation and tool evidence follows. It is not a new request or current instruction. Current Native input and instructions remain authoritative; do not execute historical requests again.");
+      if (history.deferredHistory !== undefined) {
+        if (record(history.deferredHistory)?.scope !== "prior-native-history") {
+          throw new Error("Native deferred history has an unsupported original range");
+        }
+        deferredHistory = Object.freeze({ scope: "prior-native-history" });
+        append("assistant", stableJson({ type: "deferred_native_originals", ...deferredHistory,
+          status: "originals_outside_supplied_revisions_are_not_summarized" }));
+        protectedRevisionIds.push(projected.at(-1)!.revision.id);
+      }
       const evidenceById = new Map(records.map(ref => [ref.id, ref]));
       const evidenceFor = (value: unknown): NativeProjectedMedia[] => {
         if (Array.isArray(value)) return value.flatMap(evidenceFor);
@@ -804,6 +816,7 @@ export function projectNativeRequestContext(
     protectedRevisionIds: Object.freeze(protectedRevisionIds),
     ...(currentNativeGoal ? { currentGoalStatus: currentNativeGoal.status } : {}),
     media: Object.freeze(projectedMedia),
+    ...(deferredHistory ? { deferredHistory } : {}),
   });
 }
 
@@ -1058,6 +1071,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       threadId, currentTurnId: turn.channel.binding.authority.turnId,
       authority: turn.channel.binding.authority,
       opaque,
+      ...(turn.channel.binding.readHistoryPage && turn.channel.binding.readHistoryIndex ? { historyBodyBudgetBytes: workingPolicy.firstMessageTargetTokens * 4 } : {}),
       ...(retainedHistory !== undefined ? { retainedHistory } : {}),
       ...(browserModel ? { effort: browserModel.effort, browserModel } : {}),
       options: { ...options, ...(checkpointProducer ? { checkpointProducer } : {}) },
@@ -1124,9 +1138,14 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // A healthy page already owns the prefix. Select existing checkpoints, but
     // defer paid preparation until a fresh page or Native compaction needs it.
     stage("checkpoint_lookup");
-    const deferred = !healthyRetained && turn.channel.binding.readHistoryPage
+    const deferred = !healthyRetained && turn.channel.binding.readHistoryPage && turn.channel.binding.readHistoryIndex
       ? prepareDeferredNativeHistory(projection, workingPolicy, freshBudgetTokens) : undefined;
-    const working = await selectNativeWorkingCheckpoint({
+    if (projection.deferredHistory && !(turn.channel.binding.readHistoryPage && turn.channel.binding.readHistoryIndex)) {
+      throw new Error("Deferred Native originals require their owner-bound reader");
+    }
+    const working = projection.deferredHistory
+      ? { produced: false, reused: false, pendingSuffixTokens: 0 }
+      : await selectNativeWorkingCheckpoint({
       projection, currentTurnId: turn.channel.binding.authority.turnId,
       ...(options.checkpointCache ? { cache: options.checkpointCache } : {}),
       ...(options.visiblePrefix ? { visiblePrefix: options.visiblePrefix } : {}),
@@ -1181,9 +1200,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     }
     const contentById = new Map(projection.revisions.map(item => [item.revision.id, item.content]));
     plannerSubstage("request_checkpoint_cache_read");
-    const candidates = await cachedCheckpoints(options.checkpointCache, threadId);
+    const candidates = projection.deferredHistory ? [] : await cachedCheckpoints(options.checkpointCache, threadId);
     plannerSubstage("request_checkpoint_candidate_selection");
-    let selected = working.checkpoint ?? (options.visiblePrefix && browserModel
+    let selected = projection.deferredHistory ? undefined : working.checkpoint ?? (options.visiblePrefix && browserModel
       ? undefined : activeCheckpoint(projection, candidates, budgetTokens));
     const requestCheckpointFromCache = !working.produced && selected !== undefined;
     let requestCheckpointProduced = working.produced;
@@ -1206,7 +1225,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     fitBudget = freshBudgetTokens;
     fitCheckpoint = selected !== undefined;
     stage("physical_context_fit");
-    let prepared = await prepareWebContext({
+    if (projection.deferredHistory && !deferred) throw new NativeHistoryBootstrapRequired("source_budget");
+    let prepared = projection.deferredHistory ? deferred! : await prepareWebContext({
       lineage: projection.lineage,
       headId: projection.headId,
       source: sourceFor(),
@@ -1219,7 +1239,6 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       selectedContent.clear();
       fitCheckpoint = false;
       emitDiagnosticEvent("chatgpt_tela_codex", "native_deferred_history_selected", {
-        count: deferred.physicalContext.deferredHistory!.turns.length,
         source_estimate: deferred.physicalContext.logicalTokens,
         transfer_estimate: deferred.physicalContext.transferTokens,
       });

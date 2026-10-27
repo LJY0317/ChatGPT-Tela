@@ -475,10 +475,10 @@ export async function startNativeFirstProductProfileRuntime(
                     "native-visible-prefix-executions", account.accountFingerprint),
                   initializationPath: `${config.browserProfile.accountBindingPath}.native-prefix-${account.accountFingerprint}`,
                 }),
-                read: (threadId: string, turnId: string, signal?: AbortSignal) => {
+                read: (threadId: string, turnId: string, signal?: AbortSignal, bodyBudgetBytes?: number) => {
                   if (!native) throw new Error("Native context authority is not ready");
                   return appServerCompactionHistorySource(native.routedTarget.session.endpoint)
-                    .completeVisiblePrefix(threadId, turnId, signal);
+                    .visibleHistory(threadId, turnId, signal, bodyBudgetBytes);
                 },
               },
             } : {},

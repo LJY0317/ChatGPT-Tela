@@ -557,7 +557,7 @@ const prefixEntry = (id:string, turnId='prior', text=id) => ({turnId,
 test('complete visible prefix exhausts more than 192 indexed items without requiring any marker',async()=>{
  const entries=Array.from({length:245},(_,i)=>prefixEntry(`item-${244-i}`));
  const f=prefixSource({entries});
- const result=await f.reader.completeVisiblePrefix('thread','current');
+ const result=await f.reader.visibleHistory('thread','current');
  expect(result.kind).toBe('native-visible-prefix');
  expect(result.sourceItemCount).toBe(245);
  const parsed=JSON.parse(result.content);
@@ -576,7 +576,7 @@ test('complete prefix excludes all current-turn evidence and hidden reasoning, p
   prefixEntry('old'),{turnId:'prior',item:{id:'reason',type:'reasoning',rawContent:'hidden'}},
   {turnId:'prior',item:{id:'real-marker',type:'contextCompaction'}},
   {turnId:'prior',item:{id:'image',type:'userMessage',content:[{type:'localImage',path:'/private/image.png'}]}}];
- const result=await prefixSource({entries}).reader.completeVisiblePrefix('thread','current');
+ const result=await prefixSource({entries}).reader.visibleHistory('thread','current');
  expect(result.sourceItemCount).toBe(3);
  expect(result.content).not.toContain('not historical');
  expect(result.content).not.toContain('current output');
@@ -588,8 +588,8 @@ test('complete prefix excludes all current-turn evidence and hidden reasoning, p
 });
 
 test('empty complete prefix is valid and stable; digest binds source and owner but not current turn identity',async()=>{
- const first=await prefixSource().reader.completeVisiblePrefix('thread','current');
- const repeat=await prefixSource().reader.completeVisiblePrefix('thread','current');
+ const first=await prefixSource().reader.visibleHistory('thread','current');
+ const repeat=await prefixSource().reader.visibleHistory('thread','current');
  expect(first.sourceItemCount).toBe(0);
  expect(JSON.parse(first.content).items).toEqual([]);
  expect(first.digest).toBe(repeat.digest);
@@ -597,13 +597,13 @@ test('empty complete prefix is valid and stable; digest binds source and owner b
   if(method==='thread/turns/list')result.data[0].id='next';
   return result;
  }});
- expect((await otherTurn.reader.completeVisiblePrefix('thread','next')).digest).toBe(first.digest);
+ expect((await otherTurn.reader.visibleHistory('thread','next')).digest).toBe(first.digest);
  const owner=prefixSource({change(method,result){
   if(method==='thread/read')result.thread.cwd='/other';
   return result;
  }});
- expect((await owner.reader.completeVisiblePrefix('thread','current')).digest).not.toBe(first.digest);
- const source=await prefixSource({entries:[prefixEntry('old')]}).reader.completeVisiblePrefix('thread','current');
+ expect((await owner.reader.visibleHistory('thread','current')).digest).not.toBe(first.digest);
+ const source=await prefixSource({entries:[prefixEntry('old')]}).reader.visibleHistory('thread','current');
  expect(source.digest).not.toBe(first.digest);
 });
 
@@ -620,7 +620,7 @@ test('prefix rejects foreign ownership, head changes, legacy mode, and incomplet
    if(method==='thread/items/list'&&broken==='empty-page')result.data=[];
    return result;
   }});
-  await expect(f.reader.completeVisiblePrefix('thread','current')).rejects.toThrow();
+  await expect(f.reader.visibleHistory('thread','current')).rejects.toThrow();
   expect(f.closed()).toBe(1);
   if(broken==='legacy'||broken==='foreign-owner'||broken==='foreign-turn')
    expect(f.calls.includes('thread/items/list')).toBe(false);
@@ -638,24 +638,57 @@ test('prefix enforces per-response and aggregate byte budgets and caller cancell
    }
    return result;
   }});
-  await expect(f.reader.completeVisiblePrefix('thread','current')).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
+  await expect(f.reader.visibleHistory('thread','current')).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
   expect(f.closed()).toBe(1);
  }
  const f=prefixSource();
  const abort=new AbortController();abort.abort();
- await expect(f.reader.completeVisiblePrefix('thread','current',abort.signal)).rejects.toThrow();
+ await expect(f.reader.visibleHistory('thread','current',abort.signal)).rejects.toThrow();
  expect(f.calls).toHaveLength(0);
 });
 
 test('prefix digest is independent of JSON member order but changes for visible evidence',async()=>{
- const first=await prefixSource({entries:[prefixEntry('old')]}).reader.completeVisiblePrefix('thread','current');
+ const first=await prefixSource({entries:[prefixEntry('old')]}).reader.visibleHistory('thread','current');
  const reordered=await prefixSource({entries:[{item:{text:'old',type:'agentMessage',id:'old'},turnId:'prior'}],
   change(method,result){
    if(method==='thread/read')result.thread={source:'appServer',cwd:'/fixture',environments:[],
     status:{type:'active'},historyMode:'paginated',id:'thread'};
    return result;
-  }}).reader.completeVisiblePrefix('thread','current');
+  }}).reader.visibleHistory('thread','current');
  expect(reordered.digest).toBe(first.digest);
- const changed=await prefixSource({entries:[prefixEntry('old','prior','different')]}).reader.completeVisiblePrefix('thread','current');
+ const changed=await prefixSource({entries:[prefixEntry('old','prior','different')]}).reader.visibleHistory('thread','current');
  expect(changed.digest).not.toBe(first.digest);
+});
+
+
+test('bounded history keeps complete recent exchanges without enumerating or reading the entire archive', async () => {
+ const entries=[prefixEntry('current-item','current'),prefixEntry('recent-answer','past-249','Recent answer'),
+  prefixEntry('recent-user','past-249','Recent request'),prefixEntry('cut-tool','past-248','X'.repeat(2*1024*1024)),
+  ...Array.from({length:20},(_,i)=>prefixEntry(`unread-${i}`,'past-248','Must not fetch'))];
+ const f=prefixSource({entries});
+ const result=await f.reader.visibleHistory('thread','current',undefined,4096);
+ expect(JSON.parse(result.content).items.map((entry:any)=>entry.item.id)).toEqual(['recent-user','recent-answer']);
+ expect(JSON.parse(result.content).deferredHistory).toEqual({scope:"prior-native-history"});
+ expect(result.content).toContain('not supplied or summarized');
+ expect(result.content).not.toContain('X'.repeat(100));
+ expect(f.calls.filter(method=>method==='thread/items/list')).toHaveLength(1);
+ expect(f.calls.filter(method=>method==='thread/turns/list')).toHaveLength(2);
+ expect(result.sourceItemCount).toBe(2); expect(f.closed()).toBe(1);
+});
+
+test('a giant first historical exchange remains readable by reference instead of exhausting the archive', async () => {
+ const f=prefixSource({entries:[prefixEntry('large','prior','X'.repeat(3*1024*1024))]});
+ const result=await f.reader.visibleHistory('thread','current',undefined,4096);
+ expect(result.sourceItemCount).toBe(0); expect(JSON.parse(result.content).deferredHistory).toEqual({scope:'prior-native-history'});
+ expect(JSON.parse(result.content).items).toEqual([]);
+ expect(f.calls.filter(method=>method==='thread/items/list')).toHaveLength(1);
+});
+
+test('an oversized turn inside a page defers its partial exchange and all older turns', async () => {
+ const f=prefixSource({entries:[prefixEntry('recent','recent'),prefixEntry('huge-answer','huge'),
+  prefixEntry('huge-request','huge','X'.repeat(17*1024*1024)),prefixEntry('older','older')]});
+ const result=await f.reader.visibleHistory('thread','current',undefined,4096);
+ expect(JSON.parse(result.content).items.map((entry:any)=>entry.item.id)).toEqual(['recent']);
+ expect(JSON.parse(result.content).deferredHistory).toEqual({scope:'prior-native-history'});
+ expect(f.calls.filter(method=>method==='thread/items/list')).toHaveLength(1);
 });

@@ -47,13 +47,16 @@ export class McpTurnBridge implements TurnBridgeBackend {
       const anchor = cursor && typeof cursor === "object" && !Array.isArray(cursor)
         ? cursor as Record<string, unknown> : undefined;
       if (Object.keys(invocation.arguments).some(key => !["turn_id", "cursor", "offset_bytes", "page_digest"].includes(key))
-        || typeof turn_id !== "string" || !turn_id.trim()
+        || turn_id !== undefined && (typeof turn_id !== "string" || !turn_id.trim())
         || offset_bytes !== undefined && (!Number.isSafeInteger(offset_bytes) || (offset_bytes as number) < 0)
         || page_digest !== undefined && typeof page_digest !== "string"
         || cursor !== undefined && !(typeof cursor === "string" && cursor.length > 0)
           && !(anchor?.type === "item" && typeof anchor.itemId === "string" && anchor.itemId.length > 0
             && Object.keys(anchor).length === 2)) throw Error("invalid history page selection");
-      return this.turns.readHistoryPage(capability, { turnId: turn_id, limit: 4,
+      if (turn_id === undefined && (offset_bytes !== undefined || page_digest !== undefined)) {
+        throw Error("byte ranges require an original turn_id");
+      }
+      return this.turns.readHistoryPage(capability, { ...(turn_id === undefined ? {} : { turnId: turn_id as string }), limit: 4,
         ...(cursor === undefined ? {} : { cursor: cursor as string | { type: "item"; itemId: string } }),
         ...(offset_bytes === undefined ? {} : { offsetBytes: offset_bytes as number }),
         ...(page_digest === undefined ? {} : { pageDigest: page_digest as string }),

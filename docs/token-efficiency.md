@@ -101,15 +101,16 @@ smaller seed with deferred original ranges requires a real authenticated Tela Ch
 capability first. Current structural Native inspection is not that reader. The Native history
 source shares the public `thread/items/list` page reader, including a selected `turnId` and
 exclusive item anchor. Its optional current-turn binding fixes the original thread and branch,
-and rejects a replaced or retired owner before releasing the page. A planner-selected list
-of original turns can now enable Tela Chat `read_context_history` through the existing turn
+and rejects a replaced or retired owner before releasing the page. An explicit prior-history
+scope enables Tela Chat `read_context_history` through the existing turn
 transport. Its response-cycle capability grants neither Native work tools nor another
 account/thread. Readback uses plain historical text; private reasoning and undelivered media
 contents are not exposed. Normal plans do not advertise this capability without an explicit
 scope. When a loaded indexed archive exceeds the Web window and its original reader is
 available, the planner keeps current work, authority and actual media exact and defers only
-whole historical turns. A source manifest names those turns and their original boundaries;
-it is not a summary or evidence that the archive was reviewed. A fitting maintained checkpoint
+whole historical turns. The manifest identifies unread prior history; its turn index is paginated
+on demand rather than injected as a growing ID list. It is not a summary or evidence that the
+archive was reviewed. A fitting maintained checkpoint
 still wins. Retained requests renew the read capability without repeating the manifest or
 historical bodies. Readback bytes contribute to the physical epoch estimate without starting
 Native tool work or inference.
@@ -121,12 +122,14 @@ not invalidate unchanged bytes. The selected indexed page is read again for a co
 no separate archive copy, cache engine or Base64 layer is added. Referenced media is still
 explicitly undelivered.
 
-Initial archive acquisition still has its existing full-prefix byte budgets. The next source
-adapter change must select recent bodies and explicit original-turn metadata without exhausting
-the entire archive first. This remains an unfinished cold-switch boundary, distinct from the
-now-connected deferred seed and text reader. Return readable original items rather than
-whole-turn replay or Base64 fragments. Do not duplicate the archive, add a search engine or promise readback
-that Web cannot perform. No background Native summaries, automatic
+With an owner-bound reader, initial acquisition stops at the existing working-context body
+budget and retains complete recent exchanges. The exchange crossing the budget and all older
+history remain readable through the same Native owner; partial tool chains are not supplied.
+Without that reader, full-source limits still apply and no original history is silently omitted.
+Native item paging can still return a large single item before Tela can measure it; the body
+budget bounds retained history, not the size of an individual upstream response. Installed live
+Web acceptance remains pending. Do not duplicate the archive, add a search engine or promise
+readback that Web cannot perform. No background Native summaries, automatic
 paid Native fallback or fragment/merge chain is authorized by this policy.
 
 ## Durable reuse and ownership

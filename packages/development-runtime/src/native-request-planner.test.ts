@@ -2232,11 +2232,12 @@ test('oversized indexed originals use a scoped exact seed and retain the same We
     const request = { model: chatGptWebModelId(chatGptWebFamilyKey('Fixture')), reasoning: { effort: 'medium' },
       instructions: 'Current exact authority', input: [{ type: 'compaction', encrypted_content: 'opaque' }, { role: 'user', content: 'Continue current task' }] };
     const withReader = (turnId: string) => new ActiveTurnRegistry().register({ ...binding(turnId),
-      async readHistoryPage() { bodyReads++; return { data: [], nextCursor: null }; } });
+      async readHistoryPage() { bodyReads++; return { data: [], nextCursor: null }; },
+      async readHistoryIndex() { return { data: [], nextCursor: null }; } });
     const planner = createNativeRequestDevelopmentWebTurnPlanner(options);
     const first = await planner(withReader('turn-1'), request);
     const context = first.physicalContext;
-    expect(context.deferredHistory?.turns.map(item => item.turnId)).toEqual(items.filter(item => item.item.type === 'userMessage').map(item => item.turnId));
+    expect(context.deferredHistory).toEqual({ scope: 'prior-native-history' });
     expect(context.segments.some(item => item.content.includes('Latest exact agreement'))).toBe(true);
     expect(context.segments.at(-1)?.content).toBe('Continue current task');
     expect(context.segments[0]?.content).toBe('Current exact authority');

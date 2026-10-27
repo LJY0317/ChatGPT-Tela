@@ -1,6 +1,6 @@
 import { CheckpointPreparationBudget, CheckpointPreparationBudgetExceeded, type CheckpointPreparationPolicy } from "./checkpoint-preparation-budget";
 import { createHash } from "node:crypto";
-import { NativeHistoryBootstrapRequired, type NativeVisiblePrefixSnapshot } from "@chatgpt-tela/codex";
+import { NativeHistoryBootstrapRequired, type NativeVisibleHistorySnapshot } from "@chatgpt-tela/codex";
 import {
   chatGptCheckpointInputTokens, chatGptWebCheckpointSourceTokenLimit,
   chatGptCheckpointPolicyFingerprint,
@@ -69,7 +69,7 @@ export class NativePrefixCheckpointInterrupted extends NativeHistoryBootstrapReq
 }
 
 /** One durable compressor for fitted immutable canonical request prefixes. */
-export interface NativeRequestPrefixSnapshot extends Omit<NativeVisiblePrefixSnapshot, "kind"> {
+export interface NativeRequestPrefixSnapshot extends Omit<NativeVisibleHistorySnapshot, "kind"> {
   readonly kind: "native-request-prefix";
 }
 export interface NativePrefixCheckpointInput {

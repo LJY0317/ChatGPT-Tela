@@ -156,7 +156,7 @@ test("public AppServer snapshot enters ordered projection without a bootstrap su
   if(method==="thread/items/list")return {data:[{turnId:"prior",item:{id:"message",type:"agentMessage",text:"verified public history"}}],nextCursor:null};
   throw Error("unexpected RPC");
  },async close(){}};
- const snapshot=await new AppServerCompactionHistorySource(async()=>rpc).completeVisiblePrefix("thread","active");
+ const snapshot=await new AppServerCompactionHistorySource(async()=>rpc).visibleHistory("thread","active");
  expect(snapshot.contentDigest).toBe(hash(snapshot.content));expect(snapshot.digest).not.toBe(snapshot.contentDigest);
  const root=await mkdtemp(join(tmpdir(),"tela-public-source-"));let sends=0;
  try{
@@ -243,4 +243,67 @@ test("deadline crossing during claim closes a proven uninvoked stage, preserving
    producer:async r=>{sends++;return {...r,content:"verified continuation"};}})).resolves.toContain("verified continuation");
   expect(sends).toBe(1);expect(await journal.pendingOperations()).toHaveLength(0);
  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+
+test("cold Web planning reads a bounded original source and can retrieve its giant deferred item through the same Native binding", async () => {
+ const {AppServerCompactionHistorySource,AppServerCurrentTurnSource,bindNativeTurnRequest}=await import('@chatgpt-tela/codex');
+ const {ActiveTurnRegistry}=await import('@chatgpt-tela/runtime');
+ const {createNativeRequestDevelopmentWebTurnPlanner}=await import('./native-request-planner');
+ const {chatGptWebModelId,chatGptWebFamilyKey,formatWebPhysicalContext}=await import('@chatgpt-tela/chatgpt');
+ const root=await mkdtemp(join(tmpdir(),'tela-bounded-cold-source-'));
+ let current='active',sourceReads=0,bodyReads=0,summaries=0;
+ const original={id:'giant-original',type:'agentMessage',text:'original-'.repeat(400_000)};
+ const rpc={async request(method:string,params:any):Promise<any>{
+  if(method==='thread/read')return {thread:{id:'thread',status:{type:'active'},historyMode:'paginated',cwd:'/fixture',source:'appServer'}};
+  if(method==='thread/turns/list')return {data:(params.limit===4?[current,'prior']:[current])
+   .map(id=>({id,status:id===current?'inProgress':'completed',itemsView:'notLoaded',items:[]})),nextCursor:null};
+  if(method==='thread/items/list'){
+   if(params.turnId){bodyReads++;expect(params.turnId).toBe('prior');}
+   return {data:[{turnId:'prior',item:original}],nextCursor:null};
+  }
+  throw Error('unexpected source API');
+ },async close(){}};
+ const originalSource = new AppServerCurrentTurnSource(async()=>rpc);
+ const canonical:import('@chatgpt-tela/codex').CanonicalCurrentTurnSource={async currentTurn(threadId:string){return {threadId,turnId:current,cwd:'/fixture',workspaceRoots:['/fixture'],
+  sandbox:{kind:'native-enforced' as const},proof:'turn-context' as const,environmentSourceTurnId:current};},
+  readHistoryPage:(...args)=>originalSource.readHistoryPage(...args),
+  readHistoryIndex:(...args)=>originalSource.readHistoryIndex(...args)};
+ const input=[{type:'compaction',encrypted_content:'opaque-native'},{role:'user',content:'Continue the agreed task'}];
+ const request=(items:unknown[]=input)=>({model:chatGptWebModelId(chatGptWebFamilyKey('Fixture')),reasoning:{effort:'medium'},instructions:'Exact current instruction',input:items,
+  client_metadata:{'x-codex-turn-metadata':{request_kind:'turn',thread_id:'thread',turn_id:current}},tools:[]});
+ const turns=new ActiveTurnRegistry();
+ const planner=createNativeRequestDevelopmentWebTurnPlanner({
+  visiblePrefix:{accountNamespace:'fixture-account',journal:new FileNativeVisiblePrefixStageJournal({directory:join(root,'journal'),initializationPath:join(root,'init')}),
+   async read(threadId,turnId,signal,bodyBudgetBytes){sourceReads++;expect(bodyBudgetBytes).toBeGreaterThan(0);
+    return new AppServerCompactionHistorySource(async()=>rpc).visibleHistory(threadId,turnId,signal,bodyBudgetBytes);}},
+  checkpointProducer:async()=>{summaries++;throw Error('unseen original archive must not be summarized');},
+ });
+ try{
+  const registered=turns.register(await bindNativeTurnRequest(request(),canonical));
+  const plan=await planner(registered,request());
+  expect(plan.physicalContext.deferredHistory).toEqual({scope:'prior-native-history'});
+  expect(plan.physicalContext.transferTokens).toBeLessThan(4096);
+  expect(plan.physicalContext.segments.at(-1)?.content).toBe('Continue the agreed task');
+  expect(plan.physicalContext.segments.some(item=>item.content.includes('original-'))).toBe(false);
+  const control=turns.historyControl(registered.capability,new AbortController().signal)!;
+  const index=await turns.readHistoryPage(control,{});
+  expect(index).toMatchObject({type:'native_history_index',data:[{turnId:'prior',status:'completed'}]});
+  const readback=await turns.readHistoryPage(control,{turnId:'prior'});
+  if(readback.type!=='native_history_page')throw Error('expected original body range');
+  expect(readback.text).toContain('original-');expect(readback.continuation).not.toBeNull();
+  expect(readback.range.end).toBeLessThan(readback.range.total);
+  expect(registered.channel.toolRoundCount).toBe(0);expect(bodyReads).toBe(1);expect(summaries).toBe(0);
+  plan.settle?.({status:'completed',surfaceLeaseId:'same-original-page',documentGeneration:1,answer:'Done',
+   releasedToolResultBytes:registered.channel.releasedToolResultBytes,toolRoundCount:registered.channel.toolRoundCount});
+  turns.retire(registered.capability);current='active-next';
+  const continued=request([...input,{role:'assistant',content:'Done'},{role:'user',content:'Next step'}]);
+  const next=await planner(turns.register(await bindNativeTurnRequest(continued,canonical)),continued);
+  expect(next.physicalContext.mode).toBe('retained-delta');
+  expect(next.retainedSurfaceLeaseId).toBe('same-original-page');
+  expect(next.physicalContext.deferredHistory).toEqual(plan.physicalContext.deferredHistory);
+  expect(formatWebPhysicalContext(next.physicalContext,undefined,undefined,[],{nativeHistoryControl:'fresh-control'})).not.toContain('"deferredHistory"');
+  expect(sourceReads).toBe(1);expect(bodyReads).toBe(1);expect(summaries).toBe(0);
+  next.settle?.({status:'failed'});
+ }finally{turns.cancelAll();await rm(root,{recursive:true,force:true});}
 });

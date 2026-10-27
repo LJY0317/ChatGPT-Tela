@@ -227,10 +227,11 @@ test("turns without original Goal controls do not advertise a completion capabil
 });
 
 
-test("selected history reads use the original source without Native work inventory or tool rounds", async () => {
+test("original-context history reads use the original source without Native work inventory or tool rounds", async () => {
   const turns = new ActiveTurnRegistry({ routeId: "ReadOnly1" });
   const calls: unknown[] = [];
   const owner = turns.register({ ...binding(), async readHistoryPage(selection) {
+    if (selection.turnId !== "past") throw Error("not in the original Native thread");
     calls.push(selection);
     return { data: [
       { turnId: "past", item: { id: "user", type: "userMessage", content: [
@@ -240,8 +241,8 @@ test("selected history reads use the original source without Native work invento
       { turnId: "past", item: { id: "answer", type: "agentMessage", text: "prior answer" } },
       { turnId: "past", item: { id: "reason", type: "reasoning", encryptedContent: "private-reasoning" } },
     ], nextCursor: "next-page" };
-  } });
-  const control = turns.historyControl(owner.capability, ["past"], new AbortController().signal)!;
+  }, async readHistoryIndex() { return { data: [{ turnId: "past", status: "completed" }], nextCursor: null }; } });
+  const control = turns.historyControl(owner.capability, new AbortController().signal)!;
   expect(control).toStartWith("turnr_ReadOnly1_");
   const bridge = new McpTurnBridge(turns);
   const invoke = (token: string, arguments_: Record<string, unknown>) => bridge.invoke(token, {
@@ -250,13 +251,18 @@ test("selected history reads use the original source without Native work invento
   expect(() => bridge.inventory(control)).toThrow("unknown or retired");
   expect(() => bridge.invoke(control, { callId: "work", wireName: "exec_command", mode: "structured", arguments: {} }))
     .toThrow("unknown or retired");
-  await expect(invoke(owner.capability, { turn_id: "past" })).rejects.toThrow("outside the selected");
-  await expect(invoke(control, { turn_id: "foreign" })).rejects.toThrow("outside the selected");
+  await expect(invoke(owner.capability, { turn_id: "past" })).rejects.toThrow("outside the original");
+  await expect(invoke(control, { turn_id: "foreign" })).rejects.toThrow("not in the original Native thread");
   expect(() => invoke(control, { turn_id: "past", thread_id: "foreign" })).toThrow("invalid history");
   const server = await startCodexBridgeMcpHttpServer({ turns });
   const remote = await connectCodexTurnBridge({ endpoint: server.endpointUrl, bearerToken: server.bearerToken! });
-  let result: NativeToolResult;
+  let result: NativeToolResult, indexBytes = 0;
   try {
+    const index = await remote.invoke(control, { callId: "list", wireName: CONTEXT_HISTORY_TOOL.wireName,
+      mode: "structured", arguments: {} });
+    expect(JSON.parse(index.content as string)).toMatchObject({ type: "native_history_index",
+      data: [{ turnId: "past", status: "completed" }], continuation: null });
+    indexBytes = Buffer.byteLength(index.content as string);
     result = await remote.invoke(control, { callId: "read", wireName: CONTEXT_HISTORY_TOOL.wireName,
       mode: "structured", arguments: { turn_id: "past", cursor: { type: "item", itemId: "before" } } });
   } finally { await remote.close(); await server.stop(); }
@@ -272,9 +278,9 @@ test("selected history reads use the original source without Native work invento
   expect(text).not.toContain("/private/image.png");
   expect(text).not.toContain("private-reasoning");
   expect(owner.channel.state().toolRoundCount).toBe(0);
-  expect(owner.channel.releasedToolResultBytes).toBe(Buffer.byteLength(result.content as string));
+  expect(owner.channel.releasedToolResultBytes).toBe(indexBytes + Buffer.byteLength(result.content as string));
   turns.retire(owner.capability);
-  await expect(invoke(control, { turn_id: "past" })).rejects.toThrow("outside the selected");
+  await expect(invoke(control, { turn_id: "past" })).rejects.toThrow("outside the original");
 });
 
 test("late original-history reads cannot cross a response-cycle boundary", async () => {
@@ -284,10 +290,10 @@ test("late original-history reads cannot cross a response-cycle boundary", async
   const bound = { ...binding(), async readHistoryPage() {
     reads++; await pending;
     return { data: [{ turnId: "past", item: { id: "old", type: "agentMessage", text: "old result" } }], nextCursor: null };
-  } };
+  }, async readHistoryIndex() { return { data: [], nextCursor: null }; } };
   const owner = turns.register(bound);
   const signal = new AbortController();
-  const control = turns.historyControl(owner.capability, ["past"], signal.signal)!;
+  const control = turns.historyControl(owner.capability, signal.signal)!;
   const reading = turns.readHistoryPage(control, { turnId: "past" });
   owner.channel.markSubmitted(); owner.channel.markAccepted(); owner.channel.complete("done");
   turns.nextCycle(owner.capability, bound);
@@ -295,7 +301,7 @@ test("late original-history reads cannot cross a response-cycle boundary", async
   await expect(reading).rejects.toThrow("no longer active");
   expect(reads).toBe(1);
   const next = turns.active("thread-1", "turn-1")!;
-  const aborted = turns.historyControl(next.capability, ["past"], signal.signal)!;
+  const aborted = turns.historyControl(next.capability, signal.signal)!;
   signal.abort();
   await expect(turns.readHistoryPage(aborted, { turnId: "past" })).rejects.toThrow();
   expect(reads).toBe(1);

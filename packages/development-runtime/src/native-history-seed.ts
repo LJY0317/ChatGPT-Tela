@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import type { DeferredNativeHistory, WebPhysicalContext } from "@chatgpt-tela/chatgpt";
+import type { WebPhysicalContext } from "@chatgpt-tela/chatgpt";
 import type { NativeRequestContextProjection, ProjectedNativeRevision } from "./native-request-planner";
 import type { PreparedWebContext } from "@chatgpt-tela/runtime";
 import type { WebWorkingContextPolicy } from "./web-working-context-policy";
@@ -9,7 +8,7 @@ export function prepareDeferredNativeHistory(projection: NativeRequestContextPro
   policy: WebWorkingContextPolicy, budgetTokens = Number.MAX_SAFE_INTEGER): Extract<PreparedWebContext, { status: "ready" }> | undefined {
   const all = projection.revisions;
   const logicalTokens = all.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
-  if (logicalTokens + policy.outputReserveTokens < policy.hard.contextWindowTokenLimit) return undefined;
+  if (!projection.deferredHistory && logicalTokens + policy.outputReserveTokens < policy.hard.contextWindowTokenLimit) return undefined;
   const media = new Set(projection.media.map(item => item.revisionId));
   const protectedIds = new Set(projection.protectedRevisionIds);
   const turns = new Map<string, ProjectedNativeRevision[]>();
@@ -22,23 +21,19 @@ export function prepareDeferredNativeHistory(projection: NativeRequestContextPro
   const eligible = [...turns.entries()].filter(([, items]) => items.every(item =>
     !media.has(item.revision.id) && !protectedIds.has(item.revision.id)
     && item.revision.kind !== "system" && item.revision.kind !== "developer"));
-  if (!eligible.length) return undefined;
+  if (!eligible.length && !projection.deferredHistory) return undefined;
   const deferred = new Set<string>();
-  const scope: DeferredNativeHistory["turns"][number][] = [];
+  const deferredHistory = Object.freeze({ scope: "prior-native-history" as const });
+  const manifestTokens = Math.ceil(Buffer.byteLength(JSON.stringify(deferredHistory)) / 4);
   let keptTokens = logicalTokens;
   // Oldest complete turns leave first; the newest working successor stays exact.
-  for (const [turnId, items] of eligible) {
+  for (const [, items] of eligible) {
+    if ((projection.deferredHistory || deferred.size) && keptTokens + manifestTokens
+      <= Math.min(policy.firstMessageTargetTokens, budgetTokens)) break;
     for (const item of items) deferred.add(item.revision.id);
     keptTokens -= items.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
-    scope.push({ turnId, firstRevisionId: items[0]!.revision.id, lastRevisionId: items.at(-1)!.revision.id,
-      itemCount: items.length,
-      sourceDigest: createHash("sha256").update(JSON.stringify(items.map(item => [item.revision.id, item.content]))).digest("hex"),
-    });
-    const manifestTokens = Math.ceil(Buffer.byteLength(JSON.stringify({ turns: scope })) / 4);
-    if (keptTokens + manifestTokens <= Math.min(policy.firstMessageTargetTokens, budgetTokens)) break;
   }
-  const deferredHistory = Object.freeze({ turns: Object.freeze(scope) });
-  const transferTokens = keptTokens + Math.ceil(Buffer.byteLength(JSON.stringify(deferredHistory)) / 4);
+  const transferTokens = keptTokens + manifestTokens;
   if (transferTokens > budgetTokens || transferTokens + policy.outputReserveTokens >= policy.hard.contextWindowTokenLimit) return undefined;
   const kept = all.filter(item => !deferred.has(item.revision.id));
   const segments: WebPhysicalContext["segments"] = kept.map(item => ({ type: "revision",

@@ -9,12 +9,12 @@ import type { NativeTurnBinding } from "@chatgpt-tela/codex";
 import { NativeHistoryBootstrapRequired, projectNativeHistoryReadback } from "@chatgpt-tela/codex";
 import { WebRetainedContextUnproven, webRetainedContextFailureReason, type WebRetainedContextReason } from "@chatgpt-tela/core";
 import { RuntimeTurnChannel } from "./turn-channel";
-import { boundedNativeHistoryReadback, type HistoryReadSelection } from "./history-readback";
+import { boundedNativeHistoryReadback, projectNativeHistoryIndex, type HistoryReadSelection, type HistoryReadResult } from "./history-readback";
 
 export interface TurnCapabilityResolver {
   resolve(token: string): RuntimeTurnChannel;
   resolveGoalControl?(token: string): RuntimeTurnChannel | undefined;
-  readHistoryPage?(token: string, selection: HistoryReadSelection): Promise<ReturnType<typeof boundedNativeHistoryReadback>>;
+  readHistoryPage?(token: string, selection: HistoryReadSelection): Promise<HistoryReadResult>;
 }
 
 export interface RegisteredTurn {
@@ -62,7 +62,7 @@ export class ActiveTurnRegistry {
   readonly #byCapability = new Map<string, RuntimeTurnChannel>();
   readonly #controls = new Map<string,
     { readonly kind: "goal"; readonly owner: string }
-    | { readonly kind: "history"; readonly owner: string; readonly turnIds: ReadonlySet<string>; readonly signal: AbortSignal }>();
+    | { readonly kind: "history"; readonly owner: string; readonly signal: AbortSignal }>();
   readonly #nativeCallIdsByTurn = new Map<string, Set<string>>();
   readonly #capabilityByTurn = new Map<string, string>();
   // A fixed recovery classification only; never retain raw exceptions or request content.
@@ -135,24 +135,18 @@ export class ActiveTurnRegistry {
     return scope?.kind === "goal" ? this.resolve(scope.owner) : undefined;
   }
 
-  /** Planner-selected original turns only; never a model-supplied account/thread grant. */
-  historyControl(token: string, turnIds: readonly string[], signal: AbortSignal): string | undefined {
+  /** The original Native owner supplies its entire prior indexed history, never another thread. */
+  historyControl(token: string, signal: AbortSignal): string | undefined {
     const channel = this.resolve(token);
-    if (!channel.binding.readHistoryPage || !turnIds.length) return undefined;
-    const selected = new Set(turnIds);
-    if (selected.has(channel.binding.authority.turnId) || selected.has("")) {
-      throw new Error("history scope must select settled original turns");
-    }
+    if (!channel.binding.readHistoryPage || !channel.binding.readHistoryIndex) return undefined;
     const control = capability(this.#routeId);
-    this.#controls.set(control, { kind: "history", owner: token, turnIds: selected, signal });
+    this.#controls.set(control, { kind: "history", owner: token, signal });
     return control;
   }
 
   async readHistoryPage(token: string, selection: HistoryReadSelection) {
     const scope = this.#controls.get(token);
-    if (scope?.kind !== "history" || !scope.turnIds.has(selection.turnId)) {
-      throw new Error("history read is outside the selected original turns");
-    }
+    if (scope?.kind !== "history") throw new Error("history read is outside the original Native context");
     scope.signal.throwIfAborted();
     const channel = this.resolve(scope.owner);
     const assertOwner = () => {
@@ -164,11 +158,20 @@ export class ActiveTurnRegistry {
       }
     };
     assertOwner();
-    const page = await channel.binding.readHistoryPage!({ turnId: selection.turnId, limit: 4,
-      ...(selection.cursor === undefined ? {} : { cursor: selection.cursor }) }, scope.signal);
-    assertOwner();
-    const result = boundedNativeHistoryReadback(
-      projectNativeHistoryReadback(page, channel.binding.authority.threadId, channel.binding.authority.turnId), selection);
+    let result: HistoryReadResult;
+    if (selection.turnId === undefined) {
+      if (selection.cursor !== undefined && typeof selection.cursor !== "string") throw Error("history index requires its Native cursor");
+      const page = await channel.binding.readHistoryIndex!({ limit: 4,
+        ...(selection.cursor === undefined ? {} : { cursor: selection.cursor }) }, scope.signal);
+      assertOwner();
+      result = projectNativeHistoryIndex(page);
+    } else {
+      const page = await channel.binding.readHistoryPage!({ turnId: selection.turnId, limit: 4,
+        ...(selection.cursor === undefined ? {} : { cursor: selection.cursor }) }, scope.signal);
+      assertOwner();
+      result = boundedNativeHistoryReadback(
+        projectNativeHistoryReadback(page, channel.binding.authority.threadId, channel.binding.authority.turnId), selection);
+    }
     channel.recordReleasedToolResultBytes(Buffer.byteLength(JSON.stringify(result)));
     return result;
   }

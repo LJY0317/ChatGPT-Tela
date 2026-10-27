@@ -1,7 +1,7 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import { NativeBindingError, type CanonicalCurrentTurnSource } from "./binding";
 import type { CanonicalCurrentTurnEvidence } from "./rollout";
-import { readIndexedNativeItemsPage, type NativeHistoryPageSelection } from "./native-history-items";
+import { readIndexedNativeItemsPage, type NativeHistoryPageSelection, type NativeHistoryIndexSelection, type NativeHistoryIndexPage } from "./native-history-items";
 import { capturePrivateDiagnosticValue, diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import { NativeHistoryBootstrapRequired } from "./history-bootstrap-error";
 import type { NativeLiveTurnProof, NativeLiveTurnReceipt } from "@chatgpt-tela/core";
@@ -366,6 +366,33 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
 
   async readHistoryPage(bound: CanonicalCurrentTurnEvidence, selection: NativeHistoryPageSelection, signal: AbortSignal) {
     if (selection.turnId === bound.turnId) throw new NativeBindingError("claim_invalid", "History readback cannot read the active turn");
+    return this.#readOwnedHistory(bound, signal, rpc => readIndexedNativeItemsPage(rpc, {
+      ...selection, threadId: bound.threadId, sortDirection: "asc",
+    }, signal));
+  }
+
+  async readHistoryIndex(bound: CanonicalCurrentTurnEvidence, selection: NativeHistoryIndexSelection, signal: AbortSignal): Promise<NativeHistoryIndexPage> {
+    return this.#readOwnedHistory(bound, signal, async rpc => {
+      const limit = selection.limit ?? 4;
+      const page = record(await rpc.request("thread/turns/list", {
+        ...selection, threadId: bound.threadId, sortDirection: "desc", itemsView: "notLoaded", limit,
+      }, signal));
+      if (!page || !Array.isArray(page.data) || page.data.length > limit
+        || page.nextCursor != null && typeof page.nextCursor !== "string") throw Error("Native history index is incomplete");
+      const data = page.data.map(raw => {
+        const turn = record(raw);
+        if (!turn || typeof turn.id !== "string" || !turn.id || typeof turn.status !== "string"
+          || turn.itemsView !== "notLoaded" || !Array.isArray(turn.items) || turn.items.length !== 0) {
+          throw Error("Native history index includes bodies or incomplete metadata");
+        }
+        return { turnId: turn.id, status: turn.status };
+      }).filter(turn => turn.turnId !== bound.turnId);
+      return { data, nextCursor: page.nextCursor as string | null | undefined };
+    });
+  }
+
+  async #readOwnedHistory<T>(bound: CanonicalCurrentTurnEvidence, signal: AbortSignal,
+    read: (rpc: CodexAppServerRpc) => Promise<T>): Promise<T> {
     const rpc = await this.#connect(signal);
     try {
       const current = await readBoundedNewestTurn(rpc, bound.threadId, signal);
@@ -375,9 +402,7 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
         || environment(current.thread).cwd !== bound.cwd) {
         throw new NativeBindingError("owner_changed", "Native history readback owner changed");
       }
-      const page = await readIndexedNativeItemsPage(rpc, {
-        ...selection, threadId: bound.threadId, sortDirection: "asc",
-      }, signal);
+      const page = await read(rpc);
       const after = record(await rpc.request("thread/turns/list", {
         threadId: bound.threadId, limit: 1, itemsView: "notLoaded", sortDirection: "desc",
       }, signal));

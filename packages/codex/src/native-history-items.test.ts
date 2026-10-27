@@ -10,7 +10,11 @@ function fixture(retireDuringRead=false){
   async request(method,params:any){
    calls.push({method,params});
    if(method==='thread/read')return {thread:{id:bound.threadId,historyMode:mode,cwd:'/workspace',status:{type:'active'}}};
-   if(method==='thread/turns/list')return {data:[{id:head,status:'inProgress',itemsView:'notLoaded',items:[]}]};
+   if(method==='thread/turns/list'){
+    if(params.limit===4)return {data:[{id:head,status:'inProgress',itemsView:'notLoaded',items:[]},
+      {id:'prior',status:'completed',itemsView:'notLoaded',items:[],privateField:'must not leak'}],nextCursor:'older-index-page'};
+    return {data:[{id:head,status:'inProgress',itemsView:'notLoaded',items:[]}]};
+   }
    if(method==='thread/items/list'){
     if(retireDuringRead)head='replacement-turn';
     return {data:[{turnId:params.turnId,item:{id:'selected-item',type:'agentMessage',text:'원문'}}],nextCursor:null};
@@ -44,4 +48,17 @@ test('retired current owner, current-turn access and unindexed history do not re
  f.setMode('legacy');
  await expect(f.source.readHistoryPage(bound,{turnId:'historical-turn'},signal)).rejects.toMatchObject({code:'native_history_bootstrap_required'});
  expect(f.calls.some(c=>c.method==='thread/items/list')).toBe(false);
+});
+
+
+test('original-history index is paginated through the same owner and returns metadata without bodies or account overrides',async()=>{
+ const f=fixture();
+ const result=await f.source.readHistoryIndex(bound,{cursor:'index-cursor',threadId:'foreign'} as any,new AbortController().signal);
+ expect(result).toEqual({data:[{turnId:'prior',status:'completed'}],nextCursor:'older-index-page'});
+ expect(f.calls.find(c=>c.method==='thread/turns/list'&&c.params.limit===4)).toEqual({method:'thread/turns/list',params:{
+  cursor:'index-cursor',threadId:bound.threadId,sortDirection:'desc',itemsView:'notLoaded',limit:4,
+ }});
+ expect(f.calls.some(c=>c.method==='thread/items/list')).toBe(false);
+ expect(JSON.stringify(result)).not.toContain('must not leak');
+ expect(f.closed).toBe(1);
 });

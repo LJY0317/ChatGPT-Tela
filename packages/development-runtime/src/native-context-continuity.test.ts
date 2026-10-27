@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { FileContextCheckpointCache } from "./context-cache";
 import { nativeOpaqueCompaction, resolveNativeContextContinuity } from "./native-context-continuity";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
-import type { NativeVisiblePrefixSnapshot } from "@chatgpt-tela/codex";
+import type { NativeVisibleHistorySnapshot } from "@chatgpt-tela/codex";
 
 const authority = defineNativeTurnAuthority({
   threadId: "task-1", turnId: "web-current",
@@ -51,7 +51,7 @@ test("indexed opaque continuity acquires ordered source without a separate summa
       { turnId: "prior", item: { type: "agentMessage", id: "prior-answer", text: "Historical evidence" } },
     ] });
     const digest = createHash("sha256").update(content).digest("hex");
-    const source: NativeVisiblePrefixSnapshot = { kind: "native-visible-prefix", threadId: "task-1", currentTurnId: "web-current",
+    const source: NativeVisibleHistorySnapshot = { kind: "native-visible-prefix", threadId: "task-1", currentTurnId: "web-current",
       contentDigest: digest, digest, sourceItemCount: 1, content,
       inlineAssets: [], references: [], localImageCandidates: [] };
     const journal = new FileNativeVisiblePrefixStageJournal({ directory: join(directory, "ledger"), initializationPath: join(directory, "receipt") });
@@ -374,7 +374,7 @@ test("source acquisition neither consumes nor resets an earlier preparation budg
  const directory=mkdtempSync(join(tmpdir(),"native-shared-preparation-"));
  const content=JSON.stringify({type:"tela_native_visible_prefix_v1",items:[]});
  const digest=createHash("sha256").update(content).digest("hex");
- const source:NativeVisiblePrefixSnapshot={kind:"native-visible-prefix",threadId:"task-1",currentTurnId:"web-current",
+ const source:NativeVisibleHistorySnapshot={kind:"native-visible-prefix",threadId:"task-1",currentTurnId:"web-current",
   contentDigest:digest,digest,sourceItemCount:0,content,inlineAssets:[],references:[],localImageCandidates:[]};
  const journal=new FileNativeVisiblePrefixStageJournal({directory:join(directory,"ledger"),initializationPath:join(directory,"receipt")});
  const budget=new CheckpointPreparationBudget(100000,{maxModelCalls:1,maxInputTokens:100000,maxElapsedMs:60000});

@@ -51,13 +51,7 @@ export type WebPhysicalContextSegment =
 
 /** Exact originals left in Native history, not summarized or resident in the browser. */
 export interface DeferredNativeHistory {
-  readonly turns: readonly {
-    readonly turnId: string;
-    readonly firstRevisionId: string;
-    readonly lastRevisionId: string;
-    readonly itemCount: number;
-    readonly sourceDigest: string;
-  }[];
+  readonly scope: "prior-native-history";
 }
 
 export interface WebPhysicalContext {

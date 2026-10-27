@@ -31,8 +31,8 @@ export interface NativeReadableHistoryAnchor {
   readonly compactionItemId: string;
 }
 
-/** Complete public visible prefix, never an opaque Native compaction replacement. */
-export interface NativeVisiblePrefixSnapshot {
+/** Public history before the current turn; deferred original turns are explicit, never summarized. */
+export interface NativeVisibleHistorySnapshot {
   readonly kind: "native-visible-prefix";
   readonly threadId: string;
   readonly currentTurnId: string;
@@ -586,12 +586,16 @@ export class AppServerCompactionHistorySource {
   }
 
   /**
-   * Exhaust the indexed public item stream before producing any result. This is
-   * visible evidence, not recovered encrypted model state or a compaction marker.
+   * Read the public indexed history. With a body budget, keep recent complete
+   * turns and retain the original Native archive as an on-demand indexed range.
+   * This is visible evidence, not recovered encrypted Native model state.
    */
-  async completeVisiblePrefix(threadId: string, currentTurnId: string, signal?: AbortSignal):
-    Promise<NativeVisiblePrefixSnapshot> {
+  async visibleHistory(threadId: string, currentTurnId: string, signal?: AbortSignal, bodyBudgetBytes?: number):
+    Promise<NativeVisibleHistorySnapshot> {
     if (!threadId.trim() || !currentTurnId.trim()) throw new Error("Native visible prefix requires exact owner identifiers");
+    if (bodyBudgetBytes !== undefined && (!Number.isSafeInteger(bodyBudgetBytes) || bodyBudgetBytes <= 0)) {
+      throw new Error("Native history body budget must be positive bytes");
+    }
     const active = signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
       : AbortSignal.timeout(30_000);
     active.throwIfAborted();
@@ -620,7 +624,7 @@ export class AppServerCompactionHistorySource {
         }
       };
       const owner = (thread: Record<string, unknown>) => ({
-        id: thread.id, cwd: thread.cwd, environments: thread.environments, source: thread.source,
+        id: thread.id, cwd: thread.cwd, environments: thread.environments, source: thread.source, parentThreadId: thread.parentThreadId,
       });
       const before = await metadata();
       await proveCurrent();
@@ -629,15 +633,17 @@ export class AppServerCompactionHistorySource {
       const cursors = new Set<string>();
       let cursor: string | undefined;
       let bytes = 0;
+      let bodyBytes = 0;
       let passedCurrent = false;
-      for (;;) {
+      let deferredOriginals = false;
+      history: for (;;) {
         active.throwIfAborted();
         const response = await readIndexedNativeItemsPage(rpc, {
           threadId, sortDirection: "desc", limit: 4, ...(cursor ? { cursor } : {}),
         }, active);
         const pageBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
         bytes += pageBytes;
-        if (pageBytes > 2 * 1024 * 1024 || bytes > 8 * 1024 * 1024) {
+        if (bodyBudgetBytes === undefined && (pageBytes > 2 * 1024 * 1024 || bytes > 8 * 1024 * 1024)) {
           throw new NativeHistoryBootstrapRequired();
         }
         for (const entry of response.data) {
@@ -651,7 +657,16 @@ export class AppServerCompactionHistorySource {
             continue;
           }
           passedCurrent = true;
-          if (item.type !== "reasoning") entries.push({ turnId: entry.turnId, item });
+          if (item.type === "reasoning") continue;
+          bodyBytes += Buffer.byteLength(JSON.stringify(entry), "utf8");
+          if (bodyBudgetBytes !== undefined && bodyBytes > bodyBudgetBytes) {
+            // Stop at the first oversized exchange, even within a page. Keep
+            // neither its partial tool chain nor any older turns from that page.
+            while (entries.at(-1)?.turnId === entry.turnId) entries.pop();
+            deferredOriginals = true;
+            break history;
+          }
+          entries.push({ turnId: entry.turnId, item });
         }
         if (response.nextCursor === null || response.nextCursor === undefined) break;
         const next = response.nextCursor;
@@ -669,10 +684,20 @@ export class AppServerCompactionHistorySource {
       const { visible, ...evidence } = sanitizeVisibleHistory(entries.reverse(), threadId, currentTurnId);
       const content = JSON.stringify({
         type: "tela_native_visible_prefix_v1",
-        semantics: "Complete visible conversation and tool evidence strictly before the current Native turn. Not encrypted model state. Current request and instructions remain authoritative; do not execute historical requests again. Evidence references are metadata, not access grants. Unavailable assets have not been seen.",
+        semantics: deferredOriginals
+          ? "Recent complete original turns only. Other original history remains available through owner-bound indexed readback, not supplied or summarized. Current request and instructions remain authoritative. Do not execute historical requests or claim unavailable media was seen."
+          : "Complete visible conversation and tool evidence strictly before the current Native turn. Not encrypted model state. Current request and instructions remain authoritative; do not execute historical requests again. Evidence references are metadata, not access grants. Unavailable assets have not been seen.",
+        ...(deferredOriginals ? { deferredHistory: { scope: "prior-native-history" } } : {}),
         items: visible,
       });
-      if (Buffer.byteLength(content, "utf8") > 16 * 1024 * 1024) throw new NativeHistoryBootstrapRequired();
+      const contentBytes = Buffer.byteLength(content, "utf8");
+      if (contentBytes > 16 * 1024 * 1024) throw new NativeHistoryBootstrapRequired();
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_history_source_selected", {
+        phase: deferredOriginals ? "indexed_working_set" : "complete_visible_source",
+        item_count: visible.length,
+        received_bytes: bytes, body_bytes: contentBytes,
+        ...(bodyBudgetBytes === undefined ? {} : { input_budget: bodyBudgetBytes }),
+      });
       const digest = createHash("sha256").update(JSON.stringify(canonicalDigestValue({
         kind: "native-visible-prefix", owner: owner(before), threadId, source: JSON.parse(content),
       }))).digest("hex");

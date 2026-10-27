@@ -262,8 +262,8 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             turnCapability: turn.capability,
           } : undefined;
           const nativeGoalControl = toolBridge ? undefined : turns.goalControl(turn.capability);
-          const nativeHistoryControl = toolBridge ? undefined
-            : turns.historyControl(turn.capability, plan.physicalContext.deferredHistory?.turns.map(item => item.turnId) ?? [], signal);
+          const nativeHistoryControl = !toolBridge && plan.physicalContext.deferredHistory
+            ? turns.historyControl(turn.capability, signal) : undefined;
           if (plan.physicalContext.deferredHistory && !nativeHistoryControl) {
             throw new Error("Deferred Native history requires its original readback source");
           }

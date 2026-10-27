@@ -9,7 +9,7 @@ import {
   type NativeHistoricalImageCandidate,
   type NativeReadableHistoryAnchor,
   type NativeWebHandoff,
-  type NativeVisiblePrefixSnapshot,
+  type NativeVisibleHistorySnapshot,
 } from "@chatgpt-tela/codex";
 import type {
   NativeEvidenceReference,
@@ -35,9 +35,9 @@ export type NativeHistorySource = Pick<NativeCompactionHistoryProjection,
 
 export interface NativeContinuitySources {
   readonly checkpointPreparationPolicy?: CheckpointPreparationPolicy;
-  /** One complete public indexed source, independent of optional UI compaction markers. */
+  /** Public indexed history with explicit unread originals, independent of UI compaction markers. */
   readonly visiblePrefix?: {
-    readonly read: (threadId: string, turnId: string, signal?: AbortSignal) => Promise<NativeVisiblePrefixSnapshot>;
+    readonly read: (threadId: string, turnId: string, signal?: AbortSignal, bodyBudgetBytes?: number) => Promise<NativeVisibleHistorySnapshot>;
     readonly accountNamespace: string;
     readonly journal: NativeVisiblePrefixStageJournal;
   };
@@ -115,7 +115,7 @@ function resolved(mode: NativeContinuityMode, visibleHistory?: string,
 /**
  * One cold/hot continuity decision for a Native-owned turn. The order is
  * deliberate: proven retained Web state, verified source checkpoint, explicit
- * user handoff, finally a complete bounded Native-visible source. Unavailable
+ * user handoff, finally indexed Native-visible history with explicit unread originals when readback exists. Unavailable
  * original evidence is never silently converted to a complete history.
  *
  * Local readable `context_compaction + user summary` is already on the Native
@@ -128,6 +128,8 @@ export async function resolveNativeContextContinuity(input: {
   readonly currentTurnId: string;
   readonly authority: NativeTurnAuthority;
   readonly opaque: NativeOpaqueCompaction;
+  /** Only set when this original Native owner exposes authenticated body readback. */
+  readonly historyBodyBudgetBytes?: number;
   /** Validated by the caller against active retained lineage, route and Web epoch pressure. */
   readonly retainedHistory?: NativeRetainedHistory;
   readonly effort?: ChatGptWebEffort;
@@ -275,14 +277,13 @@ export async function resolveNativeContextContinuity(input: {
     const handoff = await manual();
     if (handoff) return handoff;
     const sourceAdapter = options.visiblePrefix;
-    const source = await probe("visible_prefix", () => sourceAdapter.read(threadId, currentTurnId, signal));
+    const source = await probe("visible_prefix", () => sourceAdapter.read(threadId, currentTurnId, signal, input.historyBodyBudgetBytes));
     if (source.threadId !== threadId || source.currentTurnId !== currentTurnId) {
       throw new Error("Native visible prefix belongs to a different current turn");
     }
-    // Source acquisition is not a second compaction engine. The ordinary working
-    // planner selects a fitted prefix and keeps its complete successor exact.
-    // A small import needs no model call; a large import shares the same one-call
-    // preparation budget as every other fresh Web request.
+    // Source acquisition is not a second compaction engine. The working planner
+    // keeps complete recent turns, current work and an explicit unread-original
+    // manifest. A partial archive is never promoted to a whole-history summary.
     return resolved("visible-prefix", source.content, source.inlineAssets, source.references);
   }
 

@@ -6,6 +6,16 @@ export interface NativeHistoryPageSelection {
   readonly limit?: number;
 }
 
+export interface NativeHistoryIndexSelection {
+  readonly cursor?: string;
+  readonly limit?: number;
+}
+
+export interface NativeHistoryIndexPage {
+  readonly data: readonly { readonly turnId: string; readonly status: string }[];
+  readonly nextCursor: string | null | undefined;
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown> : undefined;

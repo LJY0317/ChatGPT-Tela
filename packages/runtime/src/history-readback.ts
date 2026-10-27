@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import type { NativeHistoryPageSelection, projectNativeHistoryReadback } from "@chatgpt-tela/codex";
+import type { NativeHistoryPageSelection, NativeHistoryIndexPage, projectNativeHistoryReadback } from "@chatgpt-tela/codex";
 
-export interface HistoryReadSelection extends NativeHistoryPageSelection {
+export interface HistoryReadSelection extends Omit<NativeHistoryPageSelection, "turnId"> {
+  readonly turnId?: string;
   readonly offsetBytes?: number;
   readonly pageDigest?: string;
 }
@@ -41,3 +42,10 @@ export function boundedNativeHistoryReadback(page: ReturnType<typeof projectNati
   if (best === start) throw Error("history page metadata exceeds the delivery budget");
   return result(best);
 }
+
+export function projectNativeHistoryIndex(page: NativeHistoryIndexPage) {
+  return { type: "native_history_index" as const, role: "historical-evidence" as const,
+    data: page.data, continuation: page.nextCursor == null ? null : { cursor: page.nextCursor } };
+}
+
+export type HistoryReadResult = ReturnType<typeof boundedNativeHistoryReadback> | ReturnType<typeof projectNativeHistoryIndex>;
