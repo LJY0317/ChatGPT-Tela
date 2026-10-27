@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve } from "node:path";
-import type { CanonicalCurrentTurnSource } from "./binding";
+import { NativeBindingError, type CanonicalCurrentTurnSource } from "./binding";
 import type { CanonicalCurrentTurnEvidence } from "./rollout";
+import { readIndexedNativeItemsPage, type NativeHistoryPageSelection } from "./native-history-items";
 import { capturePrivateDiagnosticValue, diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import { NativeHistoryBootstrapRequired } from "./history-bootstrap-error";
 import type { NativeLiveTurnProof, NativeLiveTurnReceipt } from "@chatgpt-tela/core";
@@ -361,6 +362,29 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
     // rollout before any response budget or application guard could apply.
     this.#preferBoundedTurnProof = options.preferBoundedTurnProof !== false;
     this.#liveTurnProof = options.liveTurnProof;
+  }
+
+  async readHistoryPage(bound: CanonicalCurrentTurnEvidence, selection: NativeHistoryPageSelection, signal: AbortSignal) {
+    if (selection.turnId === bound.turnId) throw new NativeBindingError("claim_invalid", "History readback cannot read the active turn");
+    const rpc = await this.#connect(signal);
+    try {
+      const current = await readBoundedNewestTurn(rpc, bound.threadId, signal);
+      if (current.thread.historyMode !== "paginated" || current.newest?.id !== bound.turnId
+        || current.newest.status !== "inProgress"
+        || owner(current.thread).parentThreadId !== bound.parentThreadId
+        || environment(current.thread).cwd !== bound.cwd) {
+        throw new NativeBindingError("owner_changed", "Native history readback owner changed");
+      }
+      const page = await readIndexedNativeItemsPage(rpc, {
+        ...selection, threadId: bound.threadId, sortDirection: "asc",
+      }, signal);
+      const after = record(await rpc.request("thread/turns/list", {
+        threadId: bound.threadId, limit: 1, itemsView: "notLoaded", sortDirection: "desc",
+      }, signal));
+      const head = Array.isArray(after?.data) && after.data.length === 1 ? record(after.data[0]) : undefined;
+      if (head?.id !== bound.turnId || head.status !== "inProgress") throw new NativeBindingError("owner_changed", "Native history owner changed during read");
+      return page;
+    } finally { await rpc.close(); }
   }
 
   async watchTurn(threadId: string, turnId: string, signal?: AbortSignal) {

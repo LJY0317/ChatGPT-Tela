@@ -1,5 +1,6 @@
+import { readIndexedNativeItemsPage } from "./native-history-items";
 import { expect, test } from 'bun:test';
-import { AppServerCompactionHistorySource, NativeHistoryBootstrapRequired, readIndexedNativeItemsPage } from './compaction-history';
+import { AppServerCompactionHistorySource, NativeHistoryBootstrapRequired } from './compaction-history';
 
 test('selected Native turn and item anchor use one public plain item page without full-turn replay', async () => {
  const calls: Array<{method:string;params:any}> = [];

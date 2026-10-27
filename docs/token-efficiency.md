@@ -100,7 +100,9 @@ large-history limitation, not a reason to revive legacy replay or truncate evide
 smaller seed with deferred original ranges requires a real authenticated Tela Chat body-read
 capability first. Current structural Native inspection is not that reader. The Native history
 source shares the public `thread/items/list` page reader, including a selected `turnId` and
-exclusive item anchor; this is not yet exposed as a Web readback capability. Bind that future
+exclusive item anchor. Its optional current-turn binding fixes the original thread and branch,
+and rejects a replaced or retired owner before releasing the page. This is not yet exposed
+as a Web readback capability. Bind that future
 capability to the current account, branch and explicitly deferred ranges, not an arbitrary
 model-supplied profile or thread. Return readable original items rather than whole-turn replay
 or Base64 fragments. Do not duplicate the archive, add a search engine or promise readback

@@ -8,6 +8,9 @@ import {
   readCanonicalCurrentTurn,
   type CanonicalCurrentTurnEvidence,
 } from "./rollout";
+import type { NativeHistoryPageSelection, readIndexedNativeItemsPage } from "./native-history-items";
+
+export type NativeHistoryPage = Awaited<ReturnType<typeof readIndexedNativeItemsPage>>;
 
 export interface NativeTurnTerminationWatch {
   readonly signal: AbortSignal;
@@ -18,6 +21,8 @@ export interface CanonicalCurrentTurnSource {
   currentTurn(threadId: string): Promise<CanonicalCurrentTurnEvidence | undefined>;
   /** Active-turn scoped public Native lifecycle; transport reconnects are not cancellation. */
   watchTurn?(threadId: string, turnId: string, signal?: AbortSignal): Promise<NativeTurnTerminationWatch | undefined>;
+  readHistoryPage?(owner: CanonicalCurrentTurnEvidence, selection: NativeHistoryPageSelection,
+    signal: AbortSignal): Promise<NativeHistoryPage>;
 }
 
 export interface NativeTurnBinding {
@@ -25,6 +30,8 @@ export interface NativeTurnBinding {
   readonly authority: NativeTurnAuthority;
   readonly tools: NativeToolInventory;
   readonly canonicalEvidence: CanonicalCurrentTurnEvidence;
+  /** The source fixes thread/branch authority; callers select only historical items within it. */
+  readonly readHistoryPage?: (selection: NativeHistoryPageSelection, signal: AbortSignal) => Promise<NativeHistoryPage>;
 }
 
 export class RolloutFileCurrentTurnSource implements CanonicalCurrentTurnSource {
@@ -101,6 +108,8 @@ export async function bindNativeTurnRequest(
     authority,
     tools,
     canonicalEvidence: evidence,
+    ...(source.readHistoryPage ? { readHistoryPage: (selection: NativeHistoryPageSelection, signal: AbortSignal) =>
+      source.readHistoryPage!(evidence, selection, signal) } : {}),
   });
 }
 

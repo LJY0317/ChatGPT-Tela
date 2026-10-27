@@ -1,3 +1,4 @@
+import { readIndexedNativeItemsPage } from "./native-history-items";
 import { createHash } from "node:crypto";
 import {
   decodeNativeInlineEvidence, nativeEmbeddedResourceDataUrl, nativeSerializedMcpResourcePart,
@@ -108,31 +109,6 @@ function record(value: unknown): Record<string, unknown> | undefined {
     ? value as Record<string, unknown> : undefined;
 }
 
-/** One public indexed page, optionally scoped to a turn/item anchor. No turn replay or encoding. */
-export async function readIndexedNativeItemsPage(
-  rpc: Pick<Awaited<ReturnType<CodexAppServerRpcFactory>>, "request">,
-  request: { threadId: string; turnId?: string; cursor?: string | { type: "item"; itemId: string };
-    limit?: number; sortDirection?: "asc" | "desc" },
-  signal: AbortSignal,
-) {
-  const limit = request.limit ?? 4;
-  const page = record(await rpc.request("thread/items/list", { ...request, limit }, signal));
-  if (!page || !Array.isArray(page.data) || page.data.length > limit
-    || (page.data.length === 0 && page.nextCursor != null)) {
-    throw new Error("Native indexed item page is incomplete");
-  }
-  const data = page.data.map(raw => {
-    const entry = record(raw), item = record(entry?.item);
-    if (!entry || typeof entry.turnId !== "string" || !entry.turnId.trim()
-      || request.turnId !== undefined && entry.turnId !== request.turnId
-      || !item || typeof item.id !== "string" || !item.id.trim()
-      || typeof item.type !== "string" || !item.type) {
-      throw new Error("Native indexed item page has incomplete or foreign item evidence");
-    }
-    return { turnId: entry.turnId, item: item as Record<string, unknown> & { id: string; type: string } };
-  });
-  return { data, nextCursor: page.nextCursor };
-}
 
 const READABLE_ITEM_TYPES = new Set([
   "userMessage", "agentMessage", "commandExecution", "fileChange", "mcpToolCall",
