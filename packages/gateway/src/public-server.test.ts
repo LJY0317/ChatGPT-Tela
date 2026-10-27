@@ -271,13 +271,15 @@ test("MCP discovery evidence distinguishes listed tools, empty queries and pre-h
   }
 });
 
-test("public Goal call uses Native MCP content and error semantics without wrapping the result", async () => {
-  const body = JSON.stringify({ goal: { status: "complete" } });
+test.each(["goal_control_call", "read_context_history"])("public %s preserves Native MCP content and error semantics without wrapping", async capabilityName => {
+  const body = JSON.stringify(capabilityName === "read_context_history"
+    ? { type: "native_history_page", text: '{"data":[{"text":"original answer"}]}' }
+    : { goal: { status: "complete" } });
   let nativeError = false;
   const chat = {
     inventory: async () => [],
     async call(capability: string) {
-      if (capability === "goal_control_call") {
+      if (capability === capabilityName) {
         return { callId: "fixture", content: body, isError: nativeError };
       }
       if (capability === "goal_control_inventory") return [{ name: "get_goal" }];
@@ -300,12 +302,12 @@ test("public Goal call uses Native MCP content and error semantics without wrapp
     const call = (capability: string) => client.callTool({
       name: CHATGPT_TELA_CHAT_CAPABILITY_CALL, arguments: { capability, arguments: {} },
     });
-    const success = await call("goal_control_call");
+    const success = await call(capabilityName);
     expect(success.isError).not.toBe(true);
     expect(text(success)).toBe(body);
-    expect(JSON.parse(text(success))).toEqual({ goal: { status: "complete" } });
+    expect(JSON.parse(text(success))).toEqual(JSON.parse(body));
     nativeError = true;
-    const error = await call("goal_control_call");
+    const error = await call(capabilityName);
     expect(error.isError).toBe(true);
     expect(text(error)).toBe(body);
     const inventory = await call("goal_control_inventory");

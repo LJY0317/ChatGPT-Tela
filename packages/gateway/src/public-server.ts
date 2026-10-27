@@ -3,7 +3,7 @@ import { CHATGPT_FILE_CONNECT_ORIGINS } from "./chatgpt-file-source";
 import { CHATGPT_TELA_IMPORT_RESOURCE_URI, CHATGPT_TELA_IMPORT_WIDGET_HTML } from "./import-widget";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { diagnosticFingerprint, emitDiagnosticEvent, traceDiagnosticToolCall, withDiagnosticContext, type NativeToolResult } from "@chatgpt-tela/core";
+import { CONTEXT_HISTORY_TOOL, diagnosticFingerprint, emitDiagnosticEvent, traceDiagnosticToolCall, withDiagnosticContext, type NativeToolResult } from "@chatgpt-tela/core";
 import {
   CHATGPT_TELA_CHAT_CAPABILITY_CALL,
   CHATGPT_TELA_CHAT_CAPABILITY_INVENTORY,
@@ -155,7 +155,7 @@ export function createPublicMcpServer(input: {
           dataBase64: z.string().max(4 * Math.ceil(2 * 1024 * 1024 / 3)) }).strict().parse(result);
         return { content: [{ type: "image", mimeType: image.mimeType, data: image.dataBase64 }] };
       }
-      if (capability === "goal_control_call") {
+      if (capability === "goal_control_call" || capability === CONTEXT_HISTORY_TOOL.name) {
         const nativeResult = result as NativeToolResult;
         const mapped = nativeToolResultToMcpContent(nativeResult.content);
         observeNativeMcpResultProjection(nativeResult, mapped);
