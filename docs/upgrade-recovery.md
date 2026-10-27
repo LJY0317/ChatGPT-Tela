@@ -202,9 +202,10 @@ source changes are not evidence that the installed client emitted the new events
 
 `chatgpt-tela maintenance stage-update --payload <package>` verifies and copies one
 candidate into Tela's owned update cache. Preparing a package does not close apps
-or install it. The menu shows **Updates…**, or **Install Update…** with an arrow
-badge when a candidate is ready. Settings uses the same status and offers manual
-package selection. Clicking Install opens the existing review/apply lifecycle;
+or install it. The menu shows **Updates…**, or **Version … available** with the
+native **Click to install** subtitle (macOS 14.4+) and an arrow badge when a
+candidate is ready. A separator divides updates from Open Tela and Quit. Settings
+uses the same status and offers manual package selection. Clicking Install opens the existing review/apply lifecycle;
 active work and unfinished transitions keep their normal protection.
 
 Preparing another candidate replaces the previous cached package under the existing

@@ -660,13 +660,14 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     }
     menu.addItem(.separator())
     if let update = controlCenter.updateStatus?.update, controlCenter.updateStatus?.pendingTransition == "none" {
-      let item = actionItem("Install Update…", action: #selector(installPreparedUpdate))
-      item.toolTip = "Version \(update.productVersion)"
-      item.isEnabled = controlCenter.updateStatus?.pendingTransition == "none" && !controlCenter.connectionOperationInProgress
+      let item = actionItem("Version \(update.productVersion) available", action: #selector(installPreparedUpdate))
+      if #available(macOS 14.4, *) { item.subtitle = "Click to install" }
+      item.isEnabled = !controlCenter.connectionOperationInProgress
       menu.addItem(item)
     } else {
       menu.addItem(actionItem("Updates…", action: #selector(openUpdates)))
     }
+    menu.addItem(.separator())
     menu.addItem(actionItem("Open Tela…", action: #selector(openControlCenter), keyEquivalent: "o"))
     menu.addItem(actionItem("Quit Tela Menu", action: #selector(quitMenuBar), keyEquivalent: "q"))
     updateProfileProgress()
