@@ -21,10 +21,10 @@ export interface CanonicalCurrentTurnSource {
   currentTurn(threadId: string): Promise<CanonicalCurrentTurnEvidence | undefined>;
   /** Active-turn scoped public Native lifecycle; transport reconnects are not cancellation. */
   watchTurn?(threadId: string, turnId: string, signal?: AbortSignal): Promise<NativeTurnTerminationWatch | undefined>;
-  readHistoryPage?(owner: CanonicalCurrentTurnEvidence, selection: NativeHistoryPageSelection,
-    signal: AbortSignal): Promise<NativeHistoryPage>;
-  readHistoryIndex?(owner: CanonicalCurrentTurnEvidence, selection: NativeHistoryIndexSelection,
-    signal: AbortSignal): Promise<NativeHistoryIndexPage>;
+  readonly readHistoryPage?: ((owner: CanonicalCurrentTurnEvidence, selection: NativeHistoryPageSelection,
+    signal: AbortSignal) => Promise<NativeHistoryPage>) | undefined;
+  readonly readHistoryIndex?: ((owner: CanonicalCurrentTurnEvidence, selection: NativeHistoryIndexSelection,
+    signal: AbortSignal) => Promise<NativeHistoryIndexPage>) | undefined;
 }
 
 export interface NativeTurnBinding {

@@ -24,7 +24,7 @@ const family = { key: chatGptWebFamilyKey("Fixture Web"), label: "Fixture Web", 
 const model = chatGptWebModelId(family.key);
 const metadata = { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "thread-1", turn_id: "turn-1" } };
 
-async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean; holdCreation?: boolean; fail?: "login" | "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly context?: import("./electron").ElectronDevelopmentRuntimeOptions["context"] }) => void; connectNativeNotifications?: NativeFirstProfileOptions["connectNativeNotifications"] } = {}) {
+async function fixture(input: { historySource?: Pick<CanonicalCurrentTurnSource, "readHistoryPage" | "readHistoryIndex">; noLifecycle?: boolean; dispatchFailure?: boolean; holdCreation?: boolean; fail?: "login" | "creation" | "account" | "discovery" | "connector" | "fresh" | "generation"; stopFails?: boolean; holdGeneration?: boolean; acceptanceSavedChat?: boolean; deleteAcceptanceFails?: boolean; accountBrowserFallback?: boolean; catalogRefresh?: () => Promise<void>; warmDisplay?: boolean; nativeGate?: Promise<void>; failNative?: boolean; onFreshProof?: () => void; onBrowserStopped?: () => void; onEarlyAuthority?: (available: boolean) => void; onExecutionContract?: (contract: { readonly chatGptUrl?: string; readonly webTurnTimeoutMs?: number; readonly currentTurnSource: CanonicalCurrentTurnSource; readonly context?: import("./electron").ElectronDevelopmentRuntimeOptions["context"] }) => void; connectNativeNotifications?: NativeFirstProfileOptions["connectNativeNotifications"] } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-native-first-"));
   const config = loadProductProfileRuntimeConfig({
     CHATGPT_TELA_PROFILE_ROOT: root, CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "1", CHATGPT_TELA_PRODUCT_ROUTE_ID: "fixture123",
@@ -57,7 +57,7 @@ async function fixture(input: { noLifecycle?: boolean; dispatchFailure?: boolean
   let nativeOwner = new AbortController();
   let stopFails = input.stopFails;
   const order: string[] = [];
-  const source = { async currentTurn(threadId: string) { return {
+  const source = { ...input.historySource, async currentTurn(threadId: string) { return {
     threadId, turnId: currentTurnId, cwd: "/workspace", workspaceRoots: ["/workspace"],
     sandbox: { kind: "read-only" as const, network: "restricted" as const }, proof: "turn-context" as const, environmentSourceTurnId: currentTurnId,
   }; }, ...(!input.noLifecycle ? { async watchTurn() { return { signal: nativeOwner.signal, async close() {} }; } } : {}) };
@@ -224,6 +224,8 @@ test("ordinary product tasks have no implicit Native fork, no elapsed-time deadl
     expect(contract?.context?.visiblePrefix?.accountNamespace).toBe("a".repeat(64));
     expect(contract?.context?.visiblePrefix?.journal).toBeDefined();
     expect(contract?.context?.visiblePrefix?.read).toBeTypeOf("function");
+    expect(contract?.currentTurnSource.readHistoryPage).toBeUndefined();
+    expect(contract?.currentTurnSource.readHistoryIndex).toBeUndefined();
     expect(contract).not.toHaveProperty("compactionAnchor");
     expect(contract).not.toHaveProperty("compactionHistory");
     if (!contract?.currentTurnSource.watchTurn) throw new Error("missing product lifecycle adapter");
@@ -232,6 +234,40 @@ test("ordinary product tasks have no implicit Native fork, no elapsed-time deadl
       .rejects.toThrow("product Native turn lifecycle is unavailable");
     expect(f.webGenerations).toBe(0);
     expect((await f.post("native-fixture")).status).toBe(200);
+  } finally { await f.cleanup(); }
+});
+
+test("product browser preserves owner-bound Native history readers", async () => {
+  let source: CanonicalCurrentTurnSource | undefined;
+  const calls: unknown[] = [];
+  const f = await fixture({
+    historySource: {
+      async readHistoryIndex(this: CanonicalCurrentTurnSource, owner, selection, signal) {
+        expect(await this.currentTurn(owner.threadId)).toEqual(owner);
+        calls.push({ owner, selection, signal });
+        return { data: [{ turnId: "past", status: "completed" }], nextCursor: null };
+      },
+      async readHistoryPage(this: CanonicalCurrentTurnSource, owner, selection, signal) {
+        expect(await this.currentTurn(owner.threadId)).toEqual(owner);
+        calls.push({ owner, selection, signal });
+        return { data: [], nextCursor: null };
+      },
+    },
+    onExecutionContract: contract => { source = contract.currentTurnSource; },
+  });
+  try {
+    await f.runtime.prepareWeb();
+    const owner = await source!.currentTurn("thread-1");
+    if (!owner) throw Error("missing original owner");
+    const signal = new AbortController().signal;
+    expect(await source!.readHistoryIndex!(owner, { limit: 4 }, signal))
+      .toEqual({ data: [{ turnId: "past", status: "completed" }], nextCursor: null });
+    expect(await source!.readHistoryPage!(owner, { turnId: "past", limit: 1 }, signal))
+      .toEqual({ data: [], nextCursor: null });
+    expect(calls).toEqual([{ owner, selection: { limit: 4 }, signal },
+      { owner, selection: { turnId: "past", limit: 1 }, signal }]);
+    expect(f.webGenerations).toBe(0);
+    expect(f.nativeRequests).toBe(0);
   } finally { await f.cleanup(); }
 });
 

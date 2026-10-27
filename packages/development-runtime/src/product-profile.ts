@@ -118,6 +118,8 @@ export interface ProductProfileRuntime {
 }
 
 class LateBoundCurrentTurnSource implements CanonicalCurrentTurnSource {
+  get readHistoryPage() { return this.#source?.readHistoryPage?.bind(this.#source); }
+  get readHistoryIndex() { return this.#source?.readHistoryIndex?.bind(this.#source); }
   async watchTurn(threadId: string, turnId: string, signal?: AbortSignal) {
     if (!this.#source) throw new Error("Native turn source is not bound");
     if (!this.#source.watchTurn) throw new Error("product Native turn lifecycle is unavailable");

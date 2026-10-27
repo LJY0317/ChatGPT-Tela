@@ -150,6 +150,8 @@ async function startNativeTarget(config: ProductProfileRuntimeConfig, url: URL, 
             return ingressMedia ? Object.freeze({ ...proven, ingressMedia }) : proven;
           },
           watchTurn: (threadId, turnId, signal) => publicSource.watchTurn(threadId, turnId, signal),
+          readHistoryPage: (owner, selection, signal) => publicSource.readHistoryPage(owner, selection, signal),
+          readHistoryIndex: (owner, selection, signal) => publicSource.readHistoryIndex(owner, selection, signal),
         },
       },
       stop: () => host.stop(),
@@ -449,6 +451,14 @@ export async function startNativeFirstProductProfileRuntime(
           // Browser preparation may precede Native. No evidence means no turn authority.
           currentTurnSource: {
             currentTurn: threadId => native?.routedTarget.currentTurnSource.currentTurn(threadId) ?? Promise.resolve(undefined),
+            get readHistoryPage() {
+              const source = native?.routedTarget.currentTurnSource;
+              return source?.readHistoryPage?.bind(source);
+            },
+            get readHistoryIndex() {
+              const source = native?.routedTarget.currentTurnSource;
+              return source?.readHistoryIndex?.bind(source);
+            },
             watchTurn: async (threadId, turnId, signal) => {
               const source = native?.routedTarget.currentTurnSource;
               if (!source?.watchTurn) throw new Error("product Native turn lifecycle is unavailable");
