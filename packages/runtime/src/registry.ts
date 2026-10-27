@@ -6,13 +6,14 @@ import { WebSubmissionUnproven, webSubmissionFailureReason, type WebSubmissionPr
 import { randomBytes } from "node:crypto";
 import { NativeProjectionUnsupported, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
-import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
+import { NativeHistoryBootstrapRequired, projectNativeHistoryReadback, type NativeHistoryPageSelection } from "@chatgpt-tela/codex";
 import { WebRetainedContextUnproven, webRetainedContextFailureReason, type WebRetainedContextReason } from "@chatgpt-tela/core";
 import { RuntimeTurnChannel } from "./turn-channel";
 
 export interface TurnCapabilityResolver {
   resolve(token: string): RuntimeTurnChannel;
   resolveGoalControl?(token: string): RuntimeTurnChannel | undefined;
+  readHistoryPage?(token: string, selection: NativeHistoryPageSelection): Promise<ReturnType<typeof projectNativeHistoryReadback>>;
 }
 
 export interface RegisteredTurn {
@@ -58,7 +59,9 @@ export function turnCapabilityRoute(token: string): string | undefined {
  */
 export class ActiveTurnRegistry {
   readonly #byCapability = new Map<string, RuntimeTurnChannel>();
-  readonly #goalControls = new Map<string, string>();
+  readonly #controls = new Map<string,
+    { readonly kind: "goal"; readonly owner: string }
+    | { readonly kind: "history"; readonly owner: string; readonly turnIds: ReadonlySet<string>; readonly signal: AbortSignal }>();
   readonly #nativeCallIdsByTurn = new Map<string, Set<string>>();
   readonly #capabilityByTurn = new Map<string, string>();
   // A fixed recovery classification only; never retain raw exceptions or request content.
@@ -120,19 +123,53 @@ export class ActiveTurnRegistry {
   goalControl(token: string): string | undefined {
     const channel = this.resolve(token);
     if (!channel.binding.tools.list().some(isNativeGoalTool)) return undefined;
-    for (const [control, owner] of this.#goalControls) if (owner === token) return control;
+    for (const [control, scope] of this.#controls) if (scope.kind === "goal" && scope.owner === token) return control;
     const control = capability(this.#routeId);
-    this.#goalControls.set(control, token);
+    this.#controls.set(control, { kind: "goal", owner: token });
     return control;
   }
 
   resolveGoalControl(token: string): RuntimeTurnChannel | undefined {
-    const owner = this.#goalControls.get(token);
-    return owner === undefined ? undefined : this.resolve(owner);
+    const scope = this.#controls.get(token);
+    return scope?.kind === "goal" ? this.resolve(scope.owner) : undefined;
   }
 
-  #releaseGoalControls(owner: string): void {
-    for (const [control, token] of this.#goalControls) if (token === owner) this.#goalControls.delete(control);
+  /** Planner-selected original turns only; never a model-supplied account/thread grant. */
+  historyControl(token: string, turnIds: readonly string[], signal: AbortSignal): string | undefined {
+    const channel = this.resolve(token);
+    if (!channel.binding.readHistoryPage || !turnIds.length) return undefined;
+    const selected = new Set(turnIds);
+    if (selected.has(channel.binding.authority.turnId) || selected.has("")) {
+      throw new Error("history scope must select settled original turns");
+    }
+    const control = capability(this.#routeId);
+    this.#controls.set(control, { kind: "history", owner: token, turnIds: selected, signal });
+    return control;
+  }
+
+  async readHistoryPage(token: string, selection: NativeHistoryPageSelection) {
+    const scope = this.#controls.get(token);
+    if (scope?.kind !== "history" || !scope.turnIds.has(selection.turnId)) {
+      throw new Error("history read is outside the selected original turns");
+    }
+    scope.signal.throwIfAborted();
+    const channel = this.resolve(scope.owner);
+    const assertOwner = () => {
+      scope.signal.throwIfAborted();
+      // A completed/replaced response cannot release a late read into a subsequent cycle.
+      if (this.#controls.get(token) !== scope || this.resolve(scope.owner) !== channel
+        || ["completed", "cancelled", "failed-before-acceptance", "indeterminate-after-acceptance"].includes(channel.phase)) {
+        throw new Error("history read owner is no longer active");
+      }
+    };
+    assertOwner();
+    const page = await channel.binding.readHistoryPage!({ ...selection, limit: 4 }, scope.signal);
+    assertOwner();
+    return projectNativeHistoryReadback(page, channel.binding.authority.threadId, channel.binding.authority.turnId);
+  }
+
+  #releaseControls(owner: string): void {
+    for (const [control, scope] of this.#controls) if (scope.owner === owner) this.#controls.delete(control);
   }
 
   refresh(binding: NativeTurnBinding): RegisteredTurn {
@@ -152,7 +189,7 @@ export class ActiveTurnRegistry {
     const nextToken = capability(this.#routeId);
     const channel = new RuntimeTurnChannel(binding, this.#nativeCallIdsByTurn.get(turnKey(binding))!);
     previous.releaseProgress();
-    this.#releaseGoalControls(token);
+    this.#releaseControls(token);
     this.#byCapability.delete(token);
     this.#byCapability.set(nextToken, channel);
     this.#capabilityByTurn.set(turnKey(binding), nextToken);
@@ -163,7 +200,7 @@ export class ActiveTurnRegistry {
     const channel = this.resolve(token);
     const key = turnKey(channel.binding);
     channel.releaseProgress();
-    this.#releaseGoalControls(token);
+    this.#releaseControls(token);
     this.#byCapability.delete(token);
     this.#capabilityByTurn.delete(key);
     this.#nativeCallIdsByTurn.delete(key);
@@ -189,7 +226,7 @@ export class ActiveTurnRegistry {
   cancelAll(reason: unknown = new Error("runtime stopped")): void {
     const active = [...this.#byCapability.entries()];
     this.#byCapability.clear();
-    this.#goalControls.clear();
+    this.#controls.clear();
     this.#capabilityByTurn.clear();
     this.#nativeCallIdsByTurn.clear();
     for (const [token, channel] of active) {

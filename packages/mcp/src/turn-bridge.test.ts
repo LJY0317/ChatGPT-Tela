@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CONTEXT_HISTORY_TOOL,
   NativeToolInventory,
   type NativeToolDescriptor,
   defineNativeTurnAuthority,
@@ -14,6 +15,8 @@ import {
   nextNativeResponsesToolCall,
 } from "@chatgpt-tela/runtime";
 import { McpTurnBridge } from "./turn-bridge";
+import { startCodexBridgeMcpHttpServer } from "./http-server";
+import { connectCodexTurnBridge } from "./remote-turn-bridge";
 
 function binding(additional: readonly NativeToolDescriptor[] = [], turnId = "turn-1"): NativeTurnBinding {
   const tools = [{
@@ -221,4 +224,77 @@ test("turns without original Goal controls do not advertise a completion capabil
     registered.channel.markWebContinuation(); registered.channel.complete("done");
     turns.retire(registered.capability); previousId = nativeCall.call_id;
   }
+});
+
+
+test("selected history reads use the original source without Native work inventory or tool rounds", async () => {
+  const turns = new ActiveTurnRegistry({ routeId: "ReadOnly1" });
+  const calls: unknown[] = [];
+  const owner = turns.register({ ...binding(), async readHistoryPage(selection) {
+    calls.push(selection);
+    return { data: [
+      { turnId: "past", item: { id: "user", type: "userMessage", content: [
+        { type: "inputText", text: "prior request" },
+        { type: "localImage", path: "/private/image.png" },
+      ] } },
+      { turnId: "past", item: { id: "answer", type: "agentMessage", text: "prior answer" } },
+      { turnId: "past", item: { id: "reason", type: "reasoning", encryptedContent: "private-reasoning" } },
+    ], nextCursor: "next-page" };
+  } });
+  const control = turns.historyControl(owner.capability, ["past"], new AbortController().signal)!;
+  expect(control).toStartWith("turnr_ReadOnly1_");
+  const bridge = new McpTurnBridge(turns);
+  const invoke = (token: string, arguments_: Record<string, unknown>) => bridge.invoke(token, {
+    callId: "read", wireName: CONTEXT_HISTORY_TOOL.wireName, mode: "structured", arguments: arguments_,
+  });
+  expect(() => bridge.inventory(control)).toThrow("unknown or retired");
+  expect(() => bridge.invoke(control, { callId: "work", wireName: "exec_command", mode: "structured", arguments: {} }))
+    .toThrow("unknown or retired");
+  await expect(invoke(owner.capability, { turn_id: "past" })).rejects.toThrow("outside the selected");
+  await expect(invoke(control, { turn_id: "foreign" })).rejects.toThrow("outside the selected");
+  expect(() => invoke(control, { turn_id: "past", thread_id: "foreign" })).toThrow("invalid history");
+  const server = await startCodexBridgeMcpHttpServer({ turns });
+  const remote = await connectCodexTurnBridge({ endpoint: server.endpointUrl, bearerToken: server.bearerToken! });
+  let result: NativeToolResult;
+  try {
+    result = await remote.invoke(control, { callId: "read", wireName: CONTEXT_HISTORY_TOOL.wireName,
+      mode: "structured", arguments: { turn_id: "past", cursor: { type: "item", itemId: "before" } } });
+  } finally { await remote.close(); await server.stop(); }
+  expect(calls).toEqual([{ turnId: "past", limit: 4, cursor: { type: "item", itemId: "before" } }]);
+  expect({ ...result, content: JSON.parse(result.content as string) }).toMatchObject({ callId: "read", isError: false, content: {
+    type: "native_history_page", role: "historical-evidence", nextCursor: "next-page",
+  } });
+  const text = JSON.stringify(result);
+  expect(text).toContain("prior answer");
+  expect(text).toContain("not_transferred");
+  expect(text).not.toContain("/private/image.png");
+  expect(text).not.toContain("private-reasoning");
+  expect(owner.channel.state().toolRoundCount).toBe(0);
+  turns.retire(owner.capability);
+  await expect(invoke(control, { turn_id: "past" })).rejects.toThrow("outside the selected");
+});
+
+test("late original-history reads cannot cross a response-cycle boundary", async () => {
+  const turns = new ActiveTurnRegistry();
+  let release!: () => void, reads = 0;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const bound = { ...binding(), async readHistoryPage() {
+    reads++; await pending;
+    return { data: [{ turnId: "past", item: { id: "old", type: "agentMessage", text: "old result" } }], nextCursor: null };
+  } };
+  const owner = turns.register(bound);
+  const signal = new AbortController();
+  const control = turns.historyControl(owner.capability, ["past"], signal.signal)!;
+  const reading = turns.readHistoryPage(control, { turnId: "past" });
+  owner.channel.markSubmitted(); owner.channel.markAccepted(); owner.channel.complete("done");
+  turns.nextCycle(owner.capability, bound);
+  release();
+  await expect(reading).rejects.toThrow("no longer active");
+  expect(reads).toBe(1);
+  const next = turns.active("thread-1", "turn-1")!;
+  const aborted = turns.historyControl(next.capability, ["past"], signal.signal)!;
+  signal.abort();
+  await expect(turns.readHistoryPage(aborted, { turnId: "past" })).rejects.toThrow();
+  expect(reads).toBe(1);
+  turns.cancelAll();
 });

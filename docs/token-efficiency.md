@@ -101,11 +101,14 @@ smaller seed with deferred original ranges requires a real authenticated Tela Ch
 capability first. Current structural Native inspection is not that reader. The Native history
 source shares the public `thread/items/list` page reader, including a selected `turnId` and
 exclusive item anchor. Its optional current-turn binding fixes the original thread and branch,
-and rejects a replaced or retired owner before releasing the page. This is not yet exposed
-as a Web readback capability. Bind that future
-capability to the current account, branch and explicitly deferred ranges, not an arbitrary
-model-supplied profile or thread. Return readable original items rather than whole-turn replay
-or Base64 fragments. Do not duplicate the archive, add a search engine or promise readback
+and rejects a replaced or retired owner before releasing the page. A planner-selected list
+of original turns can now enable Tela Chat `read_context_history` through the existing turn
+transport. Its response-cycle capability grants neither Native work tools nor another
+account/thread. Readback uses plain historical text; private reasoning and undelivered media
+contents are not exposed. Normal plans do not advertise this capability without an explicit
+scope. The deferred-range planner/seed adapter and oversized single-item readback remain
+unfinished: no original history is omitted on the assumption that these paths already work.
+Return readable original items rather than whole-turn replay or Base64 fragments. Do not duplicate the archive, add a search engine or promise readback
 that Web cannot perform. No background Native summaries, automatic
 paid Native fallback or fragment/merge chain is authorized by this policy.
 

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { diagnosticFingerprint, emitDiagnosticEvent, isNativeGoalTool } from "@chatgpt-tela/core";
+import { CONTEXT_HISTORY_TOOL, diagnosticFingerprint, emitDiagnosticEvent, isNativeGoalTool } from "@chatgpt-tela/core";
 import type {
   NativeToolCatalogEntry,
   NativeToolInvocation,
@@ -41,6 +41,20 @@ export class McpTurnBridge implements TurnBridgeBackend {
   }
 
   invoke(capability: string, invocation: NativeToolInvocation): Promise<NativeToolResult> {
+    if (invocation.wireName === CONTEXT_HISTORY_TOOL.wireName) {
+      if (!this.turns.readHistoryPage || invocation.mode !== "structured") throw Error("history read is unavailable");
+      const { turn_id, cursor } = invocation.arguments;
+      const anchor = cursor && typeof cursor === "object" && !Array.isArray(cursor)
+        ? cursor as Record<string, unknown> : undefined;
+      if (Object.keys(invocation.arguments).some(key => key !== "turn_id" && key !== "cursor")
+        || typeof turn_id !== "string" || !turn_id.trim()
+        || cursor !== undefined && !(typeof cursor === "string" && cursor.length > 0)
+          && !(anchor?.type === "item" && typeof anchor.itemId === "string" && anchor.itemId.length > 0
+            && Object.keys(anchor).length === 2)) throw Error("invalid history page selection");
+      return this.turns.readHistoryPage(capability, { turnId: turn_id, limit: 4,
+        ...(cursor === undefined ? {} : { cursor: cursor as string | { type: "item"; itemId: string } }),
+      }).then(content => ({ callId: invocation.callId, content: JSON.stringify(content), isError: false }));
+    }
     const goalControl = this.turns.resolveGoalControl?.(capability);
     const channel = goalControl ?? this.turns.resolve(capability);
     const tool = channel.binding.tools.exact(invocation.wireName);

@@ -104,3 +104,18 @@ test("Tela Chat Goal calls forward only original Goal tools without a second sta
   expect(await backend.call("goal_control_call", { goal_control: "scoped-control", call_id: "complete", wire_name: "functions.update_goal", arguments: { status: "complete" } })).toMatchObject({ isError: false, content: { status: "complete" } });
   expect(calls).toEqual([{ capability: "scoped-control", invocation: { callId: "complete", wireName: "functions.update_goal", mode: "structured", arguments: { status: "complete" } } }]);
 });
+
+
+test("Tela Chat history read uses the existing turn transport without inventory or a Native model call", async () => {
+  const calls: unknown[] = [];
+  const backend = new DynamicChatBackend(() => { throw Error("not a workspace operation"); }, {
+    inventory() { throw Error("history reads do not request Native tools"); },
+    async invoke(control, call) { calls.push({ control, call }); return { callId: call.callId, content: { data: [] }, isError: false }; },
+  });
+  expect(await backend.call("read_context_history", { history_control: "selected-history", turn_id: "past" }))
+    .toMatchObject({ isError: false, content: { data: [] } });
+  expect(calls).toEqual([{ control: "selected-history", call: {
+    callId: expect.any(String), wireName: "tela_context_history_page", mode: "structured", arguments: { turn_id: "past" },
+  } }]);
+  await expect(backend.call("read_context_history", { turn_id: "past" })).rejects.toThrow("history control");
+});

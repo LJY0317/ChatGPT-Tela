@@ -1,4 +1,5 @@
-import { isNativeGoalTool } from "@chatgpt-tela/core";
+import { CONTEXT_HISTORY_TOOL, isNativeGoalTool } from "@chatgpt-tela/core";
+import { randomUUID } from "node:crypto";
 import type { TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import type { ChatCapabilityContract } from "@chatgpt-tela/service-protocol";
 import type { ServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
@@ -8,7 +9,11 @@ import {
 } from "@chatgpt-tela/service-protocol/client";
 import { dynamicBackendCall } from "./dynamic-backend-call";
 
-const goalControls: readonly ChatCapabilityContract[] = [
+const turnControls: readonly ChatCapabilityContract[] = [
+  { capability: CONTEXT_HISTORY_TOOL.name, description: CONTEXT_HISTORY_TOOL.description,
+    inputSchema: { ...CONTEXT_HISTORY_TOOL.inputSchema,
+      required: ["history_control", ...CONTEXT_HISTORY_TOOL.inputSchema.required],
+      properties: { history_control: { type: "string" }, ...CONTEXT_HISTORY_TOOL.inputSchema.properties } } },
   { capability: "goal_control_inventory", description: "Discover the original Native Goal tools for this exact task. Does not expose Native work tools.",
     inputSchema: { type: "object", required: ["goal_control"], properties: { goal_control: { type: "string" } }, additionalProperties: false } },
   { capability: "goal_control_call", description: "Call an original Native Goal tool returned by goal_control_inventory with its exact schema. Native owns the Goal and continuation lifecycle.",
@@ -28,6 +33,12 @@ export class DynamicChatBackend {
   }
 
   async call(capability: string, arguments_: Readonly<Record<string, unknown>>): Promise<unknown> {
+    if (this.goalBridge && capability === CONTEXT_HISTORY_TOOL.name) {
+      const { history_control, ...selection } = arguments_;
+      if (typeof history_control !== "string") throw Error("history control capability is required");
+      return this.goalBridge.invoke(history_control, { callId: randomUUID(), wireName: CONTEXT_HISTORY_TOOL.wireName,
+        mode: "structured", arguments: selection });
+    }
     if (this.goalBridge && (capability === "goal_control_inventory" || capability === "goal_control_call")) {
       if (typeof arguments_.goal_control !== "string") throw Error("Goal control capability is required");
       const tools = (await this.goalBridge.inventory(arguments_.goal_control)).filter(isNativeGoalTool);
@@ -58,7 +69,7 @@ export class DynamicChatBackend {
         return descriptor ? new ChatServiceClient(descriptorForService(descriptor, "chat")) : undefined;
       },
       operation: async client => {
-        const catalog = [...await client.capabilityCatalog(), ...(this.goalBridge ? goalControls : [])];
+        const catalog = [...await client.capabilityCatalog(), ...(this.goalBridge ? turnControls : [])];
         const needle = query.trim().toLowerCase();
         return needle
           ? Object.freeze(catalog.filter(item => item.capability.toLowerCase().includes(needle)

@@ -312,7 +312,7 @@ function canonicalDigestValue(raw: unknown): unknown {
 
 function sanitizeVisibleHistory(
   historical: readonly { readonly turnId: string; readonly item: Record<string, unknown> }[],
-  threadId: string, currentTurnId: string,
+  threadId: string, currentTurnId: string, includeInline = true,
 ) {
   const localImageCandidates: NativeHistoricalImageCandidate[] = [];
   for (const { turnId, item } of historical) {
@@ -328,7 +328,8 @@ function sanitizeVisibleHistory(
       }));
     }
   }
-  const { selected, assets } = selectInlineHistory(historical, threadId);
+  const { selected, assets } = includeInline ? selectInlineHistory(historical, threadId)
+    : { selected: new Map<string, NativeEvidenceReference>(), assets: [] };
   const visible = historical.map(({ turnId, item }) => {
     const visibleItem = item.type === "userMessage"
       ? { type: item.type, id: item.id, content: userContent(item.content, threadId, turnId, item.id as string, selected) }
@@ -358,6 +359,15 @@ function sanitizeVisibleHistory(
   collect(visible, 0);
   return { visible, references: Object.freeze(references), inlineAssets: Object.freeze(assets),
     localImageCandidates: Object.freeze(localImageCandidates.slice(-128)) };
+}
+
+/** Text readback is historical evidence, not fresh instructions or proof of media delivery. */
+export function projectNativeHistoryReadback(
+  page: Awaited<ReturnType<typeof readIndexedNativeItemsPage>>, threadId: string, currentTurnId: string,
+) {
+  const { visible, references } = sanitizeVisibleHistory(page.data, threadId, currentTurnId, false);
+  return { type: "native_history_page" as const, role: "historical-evidence" as const,
+    data: visible, references, nextCursor: page.nextCursor ?? null };
 }
 
 /** Read-only visible transcript projection. This does not decode or replace Native model state. */

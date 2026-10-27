@@ -79,7 +79,7 @@ export interface WebTurnRequest {
   readonly inertSourceAttachment?: { readonly attachment: ChatGptContextAttachment; readonly receipt: string };
   readonly media?: readonly import("./turn-media").WebTurnMedia[];
   /** Independent work tools, optionally carrying a Goal-only control capability. */
-  readonly chatTools?: { readonly defaultProfileSlot?: number; readonly nativeGoalControl?: string };
+  readonly chatTools?: { readonly defaultProfileSlot?: number; readonly nativeGoalControl?: string; readonly nativeHistoryControl?: string };
   /** Local execution lifecycle only; never serialized into the Web prompt. */
   readonly isToolExecutionPending?: () => boolean;
   readonly toolBridge?: WebToolBridgeContext;
