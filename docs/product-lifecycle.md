@@ -483,7 +483,7 @@ This independence is required both for day-to-day fallback and for reliable unin
 
 The control center launches `maintenance-open` through its installed launcher. A verified temporary copy
 of only the launcher and native UI runs outside the installation removal boundary. The standalone window
-invokes the existing signed upgrade/repair and ownership uninstall engines; it adds no service authority.
+invokes the existing repair and ownership uninstall engines; it adds no service authority.
 Damaged installations may stage this helper from an independently trusted signed same-version repair
 package, after the existing repair planner validates it. Missing launchers require an external installer.
 
@@ -493,11 +493,10 @@ The UI shows immediate progress, blocks closing while applying, confirms interru
 by default. Tests inject fake OS managers for every lifecycle mutation, including uninstall.
 
 The native maintenance window groups action, signed-package input, and review; its action footer remains
-visible when the content scrolls. Only unfinished upgrades expose cancellation. The signed source package
-must explicitly support cancellation and replacement must not have started. `maintenance-open --operation`
-can validate either the retained source for cancellation or the original update target for resumption;
-repair remains the default. Cancellation never closes an already running service. Synthetic native UI
-review/confirmation and fake-OS lifecycle tests do not prove an installed consumer flow.
+visible when the content scrolls. `maintenance-open --payload <repair-package>` validates a same-version
+repair source with a dedicated maintenance executable. macOS updates use Sparkle's standard window;
+the maintenance window has no upgrade or cancellation mode. Synthetic native UI review/confirmation
+and fake-OS lifecycle tests do not prove an installed consumer flow.
 
 Normal close removes the exact hash-checked private temporary snapshot. Unknown files or changed bytes
 are preserved. A crash may leave that snapshot in the OS temporary directory until temporary-directory

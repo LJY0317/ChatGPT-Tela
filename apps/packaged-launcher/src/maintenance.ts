@@ -174,25 +174,18 @@ export function cleanupMaintenanceWindow(root: string): void {
 
 export async function resolveMaintenanceWindowSource(payloadRoot: string, launcherExecutablePath: string, repairSourceArguments: readonly string[] = [], options: PackagedLifecycleOptions = {}) {
     if (repairSourceArguments.length === 0) {
-      const verified = resolvePackagedMenuBarLaunch({ payloadRoot, launcherExecutablePath });
+      resolvePackagedMenuBarLaunch({ payloadRoot, launcherExecutablePath });
       const manifest = readPackagedProductManifest(payloadRoot);
-      return { launcher: launcherExecutablePath, ui: manifest.menuBar?.maintenanceExecutable
-        ? join(payloadRoot, manifest.menuBar.maintenanceExecutable) : verified.executable, operation: "repair", payload: undefined };
+      if (!manifest.menuBar?.maintenanceExecutable) throw new Error("package has no maintenance UI");
+      return { launcher: launcherExecutablePath, ui: join(payloadRoot, manifest.menuBar.maintenanceExecutable), operation: "repair", payload: undefined };
     }
-    const sourceArgs = [...repairSourceArguments];
-    const operationIndex = sourceArgs.indexOf("--operation");
-    const operation = operationIndex < 0 ? "repair" : sourceArgs[operationIndex + 1];
-    if (operation !== "repair") {
-      throw new Error("maintenance window supports repair; updates use Sparkle");
-    }
-    if (operationIndex >= 0) sourceArgs.splice(operationIndex, 2);
-    const args = [operation, "--dry-run", ...sourceArgs];
+    const args = ["repair", "--dry-run", ...repairSourceArguments];
     const parsed = parsePackagedLifecycleCommand(args);
     if (!parsed.payloadSourcePath) throw new Error("an explicit repair package is required");
     await runPackagedLifecycleCommand(args, options);
     const source = realpathSync(parsed.payloadSourcePath), manifest = readPackagedProductManifest(source);
-    if (!manifest.launcher || !manifest.menuBar) throw new Error("repair package has no maintenance UI");
-    return { launcher: join(source, manifest.launcher.executable), ui: join(source, manifest.menuBar.maintenanceExecutable ?? manifest.menuBar.executable), operation, payload: source };
+    if (!manifest.launcher || !manifest.menuBar?.maintenanceExecutable) throw new Error("repair package has no maintenance UI");
+    return { launcher: join(source, manifest.launcher.executable), ui: join(source, manifest.menuBar.maintenanceExecutable), operation: "repair", payload: source };
 }
 
 export async function openMaintenanceWindow(payloadRoot: string, launcherExecutablePath: string, repairSourceArguments: readonly string[] = []) {

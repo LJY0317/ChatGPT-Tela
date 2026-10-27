@@ -207,9 +207,8 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     controlCenter.updater = updater
     updater.changed = { [weak self] in
       guard let self else { return }
-      self.updateStatusIcon()
+      self.updateConnectionProgress(self.connectionProgress)
       self.controlCenter.updatePresentationChanged()
-      if !self.menuOpen { self.rebuildMenu(loading: self.snapshot == nil) }
     }
     controlCenter.workState.onChange = { [weak self] in
       guard let self else { return }
@@ -263,7 +262,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private func updateConnectionProgress(_ message: String?) {
     connectionProgress = message
     guard let button = statusItem.button else { return }
-    let visibleProgress = message ?? (refreshing ? "Checking status…" : nil) ?? (workInventory.error == nil && workInventory.profiles.contains { $0.connectionInProgress == true || ($0.connected && $0.webState == "preparing") } ? "Connecting ChatGPT…" : nil)
+    let visibleProgress = message ?? (workInventory.error == nil && workInventory.profiles.contains { $0.connectionInProgress == true || ($0.connected && $0.webState == "preparing") } ? "Connecting ChatGPT…" : nil)
     button.toolTip = visibleProgress ?? "ChatGPT Tela"
     button.setAccessibilityLabel(visibleProgress.map { "Tela: \($0)" } ?? (updater.availableVersion == nil ? "ChatGPT Tela" : "ChatGPT Tela, update available"))
     if visibleProgress != nil {
@@ -285,7 +284,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       connectionSpinner?.stopAnimation(nil)
       connectionSpinner?.removeFromSuperview()
       connectionSpinner = nil
-      button.image = NSImage(systemSymbolName: "network", accessibilityDescription: "ChatGPT Tela")
+      updateStatusIcon()
     }
     updateProfileProgress()
     // Update existing row contents while tracking; keep the open menu's geometry stable.
@@ -691,7 +690,6 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     }
     image.isTemplate = true
     statusItem.button?.image = image
-    statusItem.button?.setAccessibilityLabel("ChatGPT Tela, update available")
   }
 
   @objc private func openUpdates() {
@@ -746,7 +744,6 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private func refreshNow() async {
     guard !refreshing else { refreshAgain = true; return }
     refreshing = true
-    updateConnectionProgress(connectionProgress)
     defer {
       refreshing = false
       updateConnectionProgress(connectionProgress)

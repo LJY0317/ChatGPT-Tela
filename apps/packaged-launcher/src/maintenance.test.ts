@@ -34,7 +34,7 @@ class FakeManager implements ServiceRegistrationCommandRunner {
 function fixture(root: string, supportsCancellation = true) {
   const input = join(root, "input"), home = join(root, "home");
   mkdirSync(join(input, "electron", "bin"), { recursive: true }); mkdirSync(home);
-  for (const name of ["launcher", "gateway", "chat", "codex", "menu-bar"]) writeFileSync(join(input, name), name, { mode: 0o755 });
+  for (const name of ["launcher", "gateway", "chat", "codex", "menu-bar", "maintenance"]) writeFileSync(join(input, name), name, { mode: 0o755 });
   writeFileSync(join(input, "electron/bin/electron"), "electron", { mode: 0o755 });
   writeFileSync(join(input, "profile.cjs"), "module.exports={};");
 
@@ -42,6 +42,7 @@ function fixture(root: string, supportsCancellation = true) {
     const payload = join(root, version);
     buildPackagedPayload({ outputPath: payload, productVersion: version, launcherSourcePath: join(input, "launcher"),
       menuBarSourcePath: join(input, "menu-bar"),
+      maintenanceUISourcePath: join(input, "maintenance"),
       ...(supportsCancellation ? { lifecycle: { transitionLaunch: 1 as const, sourceCancellation: 1 as const } } : {}),
       services: { gateway: { executableSourcePath: join(input, "gateway") }, chat: { executableSourcePath: join(input, "chat") }, codex: { executableSourcePath: join(input, "codex") } },
       profileRuntime: { electronBundleSourcePath: join(input, "electron"), electronExecutableRelativePath: "bin/electron", entrypointSourcePath: join(input, "profile.cjs") },});
@@ -176,10 +177,10 @@ test("damaged installation stages only a same-version repair source", async () =
     const f = fixture(root), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner };
     await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first, ], options);
     const resolveSource = (payload: string) => resolveMaintenanceWindowSource("unused", "unused", ["--payload", payload, ], options);
-    expect((await resolveSource(f.first)).ui).toBe(realpathSync(join(f.first, readPackagedProductManifest(f.first).menuBar!.executable)));
+    expect((await resolveSource(f.first)).ui).toBe(realpathSync(join(f.first, readPackagedProductManifest(f.first).menuBar!.maintenanceExecutable!)));
     await expect(resolveSource(f.second)).rejects.toThrow();
     const manifestPath = join(f.first, "chatgpt-tela-package-v1.json");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")); delete manifest.menuBar;
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")); delete manifest.menuBar.maintenanceExecutable;
     writeFileSync(manifestPath, JSON.stringify(manifest));
     await expect(resolveSource(f.first)).rejects.toThrow();
     expect(readOwnershipManifest(resolveProductPaths(options).installManifest)?.productVersion).toBe("1.0.0");
@@ -239,7 +240,6 @@ for (const supported of [true, false]) test(`maintenance cancellation review bin
     expect(reviewed.interruptedConnections).toBe(false);
     expect(reviewed.toVersion).toBe("1.0.0");
     expect(readFileSync(journalPath)).toEqual(journal);
-    await expect(resolveMaintenanceWindowSource("unused", "unused", ["--operation", "cancel-upgrade", ...args], options)).rejects.toThrow("updates use Sparkle");
     // Same phase/version/service list, but changed quiescence must invalidate review.
     writeFileSync(journalPath, JSON.stringify({ ...readPackagedUpgradeJournal(journalPath), quiescedServices: [] }));
     const changed = readFileSync(journalPath);
