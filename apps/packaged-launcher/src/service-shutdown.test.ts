@@ -6,7 +6,7 @@ import { resolveProductPaths, PackagedServiceShutdownNotStartedError } from "@ch
 import { startChatService, createChatToolRuntime } from "@chatgpt-tela/chat-service";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 import { startCodexServiceHttpServer, type CodexService } from "@chatgpt-tela/codex-service";
-import { ownedServiceShutdown } from "./service-shutdown";
+import { interruptOwnedWork, ownedServiceShutdown } from "./service-shutdown";
 import { ChatServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
 
 test("explicit maintenance cancellation is followed by observed shutdown readiness", async () => {
@@ -37,7 +37,7 @@ test("explicit maintenance cancellation is followed by observed shutdown readine
     await expect(owner.prepare("chat")).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
     const client = new ChatServiceClient(descriptorForService(descriptor, "chat"));
     expect(await client.maintenanceProcesses()).toEqual([entry]);
-    expect(await client.call("cancel_process", { workspace_id: entry.workspaceId, operation_id: entry.operationId })).toEqual({ state: "signaled" });
+    await interruptOwnedWork("fixture", paths, ["chat"]);
     expect(cancellations).toBe(1);
     expect(await client.maintenanceProcesses()).toEqual([]);
     await owner.prepare("chat");
@@ -106,10 +106,13 @@ test("foreign install runtime identity is preserved instead of authorizing shutd
 test("Codex activity is checked before any shutdown request", async () => {
   const home = mkdtempSync(join(tmpdir(), "tela-codex-preflight-"));
   const paths = resolveProductPaths({ platform: "linux", home, environment: {} });
-  let blocked = true, shutdownCalls = 0;
+  let blocked = true, shutdownCalls = 0, observations = 0;
   const service = {
     serviceStatus: () => ({ contractVersion: 1, service: "codex", instanceId: "fixture-codex", state: "ready" }),
-    shutdownReadiness: async () => blocked ? "blocked" : "ready",
+    shutdownReadiness: async () => {
+      if (observations++ === 0) await Bun.sleep(1_600); // Exceeds the ordinary status budget, not the lifecycle budget.
+      return blocked ? "blocked" : "ready";
+    },
     close: async () => { shutdownCalls++; },
   } as unknown as CodexService;
   const http = await startCodexServiceHttpServer({ service });
@@ -126,4 +129,45 @@ test("Codex activity is checked before any shutdown request", async () => {
     await shutdown.prepare("codex");
     expect(shutdownCalls).toBe(0);
   } finally { await http.close(); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("consented update interruption uses the owned Native endpoint and exact active turn", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tela-update-interrupt-native-"));
+  const paths = resolveProductPaths({ platform: "linux", home, environment: {} });
+  const calls: { method: string; params?: any }[] = [];
+  const thread = { id: "active-thread", historyMode: "paginated", cwd: home,
+    status: { type: "active", activeFlags: [] }, parentThreadId: null, source: "cli",
+    environments: [{ environmentId: "fixture-env", cwd: home, runtimeWorkspaceRoots: [home] }] };
+  const native = Bun.serve({ hostname: "127.0.0.1", port: 0,
+    fetch(request, server) { if (server.upgrade(request)) return; return new Response(null, { status: 400 }); },
+    websocket: { message(socket, data) {
+      const message = JSON.parse(String(data)); calls.push(message);
+      if (message.id === undefined) return;
+      const result = message.method === "thread/loaded/list" ? { data: [thread.id], nextCursor: null }
+        : message.method === "thread/read" ? { thread }
+        : message.method === "thread/turns/list" ? { data: [{ id: "exact-turn", status: "inProgress", itemsView: "notLoaded", items: [] }], nextCursor: null } : {};
+      socket.send(JSON.stringify({ id: message.id, result }));
+    } },
+  });
+  const requestedSlots: number[] = [];
+  const service = {
+    serviceStatus: () => ({ contractVersion: 1, service: "codex", instanceId: "fixture-interrupt", state: "ready" }),
+    profiles: async () => [1, 2].map(slot => ({ slot, targetId: `target-${slot}`, targetDisplayName: `Profile ${slot}`,
+      targetState: "running", targetSessionState: "ready", controlState: slot === 1 ? "running" : "restart-required" })),
+    terminalSession: async (slot: number) => { requestedSlots.push(slot); return { contractVersion: 1, slot, endpoint: `ws://127.0.0.1:${native.port}` }; },
+  } as unknown as CodexService;
+  const http = await startCodexServiceHttpServer({ service });
+  try {
+    mkdirSync(paths.serviceRuntime("codex"), { recursive: true });
+    writeServiceRuntimeDescriptor(join(paths.serviceRuntime("codex"), "descriptor.json"), {
+      version: 1, service: "codex", instanceId: "fixture-interrupt", installId: "fixture", pid: process.pid,
+      endpoint: http.endpoint.href, bearerToken: http.bearerToken, startedAt: new Date().toISOString(),
+    });
+    await interruptOwnedWork("fixture", paths, ["codex"]);
+    expect(requestedSlots).toEqual([1]);
+    expect(calls.filter(call => call.method === "turn/interrupt")).toEqual([
+      expect.objectContaining({ method: "turn/interrupt", params: { threadId: thread.id, turnId: "exact-turn" } }),
+    ]);
+    expect(calls.filter(call => call.method === "thread/read").every(call => call.params.includeTurns === false)).toBe(true);
+  } finally { await http.close(); native.stop(true); rmSync(home, { recursive: true, force: true }); }
 });

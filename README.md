@@ -1273,7 +1273,9 @@ ChatGPT Tela is an independent, unofficial project and is not affiliated with Op
 
 Use the menu's **Check for Updates…** or Settings → **Updates** for Sparkle's standard update window.
 Settings also controls automatic update checks. Downloading does not end active work; an update that cannot
-settle active tasks is postponed. Release feeds and public signing are still being prepared.
+settle active tasks offers **Stop Tasks and Update** or **Later**. Stopping tasks uses normal cancellation
+and keeps conversations and saved files; unavailable or unsettled services still postpone installation.
+Checking again brings an existing Sparkle update back into focus. Release feeds are still being prepared.
 
 GitHub Releases can host both the update archive and `appcast.xml`; a separate website is unnecessary.
 After the menu build, Sparkle's official tools are in

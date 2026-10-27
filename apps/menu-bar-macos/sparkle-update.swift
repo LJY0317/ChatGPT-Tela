@@ -22,7 +22,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     set { controller.updater.automaticallyChecksForUpdates = newValue }
   }
 
-  var canCheck: Bool { controller.updater.canCheckForUpdates }
+  var canCheck: Bool { controller.updater.canCheckForUpdates || controller.updater.sessionInProgress }
   func checkForUpdates(_ sender: Any?) { controller.checkForUpdates(sender) }
 
   /// Resume ordinary startup only when no update restoration already chose the running services.
@@ -47,14 +47,28 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     preparingTermination = true
     Task {
       do {
-        _ = try await lifecycle(["prepare", "--target-build", build])
+        let arguments = ["prepare", "--target-build", build]
+        do { _ = try await lifecycle(arguments) }
+        catch let error as NSError where error.domain == "TelaUpdateBusy" {
+          let alert = NSAlert()
+          alert.messageText = "Stop tasks and update?"
+          alert.informativeText = error.localizedDescription + " Running tasks will be interrupted. Conversations and saved files are kept."
+          alert.addButton(withTitle: "Stop Tasks and Update")
+          alert.addButton(withTitle: "Later")
+          guard alert.runModal() == .alertFirstButtonReturn else { throw CancellationError() }
+          _ = try await lifecycle(arguments + ["--interrupt-work"])
+        }
+        problem = nil
         app.reply(toApplicationShouldTerminate: true)
       } catch {
         preparingTermination = false
         app.reply(toApplicationShouldTerminate: false)
+        changed?()
+        if error is CancellationError { return }
+        problem = error.localizedDescription
         let alert = NSAlert()
         alert.messageText = "Update postponed"
-        alert.informativeText = "Finish active tasks and check Tela's service status before trying again. Your conversations are kept."
+        alert.informativeText = error.localizedDescription
         alert.addButton(withTitle: "OK")
         alert.runModal()
       }
@@ -81,9 +95,17 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
         return (task.terminationStatus, data)
       } catch { return (1, Data()) }
     }.value
-    guard outcome.0 == 0,
-      let value = (try? JSONSerialization.jsonObject(with: outcome.1)) as? [String: Any],
-      value["ready"] as? Bool == true || value["prepared"] as? Bool == true else { throw NSError(domain: "TelaUpdate", code: 2) }
+    let value = (try? JSONSerialization.jsonObject(with: outcome.1)) as? [String: Any]
+    if let service = value?["blockedService"] as? String,
+      let name = ["chat": "Tela Chat", "codex": "Work / Codex", "gateway": "Tela Gateway"][service] {
+      throw NSError(domain: "TelaUpdateBusy", code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "\(name) has running or unsettled tasks."])
+    }
+    guard outcome.0 == 0, let value,
+      value["ready"] as? Bool == true || value["prepared"] as? Bool == true else {
+      throw NSError(domain: "TelaUpdate", code: 2,
+        userInfo: [NSLocalizedDescriptionKey: "Tela could not prepare its services for updating. Check service status and try again. Your conversations are kept."])
+    }
     return (value["ready"] as? Bool == true, value["restored"] as? Bool == true)
   }
 
@@ -118,8 +140,9 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
     pendingBuild = nil
     preparingTermination = false
+    problem = error.localizedDescription
     Task {
-      do { _ = try await lifecycle(["cancel"]); problem = nil }
+      do { _ = try await lifecycle(["cancel"]) }
       catch { problem = "Tela recovery needs attention before updating." }
       changed?()
     }

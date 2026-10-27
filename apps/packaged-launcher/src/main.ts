@@ -2,7 +2,7 @@ import { runApplicationUpdate } from "./application-update";
 import { diagnosePublicIngress, SystemTailscaleCommandRunner } from "@chatgpt-tela/tailscale-ingress";
 import { probePublicMcp, probeUnifiedDevelopmentMcp } from "@chatgpt-tela/gateway";
 import { readProductConfig } from "@chatgpt-tela/product-config";
-import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
+import { resolveProductPaths, PackagedServiceShutdownNotStartedError } from "@chatgpt-tela/product-lifecycle";
 import { writeDiagnosticIncident, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { join } from "node:path";
 import {
@@ -75,14 +75,22 @@ async function main(): Promise<void> {
     return;
   }
   if (args[0] === "application-update") {
+    const interruptWork = args.includes("--interrupt-work");
+    if (interruptWork) args.splice(args.indexOf("--interrupt-work"), 1);
     const action = args[1], payloadIndex = args.indexOf("--payload"), targetIndex = args.indexOf("--target-build");
     if (!(action === "prepare" || action === "finish" || action === "cancel") || payloadIndex < 0 || !args[payloadIndex + 1]
-      || args.length !== (action === "prepare" ? 6 : 4) || (action === "prepare" && (targetIndex < 0 || !args[targetIndex + 1]))) {
-      throw Error("usage: application-update <prepare --target-build N|finish|cancel> --payload app");
+      || args.length !== (action === "prepare" ? 6 : 4) || (action === "prepare" && (targetIndex < 0 || !args[targetIndex + 1]))
+      || interruptWork && action !== "prepare") {
+      throw Error("usage: application-update <prepare --target-build N [--interrupt-work]|finish|cancel> --payload app");
     }
-    const result = await runApplicationUpdate(action, { payloadRoot: args[payloadIndex + 1]!,
-      ...(targetIndex >= 0 ? { targetBuild: args[targetIndex + 1]! } : {}) });
-    process.stdout.write(JSON.stringify(result) + "\n");
+    try {
+      const result = await runApplicationUpdate(action, { payloadRoot: args[payloadIndex + 1]!, interruptWork,
+        ...(targetIndex >= 0 ? { targetBuild: args[targetIndex + 1]! } : {}) });
+      process.stdout.write(JSON.stringify(result) + "\n");
+    } catch (error) {
+      if (!(error instanceof PackagedServiceShutdownNotStartedError)) throw error;
+      process.stdout.write(JSON.stringify({ prepared: false, blockedService: error.service }) + "\n");
+    }
     return;
   }
   if (args[0] === "ingress") {

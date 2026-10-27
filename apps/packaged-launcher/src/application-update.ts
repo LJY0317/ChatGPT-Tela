@@ -8,7 +8,7 @@ import {
   readOwnershipManifest, recordInstalledApplicationPayload, resolveProductPaths, ServiceRegistrationInstaller,
   withPackagedTransitionOwner, type MacApplicationUpdate, type TelaServiceId,
 } from "@chatgpt-tela/product-lifecycle";
-import { ownedServiceShutdown } from "./service-shutdown";
+import { interruptOwnedWork, ownedServiceShutdown } from "./service-shutdown";
 import type { PackagedLifecycleOptions } from "./lifecycle";
 import { verifyInstalledPackage } from "./runtime";
 
@@ -17,7 +17,7 @@ const startOrder: readonly TelaServiceId[] = ["chat", "codex", "gateway"];
 
 /** Sparkle replaces the app. This command only settles existing Tela service ownership. */
 export async function runApplicationUpdate(action: "prepare" | "finish" | "cancel", input: {
-  payloadRoot: string; targetBuild?: string; options?: PackagedLifecycleOptions;
+  payloadRoot: string; targetBuild?: string; interruptWork?: boolean; options?: PackagedLifecycleOptions;
   verifySignature?: (path: string) => void;
   readBuild?: (path: string) => string;
 }) {
@@ -107,6 +107,7 @@ export async function runApplicationUpdate(action: "prepare" | "finish" | "cance
     if (!input.targetBuild || !/^\d+(\.\d+){0,2}$/.test(input.targetBuild) || input.targetBuild === build) throw Error("a different numeric target build is required");
     const running: TelaServiceId[] = [];
     for (const service of stopOrder) if (await controller.inspect(service) === "running") running.push(service);
+    if (input.interruptWork) await interruptOwnedWork(owner.installId, paths, running);
     await controller.prepare(stopOrder);
     let state = save({ version: 1, installId: owner.installId, sourceVersion: owner.productVersion, sourceBuild: build,
       targetBuild: input.targetBuild, applicationPath: root, sourceFingerprint: fingerprint, phase: "quiescing",
