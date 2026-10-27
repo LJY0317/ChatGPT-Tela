@@ -242,10 +242,11 @@ package smoke builds the complete app, verifies its signature and launches its C
 it does not operate real services or user conversations.
 
 Builds require an increasing numeric `--build-number`, `--update-feed-url`,
-`--update-public-key` and `--mac-codesign-identity`. Only HTTPS and loopback test
-feeds are accepted. Public releases still need an actual signed appcast/archive,
-Developer ID signing and notarization; smoke tests use disposable public keys and
-ad-hoc signatures. No production feed or private signing key is supplied here.
+`--update-public-key`; `--mac-codesign-identity` defaults to ad hoc (`-`). Only HTTPS
+and loopback test feeds are accepted. Published updates need an actual feed and
+EdDSA-signed archive. Developer ID signing and notarization provide Apple-trusted
+distribution but are not prerequisites for Sparkle updates. Smoke tests use disposable
+public keys and ad-hoc signatures. No production feed or private signing key is supplied here.
 
 Installed migration and end-to-end service/profile restoration through the actual
 Sparkle replacement remain unverified. The previous split-payload installation

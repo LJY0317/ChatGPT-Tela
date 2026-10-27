@@ -101,7 +101,7 @@ async function main(): Promise<void> {
   const macApp = process.platform === "darwin";
   if (macApp && !outputPath.endsWith(".app")) throw Error("macOS package builds require a .app output");
   const appOptions = macApp ? { buildVersion: requiredOption("--build-number"), feedURL: requiredOption("--update-feed-url"), publicKey: requiredOption("--update-public-key") } : undefined;
-  const macCodesignIdentity = process.platform === "darwin" ? requiredOption("--mac-codesign-identity") : undefined;
+  const macCodesignIdentity = macApp ? option("--mac-codesign-identity") ?? "-" : undefined;
   const workspaceFilesSourcePath = option("--workspace-files");
   const nativeEnginePath = option("--native-engine");
   const nativeEngineMetadataPath = option("--native-engine-metadata");

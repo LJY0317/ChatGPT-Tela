@@ -292,8 +292,9 @@ upgrade, keep-data uninstall, reinstall and remove-data uninstall in a temporary
 bytes and external app/config/conversation/project sentinels are checked throughout. Service management and
 login are fixtures: this proves lifecycle composition, not real Windows/Linux or login UI behavior.
 
-The remaining packaging boundary is product distribution UX/trust: a public macOS build needs Developer ID
-signing and notarization instead of the local ad-hoc proof identity, Windows/Linux still need real release
+The remaining packaging boundary is product distribution UX/trust: Apple-trusted macOS distribution needs
+Developer ID signing and notarization; ad-hoc builds can use Sparkle's EdDSA-signed updates with macOS
+approval limitations. Windows/Linux still need real release
 signing and packaged E2E, and installer/updater UI must surface the existing plan/apply/verify results.
 
 Cross-version packaged upgrade is a separate ownership transition. The first upgrade generation requires the
@@ -500,6 +501,6 @@ and fake-OS lifecycle tests do not prove an installed consumer flow.
 
 Normal close removes the exact hash-checked private temporary snapshot. Unknown files or changed bytes
 are preserved. A crash may leave that snapshot in the OS temporary directory until temporary-directory
-cleanup; no permanent registration is created. Automatic downloads, pinned consumer keys, notarized
-release distribution, and Windows/Linux maintenance UI remain pending. Local ad-hoc preview signing does
+cleanup; no permanent registration is created. Production feed/key configuration, notarized
+release distribution, and Windows/Linux maintenance UI remain pending. Ad-hoc app signing does
 not establish consumer release trust.

@@ -405,10 +405,11 @@ pending recovery records and ownership state until recovery is resolved.
 
 On macOS, the package builder produces a single `.app` and requires `--output <name>.app`,
 `--build-number <increasing-number>`, `--update-feed-url <HTTPS-appcast>`,
-`--update-public-key <base64-Ed25519-public-key>` and an explicit codesign identity. Sparkle is pinned by
+`--update-public-key <base64-Ed25519-public-key>`. Sparkle is pinned by
 Swift Package Manager and bundled with its license; it does not share another application's framework.
-`-` is supported only for local
-ad-hoc development proof; a public release still needs a Developer ID identity and notarization. The payload
+The default app signature is ad hoc (`-`), which needs no paid Apple account. Sparkle's separate EdDSA
+signature authenticates updates. Downloaded, unnotarized apps may require explicit macOS approval;
+for Apple-trusted distribution, pass `--mac-codesign-identity <Developer-ID>` and notarize the app. The payload
 retains only **relative internal symlinks whose lexical and resolved targets remain inside the payload root**,
 because Electron frameworks require those links for a valid bundle. Absolute, broken/cyclic, or escaping
 links fail closed; the link path and target text are covered by the payload fingerprint and reproduced exactly
@@ -612,7 +613,7 @@ bun run cli status
 CI runs the same `package:smoke` on macOS, Windows, and Linux. It compiles
 the stable launcher plus separate Gateway/Chat/Codex executables, stages the real Electron/profile runtime,
 verifies the payload fingerprint, and executes the packaged launcher's lifecycle/help CLI boundary. macOS additionally uses
-ad-hoc codesign for this CI proof; public releases still require Developer ID signing and notarization.
+ad-hoc codesign for this CI proof; Apple-trusted distribution additionally needs Developer ID signing and notarization.
 
 `doctor` is a non-mutating default-profile preflight. It resolves the platform's official ChatGPT/Codex
 installation, runs only `codex --version`, and observes the exact Desktop process set. It never starts,
@@ -1273,6 +1274,18 @@ ChatGPT Tela is an independent, unofficial project and is not affiliated with Op
 Use the menu's **Check for Updates…** or Settings → **Updates** for Sparkle's standard update window.
 Settings also controls automatic update checks. Downloading does not end active work; an update that cannot
 settle active tasks is postponed. Release feeds and public signing are still being prepared.
+
+GitHub Releases can host both the update archive and `appcast.xml`; a separate website is unnecessary.
+After the menu build, Sparkle's official tools are in
+`apps/menu-bar-macos/.build/artifacts/sparkle/Sparkle/bin/`. Run `generate_keys --account ChatGPT-Tela`
+once to store an update-signing key in your Keychain, then embed its printed **public** key with
+`--update-public-key`. Keep the private key backed up outside the repository and release assets.
+Use a stable HTTPS feed URL, such as `https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml`.
+For each release, archive the final app with `ditto -c -k --sequesterRsrc --keepParent`, then run
+`generate_appcast --account ChatGPT-Tela --download-url-prefix https://github.com/<owner>/<repo>/releases/download/<tag>/ <archives-directory>`.
+Upload the archive and generated `appcast.xml` to that release. Sparkle owns feed generation and archive
+signing; Tela adds no publishing or signing engine. Apple Developer ID and notarization are optional for
+this update mechanism, but needed for Apple-trusted distribution without the unnotarized-app limitation.
 
 Settings → **Maintenance → Manage…** opens the independent repair/removal app. For repair, select a trusted
 Tela app matching the installed version, then **Review changes** before applying. Removal keeps settings
