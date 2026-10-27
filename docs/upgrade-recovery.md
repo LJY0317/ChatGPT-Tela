@@ -214,3 +214,43 @@ stored; cache removal is part of owned uninstall. Status reads metadata rather t
 hashing the payload repeatedly. Installation revalidates package bytes. Release-feed
 lookup and automatic download are not implemented; development packages can use
 this same prepared-package entry point without an agent workspace dependency.
+
+### Sparkle integration assessment (macOS)
+
+Sparkle is not integrated. A menu-only integration would update the wrong boundary:
+`packaged-install.ts` owns both a separate product payload and an Applications menu
+bundle, while service/menu registrations execute from the product payload. The
+generated menu bundle also has a constant `CFBundleVersion` of `1`. Sparkle needs an
+increasing release build version; the current local labels are not a release scheme.
+
+Prefer evaluating one signed macOS app bundle containing the product executables,
+with mutable state outside it. Sparkle would own update discovery, signed download
+and bundle replacement; Tela would retain work admission, service/profile settlement,
+registration refresh and authenticated readiness. This is a packaging migration,
+not an adapter that can safely call the current full-payload apply after Sparkle
+replaces the menu app. Never give both installers ownership of the same bytes.
+
+The public updater delegate provides discovery/download events and a postponed
+relaunch callback. That callback is conditional, so it cannot be the only work
+protection. App termination and explicit installation must use the existing lifecycle
+admission. Download completion is not installed-service readiness. The download and
+extraction notifications supply an appcast item, not a documented extracted-payload
+handoff to `stage-update`; do not depend on Sparkle private cache paths or installers.
+
+Before runtime integration, prove a disposable whole-product bundle update: refuse
+active work before closing profiles, replace through one installer, refresh service
+registrations, reopen only previously running profiles, and recover after restart or
+failed readiness without ownership/fingerprint drift. Existing whole-payload recovery
+must be adapted to that boundary, not layered over Sparkle's replacement. Preserve
+the existing Windows/Linux lifecycle independently. No installed migration is proven.
+
+Use ordinary app updates if the bundle experiment succeeds. Sparkle package updates
+are a fallback only for demonstrated custom installation requirements: they require
+authorization and lose delta updates. Services alone do not require a package.
+Public delivery additionally needs a real appcast, release archives, an increasing
+build number, update signing and Developer ID/notarization. None is configured here;
+no feed, key access, new downloader or runtime dependency was added by this assessment.
+
+References: [setup](https://sparkle-project.org/documentation/),
+[updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),
+[package tradeoffs](https://sparkle-project.org/documentation/package-updates/).
