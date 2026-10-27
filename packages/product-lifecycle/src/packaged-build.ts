@@ -216,6 +216,7 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>CFBundleShortVersionString</key><string>1.0</string>
+<key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/>
 </dict></plist>
 `);
@@ -229,7 +230,8 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
 <plist version="1.0"><dict><key>CFBundleExecutable</key><string>chatgpt-tela-maintenance</string>
 <key>CFBundleIdentifier</key><string>com.openai.chatgpt-tela.maintenance</string>
 <key>CFBundleName</key><string>Tela Maintenance</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>1</string></dict></plist>\n`);
+<key>CFBundleVersion</key><string>1</string>
+<key>LSMinimumSystemVersion</key><string>13.0</string></dict></plist>\n`);
   }
 
   let nativeEngine: PackagedNativeEngine | undefined;

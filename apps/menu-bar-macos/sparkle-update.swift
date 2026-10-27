@@ -63,9 +63,9 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
       } catch {
         preparingTermination = false
         app.reply(toApplicationShouldTerminate: false)
-        changed?()
         if error is CancellationError { return }
         problem = error.localizedDescription
+        changed?()
         let alert = NSAlert()
         alert.messageText = "Update postponed"
         alert.informativeText = error.localizedDescription

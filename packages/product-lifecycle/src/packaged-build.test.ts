@@ -72,6 +72,7 @@ describe("packaged payload builder", () => {
       expect(existsSync(join(output, "ui", "ChatGPT Tela.app", "Contents", "MacOS", "chatgpt-tela-menu-bar"))).toBe(true);
       const info = readFileSync(join(output, "ui", "ChatGPT Tela.app", "Contents", "Info.plist"), "utf8");
       expect(info).toContain("<key>CFBundlePackageType</key><string>APPL</string>");
+      expect(info).toContain("<key>LSMinimumSystemVersion</key><string>13.0</string>");
       expect(info).toContain("<key>LSUIElement</key><true/>");
       expect(info).toContain("<key>CFBundleIdentifier</key><string>com.openai.chatgpt-tela.menu-bar</string>");
       expect(packagedPayloadFingerprint(output)).toBe(built.payloadFingerprint);
@@ -129,6 +130,7 @@ describe("packaged payload builder", () => {
       expect(existsSync(join(output, "electron"))).toBe(false);
       expect(readFileSync(join(output, "Contents/Helpers/services/chat"), "utf8")).toBe("chat\n");
       expect(readFileSync(join(output, "Contents/Info.plist"), "utf8")).toContain("<key>CFBundleVersion</key><string>123</string>");
+      expect(readFileSync(join(output, "Contents/Info.plist"), "utf8")).toContain("<key>LSMinimumSystemVersion</key><string>13.0</string>");
       expect(packagedPayloadFingerprint(output)).toBe(result.payloadFingerprint);
       expect(readdirSync(output)).toEqual(["Contents"]);
       expect(readFileSync(join(output, "Contents/Resources/ThirdPartyNotices/Electron.txt"), "utf8")).toBe("electron notice");

@@ -68,7 +68,7 @@ export function assembleMacApplication(input: {
   const strings = {
     CFBundleExecutable: "chatgpt-tela-menu-bar", CFBundleIdentifier: "com.openai.chatgpt-tela.menu-bar",
     CFBundleName: "ChatGPT Tela", CFBundlePackageType: "APPL", CFBundleVersion: input.buildVersion,
-    CFBundleShortVersionString: manifest.productVersion, SUFeedURL: input.feedURL, SUPublicEDKey: input.publicKey,
+    CFBundleShortVersionString: manifest.productVersion, LSMinimumSystemVersion: "13.0", SUFeedURL: input.feedURL, SUPublicEDKey: input.publicKey,
   };
   writeFileSync(join(contents, "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>${Object.entries(strings).map(([key, value]) => `<key>${key}</key><string>${xml(value)}</string>`).join("")}<key>LSUIElement</key><true/><key>SUEnableAutomaticChecks</key><true/><key>SUAllowsAutomaticUpdates</key><false/><key>SUVerifyUpdateBeforeExtraction</key><true/></dict></plist>\n`);
   input.finalizeBundle(root);

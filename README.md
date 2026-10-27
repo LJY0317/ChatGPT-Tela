@@ -1275,7 +1275,7 @@ Use the menu's **Check for Updates…** or Settings → **Updates** for Sparkle'
 Settings also controls automatic update checks. Downloading does not end active work; an update that cannot
 settle active tasks offers **Stop Tasks and Update** or **Later**. Stopping tasks uses normal cancellation
 and keeps conversations and saved files; unavailable or unsettled services still postpone installation.
-Checking again brings an existing Sparkle update back into focus. The macOS arm64 pre-alpha feed is
+Checking again brings an existing Sparkle update back into focus. The arm64 pre-alpha requires macOS 13 or later; its feed is
 available through [GitHub Releases](https://github.com/LJY0317/ChatGPT-Tela/releases/latest).
 
 GitHub Releases can host both the update archive and `appcast.xml`; a separate website is unnecessary.
