@@ -27,3 +27,6 @@ artifact_*.html
 artifact_*.jpg
 artifact_*.json
 capture-policy.json
+
+# Swift Package Manager artifacts (dependency lockfiles stay tracked).
+.build/

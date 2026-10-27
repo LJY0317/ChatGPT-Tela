@@ -77,7 +77,7 @@ export async function finalizeUninstall(paths: ProductPaths, expected: Uninstall
       || JSON.stringify(manifest.resources[0]) !== JSON.stringify(resource))) throw new Error("uninstall still owns non-coordinator resources");
     if (existsSync(resource.path)) {
       if (!lstatSync(resource.path).isDirectory() || lstatSync(resource.path).isSymbolicLink()) throw new Error("uninstall coordinator directory is unsafe");
-      const marker = readOwnershipMarker(resource.path);
+      const marker = readOwnershipMarker(resource);
       if (!marker || marker.installId !== current.installId || marker.resourceId !== COORDINATOR
         || (manifest && await new FilesystemOwnershipObserver().observe(resource, manifest) !== "owned")) throw new Error("uninstall coordinator ownership drift");
       if (readdirSync(resource.path).some(name => ![OWNERSHIP_MARKER, "writer.sqlite", "writer.sqlite-journal", "writer.sqlite-wal", "writer.sqlite-shm"].includes(name))) {

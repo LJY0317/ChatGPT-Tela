@@ -14,7 +14,7 @@ import {
 import { runProductUninstall } from "./index";
 import { startUninstallCheckpoint, writeUninstallCheckpoint } from "./coordination";
 
-async function binaryFixture(root: string) {
+async function binaryFixture(root: string, externalMetadata = false) {
   const home = join(root, "home");
   mkdirSync(home);
   const options = { platform: "linux" as const, home, environment: {} };
@@ -27,6 +27,7 @@ async function binaryFixture(root: string) {
     owner: "product",
     path: paths.binaryRoot,
     dataClass: "binary",
+    ...(externalMetadata ? { metadataRoot: join(paths.stateRoot, "install", "application") } : {}),
   });
   await prepareOwnedDirectory({
     manifestPath: paths.installManifest,
@@ -36,6 +37,19 @@ async function binaryFixture(root: string) {
   });
   return { home, paths, options };
 }
+
+for (const unknown of [false, true]) test(`binary removal owns external metadata and preserves unknown files (${unknown})`, async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-binary-metadata-uninstall-"));
+  try {
+    const f = await binaryFixture(root, true), metadata = join(f.paths.stateRoot, "install", "application");
+    if (unknown) writeFileSync(join(metadata, "unowned.txt"), "preserve");
+    const result = await runProductUninstall({ mode: "apply", removeData: true, ...f.options });
+    expect(existsSync(f.paths.binaryRoot)).toBe(unknown);
+    expect(existsSync(metadata)).toBe(unknown);
+    if (unknown) expect(readFileSync(join(metadata, "unowned.txt"), "utf8")).toBe("preserve");
+    else expect(result.manifestRemoved).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("uninstall cannot remove binaries or start shutdown under another transition owner", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-uninstall-competing-"));

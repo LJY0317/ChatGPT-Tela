@@ -8,7 +8,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type { TelaServiceId } from "./layout";
 
 export const OWNERSHIP_MARKER = ".chatgpt-tela-owner.json";
@@ -39,6 +39,7 @@ export type OwnedResource =
       readonly owner: "product" | TelaServiceId;
       readonly path: string;
       readonly dataClass: DirectoryDataClass;
+      readonly metadataRoot?: string;
     }
   | {
       readonly kind: "service-registration";
@@ -114,8 +115,16 @@ export function parseOwnedResource(value: unknown): OwnedResource {
     const dataClass = item.dataClass;
     if (!(["binary", "config", "state", "cache", "logs", "runtime", "browser-profile"] as const)
       .includes(dataClass as never)) throw new Error("directory data class is invalid");
+    const path = absolutePath(item.path, "owned directory path");
+    const metadataRoot = item.metadataRoot === undefined ? undefined : absolutePath(item.metadataRoot, "binary metadata root");
+    if (metadataRoot !== undefined) {
+      if (dataClass !== "binary") throw Error("external metadata is only supported for binary directories");
+      const rel = relative(path, metadataRoot);
+      const reverse = relative(metadataRoot, path);
+      if ((!rel.startsWith("..") && !isAbsolute(rel)) || (!reverse.startsWith("..") && !isAbsolute(reverse))) throw Error("binary metadata and payload must not overlap");
+    }
     return Object.freeze({ kind, id, owner: owner as "product" | TelaServiceId,
-      path: absolutePath(item.path, "owned directory path"), dataClass: dataClass as DirectoryDataClass });
+      path, dataClass: dataClass as DirectoryDataClass, ...(metadataRoot ? { metadataRoot } : {}) });
   }
   if (kind === "service-registration") {
     if (!(["product", "gateway", "chat", "codex"] as const).includes(owner as never)) throw new Error("service owner is invalid");
@@ -265,19 +274,26 @@ export function writeOwnershipManifest(path: string, manifest: OwnershipManifest
 }
 
 export function writeOwnershipMarker(path: string, manifest: OwnershipManifest, resourceId: string): void {
-  if (!manifest.resources.some(resource => resource.kind === "directory" && resource.id === resourceId && resource.path === path)) {
-    throw new Error("directory is not recorded in this ownership manifest");
+  const resource = manifest.resources.find(resource => resource.kind === "directory" && resource.id === resourceId && resource.path === path);
+  if (!resource || resource.kind !== "directory") throw new Error("directory is not recorded in this ownership manifest");
+  for (const directory of new Set([path, resource.metadataRoot ?? path])) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const stat = lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("owned directory path is unsafe or replaced");
   }
-  mkdirSync(path, { recursive: true, mode: 0o700 });
-  const stat = lstatSync(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("owned directory path is unsafe or replaced");
   const marker: OwnershipMarker = { version: 1, installId: manifest.installId, resourceId };
-  writeFileSync(join(path, OWNERSHIP_MARKER), `${JSON.stringify(marker)}\n`, { mode: 0o600, encoding: "utf8" });
+  writeFileSync(join(resource.metadataRoot ?? path, OWNERSHIP_MARKER), `${JSON.stringify(marker)}\n`, { mode: 0o600, encoding: "utf8" });
 }
 
-export function readOwnershipMarker(path: string): OwnershipMarker | undefined {
-  const markerPath = join(path, OWNERSHIP_MARKER);
+export function readOwnershipMarker(directory: string | Extract<OwnedResource, { kind: "directory" }>): OwnershipMarker | undefined {
+  const root = typeof directory === "string" ? directory : directory.metadataRoot ?? directory.path;
+  if (!existsSync(root)) return undefined;
+  const stat = lstatSync(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error("ownership metadata directory is unsafe");
+  const markerPath = join(root, OWNERSHIP_MARKER);
   if (!existsSync(markerPath)) return undefined;
+  const markerStat = lstatSync(markerPath);
+  if (!markerStat.isFile() || markerStat.isSymbolicLink()) throw Error("ownership marker is unsafe");
   const value = JSON.parse(readFileSync(markerPath, "utf8")) as unknown;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("ownership marker is invalid");
   const item = value as Record<string, unknown>;

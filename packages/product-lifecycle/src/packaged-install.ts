@@ -242,13 +242,16 @@ export function createPackagedInstallBlueprint(input: {
   const platform = platformKind(input.platform ?? process.platform);
   const home = resolve(input.home ?? homedir());
   const environment = input.environment ?? process.env;
-  const paths = resolveProductPaths({ platform, home, environment });
+  const basePaths = resolveProductPaths({ platform, home, environment });
+  const application = platform === "darwin" && input.spec.menuBar?.executableRelativePath.startsWith("Contents/MacOS/");
+  const paths = application ? Object.freeze({ ...basePaths, binaryRoot: join(home, "Applications", "ChatGPT Tela.app") }) : basePaths;
   const payloadResource = Object.freeze({
     kind: "directory" as const,
     id: "product-binaries",
     owner: "product" as const,
     path: paths.binaryRoot,
     dataClass: "binary" as const,
+    ...(application ? { metadataRoot: join(paths.stateRoot, "install", "application") } : {}),
   });
   const payload: PackagedPayloadSpec = Object.freeze({
     sourcePath: resolve(input.spec.payloadSourcePath),

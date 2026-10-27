@@ -148,7 +148,7 @@ export function packagedPayloadFingerprint(root: string, input: { readonly targe
 }
 
 function receiptPath(resource: DirectoryResource): string {
-  return join(resource.path, PACKAGED_PAYLOAD_RECEIPT);
+  return join(resource.metadataRoot ?? resource.path, PACKAGED_PAYLOAD_RECEIPT);
 }
 
 function parseReceipt(value: unknown): PackagedPayloadReceipt {

@@ -198,7 +198,7 @@ export class FilesystemOwnershipObserver implements UninstallObserver {
     const stat = lstatSync(resource.path);
     if (!stat.isDirectory() || stat.isSymbolicLink()) return "unsafe";
     let marker;
-    try { marker = readOwnershipMarker(resource.path); }
+    try { marker = readOwnershipMarker(resource); }
     catch { return "unsafe"; }
     if (!marker) return "ownership-drift";
     return marker.installId === manifest.installId && marker.resourceId === resource.id

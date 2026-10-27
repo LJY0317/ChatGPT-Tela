@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assembleMacApplication } from "./mac-application";
 import { buildPackagedPayload } from "./packaged-build";
+import { createPackagedInstallBlueprint } from "./packaged-install";
 import { packagedInstallSpecFromPayload, readPackagedProductManifest } from "./packaged-manifest";
 
 function fixture(root: string) {
@@ -116,6 +117,10 @@ describe("packaged payload builder", () => {
         const spec = packagedInstallSpecFromPayload(app);
         expect(spec.menuBarApp).toBeUndefined();
         expect(spec.services[0]?.executableRelativePath).toBe("Contents/MacOS/chatgpt-tela");
+        const blueprint = createPackagedInstallBlueprint({ spec, platform: "darwin", home: root, environment: {} });
+        expect(blueprint.payload.resource.path).toBe(join(root, "Applications", "ChatGPT Tela.app"));
+        expect(blueprint.payload.resource.metadataRoot).toBe(join(root, "Library/Application Support/ChatGPT Tela/state/install/application"));
+        expect(blueprint.services[0]?.definition).toEqual(expect.objectContaining({ content: expect.stringContaining("Contents/MacOS/chatgpt-tela") }));
       } });
       expect(readPackagedProductManifest(output)).toEqual(result.manifest);
       expect(existsSync(join(output, "ui"))).toBe(false);

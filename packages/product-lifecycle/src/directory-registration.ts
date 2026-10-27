@@ -44,20 +44,22 @@ export async function prepareOwnedDirectory(input: {
     throw new Error("owned directory resource id already records a different identity");
   }
 
+  const marker = readOwnershipMarker(resource);
+  if (marker && (marker.installId !== input.installId || marker.resourceId !== resource.id)) {
+    throw new Error("owned directory marker belongs to a different install or resource");
+  }
+  if (marker && !recorded) throw new Error("owned directory marker exists without matching manifest authority");
+  if (resource.metadataRoot && existsSync(resource.metadataRoot) && !marker) {
+    throw new Error("binary metadata directory exists without Tela ownership");
+  }
+
   if (existsSync(resource.path)) {
     const stat = lstatSync(resource.path);
     if (!stat.isDirectory() || stat.isSymbolicLink()) {
       throw new Error("owned directory path is unsafe or replaced");
     }
-    const marker = readOwnershipMarker(resource.path);
     if (!marker) {
       return Object.freeze({ state: "external-existing", resource });
-    }
-    if (marker.installId !== input.installId || marker.resourceId !== resource.id) {
-      throw new Error("owned directory marker belongs to a different install or resource");
-    }
-    if (!recorded) {
-      throw new Error("owned directory marker exists without matching manifest authority");
     }
     return Object.freeze({ state: "already-owned", resource });
   }

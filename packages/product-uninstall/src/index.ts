@@ -1,5 +1,5 @@
 import { coordinatorResource, finalizeUninstall, readUninstallCheckpoint, startUninstallCheckpoint, clearUninstallCheckpoint, writeUninstallCheckpoint } from "./coordination";
-import { existsSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   hasPendingFileImports,
@@ -12,6 +12,8 @@ import {
 } from "@chatgpt-tela/credential-store";
 import {
   applyUninstallPlan,
+  OWNERSHIP_MARKER,
+  PACKAGED_PAYLOAD_RECEIPT,
   withPackagedTransitionOwner,
   FilesystemOwnershipObserver,
   observeProductActivity,
@@ -251,7 +253,11 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
           }
           const absolute = resolve(resource.path);
           if (dirname(absolute) === absolute) throw new Error("refusing to remove a filesystem root");
+          if (resource.metadataRoot && readdirSync(resource.metadataRoot).some(name => ![OWNERSHIP_MARKER, PACKAGED_PAYLOAD_RECEIPT].includes(name))) {
+            return { removed: false, detail: "binary metadata contains files outside this resource" };
+          }
           rmSync(absolute, { recursive: true, force: false });
+          if (resource.metadataRoot) rmSync(resource.metadataRoot, { recursive: true, force: false });
           return { removed: true, detail: "exact marker-owned directory removed" };
         }
         if (resource.kind === "service-registration") {

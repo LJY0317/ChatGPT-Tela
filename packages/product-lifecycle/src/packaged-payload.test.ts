@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureOwnershipManifest } from "./ownership-store";
@@ -58,6 +59,39 @@ describe("packaged binary payload ownership", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test.skipIf(process.platform !== "darwin")("external records preserve an installed app's real code signature", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-signed-app-record-"));
+    try {
+      const source = join(root, "source.app"), target = join(root, "installed.app"), metadataRoot = join(root, "state/app");
+      mkdirSync(join(source, "Contents/MacOS"), { recursive: true });
+      copyFileSync("/bin/echo", join(source, "Contents/MacOS/probe"));
+      writeFileSync(join(source, "Contents/Info.plist"), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>probe</string><key>CFBundleIdentifier</key><string>org.chatgpt-tela.signature-fixture</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`);
+      execFileSync("/usr/bin/codesign", ["--force", "--sign", "-", source], { stdio: "pipe" });
+      const manifestPath = join(root, "state/ownership-v1.json");
+      const manifest = await ensureOwnershipManifest({ path: manifestPath, productVersion: "1.2.3" });
+      const resource = { kind: "directory" as const, id: "product-binaries", owner: "product" as const, path: target, dataClass: "binary" as const, metadataRoot };
+      const manager = new PackagedPayloadManager({ manifestPath, installId: manifest.installId, spec: { sourcePath: source, productVersion: "1.2.3", resource } });
+      await manager.install(manifest);
+      expect(manager.observe(readOwnershipManifest(manifestPath)!)).toBe("owned");
+      execFileSync("/usr/bin/codesign", ["--verify", "--strict", target], { stdio: "pipe" });
+      expect(packagedPayloadFingerprint(target)).toBe(packagedPayloadFingerprint(source));
+      expect(existsSync(join(target, OWNERSHIP_MARKER))).toBe(false);
+      expect(existsSync(join(target, PACKAGED_PAYLOAD_RECEIPT))).toBe(false);
+      expect(existsSync(join(metadataRoot, PACKAGED_PAYLOAD_RECEIPT))).toBe(true);
+      // Missing receipt can be rebuilt without changing any signed app bytes.
+      rmSync(join(metadataRoot, PACKAGED_PAYLOAD_RECEIPT));
+      await manager.install(readOwnershipManifest(manifestPath)!);
+      execFileSync("/usr/bin/codesign", ["--verify", "--strict", target], { stdio: "pipe" });
+      expect(manager.observe(readOwnershipManifest(manifestPath)!)).toBe("owned");
+      // A second install cannot overwrite the external ownership record, even if the app is absent.
+      rmSync(target, { recursive: true });
+      const otherPath = join(root, "other/ownership.json");
+      const other = await ensureOwnershipManifest({ path: otherPath, productVersion: "1.2.3" });
+      const otherManager = new PackagedPayloadManager({ manifestPath: otherPath, installId: other.installId, spec: { sourcePath: source, productVersion: "1.2.3", resource } });
+      await expect(otherManager.install(other)).rejects.toThrow("different install");
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   test("repairs an interrupted copy only inside the exact owned binary directory", async () => {
