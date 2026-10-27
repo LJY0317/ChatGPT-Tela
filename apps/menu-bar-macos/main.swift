@@ -262,7 +262,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private func updateConnectionProgress(_ message: String?) {
     connectionProgress = message
     guard let button = statusItem.button else { return }
-    let visibleProgress = message ?? (workInventory.error == nil && workInventory.profiles.contains { $0.connectionInProgress == true || ($0.connected && $0.webState == "preparing") } ? "Connecting ChatGPT…" : nil)
+    let visibleProgress = updater.preparationStatus ?? message ?? (workInventory.error == nil && workInventory.profiles.contains { $0.connectionInProgress == true || ($0.connected && $0.webState == "preparing") } ? "Connecting ChatGPT…" : nil)
     button.toolTip = visibleProgress ?? "ChatGPT Tela"
     button.setAccessibilityLabel(visibleProgress.map { "Tela: \($0)" } ?? (updater.availableVersion == nil ? "ChatGPT Tela" : "ChatGPT Tela, update available"))
     if visibleProgress != nil {
@@ -662,7 +662,11 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       addProfileOpen(1, name: "ChatGPT", to: menu)
     }
     menu.addItem(.separator())
-    if let version = updater.availableVersion {
+    if let status = updater.preparationStatus {
+      let item = NSMenuItem(title: status, action: nil, keyEquivalent: "")
+      item.isEnabled = false
+      menu.addItem(item)
+    } else if let version = updater.availableVersion {
       let item = actionItem("Version \(version) available", action: #selector(openUpdates))
       if #available(macOS 14.4, *) { item.subtitle = updater.downloaded ? "Click to install" : "Click to download" }
       item.isEnabled = updater.canCheck && !controlCenter.connectionOperationInProgress

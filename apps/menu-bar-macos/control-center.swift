@@ -1118,7 +1118,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       let check = actionButton("Check for Updates…", action: #selector(checkForUpdates))
       check.isEnabled = updater?.canCheck == true && !operationInProgress
       let installed = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
-      row(updater?.availableVersion.map { "Version \($0) available" } ?? "ChatGPT Tela",
+      row(updater?.preparationStatus ?? updater?.availableVersion.map { "Version \($0) available" } ?? "ChatGPT Tela",
           subtitle: updater?.problem ?? "Installed: \(installed)", control: check, in: updates)
       let automatic = NSButton(checkboxWithTitle: "Automatically check for updates", target: self, action: #selector(setAutomaticUpdateChecks(_:)))
       automatic.state = updater?.automaticallyChecksForUpdates == true ? .on : .off

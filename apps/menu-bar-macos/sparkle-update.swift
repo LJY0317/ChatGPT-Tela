@@ -10,6 +10,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   var changed: (() -> Void)?
   private var pendingBuild: String?
   private var preparingTermination = false
+  private var preparationWindow: NSPanel?
   private var controller: SPUStandardUpdaterController!
 
   override init() {
@@ -22,8 +23,39 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     set { controller.updater.automaticallyChecksForUpdates = newValue }
   }
 
-  var canCheck: Bool { controller.updater.canCheckForUpdates || controller.updater.sessionInProgress }
+  var preparationStatus: String? { preparingTermination ? "Preparing update…" : nil }
+  var canCheck: Bool { !preparingTermination && (controller.updater.canCheckForUpdates || controller.updater.sessionInProgress) }
   func checkForUpdates(_ sender: Any?) { controller.checkForUpdates(sender) }
+
+  private static func makePreparationWindow() -> NSPanel {
+    let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 110),
+                        styleMask: [.titled], backing: .buffered, defer: false)
+    panel.title = "Updating Tela"
+    panel.isReleasedWhenClosed = false
+    let progress = NSProgressIndicator()
+    progress.style = .spinning
+    progress.isIndeterminate = true
+    progress.controlSize = .small
+    progress.sizeToFit()
+    progress.setAccessibilityLabel("Preparing update")
+    let title = NSTextField(labelWithString: "Preparing update…")
+    title.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+    let detail = NSTextField(labelWithString: "Tela will restart automatically.")
+    detail.textColor = .secondaryLabelColor
+    let text = NSStackView(views: [title, detail])
+    text.orientation = .vertical
+    text.alignment = .leading
+    let content = NSStackView(views: [progress, text])
+    content.spacing = 16
+    content.translatesAutoresizingMaskIntoConstraints = false
+    panel.contentView!.addSubview(content)
+    NSLayoutConstraint.activate([
+      content.centerXAnchor.constraint(equalTo: panel.contentView!.centerXAnchor),
+      content.centerYAnchor.constraint(equalTo: panel.contentView!.centerYAnchor),
+    ])
+    progress.startAnimation(nil)
+    return panel
+  }
 
   /// Resume ordinary startup only when no update restoration already chose the running services.
   func start() async -> Bool {
@@ -45,17 +77,32 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     guard let build = pendingBuild else { return .terminateNow }
     guard !preparingTermination else { return .terminateLater }
     preparingTermination = true
+    problem = nil
+    preparationWindow = Self.makePreparationWindow()
+    preparationWindow?.center()
+    preparationWindow?.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+    changed?()
+    let started = ProcessInfo.processInfo.systemUptime
+    NSLog("Tela update preparation started for build %@", build)
     Task {
+      defer {
+        preparationWindow?.close()
+        preparationWindow = nil
+        NSLog("Tela update preparation ended after %.3f seconds", ProcessInfo.processInfo.systemUptime - started)
+      }
       do {
         let arguments = ["prepare", "--target-build", build]
         do { _ = try await lifecycle(arguments) }
         catch let error as NSError where error.domain == "TelaUpdateBusy" {
+          preparationWindow?.orderOut(nil)
           let alert = NSAlert()
           alert.messageText = "Stop tasks and update?"
           alert.informativeText = error.localizedDescription + " Running tasks will be interrupted. Conversations and saved files are kept."
           alert.addButton(withTitle: "Stop Tasks and Update")
           alert.addButton(withTitle: "Later")
           guard alert.runModal() == .alertFirstButtonReturn else { throw CancellationError() }
+          preparationWindow?.makeKeyAndOrderFront(nil)
           _ = try await lifecycle(arguments + ["--interrupt-work"])
         }
         problem = nil
@@ -63,7 +110,8 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
       } catch {
         preparingTermination = false
         app.reply(toApplicationShouldTerminate: false)
-        if error is CancellationError { return }
+        if error is CancellationError { changed?(); return }
+        preparationWindow?.orderOut(nil)
         problem = error.localizedDescription
         changed?()
         let alert = NSAlert()
@@ -140,7 +188,10 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
     pendingBuild = nil
     preparingTermination = false
+    preparationWindow?.close()
+    preparationWindow = nil
     problem = error.localizedDescription
+    changed?()
     Task {
       do { _ = try await lifecycle(["cancel"]) }
       catch { problem = "Tela recovery needs attention before updating." }
