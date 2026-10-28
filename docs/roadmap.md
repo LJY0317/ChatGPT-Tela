@@ -14,8 +14,9 @@ new runtimes, schedulers or queues. This list records product requirements, not 
 - **Carry relevant attachments.** The delegator should pass task-relevant user images/files through existing
   supported inputs or workspace references, reuse previously delivered material, and distinguish actual
   receipt from an attempted send. Add a short shipped delegation instruction; personal AGENTS files must
-  not be required. The managed `web-delegate` start/continue path currently accepts text only: expose the
-  existing media/file contracts where needed instead of building another attachment engine. Receiving
+  not be required. Managed `web-delegate` start/continue supports text and explicit inline images.
+  Arbitrary file upload is not supported by the current Native input contract; an authorized workspace
+  reference requires actual read evidence. Reuse supported inputs instead of another upload engine. Receiving
   workers should discover the available tools without repeated instructions to use a specific image tool.
 - **Use available native features when appropriate.** Discover Queue, steering, Goal, attachments,
   skills/plugins and other supported capabilities from current schemas and concise bundled guidance.
@@ -58,13 +59,53 @@ new runtimes, schedulers or queues. This list records product requirements, not 
   recovery instead of rebuilding obsolete paths or retrying failed turns blindly. Add diagnostics only at
   boundaries where existing evidence cannot distinguish the cause.
 
+## Remaining requirements from retired implementation candidates
+
+Old candidate branches are retired; these requirements are not implementation or acceptance claims.
+Reuse the current contracts instead of restoring their parallel registries, manifests or admission gates.
+
+- **Unanswered requests.** Preserve the bounded original question, source references and uncertain execution
+  state independently of the Native chat. An explicit reviewed answer from another owned conversation may
+  settle the question; transport completion alone cannot. Manual deletion must not lose unanswered work,
+  and settled failures must not prevent normal retention. No automatic replay or new recovery scheduler.
+- **Advisory capacity.** Unarchived delegations target 32 per profile; all browser surfaces together target
+  10. Reuse the existing retention/retirement lifecycle and expose counts, protected reasons and useful
+  cleanup actions. These are soft targets: no numeric rejection, forced close or indefinite wait.
+- **Instruction reuse.** Explicit rediscovery may omit unchanged instruction bodies only with a matching
+  workspace-scoped source revision previously delivered to that caller. Native revision IDs do not prove
+  standalone Chat delivery; changed global/project instructions must still be returned.
+- **Workspace continuity.** Reboot-varying device identifiers must not alone reject an unchanged checkout.
+  Keep actual replacement detection and the native filesystem helper consistent across supported systems;
+  report a missing old checkout without recreating it or retrying its historical operation.
+- **Shared execution ownership.** Reconcile independent Native Web/Goal activity through existing owners
+  and cancellation paths. A stale observation must not disable unrelated Web startup. Avoid a second
+  permit engine or stricter admission merely to implement a soft target.
+- **Observation attribution.** Browser inspection must distinguish exact task/epoch ownership from the
+  selected profile's unrelated preview. Correlate existing request/operation/RPC evidence through result
+  projection and client receipt; missing evidence is unknown, not failure or proof of model understanding.
+
 ## Desktop lifecycle and presentation
 
-- Notify users when a newer release is available and offer installation from the menu-bar UI through
-  the shared update lifecycle. Defer this feature until the existing update path is reliable.
 - Complete the update/repair lifecycle through the running menu-bar UI as well as backend services and
-  their owned children. Success must reflect new running code; retain normal recovery after a failed
-  final participant. Review both command-line and UI-initiated updates.
+  their owned children. macOS uses Sparkle; retain the supported CLI lifecycle on other systems. Success
+  must reflect new running code and preserve normal recovery after failure, including actionable recovery
+  when completed work leaves an idle tool process that blocks shutdown readiness. Never close ChatGPT
+  for an update that preflight cannot start.
+- Complete the existing owned-process cancellation contract so abandoned tool commands can be stopped
+  and settled through their owner, including child processes. Integrate actionable cancellation into
+  update readiness without terminating active work automatically or requiring manual OS cleanup.
+- **Consumer update acceptance.** Use one menu-bar flow: Check for Updates, download/readiness progress,
+  then Sparkle’s standard Install and Relaunch on macOS. Development dependency preparation and package assembly stay outside this flow.
+  Ship the complete supported payload, including required helpers and runtimes; an update must not silently
+  remove existing capabilities. Confirm the new menu UI, services and enabled profiles are running before
+  reporting success; preserve an actionable recovery result when any participant fails.
+- **Apply after current work.** Reuse host lifecycle events to apply an authorized update after the current
+  Native turn and other active work finish. Preserve the authorization across UI/service replacement,
+  show why an update is deferred, and avoid manual process cleanup, repeated model calls or a new Goal engine.
+- **Prevent validation side effects.** A daemon invoked with unsupported help arguments must not start a
+  production instance or overwrite its runtime descriptor. Validate entry-point usage without inherited
+  production service authority. Runtime publication/removal must remain with the actual service owner;
+  completed validation commands must not leave a live daemon that blocks the next update.
 - Provide a normal macOS application entry point discoverable in Applications/Spotlight. Reopening should
   reveal the existing menu UI or start it once, without restarting browser sessions or background work.
   Keep menu-only quit distinct from stopping services and manage installation/removal ownership.
@@ -83,7 +124,23 @@ new runtimes, schedulers or queues. This list records product requirements, not 
   where possible. Avoid duplicate tools and idle browser bridges; expose capabilities through concise,
   discoverable schemas rather than personal instructions.
 
+## Consumer installation and removal
+
+- Implement the standard host install/connect/remove flow described in
+  [consumer-installation.md](consumer-installation.md). Reuse existing lifecycle ownership and
+  maintenance; distinguish computer removal, account plugin removal and saved-data removal.
+  Verify official private transport/authentication and public-plugin-to-local-machine binding
+  before committing to an implementation. Avoid mandatory browser automation, duplicate
+  connection engines or a new hosted relay without a confirmed requirement. Consumer completion
+  must include actual connection verification and explicit reporting of any remaining host step.
+
 ## Remaining acceptance
+
+- **Consumer disk footprint.** Before final release, measure download size, installed program size excluding
+  user data, and Tela-generated growth during normal use and repeated updates. Check bundled runtime
+  duplication, obsolete versions, caches, logs and temporary files; verify bounded retention and removal
+  of owned leftovers on uninstall. Recheck when packaging, dependencies or storage lifecycles materially
+  change, rather than on every edit. Reuse existing build and lifecycle tools; do not add a resident monitor.
 
 Validate model selection on background Web surfaces without toggling an already-open menu again.
 

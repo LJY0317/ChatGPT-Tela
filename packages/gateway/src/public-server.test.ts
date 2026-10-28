@@ -200,10 +200,11 @@ test("public Goal result uses Native MCP content and error semantics", async () 
   const goalTools = [{ wireName: "get_goal", name: "get_goal", kind: "function" as const,
     description: "Read current Goal", observedFrom: ["native"] }];
   let failed = false;
+  let empty = false;
   const bridge: TurnBridgeBackend = {
     inventory: () => goalTools,
     async invoke(_capability, invocation) {
-      return { callId: invocation.callId, content: JSON.stringify({ goal: { status: failed ? "blocked" : "active" } }),
+      return { callId: invocation.callId, content: empty ? undefined : JSON.stringify({ goal: { status: failed ? "blocked" : "active" } }),
         isError: failed };
     },
   };
@@ -230,6 +231,10 @@ test("public Goal result uses Native MCP content and error semantics", async () 
     const errored = await invoke();
     expect(errored.isError).toBe(true);
     expect(JSON.parse(text(errored))).toEqual({ goal: { status: "blocked" } });
+    empty = true;
+    const absent = await invoke();
+    expect(absent.content).toEqual([]);
+    expect(absent.isError).toBe(true);
   } finally {
     await client.close();
     await server.stop();

@@ -28,7 +28,7 @@ const MAX_TOOL_FILES = 8;
  * Native execution and approval happen upstream. This adapter neither executes tools
  * nor fetches URLs or resources, and does not convert an opaque URI into content.
  */
-export function nativeToolResultToMcpContent(input: unknown): {
+export function nativeToolResultToMcpContent(input: unknown = []): {
   readonly content: readonly TelaMcpResultContent[];
   readonly referencedImages: number;
   readonly distinctImages: number;
