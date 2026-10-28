@@ -131,7 +131,9 @@ history remain readable through the same Native owner; partial tool chains are n
 Without that reader, full-source limits still apply and no original history is silently omitted.
 Native item paging can still return a large single item before Tela can measure it; the body
 budget bounds retained history, not the size of an individual upstream response. Installed live
-Web acceptance remains pending. Do not duplicate the archive, add a search engine or promise
+acceptance covers a long Native-only fork with no Web checkpoint and selected original readback,
+and a separate post-compaction checkpoint-reuse continuation. This does not prove complete semantic
+preservation for every archive size. Do not duplicate the archive, add a search engine or promise
 readback that Web cannot perform. No background Native summaries, automatic
 paid Native fallback or fragment/merge chain is authorized by this policy.
 
