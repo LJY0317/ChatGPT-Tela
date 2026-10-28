@@ -5,34 +5,32 @@
   "upstreamCommit": "687a119f0fcaace47e1f1abcc77cec6c813fd6da",
   "rustToolchain": "1.95.0",
   "patchFile": "model-compaction-mode.patch",
-  "patchSha256": "5494da76e31975443137b2eea43f62d1530a5af0a3415a49ca3973979abb63c9",
-  "status": "experimental-web-verified",
+  "patchSha256": "33476f370d250706c3d858c532689ac3e5c09c1d046fd21f99e9679ecf414f77",
+  "status": "experimental-model-switch-tests-verified",
   "capability": {
     "modelCatalogField": "compaction_mode",
     "localValue": "local",
     "omittedValue": "provider-default"
   },
   "verification": {
-    "focusedEngineTests": 44,
-    "protocolAndModelTests": 423,
-    "telaBoundaryTests": 18,
-    "mockOfficialColdResume": true,
-    "realWebSummary": true,
+    "focusedEngineTests": 13,
+    "telaBoundaryTests": 26,
     "workspaceSuite": false,
-    "deployed": true,
-    "realWebRecall": true,
-    "officialColdResumeAfterWebSummary": true,
-    "nativeResponsesMocked": true,
-    "deploymentScope": "local-macos-arm64-profile-preview",
+    "deployed": false,
     "consumerRelease": false,
-    "liveWebRepeatedCompaction": true,
-    "automaticPressureWithoutBackendUsageTests": 2,
-    "automaticCompactionRegressionTests": 15,
-    "realAutomaticWebCompaction": true
+    "nativeResponsesMocked": true
   },
   "installedPreview": {
     "productVersion": "0.0.0-web-compaction-preview.4",
     "patchSha256": "5494da76e31975443137b2eea43f62d1530a5af0a3415a49ca3973979abb63c9",
     "automaticWebCompactionVerified": true
+  },
+  "modelSwitchVerification": {
+    "status": "13-mocked-engine-tests-passed-release-building",
+    "previousModelCompactionSkippedForLocal": true,
+    "installed": false,
+    "liveWebAcceptance": false,
+    "selectedLocalModelTests": 2,
+    "providerDefaultSwitchTests": 11
   }
 }

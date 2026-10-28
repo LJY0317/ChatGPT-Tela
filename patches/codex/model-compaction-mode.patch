@@ -48,7 +48,7 @@ index edddb25..3d698a2 100644
      // Count either the full active context or only the tokens added after the initial prefix.
      let (auto_compact_scope_tokens, auto_compact_scope_limit, auto_compact_window_prefill_tokens) =
 diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
-index b88b343..06f2dda 100644
+index b88b343..f3c55d5 100644
 --- a/codex-rs/core/src/session/turn.rs
 +++ b/codex-rs/core/src/session/turn.rs
 @@ -208,7 +208,9 @@ pub(crate) async fn run_turn(
@@ -62,7 +62,19 @@ index b88b343..06f2dda 100644
              RemoteCompactionSupport::V2 => Some("Error running remote compact task".to_string()),
              RemoteCompactionSupport::Unsupported => None,
          };
-@@ -1471,7 +1473,7 @@ async fn run_auto_compact(
+@@ -1349,6 +1351,11 @@ async fn maybe_run_previous_model_inline_compact(
+     client_session: &mut ModelClientSession,
+     cancellation_token: &CancellationToken,
+ ) -> CodexResult<()> {
++    // Local compaction belongs to the selected model. Do not invoke a previous
++    // provider before the current model can compact its own readable history.
++    if turn_context.model_info().prefers_local_compaction() {
++        return Ok(());
++    }
+     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
+         return Ok(());
+     };
+@@ -1471,7 +1478,7 @@ async fn run_auto_compact(
          return Ok(());
      }
  
@@ -119,7 +131,7 @@ index 6f5c9fc..f38fc3f 100644
          display_name: format!("{slug} display"),
          description: Some(format!("{slug} description")),
 diff --git a/codex-rs/core/tests/suite/compact.rs b/codex-rs/core/tests/suite/compact.rs
-index 7455ff7..0490459 100644
+index 7455ff7..9fb3c31 100644
 --- a/codex-rs/core/tests/suite/compact.rs
 +++ b/codex-rs/core/tests/suite/compact.rs
 @@ -19,6 +19,7 @@ use codex_protocol::config_types::Settings;
@@ -274,6 +286,114 @@ index 7455ff7..0490459 100644
      let codex = builder.build(&server).await.unwrap().codex;
  
      codex
+@@ -2480,6 +2566,107 @@ async fn pre_sampling_compact_runs_when_comp_hash_changes() {
+     );
+ }
+ 
++#[test_case::test_case(false; "smaller_window")]
++#[test_case::test_case(true; "incompatible_hash")]
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn model_switch_to_local_compacts_with_selected_model(hash_changed: bool) {
++    skip_if_no_network!();
++    let server = MockServer::start().await;
++    let previous_model = "gpt-5.4";
++    let next_model = "gpt-5.2";
++    let mut previous = model_info_with_context_window(previous_model, 273_000);
++    let mut next = model_info_with_context_window(next_model, 125_000);
++    next.compaction_mode = Some(ModelCompactionMode::Local);
++    if hash_changed {
++        previous.comp_hash = Some("hash-a".into());
++        next.comp_hash = Some("hash-b".into());
++    }
++    mount_models_once(
++        &server,
++        ModelsResponse {
++            models: vec![previous, next],
++        },
++    )
++    .await;
++    let requests = mount_sse_sequence(
++        &server,
++        vec![
++            sse(vec![
++                ev_assistant_message("m1", "before switch"),
++                ev_completed_with_tokens("r1", 120_000),
++            ]),
++            sse(vec![
++                ev_assistant_message("m2", AUTO_SUMMARY_TEXT),
++                ev_completed_with_tokens("r2", 10),
++            ]),
++            sse(vec![
++                ev_assistant_message("m3", FINAL_REPLY),
++                ev_completed_with_tokens("r3", 100),
++            ]),
++        ],
++    )
++    .await;
++    let provider = openai_model_provider(&server);
++    let mut builder = test_codex()
++        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
++        .with_model(previous_model)
++        .with_config(move |config| {
++            config.model_provider = provider;
++            set_test_compact_prompt(config);
++        });
++    let test = builder.build(&server).await.expect("build test codex");
++    for (text, model) in [
++        ("before switch", previous_model),
++        ("AFTER_SWITCH_USER", next_model),
++    ] {
++        test.codex
++            .start_or_steer_turn(disabled_permission_user_turn(
++                text,
++                test.cwd.path().to_path_buf(),
++                model.to_string(),
++            ))
++            .await
++            .expect("submit turn");
++        wait_for_event(&test.codex, |event| {
++            matches!(event, EventMsg::TurnComplete(_))
++        })
++        .await;
++    }
++    let bodies: Vec<_> = requests
++        .requests()
++        .iter()
++        .map(|request| request.body_json())
++        .collect();
++    assert_eq!(
++        bodies.len(),
++        3,
++        "one old-model turn, one selected-model summary, one selected-model answer"
++    );
++    assert_eq!(
++        bodies
++            .iter()
++            .map(|body| body["model"].as_str().unwrap())
++            .collect::<Vec<_>>(),
++        vec![previous_model, next_model, next_model]
++    );
++    assert!(body_contains_text(
++        &bodies[1].to_string(),
++        SUMMARIZATION_PROMPT
++    ));
++    assert!(!body_contains_text(
++        &bodies[1].to_string(),
++        "AFTER_SWITCH_USER"
++    ));
++    assert!(body_contains_text(
++        &bodies[2].to_string(),
++        "AFTER_SWITCH_USER"
++    ));
++    assert!(body_contains_text(
++        &bodies[2].to_string(),
++        AUTO_SUMMARY_TEXT
++    ));
++}
++
+ #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+ async fn previous_model_compaction_resolves_selected_settings() -> Result<()> {
+     skip_if_no_network!(Ok(()));
 diff --git a/codex-rs/core/tests/suite/model_switching.rs b/codex-rs/core/tests/suite/model_switching.rs
 index 2694a94..a447adc 100644
 --- a/codex-rs/core/tests/suite/model_switching.rs
@@ -418,7 +538,7 @@ index cb0c9f0..a4e57fc 100644
 +    pub compaction_mode: Option<ModelCompactionMode>,
      /// Model-owned approval coverage. Absent preserves legacy settings; an empty map disables
      /// ordinary Guardian review. Keys are computer_use, shell, file_changes, mcp, network,
-     /// and permissions. This does not override administrator requirements.
+     /// and permissions. This does not override mandatory safety or administrator requirements.
 @@ -511,6 +522,10 @@ pub struct ModelInfo {
  }
  

@@ -5,6 +5,10 @@ while other models keep the provider's default compaction. It does not change pr
 authentication, usage limits, tool execution, permissions, or the official Desktop installation.
 
 The upstream revision, toolchain, patch digest, and verification status are in `manifest.json`.
+The current candidate keeps pre-turn compaction on the selected local-compaction model,
+rather than invoking the previous model on a compatibility-hash change or context-window
+downshift. Ordinary provider-default model switches retain upstream behavior. This change
+is not yet installed; earlier live Web acceptance does not prove this boundary Native-free.
 Real ChatGPT Web summarization, canonical plaintext compaction, and exact identifier recall by a
 subsequent Web turn have passed in an isolated fixture. The unmodified official engine also cold-resumed
 the resulting history. Native replies in this fixture were mocked; exhausted-quota Desktop usability,
