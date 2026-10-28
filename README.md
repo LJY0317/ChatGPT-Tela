@@ -1277,7 +1277,10 @@ settle active tasks offers **Stop Tasks and Update** or **Later**. Stopping task
 and keeps conversations and saved files; unavailable or unsettled services still postpone installation.
 After **Install and Relaunch**, **Preparing update…** stays visible while Tela settles its services;
 Sparkle handles installation after the app exits. Choosing **Later** or encountering an error ends the preparation display.
-Checking again brings an existing Sparkle update back into focus. The arm64 pre-alpha requires macOS 13 or later; its feed is
+Checking again brings an existing Sparkle update back into focus. When Sparkle offers a cancellable downloaded
+update, **Discard Download and Check Again…** cancels it and checks the current feed after cancellation finishes.
+Sparkle removes the canceled update's files; ordinary checks keep the existing download. This action is unavailable
+once installation has advanced to waiting for the app to quit. The arm64 pre-alpha requires macOS 13 or later; its feed is
 available through [GitHub Releases](https://github.com/LJY0317/ChatGPT-Tela/releases/latest).
 
 GitHub Releases can host both the update archive and `appcast.xml`; a separate website is unnecessary.

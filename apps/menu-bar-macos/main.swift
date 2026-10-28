@@ -667,10 +667,15 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       item.isEnabled = false
       menu.addItem(item)
     } else if let version = updater.availableVersion {
-      let item = actionItem("Version \(version) available", action: #selector(openUpdates))
+      let item = actionItem("Version \(version) \(updater.downloaded ? "ready" : "available")", action: #selector(openUpdates))
       if #available(macOS 14.4, *) { item.subtitle = updater.downloaded ? "Click to install" : "Click to download" }
       item.isEnabled = updater.canCheck && !controlCenter.connectionOperationInProgress
       menu.addItem(item)
+      if updater.canDiscardDownload {
+        let discard = actionItem("Discard Download and Check Again…", action: #selector(discardUpdateDownload))
+        discard.isEnabled = !controlCenter.connectionOperationInProgress
+        menu.addItem(discard)
+      }
     } else {
       let item = actionItem("Check for Updates…", action: #selector(openUpdates))
       item.isEnabled = updater.canCheck
@@ -699,6 +704,11 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   @objc private func openUpdates() {
     statusMenu.cancelTracking()
     updater.checkForUpdates(nil)
+  }
+
+  @objc private func discardUpdateDownload() {
+    statusMenu.cancelTracking()
+    updater.discardDownloadAndCheckAgain()
   }
 
   @objc private func startTela() {
