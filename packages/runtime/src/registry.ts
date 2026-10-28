@@ -1,4 +1,4 @@
-import { isNativeGoalTool } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, emitDiagnosticEvent, isNativeGoalTool } from "@chatgpt-tela/core";
 import { WebProviderResponseFailed, type WebProviderFailureReason } from "@chatgpt-tela/core";
 import { WebContextFitFailed, webContextFitFailureReason, type WebContextFitReason } from "@chatgpt-tela/core";
 import { WebObservationUnproven, webObservationFailureReason, type WebObservationReason } from "@chatgpt-tela/core";
@@ -141,11 +141,21 @@ export class ActiveTurnRegistry {
     if (!channel.binding.readHistoryPage || !channel.binding.readHistoryIndex) return undefined;
     const control = capability(this.#routeId);
     this.#controls.set(control, { kind: "history", owner: token, signal });
+    emitDiagnosticEvent("chatgpt_tela_codex", "native_history_control_issued", {
+      history_control_fingerprint: diagnosticFingerprint(control),
+      turn_fingerprint: diagnosticFingerprint(channel.binding.authority.turnId),
+    });
     return control;
   }
 
   async readHistoryPage(token: string, selection: HistoryReadSelection) {
     const scope = this.#controls.get(token);
+    let controlFingerprint: string | undefined;
+    try { controlFingerprint = diagnosticFingerprint(token); } catch { /* Invalid input remains a normal tool error. */ }
+    emitDiagnosticEvent("chatgpt_tela_codex", "native_history_control_resolved", {
+      ...(controlFingerprint ? { history_control_fingerprint: controlFingerprint } : {}),
+      scope_found: scope?.kind === "history",
+    });
     if (scope?.kind !== "history") throw new Error("history read is outside the original Native context");
     scope.signal.throwIfAborted();
     const channel = this.resolve(scope.owner);

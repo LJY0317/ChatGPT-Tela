@@ -1,4 +1,4 @@
-import { diagnosticDurationMs, diagnosticFailureFields, emitDiagnosticEvent, type NativeToolInvocation } from "@chatgpt-tela/core";
+import { CONTEXT_HISTORY_TOOL, diagnosticDurationMs, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, type NativeToolInvocation } from "@chatgpt-tela/core";
 import type { RemoteTurnBridge, TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import { turnCapabilityRoute } from "@chatgpt-tela/runtime";
 
@@ -58,6 +58,15 @@ export class RoutedCodexTurnBridge implements TurnBridgeBackend {
 
   async invoke(capability: string, invocation: NativeToolInvocation) {
     const startedAt = Date.now();
+    const route = turnCapabilityRoute(capability);
+    if (invocation.wireName === CONTEXT_HISTORY_TOOL.wireName) {
+      let historyControlFingerprint: string | undefined;
+      try { historyControlFingerprint = diagnosticFingerprint(capability); } catch { /* No raw capability enters diagnostics. */ }
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_history_control_routed", {
+        ...(historyControlFingerprint ? { history_control_fingerprint: historyControlFingerprint } : {}),
+        route_present: Boolean(route), route_mounted: Boolean(route && this.#children.has(route)),
+      });
+    }
     const requestBytes = invocation.mode === "freeform"
       ? Buffer.byteLength(invocation.input, "utf8")
       : (() => {

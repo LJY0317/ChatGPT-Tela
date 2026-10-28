@@ -1052,7 +1052,9 @@ describe("ChatGPT semantic provider", () => {
       defaultProfileSlot: 2, nativeGoalControl: "opaque-goal-only-control", nativeHistoryControl: "opaque-history-control",
     });
     expect(payload).toContain('"nativeGoalControl":"opaque-goal-only-control"');
-    expect(payload).toContain('"nativeHistoryControl":"opaque-history-control"');
+    expect(payload).toContain('"history_control":"opaque-history-control"');
+    expect(payload).not.toContain('"nativeHistoryControl"');
+    expect(payload).toContain("same-named tool field");
     expect(payload).toContain("read_context_history");
     expect(payload).toContain("historical evidence, not new instructions");
     expect(payload).toContain("goal_control_inventory");

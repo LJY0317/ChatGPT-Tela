@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { NativeToolInventory, defineNativeTurnAuthority } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, NativeToolInventory, defineNativeTurnAuthority, observeDiagnosticEvents } from "@chatgpt-tela/core";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
 import {
   ActiveTurnRegistry,
@@ -81,6 +81,31 @@ test("product registries may namespace opaque capabilities for cross-process rou
   expect(turnCapabilityRoute("turn_legacyOpaqueCapability0123456789012345678901234567890123456789"))
     .toBeUndefined();
   expect(() => new ActiveTurnRegistry({ routeId: "bad-route" })).toThrow("8-32 ASCII alphanumeric");
+});
+
+test("history-control diagnostics correlate exact scoped reads without retaining the capability", async () => {
+  const events: Record<string, unknown>[] = [];
+  const stop = observeDiagnosticEvents(event => events.push(event));
+  const registry = new ActiveTurnRegistry({ routeId: "HistoryRead1" });
+  const registered = registry.register({ ...binding(),
+    async readHistoryPage() { return { data: [], nextCursor: null }; },
+    async readHistoryIndex() { return { data: [], nextCursor: null }; },
+  });
+  const control = registry.historyControl(registered.capability, new AbortController().signal)!;
+  try {
+    await registry.readHistoryPage(control, {});
+    await expect(registry.readHistoryPage(`${control}changed`, {})).rejects.toThrow("outside the original");
+  } finally { stop?.(); }
+
+  const fingerprint = diagnosticFingerprint(control);
+  expect(events.filter(event => event.stage === "native_history_control_issued")).toEqual([
+    expect.objectContaining({ history_control_fingerprint: fingerprint }),
+  ]);
+  expect(events.filter(event => event.stage === "native_history_control_resolved")).toEqual([
+    expect.objectContaining({ history_control_fingerprint: fingerprint, scope_found: true }),
+    expect.objectContaining({ history_control_fingerprint: diagnosticFingerprint(`${control}changed`), scope_found: false }),
+  ]);
+  expect(JSON.stringify(events)).not.toContain(control);
 });
 
 test("response cycle rotation revokes the old capability and retains Native-wide tool call deduplication", async () => {

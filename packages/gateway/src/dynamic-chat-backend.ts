@@ -1,4 +1,4 @@
-import { CONTEXT_HISTORY_TOOL, isNativeGoalTool } from "@chatgpt-tela/core";
+import { CONTEXT_HISTORY_TOOL, diagnosticFingerprint, emitDiagnosticEvent, isNativeGoalTool } from "@chatgpt-tela/core";
 import { randomUUID } from "node:crypto";
 import type { TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import type { ChatCapabilityContract } from "@chatgpt-tela/service-protocol";
@@ -35,6 +35,15 @@ export class DynamicChatBackend {
   async call(capability: string, arguments_: Readonly<Record<string, unknown>>): Promise<unknown> {
     if (this.goalBridge && capability === CONTEXT_HISTORY_TOOL.name) {
       const { history_control, ...selection } = arguments_;
+      let historyControlFingerprint: string | undefined;
+      if (typeof history_control === "string" && history_control) {
+        try { historyControlFingerprint = diagnosticFingerprint(history_control); } catch { /* No raw capability enters diagnostics. */ }
+      }
+      emitDiagnosticEvent("chatgpt_tela_chat", "native_history_control_received", {
+        history_control_present: typeof history_control === "string",
+        history_control_empty: history_control === "",
+        ...(historyControlFingerprint ? { history_control_fingerprint: historyControlFingerprint } : {}),
+      });
       if (typeof history_control !== "string") throw Error("history control capability is required");
       return this.goalBridge.invoke(history_control, { callId: randomUUID(), wireName: CONTEXT_HISTORY_TOOL.wireName,
         mode: "structured", arguments: selection });
