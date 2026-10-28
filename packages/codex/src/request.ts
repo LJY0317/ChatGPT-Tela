@@ -199,6 +199,25 @@ export function parseNativeTurnClaim(value: unknown): NativeTurnClaim {
   return parseCurrentRequestClaim(value, "turn");
 }
 
+/** Metadata-only claim, never execution authority. Does not inspect history or tools. */
+export function parseNativeRequestIdentity(value: unknown): Readonly<{
+  threadId: string;
+  turnId: string;
+  requestKind: "turn" | "compaction";
+}> {
+  const body = record(value);
+  if (!body) throw new Error("native Codex request body must be an object");
+  const metadata = turnMetadata(body);
+  if (metadata.request_kind !== "turn" && metadata.request_kind !== "compaction") {
+    throw new Error("native Codex request kind is unknown");
+  }
+  return Object.freeze({
+    threadId: requiredIdentifier(metadata.thread_id, "thread_id"),
+    turnId: requiredIdentifier(metadata.turn_id, "turn_id"),
+    requestKind: metadata.request_kind,
+  });
+}
+
 /**
  * Untrusted, metadata-only identity for **negative replay checks**.
  * This never proves Native ownership or tool authority: a non-retired request
@@ -209,15 +228,13 @@ export function parseNativeTurnReplayIdentity(value: unknown): Readonly<{
   threadId: string;
   turnId: string;
 }> {
-  const body = record(value);
-  if (!body) throw new Error("native Codex request body must be an object");
-  const metadata = turnMetadata(body);
-  if (metadata.request_kind !== "turn") {
+  const identity = parseNativeRequestIdentity(value);
+  if (identity.requestKind !== "turn") {
     throw new Error("native Codex request is not a current turn");
   }
   return Object.freeze({
-    threadId: requiredIdentifier(metadata.thread_id, "thread_id"),
-    turnId: requiredIdentifier(metadata.turn_id, "turn_id"),
+    threadId: identity.threadId,
+    turnId: identity.turnId,
   });
 }
 

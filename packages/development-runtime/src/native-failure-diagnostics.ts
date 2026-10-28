@@ -2,6 +2,7 @@ import {
   diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext,
   type DiagnosticScalar,
 } from "@chatgpt-tela/core";
+import { parseNativeRequestIdentity } from "@chatgpt-tela/codex";
 
 const MAX_ITEMS = 4096;
 const MAX_ERROR_BYTES = 16 * 1024;
@@ -24,6 +25,17 @@ export function nativeRequestShape(value: unknown): NativeRequestShape {
   const fields: Fields = { parsed: !!root };
   const items = new Map<string, Item>();
   if (!root) return { fields, items };
+  try {
+    const identity = parseNativeRequestIdentity(root);
+    Object.assign(fields, {
+      scope_fingerprint: diagnosticFingerprint(identity.threadId),
+      turn_fingerprint: diagnosticFingerprint(identity.turnId),
+      request_role: identity.requestKind, observation_source: "request_metadata", identity_available: true,
+    });
+  } catch {
+    // Missing metadata is an evidence gap, never a Native admission failure.
+    fields.identity_available = false;
+  }
   if (typeof root.model === "string" && root.model.length > 0 && root.model.length <= 512 && !root.model.includes("\u0000"))
     fields.model_fingerprint = diagnosticFingerprint(root.model);
   fields.policy = root.store === false ? "stateless" : root.store === true ? "stored" : "unspecified";

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseNativeTurnClaim } from "./request";
+import { parseNativeRequestIdentity, parseNativeTurnClaim, parseNativeTurnReplayIdentity } from "./request";
 
 function body(metadata: Record<string, unknown>, extra: Record<string, unknown> = {}): unknown {
   return {
@@ -11,6 +11,13 @@ function body(metadata: Record<string, unknown>, extra: Record<string, unknown> 
 }
 
 describe("native Codex request adapter", () => {
+  test("metadata-only attribution distinguishes compaction without expanding replay authority or reading history", () => {
+    const value = body({request_kind:"compaction",thread_id:"thread-1",turn_id:"turn-1"}) as Record<string, unknown>;
+    Object.defineProperty(value, "input", {get() { throw Error("history must not be read"); }});
+    Object.defineProperty(value, "tools", {get() { throw Error("tool catalog must not be read"); }});
+    expect(parseNativeRequestIdentity(value)).toEqual({requestKind:"compaction",threadId:"thread-1",turnId:"turn-1"});
+    expect(() => parseNativeTurnReplayIdentity(value)).toThrow("not a current turn");
+  });
   test("parses current-turn identity without treating request environment fields as authority", () => {
     const claim = parseNativeTurnClaim(body({
       request_kind: "turn",

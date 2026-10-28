@@ -141,3 +141,27 @@ test("requested model evidence is bounded and never exports the raw model", () =
   expect(JSON.stringify(shape.fields)).not.toContain("private-model");
   for(const model of ["", "x".repeat(513), "bad\u0000model", undefined]) expect(nativeRequestShape({model}).fields.model_fingerprint).toBeUndefined();
 });
+
+test("Native dispatch attribution keeps only metadata fingerprints and never gates or rewrites a request", async () => {
+  for (const requestKind of ["turn", "compaction"]) for (const stringMetadata of [false, true]) {
+    const metadata = {request_kind:requestKind,thread_id:"private-thread",turn_id:"private-turn"};
+    const body = JSON.stringify({model:"private-model",client_metadata:{"x-codex-turn-metadata":stringMetadata?JSON.stringify(metadata):metadata},input:[]});
+    let forwarded = "";
+    const requestFingerprint = diagnosticFingerprint(`${requestKind}-${stringMetadata}`);
+    const response = await withDiagnosticContext({request_fingerprint:requestFingerprint}, () => forwardNativeCodexRequest({
+      request:new Request("http://localhost/responses",{method:"POST",headers:{authorization:"Bearer synthetic"},body}),
+      endpoint:"responses",runtimeHeaderName:"x-tela",fetchUpstream:async request => {forwarded=await request.text();return new Response("done");},
+    }));
+    expect(await response.text()).toBe("done"); expect(forwarded).toBe(body);
+    const event=structuralDiagnosticEvent(events().find(row=>row.stage==="native_dispatch_started"&&row.request_fingerprint===requestFingerprint));
+    expect(event).toMatchObject({scope_fingerprint:diagnosticFingerprint("private-thread"),turn_fingerprint:diagnosticFingerprint("private-turn"),
+      model_fingerprint:diagnosticFingerprint("private-model"),provider_kind:"native",request_role:requestKind,identity_available:true,observation_source:"request_metadata"});
+    expect(JSON.stringify(event)).not.toContain("private-");
+  }
+  const body=JSON.stringify({client_metadata:{"x-codex-turn-metadata":"not JSON"}});
+  let calls=0;
+  const response=await forwardNativeCodexRequest({request:new Request("http://localhost/responses",{method:"POST",headers:{authorization:"Bearer synthetic"},body}),
+    endpoint:"responses",runtimeHeaderName:"x-tela",fetchUpstream:async request=>{calls++;expect(await request.text()).toBe(body);return new Response("done");}});
+  expect(await response.text()).toBe("done");expect(calls).toBe(1);
+  expect(nativeRequestShape(JSON.parse(body)).fields).toMatchObject({identity_available:false});
+});
