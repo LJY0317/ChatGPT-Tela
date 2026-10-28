@@ -1,4 +1,4 @@
-import { diagnosticDurationMs, diagnosticFingerprint, diagnosticFailureClass, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
+import { capturePrivateDiagnosticValue, diagnosticDurationMs, diagnosticFingerprint, diagnosticFailureClass, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import { createHash, randomUUID } from "node:crypto";
 import {
   bindNativeCompactionRequest, historicalTurnAuthority,
@@ -252,6 +252,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
               if (typeof checkpoint?.summary !== "string") throw new CompactionFailure("summary_validation", "invalid_summary");
               summary = checkpoint.summary;
             } else {
+              capturePrivateDiagnosticValue("web_context", { purpose: "native_compaction_source", physicalContext: bounded });
               const result = await preparationBudget.producer(producer)({
                 nativeTaskId: claim.threadId, sourceRevisionId: projection.headId,
                 physicalContext: bounded, browserModel,

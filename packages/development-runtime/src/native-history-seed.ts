@@ -22,6 +22,9 @@ export function prepareDeferredNativeHistory(projection: NativeRequestContextPro
   const eligible = [...turns.entries()].filter(([, items]) => items.every(item =>
     !media.has(item.revision.id) && !protectedIds.has(item.revision.id)
     && item.revision.kind !== "system" && item.revision.kind !== "developer"));
+  // The latest complete exchange is current working state, even when a large
+  // tool result makes it exceed the soft recent-history target.
+  eligible.pop();
   if (!eligible.length && !projection.deferredHistory) return undefined;
   const deferred = new Set<string>();
   const deferredHistory = Object.freeze({ scope: "prior-native-history" as const });

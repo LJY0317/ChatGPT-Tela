@@ -91,7 +91,7 @@ for (const remote of [false,true]) test(`oversized ${remote?'remote':'local'} co
  const result=await router(request(body({instructions:authority,input:[
   ...Array.from({length:6},(_,i)=>({role:'user',content:'OLD-DATA-'.repeat(10000),...attributed(`old-${i}`)})),
   {role:'user',content:'Repair installation',...attributed('recent')},
-  {role:'assistant',content:recent,...attributed('recent')},
+  {role:'assistant',content:'Recent completed work. '.repeat(5000)+recent,...attributed('recent')},
   {type:'function_call',name:'current_tool',call_id:'pending',arguments:'{}',...attributed('turn')},
   {role:'user',content:'Summarize current task',...attributed('turn')},
   ...(remote?[{type:'compaction_trigger'}]:[]),
