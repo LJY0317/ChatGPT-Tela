@@ -21,6 +21,7 @@ const engine = resolve(option("--engine")!);
 const catalogPath = resolve(option("--catalog")!);
 const rejectCompaction = option("--reject-compaction");
 const autoLimit = option("--auto-limit") ? Number(option("--auto-limit")) : undefined;
+const oversizedSource = process.argv.includes("--oversized-source");
 const root = mkdtempSync(join(option("--scratch-root") ?? tmpdir(), "tela-standard-engine-"));
 const home = join(root, "home"); mkdirSync(home);
 const model = chatGptWebModelId(chatGptWebFamilyKey("Standard Engine Fixture"));
@@ -29,16 +30,23 @@ const template = original.models[0]!;
 const modelCatalog = join(root, "models.json");
 writeFileSync(modelCatalog, JSON.stringify({ models: [{ ...template, slug: model,
   display_name: "Standard Engine Fixture", tool_mode: null,
-  context_window: 100_000, max_context_window: 100_000,
-  auto_compact_token_limit: autoLimit ?? 90_000,
+  context_window: oversizedSource ? 1_000_000 : 100_000, max_context_window: oversizedSource ? 1_000_000 : 100_000,
+  auto_compact_token_limit: autoLimit ?? (oversizedSource ? 900_000 : 90_000),
   supported_reasoning_levels: [{ effort: "medium", description: "Fixture" }], default_reasoning_level: "medium",
 }] }));
 let rpcRequest!: (method: string, params?: unknown) => Promise<any>;
 const current = new AppServerCurrentTurnSource(async () => ({ request: rpcRequest, async close() {} }));
 let summaries = 0, remoteRequests = 0, plannedReplays = 0, nativeSwitches = 0, automatic = 0, continuedAfterRejection = 0;
 const router = createNativeLocalCompactionRouter({
-  source: { currentTurn: id => current.currentTurn(id) },
-  summarize: async () => { summaries++;
+  source: { currentTurn: id => current.currentTurn(id), ...(oversizedSource ? {
+    readHistoryPage: current.readHistoryPage.bind(current), readHistoryIndex: current.readHistoryIndex.bind(current),
+  } : {}) },
+  summarize: async input => { summaries++;
+    if (oversizedSource) {
+      assert(input.physicalContext.deferredHistory, "Oversized canonical input must retain an explicit original-history notice");
+      assert(input.physicalContext.segments.some(item => item.content.includes("Latest exact decision:")));
+      assert(!input.physicalContext.segments.some(item => item.content.includes("Archived-only-material-")));
+    }
     if (rejectCompaction === "source-budget") throw new NativeHistoryBootstrapRequired("source_budget");
     if (rejectCompaction) throw new Error("Synthetic terminal summary failure");
     return "Fixture checkpoint: preserve pending task and read original evidence when needed."; },
@@ -140,6 +148,10 @@ try {
     const completed = await notification("turn/completed"); assert.equal(completed.params.turn.status, "completed");
   };
   await turn("Produce a synthetic seed.");
+  if (oversizedSource) {
+    for (let index = 0; index < 6; index++) await turn((`Archived-only-material-${index} `).repeat(4_000));
+    await turn("Latest exact decision: Sparkle owns replacement. Goal pause is unnecessary. Installation remains unverified.");
+  }
   phase = "followup";
   if (autoLimit) await turn("Continue the synthetic seed.");
   automatic = remoteRequests;
@@ -162,7 +174,7 @@ try {
     canonicalOwner: "public-paginated-rpc", remoteCompactions: remoteRequests, summaryCalls: summaries,
     automaticCompactionsWithoutUsage: automatic, plannedReplays, nativeSwitches, continuedAfterRejection,
     terminalCompactionRejection: rejectCompaction ?? null,
-    browserOrModelCalls: 0, fakeResponses: true, installedOrRestartedServices: false };
+    browserOrModelCalls: 0, fakeResponses: true, oversizedCanonicalSource: oversizedSource, installedOrRestartedServices: false };
   if (option("--output")) writeFileSync(resolve(option("--output")!), JSON.stringify(proof, null, 2) + "\n");
   console.log(JSON.stringify(proof));
 } finally {

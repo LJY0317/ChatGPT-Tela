@@ -8,7 +8,8 @@ export function prepareDeferredNativeHistory(projection: NativeRequestContextPro
   policy: WebWorkingContextPolicy, budgetTokens = Number.MAX_SAFE_INTEGER): Extract<PreparedWebContext, { status: "ready" }> | undefined {
   const all = projection.revisions;
   const logicalTokens = all.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
-  if (!projection.deferredHistory && logicalTokens + policy.outputReserveTokens < policy.hard.contextWindowTokenLimit) return undefined;
+  if (!projection.deferredHistory && logicalTokens <= budgetTokens
+    && logicalTokens + policy.outputReserveTokens < policy.hard.contextWindowTokenLimit) return undefined;
   const media = new Set(projection.media.map(item => item.revisionId));
   const protectedIds = new Set(projection.protectedRevisionIds);
   const turns = new Map<string, ProjectedNativeRevision[]>();
@@ -16,8 +17,8 @@ export function prepareDeferredNativeHistory(projection: NativeRequestContextPro
     const group = turns.get(item.historicalTurnId) ?? [];
     group.push(item); turns.set(item.historicalTurnId, group);
   }
-  // Never defer Native input, current authority, pending work or bytes that the text reader
-  // cannot actually deliver. A turn is an indivisible exchange, including its tool results.
+  // Only attributed, readable prior turns may leave the working input. Current authority,
+  // unattributed input, pending work and media remain exact. Tool exchanges stay indivisible.
   const eligible = [...turns.entries()].filter(([, items]) => items.every(item =>
     !media.has(item.revision.id) && !protectedIds.has(item.revision.id)
     && item.revision.kind !== "system" && item.revision.kind !== "developer"));
@@ -25,11 +26,17 @@ export function prepareDeferredNativeHistory(projection: NativeRequestContextPro
   const deferred = new Set<string>();
   const deferredHistory = Object.freeze({ scope: "prior-native-history" as const });
   const manifestTokens = Math.ceil(Buffer.byteLength(JSON.stringify(deferredHistory)) / 4);
+  const eligibleIds = new Set(eligible.flatMap(([, items]) => items.map(item => item.revision.id)));
+  const requiredTokens = all.filter(item => !eligibleIds.has(item.revision.id))
+    .reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
+  // Large exact authority must not drive the desired recent-history runway to zero.
+  const targetTokens = Math.min(budgetTokens,
+    Math.max(policy.firstMessageTargetTokens, requiredTokens + policy.suffixTargetTokens));
   let keptTokens = logicalTokens;
   // Oldest complete turns leave first; the newest working successor stays exact.
   for (const [, items] of eligible) {
     if ((projection.deferredHistory || deferred.size) && keptTokens + manifestTokens
-      <= Math.min(policy.firstMessageTargetTokens, budgetTokens)) break;
+      <= targetTokens) break;
     for (const item of items) deferred.add(item.revision.id);
     keptTokens -= items.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
   }

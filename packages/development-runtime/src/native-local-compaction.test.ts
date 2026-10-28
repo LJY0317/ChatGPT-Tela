@@ -63,6 +63,57 @@ test('oversized local compaction refuses to send the whole logical history to a 
  expect(summarizerCalls).toBe(0);
 });
 
+for (const remote of [false,true]) test(`oversized ${remote?'remote':'local'} compaction defers only owner-indexed prior exchanges and preserves recent work`,async()=>{
+ let calls=0,indexReads=0;
+ const attributed=(turn_id:string)=>({internal_chat_message_metadata_passthrough:{turn_id}});
+ const authority='Exact current authority. '.repeat(4800);
+ const recent='Correction: Goal pause was unnecessary. Use Sparkle. Installation remains unverified.';
+ const router=createNativeLocalCompactionRouter({
+  source:{currentTurn:async()=>canonical,
+   readHistoryPage:async()=>{throw Error('No model readback during summary preparation')},
+   readHistoryIndex:async(_owner,selection)=>{
+    indexReads++;
+    return selection.cursor ? {data:[{turnId:'recent',status:'completed'}],nextCursor:null}
+     : {data:Array.from({length:6},(_,i)=>({turnId:`old-${i}`,status:'completed'})),nextCursor:'older-index'};
+   }},
+  summarize:async input=>{
+   calls++;
+   expect(input.physicalContext.deferredHistory).toEqual({scope:'prior-native-history'});
+   const text=input.physicalContext.segments.map(s=>s.content).join('\n');
+   expect(text).toContain(authority);
+   expect(text).toContain(recent);
+   expect(text).toContain('current_tool');
+   expect(text).not.toContain('OLD-DATA-'.repeat(100));
+   expect(chatGptCheckpointInputTokens(input.physicalContext)).toBeLessThanOrEqual(chatGptWebCheckpointSourceTokenLimit('medium'));
+   return 'Goal pause was unnecessary; Sparkle is required; installation still unverified.';
+  },
+ });
+ const result=await router(request(body({instructions:authority,input:[
+  ...Array.from({length:6},(_,i)=>({role:'user',content:'OLD-DATA-'.repeat(10000),...attributed(`old-${i}`)})),
+  {role:'user',content:'Repair installation',...attributed('recent')},
+  {role:'assistant',content:recent,...attributed('recent')},
+  {type:'function_call',name:'current_tool',call_id:'pending',arguments:'{}',...attributed('turn')},
+  {role:'user',content:'Summarize current task',...attributed('turn')},
+  ...(remote?[{type:'compaction_trigger'}]:[]),
+ ]})));
+ expect(result?.status).toBe(200);expect(calls).toBe(1);expect(indexReads).toBe(2);
+ const item=(await result!.json()).output[0];
+ const summary=remote?decodeTelaCompactionSummary(item.encrypted_content)!:item.content[0].text;
+ expect(JSON.parse(summary.split('\n')[0])).toMatchObject({type:'deferred_native_originals',status:'originals_outside_supplied_revisions_are_not_summarized'});
+ expect(summary).toContain('installation still unverified');
+});
+
+test('unindexed attribution cannot authorize deferral of oversized canonical input',async()=>{
+ let calls=0;
+ const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical,
+  readHistoryPage:async()=>({data:[],nextCursor:null}),
+  readHistoryIndex:async()=>({data:[{turnId:'turn',status:'inProgress'}],nextCursor:null})},
+  summarize:async()=>{calls++;return 'Must not run'}});
+ const result=await router(request(body({input:[{role:'user',content:'X'.repeat(420000),
+  internal_chat_message_metadata_passthrough:{turn_id:'foreign'}},{role:'user',content:'Summarize'}]})));
+ expect(result?.status).toBe(400);expect(calls).toBe(0);
+});
+
 for(const remote of [false,true])test(`automatic ${remote?'remote':'local'} compaction uses the normal bounded working set and preserves unread originals`,async()=>{
  const directory=mkdtempSync(join(tmpdir(),'tela-bounded-compaction-'));
  try {

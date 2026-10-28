@@ -8,7 +8,7 @@ import {
 import { nativeCompactionSummaryResponse } from "@chatgpt-tela/responses";
 import {
   chatGptCheckpointInputTokens, chatGptWebCheckpointSourceTokenLimit, type ChatGptWebEffort, type WebPhysicalContext, type WebTurnMedia } from "@chatgpt-tela/chatgpt";
-import { bindNativePhysicalEvidence, deferredNativeOriginalsNotice, nativeRequestContentSource, nativeRequestBrowserModelRoute, projectNativeRequestContext, type NativeRequestCheckpointProducer, type NativeRequestCheckpointProductionRequest } from "./native-request-planner";
+import { bindNativePhysicalEvidence, deferredNativeOriginalsNotice, nativeRequestContentSource, nativeRequestSourceTurnId, nativeRequestBrowserModelRoute, projectNativeRequestContext, type NativeRequestCheckpointProducer, type NativeRequestCheckpointProductionRequest } from "./native-request-planner";
 import {
   nativeOpaqueCompaction, resolveNativeContextContinuity, type NativeContinuitySources,
 } from "./native-context-continuity";
@@ -18,6 +18,7 @@ import { produceNativePrefixCheckpoint } from "./native-visible-prefix-checkpoin
 import { nativeRequestPrefixSnapshot, nativeCompactionPhysicalContext, selectNativeWorkingCheckpoint } from "./native-working-context";
 import { webWorkingContextPolicy } from "./web-working-context-policy";
 import type { ContextCheckpointCache } from "./context-cache";
+import { prepareDeferredNativeHistory } from "./native-history-seed";
 
 type RecordValue = Record<string, unknown>;
 function record(value: unknown): RecordValue | undefined {
@@ -163,7 +164,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
               throw new Error("Native ingress media belongs to a different current turn");
             }
             operationPhase = "projection";
-            const projection = projectNativeRequestContext(claim.threadId, body, continuity.visibleHistory,
+            let projection = projectNativeRequestContext(claim.threadId, body, continuity.visibleHistory,
               continuity.inlineHistoryAssets, continuity.historyReferences, activeOwner.ingressMedia,
               activeOwner.nativeGoal, activeOwner.nativeGoalState);
             if (projection.deferredHistory && !hasHistoryReadback) throw new NativeHistoryBootstrapRequired();
@@ -179,11 +180,43 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
               ...(watch ? { signal: watch.signal,
                 preparation: { signal: watch.signal, onProgress: (_message: string) => {} } } : {}),
             });
-            const physicalContext: WebPhysicalContext = bindNativePhysicalEvidence(projection,
+            let physicalContext: WebPhysicalContext = bindNativePhysicalEvidence(projection,
               nativeCompactionPhysicalContext(projection, maintained.checkpoint));
             // Refuse an unprovable or oversized source before producing any model summary.
             operationPhase = "source_fit";
-            const bounded = boundedWebCheckpointSource(physicalContext, projection.media, browserModel.effort);
+            let bounded = boundedWebCheckpointSource(physicalContext, projection.media, browserModel.effort);
+            if (!bounded && hasHistoryReadback) {
+              const wanted = new Set((Array.isArray(body.input) ? body.input : []).flatMap(raw => {
+                const id = nativeRequestSourceTurnId(raw);
+                return id !== undefined && id !== claim.turnId ? [id] : [];
+              }));
+              const readable = new Set<string>();
+              let cursor: string | undefined;
+              while (wanted.size) {
+                const page = await input.source.readHistoryIndex!(activeOwner, { ...(cursor ? { cursor } : {}) },
+                  watch?.signal ?? new AbortController().signal);
+                for (const item of page.data) {
+                  if (wanted.delete(item.turnId) && ["completed", "failed", "interrupted"].includes(item.status)
+                    && item.turnId !== claim.turnId) readable.add(item.turnId);
+                }
+                if (!page.nextCursor) break;
+                cursor = page.nextCursor;
+              }
+              projection = projectNativeRequestContext(claim.threadId, body, continuity.visibleHistory,
+                continuity.inlineHistoryAssets, continuity.historyReferences, activeOwner.ingressMedia,
+                activeOwner.nativeGoal, activeOwner.nativeGoalState, readable);
+              const seed = prepareDeferredNativeHistory(projection, policy, policy.checkpointSourceTokens);
+              if (seed) {
+                physicalContext = bindNativePhysicalEvidence(projection, seed.physicalContext);
+                bounded = boundedWebCheckpointSource(physicalContext, projection.media, browserModel.effort);
+              }
+              emitDiagnosticEvent("chatgpt_tela_work", "compaction_history_source_selected", {
+                source_revision_count: projection.revisions.length,
+                covered_revision_count: projection.revisions.filter(item => item.historicalTurnId).length,
+                item_count: physicalContext.segments.length, source_fits: !!bounded,
+                reason_class: seed ? "indexed_originals_deferred" : "exact_source_required",
+              });
+            }
             emitDiagnosticEvent("chatgpt_tela_work", "compaction_source_observed", {
               logical_estimate: tokens, revision_count: projection.revisions.length,
               transfer_estimate: Math.max(physicalContext.transferTokens, chatGptCheckpointInputTokens(physicalContext, projection.media)),
@@ -228,7 +261,8 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
             }
             if (watch?.signal.aborted) throw new CompactionFailure(operationPhase, "owner_cancelled");
             operationPhase = "summary_validation";
-            const notice = projection.deferredHistory ? deferredNativeOriginalsNotice(projection.deferredHistory) + "\n" : "";
+            const deferredHistory = physicalContext.deferredHistory ?? projection.deferredHistory;
+            const notice = deferredHistory ? deferredNativeOriginalsNotice(deferredHistory) + "\n" : "";
             if (!summary.trim() || Buffer.byteLength(notice + summary, "utf8") > MAX_TELA_COMPACTION_SUMMARY_BYTES) throw new CompactionFailure(operationPhase, "invalid_summary");
             summary = notice + summary;
           } catch (error) { primaryFailure = true; throw failure(error, operationPhase); }

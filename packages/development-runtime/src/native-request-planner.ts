@@ -487,6 +487,12 @@ export function nativeRequestContentSource(value: unknown): { readonly instructi
   return { instructions: body.instructions, input: body.input };
 }
 
+/** Optional Native protocol attribution; it grants no authority without the owner-bound history index. */
+export function nativeRequestSourceTurnId(value: unknown): string | undefined {
+  const id = record(record(value)?.internal_chat_message_metadata_passthrough)?.turn_id;
+  return typeof id === "string" ? id : undefined;
+}
+
 /**
  * Deterministically project the complete current Native request into a logical active path.
  *
@@ -504,6 +510,7 @@ export function projectNativeRequestContext(
   currentIngressMedia?: NativeIngressTurnMedia,
   currentNativeGoal?: NativeThreadGoalObservation,
   currentNativeGoalState?: "absent" | "unavailable",
+  readableHistoricalTurnIds?: ReadonlySet<string>,
 ): NativeRequestContextProjection {
   const body = nativeRequestContentSource(value);
   const taskId = nativeTaskId.trim();
@@ -681,14 +688,19 @@ export function projectNativeRequestContext(
       const item = record(raw);
       if (!item) throw unsupportedProjection("input_item_shape", body.input, index);
       const type = typeof item.type === "string" ? item.type : undefined;
+      // Native supplies source attribution separately from message text. Only a
+      // turn verified through this owner's original-history index may be deferred.
+      const attributedTurn = nativeRequestSourceTurnId(item);
+      const historicalTurnId = attributedTurn !== undefined && readableHistoricalTurnIds?.has(attributedTurn)
+        ? attributedTurn : undefined;
 
       if (type === "message" || (type === undefined && typeof item.role === "string")) {
         const kind = messageKind(item.role);
         if (kind === "user") {
           const user = projectNativeUserContent(item.content, taskId, `input:${index}`);
-          append(kind, user.text, user.media);
+          append(kind, user.text, user.media, historicalTurnId);
         } else {
-          append(kind, textFromContent(item.content, `input[${index}].content`));
+          append(kind, textFromContent(item.content, `input[${index}].content`), [], historicalTurnId);
         }
         continue;
       }
@@ -714,7 +726,7 @@ export function projectNativeRequestContext(
 
       if (type === "function_call" || type === "custom_tool_call" || type === "tool_search_call") {
         const tool = projectNativeToolEvidence(item, taskId, `input:${index}`);
-        append("tool-call", stableJson(tool.item), tool.media);
+        append("tool-call", stableJson(tool.item), tool.media, historicalTurnId);
         continue;
       }
 
@@ -723,7 +735,7 @@ export function projectNativeRequestContext(
       if (type === "function_call_output" || type === "mcp_tool_call_output"
         || type === "custom_tool_call_output" || type === "tool_search_output") {
         const tool = projectNativeToolEvidence(item, taskId, `input:${index}`);
-        append("tool-result", stableJson(tool.item), tool.media);
+        append("tool-result", stableJson(tool.item), tool.media, historicalTurnId);
         continue;
       }
 

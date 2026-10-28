@@ -39,6 +39,16 @@ Preparation and the actual task answer are counted separately. A healthy retaine
 selects existing checkpoints without invoking proactive summary maintenance. Prepare a
 new summary when a fresh page or Native compaction actually needs one.
 
+Oversized Native compaction also uses that bounded working source when canonical input
+contains Native turn attribution and the same owner's public history index confirms those
+prior turns are terminal and readable. Only complete attributed exchanges may be deferred;
+current requests, instructions, protected state and media remain exact. Missing attribution
+does not grant permission to trim source. The recent-history target accounts for mandatory
+authority so a large instruction block cannot evict every recent exchange merely to meet a
+soft seed target. One summary call covers only the supplied working source, and its returned
+continuation explicitly identifies unread originals. Native still receives its standard single
+compaction item; no extra response items, fragment/merge sequence or replacement engine is used.
+
 ## Capacity and regular maintenance
 
 Native owns canonical task history, edits, authorization and compaction. Web state is a
