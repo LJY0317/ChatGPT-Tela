@@ -104,12 +104,12 @@ smaller seed with deferred original ranges requires a real authenticated Tela Ch
 capability first. Current structural Native inspection is not that reader. The Native history
 source shares the public `thread/items/list` page reader, including a selected `turnId` and
 exclusive item anchor. Its optional current-turn binding fixes the original thread and branch,
-and rejects a replaced or retired owner before releasing the page. An explicit prior-history
-scope enables Tela Chat `read_context_history` through the existing turn
-transport. Its response-cycle capability grants neither Native work tools nor another
-account/thread. Readback uses plain historical text; private reasoning and undelivered media
-contents are not exposed. Normal plans do not advertise this capability without an explicit
-scope. When a loaded indexed archive exceeds the Web window and its original reader is
+and rejects a replaced or retired owner before releasing the page. An available indexed source
+enables Tela Chat `read_context_history` through the existing turn transport, including after
+Native compaction or checkpoint reuse. Its response-cycle capability grants neither Native
+work tools nor another account/thread. Readback uses plain historical text; private reasoning
+and undelivered media contents are not exposed. When a loaded indexed archive exceeds the Web
+window and its original reader is
 available, the planner keeps current work, authority and actual media exact and defers only
 whole historical turns. The manifest identifies unread prior history; its turn index is paginated
 on demand rather than injected as a growing ID list. It is not a summary or evidence that the

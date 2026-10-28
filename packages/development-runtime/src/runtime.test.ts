@@ -1397,7 +1397,7 @@ test("same Native turn continuation runs two settled Web cycles through the real
 });
 
 
-test("runtime grants only the seed's original history scope and accounts its readback before Native completion", async () => {
+for (const deferred of [true, false]) test(`runtime keeps owner-bound original history readable for ${deferred ? "deferred seeds" : "compacted checkpoint continuations"}`, async () => {
   const { McpTurnBridge } = await import('@chatgpt-tela/mcp');
   const { CONTEXT_HISTORY_TOOL } = await import('@chatgpt-tela/core');
   const host = new ControlledBrowserHost(async () => ({
@@ -1428,9 +1428,12 @@ test("runtime grants only the seed's original history scope and accounts its rea
       return { data: [{ turnId: 'past', item: { type: 'agentMessage', id: 'old', text: 'original answer' } }], nextCursor: null };
     }, async readHistoryIndex() { return { data: [{ turnId: 'past', status: 'completed' }], nextCursor: null }; } },
     planWebTurn() { return { nativeTaskId: 'thread-1', webEpochId: 'scope-epoch', physicalContext: {
-      mode: 'full', headRevisionId: 'current', activeRequestRevisionId: 'current', logicalTokens: 100, transferTokens: 100,
-      segments: [{ type: 'revision', revisionId: 'current', kind: 'user', content: 'Current request' }],
-      deferredHistory: { scope: 'prior-native-history' },
+      mode: deferred ? 'full' : 'checkpoint-delta', headRevisionId: 'current', activeRequestRevisionId: 'current', logicalTokens: 100, transferTokens: 100,
+      segments: [
+        ...(!deferred ? [{ type: 'checkpoint' as const, checkpointId: 'summary', sourceRevisionId: 'past', content: 'Maintained summary' }] : []),
+        { type: 'revision', revisionId: 'current', kind: 'user', content: 'Current request' },
+      ],
+      ...(deferred ? { deferredHistory: { scope: 'prior-native-history' as const } } : {}),
     } }; },
   });
   try {
