@@ -13,7 +13,7 @@
     "omittedValue": "provider-default"
   },
   "verification": {
-    "focusedEngineTests": 13,
+    "focusedEngineTests": 15,
     "telaBoundaryTests": 26,
     "workspaceSuite": false,
     "deployed": false,
@@ -26,11 +26,17 @@
     "automaticWebCompactionVerified": true
   },
   "modelSwitchVerification": {
-    "status": "13-mocked-engine-tests-passed-release-building",
+    "status": "15-mocked-engine-tests-passed-release-building",
     "previousModelCompactionSkippedForLocal": true,
     "installed": false,
     "liveWebAcceptance": false,
     "selectedLocalModelTests": 2,
-    "providerDefaultSwitchTests": 11
-  }
+    "providerDefaultSwitchTests": 11,
+    "catalogSeedTests": 2,
+    "catalogSeedContract": "startup seed with ordinary remote discovery",
+    "releaseEngineBuild": "pending-rebuild-with-seed"
+  },
+  "catalogPatchFile": "model-catalog-refresh.patch",
+  "catalogPatchSha256": "f23fdd788003c1d610d853409fce3968f97aad13c1c6e73273a635c3ad63d4a1",
+  "combinedPatchSha256": "6f85ea769e0be852ad13e4291201607b0eedd57c810b8c0a68428e661dfb8395"
 }

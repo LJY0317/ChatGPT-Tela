@@ -73,3 +73,11 @@ estimation, whose equivalent standard behavior has not been verified. The refres
 also does not invalidate Desktop's picker cache. Keep existing preview compatibility
 while validating the standard path; do not expand the fork to repair proxy ownership
 or terminal-response replay. See [the responsibility review](../../docs/token-efficiency.md#standard-engine-and-optional-fork).
+
+The catalog patch also reproduces the installed `model-catalog-seed-v1` contract:
+`features.tela_seeded_model_catalog=true` treats `model_catalog_json` as an initial
+snapshot for the ordinary OpenAI model manager, preserving its remote/cache lifecycle.
+Without this opt-in the upstream static-catalog behavior remains unchanged. The owned
+engine capability list includes `model-catalog-seed-v1` only after startup and remote
+refresh acceptance. The manifest binds both ordered patch files; an engine built from
+only the compaction patch must not replace a preview declaring both catalog capabilities.

@@ -6351,3 +6351,150 @@ index 01fce38..6eb53d3 100644
              .await
              .map_err(|err| config_load_error(&err))?;
          let models = supported_models(presets, include_hidden.unwrap_or(false));
+diff --git a/codex-rs/core/config.schema.json b/codex-rs/core/config.schema.json
+index af8f05e..2e15fac 100644
+--- a/codex-rs/core/config.schema.json
++++ b/codex-rs/core/config.schema.json
+@@ -1103,6 +1103,9 @@
+             "system_proxy_fallback": {
+               "type": "boolean"
+             },
++            "tela_seeded_model_catalog": {
++              "type": "boolean"
++            },
+             "telepathy": {
+               "type": "boolean"
+             },
+@@ -7133,6 +7136,9 @@
+         "system_proxy_fallback": {
+           "type": "boolean"
+         },
++        "tela_seeded_model_catalog": {
++          "type": "boolean"
++        },
+         "telepathy": {
+           "type": "boolean"
+         },
+diff --git a/codex-rs/core/src/thread_manager.rs b/codex-rs/core/src/thread_manager.rs
+index db3d358..b46915b 100644
+--- a/codex-rs/core/src/thread_manager.rs
++++ b/codex-rs/core/src/thread_manager.rs
+@@ -434,10 +434,17 @@ pub fn build_models_manager(
+     auth_manager: Arc<AuthManager>,
+ ) -> SharedModelsManager {
+     let provider = create_model_provider(config.model_provider.clone(), Some(auth_manager));
+-    let manager = provider.models_manager(
++    let seed_catalog = config.features.enabled(Feature::TelaSeededModelCatalog)
++        && config.model_provider.is_openai();
++    let mut manager = provider.models_manager(
+         config.codex_home.to_path_buf(),
+-        config.model_catalog.clone(),
++        config.model_catalog.clone().filter(|_| !seed_catalog),
+     );
++    if seed_catalog && let Some(catalog) = config.model_catalog.clone() {
++        Arc::get_mut(&mut manager)
++            .expect("new provider model manager is not shared")
++            .seed_model_catalog(catalog);
++    }
+     manager.set_api_key_model_discovery_enabled(
+         config.features.enabled(Feature::ApiKeyModelDiscovery),
+     );
+diff --git a/codex-rs/core/src/thread_manager_tests.rs b/codex-rs/core/src/thread_manager_tests.rs
+index 99321ce..b3804f8 100644
+--- a/codex-rs/core/src/thread_manager_tests.rs
++++ b/codex-rs/core/src/thread_manager_tests.rs
+@@ -3311,3 +3311,43 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
+         1,
+     );
+ }
++
++#[test_case::test_case(false; "static_catalog")]
++#[test_case::test_case(true; "seeded_remote_catalog")]
++#[tokio::test]
++async fn startup_catalog_seed_preserves_remote_discovery(seed_catalog: bool) {
++    let server = MockServer::start().await;
++    let mut row = codex_models_manager::bundled_models_response()
++        .expect("bundled models")
++        .models
++        .remove(0);
++    row.slug = "fixture-seed-web".into();
++    row.visibility = codex_protocol::openai_models::ModelVisibility::List;
++    let seed = ModelsResponse {
++        models: vec![row.clone()],
++    };
++    row.slug = "fixture-updated-web".into();
++    let remote = ModelsResponse { models: vec![row] };
++    let request = mount_models_once(&server, remote.clone()).await;
++    let home = tempdir().expect("tempdir");
++    let mut config = test_config().await;
++    config.codex_home = home.path().abs();
++    config.model_provider.base_url = Some(server.uri());
++    config
++        .features
++        .set_enabled(Feature::TelaSeededModelCatalog, seed_catalog)
++        .expect("set seed feature");
++    config.model_catalog = Some(seed.clone());
++    let auth =
++        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
++    let manager = build_models_manager(&config, auth);
++    assert_eq!(manager.get_remote_models().await, seed.models);
++    let actual = manager
++        .raw_model_catalog(
++            RefreshStrategy::Online,
++            crate::test_support::default_http_client_factory(),
++        )
++        .await;
++    assert_eq!(actual, if seed_catalog { remote } else { seed });
++    assert_eq!(request.requests().len(), usize::from(seed_catalog));
++}
+diff --git a/codex-rs/features/src/lib.rs b/codex-rs/features/src/lib.rs
+index ebd6d89..3f91e84 100644
+--- a/codex-rs/features/src/lib.rs
++++ b/codex-rs/features/src/lib.rs
+@@ -95,6 +95,8 @@ pub enum Feature {
+     AnalyticsPlanHistory,
+     /// Discover model catalogs for OpenAI API-key authentication.
+     ApiKeyModelDiscovery,
++    /// Use an initial Tela catalog without disabling ordinary remote discovery.
++    TelaSeededModelCatalog,
+     /// Deprecated no-op; use `tui.fullscreen_transcript` instead.
+     TranscriptV2,
+     // Stable.
+@@ -1277,6 +1279,12 @@ pub const FEATURES: &[FeatureSpec] = &[
+         stage: Stage::Removed,
+         default_enabled: false,
+     },
++    FeatureSpec {
++        id: Feature::TelaSeededModelCatalog,
++        key: "tela_seeded_model_catalog",
++        stage: Stage::UnderDevelopment,
++        default_enabled: false,
++    },
+     FeatureSpec {
+         id: Feature::ApiKeyModelDiscovery,
+         key: "api_key_model_discovery",
+diff --git a/codex-rs/models-manager/src/manager.rs b/codex-rs/models-manager/src/manager.rs
+index 7b4d613..72f65b4 100644
+--- a/codex-rs/models-manager/src/manager.rs
++++ b/codex-rs/models-manager/src/manager.rs
+@@ -111,6 +111,9 @@ type SharedModelsEndpointClient = Arc<dyn ModelsEndpointClient>;
+ 
+ /// Coordinates model discovery plus cached metadata on disk.
+ pub trait ModelsManager: fmt::Debug + Send + Sync {
++    /// Supply an initial catalog before sharing the manager; remote refresh remains authoritative.
++    fn seed_model_catalog(&mut self, _catalog: ModelsResponse) {}
++
+     /// Supply startup API-key discovery policy; live changes require a new session.
+     /// Static catalogs ignore this setting.
+     fn set_api_key_model_discovery_enabled(&self, _enabled: bool) {}
+@@ -343,6 +346,10 @@ impl StaticModelsManager {
+ }
+ 
+ impl ModelsManager for OpenAiModelsManager {
++    fn seed_model_catalog(&mut self, catalog: ModelsResponse) {
++        self.remote_models.get_mut().models = catalog.models;
++    }
++
+     fn set_api_key_model_discovery_enabled(&self, enabled: bool) {
+         self.api_key_model_discovery_enabled
+             .store(enabled, Ordering::SeqCst);
