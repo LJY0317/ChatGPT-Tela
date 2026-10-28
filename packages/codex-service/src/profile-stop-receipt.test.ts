@@ -2,13 +2,13 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { startCodexService } from "./controller";
+import { CodexShutdownNotStartedError, startCodexService } from "./controller";
 import type { CodexNativeTargetAdapter } from "./native-target";
 
 test("refused default Desktop cleanup keeps authenticated child, route and service until explicit successful stop", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-stop-receipt-")), state = join(root, "stop.json");
   writeFileSync(state, JSON.stringify({ refuse: true }));
-  let active = false, closes = 0, parentQuits = 0;
+  let active = false, closes = 0, parentQuits = 0, nativeBusy = false;
   const closedSlots: number[] = [];
   let onClosed = (_slot: number) => {};
   const closed = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) { const slot = Number(new URL(request.url).searchParams.get("slot") ?? 1); closedSlots.push(slot); onClosed(slot); closes++; active = false; return new Response(null, { status: 204 }); } });
@@ -18,7 +18,8 @@ test("refused default Desktop cleanup keeps authenticated child, route and servi
       const request = JSON.parse(String(data));
       if (request.id === undefined) return;
       socket.send(JSON.stringify({ id: request.id, result: request.method === "thread/loaded/list"
-        ? { data: [], nextCursor: null } : {} }));
+        ? { data: nativeBusy ? ["owned-thread"] : [], nextCursor: null }
+        : request.method === "thread/read" ? { thread: { id: "owned-thread", status: { type: "active" } } } : {} }));
     } },
   });
   const supervision = resolve(import.meta.dir, "../../../apps/profile-runtime/src/supervision.ts");
@@ -32,7 +33,7 @@ import {startCodexBridgeMcpHttpServer} from ${JSON.stringify(mcp)};
 const slot=Number(process.env.CHATGPT_TELA_PRODUCT_PROFILE_SLOT);
 const lifecycle=await createProfileSupervisorLifecycle();
 const mcp=await startCodexBridgeMcpHttpServer({bridge:{inventory(){return []},async invoke(){throw Error('unused')}},authentication:{kind:'bearer',token:process.env.CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN}});
-const preview=await startProfileBridgePreviewServer({slot,bearerToken:process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN,async observe(){return{activeSurfaceCount:0}},shutdownReadiness(){return 'ready'},async shutdownProfile(){const state=JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8'));if(state.refuse||state.refuseSlot===slot)throw Error('synthetic normal quit refusal');await fetch(process.env.FIXTURE_CLOSED);return{responsesRouteFingerprint:'a'.repeat(64)}}});
+const preview=await startProfileBridgePreviewServer({slot,bearerToken:process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN,async observe(){return{activeSurfaceCount:0}},shutdownReadiness(){return JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).busy?'blocked':'ready'},async shutdownProfile(){const state=JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8'));if(state.refuse||state.refuseSlot===slot)throw Error('synthetic normal quit refusal');await fetch(process.env.FIXTURE_CLOSED);return{responsesRouteFingerprint:'a'.repeat(64)}}});
 await lifecycle.publishReady({stage:'product-profile-ready',runtimeProcessId:process.pid,slot,routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:slot===1?'default':'fixture-'+slot,nativeTargetKind:'default-desktop',targetProcessId:123,nativeReady:true,webState:'preparing',profileId:'fixture',internalMcpUrl:mcp.endpointUrl.href,bridgePreviewUrl:preview.endpoint.href,terminalEndpoint:process.env.FIXTURE_APP_SERVER_ENDPOINT,responsesUrl:'http://127.0.0.1:1234/',responsesRouteFingerprint:'a'.repeat(64)});
 await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecycle.dispose();`);
   const built = await Bun.build({ entrypoints: [child], target: "bun", outdir: root, naming: "child.mjs" });
@@ -134,6 +135,42 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
       expect(closedSlots).toEqual([1, 2, 1]);
     } finally {
       writeFileSync(state, JSON.stringify({ refuse: false })); await multiple.close();
+    }
+    // Official updates may replace or close Desktop while Tela's exact runtime
+    // remains alive. Only that runtime's work and cleanup receipt govern its stop.
+    for (const replacementPid of [456, undefined]) {
+      let replaced = false;
+      const replacementSession = async () => replaced
+        ? { targetId: "default", state: replacementPid ? "restart-required" : "available",
+            ...(replacementPid ? { desktopProcessId: replacementPid } : {}) }
+        : session();
+      const detached = await startCodexService({ config: {},
+        profileRuntimeCommand: [process.execPath, join(root, "child.mjs")],
+        nativeTargetAdapter: { ...adapter,
+          async profiles() { return [{ target, session: await replacementSession() }]; },
+          session: replacementSession,
+          async quit() { throw Error("replacement app must not be quit"); },
+        } });
+      try {
+        await detached.startProfile(1);
+        replaced = true;
+        expect((await detached.profiles())[0]?.controlState).toBe("orphaned");
+        nativeBusy = true;
+        expect(await detached.shutdownReadiness()).toBe("blocked");
+        await expect(detached.close()).rejects.toBeInstanceOf(CodexShutdownNotStartedError);
+        expect(detached.activeProfileCount).toBe(1);
+        nativeBusy = false;
+        writeFileSync(state, JSON.stringify({ busy: true }));
+        expect(await detached.shutdownReadiness()).toBe("blocked");
+        writeFileSync(state, JSON.stringify({ refuse: false }));
+        expect(await detached.shutdownReadiness()).toBe("ready");
+        await detached.close();
+        expect(detached.activeProfileCount).toBe(0);
+        expect(parentQuits).toBe(0);
+      } finally {
+        nativeBusy = false; writeFileSync(state, JSON.stringify({ refuse: false }));
+        await detached.close();
+      }
     }
   } finally {
     writeFileSync(state, JSON.stringify({ refuse: false }));

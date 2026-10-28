@@ -360,8 +360,8 @@ export async function startCodexService(input: {
     };
     if ((!duringStop && (profile.stopping || stoppingProfiles.has(profile.slot) || starting.has(profile.slot)))
       || profile.child.exitCode !== null || profile.child.signalCode !== null) return blocked("profile_transition");
-    const session = await targets.session(profile.target.id);
-    if (!ownsNativeTargetSession(profile.target, session, profile)) return blocked("native_owner_changed");
+    // Readiness belongs to this owned runtime, not a replacement Desktop.
+    // stopOwned/runtime cleanup separately prove ownership before quitting an app.
     // The built-in Desktop adapter reports process identity, not the routed
     // app-server. Use the same owned endpoint as terminalSession for all targets.
     if (!profile.terminalEndpoint) return blocked("native_endpoint_unavailable");
