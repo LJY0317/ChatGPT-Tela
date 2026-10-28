@@ -49,7 +49,7 @@ test("public failure retains TLS cause and aggregate incident; mixed relays and 
   const dns = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => Response.json({ Status: 0, Answer: [
     { type: 1, data: "192.0.2.1" }, { type: 1, data: "192.0.2.2" },
   ] }), { preconnect: globalThis.fetch.preconnect }));
-  let failAll = true, failFirst = true, verifiedCalls = 0, snapshots = 0;
+  let failAll = true, failFirst = true, verifiedCalls = 0, snapshots = 0, capabilityChecks = 0, capabilityFailure = false;
   const mock = spyOn(https, "request").mockImplementation(((url: URL, options: any, callback: any) => {
     let address: string | undefined;
     options.lookup(url.hostname, {}, (_error: unknown, value: string) => { address = value; });
@@ -67,27 +67,41 @@ test("public failure retains TLS cause and aggregate incident; mixed relays and 
     return req;
   }) as typeof https.request);
   const runner = { async run(args: readonly string[]) {
+    if (args[1] === "netmap") {
+      capabilityChecks++;
+      if (capabilityFailure) throw Error("private-debug-failure");
+      return { stdout: JSON.stringify({ Cached: false, NodeKey: "private-node-key", Peers: [
+        { Tags: ["tag:ingress"], UnsignedPeerAPIOnly: true, IsJailed: true, Name: "private-peer" },
+      ], PacketFilter: [{ Srcs: ["private-address"], Caps: [
+        { Cap: "https://tailscale.com/cap/ingress", Dst: "private-destination" },
+      ] }] }), stderr: "" };
+    }
     if (args[0] === "debug") return { stdout: "peerapi_ingress 7", stderr: "" };
     if (args[0] === "status") { snapshots++; return { stdout: JSON.stringify({ BackendState: "Running", Self: { Online: true }, Peer: {} }), stderr: "" }; }
     return { stdout: "{}", stderr: "" };
   } };
   try {
     const failed = await diagnosePublicIngress(new URL("https://private-host.invalid/mcp"), "https://resolver.invalid", runner);
-    expect(failed).toMatchObject({ state: "unavailable", stage: "tls", responsiveCount: 0, localIngress: { delta: 0 }, localStateAfter: { node_online: true } });
+    expect(failed).toMatchObject({ state: "unavailable", stage: "tls", responsiveCount: 0, localIngress: { delta: 0 }, localStateAfter: { node_online: true },
+      capabilityState: { netmap_observed: true, netmap_cached: false, ingress_peer_count: 1,
+        ingress_unsigned_peer_count: 1, ingress_jailed_peer_count: 1, filter_observed: true, ingress_capability_count: 1 } });
     await new Promise(resolve => setImmediate(resolve));
     const persisted = readFileSync(process.env.CHATGPT_TELA_DIAGNOSTIC_FILE!, "utf8");
     expect(persisted).toContain('"failure_class":"err_socket_closed"');
     expect(persisted).toContain('"stage":"public_ingress_probe_failed"');
+    expect(persisted).toContain('"stage":"public_ingress_capability_snapshot"');
     const incidents = listDiagnosticIncidents(join(root, "diagnostics"));
     const incident = incidents.find(row => row.stage === "public_ingress_probe_failed");
     expect(incident).toBeDefined();
     expect(readDiagnosticIncident(join(root, "diagnostics"), incident!.ref)).toMatchObject({
       stage: "public_ingress_probe_failed", failure: { phase: "tls", responsive_count: 0 },
     });
-    expect(persisted).not.toMatch(/private-host|private-body|private socket|192\.0\.2/);
+    expect(persisted).not.toMatch(/private-host|private-body|private socket|192\.0\.2|private-node-key|private-peer|private-address|private-destination/);
+    expect(JSON.stringify(failed)).not.toMatch(/private-node-key|private-peer|private-address|private-destination/);
     failAll = false;
     const mixed = await diagnosePublicIngress(new URL("https://private-host.invalid/mcp"), "https://resolver.invalid", runner);
     expect(mixed).toMatchObject({ state: "http-responsive", responsiveCount: 1, mcpContract: "not-probed" });
+    expect(capabilityChecks).toBe(1);
     const mismatch = await diagnosePublicIngress(new URL("https://private-host.invalid/mcp"), "https://resolver.invalid", runner, {
       async verify(fetch, signal) {
         verifiedCalls++;
@@ -107,6 +121,11 @@ test("public failure retains TLS cause and aggregate incident; mixed relays and 
     });
     expect(recovered).toMatchObject({ state: "http-responsive", responsiveCount: 2, mcpContract: "verified" });
     expect(attempts).toBe(2);
+    capabilityFailure = true;
+    failAll = true;
+    const debugUnavailable = await diagnosePublicIngress(new URL("https://private-host.invalid/mcp"), "https://resolver.invalid", runner);
+    expect(debugUnavailable).toMatchObject({ state: "unavailable", stage: "tls", capabilityState: { netmap_observed: false } });
+    expect(JSON.stringify(debugUnavailable)).not.toContain("private-debug-failure");
   } finally {
     mock.mockRestore(); dns.mockRestore();
     if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE; else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;

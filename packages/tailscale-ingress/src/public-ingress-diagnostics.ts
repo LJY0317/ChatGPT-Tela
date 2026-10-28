@@ -73,6 +73,30 @@ async function localIngressState(runner: TailscaleCommandRunner, probeFingerprin
 
 export type PublicIngressFetch = (url: string | URL, init?: RequestInit) => Promise<Response>;
 
+/** Failure-only support evidence. Debug schemas are optional and never admission rules. */
+async function ingressCapabilities(runner: TailscaleCommandRunner, signal?: AbortSignal): Promise<Record<string, boolean | number>> {
+  const state: Record<string, boolean | number> = { netmap_observed: false };
+  try {
+    const result = await runner.run(["debug", "netmap"], signal ? AbortSignal.any([signal, AbortSignal.timeout(4000)]) : AbortSignal.timeout(4000));
+    const map = JSON.parse(result.stdout);
+    if (!map || typeof map !== "object" || Array.isArray(map)) return state;
+    state.netmap_observed = true;
+    if (typeof map.Cached === "boolean") state.netmap_cached = map.Cached;
+    if (Array.isArray(map.Peers)) {
+      const peers = map.Peers.filter((peer: any) => Array.isArray(peer?.Tags) && peer.Tags.includes("tag:ingress"));
+      state.ingress_peer_count = peers.length;
+      state.ingress_unsigned_peer_count = peers.filter((peer: any) => peer.UnsignedPeerAPIOnly === true).length;
+      state.ingress_jailed_peer_count = peers.filter((peer: any) => peer.IsJailed === true).length;
+    }
+    if (Array.isArray(map.PacketFilter)) {
+      state.filter_observed = true;
+      state.ingress_capability_count = map.PacketFilter.flatMap((rule: any) => Array.isArray(rule?.Caps) ? rule.Caps : [])
+        .filter((grant: any) => grant?.Cap === "https://tailscale.com/cap/ingress").length;
+    }
+  } catch { /* Keep the transport failure even if this optional debug interface changes. */ }
+  return state;
+}
+
 /** Standard MCP client transport, with DNS pinned while Host/SNI/certificate checks stay intact. */
 function publicFetch(endpoint: URL, address: string, signal: AbortSignal): PublicIngressFetch {
   return async (url, init) => {
@@ -198,7 +222,11 @@ export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string, 
   });
   const localStateAfter = runner ? await localIngressState(runner, probeFingerprint, "after", options.signal) : undefined;
   const available = responsive.length > 0 && mcpContract !== "failed";
+  const capabilityState = runner && !available ? await ingressCapabilities(runner, options.signal) : undefined;
+  options.signal?.throwIfAborted();
+  if (capabilityState) emitDiagnosticEvent("chatgpt_tela_ingress", "public_ingress_capability_snapshot", { ...identity, ...capabilityState });
   return finish({ ...(runner ? { localIngress, localStateAfter } : {}), state: available ? "http-responsive" : "unavailable",
+    ...(capabilityState ? { capabilityState } : {}),
     ...(!available ? { stage: mcpContract === "failed" ? "mcp" : failed?.stage ?? "tcp" } : {}),
     addressCount: addresses.length, responsiveCount: responsive.length, relays, mcpContract });
 }

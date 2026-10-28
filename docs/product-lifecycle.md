@@ -460,6 +460,14 @@ If the CLI reports failure after actually mutating the path, the verified post-s
 not blindly retried. If verification fails, ownership intent remains visible unless the route is proven
 absent. A pre-existing matching route is never auto-adopted into the manifest.
 
+`ingress status --public` distinguishes local MCP, tailnet access and public-DNS relay access.
+Local success does not prove that ChatGPT can reach Funnel. A public TLS failure with no ingress
+counter change occurs before Tela handles the request; it does not establish a Tela backend defect.
+On failed public transport/MCP checks, the existing diagnostic records optional network-map cache,
+ingress-peer and effective ingress-capability counts. It retains no node keys, peer addresses or
+raw network map. This debug interface is best-effort support evidence, not an execution gate or
+reason to reset Funnel, restart Tailscale, or change network settings automatically.
+
 ## Service independence
 
 Packaged Native engines include their matching upstream `codex-code-mode-host` beside `codex`
