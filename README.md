@@ -1272,15 +1272,16 @@ ChatGPT Tela is an independent, unofficial project and is not affiliated with Op
 ### macOS updates and maintenance
 
 Use the menu's **Check for Updates…** or Settings → **Updates** for Sparkle's standard update window.
+The menu-bar icon gains an arrow when an update is available; Sparkle presents update notifications.
+The menu action stays the same, and the standard window shows the version and download or installation step.
 Settings also controls automatic update checks. Downloading does not end active work; an update that cannot
 settle active tasks offers **Stop Tasks and Update** or **Later**. Stopping tasks uses normal cancellation
 and keeps conversations and saved files; unavailable or unsettled services still postpone installation.
 After **Install and Relaunch**, **Preparing update…** stays visible while Tela settles its services;
 Sparkle handles installation after the app exits. Choosing **Later** or encountering an error ends the preparation display.
-Checking again brings an existing Sparkle update back into focus. When Sparkle offers a cancellable downloaded
-update, **Discard Download and Check Again…** cancels it and checks the current feed after cancellation finishes.
-Sparkle removes the canceled update's files; ordinary checks keep the existing download. This action is unavailable
-once installation has advanced to waiting for the app to quit. The arm64 pre-alpha requires macOS 13 or later; its feed is
+Checking again brings an existing Sparkle update back into focus, including one already waiting to install.
+Sparkle manages downloaded files and installation cleanup; checking does not discard and redownload an existing update.
+The arm64 pre-alpha requires macOS 13 or later; its feed is
 available through [GitHub Releases](https://github.com/LJY0317/ChatGPT-Tela/releases/latest).
 
 GitHub Releases can host both the update archive and `appcast.xml`; a separate website is unnecessary.

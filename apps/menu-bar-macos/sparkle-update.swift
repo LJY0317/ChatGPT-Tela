@@ -1,97 +1,30 @@
 import AppKit
 import Sparkle
 
-/// Keep Sparkle's standard UI and expose only its live, cancellable installation choice.
-@MainActor
-final class TelaSparkleUserDriver: SPUStandardUserDriver {
-  private var installationReply: ((SPUUserUpdateChoice) -> Void)?
-  var choiceChanged: (() -> Void)?
-  var canDiscardDownload: Bool { installationReply != nil }
-
-  private func installationChoice(_ reply: @escaping (SPUUserUpdateChoice) -> Void) -> (SPUUserUpdateChoice) -> Void {
-    var pendingReply: ((SPUUserUpdateChoice) -> Void)? = reply
-    let respond: (SPUUserUpdateChoice) -> Void = { [weak self] choice in
-      guard let reply = pendingReply else { return }
-      pendingReply = nil
-      self?.installationReply = nil
-      self?.choiceChanged?()
-      reply(choice)
-    }
-    installationReply = respond
-    choiceChanged?()
-    return respond
-  }
-
-  override func showUpdateFound(with appcastItem: SUAppcastItem, state: SPUUserUpdateState,
-    reply: @escaping (SPUUserUpdateChoice) -> Void) {
-    super.showUpdateFound(with: appcastItem, state: state,
-      reply: state.stage == .notDownloaded ? reply : installationChoice(reply))
-  }
-
-  override func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
-    super.showReady(toInstallAndRelaunch: installationChoice(reply))
-  }
-
-  func discardDownload() {
-    guard let reply = installationReply else { return }
-    installationReply = nil
-    super.dismissUpdateInstallation()
-    choiceChanged?()
-    // Sparkle owns cancellation and file removal; the following explicit check clears skipped versions.
-    reply(.skip)
-  }
-
-  override func dismissUpdateInstallation() {
-    installationReply = nil
-    choiceChanged?()
-    super.dismissUpdateInstallation()
-  }
-
-  override func showInstallingUpdate(withApplicationTerminated applicationTerminated: Bool,
-    retryTerminatingApplication: @escaping () -> Void) {
-    installationReply = nil
-    choiceChanged?()
-    super.showInstallingUpdate(withApplicationTerminated: applicationTerminated,
-      retryTerminatingApplication: retryTerminatingApplication)
-  }
-}
-
 /// Sparkle owns all update transport, verification, replacement and standard presentation.
 @MainActor
 final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
   private(set) var availableVersion: String?
-  private(set) var downloaded = false
   private(set) var problem: String?
   var changed: (() -> Void)?
   private var pendingBuild: String?
   private var preparingTermination = false
   private var preparationWindow: NSPanel?
-  private var updater: SPUUpdater!
-  private var userDriver: TelaSparkleUserDriver!
-  private var checkAfterDiscard = false
+  private var controller: SPUStandardUpdaterController!
 
   override init() {
     super.init()
-    userDriver = TelaSparkleUserDriver(hostBundle: .main, delegate: self)
-    updater = SPUUpdater(hostBundle: .main, applicationBundle: .main, userDriver: userDriver, delegate: self)
-    userDriver.choiceChanged = { [weak self] in self?.changed?() }
+    controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: self, userDriverDelegate: self)
   }
 
   var automaticallyChecksForUpdates: Bool {
-    get { updater.automaticallyChecksForUpdates }
-    set { updater.automaticallyChecksForUpdates = newValue }
+    get { controller.updater.automaticallyChecksForUpdates }
+    set { controller.updater.automaticallyChecksForUpdates = newValue }
   }
 
   var preparationStatus: String? { preparingTermination ? "Preparing update…" : nil }
-  var canCheck: Bool { !preparingTermination && !checkAfterDiscard && (updater.canCheckForUpdates || updater.sessionInProgress) }
-  var canDiscardDownload: Bool { !preparingTermination && !checkAfterDiscard && userDriver.canDiscardDownload }
-  func checkForUpdates(_ sender: Any?) { updater.checkForUpdates() }
-
-  func discardDownloadAndCheckAgain() {
-    guard canDiscardDownload else { return }
-    checkAfterDiscard = true
-    userDriver.discardDownload()
-  }
+  var canCheck: Bool { !preparingTermination && (controller.updater.canCheckForUpdates || controller.updater.sessionInProgress) }
+  func checkForUpdates(_ sender: Any?) { controller.checkForUpdates(sender) }
 
   private static func makePreparationWindow() -> NSPanel {
     let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 110),
@@ -127,7 +60,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   func start() async -> Bool {
     do {
       let result = try await lifecycle(["finish"])
-      try updater.start()
+      try controller.updater.start()
       problem = result.ready ? nil : "Finish the pending update to restart Tela."
       changed?()
       return result.ready && !result.restored
@@ -224,29 +157,21 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   }
 
   func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
-    if availableVersion != item.displayVersionString { downloaded = false }
     availableVersion = item.displayVersionString
     changed?()
   }
 
   func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
     availableVersion = nil
-    downloaded = false
     changed?()
   }
 
   nonisolated func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
-    let version = update.displayVersionString, downloaded = state.stage != .notDownloaded
+    let version = update.displayVersionString
     Task { @MainActor [weak self] in
       self?.availableVersion = version
-      self?.downloaded = downloaded
       self?.changed?()
     }
-  }
-
-  func updater(_ updater: SPUUpdater, didExtractUpdate item: SUAppcastItem) {
-    downloaded = true
-    changed?()
   }
 
   func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) { pendingBuild = item.versionString }
@@ -258,26 +183,9 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     preparationWindow = nil
     problem = error.localizedDescription
     changed?()
-  }
-
-  func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
-    guard error != nil || checkAfterDiscard else { return }
     Task {
       do { _ = try await lifecycle(["cancel"]) }
-      catch {
-        checkAfterDiscard = false
-        problem = "Tela recovery needs attention before updating."
-        changed?()
-        return
-      }
-      if checkAfterDiscard {
-        checkAfterDiscard = false
-        pendingBuild = nil
-        availableVersion = nil
-        downloaded = false
-        problem = nil
-        updater.checkForUpdates()
-      }
+      catch { problem = "Tela recovery needs attention before updating." }
       changed?()
     }
   }
