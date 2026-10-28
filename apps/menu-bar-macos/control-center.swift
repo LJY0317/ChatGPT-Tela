@@ -358,7 +358,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var selectedBridgeSurface: String?
   private var previewRevision = 0
   private var preferenceError = false
-  private let delegationHelpText = "Web delegations run tasks in separate ChatGPT conversations. This usage counts tasks managed by Tela; your other chats are not included."
+  private let delegationHelpText = "Web delegations run tasks in separate ChatGPT conversations. This usage counts tasks managed by Tela; your other chats are not included. Older collected conversations and settled idle browser windows are cleaned up automatically. Active work and uncollected answers are protected from capacity cleanup."
 
   private var supportRoot: URL {
     home.appendingPathComponent("Library/Application Support/ChatGPT Tela", isDirectory: true)

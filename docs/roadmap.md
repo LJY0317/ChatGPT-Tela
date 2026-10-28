@@ -68,13 +68,14 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   state independently of the Native chat. An explicit reviewed answer from another owned conversation may
   settle the question; transport completion alone cannot. Manual deletion must not lose unanswered work,
   and settled failures must not prevent normal retention. No automatic replay or new recovery scheduler.
-- **Advisory capacity.** Unarchived delegations still need a target of 32 per profile through the existing
-  archival lifecycle. Browser retirement now targets ten total surfaces per profile on task acquisition
-  and completion, reclaiming settled idle task epochs while protecting preparing/active work and
-  undelivered answers. Structural diagnostics report occupancy and protected task counts; consumer
-  presentation of protected reasons and cleanup actions remains open. These are soft targets: no
-  numeric rejection, forced close of protected work or indefinite admission wait. Installed acceptance
-  of the browser policy remains separate from source verification.
+- **Advisory capacity.** Source policies now target 32 unarchived managed conversations and ten browser
+  surfaces per profile through the existing archival/retirement lifecycles. Pressure archives the oldest
+  idle collected conversations; ordinary chats, uncollected answers, queued/active work and manual
+  restores are protected. Browser retirement protects preparing/active work and undelivered answers.
+  Structural diagnostics report occupancy/remaining excess, and Work help explains automatic cleanup.
+  Detailed consumer presentation of per-item protected reasons and cleanup actions remains open.
+  These are soft targets: no numeric rejection, forced close of protected work or indefinite admission
+  wait. Installed acceptance remains separate from source verification.
 - **Instruction reuse.** Explicit rediscovery may omit unchanged instruction bodies only with a matching
   workspace-scoped source revision previously delivered to that caller. Native revision IDs do not prove
   standalone Chat delivery; changed global/project instructions must still be returned.

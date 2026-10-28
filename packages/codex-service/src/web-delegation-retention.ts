@@ -5,6 +5,7 @@ import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core"
 import { sameAccountOwner, verifiedWebDelegationAnswer, webDelegationRetentionPath, type WebDelegationAdapters, type WebDelegationRecord, type WebDelegationThreadKey } from "./web-delegation";
 
 const DAY = 86_400_000;
+const UNARCHIVED_THREAD_TARGET = 32;
 interface Retention {
   state: "archived" | "excluded" | "deleted";
   archivedAt?: number;
@@ -65,6 +66,11 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     const key = `${record.slot}:${record.owner.accountFingerprint}:${record.threadId}`;
     groups.set(key, [...(groups.get(key) ?? []), record]);
   }
+  for (const jobs of groups.values()) {
+    jobs.sort((a, b) => a.createdAt - b.createdAt || (a.parentJobId === b.id ? 1 : b.parentJobId === a.id ? -1 : 0));
+  }
+  const collections = new Map([...groups.values()].flatMap(jobs =>
+    jobs.map(job => [job.id, adapters.store.collectedAt(job.id)] as const)));
   let next = Infinity;
   const historyEligible = new Set<string>();
   const connections = new Map<string, Awaited<ReturnType<WebDelegationAdapters["connect"]>>>();
@@ -103,22 +109,25 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     }
   }
   const inventories = new Map<string, Map<string, { archived: boolean; thread: Record<string, any> }>>();
+  const occupancy = new Map<string, { before: number; current: number; uncertain: boolean }>();
+  let pending = [...groups.values()];
   try {
-  for (const jobs of groups.values()) {
+  while (pending.length) {
+    const jobs = pending.pop()!;
     input.signal.throwIfAborted();
-    jobs.sort((a, b) => a.createdAt - b.createdAt || (a.parentJobId === b.id ? 1 : b.parentJobId === a.id ? -1 : 0));
     const record = jobs.at(-1)!;
     const path = statePath(adapters, record), retained = load(path);
     if (retained?.state === "deleted") continue;
-    const ownCollection = adapters.store.collectedAt(record.id);
+    const ownCollection = collections.get(record.id);
     const collected = ownCollection ?? (record.state === "failed" && !verifiedWebDelegationAnswer(record)
-      ? Math.max(0, ...jobs.map(job => adapters.store.collectedAt(job.id) ?? 0)) || undefined : undefined);
+      ? Math.max(0, ...jobs.map(job => collections.get(job.id) ?? 0)) || undefined : undefined);
     let dueBasis = retained?.archivedAt !== undefined ? "archive_expiry"
       : collected !== undefined ? "collected_result" : "idle_activity";
     let due = retained?.archivedAt !== undefined ? retained.archivedAt + 30 * DAY
       : collected !== undefined ? collected + DAY : record.createdAt + 7 * DAY;
     if (due > now && retained?.state !== "excluded") next = Math.min(next, due);
     let publicOperation = "owner_resolution";
+    let scopeConnection: string | undefined;
     const skipped = (reason: string, relation = "unknown", error?: unknown) => {
       if (due > now || retained?.state === "excluded") return;
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_skipped", {
@@ -129,7 +138,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     try {
       const owner = await adapters.owner(record.slot);
       if (!sameAccountOwner(record, owner)) { skipped("owner_unavailable_or_changed"); continue; }
-      const scopeConnection = JSON.stringify([record.slot, record.owner.accountFingerprint, owner.session.terminalEndpoint]);
+      scopeConnection = JSON.stringify([record.slot, record.owner.accountFingerprint, owner.session.terminalEndpoint]);
       let rpc = connections.get(scopeConnection);
       if (!rpc) {
         publicOperation = "connect";
@@ -165,6 +174,23 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           } while (cursor);
           }
           inventories.set(scope, listed);
+          const sameProfile = (other: WebDelegationRecord[]) => other.at(-1)!.slot === record.slot
+            && other.at(-1)!.owner.accountFingerprint === record.owner.accountFingerprint;
+          const count = [...groups.values()].filter(other => sameProfile(other)
+            && listed!.get(other.at(-1)!.threadId!)?.archived === false).length;
+          occupancy.set(scope, {before: count, current: count, uncertain: false});
+          if (count > UNARCHIVED_THREAD_TARGET) {
+            // Reuse this complete inventory. Oldest real activity/collection first,
+            // not journal filename, creation order, or conversation title.
+            const activity = (other: WebDelegationRecord[]) => {
+              const latest = other.at(-1)!;
+              return Math.max(latest.createdAt, collections.get(latest.id) ?? 0,
+                Number(listed!.get(latest.threadId!)?.thread.updatedAt ?? 0) * 1000);
+            };
+            const peers = [jobs, ...pending.filter(sameProfile)].sort((a, b) => activity(b) - activity(a));
+            pending = [...pending.filter(other => !sameProfile(other)), ...peers];
+            continue;
+          }
         }
         const present = listed.get(record.threadId!);
         if (!present) {
@@ -219,6 +245,16 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           // control to the user. Never delete such a thread automatically.
           save(path, { state: "excluded" }); continue;
         }
+        // Pressure may shorten the age policy only for collected answers. Keep
+        // uncollected sibling results and uncertain/failed latest work on their
+        // normal retention path; capacity never becomes an admission condition.
+        if (!present.archived && !retained && !occupancy.get(scope)!.uncertain
+          && occupancy.get(scope)!.current > UNARCHIVED_THREAD_TARGET
+          && ownCollection !== undefined && verifiedWebDelegationAnswer(record)
+          && jobs.every(job => !verifiedWebDelegationAnswer(job) || collections.get(job.id) !== undefined)) {
+          due = now;
+          dueBasis = "capacity_pressure";
+        }
         if (due > now) continue;
         // Archive is reversible and needs current idle/queue proof, not a
         // readable execution rollout or an exact journal entry for every turn.
@@ -242,6 +278,8 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
         } else {
           publicOperation = "thread_archive";
           await rpc.request("thread/archive", { threadId: record.threadId }, input.signal);
+          present.archived = true;
+          occupancy.get(scope)!.current--;
           publicOperation = "thread_read_after_archive";
           const read = object(await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false }, input.signal));
           const archivedUpdatedAt = object(read?.thread)?.updatedAt;
@@ -252,6 +290,10 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
       } finally { /* Shared owner connection closes after the pass. */ }
     } catch (error) {
       if (input.signal.aborted) throw error;
+      if (publicOperation === "thread_archive" && scopeConnection && occupancy.has(scopeConnection)) {
+        // Re-observe this account before any more pressure-driven mutations.
+        occupancy.get(scopeConnection)!.uncertain = true;
+      }
       if (publicOperation === "owner_resolution" && ownerTemporarilyUnavailable(error)) continue;
       skipped("public_metadata_or_retention_error", "unknown", error);
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_failed", {
@@ -262,6 +304,15 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     }
   }
   } finally {
+    for (const count of occupancy.values()) {
+      if (count.before <= UNARCHIVED_THREAD_TARGET) continue;
+      emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_capacity", {
+        thread_count: count.current, target_count: UNARCHIVED_THREAD_TARGET,
+        archived_count: count.before - count.current,
+        over_target_count: Math.max(0, count.current - UNARCHIVED_THREAD_TARGET),
+        archive_outcome_uncertain: count.uncertain,
+      });
+    }
     await Promise.allSettled([...connections.values()].map(rpc => rpc.close()));
   }
   if (!input.signal.aborted) {

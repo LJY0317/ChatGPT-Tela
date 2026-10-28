@@ -359,6 +359,14 @@ Result receipts and local workspace files remain intact. Status reads do not
 extend either period. These rules cover journal-owned `web-delegate` threads;
 chats created directly by another Native client are not discovered or adopted.
 
+The same retention pass targets 32 unarchived managed conversations per profile. Above that target,
+it can archive idle conversations with collected answers before their normal age deadline, oldest
+activity/collection first. A newer uncollected sibling answer or failed/uncertain latest request keeps
+the conversation on its normal age policy. Active/queued work and manual restores remain protected;
+ordinary chats do not count. An unknown archive outcome suspends further pressure-driven changes for
+that profile until fresh inventory. The target never rejects a new task or forces protected work to
+close. Existing journal/profile events trigger cleanup; no additional timer, polling or scheduler is used.
+
 Retention lists both Native archive partitions once per account connection,
 using thread identity rather than execution cwd. Current Native activity,
 unsettled managed jobs and queued work protect a conversation. Archive/delete

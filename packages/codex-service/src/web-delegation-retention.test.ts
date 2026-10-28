@@ -77,6 +77,96 @@ function fixture(statusShape: "object" | "string" = "object") {
   return { root, store, record, native, calls, origin, adapters, run, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
+function capacityFixture(collect = true, splitProfiles = false) {
+  const f = fixture();
+  const records = [f.record];
+  for (let i = 1; i < 33; i++) {
+    const slot = splitProfiles && i % 2 ? 1 : 2;
+    const record = {...f.record, slot, owner:{...f.record.owner,slot},session:{...f.record.session,slot},
+      id: randomUUID(), threadId: randomUUID(), turnId: randomUUID(), createdAt: f.origin + i * 1000};
+    f.store.reserve(record);
+    f.store.save({...record, state: "completed", answer: "result", finalEvidence: "explicit-final-phase"});
+    records.push(record);
+  }
+  if (collect) for (const record of records) f.store.collect(record.id, record.createdAt);
+  const native = new Map(records.map(record => [record.threadId!, {
+    archived: false, updatedAt: record.createdAt / 1000, status: "idle", queued: false,
+  }]));
+  const mutations: string[] = [];
+  let loseArchiveAck = false;
+  const rpc = { async close() {}, async request(method: string, params: any) {
+    if (method === "thread/list") return {data: [...native].filter(([, thread]) => thread.archived === params.archived)
+      .map(([id, thread]) => ({id, ...thread})), nextCursor: null};
+    const thread = native.get(params.threadId)!;
+    if (method === "thread/queue/list") return {data: thread.queued ? [{id:"queued"}] : [], nextCursor:null};
+    if (method === "thread/turns/list") return {data: [{id:records.find(record => record.threadId === params.threadId)!.turnId,status:"completed"}],nextCursor:null};
+    if (method === "thread/read") return {thread: {id:params.threadId,...thread}};
+    if (method === "thread/archive") {
+      mutations.push(params.threadId); thread.archived = true; thread.updatedAt++;
+      if (loseArchiveAck) throw Error("archive ACK lost");
+      return {};
+    }
+    throw Error(`Unexpected capacity RPC ${method}`);
+  }};
+  return {...f, records, native, mutations, loseArchiveAck() { loseArchiveAck = true; },
+    run: () => settleWebDelegationRetention({...f.adapters,
+      owner:async slot => ({binding:{...f.record.owner,slot},session:{...f.record.session,slot}}),
+      connect:async () => rpc as any},
+      {now:f.origin + 3600_000,signal:new AbortController().signal})};
+}
+
+test("the conversation target is per profile rather than a shared installation-wide bound", async () => {
+  const f = capacityFixture(true, true);
+  try { await f.run(); expect(f.mutations).toEqual([]); }
+  finally { f.cleanup(); }
+});
+
+test("capacity pressure archives oldest collected idle work, skips queued work and ignores ordinary chats", async () => {
+  const f = capacityFixture();
+  try {
+    f.native.get(f.record.threadId!)!.updatedAt += 100; // Old creation, recent real activity.
+    f.native.get(f.records[1]!.threadId!)!.queued = true;
+    const ordinary = randomUUID();
+    f.native.set(ordinary, {archived:false,updatedAt:0,status:"idle",queued:false});
+    await f.run();
+    expect(f.mutations).toEqual([f.records[2]!.threadId!]);
+    expect(f.native.get(ordinary)!.archived).toBe(false);
+    expect(f.store.get(f.records[2]!.id)?.answer).toBe("result");
+    expect(f.store.threadRetention(f.records[2]!)?.state).toBe("archived");
+    await f.run();
+    expect(f.mutations).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
+test("uncollected and manually restored conversations can exceed the soft target without forced archive", async () => {
+  const f = capacityFixture(false);
+  const events: any[] = [];
+  const off = observeDiagnosticEvents(event => events.push(structuralDiagnosticEvent(event)));
+  try {
+    await f.run();
+    expect(f.mutations).toEqual([]);
+    expect(events.find(event => event?.stage === "web_delegation_retention_capacity"))
+      .toMatchObject({thread_count:33,target_count:32,over_target_count:1});
+    for (const record of f.records) {
+      f.store.collect(record.id, record.createdAt);
+      writeFileSync(join(f.root, `thread-2-${record.owner.accountFingerprint}-${record.threadId}.retention`), JSON.stringify({state:"excluded"}));
+    }
+    await f.run();
+    expect(f.mutations).toEqual([]);
+  } finally { off?.(); f.cleanup(); }
+});
+
+test("an unknown archive outcome stops further pressure mutations until fresh inventory", async () => {
+  const f = capacityFixture();
+  try {
+    f.loseArchiveAck();
+    await f.run();
+    expect(f.mutations).toHaveLength(1);
+    await f.run();
+    expect(f.mutations).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
 test("explicit adoption works without an execution directory or rollout and reclaims a known exclusion", async () => {
   const f = fixture();
   try {
