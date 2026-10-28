@@ -661,16 +661,18 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     if workInventory.profiles.isEmpty {
       addProfileOpen(1, name: "ChatGPT", to: menu)
     }
-    menu.addItem(.separator())
-    if let status = updater.preparationStatus {
-      let item = NSMenuItem(title: status, action: nil, keyEquivalent: "")
-      item.isEnabled = false
-      menu.addItem(item)
-    } else {
-      let item = actionItem("Check for Updates…", action: #selector(openUpdates))
-      item.isEnabled = updater.canCheck
-      if #available(macOS 14.4, *), let problem = updater.problem { item.subtitle = problem }
-      menu.addItem(item)
+    if updater.availableVersion != nil || updater.preparationStatus != nil {
+      menu.addItem(.separator())
+      if let status = updater.preparationStatus {
+        let item = NSMenuItem(title: status, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        menu.addItem(item)
+      } else {
+        let item = actionItem("Check for Updates…", action: #selector(openUpdates))
+        item.isEnabled = updater.canCheck
+        if #available(macOS 14.4, *), let problem = updater.problem { item.subtitle = problem }
+        menu.addItem(item)
+      }
     }
     menu.addItem(.separator())
     menu.addItem(actionItem("Open Tela…", action: #selector(openControlCenter), keyEquivalent: "o"))

@@ -1271,7 +1271,8 @@ ChatGPT Tela is an independent, unofficial project and is not affiliated with Op
 
 ### macOS updates and maintenance
 
-Use the menu's **Check for Updates…** or Settings → **Updates** for Sparkle's standard update window.
+Use Settings → **Updates** for Sparkle's standard update window. When an update is available,
+the menu also shows **Check for Updates…**; it is hidden when no update is known.
 The menu-bar icon gains an arrow when an update is available; Sparkle presents update notifications.
 The menu action stays the same, and the standard window shows the version and download or installation step.
 Settings also controls automatic update checks. Downloading does not end active work; an update that cannot
