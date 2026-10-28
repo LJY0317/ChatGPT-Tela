@@ -1,4 +1,5 @@
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
 
 interface RetainedEpoch {
   readonly epochId: string;
@@ -22,7 +23,8 @@ export class RetainedBrowserEpochRegistry {
   readonly #browserHost: BrowserHost;
   readonly #byTask = new Map<string, RetainedEpoch>();
   readonly #acquiring = new Set<string>();
-  readonly #maxIdleEpochs: number | undefined;
+  readonly #surfaceTarget: number;
+  readonly #isTaskActive: (taskId: string) => boolean;
   readonly #onRetire: ((taskId: string, surfaceLeaseId: string) => void) | undefined;
   #completed = 0;
   #timer: ReturnType<typeof setTimeout> | undefined;
@@ -30,16 +32,18 @@ export class RetainedBrowserEpochRegistry {
   readonly #now: () => number;
 
   constructor(browserHost: BrowserHost, options: {
-    readonly maxIdleEpochs?: number;
+    readonly surfaceTarget?: number;
+    readonly isTaskActive?: (taskId: string) => boolean;
     readonly onRetire?: (taskId: string, surfaceLeaseId: string) => void;
     readonly now?: () => number;
   } = {}) {
-    if (options.maxIdleEpochs !== undefined
-      && (!Number.isSafeInteger(options.maxIdleEpochs) || options.maxIdleEpochs < 1)) {
-      throw new Error("idle browser epoch limit must be a positive safe integer");
+    if (options.surfaceTarget !== undefined
+      && (!Number.isSafeInteger(options.surfaceTarget) || options.surfaceTarget < 1)) {
+      throw new Error("browser surface target must be a positive safe integer");
     }
     this.#browserHost = browserHost;
-    this.#maxIdleEpochs = options.maxIdleEpochs;
+    this.#surfaceTarget = options.surfaceTarget ?? 10;
+    this.#isTaskActive = options.isTaskActive ?? (() => false);
     this.#onRetire = options.onRetire;
     this.#now = options.now ?? Date.now;
   }
@@ -103,6 +107,7 @@ export class RetainedBrowserEpochRegistry {
       if (current) {
         await this.#release(taskId, current);
       }
+      await this.#trim(1);
       const surface = await this.#browserHost.acquire({ taskId, epochId });
       this.#byTask.set(taskId, { epochId, surface, busy: true, lastCompleted: 0 });
       return Object.freeze({ surface, reused: false });
@@ -123,15 +128,35 @@ export class RetainedBrowserEpochRegistry {
     current.lastCompleted = ++this.#completed;
     current.idleSince = this.#now();
     this.#schedule();
-    if (this.#maxIdleEpochs === undefined) return;
-    const idle = [...this.#byTask.entries()].filter(([task, entry]) => !entry.busy && !this.#acquiring.has(task))
+    await this.#trim();
+  }
+
+  /** On demand only. Count every host surface, but retire only settled task epochs.
+   * Busy/creating operations and undelivered answers can exceed the soft target. */
+  async #trim(reserved = 0): Promise<void> {
+    const count = () => this.#browserHost.activeSurfaceCount ?? this.#byTask.size;
+    if (count() + reserved <= this.#surfaceTarget) return;
+    const idle = [...this.#byTask.entries()].filter(([task, entry]) =>
+      !entry.busy && !entry.retiring && entry.lastCompleted > 0 && !this.#acquiring.has(task) && !this.#isTaskActive(task))
       .sort(([, left], [, right]) => left.lastCompleted - right.lastCompleted);
-    for (const [task, entry] of idle.slice(0, Math.max(0, idle.length - this.#maxIdleEpochs))) {
+    for (const [task, entry] of idle) {
+      if (count() + reserved <= this.#surfaceTarget) break;
       // Recheck after asynchronous releases: a peer may have started its next turn meanwhile.
-      if (this.#byTask.get(task) === entry && !entry.busy && !this.#acquiring.has(task)) {
-        await this.#release(task, entry);
+      if (this.#byTask.get(task) === entry && !entry.busy && !entry.retiring && !this.#acquiring.has(task) && !this.#isTaskActive(task)) {
+        try { await this.#release(task, entry); }
+        catch (error) {
+          // Cleanup cannot turn a completed answer or an independent new task into a failure.
+          emitDiagnosticEvent("chatgpt_tela_work", "browser_retention_failed", {
+            failure_class: diagnosticFailureClass(error), policy: "surface_target",
+          });
+        }
       }
     }
+    emitDiagnosticEvent("chatgpt_tela_work", "browser_retention_observed", {
+      surface_count: count(), target_count: this.#surfaceTarget, reserved_count: reserved,
+      protected_count: [...this.#byTask.entries()].filter(([task, entry]) =>
+        entry.busy || entry.retiring || entry.lastCompleted === 0 || this.#acquiring.has(task) || this.#isTaskActive(task)).length,
+    });
   }
 
   async fail(taskId: string, epochId: string, preserveSurface = false): Promise<void> {

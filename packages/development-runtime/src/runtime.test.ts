@@ -581,10 +581,19 @@ describe("development runtime composition", () => {
     const provider = new RetainedFinalProvider();
     const submit = provider.submitTurn.bind(provider);
     provider.submitTurn = async (surface, request) => { requests.push(request); return submit(surface, request); };
+    const planner = createNativeRequestDevelopmentWebTurnPlanner();
+    let hold: Promise<void> | undefined;
+    let entered: (() => void) | undefined;
+    let release: (() => void) | undefined;
+    const gatedPlanner = Object.assign(async (...args: Parameters<typeof planner>) => {
+      const plan = await planner(...args);
+      if (plan.nativeTaskId === "task-A" && hold) { entered?.(); await hold; }
+      return plan;
+    }, {retireSurface: planner.retireSurface});
     const runtime = await startDevelopmentRuntime({
       currentTurnSource: { async currentTurn(threadId) { return {...(await source.currentTurn(threadId))!,turnId,environmentSourceTurnId:turnId}; } },
       browserHost: host, provider, mcp: {kind:"external",abi:"stable"},
-      planWebTurn: createNativeRequestDevelopmentWebTurnPlanner(), maxIdleBrowserEpochs: 1,
+      planWebTurn: gatedPlanner, browserSurfaceTarget: 1,
     });
     const send = async (threadId: string, input: unknown[]) => {
       const response = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, {
@@ -603,7 +612,22 @@ describe("development runtime composition", () => {
       expect(JSON.stringify(requests[2]!.physicalContext.segments)).toContain("Task A exact history");
       expect(provider.surfaceLeaseIds[2]).not.toBe(provider.surfaceLeaseIds[0]);
       expect(host.activeSurfaceCount).toBe(1);
-    } finally { await runtime.stop(); }
+      const lease = provider.surfaceLeaseIds[2];
+      turnId = "turn-3";
+      const ready = new Promise<void>(resolve => { entered = resolve; });
+      hold = new Promise<void>(resolve => { release = resolve; });
+      const pending = send("task-A", [...firstInput,
+        {type:"message",role:"assistant",content:"done:turn-1"}, {type:"message",role:"user",content:"Continue A"},
+        {type:"message",role:"assistant",content:"done:turn-2"}, {type:"message",role:"user",content:"Continue once more"},
+      ]);
+      await ready;
+      // A owns a retained-delta plan but has not reacquired its physical page yet.
+      await send("task-C", [{type:"message",role:"user",content:"Independent C"}]);
+      release!();
+      await pending;
+      expect(requests.at(-1)!.physicalContext.mode).toBe("retained-delta");
+      expect(provider.surfaceLeaseIds.at(-1)).toBe(lease);
+    } finally { release?.(); await runtime.stop(); }
   });
 
   test("original Native thread survives model switch, readable compaction, Web failure and fresh recovery without stale epoch replay", async () => {

@@ -97,6 +97,13 @@ export class ActiveTurnRegistry {
     return Object.freeze({ capability: token, channel: this.resolve(token) });
   }
 
+  /** Includes preparation before the physical browser epoch has been acquired. */
+  hasUnsettledTask(threadId: string): boolean {
+    return [...this.#byCapability.values()].some(channel =>
+      channel.binding.authority.threadId === threadId
+      && !["completed", "failed-before-acceptance", "indeterminate-after-acceptance", "cancelled"].includes(channel.phase));
+  }
+
   /** Only for rejecting a previously canonically proven, retired turn. */
   isRetired(threadId: string, turnId: string): boolean {
     return this.#retiredTurns.has(threadId + "\u0000" + turnId);

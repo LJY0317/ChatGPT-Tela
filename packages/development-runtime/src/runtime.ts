@@ -155,8 +155,8 @@ export interface DevelopmentRuntimeOptions {
   readonly turns?: ActiveTurnRegistry;
   readonly mcp: DevelopmentMcpConfiguration;
   readonly planWebTurn: DevelopmentWebTurnPlanner;
-  /** Optional measured policy; requires coordinated planner retirement, never evicts busy turns. */
-  readonly maxIdleBrowserEpochs?: number;
+  /** Per-profile soft target for all host surfaces; only settled idle epochs are retired. Default 10. */
+  readonly browserSurfaceTarget?: number;
   readonly provider?: WebConversationProvider;
   /** Optional per-Web-turn deadline used by bounded development/canary runs. */
   readonly webTurnTimeoutMs?: number;
@@ -189,11 +189,9 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
   const abortController = new AbortController();
   const webRuns = new Set<Promise<unknown>>();
   const planner = input.planWebTurn as DevelopmentWebTurnPlanner & Partial<RetiringDevelopmentWebTurnPlanner>;
-  if (input.maxIdleBrowserEpochs !== undefined && typeof planner.retireSurface !== "function") {
-    throw new Error("bounded browser retention requires coordinated planner retirement");
-  }
   const browserEpochs = new RetainedBrowserEpochRegistry(input.browserHost, {
-    ...(input.maxIdleBrowserEpochs !== undefined ? { maxIdleEpochs: input.maxIdleBrowserEpochs } : {}),
+    isTaskActive: taskId => turns.hasUnsettledTask(taskId),
+    ...(input.browserSurfaceTarget !== undefined ? { surfaceTarget: input.browserSurfaceTarget } : {}),
     ...(planner.retireSurface ? { onRetire: (taskId: string, leaseId: string) => planner.retireSurface!(taskId, leaseId) } : {}),
   });
 

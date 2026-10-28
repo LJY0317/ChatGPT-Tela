@@ -55,6 +55,16 @@ Goal activation starts execution itself; do not also submit a competing `turn/st
 
 ## Source CLI
 
+Browser retention is separate from conversation archival. Each profile targets ten live browser
+surfaces, counting checkpoint and other temporary operations too. Before opening a task surface and
+after completing a turn, Tela retires the least recently completed, settled task surfaces through
+their existing owner and invalidates their physical context anchors. A later explicit continuation
+rebuilds from canonical history. Active work (including context preparation), undelivered answers and
+surfaces owned by other operations are protected: the target can be exceeded and never rejects new
+work. Delivery-timeout surfaces retain their existing seven-day expiry. Cleanup failures are diagnosed
+without failing independent work or an already completed answer. This closes browser windows, not
+Native conversations or saved results.
+
 These commands require an already installed, owned Tela Work runtime and a matching signed-in Web
 profile. They do not start, update or restart services. New delegations default to the calling profile when its runtime hint or exact Native thread identifies one; otherwise the single-profile default is 1. Explicit `--slot N` selects another profile. A continuation retains its existing job profile.
 

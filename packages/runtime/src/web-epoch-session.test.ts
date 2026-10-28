@@ -3,6 +3,68 @@ import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
 import { RetainedBrowserEpochRegistry } from "./web-epoch-session";
 
 describe("retained browser epoch registry", () => {
+  test("defaults to ten total profile surfaces and retires the least recently completed epoch", async () => {
+    const closed: string[] = [];
+    const host = new ControlledBrowserHost(async ({taskId}) => ({
+      async navigate() {}, async reveal() {}, async hide() {}, async close() { closed.push(taskId); },
+    }));
+    const registry = new RetainedBrowserEpochRegistry(host);
+    try {
+      // Non-task surfaces share the profile budget but this registry does not own their retirement.
+      await host.acquire({taskId: "checkpoint", epochId: "ephemeral"});
+      for (let i = 0; i < 9; i++) {
+        await registry.acquire(`task-${i}`, "epoch");
+        await registry.complete(`task-${i}`, "epoch");
+      }
+      await registry.acquire("task-0", "epoch");
+      await registry.complete("task-0", "epoch");
+      await registry.acquire("new", "epoch");
+      expect(host.activeSurfaceCount).toBe(10);
+      expect(closed).toEqual(["task-1"]);
+      await registry.complete("new", "epoch");
+      expect((await registry.acquire("task-0", "epoch")).reused).toBe(true);
+    } finally { registry.dispose(); await host.close(); }
+  });
+
+  test("soft pressure protects undelivered answers and busy work without denying independent creation", async () => {
+    const closed: string[] = [];
+    const host = new ControlledBrowserHost(async ({taskId}) => ({
+      async navigate() {}, async reveal() {}, async hide() {}, async close() { closed.push(taskId); },
+    }));
+    const registry = new RetainedBrowserEpochRegistry(host, {surfaceTarget: 1});
+    try {
+      await registry.acquire("undelivered", "epoch");
+      await registry.fail("undelivered", "epoch", true);
+      await registry.acquire("busy", "epoch");
+      await registry.acquire("new", "epoch");
+      expect(host.activeSurfaceCount).toBe(3);
+      expect(closed).toEqual([]);
+      await registry.complete("new", "epoch");
+      expect(closed).toEqual(["new"]);
+      expect(host.activeSurfaceCount).toBe(2);
+    } finally { registry.dispose(); await host.close(); }
+  });
+
+  test("a capacity cleanup failure never fails a new or already completed task", async () => {
+    let oldCloses = 0;
+    const host = new ControlledBrowserHost(async ({taskId}) => ({
+      async navigate() {}, async reveal() {}, async hide() {}, async close() {
+        if (taskId === "old") { oldCloses++; throw Error("platform close failed"); }
+      },
+    }));
+    const registry = new RetainedBrowserEpochRegistry(host, {surfaceTarget: 1});
+    try {
+      await registry.acquire("old", "epoch");
+      await registry.complete("old", "epoch");
+      await registry.acquire("new", "epoch");
+      let committed = false;
+      await registry.complete("new", "epoch", () => { committed = true; });
+      expect(committed).toBe(true);
+      expect(oldCloses).toBe(1);
+      await expect(registry.acquire("old", "epoch")).rejects.toThrow("retirement is unresolved");
+    } finally { registry.dispose(); await host.close(); }
+  });
+
   test("expires only idle surfaces seven days after actual completion, preserving busy work", async () => {
     let now = 1_000;
     const events: string[] = [];
@@ -93,7 +155,7 @@ describe("retained browser epoch registry", () => {
       async navigate() {}, async reveal() {}, async hide() {},
       async close() { events.push(`close:${taskId}`); },
     }));
-    const registry = new RetainedBrowserEpochRegistry(host, {maxIdleEpochs: 1,
+    const registry = new RetainedBrowserEpochRegistry(host, {surfaceTarget: 2,
       onRetire(taskId) { events.push(`invalidate:${taskId}`); },
     });
     try {
@@ -102,7 +164,7 @@ describe("retained browser epoch registry", () => {
       await registry.complete("old", "epoch");
       await registry.acquire("new", "epoch");
       await registry.complete("new", "epoch", () => events.push("commit:new"));
-      expect(events).toEqual(["commit:new", "invalidate:old", "close:old"]);
+      expect(events).toEqual(["invalidate:old", "close:old", "commit:new"]);
       expect(registry.size).toBe(2);
       const recreated = await registry.acquire("old", "epoch");
       expect(recreated.reused).toBe(false);
