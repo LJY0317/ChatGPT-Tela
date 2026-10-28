@@ -17,11 +17,11 @@ export function prepareDeferredNativeHistory(projection: NativeRequestContextPro
     const group = turns.get(item.historicalTurnId) ?? [];
     group.push(item); turns.set(item.historicalTurnId, group);
   }
-  // Only attributed, readable prior turns may leave the working input. Current authority,
-  // unattributed input, pending work and media remain exact. Tool exchanges stay indivisible.
+  // Only attributed, readable prior turns may leave the working input. Current authority has
+  // no historical turn attribution; old developer messages belong to their completed turn.
+  // Unattributed input, pending work and media remain exact. Tool exchanges stay indivisible.
   const eligible = [...turns.entries()].filter(([, items]) => items.every(item =>
-    !media.has(item.revision.id) && !protectedIds.has(item.revision.id)
-    && item.revision.kind !== "system" && item.revision.kind !== "developer"));
+    !media.has(item.revision.id) && !protectedIds.has(item.revision.id)));
   // The latest complete exchange is current working state, even when a large
   // tool result makes it exceed the soft recent-history target.
   eligible.pop();

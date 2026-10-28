@@ -68,6 +68,7 @@ for (const remote of [false,true]) test(`oversized ${remote?'remote':'local'} co
  const attributed=(turn_id:string)=>({internal_chat_message_metadata_passthrough:{turn_id}});
  const authority='Exact current authority. '.repeat(4800);
  const recent='Correction: Goal pause was unnecessary. Use Sparkle. Installation remains unverified.';
+ const oldDeveloper='OLD-DEVELOPER-INSTRUCTION-'.repeat(1000);
  const router=createNativeLocalCompactionRouter({
   source:{currentTurn:async()=>canonical,
    readHistoryPage:async()=>{throw Error('No model readback during summary preparation')},
@@ -82,6 +83,7 @@ for (const remote of [false,true]) test(`oversized ${remote?'remote':'local'} co
    const text=input.physicalContext.segments.map(s=>s.content).join('\n');
    expect(text).toContain(authority);
    expect(text).toContain(recent);
+   expect(text).not.toContain(oldDeveloper);
    expect(text).toContain('current_tool');
    expect(text).not.toContain('OLD-DATA-'.repeat(100));
    expect(chatGptCheckpointInputTokens(input.physicalContext)).toBeLessThanOrEqual(chatGptWebCheckpointSourceTokenLimit('medium'));
@@ -89,7 +91,10 @@ for (const remote of [false,true]) test(`oversized ${remote?'remote':'local'} co
   },
  });
  const result=await router(request(body({instructions:authority,input:[
-  ...Array.from({length:6},(_,i)=>({role:'user',content:'OLD-DATA-'.repeat(10000),...attributed(`old-${i}`)})),
+  ...Array.from({length:6},(_,i)=>[
+   {role:'developer',content:oldDeveloper,...attributed(`old-${i}`)},
+   {role:'user',content:'OLD-DATA-'.repeat(10000),...attributed(`old-${i}`)},
+  ]).flat(),
   {role:'user',content:'Repair installation',...attributed('recent')},
   {role:'assistant',content:'Recent completed work. '.repeat(5000)+recent,...attributed('recent')},
   {type:'function_call',name:'current_tool',call_id:'pending',arguments:'{}',...attributed('turn')},
@@ -109,7 +114,7 @@ test('unindexed attribution cannot authorize deferral of oversized canonical inp
   readHistoryPage:async()=>({data:[],nextCursor:null}),
   readHistoryIndex:async()=>({data:[{turnId:'turn',status:'inProgress'}],nextCursor:null})},
   summarize:async()=>{calls++;return 'Must not run'}});
- const result=await router(request(body({input:[{role:'user',content:'X'.repeat(420000),
+ const result=await router(request(body({input:[{role:'developer',content:'UNINDEXED-DEVELOPER'.repeat(21000),
   internal_chat_message_metadata_passthrough:{turn_id:'foreign'}},{role:'user',content:'Summarize'}]})));
  expect(result?.status).toBe(400);expect(calls).toBe(0);
 });
