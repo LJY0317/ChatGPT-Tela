@@ -8,7 +8,7 @@ import {
 import { nativeCompactionSummaryResponse } from "@chatgpt-tela/responses";
 import {
   chatGptCheckpointInputTokens, chatGptWebCheckpointSourceTokenLimit, type ChatGptWebEffort, type WebPhysicalContext, type WebTurnMedia } from "@chatgpt-tela/chatgpt";
-import { bindNativePhysicalEvidence, nativeRequestContentSource, nativeRequestBrowserModelRoute, projectNativeRequestContext, type NativeRequestCheckpointProducer, type NativeRequestCheckpointProductionRequest } from "./native-request-planner";
+import { bindNativePhysicalEvidence, deferredNativeOriginalsNotice, nativeRequestContentSource, nativeRequestBrowserModelRoute, projectNativeRequestContext, type NativeRequestCheckpointProducer, type NativeRequestCheckpointProductionRequest } from "./native-request-planner";
 import {
   nativeOpaqueCompaction, resolveNativeContextContinuity, type NativeContinuitySources,
 } from "./native-context-continuity";
@@ -146,9 +146,11 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
                 ...(preparation ? { signal: preparation.signal } : {}) }),
             });
             const opaque = nativeOpaqueCompaction(body);
+            const hasHistoryReadback = !!(input.source.readHistoryPage && input.source.readHistoryIndex);
             const continuity = await resolveNativeContextContinuity({
               threadId: claim.threadId, currentTurnId: claim.turnId,
               authority: historicalTurnAuthority(activeOwner),
+              ...(hasHistoryReadback ? { historyBodyBudgetBytes: policy.firstMessageTargetTokens * 4 } : {}),
               opaque, effort: browserModel.effort, browserModel, preparationBudget, options: {
                 ...input,
                 checkpointProducer: producer,
@@ -164,9 +166,11 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
             const projection = projectNativeRequestContext(claim.threadId, body, continuity.visibleHistory,
               continuity.inlineHistoryAssets, continuity.historyReferences, activeOwner.ingressMedia,
               activeOwner.nativeGoal, activeOwner.nativeGoalState);
+            if (projection.deferredHistory && !hasHistoryReadback) throw new NativeHistoryBootstrapRequired();
             const tokens = projection.revisions.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
             emitDiagnosticEvent("chatgpt_tela_work", "compaction_started", { logical_estimate: tokens, revision_count: projection.revisions.length });
-            const maintained = await selectNativeWorkingCheckpoint({
+            const maintained = projection.deferredHistory ? { checkpoint: undefined, reused: false, produced: false }
+              : await selectNativeWorkingCheckpoint({
               projection, currentTurnId: claim.turnId,
               ...(input.checkpointCache ? { cache: input.checkpointCache } : {}),
               ...(input.visiblePrefix ? { visiblePrefix: input.visiblePrefix } : {}),
@@ -224,7 +228,9 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
             }
             if (watch?.signal.aborted) throw new CompactionFailure(operationPhase, "owner_cancelled");
             operationPhase = "summary_validation";
-            if (!summary.trim() || Buffer.byteLength(summary, "utf8") > MAX_TELA_COMPACTION_SUMMARY_BYTES) throw new CompactionFailure(operationPhase, "invalid_summary");
+            const notice = projection.deferredHistory ? deferredNativeOriginalsNotice(projection.deferredHistory) + "\n" : "";
+            if (!summary.trim() || Buffer.byteLength(notice + summary, "utf8") > MAX_TELA_COMPACTION_SUMMARY_BYTES) throw new CompactionFailure(operationPhase, "invalid_summary");
+            summary = notice + summary;
           } catch (error) { primaryFailure = true; throw failure(error, operationPhase); }
           finally {
             try { await watch?.close(); }

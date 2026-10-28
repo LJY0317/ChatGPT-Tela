@@ -32,6 +32,9 @@ Its source is the selected checkpoint plus the unsealed suffix, including any ne
 instruction revisions. Do not reattach checkpoint-covered historical instructions to
 this summary source: Native restores its current initial context after compaction.
 Ordinary task transport still preserves exact instructions outside historical summaries.
+With owner-bound original-history readers, cold compaction uses the same bounded recent
+turns as ordinary Web planning. Unread originals are not summarized; their notice is
+preserved outside the generated summary rather than relying on the model to repeat it.
 Preparation and the actual task answer are counted separately. A healthy retained page
 selects existing checkpoints without invoking proactive summary maintenance. Prepare a
 new summary when a fresh page or Native compaction actually needs one.

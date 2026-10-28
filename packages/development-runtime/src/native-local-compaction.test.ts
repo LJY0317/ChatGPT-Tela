@@ -12,8 +12,9 @@ import { maybeProduceNativeHistoryCheckpoint } from './native-history-checkpoint
 import { FileNativeVisiblePrefixStageJournal } from './native-visible-prefix-journal';
 import { ActiveTurnRegistry, NativeResponsesGateway, settleNativeCompactionToolResult } from '@chatgpt-tela/runtime';
 import { handleNativeResponsesHttp } from '@chatgpt-tela/responses';
-import { bindNativeTurnRequest, decodeTelaCompactionSummary } from '@chatgpt-tela/codex';
+import { bindNativeTurnRequest, decodeTelaCompactionSummary, NativeHistoryBootstrapRequired } from '@chatgpt-tela/codex';
 import { createNativeRequestDevelopmentWebTurnPlanner } from './native-request-planner';
+import { webWorkingContextPolicy } from './web-working-context-policy';
 const canonical:CanonicalCurrentTurnEvidence={threadId:'thread',turnId:'turn',cwd:'/fixture',workspaceRoots:['/fixture'],sandbox:{kind:'native-enforced'},proof:'app-server-active-turn',environmentSourceTurnId:'turn'};
 function body(extra:any={}){return {model:chatGptWebModelId(chatGptWebFamilyKey('Fixture')),reasoning:{effort:'medium'},tools:[],input:[{type:'message',role:'user',content:'Observed old result'},{type:'message',role:'user',content:'Summarize the task'}],client_metadata:{'x-codex-turn-metadata':JSON.stringify({request_kind:'compaction',thread_id:'thread',turn_id:'turn'})},...extra}}
 function request(value:any){return new Request('http://127.0.0.1/v1/responses',{method:'POST',body:JSON.stringify(value)})}
@@ -60,6 +61,48 @@ test('oversized local compaction refuses to send the whole logical history to a 
   code:'tela_compaction_requires_readable_checkpoint',
  });
  expect(summarizerCalls).toBe(0);
+});
+
+for(const remote of [false,true])test(`automatic ${remote?'remote':'local'} compaction uses the normal bounded working set and preserves unread originals`,async()=>{
+ const directory=mkdtempSync(join(tmpdir(),'tela-bounded-compaction-'));
+ try {
+  let reads=0,summaries=0;
+  const router=createNativeLocalCompactionRouter({
+   source:{currentTurn:async()=>canonical,
+    readHistoryPage:async()=>{throw Error('Summary must not execute history tools')},
+    readHistoryIndex:async()=>{throw Error('Summary must not execute history tools')}},
+   visiblePrefix:{accountNamespace:'account',journal:new FileNativeVisiblePrefixStageJournal({
+    directory:join(directory,'journal'),initializationPath:join(directory,'init')}),
+    read:async(threadId,currentTurnId,_signal,budget)=>{
+     reads++;
+     // The unbounded path reproduces the public reader's oversized-archive refusal.
+     if(budget===undefined)throw new NativeHistoryBootstrapRequired();
+     expect(budget).toBe(webWorkingContextPolicy('medium').firstMessageTargetTokens*4);
+     const content=JSON.stringify({type:'tela_native_visible_prefix_v1',
+      deferredHistory:{scope:'prior-native-history'},items:[{turnId:'recent',
+       item:{id:'recent-answer',type:'agentMessage',text:'Verified recent task result'}}]});
+     return {kind:'native-visible-prefix',threadId,currentTurnId,digest:'a'.repeat(64),
+      contentDigest:'b'.repeat(64),sourceItemCount:1,content,inlineAssets:[],references:[],localImageCandidates:[]};
+    }},
+   summarize:async input=>{
+    summaries++;
+    const text=input.physicalContext.segments.map(s=>s.content).join('\n');
+    expect(text).toContain('Verified recent task result');
+    expect(text).toContain('originals_outside_supplied_revisions_are_not_summarized');
+    expect(text).toContain('Summarize current task');
+    return 'Recent working state only';
+   },
+  });
+  const response=await router(request(body({input:[{type:'compaction',encrypted_content:'original-native-opaque'},
+   {type:'message',role:'user',content:'Summarize current task'},...(remote?[{type:'compaction_trigger'}]:[])]})));
+  expect(response?.status).toBe(200);
+  const item=(await response?.json()).output[0];
+  const answer=remote?decodeTelaCompactionSummary(item.encrypted_content)!:item.content[0].text;
+  expect(answer).toContain('Recent working state only');
+  expect(JSON.parse(answer.split('\n')[0])).toMatchObject({type:'deferred_native_originals',
+   scope:'prior-native-history',status:'originals_outside_supplied_revisions_are_not_summarized'});
+  expect(reads).toBe(1);expect(summaries).toBe(1);
+ } finally {rmSync(directory,{recursive:true,force:true})}
 });
 test('Native local compaction uses the same verified history checkpoint as an ordinary Web turn without replaying old source', async()=>{
  const directory=mkdtempSync(join(tmpdir(),'tela-shared-continuity-'));

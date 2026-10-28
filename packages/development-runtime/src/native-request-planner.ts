@@ -94,6 +94,11 @@ export interface NativeRequestContextProjection {
   readonly deferredHistory?: DeferredNativeHistory;
 }
 
+export function deferredNativeOriginalsNotice(history: DeferredNativeHistory): string {
+  return stableJson({ type: "deferred_native_originals", ...history,
+    status: "originals_outside_supplied_revisions_are_not_summarized" });
+}
+
 export interface NativeRequestCheckpointProductionRequest {
   readonly nativeTaskId: string;
   readonly sourceRevisionId: string;
@@ -564,8 +569,7 @@ export function projectNativeRequestContext(
           throw new Error("Native deferred history has an unsupported original range");
         }
         deferredHistory = Object.freeze({ scope: "prior-native-history" });
-        append("assistant", stableJson({ type: "deferred_native_originals", ...deferredHistory,
-          status: "originals_outside_supplied_revisions_are_not_summarized" }));
+        append("assistant", deferredNativeOriginalsNotice(deferredHistory));
         protectedRevisionIds.push(projected.at(-1)!.revision.id);
       }
       const evidenceById = new Map(records.map(ref => [ref.id, ref]));
