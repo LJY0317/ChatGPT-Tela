@@ -367,7 +367,7 @@ export class AppServerCurrentTurnSource implements CanonicalCurrentTurnSource {
   async readHistoryPage(bound: CanonicalCurrentTurnEvidence, selection: NativeHistoryPageSelection, signal: AbortSignal) {
     if (selection.turnId === bound.turnId) throw new NativeBindingError("claim_invalid", "History readback cannot read the active turn");
     return this.#readOwnedHistory(bound, signal, rpc => readIndexedNativeItemsPage(rpc, {
-      ...selection, threadId: bound.threadId, sortDirection: "asc",
+      ...selection, threadId: bound.threadId, sortDirection: "desc",
     }, signal));
   }
 

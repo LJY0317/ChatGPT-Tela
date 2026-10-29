@@ -3,7 +3,7 @@ import {AppServerCurrentTurnSource} from './app-server';
 import type {CanonicalCurrentTurnEvidence} from './rollout';
 const bound:CanonicalCurrentTurnEvidence={threadId:'original-thread',turnId:'active-turn',cwd:'/workspace',
  workspaceRoots:['/workspace'],sandbox:{kind:'native-enforced'},proof:'app-server-active-turn',environmentSourceTurnId:'active-turn'};
-function fixture(retireDuringRead=false){
+function fixture(retireDuringRead=false,items:Record<string,unknown>[]=[{id:'selected-item',type:'agentMessage',text:'원문'}]){
  let head='active-turn',mode='paginated',closed=0;
  const calls:{method:string;params:any}[]=[];
  const source=new AppServerCurrentTurnSource(async()=>({
@@ -17,7 +17,8 @@ function fixture(retireDuringRead=false){
    }
    if(method==='thread/items/list'){
     if(retireDuringRead)head='replacement-turn';
-    return {data:[{turnId:params.turnId,item:{id:'selected-item',type:'agentMessage',text:'원문'}}],nextCursor:null};
+    return {data:(params.sortDirection==='desc'?[...items].reverse():items).slice(0,params.limit).map(item=>({turnId:params.turnId,item})),
+      nextCursor:items.length>params.limit?'older-items':null};
    }
    throw Error('unexpected request');
   },async close(){closed++;}
@@ -28,9 +29,17 @@ test('history source binds the original thread and never accepts a caller thread
  const f=fixture();
  const result=await f.source.readHistoryPage(bound,{turnId:'historical-turn',threadId:'foreign-thread',limit:1} as any,new AbortController().signal);
  expect(result.data[0]?.item.text).toBe('원문');
- expect(f.calls.filter(c=>c.method==='thread/items/list')).toEqual([{method:'thread/items/list',params:{threadId:bound.threadId,turnId:'historical-turn',limit:1,sortDirection:'asc'}}]);
+ expect(f.calls.filter(c=>c.method==='thread/items/list')).toEqual([{method:'thread/items/list',params:{threadId:bound.threadId,turnId:'historical-turn',limit:1,sortDirection:'desc'}}]);
  expect(f.closed).toBe(1);
  expect(f.calls.filter(c=>c.method==='thread/read').every(c=>c.params.includeTurns===false)).toBe(true);
+});
+test('a final answer is readable before a large earlier item while older originals remain paginated',async()=>{
+ const f=fixture(false,[{id:'large-old-result',type:'commandExecution',output:'old output'.repeat(70_000)},
+  {id:'final',type:'agentMessage',phase:'final_answer',text:'Verified final result'}]);
+ const page=await f.source.readHistoryPage(bound,{turnId:'historical-turn',limit:1},new AbortController().signal);
+ expect(page.data.map(entry=>entry.item.id)).toEqual(['final']);
+ expect(page.nextCursor).toBe('older-items');
+ expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(1_000);
 });
 test('a turn retiring during item read never releases its stale page',async()=>{
  const f=fixture(true);

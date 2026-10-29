@@ -128,6 +128,9 @@ still wins. Retained requests renew the read capability without repeating the ma
 historical bodies. Readback bytes contribute to the physical epoch estimate without starting
 Native tool work or inference.
 
+Selected-turn items are read newest first, so a final answer is available before large
+earlier tool output. The existing continuation walks older items without omitting them.
+
 Each read returns at most 64 KiB of result JSON. Oversized original items continue in explicit
 UTF-8 byte ranges with a source digest; there is no total-history truncation. A changed original
 cannot be joined to an earlier slice. Native cursor encoding is not original content and does
