@@ -169,8 +169,8 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
   for (const service of ["gateway", "chat", "codex"] as const) {
     const spec = input.services[service];
     const source = realRegularFile(spec.executableSourcePath, `packaged ${service} source`);
-    const relativePath = `services/${serviceOutputName(service, source)}`;
-    copyFile(source, join(outputPath, ...relativePath.split("/")));
+    const relativePath = source === launcherSource ? launcherName : `services/${serviceOutputName(service, source)}`;
+    if (source !== launcherSource) copyFile(source, join(outputPath, ...relativePath.split("/")));
     serviceManifest[service] = Object.freeze({
       executable: relativePath,
       arguments: Object.freeze([...(spec.arguments ?? [])].map(value => oneLine(value, `${service} argument`))),

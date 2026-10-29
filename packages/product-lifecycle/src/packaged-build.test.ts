@@ -98,7 +98,7 @@ describe("packaged payload builder", () => {
     }
   });
 
-  test("assembles one complete macOS app with resolvable manifest paths and no duplicate menu", () => {
+  test.each([false, true])("assembles one complete macOS app with shared runtime=%s and resolvable manifest paths", shared => {
     const root = mkdtempSync(join(tmpdir(), "tela-mac-app-"));
     try {
       const input = fixture(root), output = join(root, "Tela.app");
@@ -109,13 +109,16 @@ describe("packaged payload builder", () => {
       writeFileSync(join(input, "notices/Codex-NOTICE.txt"), "codex notice");
       buildPackagedPayload({ outputPath: output, productVersion: "1.2.3", launcherSourcePath: join(input, "launcher"),
         noticesSourcePath: join(input, "notices"),
-        services: { gateway: { executableSourcePath: join(input, "gateway") }, chat: { executableSourcePath: join(input, "chat") }, codex: { executableSourcePath: join(input, "codex") } },
+        services: Object.fromEntries((["gateway", "chat", "codex"] as const).map(service => [service, {
+          executableSourcePath: join(input, shared ? "launcher" : service),
+          arguments: shared ? ["--tela-daemon", service] : [],
+        }])) as Record<"gateway" | "chat" | "codex", { executableSourcePath: string; arguments: string[] }>,
         profileRuntime: { electronBundleSourcePath: join(input, "electron"), electronExecutableRelativePath: "Electron.app/Contents/MacOS/Electron", entrypointSourcePath: join(input, "profile-runtime.cjs") },
         menuBarSourcePath: join(input, "menu-bar"), workspaceFilesSourcePath: join(input, "chat") });
       const options = { payloadPath: output, buildVersion: "123", feedURL: "https://example.com/updates.xml", publicKey: Buffer.alloc(32).toString("base64"), finalizeBundle: () => {} };
       writeFileSync(join(output, ".chatgpt-tela-owner.json"), "owned");
       expect(() => assembleMacApplication(options)).toThrow("installed payload");
-      expect(existsSync(join(output, "services/gateway"))).toBe(true);
+      expect(existsSync(join(output, "services/gateway"))).toBe(!shared);
       rmSync(join(output, ".chatgpt-tela-owner.json"));
       const result = assembleMacApplication({ ...options, finalizeBundle(app) {
         const spec = packagedInstallSpecFromPayload(app);
@@ -128,7 +131,11 @@ describe("packaged payload builder", () => {
       expect(readPackagedProductManifest(output)).toEqual(result.manifest);
       expect(existsSync(join(output, "ui"))).toBe(false);
       expect(existsSync(join(output, "electron"))).toBe(false);
-      expect(readFileSync(join(output, "Contents/Helpers/services/chat"), "utf8")).toBe("chat\n");
+      expect(existsSync(join(output, "Contents/Helpers/services"))).toBe(!shared);
+      for (const service of ["gateway", "chat", "codex"] as const) {
+        expect(readFileSync(join(output, result.manifest.services[service].executable), "utf8")).toBe(shared ? "launcher\n" : `${service}\n`);
+        expect(result.manifest.services[service].arguments).toEqual(shared ? ["--tela-daemon", service] : []);
+      }
       expect(readFileSync(join(output, "Contents/Info.plist"), "utf8")).toContain("<key>CFBundleVersion</key><string>123</string>");
       expect(readFileSync(join(output, "Contents/Info.plist"), "utf8")).toContain("<key>LSMinimumSystemVersion</key><string>13.0</string>");
       expect(packagedPayloadFingerprint(output)).toBe(result.payloadFingerprint);

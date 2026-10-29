@@ -19,6 +19,7 @@ import {
   CURRENT_PACKAGED_LIFECYCLE,
   parsePackagedNativeEngine,
   CURRENT_CHAT_PROCESS_STORE_COMPATIBILITY,
+  type PackagedProductManifest,
 } from "@chatgpt-tela/product-lifecycle";
 
 const repoRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
@@ -64,7 +65,7 @@ function electronExecutableRelativePath(): string {
   throw new Error(`packaged payload build is unsupported on ${process.platform}`);
 }
 
-function macCodesign(outputPath: string, identity: string): void {
+function macCodesign(outputPath: string, identity: string, manifest: PackagedProductManifest): void {
   const sign = (path: string, flags: readonly string[] = []) => {
     execFileSync("/usr/bin/codesign", ["--force", ...flags, "--sign", identity, path], {
       stdio: "inherit",
@@ -73,8 +74,9 @@ function macCodesign(outputPath: string, identity: string): void {
       stdio: "inherit",
     });
   };
-  sign(join(outputPath, "chatgpt-tela"));
-  for (const service of ["gateway", "chat", "codex"] as const) sign(join(outputPath, "services", service));
+  for (const executable of new Set([manifest.launcher!.executable, ...Object.values(manifest.services).map(service => service.executable)])) {
+    sign(join(outputPath, executable));
+  }
   const menuBarApp = join(outputPath, "ui", "ChatGPT Tela.app");
   const sparkle = join(menuBarApp, "Contents/Frameworks/Sparkle.framework");
   if (existsSync(sparkle)) {
@@ -122,17 +124,11 @@ async function main(): Promise<void> {
   try {
     const executableExtension = process.platform === "win32" ? ".exe" : "";
     const launcher = join(temporary, `chatgpt-tela${executableExtension}`);
-    const gateway = join(temporary, `gateway${executableExtension}`);
-    const chat = join(temporary, `chat${executableExtension}`);
-    const codex = join(temporary, `codex${executableExtension}`);
     const profileRuntime = join(temporary, "profile-runtime.cjs");
     const profileSetup = join(temporary, "profile-setup.cjs");
     const menuBar = process.platform === "darwin" ? join(temporary, "chatgpt-tela-menu-bar") : undefined;
 
-    compileExecutable("apps/packaged-launcher/src/main.ts", launcher);
-    compileExecutable("apps/gateway-daemon/src/main.ts", gateway);
-    compileExecutable("apps/chat-daemon/src/main.ts", chat);
-    compileExecutable("apps/codex-daemon/src/main.ts", codex);
+    compileExecutable("apps/packaged-launcher/src/entrypoint.ts", launcher);
     runBun(["build", "apps/profile-runtime/src/main.ts", "--target=node", "--format=cjs", "--external", "electron",
       `--outfile=${profileRuntime}`]);
     runBun(["build", "apps/profile-setup/src/main.ts", "--target=node", "--format=cjs", "--external", "electron",
@@ -161,9 +157,9 @@ async function main(): Promise<void> {
       lifecycle: CURRENT_PACKAGED_LIFECYCLE,
       launcherSourcePath: launcher,
       services: {
-        gateway: { executableSourcePath: gateway },
-        chat: { executableSourcePath: chat },
-        codex: { executableSourcePath: codex },
+        gateway: { executableSourcePath: launcher, arguments: ["--tela-daemon", "gateway"] },
+        chat: { executableSourcePath: launcher, arguments: ["--tela-daemon", "chat"] },
+        codex: { executableSourcePath: launcher, arguments: ["--tela-daemon", "codex"] },
       },
       profileRuntime: {
         electronBundleSourcePath: electronBundle,
@@ -178,7 +174,7 @@ async function main(): Promise<void> {
         executableSourcePath: realRegularFile(nativeEnginePath, "Native engine executable"),
       } } : {}),
       ...(macCodesignIdentity
-        ? { finalizeStagedPayload: ({ outputPath: staged }) => macCodesign(staged, macCodesignIdentity) }
+        ? { finalizeStagedPayload: ({ outputPath: staged, manifest }) => macCodesign(staged, macCodesignIdentity, manifest) }
         : {}),
     });
 

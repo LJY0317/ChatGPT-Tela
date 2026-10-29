@@ -33,7 +33,7 @@ export function assembleMacApplication(input: {
   };
   move(previous.launcher.executable, "Contents/MacOS/chatgpt-tela");
   move(previous.menuBar.executable, "Contents/MacOS/chatgpt-tela-menu-bar");
-  move("services", "Contents/Helpers/services");
+  if (existsSync(join(root, "services"))) move("services", "Contents/Helpers/services");
   move("electron/Electron.app", "Contents/Frameworks/Electron.app");
   if (existsSync(join(root, "ui/ChatGPT Tela.app/Contents/Frameworks/Sparkle.framework"))) {
     move("ui/ChatGPT Tela.app/Contents/Frameworks/Sparkle.framework", "Contents/Frameworks/Sparkle.framework");
@@ -53,7 +53,8 @@ export function assembleMacApplication(input: {
     launcher: { executable: "Contents/MacOS/chatgpt-tela" },
     menuBar: { executable: "Contents/MacOS/chatgpt-tela-menu-bar",
       ...(previous.menuBar.maintenanceExecutable ? { maintenanceExecutable: "Contents/Helpers/Tela Maintenance.app/Contents/MacOS/chatgpt-tela-maintenance" } : {}) },
-    services: Object.fromEntries(Object.entries(previous.services).map(([id, service]) => [id, { ...service, executable: `Contents/Helpers/${service.executable}` }])),
+    services: Object.fromEntries(Object.entries(previous.services).map(([id, service]) => [id, { ...service,
+      executable: service.executable === previous.launcher!.executable ? "Contents/MacOS/chatgpt-tela" : `Contents/Helpers/${service.executable}` }])),
     profileRuntime: {
       executable: previous.profileRuntime.executable.replace("electron/", "Contents/Frameworks/"),
       entrypoint: `Contents/Resources/${previous.profileRuntime.entrypoint}`,
