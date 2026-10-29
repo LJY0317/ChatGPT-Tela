@@ -149,11 +149,7 @@ export function readDiagnosticTail(path: string, maxBytes = DIAGNOSTIC_LIMITS.ta
   let fd: number | undefined;
   let unavailableReason: "missing" | "access_denied" | "unsafe_source" | "read_failed" = "read_failed";
   try {
-    let link;
-    try { link = lstatSync(path); } catch (error) {
-      unavailableReason = (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : (error as NodeJS.ErrnoException).code === "EACCES" ? "access_denied" : "read_failed";
-      throw error;
-    }
+    const link = lstatSync(path);
     if (link.isSymbolicLink()) { unavailableReason = "unsafe_source"; throw new Error("unsafe source"); }
     fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     const stat = fstatSync(fd); if (!stat.isFile()) { unavailableReason = "unsafe_source"; throw new Error("unsafe source"); }
@@ -178,7 +174,10 @@ export function readDiagnosticTail(path: string, maxBytes = DIAGNOSTIC_LIMITS.ta
     return { state: "read" as const, invalidTimestampRows, malformedRows, oversizedRows, outsideWindowRows,
       windowSelected: Boolean(window), bytesRead: used, fileBytes: stat.size, truncated: stat.size > bytes,
       events, eventLimitReached: false };
-  } catch { return { state: "unavailable" as const, reason: unavailableReason, invalidTimestampRows: 0, malformedRows: 0, oversizedRows: 0,
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    const reason = code === "ENOENT" ? "missing" : code === "EACCES" || code === "EPERM" ? "access_denied" : unavailableReason;
+    return { state: "unavailable" as const, reason, invalidTimestampRows: 0, malformedRows: 0, oversizedRows: 0,
     outsideWindowRows: 0, windowSelected: Boolean(window), bytesRead: 0, fileBytes: 0, truncated: false, events: [] as StructuralDiagnosticEvent[], eventLimitReached: false }; }
   finally { if (fd !== undefined) closeSync(fd); }
 }

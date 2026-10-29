@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { diagnosticFingerprint, emitDiagnosticEvent, emitDiagnosticIncident } from "./diagnostic-events";
@@ -161,6 +161,12 @@ test("bounded reader explicitly reports truncation and never follows source syml
   expect(result.truncated).toBe(true); expect(result.bytesRead).toBe(512); expect(JSON.stringify(result)).not.toContain("private");
   symlinkSync(file,join(root,"link")); expect(readDiagnosticTail(join(root,"link")).state).toBe("unavailable");
   expect(readDiagnosticSources([file,file]).sourceLimitReached).toBe(false);
+});
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("diagnostic file open permission failure is reported as access denied", () => {
+  const file = join(fixture(), "events.jsonl");
+  writeFileSync(file, "", { mode: 0o000 });
+  try { expect(readDiagnosticTail(file)).toMatchObject({ state: "unavailable", reason: "access_denied" }); }
+  finally { chmodSync(file, 0o600); }
 });
 test("parent transport correlation and report-time process state remain separate from host continuation", () => {
   const operation=fp("operation"), request=fp("request"), child=fp("child"), scope=fp("scope");
