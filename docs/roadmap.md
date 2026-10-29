@@ -79,9 +79,12 @@ Reuse the current contracts instead of restoring their parallel registries, mani
 - **Instruction reuse.** Explicit rediscovery may omit unchanged instruction bodies only with a matching
   workspace-scoped source revision previously delivered to that caller. Native revision IDs do not prove
   standalone Chat delivery; changed global/project instructions must still be returned.
-- **Workspace continuity.** Reboot-varying device identifiers must not alone reject an unchanged checkout.
-  Keep actual replacement detection and the native filesystem helper consistent across supported systems;
-  report a missing old checkout without recreating it or retrying its historical operation.
+- **Workspace continuity.** macOS source now records the system volume UUID with the directory inode,
+  while Native file helpers receive the current mount's device/inode. Explicit open upgrades an old
+  record only while its original identity still matches; an old record already missing that proof must
+  be reopened. Non-disk filesystems and other platforms retain device/inode identity. Simulated remount
+  and actual Native file read pass; installed reboot acceptance and other-platform identity work remain.
+  Report a missing old checkout without recreating it or retrying its historical operation.
 - **Shared execution ownership.** Reconcile independent Native Web/Goal activity through existing owners
   and cancellation paths. A stale observation must not disable unrelated Web startup. Avoid a second
   permit engine or stricter admission merely to implement a soft target.

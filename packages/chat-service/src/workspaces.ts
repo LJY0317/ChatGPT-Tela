@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { workspaceVolume } from "./workspace-volume";
 
 export interface ChatWorkspace {
   readonly id: string;
@@ -18,6 +19,7 @@ export interface ChatWorkspace {
   readonly root: string;
   readonly device: string;
   readonly inode: string;
+  readonly volume?: string;
   readonly openedAt: string;
 }
 
@@ -35,9 +37,15 @@ function canonicalDirectory(path: string): string {
   return realpathSync(absolute);
 }
 
-function identity(path: string): { readonly device: string; readonly inode: string } {
+function identity(path: string): Pick<ChatWorkspace, "device" | "inode" | "volume"> {
   const stat = statSync(path, { bigint: true });
-  return Object.freeze({ device: stat.dev.toString(), inode: stat.ino.toString() });
+  const device = stat.dev.toString(), volume = workspaceVolume(path, device);
+  return Object.freeze({ device, inode: stat.ino.toString(), ...(volume ? { volume } : {}) });
+}
+
+function sameIdentity(saved: ChatWorkspace, current: ReturnType<typeof identity>): boolean {
+  return saved.inode === current.inode
+    && (saved.volume ? saved.volume === current.volume : saved.device === current.device);
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -69,6 +77,7 @@ function parseStore(value: unknown): WorkspaceStore {
       root,
       device: text("device"),
       inode: text("inode"),
+      ...(row.volume === undefined ? {} : { volume: text("volume") }),
       openedAt: text("openedAt"),
     });
   });
@@ -170,8 +179,14 @@ export class ChatWorkspaceRegistry {
     const currentIdentity = identity(root);
     for (const existing of this.#byId.values()) {
       if (existing.kind === kind && existing.root === root
-        && existing.device === currentIdentity.device && existing.inode === currentIdentity.inode) {
-        return this.get(existing.id);
+        && sameIdentity(existing, currentIdentity)) {
+        const refreshed = this.get(existing.id);
+        if (refreshed !== existing) {
+          this.#byId.set(existing.id, refreshed);
+          try { this.#save(); }
+          catch (error) { this.#byId.set(existing.id, existing); throw error; }
+        }
+        return refreshed;
       }
     }
     const workspace = Object.freeze({
@@ -201,7 +216,7 @@ export class ChatWorkspaceRegistry {
     const root = canonicalDirectory(workspace.root);
     if (root !== workspace.root) throw new Error("workspace root identity changed");
     const current = identity(root);
-    if (current.device !== workspace.device || current.inode !== workspace.inode) {
+    if (!sameIdentity(workspace, current)) {
       throw new Error("workspace root was replaced since it was opened");
     }
     const roots = workspace.kind === "user" ? this.#allowedRoots : this.#managedRoots;
@@ -209,6 +224,11 @@ export class ChatWorkspaceRegistry {
       throw new Error(workspace.kind === "user"
         ? "workspace root is no longer inside locally approved roots"
         : "managed workspace root is no longer inside Tela-owned roots");
+    }
+    // Native file helpers need the current device/inode. A worker reading this
+    // registry must not rewrite it; only explicit open persists identity updates.
+    if (workspace.device !== current.device || workspace.volume !== current.volume) {
+      return Object.freeze({ ...workspace, ...current });
     }
     return workspace;
   }
