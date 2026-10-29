@@ -628,6 +628,59 @@ test("Native local compaction reuses the ordinary request's compatible working c
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("pre-turn Native compaction and its Web request share one summary budget without dropping readable input", async () => {
+  const directory = root();
+  try {
+    const cache = new FileContextCheckpointCache({ directory: join(directory, "cache") });
+    const visiblePrefix = { accountNamespace: "bound-account",
+      journal: new FileNativeVisiblePrefixStageJournal({ directory: join(directory, "ledger"), initializationPath: join(directory, "init") }),
+      async read(): Promise<never> { throw Error("source already readable"); } };
+    const oldUser = "Original task detail. ".repeat(5_000);
+    const instructions = "Exact current policy";
+    const canonical = { threadId: "task", turnId: "compact", cwd: "/fixture",
+      workspaceRoots: ["/fixture"], sandbox: { kind: "native-enforced" as const },
+      proof: "app-server-active-turn" as const, environmentSourceTurnId: "compact" };
+    let summaries = 0;
+    const router = createNativeLocalCompactionRouter({ source: { currentTurn: async () => canonical },
+      checkpointCache: cache, visiblePrefix,
+      summarize: async () => { summaries++; return "Fresh Native continuation summary"; } });
+    const response = await router(new Request("http://127.0.0.1/v1/responses", {
+      method: "POST", body: JSON.stringify({ model, reasoning: { effort: "high" }, instructions,
+        input: [{ role: "user", content: oldUser }, { role: "assistant", content: "Observed previous result" },
+          { type: "compaction_trigger" }],
+        client_metadata: { "x-codex-turn-metadata": JSON.stringify({ request_kind: "compaction", thread_id: "task", turn_id: "compact" }) },
+      }),
+    }));
+    expect(response?.status).toBe(200);
+    const compacted = (await response!.json()).output[0];
+    let maintenance = 0;
+    const planner = createNativeRequestDevelopmentWebTurnPlanner({ checkpointCache: cache, visiblePrefix,
+      preparationBudgetFor: router.preparationBudgetFor,
+      checkpointProducer: async request => { maintenance++; return {
+        nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId, content: "Later maintained checkpoint" }; } });
+    const request = { model, reasoning: { effort: "high" }, instructions,
+      input: [{ role: "user", content: oldUser }, compacted, { role: "user", content: "Continue current work" }] };
+    const planned = await planner(registered("compact"), request);
+    expect(summaries).toBe(1);
+    expect(maintenance).toBe(0);
+    const content = planned.physicalContext.segments.map(item => item.content).join("\n");
+    expect(content).toContain(oldUser);
+    expect(content).toContain("Fresh Native continuation summary");
+    expect(content).toContain(instructions);
+    expect(content).toContain("Continue current work");
+    planned.settle?.({ status: "failed" });
+    await expect(planner(registered("compact"), { ...request,
+      input: [...request.input, { role: "user", content: "Irreducible current request ".repeat(30_000) }] }))
+      .rejects.toThrow();
+    expect(maintenance).toBe(0);
+    expect(await router.preparationBudgetFor("task", "another-turn", { familyKey: chatGptWebFamilyKey("Working Set Fixture"), effort: "high" })).toBeUndefined();
+    expect(await router.preparationBudgetFor("task", "compact", { familyKey: "other-model", effort: "high" })).toBeUndefined();
+    const next = await planner(registered("next-turn"), request);
+    expect(maintenance).toBe(1);
+    next.settle?.({ status: "failed" });
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("Web model metadata is scoped to Web evidence, not inherited Native capacity", async () => {
   const { augmentNativeCodexModelCatalog } = await import("./web-model-catalog");
   const source = { models: [{ slug: "native", visibility: "list",

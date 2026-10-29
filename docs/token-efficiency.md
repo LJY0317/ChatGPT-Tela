@@ -197,6 +197,11 @@ residency separately. Counts and token estimates are not provider billing. Corre
 planner decisions with stage/settlement receipts; missing logs are not proof of failure.
 Raw source and provider evidence remain local opt-in with bounded retention.
 
+Native pre-turn compaction and the subsequent Web request share the existing exact-turn,
+model/effort-bound preparation budget. After a successful summary, optional working-set
+maintenance must not summarize again merely to meet a soft seed target. Keep the full
+readable input and ordinary fit checks; a different turn or route uses its own budget.
+
 ## Standard engine and optional fork
 
 The engine executing Native tools is required by the current Desktop integration; a

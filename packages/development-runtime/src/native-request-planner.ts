@@ -922,6 +922,8 @@ function checkpointTokens(content: string): number {
 export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeContinuitySources & {
   readonly checkpointCache?: ContextCheckpointCache;
   readonly budgetTokens?: number;
+  readonly preparationBudgetFor?: (threadId: string, turnId: string,
+    browserModel: { familyKey: string; effort: ChatGptWebEffort } | undefined) => Promise<CheckpointPreparationBudget | undefined>;
 } = {}): RetiringDevelopmentWebTurnPlanner {
   const retainedByTask = new Map<string, CommittedRetainedContext>();
   // A frozen historical projection (raw or summarized) is disposable; only a
@@ -1043,7 +1045,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     stage("model_route");
     const browserModel = nativeRequestBrowserModelRoute(nativeRequest);
     const workingPolicy = webWorkingContextPolicy(browserModel?.effort ?? "medium", options.checkpointPreparationPolicy);
-    const preparationBudget = new CheckpointPreparationBudget(
+    const preparationBudget = await options.preparationBudgetFor?.(
+      threadId, turn.channel.binding.authority.turnId, browserModel) ?? new CheckpointPreparationBudget(
       workingPolicy.checkpointSourceTokens, options.checkpointPreparationPolicy);
     const checkpointProducer = options.checkpointProducer ? preparationBudget.producer(options.checkpointProducer) : undefined;
     const physicalLimits = browserModel ? workingPolicy.hard : undefined;
@@ -1147,6 +1150,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       reason_class: !committed ? "no_committed_context" : !admitted ? retentionDiagnostic.reason ?? "unclassified"
         : pressure?.shouldRollover ? "physical_pressure" : healthyRetained ? "retained_match" : "pressure_unavailable",
       prior_settlement_present: committed !== undefined, reuse_eligible: healthyRetained,
+      preparation_model_calls: preparationBudget.modelCalls,
       ...retentionDiagnostic.fields,
       ...(pressure ? { epoch_input_estimate: pressure.estimatedEpochInputTokens,
         epoch_rollover_limit: pressure.effectiveRolloverTokenLimit, physical_rollover: pressure.shouldRollover } : {}),
@@ -1168,7 +1172,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       ...(checkpointProducer ? { producer: checkpointProducer } : {}),
       ...(browserModel ? { browserModel } : {}),
       policy: workingPolicy, preparationBudget,
-      allowMaintenance: !healthyRetained && !deferred,
+      allowMaintenance: !healthyRetained && !deferred && preparationBudget.modelCalls === 0,
       ...(preparation ? { preparation, signal: preparation.signal } : {}),
       onSubstage: plannerSubstage,
     });

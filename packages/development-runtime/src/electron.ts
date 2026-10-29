@@ -296,6 +296,7 @@ export async function startElectronDevelopmentRuntime(
     turns,
     mcp: input.mcp,
     planWebTurn: input.planWebTurn ?? createNativeRequestDevelopmentWebTurnPlanner({
+      ...(localCompactionRouter ? { preparationBudgetFor: localCompactionRouter.preparationBudgetFor } : {}),
       ...(input.context?.visiblePrefix ? { visiblePrefix: input.context.visiblePrefix } : {}),
       ...(input.compactionHistory ? { compactionHistory: input.compactionHistory } : {}),
       ...(input.compactionAnchor ? { compactionAnchor: input.compactionAnchor } : {}),

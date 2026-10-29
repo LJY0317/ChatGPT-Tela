@@ -67,8 +67,9 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
 }) {
   const capacity = input.maxRetainedOperations ?? 64;
   if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error("Invalid compaction operation capacity");
-  const operations = new Map<string, { digest: string; wireDigest: string; id: string; result: Promise<string>; settled: boolean }>();
-  return async (request: Request): Promise<Response | undefined> => {
+  const operations = new Map<string, { digest: string; wireDigest: string; id: string; result: Promise<string>; settled: boolean;
+    browserModel: { familyKey: string; effort: ChatGptWebEffort }; preparationBudget: CheckpointPreparationBudget }>();
+  const route = async (request: Request): Promise<Response | undefined> => {
     if (request.method !== "POST" || new URL(request.url).pathname !== "/v1/responses") return undefined;
     let body: RecordValue | undefined;
     try { body = record(await request.json()); } catch { return undefined; }
@@ -129,6 +130,9 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
         input.settlePendingToolResult?.(claim.threadId, claim.turnId, body);
         const id = randomUUID(); operationId = id;
         const startedAt = Date.now();
+        const preparationBudget = new CheckpointPreparationBudget(
+          webWorkingContextPolicy(browserModel.effort, input.checkpointPreparationPolicy).checkpointSourceTokens,
+          input.checkpointPreparationPolicy);
         const result = withDiagnosticContext({ operation_fingerprint: diagnosticFingerprint(id), scope_fingerprint: scope, turn_fingerprint: turn }, async () => {
           let operationPhase: CompactionPhase = "watch";
           let watch: Awaited<ReturnType<NonNullable<typeof input.source.watchTurn>>>;
@@ -139,8 +143,6 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
             if (watch?.signal.aborted) throw new CompactionFailure(operationPhase, "owner_cancelled");
             operationPhase = "continuity";
             const policy = webWorkingContextPolicy(browserModel.effort, input.checkpointPreparationPolicy);
-            const preparationBudget = new CheckpointPreparationBudget(
-              policy.checkpointSourceTokens, input.checkpointPreparationPolicy);
             const producer: NativeRequestCheckpointProducer = async (request, preparation) => ({
               nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId,
               content: await input.summarize({ ...request, browserModel,
@@ -279,7 +281,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
           emitDiagnosticEvent("chatgpt_tela_work", "compaction_completed", { result_bytes: Buffer.byteLength(summary), duration_ms: diagnosticDurationMs(startedAt) });
           return summary;
         });
-        operation = { digest: sourceDigest, wireDigest, id, result, settled: false };
+        operation = { digest: sourceDigest, wireDigest, id, result, settled: false, browserModel, preparationBudget };
         operations.set(key, operation);
         const saved = operation;
         void result.finally(() => { saved.settled = true; }).catch(() => {});
@@ -325,4 +327,15 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
         message: "Web compaction could not verify the current conversation and its readable source. Native history was not changed by this request." } }, { status: 400 });
     }
   };
+  return Object.assign(route, {
+    /** Native pre-turn compaction and the following request share one preparation receipt. */
+    async preparationBudgetFor(threadId: string, turnId: string,
+      browserModel: { familyKey: string; effort: ChatGptWebEffort } | undefined) {
+      const operation = operations.get(JSON.stringify([threadId, turnId]));
+      if (!operation || operation.browserModel.familyKey !== browserModel?.familyKey
+        || operation.browserModel.effort !== browserModel.effort) return undefined;
+      await operation.result;
+      return operation.preparationBudget;
+    },
+  });
 }
