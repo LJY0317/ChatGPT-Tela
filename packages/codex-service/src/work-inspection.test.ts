@@ -38,6 +38,7 @@ function harness() {
   let preview = {
     contractVersion: 1 as const, slot: 2, activeSurfaceCount: 1, previewAvailable: true,
     imageMimeType: "image/jpeg" as const, imageBase64: "SECRET_SCREENSHOT_IMAGE",
+    retention: { total: 129, target: 10, active: 128, undelivered: 1, closing: 0, otherOwners: 0, reclaimable: 0 },
     approvalState: "unavailable" as const, approvalObservationReason: "dom_observation_failed" as const,
   };
   const service = {
@@ -152,6 +153,7 @@ describe("profile-owned read-only Work inspection", () => {
         identityVerified: true, threadId,
         native: { state: "active", recentTurns: [{ id: turnId, status: "inProgress" }] },
         browser: { activeSurfaceCount: 1, approvalState: "unavailable",
+          retention: { total: 129, target: 10, active: 128, undelivered: 1 },
           observationReason: "dom_observation_failed", attributableToThread: false },
         hostPlatformReview: { visibility: "outside_tela_pre_ingress", agentMayApprove: false },
       });

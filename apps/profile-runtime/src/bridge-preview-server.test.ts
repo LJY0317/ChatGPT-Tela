@@ -223,10 +223,11 @@ describe("profile bridge preview server", () => {
   });
   test("approval status belongs only to the explicitly selected surface and is observed on demand", async () => {
     const token = "p".repeat(48); const id = "surface_" + "a".repeat(32); let calls = 0;
+    const retention = { total: 12, target: 10, active: 1, undelivered: 1, closing: 0, otherOwners: 10, reclaimable: 0 };
     const server = await startProfileBridgePreviewServer({ slot: 1, bearerToken: token,
       async observe(selected) {
         calls++;
-        return { activeSurfaceCount: 2, ...(selected === id ? { selectedSurfaceId: id, approvalState: "pending" as const } : {}) };
+        return { activeSurfaceCount: 2, retention, ...(selected === id ? { selectedSurfaceId: id, approvalState: "pending" as const } : {}) };
       },
     });
     try {
@@ -234,6 +235,7 @@ describe("profile bridge preview server", () => {
       const headers = { authorization: `Bearer ${token}` };
       const unselected = await (await fetch(new URL("v1/bridge-preview", server.endpoint), { headers })).json() as any;
       expect(unselected).not.toHaveProperty("approvalState");
+      expect(unselected.retention).toEqual(retention);
       const selected = await (await fetch(new URL(`v1/bridge-preview?surfaceId=${id}`, server.endpoint), { headers })).json() as any;
       expect(selected.approvalState).toBe("pending");
       expect(selected.selectedSurfaceId).toBe(id);

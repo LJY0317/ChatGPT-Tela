@@ -60,6 +60,7 @@ export function createCodexWorkInspector(input: {
     // This is a current on-demand profile observation, not a stale log or
     // a proof that a browser card belongs to the requested Native thread.
     let browser: {
+      readonly retention?: import("@chatgpt-tela/core").BrowserRetentionObservation;
       readonly activeSurfaceCount: number | null;
       readonly selectedSurface: boolean;
       readonly approvalState: "pending" | "none" | "unavailable";
@@ -81,6 +82,7 @@ export function createCodexWorkInspector(input: {
           ?? (preview.approvalState ? undefined : "dom_observation_failed");
       browser = {
         activeSurfaceCount: preview.activeSurfaceCount,
+        ...(preview.retention ? { retention: preview.retention } : {}),
         selectedSurface,
         approvalState: selectedSurface ? preview.approvalState ?? "unavailable" : "unavailable",
         ...(observationReason ? { observationReason } : {}),

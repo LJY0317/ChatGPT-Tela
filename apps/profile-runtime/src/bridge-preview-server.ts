@@ -45,7 +45,7 @@ export async function startProfileBridgePreviewServer(input: {
   readonly reveal?: (id: string, interactive?: boolean) => Promise<void>;
   readonly surfaces?: () => { readonly revision: number; readonly surfaces: readonly { readonly id: string; readonly label: string; readonly taskId?: string; readonly title?: string }[] };
   readonly onSurfacesChanged?: (listener: () => void) => () => void;
-  readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable"; readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed"; readonly approvalWait?: CodexApprovalWaitContract }>;
+  readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly retention?: import("@chatgpt-tela/core").BrowserRetentionObservation; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable"; readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed"; readonly approvalWait?: CodexApprovalWaitContract }>;
   readonly probeModelSelection?: () => Promise<{
     readonly familyCount: number;
     readonly exercised: boolean;
@@ -252,6 +252,7 @@ export async function startProfileBridgePreviewServer(input: {
         contractVersion: 1,
         slot: input.slot,
         activeSurfaceCount: observed.activeSurfaceCount,
+        ...(observed.retention ? { retention: observed.retention } : {}),
         ...(observed.surfaces ? { surfaces: observed.surfaces } : {}),
         ...(observed.selectedSurfaceId ? { selectedSurfaceId: observed.selectedSurfaceId } : {}),
         ...(observed.selectedSurfaceId && observed.approvalState ? { approvalState: observed.approvalState } : {}),

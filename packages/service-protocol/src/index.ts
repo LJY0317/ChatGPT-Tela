@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
+import { parseBrowserRetentionObservation, type BrowserRetentionObservation } from "@chatgpt-tela/core";
 export { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
 export { parseCodexWorkInspectionContract } from "./work-inspection";
 export { parseCodexCheckpointInspectionContract } from "./work-inspection";
@@ -138,6 +139,7 @@ export interface CodexProfileStatusContract {
 }
 
 export interface CodexBridgePreviewContract {
+  readonly retention?: BrowserRetentionObservation;
   readonly surfaces?: readonly { readonly id: string; readonly label: string }[];
   readonly selectedSurfaceId?: string;
   readonly contractVersion: 1;
@@ -226,8 +228,7 @@ export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePrev
     throw new Error("Codex bridge preview slot is invalid");
   }
   if (!Number.isSafeInteger(item.activeSurfaceCount)
-    || (item.activeSurfaceCount as number) < 0
-    || (item.activeSurfaceCount as number) > 128) {
+    || (item.activeSurfaceCount as number) < 0) {
     throw new Error("Codex bridge preview active surface count is invalid");
   }
   if (typeof item.previewAvailable !== "boolean") throw new Error("Codex bridge preview availability is invalid");
@@ -265,6 +266,7 @@ export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePrev
     contractVersion: 1,
     slot: item.slot as number,
     activeSurfaceCount: item.activeSurfaceCount as number,
+    ...(item.retention === undefined ? {} : { retention: parseBrowserRetentionObservation(item.retention) }),
     previewAvailable: item.previewAvailable,
     ...(surfaces ? { surfaces: Object.freeze(surfaces.map(row => Object.freeze({ id: row.id, label: row.label }))) } : {}),
     ...(selected ? { selectedSurfaceId: selected as string } : {}),

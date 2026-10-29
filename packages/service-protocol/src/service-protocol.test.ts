@@ -71,6 +71,10 @@ describe("private service protocol", () => {
   });
 
   test("read-only bridge preview contract is bounded and unambiguous", () => {
+    const retention = { total: 129, target: 10, active: 128, undelivered: 1,
+      closing: 0, otherOwners: 0, reclaimable: 0 };
+    expect(parseCodexBridgePreviewContract({ contractVersion: 1, slot: 2,
+      activeSurfaceCount: 129, previewAvailable: false, retention }).retention).toEqual(retention);
     expect(parseCodexBridgePreviewContract({
       contractVersion: 1,
       slot: 2,

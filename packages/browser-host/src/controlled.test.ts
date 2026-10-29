@@ -31,22 +31,50 @@ describe("controlled browser host", () => {
     let release!: () => void;
     const ready = new Promise<void>(resolve => { release = resolve; });
     let closed = 0;
+    let finishClose!: () => void, didStartClose!: () => void;
+    const closeStarted = new Promise<void>(resolve => { didStartClose = resolve; });
+    const closeReady = new Promise<void>(resolve => { finishClose = resolve; });
     const host = new ControlledBrowserHost(async () => {
       await ready;
       return { async navigate() {}, async reveal() {}, async hide() {},
-        async close() { closed += 1; } };
+        async close() { closed += 1; didStartClose(); await closeReady; } };
     });
     const acquisition = host.acquire({ taskId: "task", epochId: "epoch" }).then(
       () => "accepted", () => "rejected",
     );
     const closing = host.close();
     release();
+    await closeStarted;
+    expect(host.activeSurfaceCount).toBe(1);
+    finishClose();
     await closing;
     expect(await acquisition).toBe("rejected");
     expect(closed).toBe(1);
     expect(host.activeSurfaceCount).toBe(0);
     await host.close();
     expect(closed).toBe(1);
+  });
+
+  test("release keeps the visible owner until close completes and coalesces shutdown", async () => {
+    let finish!: () => void;
+    const ready = new Promise<void>(resolve => { finish = resolve; });
+    let closes = 0;
+    const host = new ControlledBrowserHost(async () => ({
+      async navigate() {}, async reveal() {}, async hide() {},
+      async close() { closes++; await ready; },
+    }));
+    const lease = await host.acquire({ taskId: "owned", epochId: "epoch" });
+    const first = host.release(lease.leaseId), duplicate = host.release(lease.leaseId);
+    expect(host.activeSurfaceCount).toBe(1);
+    expect(host.listSurfaces()[0]?.id).toBe(lease.leaseId);
+    await expect(host.acquire({ taskId: "owned", epochId: "epoch" })).rejects.toThrow("active owner");
+    const shutdown = host.close();
+    expect(closes).toBe(1);
+    finish();
+    await Promise.all([first, duplicate, shutdown]);
+    expect(host.activeSurfaceCount).toBe(0);
+    expect(host.listSurfaces()).toEqual([]);
+    expect(closes).toBe(1);
   });
 
   test("owns one surface per task epoch and releases it through one lifecycle", async () => {

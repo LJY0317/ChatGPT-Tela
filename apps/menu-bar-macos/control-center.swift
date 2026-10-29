@@ -93,6 +93,24 @@ private struct ControlCenterApprovalWait: Decodable {
 }
 
 private struct ControlCenterBridgePreview: Decodable {
+  let retention: BrowserRetention?
+  struct BrowserRetention: Decodable {
+    let total: Int
+    let target: Int
+    let active: Int
+    let undelivered: Int
+    let closing: Int
+    let otherOwners: Int
+    let reclaimable: Int
+    var notice: String? {
+      guard total > target else { return nil }
+      let details = [(active, "active"), (undelivered, "results to check"),
+                     (closing, "close not confirmed"), (otherOwners, "setup or other operations"),
+                     (reclaimable, "ready for cleanup")]
+        .filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }.joined(separator: ", ")
+      return "Cleanup pending · \(total) browser windows\n\(details). Check uncollected answers or let active work finish."
+    }
+  }
   let approvalState: String?
   let approvalObservationReason: String?
   let approvalWait: ControlCenterApprovalWait?
@@ -2271,6 +2289,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       } else {
         bridgeMessage = "Choose a Web session to view its snapshot or open its browser."
       }
+      if let notice = preview.retention?.notice { bridgeMessage += "\n" + notice }
       if preview.selectedSurfaceId != nil, let wait = preview.approvalWait {
         bridgeMessage += "\n\(wait.statusText)"
       }

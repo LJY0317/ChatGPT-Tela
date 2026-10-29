@@ -1,4 +1,4 @@
-import { diagnosticFingerprint } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, parseBrowserRetentionObservation } from "@chatgpt-tela/core";
 import { parseCodexApprovalWait } from "./approval-review";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -78,7 +78,7 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
     || !["paginated", "legacy"].includes(String(native.historyMode))
     || browser.scope !== "selected_profile_only" || browser.attributableToThread !== false
     || (browser.activeSurfaceCount !== null && (!Number.isSafeInteger(browser.activeSurfaceCount)
-      || (browser.activeSurfaceCount as number) < 0 || (browser.activeSurfaceCount as number) > 128))
+      || (browser.activeSurfaceCount as number) < 0))
     || typeof browser.selectedSurface !== "boolean"
     || !APPROVAL.includes(browser.approvalState as typeof APPROVAL[number])
     || host.visibility !== "outside_tela_pre_ingress" || host.agentMayApprove !== false
@@ -140,6 +140,7 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
       scope: "selected_profile_only" as const,
       attributableToThread: false as const,
       activeSurfaceCount: browser.activeSurfaceCount as number | null,
+      ...(browser.retention === undefined ? {} : { retention: parseBrowserRetentionObservation(browser.retention) }),
       selectedSurface: browser.selectedSurface as boolean,
       approvalState: browser.approvalState as typeof APPROVAL[number],
       ...(browser.observationReason ? { observationReason: browser.observationReason as typeof CAUSE[number] } : {}),

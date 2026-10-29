@@ -87,6 +87,7 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
   bridgeSurfaces(): { readonly revision: number; readonly surfaces: readonly { readonly id: string; readonly label: string; readonly taskId: string }[] };
   onBridgeSurfacesChanged(listener: () => void): () => void;
   observeBridgePreview(id?: string): Promise<{
+    readonly retention?: import("@chatgpt-tela/core").BrowserRetentionObservation;
     readonly activeSurfaceCount: number;
     readonly surfaces?: readonly { readonly id: string; readonly label: string }[];
     readonly selectedSurfaceId?: string;
@@ -352,6 +353,7 @@ export async function startElectronDevelopmentRuntime(
     responses: runtime.responses,
     mcp: runtime.mcp,
     turns: runtime.turns,
+    browserRetention: () => runtime.browserRetention(),
     prepareChatGptWebSession: (options: Parameters<ChatGptProfileControl["prepareChatGptWebSession"]>[0]) => profileControl.prepareChatGptWebSession(options),
     probeChatGptReadiness: (signal?: AbortSignal) => profileControl.probeChatGptReadiness(signal),
     probeChatGptProfile: (signal?: AbortSignal) => profileControl.probeChatGptProfile(signal),
@@ -464,6 +466,7 @@ export async function startElectronDevelopmentRuntime(
       }
       const approvalWait = selected ? provider.inspectApprovalWait?.(browserHost.selectedSurfaceLease(selected)) : undefined;
       return Object.freeze({ activeSurfaceCount: surfaces.length, surfaces,
+        retention: runtime.browserRetention(),
         ...(selected ? { selectedSurfaceId: selected } : {}),
         ...(selected ? { approvalState } : {}),
         ...(approvalObservationReason ? { approvalObservationReason } : {}),

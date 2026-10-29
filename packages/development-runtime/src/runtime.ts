@@ -95,6 +95,7 @@ export type RetiringDevelopmentWebTurnPlanner = DevelopmentWebTurnPlanner & {
 };
 
 export interface DevelopmentRuntime {
+  browserRetention(): import("@chatgpt-tela/core").BrowserRetentionObservation;
   readonly responses: LocalResponsesServer;
   readonly mcp: DevelopmentMcpRuntime;
   readonly turns: ActiveTurnRegistry;
@@ -534,6 +535,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
     responses,
     mcp,
     turns,
+    browserRetention: () => browserEpochs.retention(),
     stop() {
       if (stopping) return stopping;
       stopping = (async () => {

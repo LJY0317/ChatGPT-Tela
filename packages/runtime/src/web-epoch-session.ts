@@ -1,5 +1,5 @@
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
-import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFailureClass, emitDiagnosticEvent, type BrowserRetentionObservation } from "@chatgpt-tela/core";
 
 interface RetainedEpoch {
   readonly epochId: string;
@@ -129,6 +129,20 @@ export class RetainedBrowserEpochRegistry {
     current.idleSince = this.#now();
     this.#schedule();
     await this.#trim();
+  }
+
+  /** Read existing ownership only; observing never closes a browser or touches its page. */
+  retention(): BrowserRetentionObservation {
+    const total = Math.max(this.#browserHost.activeSurfaceCount ?? this.#byTask.size, this.#byTask.size);
+    const counts = { active: 0, undelivered: 0, closing: 0, reclaimable: 0 };
+    for (const [task, entry] of this.#byTask) {
+      if (entry.retiring) counts.closing++;
+      else if (entry.busy || this.#acquiring.has(task) || this.#isTaskActive(task)) counts.active++;
+      else if (entry.lastCompleted === 0) counts.undelivered++;
+      else counts.reclaimable++;
+    }
+    return Object.freeze({ total, target: this.#surfaceTarget, ...counts,
+      otherOwners: Math.max(0, total - this.#byTask.size) });
   }
 
   /** On demand only. Count every host surface, but retire only settled task epochs.

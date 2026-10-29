@@ -76,7 +76,10 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   The existing managed-job capacity response now carries the last completed cleanup observation and
   aggregate protected reasons; Control Center shows a short pending notice with help when above target.
   Interrupted observations are not published, and uncertain archive outcomes are identified separately.
-  Detailed per-item cleanup actions and equivalent browser-pressure presentation remain open.
+  Browser preview and work inspection also expose on-demand ownership counts and a pressure notice.
+  Closing surfaces remain owned/listed until physical close succeeds; duplicate release/shutdown calls
+  share the same close operation. Creating surfaces count toward the soft target. Detailed per-item
+  cleanup actions remain open; do not infer that a protected result has been collected from these counts.
   These are soft targets: no numeric rejection, forced close of protected work or indefinite admission
   wait. Installed acceptance remains separate from source verification.
 - **Instruction reuse.** Explicit rediscovery may omit unchanged instruction bodies only with a matching

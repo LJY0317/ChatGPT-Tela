@@ -26,6 +26,7 @@ interface OwnedSurface {
   readonly key: string;
   readonly controller: BrowserSurfaceController;
   readonly detachLabel?: () => void;
+  closing?: Promise<void>;
 }
 
 function surfaceKey(taskId: string, epochId: string): string {
@@ -81,7 +82,7 @@ export class ControlledBrowserHost implements BrowserHost {
       controller = await creation;
       if (this.#closed) throw new Error("browser host is closed");
     } finally {
-      this.#creating.delete(key);
+      if (!this.#closed) this.#creating.delete(key);
     }
     const lease: BrowserSurfaceLease = Object.freeze({
       leaseId: id,
@@ -102,28 +103,30 @@ export class ControlledBrowserHost implements BrowserHost {
   async release(id: string): Promise<void> {
     const owned = this.#surfaces.get(id);
     if (!owned) throw new Error("browser surface lease is unknown or already released");
-    this.#surfaces.delete(id);
-    this.#leaseByKey.delete(owned.key);
-    owned.detachLabel?.();
-    this.#changed();
-    await owned.controller.close();
+    owned.closing ??= (async () => {
+      await owned.controller.close();
+      this.#surfaces.delete(id);
+      this.#leaseByKey.delete(owned.key);
+      owned.detachLabel?.();
+      this.#changed();
+    })();
+    await owned.closing;
   }
 
   close(): Promise<void> {
     if (this.#closing) return this.#closing;
     this.#closed = true;
     const surfaces = [...this.#surfaces.entries()];
-    this.#surfaces.clear();
-    this.#leaseByKey.clear();
-    for (const [, surface] of surfaces) surface.detachLabel?.();
-    this.#changed();
-    this.#listeners.clear();
-    const creations = [...this.#creating.values()];
+    const creations = [...this.#creating.entries()];
     this.#closing = (async () => {
       const results = await Promise.allSettled([
-        ...surfaces.map(([, surface]) => surface.controller.close()),
-        ...creations.map(creation => creation.then(controller => controller.close(), () => {})),
+        ...surfaces.map(([id]) => this.release(id)),
+        ...creations.map(([key, creation]) => creation.then(async controller => {
+          await controller.close();
+          this.#creating.delete(key);
+        }, () => { this.#creating.delete(key); })),
       ]);
+      this.#listeners.clear();
       const failures = results
         .filter((result): result is PromiseRejectedResult => result.status === "rejected")
         .map(result => result.reason);
@@ -135,7 +138,7 @@ export class ControlledBrowserHost implements BrowserHost {
   }
 
   get activeSurfaceCount(): number {
-    return this.#surfaces.size;
+    return this.#surfaces.size + this.#creating.size;
   }
 
   get surfaceRevision(): number { return this.#revision; }

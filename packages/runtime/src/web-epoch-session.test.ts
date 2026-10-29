@@ -38,10 +38,13 @@ describe("retained browser epoch registry", () => {
       await registry.acquire("busy", "epoch");
       await registry.acquire("new", "epoch");
       expect(host.activeSurfaceCount).toBe(3);
+      expect(registry.retention()).toEqual({ total: 3, target: 1, active: 2,
+        undelivered: 1, closing: 0, otherOwners: 0, reclaimable: 0 });
       expect(closed).toEqual([]);
       await registry.complete("new", "epoch");
       expect(closed).toEqual(["new"]);
       expect(host.activeSurfaceCount).toBe(2);
+      expect(registry.retention()).toMatchObject({ total: 2, active: 1, undelivered: 1 });
     } finally { registry.dispose(); await host.close(); }
   });
 
@@ -61,8 +64,9 @@ describe("retained browser epoch registry", () => {
       await registry.complete("new", "epoch", () => { committed = true; });
       expect(committed).toBe(true);
       expect(oldCloses).toBe(1);
+      expect(registry.retention()).toMatchObject({ closing: 1, reclaimable: 0 });
       await expect(registry.acquire("old", "epoch")).rejects.toThrow("retirement is unresolved");
-    } finally { registry.dispose(); await host.close(); }
+    } finally { registry.dispose(); await expect(host.close()).rejects.toThrow("failed to close"); }
   });
 
   test("expires only idle surfaces seven days after actual completion, preserving busy work", async () => {
@@ -147,7 +151,7 @@ describe("retained browser epoch registry", () => {
     for (const epoch of ["old", "new"]) await expect(registry.acquire("task", epoch)).rejects.toThrow("retirement is unresolved");
     await expect(registry.fail("task", "old")).rejects.toThrow("retirement is unresolved");
     expect(closes).toBe(1); expect(creates).toBe(1); expect(registry.size).toBe(1);
-    await host.close();
+    await expect(host.close()).rejects.toThrow("failed to close");
   });
   test("bounded idle retirement invalidates the matching anchor before close and never evicts busy tasks", async () => {
     const events: string[] = [];
