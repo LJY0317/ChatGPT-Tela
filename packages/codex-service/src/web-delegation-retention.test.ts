@@ -687,6 +687,28 @@ test("excluded collected local history expires without Native mutation or late r
   } finally { f.cleanup(); }
 });
 
+test("reviewed failed history expires through the existing exclusion lifecycle", async () => {
+  const f = fixture();
+  try {
+    f.store.collect(f.record.id, f.origin);
+    const failed = { ...f.record, id: randomUUID(), turnId: randomUUID(), createdAt: f.origin + 1 };
+    f.store.reserve(failed);
+    f.store.requests.capture(failed, { prompt: "Original unanswered question" });
+    f.store.save({ ...failed, state: "failed", failure: "turn_failed" });
+    f.store.settleRequest(failed.id, f.record.id);
+    f.native.tailId = failed.turnId;
+    f.native.turnStatus = "failed";
+    f.native.archived = true;
+    await f.run(Date.now());
+    expect(f.store.threadRetention(f.record)?.state).toBe("excluded");
+    await f.run(Date.now() + 31 * DAY);
+    expect(f.store.get(failed.id)).toBeUndefined();
+    expect(f.store.requests.header(failed.id)).toBeUndefined();
+    expect(f.native.exists).toBe(true);
+    expect(f.calls.filter(call => call.method === "thread/delete" || call.method === "thread/archive")).toHaveLength(0);
+  } finally { f.cleanup(); }
+});
+
 test("excluded history waits for empty Native queue and the managed latest turn", async () => {
   const f = fixture();
   try {

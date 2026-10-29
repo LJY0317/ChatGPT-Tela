@@ -64,10 +64,11 @@ new runtimes, schedulers or queues. This list records product requirements, not 
 Old candidate branches are retired; these requirements are not implementation or acceptance claims.
 Reuse the current contracts instead of restoring their parallel registries, manifests or admission gates.
 
-- **Unanswered requests.** Preserve the bounded original question, source references and uncertain execution
-  state independently of the Native chat. An explicit reviewed answer from another owned conversation may
-  settle the question; transport completion alone cannot. Manual deletion must not lose unanswered work,
-  and settled failures must not prevent normal retention. No automatic replay or new recovery scheduler.
+- **Unanswered requests.** Source now preserves new prompts/images in private journal sidecars before
+  submission; local retrieval survives Native deletion and explicit review can settle a question using
+  another verified job answer. Collection is not settlement. Existing retention reclaims reviewed history;
+  unresolved originals are protected. No replay scheduler. Installed acceptance remains pending; old
+  hash-only questions and external reference contents cannot be reconstructed from these sidecars.
 - **Advisory capacity.** Source policies now target 32 unarchived managed conversations and ten browser
   surfaces per profile through the existing archival/retirement lifecycles. Pressure archives the oldest
   idle collected conversations; ordinary chats, uncollected answers, queued/active work and manual

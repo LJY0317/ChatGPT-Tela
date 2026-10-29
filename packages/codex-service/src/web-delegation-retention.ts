@@ -120,7 +120,8 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     const record = jobs.at(-1)!;
     const path = statePath(adapters, record), retained = load(path);
     if (retained?.state === "deleted") continue;
-    const ownCollection = collections.get(record.id);
+    const reviewedAt = adapters.store.requests.header(record.id)?.settlement?.at;
+    const ownCollection = collections.get(record.id) ?? reviewedAt;
     const collected = ownCollection ?? (record.state === "failed" && !verifiedWebDelegationAnswer(record)
       ? Math.max(0, ...jobs.map(job => collections.get(job.id) ?? 0)) || undefined : undefined);
     let dueBasis = retained?.archivedAt !== undefined ? "archive_expiry"
@@ -260,7 +261,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
         // normal retention path; capacity never becomes an admission condition.
         if (!present.archived && !retained && !occupancy.get(scope)!.uncertain
           && occupancy.get(scope)!.current > UNARCHIVED_THREAD_TARGET
-          && ownCollection !== undefined && verifiedWebDelegationAnswer(record)
+          && ownCollection !== undefined && (verifiedWebDelegationAnswer(record) || record.state === "failed" && reviewedAt !== undefined)
           && jobs.every(job => !verifiedWebDelegationAnswer(job) || collections.get(job.id) !== undefined)) {
           due = now;
           dueBasis = "capacity_pressure";
@@ -337,6 +338,8 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
   }
   if (!input.signal.aborted) {
     const history = adapters.store.pruneCollectedHistory(historyEligible, now);
+    const requests = adapters.store.requests.prune(now);
+    if (requests.next !== undefined) next = Math.min(next, requests.next);
     adapters.store.pruneOrphanedExcludedReceipts();
     if (history.next !== undefined) next = Math.min(next, history.next);
   }
@@ -371,7 +374,8 @@ export function startWebDelegationRetention(adapters: WebDelegationAdapters, sig
     }).finally(() => { running = undefined; });
   };
   const watcher = watch(adapters.store.root, (_event, filename) => {
-    if (filename && (/\.json(?:\.(?:completed|failed))?$/.test(String(filename)) || String(filename).endsWith(".collected"))) wake();
+    if (filename && (/\.json(?:\.(?:completed|failed))?$/.test(String(filename))
+      || String(filename).endsWith(".request.ndjson") || String(filename).endsWith(".collected"))) wake();
   });
   watcher.on("error", error => emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_failed", { failure_class: diagnosticFailureClass(error) }));
   const stop = () => { closed = true; watcher.close(); if (timer) clearTimeout(timer); };

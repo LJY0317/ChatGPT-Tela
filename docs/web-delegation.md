@@ -80,7 +80,25 @@ bun run cli web-delegate status --job UUID --confirm-title-retry
 bun run cli web-delegate reconcile --job UUID
 bun run cli web-delegate result --job UUID
 bun run cli web-delegate result --job UUID --confirm-title-retry
+bun run cli web-delegate unanswered [--slot N] [--after UUID] [--limit N]
+bun run cli web-delegate request --job UUID [--output /path/to/new-private.json]
+bun run cli web-delegate settle-request --job ORIGINAL_UUID --answer-job ANSWER_UUID
 ```
+
+New managed requests preserve their original prompt and inline images privately in the existing
+job journal before submitting a Native turn. `unanswered` lists requests awaiting explicit review;
+it does not mean every listed job failed. `request` reads the original prompt and execution references
+without opening a chat or replaying work. Its optional fresh-file export includes the exact images;
+default output reports their count instead of printing image data. Deleted Native chats do not erase
+these originals or a verified answer recovered before deletion. References in a prompt remain references:
+this is not a snapshot of every workspace file or the entire Native history.
+
+After reviewing a verified answer against the original question, use `settle-request` explicitly.
+The answer may come from another profile. Result collection and transport completion never imply
+that the question was answered; settlement does not change an execution failure into success or
+authorize replay. Reviewed answers are retained with the original input. Settled history follows the
+existing 30-day/16-MiB cleanup target after its job history is reclaimed; unresolved questions are protected.
+Older hash-only jobs cannot reconstruct their original input and report that limit explicitly.
 
 The optional `--image-file` sends inline PNG/JPEG/GIF/WebP image bytes with either start or continuation (at most eight images per turn). Omitting it on continuation does not resend previous images. Arbitrary file uploads are not part of the supported Native `turn/start` input here; `--file` is rejected. For an existing workspace file, give the worker its authorized path to inspect with discovered tools; a path reference is not proof of upload or read receipt.
 

@@ -7,6 +7,7 @@ import type { CodexWebDelegationCapacityContract, WebDelegationBlockCode } from 
 import type { LocalProfileBinding } from "./cross-profile-thread-relay";
 import type { TrustedNativeProfileSession } from "./cross-profile-account-proof";
 import { selectDelegationWebModel, webDelegationTurnSettings, type DelegationWebModel } from "./web-delegation-model";
+import { WebDelegationRequests } from "./web-delegation-requests";
 import { indexedWebDelegationProgress, WebDelegationProgressProjection, type WebDelegationProgress } from "./web-delegation-progress";
 import { decodeNativeInlineEvidence, diagnosticFailureClass, diagnosticFailureIncidentRef, diagnosticFingerprint, emitDiagnosticEvent, emitDiagnosticIncident, structuralDiagnosticEvent, privateDiagnosticFailureGuidance } from "@chatgpt-tela/core";
 
@@ -266,6 +267,7 @@ function checkoutRoot(cwd: string): string {
 /** Private user data, outside repositories/logs/releases. Execution capacity is lease-based. */
 export class WebDelegationStore {
   readonly fingerprintKey: Uint8Array;
+  readonly requests: WebDelegationRequests;
   readonly #cleanup = new Map<number, NonNullable<CodexWebDelegationCapacityContract["cleanup"]>>();
   beginCleanupObservation(): void { this.#cleanup.clear(); }
   observeCleanup(slot: number, observation: NonNullable<CodexWebDelegationCapacityContract["cleanup"]>): void {
@@ -275,6 +277,7 @@ export class WebDelegationStore {
     mkdirSync(root, { recursive: true, mode: 0o700 });
     if (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink()) throw Error("Unsafe Web job store");
     chmodSync(root, 0o700);
+    this.requests = new WebDelegationRequests(root);
     const key = join(root, "owner-key");
     try {
       const fd = openSync(key, "wx", 0o600);
@@ -421,6 +424,7 @@ export class WebDelegationStore {
   removeDeletedThread(key: WebDelegationThreadKey): { jobs: number; files: number } {
     const records = this.recordsForThread(key);
     for (const record of records) {
+      this.requests.remember(record, verifiedWebDelegationAnswer(record));
       const paths = [...this.#permits(record.slot), ...this.#legacyPermits(record.slot),
         this.#checkoutPermit(record.checkoutRoot ?? record.cwd), this.#legacyCheckoutPermit(record.cwd),
         ...(record.parentJobId && record.threadId ? [this.#threadPermit(record.threadId)] : [])];
@@ -446,6 +450,9 @@ export class WebDelegationStore {
    * Active, unresolved and uncollected results can exceed this reclaimable-history budget. */
   pruneCollectedHistory(eligible: ReadonlySet<string>, now = Date.now()): { removed: number; next?: number } {
     const records = this.records();
+    const reviewedAt = (job: WebDelegationRecord) => this.requests.header(job.id)?.settlement?.at;
+    const reclaimable = (job: WebDelegationRecord) => this.#terminal(job)
+      && (Boolean(verifiedWebDelegationAnswer(job)) && this.collectedAt(job.id) !== undefined || reviewedAt(job) !== undefined);
     let bytes = 0;
     const groups = new Map<string, WebDelegationRecord[]>();
     const identity = (record: WebDelegationRecord) => `${record.slot}:${record.owner.accountFingerprint}:${record.threadId}`;
@@ -456,8 +463,8 @@ export class WebDelegationStore {
     }
     const candidates = [...groups.entries()].flatMap(([key, jobs]) => {
       if (!eligible.has(key) || this.threadRetention(jobs[0]!)?.state !== "excluded"
-        || jobs.some(job => !this.#terminal(job) || !verifiedWebDelegationAnswer(job) || this.collectedAt(job.id) === undefined)) return [];
-      const collected = Math.max(...jobs.map(job => this.collectedAt(job.id)!));
+        || jobs.some(job => !reclaimable(job))) return [];
+      const collected = Math.max(...jobs.map(job => this.collectedAt(job.id) ?? reviewedAt(job)!));
       const size = jobs.reduce((sum, job) => sum + ["", ".collected", ".failed", ".completed", ".named", ".naming"].reduce((total, suffix) => {
         const path = this.#path(job.id) + suffix;
         return total + (existsSync(path) ? lstatSync(path).size : 0);
@@ -472,7 +479,7 @@ export class WebDelegationStore {
       if (expiry > now && bytes <= MAX_HISTORY_BYTES) { next = Math.min(next, expiry); continue; }
       if (jobs.some(job => {
         const current = this.get(job.id);
-        return !current || !this.#terminal(current) || !verifiedWebDelegationAnswer(current) || this.collectedAt(job.id) === undefined;
+        return !current || !reclaimable(current);
       })) continue;
       const record = jobs[0]!;
       if (this.threadRetention(record)?.state !== "excluded") continue;
@@ -480,7 +487,10 @@ export class WebDelegationStore {
       // pass observed the Native tail. An unknown lease is protected too.
       if (this.#leaseOwner(this.#threadPermit(record.threadId!)) !== "free") continue;
       const key = { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! };
-      for (const job of jobs) { this.#release(job); this.#removeRecordFiles(job.id); removed++; }
+      for (const job of jobs) {
+        this.requests.remember(job, verifiedWebDelegationAnswer(job));
+        this.#release(job); this.#removeRecordFiles(job.id); removed++;
+      }
       delegationBoundary(record.id, "collected_history_pruned", { thread_linked: true });
       bytes -= size;
       const receipt = webDelegationRetentionPath(this.root, key);
@@ -670,6 +680,15 @@ export class WebDelegationStore {
       throw error;
     }
   }
+  /** Explicit reviewer attestation, never inferred from collecting a transport result. */
+  settleRequest(id: string, answerJobId: string): void {
+    const answerRecord = this.get(answerJobId);
+    const answer = answerRecord && verifiedWebDelegationAnswer(answerRecord);
+    if (!answer) throw Error("Review a verified answer before settling the original request");
+    const original = this.get(id);
+    if (original) this.requests.remember(original);
+    this.requests.settle(id, answerJobId, answer);
+  }
   save(record: WebDelegationRecord): WebDelegationRecord {
     if (this.#terminal(record)) {
       const { progress: _progress, reconciliation: _reconciliation, ...settled } = record;
@@ -753,6 +772,7 @@ async function notifyFailureCoordinator(adapters: WebDelegationAdapters, record:
       const text = [
         "Tela delegated job failed; inspect this exact job before any retry.",
         `job_id: ${record.id}`,
+        ...(adapters.store.requests.header(record.id) ? [`original_input: web-delegate request --job ${record.id}`] : []),
         `thread_id: ${record.threadId ?? "unavailable"}`,
         `turn_id: ${record.turnId ?? "unavailable"}`,
         `failure_stage: ${record.failureStage ?? "unknown"}`,
@@ -1008,6 +1028,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     // Admission is persistent and atomic before connecting to a model/provider.
     adapters.store.reserve(record);
     reserved = true;
+    adapters.store.requests.capture(record, { prompt: input.prompt, ...(input.images?.length ? { images: input.images } : {}) });
     delegationBoundary(record.id, "job_reserved");
     adapters.changed?.(record);
     failureStageHint = "connect";

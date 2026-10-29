@@ -197,6 +197,64 @@ test("first collection names once and preserves later manual removal", async () 
     expect(f.calls).toHaveLength(before);
   } finally { f.cleanup(); }
 });
+test("original input survives restart and deleted Native history; collection is not review", async () => {
+  const f = await fixture();
+  try {
+    const result = await f.run();
+    expect(new WebDelegationStore(f.root).requests.input(f.id).prompt).toBe("Read this fixture and design only");
+    await f.collect();
+    expect(f.store.requests.list().data.map(row => row.jobId)).toEqual([f.id]);
+    const replacement = await f.continue(f.id, "Answer the original question with verified facts");
+    f.store.removeDeletedThread({ slot: result.slot, accountFingerprint: result.owner.accountFingerprint, threadId: result.threadId! });
+    expect(f.store.get(f.id)).toBeUndefined();
+    expect(f.store.requests.input(f.id).recoveredAnswer).toBe("verified design");
+    expect(f.store.requests.header(f.id)?.execution.turnId).toBe(result.turnId);
+    expect(f.store.requests.list().data).toHaveLength(2);
+    // Deletion preserves proof for reading, but a removed replacement is not an unchecked settlement authority.
+    expect(() => f.store.settleRequest(f.id, replacement.id)).toThrow("verified answer");
+  } finally { f.cleanup(); }
+});
+test("failed original is retained until explicit review of a verified replacement", async () => {
+  const f = await fixture({ failedTurn: true, answer: "" });
+  const answer = await fixture({ slot: 2 });
+  try {
+    await expect(f.run()).rejects.toThrow();
+    expect(f.store.requests.input(f.id).prompt).toBe("Read this fixture and design only");
+    expect(() => f.store.settleRequest(f.id, f.id)).toThrow("verified answer");
+    const result = await answer.run();
+    // A replacement may come from another profile, but must be a real verified journal answer.
+    f.store.reserve({ ...result, state: "reserved" });
+    f.store.save(result);
+    f.store.settleRequest(f.id, result.id);
+    expect(f.store.requests.list().data).toHaveLength(0);
+    expect(f.store.requests.input(f.id).recoveredAnswer).toBe("verified design");
+    expect(f.store.get(f.id)?.state).toBe("failed");
+    expect(f.store.requests.header(f.id)?.settlement?.answerJobId).toBe(result.id);
+    f.store.requests.prune(Date.now() + 31 * 86_400_000);
+    expect(f.store.requests.header(f.id)?.settlement).toBeDefined();
+    const original = f.store.get(f.id)!;
+    f.store.removeDeletedThread({ slot: original.slot, accountFingerprint: original.owner.accountFingerprint, threadId: original.threadId! });
+    f.store.requests.prune(Date.now() + 31 * 86_400_000);
+    expect(f.store.requests.header(f.id)).toBeUndefined();
+  } finally { f.cleanup(); answer.cleanup(); }
+});
+test("private original images round-trip and only reviewed originals expire", async () => {
+  const f = await fixture();
+  try {
+    const result = await f.run();
+    const id = randomUUID(), image = "data:image/png;base64,aGVsbG8=";
+    f.store.requests.capture({ ...result, id }, { prompt: "Inspect this", images: [image] });
+    expect(new WebDelegationStore(f.root).requests.input(id)).toEqual({ prompt: "Inspect this", images: [image] });
+    expect(f.store.requests.list({ limit: 1 }).nextCursor).not.toBeNull();
+    const first = f.store.requests.list({ limit: 1 });
+    expect(f.store.requests.list({ after: first.nextCursor!, limit: 1 }).data).toHaveLength(1);
+    f.store.requests.prune(Date.now() + 90 * 86_400_000);
+    expect(f.store.requests.input(id).images).toEqual([image]);
+    expect(() => f.store.requests.input(randomUUID())).toThrow("older job");
+    writeFileSync(join(f.root, `${id}.request.ndjson`), readFileSync(join(f.root, `${id}.request.ndjson`), "utf8").replace("Inspect this", "Changed text"));
+    expect(() => f.store.requests.input(id)).toThrow("changed");
+  } finally { f.cleanup(); }
+});
 test("failed result inspection names once without starting collected retention", async () => {
   const f = await fixture({ failedTurn: true, answer: "" });
   try {

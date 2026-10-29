@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readProductPreferences, webDelegationLimit } from "@chatgpt-tela/product-config";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { decodeNativeInlineEvidence } from "@chatgpt-tela/core";
 import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
@@ -49,6 +49,37 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   };
   const adapters = { store, owner, diagnosticRoot: join(paths.logsRoot, "diagnostics"),
     connect: (endpoint: string) => connectCodexAppServerWebSocket(endpoint, { signal: AbortSignal.timeout(10_000) }) };
+  const execution = (id: string) => {
+    const row = store.get(id) ?? store.requests.header(id)?.execution;
+    return row && { state: row.state, parentJobId: row.parentJobId, threadId: row.threadId, turnId: row.turnId,
+      failure: row.failure, failureNativeCode: row.failureNativeCode,
+      toolItems: row.toolItems, toolResultItems: row.toolResultItems };
+  };
+  // Local original-input retrieval must work even after its Native chat/account is gone.
+  if (subcommand === "unanswered") {
+    const page = store.requests.list({ ...(args.includes("--slot") ? { slot: profileSlotFromArguments(args) } : {}),
+      ...(args.includes("--after") ? { after: option("--after") } : {}),
+      ...(args.includes("--limit") ? { limit: Number(option("--limit")) } : {}) });
+    console.log(JSON.stringify({ ...page, data: page.data.map(row => ({ jobId: row.jobId, slot: row.slot,
+      createdAt: row.createdAt, inputBytes: row.inputBytes, execution: execution(row.jobId) })) }, null, 2));
+    return;
+  }
+  if (subcommand === "request") {
+    const id = option("--job"), input = store.requests.input(id);
+    if (args.includes("--output")) {
+      const path = option("--output");
+      writeFileSync(path, JSON.stringify(input) + "\n", { flag: "wx", mode: 0o600 });
+      console.log(JSON.stringify({ jobId: id, output: path, imageCount: input.images?.length ?? 0 }));
+    } else console.log(JSON.stringify({ jobId: id, ...input, images: undefined,
+      imageCount: input.images?.length ?? 0, execution: execution(id) }, null, 2));
+    return;
+  }
+  if (subcommand === "settle-request") {
+    const id = option("--job");
+    store.settleRequest(id, option("--answer-job"));
+    console.log(JSON.stringify({ jobId: id, settlement: store.requests.header(id)?.settlement }));
+    return;
+  }
   if (args.includes("--mode")) throw Error("--mode has been removed; each new task uses workspace-write authority");
   if (subcommand === "capacity") {
     console.log(JSON.stringify(store.capacity(profileSlotFromArguments(args)), null, 2));
@@ -64,7 +95,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     }
     return;
   }
-  if (subcommand !== "start" && subcommand !== "continue" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|capacity|start|continue|status|result|reconcile>");
+  if (subcommand !== "start" && subcommand !== "continue" && subcommand !== "catalog" && subcommand !== "reconcile") throw Error("Usage: web-delegate <catalog|capacity|start|continue|status|result|reconcile|unanswered|request|settle-request>");
   const selectedJob = subcommand === "reconcile" ? store.get(option("--job")) : undefined;
   if (subcommand === "reconcile" && !selectedJob) throw Error("Web job was not found");
   const continuation = subcommand === "continue" ? store.get(option("--job")) : undefined;
