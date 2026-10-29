@@ -35,13 +35,12 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   };
   const session = async (selected: number): Promise<TrustedNativeProfileSession> => {
     const client = await getClient();
-    const profile = (await client.profiles()).find(row => row.slot === selected);
-    if (!profile || profile.controlState !== "running" || profile.targetSessionState !== "ready"
-      || !profile.childProcessId || !profile.responsesRouteFingerprint) {
-      throw Error("Selected profile is not ready for a new Web job");
-    }
     const terminal = await client.terminalSession(selected);
-    return { slot: selected, runtimeProcessId: profile.childProcessId, responsesRouteFingerprint: profile.responsesRouteFingerprint, terminalEndpoint: terminal.endpoint };
+    if (terminal.runtimeProcessId === undefined || terminal.responsesRouteFingerprint === undefined) {
+      throw Error("Native runtime owner details are unavailable; update Tela before delegation");
+    }
+    return { slot: selected, runtimeProcessId: terminal.runtimeProcessId,
+      responsesRouteFingerprint: terminal.responsesRouteFingerprint, terminalEndpoint: terminal.endpoint };
   };
   const binding = createLocalNativeAccountProof({ resolveOwnedSession: session, fingerprintKey: store.fingerprintKey });
   const owner = async (selected: number) => {

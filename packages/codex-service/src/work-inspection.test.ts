@@ -43,7 +43,7 @@ function harness() {
   };
   const service = {
     async profiles() { return [current]; },
-    async terminalSession(slot: number) { return { contractVersion: 1 as const, slot, endpoint: "ws://127.0.0.1:1234/" }; },
+    async terminalSession(slot: number) { return { contractVersion: 1 as const, slot, endpoint: "ws://127.0.0.1:1234/", runtimeProcessId: 10, responsesRouteFingerprint: "a".repeat(64) }; },
     async bridgePreview() { return preview; },
   };
   return {

@@ -215,6 +215,7 @@ function childReady(value: unknown, expected: {
     bridgePreviewUrl: bridgePreviewUrl.href,
     ...(item.terminalEndpoint === undefined ? {} : { terminalEndpoint: parseCodexTerminalSessionContract({
       contractVersion: 1, slot: expected.slot, endpoint: item.terminalEndpoint,
+      runtimeProcessId: item.runtimeProcessId, responsesRouteFingerprint: fingerprint,
     }).endpoint }),
     responsesUrl: responsesUrl.href,
     responsesRouteFingerprint: fingerprint,
@@ -764,7 +765,8 @@ export async function startCodexService(input: {
         throw new Error("terminal profile route ownership changed");
       }
       if (!profile.terminalEndpoint) throw new Error("profile runtime requires an update before terminal attachment");
-      return parseCodexTerminalSessionContract({ contractVersion: 1, slot, endpoint: profile.terminalEndpoint });
+      return parseCodexTerminalSessionContract({ contractVersion: 1, slot, endpoint: profile.terminalEndpoint,
+        runtimeProcessId: profile.runtimeProcessId, responsesRouteFingerprint: profile.responsesRouteFingerprint });
     },
     async inspectCheckpointCandidates(slotValue: number, threadId: string) {
       const slot = slotNumber(slotValue);

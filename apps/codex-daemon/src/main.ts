@@ -80,12 +80,12 @@ async function main(): Promise<void> {
     .finally(() => { restoring = false; retention?.wake(); });
 
   const ownedSession = async (slot: number): Promise<TrustedNativeProfileSession> => {
-    const profile = (await service.profiles()).find(row => row.slot === slot);
-    if (!profile || profile.controlState !== "running" || profile.targetSessionState !== "ready"
-      || !profile.childProcessId || !profile.responsesRouteFingerprint) throw Error("Web cleanup profile unavailable");
     const terminal = await service.terminalSession(slot);
-    return { slot, runtimeProcessId: profile.childProcessId,
-      responsesRouteFingerprint: profile.responsesRouteFingerprint, terminalEndpoint: terminal.endpoint };
+    if (terminal.runtimeProcessId === undefined || terminal.responsesRouteFingerprint === undefined) {
+      throw Error("Native runtime owner details are unavailable; update Tela before delegation");
+    }
+    return { slot, runtimeProcessId: terminal.runtimeProcessId,
+      responsesRouteFingerprint: terminal.responsesRouteFingerprint, terminalEndpoint: terminal.endpoint };
   };
   const proof = createLocalNativeAccountProof({ resolveOwnedSession: ownedSession, fingerprintKey: delegationStore.fingerprintKey });
   const delegationAdapters = {

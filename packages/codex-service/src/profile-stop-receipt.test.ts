@@ -73,7 +73,11 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
     expect(service.activeProfileCount).toBe(1); expect(active).toBe(true); expect(closes).toBe(0); expect(parentQuits).toBe(0);
     expect((await service.profiles())[0]?.controlState).toBe("running");
     expect((await service.profiles())[0]?.childProcessId).toBe(started.childProcessId);
-    expect((await service.terminalSession(1)).endpoint).toBe(`ws://127.0.0.1:${appServer.port}/`);
+    expect(await service.terminalSession(1)).toMatchObject({
+      endpoint: `ws://127.0.0.1:${appServer.port}/`,
+      runtimeProcessId: started.childProcessId,
+      responsesRouteFingerprint: started.responsesRouteFingerprint,
+    });
     writeFileSync(state, JSON.stringify({ refuse: false }));
     await service.close();
     expect(service.activeProfileCount).toBe(0); expect(active).toBe(false); expect(closes).toBe(1); expect(parentQuits).toBe(0);

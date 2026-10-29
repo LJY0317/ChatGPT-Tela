@@ -495,6 +495,8 @@ export interface CodexTerminalSessionContract {
   readonly contractVersion: 1;
   readonly slot: number;
   readonly endpoint: string;
+  readonly runtimeProcessId?: number;
+  readonly responsesRouteFingerprint?: string;
 }
 
 /** Private, exact-slot, content-free inspection. No chat id/title/URL or mutation authority. */
@@ -616,12 +618,20 @@ export function parseCodexTerminalSessionContract(value: unknown): CodexTerminal
     || (item.slot as number) < 1 || (item.slot as number) > 99 || typeof item.endpoint !== "string") {
     throw new Error("invalid terminal session contract");
   }
+  const owner = item.runtimeProcessId === undefined && item.responsesRouteFingerprint === undefined ? undefined
+    : { runtimeProcessId: item.runtimeProcessId, responsesRouteFingerprint: item.responsesRouteFingerprint };
+  if (owner && (!Number.isSafeInteger(owner.runtimeProcessId) || (owner.runtimeProcessId as number) < 1
+    || typeof owner.responsesRouteFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(owner.responsesRouteFingerprint))) {
+    throw new Error("invalid terminal session owner");
+  }
   const url = new URL(item.endpoint);
   if (url.protocol !== "ws:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
     || !url.port || url.username || url.password || url.search || url.hash || !["", "/"].includes(url.pathname)) {
     throw new Error("terminal session requires a plain loopback WebSocket endpoint");
   }
-  return Object.freeze({ contractVersion: 1, slot: item.slot as number, endpoint: url.href });
+  return Object.freeze({ contractVersion: 1, slot: item.slot as number, endpoint: url.href,
+    ...(owner ? { runtimeProcessId: owner.runtimeProcessId as number,
+      responsesRouteFingerprint: owner.responsesRouteFingerprint as string } : {}) });
 }
 
 /** Private profile control response. Browser admission is distinct from app-server visibility. */

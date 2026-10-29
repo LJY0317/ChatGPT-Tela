@@ -28,7 +28,7 @@ function fixtureService(): CodexService {
     async waitWebPreparation() { throw new Error("not used"); },
     async reconnectWeb() { throw new Error("not used"); },
     async stopProfile() { throw new Error("not used"); },
-    async terminalSession(slot) { return { contractVersion: 1, slot, endpoint: "ws://127.0.0.1:1234/" }; },
+    async terminalSession(slot) { return { contractVersion: 1, slot, endpoint: "ws://127.0.0.1:1234/", runtimeProcessId: 10, responsesRouteFingerprint: "a".repeat(64) }; },
     async bridgeSurfaces(slot) { return { contractVersion: 1, slot, revision: 0, surfaces: [] }; },
     async bridgePreview(slot) {
       return {
@@ -465,7 +465,7 @@ test("terminal attachment is private, no-store and does not start or stop a prof
     const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(await response.json()).toEqual({ contractVersion: 1, slot: 2, endpoint: "ws://127.0.0.1:1234/" });
+    expect(await response.json()).toEqual({ contractVersion: 1, slot: 2, endpoint: "ws://127.0.0.1:1234/", runtimeProcessId: 10, responsesRouteFingerprint: "a".repeat(64) });
   } finally { await server.close(); }
 });
 

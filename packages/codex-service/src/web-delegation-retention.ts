@@ -32,7 +32,7 @@ function publicErrorKind(error: unknown): string {
 // The daemon's owned-session resolver reports this exact readiness state while
 // profiles are stopping or reconnecting. Other owner/proof errors remain failures.
 function ownerTemporarilyUnavailable(error: unknown): boolean {
-  return error instanceof Error && error.message === "Web cleanup profile unavailable";
+  return error instanceof Error && error.message === "terminal requires a running Tela profile";
 }
 function statePath(adapters: WebDelegationAdapters, record: WebDelegationRecord): string {
   // Thread IDs originate from acknowledged Native creation, not user-selected filenames.

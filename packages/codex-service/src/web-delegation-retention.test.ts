@@ -246,7 +246,7 @@ test("profile reconnect defers retention without losing due work; other owner fa
     f.store.collect(f.record.id, f.origin);
     let ready = false;
     const adapters = { ...f.adapters, owner: async () => {
-      if (!ready) throw Error("Web cleanup profile unavailable");
+      if (!ready) throw Error("terminal requires a running Tela profile");
       return f.adapters.owner();
     } };
     await settleWebDelegationRetention(adapters, { now: f.origin + 2 * DAY, signal: new AbortController().signal });

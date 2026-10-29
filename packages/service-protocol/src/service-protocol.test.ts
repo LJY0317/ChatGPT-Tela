@@ -1,7 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { parseCodexAccountDisplayContract, parseCodexAccountCheckContract, parseCodexProfileStatusContract, parseCodexBridgePreviewContract, parseServiceRuntimeDescriptor, parseServiceStatus, parseCodexWebDelegationCapacityContract } from "./index";
+import { parseCodexTerminalSessionContract, parseCodexAccountDisplayContract, parseCodexAccountCheckContract, parseCodexProfileStatusContract, parseCodexBridgePreviewContract, parseServiceRuntimeDescriptor, parseServiceStatus, parseCodexWebDelegationCapacityContract } from "./index";
 
 describe("private service protocol", () => {
+  test("terminal attachment carries its exact runtime owner with the endpoint", () => {
+    const value = { contractVersion: 1 as const, slot: 2, endpoint: "ws://127.0.0.1:1234/",
+      runtimeProcessId: 42, responsesRouteFingerprint: "a".repeat(64) };
+    expect(parseCodexTerminalSessionContract({ ...value, secret: "discard" })).toEqual(value);
+    expect(parseCodexTerminalSessionContract({ contractVersion: 1, slot: 2, endpoint: value.endpoint }).endpoint).toBe(value.endpoint);
+    expect(() => parseCodexTerminalSessionContract({ ...value, runtimeProcessId: 0 })).toThrow();
+    expect(() => parseCodexTerminalSessionContract({ ...value, responsesRouteFingerprint: undefined })).toThrow();
+  });
+
   test("retained count above legacy review threshold is valid with free execution permits", () => {
     const base = { contractVersion: 3, profileSlot: 2, source: "managed_delegation_journal",
       observedAt: new Date().toISOString(), coverage: "managed_jobs_only",
