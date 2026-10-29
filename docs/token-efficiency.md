@@ -176,6 +176,13 @@ and evidence remain available for authorized source readback.
 
 ## Native Goal continuations
 
+The delegation CLI waits on Native `turn/completed` notifications; progress events do not
+request coordinator inference. An active Goal can schedule another reasoning turn and is
+not a parked wait. Automatic coordinator resumption remains host-dependent; worker completion
+and a queued failure notice do not prove that the coordinator received or acted on either.
+See the [app-server lifecycle](https://learn.chatgpt.com/docs/app-server) and
+[Goal continuation behavior](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex).
+
 Goal accounting (`tokensUsed`, elapsed time and update timestamps) stays in Native
 state, outside canonical Web context identity. Only operative status, objective and
 budget belong to the projected Goal observation. Otherwise every accounting update

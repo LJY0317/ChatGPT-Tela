@@ -1101,12 +1101,11 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
     void done.catch(() => {});
     const messages = new Map<string, { text: string; phase?: string }>();
     const pending: Array<[string, Record<string, unknown>]> = [];
-    let toolItems = 0, turnId: string | undefined, eventCount = 0, reportedStatus: string | undefined;
+    let toolItems = 0, turnId: string | undefined, reportedStatus: string | undefined;
     const resultItems = new Set<string>();
     const progressProjection = new WebDelegationProgressProjection();
     const accept = (method: string, event: Record<string, unknown>) => {
       if (event.threadId !== record!.threadId) return;
-      if (++eventCount > 10_000) { rejectDone(Error("Web job event bound exceeded")); return; }
       if (!turnId) {
         if (pending.length >= 256) { rejectDone(Error("Web job ACK event bound exceeded")); return; }
         if (method === "item/started" || method === "item/completed" || method === "turn/completed" || method === "item/reasoning/summaryPartAdded"

@@ -113,6 +113,7 @@ async function fixture(options: { nativeFailureCode?: string; nativeFailureJson?
     },
   };
   return { root, store, calls, changes, id, slot, adapters, executionModels, queuedExecutionModels,
+    emit: (method: string, params: unknown) => notify(method, params),
     setModeModel: (model: string) => { modeModel = model; },
     inspect: (jobId: string = id, confirmUncertainTitleRetry = false) => inspectWebDelegationResult(adapters, jobId, confirmUncertainTitleRetry),
     collect: (jobId: string = id) => collectWebDelegationResult(adapters, jobId),
@@ -121,6 +122,31 @@ async function fixture(options: { nativeFailureCode?: string; nativeFailureJson?
     allowTitleReadback: () => { failTitleReadAfterSet = false; },
     continue: (parentJobId: string, prompt = "Follow up") => runWebDelegation(adapters, { id: randomUUID(), slot, cwd: root, prompt, parentJobId, signal: AbortSignal.timeout(1000) }), run: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", signal: AbortSignal.timeout(1000) }), runWithCoordinator: () => runWebDelegation(adapters, { id, slot, cwd: root, prompt: "Read this fixture and design only", coordinator: { slot, threadId, accountFingerprint: "a".repeat(64) }, signal: AbortSignal.timeout(1000) }), reconcile: () => reconcileWebDelegation(adapters, id, AbortSignal.timeout(1000)), cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
+
+test("a long valid stream reaches its final without a cumulative event-count failure", async () => {
+  const f = await fixture({ silent: true });
+  const running = new Promise<WebDelegationRecord>(resolve => {
+    const changed = f.adapters.changed;
+    f.adapters.changed = record => {
+      const result = changed(record);
+      if (record.state === "running") resolve(record);
+      return result;
+    };
+  });
+  try {
+    const completion = f.run();
+    void completion.catch(() => {});
+    const record = await running;
+    for (let i = 0; i < 10_001; i++) f.emit("item/agentMessage/delta", {
+      threadId: record.threadId, turnId: record.turnId, itemId: "final", delta: "a",
+    });
+    f.emit("item/completed", { threadId: record.threadId, turnId: record.turnId,
+      item: { id: "final", type: "agentMessage", phase: "final_answer", text: "verified design" } });
+    f.emit("turn/completed", { threadId: record.threadId, turn: { id: record.turnId, status: "completed" } });
+    expect(await completion).toMatchObject({ state: "completed", answer: "verified design" });
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
 
 test("failure notice queues once to the explicitly owned coordinator and preserves the original failure", async () => {
   const f = await fixture({ failedTurn: true, answer: "" });
