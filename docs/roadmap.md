@@ -73,7 +73,10 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   idle collected conversations; ordinary chats, uncollected answers, queued/active work and manual
   restores are protected. Browser retirement protects preparing/active work and undelivered answers.
   Structural diagnostics report occupancy/remaining excess, and Work help explains automatic cleanup.
-  Detailed consumer presentation of per-item protected reasons and cleanup actions remains open.
+  The existing managed-job capacity response now carries the last completed cleanup observation and
+  aggregate protected reasons; Control Center shows a short pending notice with help when above target.
+  Interrupted observations are not published, and uncertain archive outcomes are identified separately.
+  Detailed per-item cleanup actions and equivalent browser-pressure presentation remain open.
   These are soft targets: no numeric rejection, forced close of protected work or indefinite admission
   wait. Installed acceptance remains separate from source verification.
 - **Instruction reuse.** Explicit rediscovery may omit unchanged instruction bodies only with a matching

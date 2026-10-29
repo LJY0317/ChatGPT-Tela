@@ -11,6 +11,14 @@ export interface CodexWebDelegationCapacityContract {
   readonly total: { readonly used: number; readonly limit: number };
   /** `limit` is the legacy record review threshold, not an admission ceiling. */
   readonly records: { readonly retained: number; readonly limit: 64; readonly admissionBound?: false };
+  /** Last completed cleanup observation, not an admission limit or a live Native inventory. */
+  readonly cleanup?: {
+    readonly observedAt: string;
+    readonly unarchived: number;
+    readonly target: number;
+    readonly uncertain: boolean;
+    readonly protected: Readonly<Record<string, number>>;
+  };
   readonly available: boolean;
   readonly blockCode?: WebDelegationBlockCode;
   readonly messageKo: string;
@@ -28,6 +36,7 @@ export function parseCodexWebDelegationCapacityContract(value: unknown): CodexWe
   const records = row?.records && typeof row.records === "object" && !Array.isArray(row.records)
     ? row.records as Record<string, unknown> : undefined;
   const whole = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 0;
+  const cleanup = row?.cleanup as CodexWebDelegationCapacityContract["cleanup"];
   const reasons: readonly string[] = ["CAPACITY_WRITER_CHECKOUT", "CAPACITY_THREAD_ACTIVE", "CAPACITY_TOTAL_PROFILE", "CAPACITY_STORAGE_RECORDS", "UNCERTAIN_RESERVATION"];
   const actions: readonly string[] = ["start_if_profile_ready", "wait_for_active_job",
     "inspect_and_reconcile_exact_job", "review_owned_finished_records"];
@@ -40,6 +49,10 @@ export function parseCodexWebDelegationCapacityContract(value: unknown): CodexWe
     || !whole(total.limit) || (total.limit as number) < 1 || (total.limit as number) > 5
     || !records || !whole(records.retained) || records.limit !== 64
     || records.admissionBound !== undefined && records.admissionBound !== false
+    || cleanup !== undefined && (!cleanup || typeof cleanup.observedAt !== "string" || !Number.isFinite(Date.parse(cleanup.observedAt))
+      || !whole(cleanup.unarchived) || !whole(cleanup.target) || cleanup.target < 1 || typeof cleanup.uncertain !== "boolean"
+      || !cleanup.protected || typeof cleanup.protected !== "object" || Array.isArray(cleanup.protected)
+      || !Object.values(cleanup.protected).every(whole))
     || typeof row.available !== "boolean"
     || row.blockCode !== undefined && !reasons.includes(row.blockCode as string)
     || row.available !== (row.blockCode === undefined)

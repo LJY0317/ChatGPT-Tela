@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { structuralDiagnosticEvent, observeDiagnosticEvents } from "@chatgpt-tela/core";
+import { parseCodexWebDelegationCapacityContract } from "@chatgpt-tela/service-protocol";
 import { WebDelegationStore, linkNativeThreadForRetention, type WebDelegationRecord } from "./web-delegation";
 import { settleWebDelegationRetention, startWebDelegationRetention } from "./web-delegation-retention";
 const DAY = 86_400_000;
@@ -147,12 +148,17 @@ test("uncollected and manually restored conversations can exceed the soft target
     expect(f.mutations).toEqual([]);
     expect(events.find(event => event?.stage === "web_delegation_retention_capacity"))
       .toMatchObject({thread_count:33,target_count:32,over_target_count:1});
+    expect(f.store.capacity(2)).toMatchObject({ available: true,
+      cleanup: { unarchived: 33, target: 32, uncertain: false, protected: { uncollected_answers: 33 } } });
+    expect(parseCodexWebDelegationCapacityContract(JSON.parse(JSON.stringify(f.store.capacity(2)))).cleanup)
+      .toEqual(f.store.capacity(2).cleanup);
     for (const record of f.records) {
       f.store.collect(record.id, record.createdAt);
       writeFileSync(join(f.root, `thread-2-${record.owner.accountFingerprint}-${record.threadId}.retention`), JSON.stringify({state:"excluded"}));
     }
     await f.run();
     expect(f.mutations).toEqual([]);
+    expect(f.store.capacity(2).cleanup?.protected).toEqual({ manually_managed: 33 });
   } finally { off?.(); f.cleanup(); }
 });
 
@@ -162,8 +168,10 @@ test("an unknown archive outcome stops further pressure mutations until fresh in
     f.loseArchiveAck();
     await f.run();
     expect(f.mutations).toHaveLength(1);
+    expect(f.store.capacity(2).cleanup?.uncertain).toBe(true);
     await f.run();
     expect(f.mutations).toHaveLength(1);
+    expect(f.store.capacity(2).cleanup).toMatchObject({ unarchived: 32, uncertain: false });
   } finally { f.cleanup(); }
 });
 

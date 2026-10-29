@@ -60,6 +60,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
   now?: number; signal: AbortSignal;
 }): Promise<number | undefined> {
   const now = input.now ?? Date.now();
+  adapters.store.beginCleanupObservation();
   const groups = new Map<string, WebDelegationRecord[]>();
   for (const record of adapters.store.records()) {
     if (!record.threadId) continue;
@@ -109,7 +110,8 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     }
   }
   const inventories = new Map<string, Map<string, { archived: boolean; thread: Record<string, any> }>>();
-  const occupancy = new Map<string, { before: number; current: number; uncertain: boolean }>();
+  const occupancy = new Map<string, { slot: number; before: number; current: number; uncertain: boolean;
+    protected: Map<string, string> }>();
   let pending = [...groups.values()];
   try {
   while (pending.length) {
@@ -128,7 +130,12 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     if (due > now && retained?.state !== "excluded") next = Math.min(next, due);
     let publicOperation = "owner_resolution";
     let scopeConnection: string | undefined;
+    let unarchived = false;
+    const protect = (reason: string) => {
+      if (unarchived && scopeConnection) occupancy.get(scopeConnection)?.protected.set(record.threadId!, reason);
+    };
     const skipped = (reason: string, relation = "unknown", error?: unknown) => {
+      protect(reason);
       if (due > now || retained?.state === "excluded") return;
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_skipped", {
         reason_class: reason, due_at: due, kind: relation, policy: dueBasis, next_action: publicOperation,
@@ -178,7 +185,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
             && other.at(-1)!.owner.accountFingerprint === record.owner.accountFingerprint;
           const count = [...groups.values()].filter(other => sameProfile(other)
             && listed!.get(other.at(-1)!.threadId!)?.archived === false).length;
-          occupancy.set(scope, {before: count, current: count, uncertain: false});
+          occupancy.set(scope, {slot: record.slot, before: count, current: count, uncertain: false, protected: new Map()});
           if (count > UNARCHIVED_THREAD_TARGET) {
             // Reuse this complete inventory. Oldest real activity/collection first,
             // not journal filename, creation order, or conversation title.
@@ -199,6 +206,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           await confirmAbsent(record, rpc);
           continue;
         }
+        unarchived = !present.archived;
         const nativeState = typeof present.thread.status === "string"
           ? present.thread.status : present.thread.status?.type;
         const updatedAt = present.thread.updatedAt;
@@ -214,6 +222,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
         }
         if (due > now && retained?.state !== "excluded") next = Math.min(next, due);
         if (retained?.state === "excluded") {
+          protect("manually_managed");
           // A manual archive/restore hands over Native ownership. Local history
           // is reclaimable only after a fresh idle/queue/turn proof.
           publicOperation = "thread_turns_list";
@@ -243,6 +252,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           || retained?.state === "archived" && updatedAt !== retained.updatedAt) {
           // Manual archive, restore or an observed change while archived hands
           // control to the user. Never delete such a thread automatically.
+          protect("manually_managed");
           save(path, { state: "excluded" }); continue;
         }
         // Pressure may shorten the age policy only for collected answers. Keep
@@ -255,7 +265,13 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           due = now;
           dueBasis = "capacity_pressure";
         }
-        if (due > now) continue;
+        if (due > now) {
+          protect(nativeState === "active" || jobs.some(job => !["completed", "failed", "linked"].includes(job.state))
+            ? "active_or_unresolved_tail"
+            : jobs.some(job => verifiedWebDelegationAnswer(job) && collections.get(job.id) === undefined)
+              ? "uncollected_answers" : "not_yet_due_or_unverified");
+          continue;
+        }
         // Archive is reversible and needs current idle/queue proof, not a
         // readable execution rollout or an exact journal entry for every turn.
         if (nativeState === "active"
@@ -305,6 +321,10 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
   }
   } finally {
     for (const count of occupancy.values()) {
+      const protectedCounts: Record<string, number> = {};
+      for (const reason of count.protected.values()) protectedCounts[reason] = (protectedCounts[reason] ?? 0) + 1;
+      if (!input.signal.aborted) adapters.store.observeCleanup(count.slot, { observedAt: new Date(now).toISOString(),
+        unarchived: count.current, target: UNARCHIVED_THREAD_TARGET, uncertain: count.uncertain, protected: protectedCounts });
       if (count.before <= UNARCHIVED_THREAD_TARGET) continue;
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_capacity", {
         thread_count: count.current, target_count: UNARCHIVED_THREAD_TARGET,

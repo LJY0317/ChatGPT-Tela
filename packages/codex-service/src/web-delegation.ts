@@ -266,6 +266,11 @@ function checkoutRoot(cwd: string): string {
 /** Private user data, outside repositories/logs/releases. Execution capacity is lease-based. */
 export class WebDelegationStore {
   readonly fingerprintKey: Uint8Array;
+  readonly #cleanup = new Map<number, NonNullable<CodexWebDelegationCapacityContract["cleanup"]>>();
+  beginCleanupObservation(): void { this.#cleanup.clear(); }
+  observeCleanup(slot: number, observation: NonNullable<CodexWebDelegationCapacityContract["cleanup"]>): void {
+    this.#cleanup.set(slot, observation);
+  }
   constructor(readonly root: string, readonly limitForProfile: (slot: number) => number = () => 3) {
     mkdirSync(root, { recursive: true, mode: 0o700 });
     if (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink()) throw Error("Unsafe Web job store");
@@ -373,6 +378,7 @@ export class WebDelegationStore {
       // Keep the historical 'limit' field for v2 clients, but explicitly mark
       // it advisory. Neither record count nor age releases or denies a lease.
       records: { retained: retained.length, limit: RECORD_REVIEW_THRESHOLD, admissionBound: false },
+      ...(this.#cleanup.has(slot) ? { cleanup: this.#cleanup.get(slot)! } : {}),
       available: !blockCode, ...(blockCode ? { blockCode } : {}),
       messageKo: `${statusKo}. ${reasonKo}`, messageEn: `${statusEn}. ${reasonEn}`,
       nextAction: blockCode === "UNCERTAIN_RESERVATION" ? "inspect_and_reconcile_exact_job"

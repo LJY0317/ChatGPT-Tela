@@ -42,6 +42,28 @@ private struct ControlCenterDelegationCapacity: Decodable {
   let source: String
   let coverage: String
   let total: Total
+  let cleanup: Cleanup?
+  struct Cleanup: Decodable {
+    let observedAt: String
+    let unarchived: Int
+    let target: Int
+    let uncertain: Bool
+    let protected: [String: Int]
+    var summary: String? {
+      if uncertain { return "Cleanup needs another check" }
+      return unarchived > target ? "Cleanup pending · \(unarchived) conversations" : nil
+    }
+    var help: String {
+      let labels = ["manually_managed": "manually managed", "uncollected_answers": "answers to collect",
+                    "active_or_unresolved_tail": "active or unresolved", "queued_work": "queued work",
+                    "not_yet_due_or_unverified": "not yet due or unverified"]
+      let reasons = protected.sorted { $0.key < $1.key }.filter { $0.value > 0 }
+        .map { "\($0.value) \(labels[$0.key] ?? "need another check")" }.joined(separator: ", ")
+      return "Last cleanup: \(unarchived) unarchived conversations (target \(target)). "
+        + (reasons.isEmpty ? "" : "Protected: \(reasons). ")
+        + "Collect completed answers or let active work finish. Manually managed chats stay yours. This target does not block new tasks."
+    }
+  }
   struct Total: Decodable { let used: Int; let limit: Int }
   func valid(for slot: Int) -> Bool {
     contractVersion == 3 && profileSlot == slot && source == "managed_delegation_journal"
@@ -844,9 +866,12 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         help.controlSize = .small
         help.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         help.setButtonType(.momentaryPushIn)
-        help.helpText = delegationHelpText
+        let cleanup = delegationCapacity[profile.slot]?.cleanup
+        var helpText = delegationHelpText
+        if let cleanup, cleanup.summary != nil { helpText += "\n\n" + cleanup.help }
+        help.helpText = helpText
         help.setAccessibilityLabel("Web delegations help")
-        help.setAccessibilityHelp(delegationHelpText)
+        help.setAccessibilityHelp(helpText)
         let usage = delegationCapacity[profile.slot].map { "\($0.total.used) of \($0.total.limit) slots in use" } ?? "Usage unavailable"
 
         let web = TelaWebPresentation(profile: profile, account: account)
@@ -886,6 +911,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         row("Account", subtitle: workInventory.error == nil ? (localProgress ?? web.status) : "Status unavailable",
             control: controls, in: profileCard)
         delegationRow(usage: usage, help: help, in: profileCard)
+        if let summary = cleanup?.summary { append(secondary(summary), to: profileCard) }
       }
       let preview = card("Web activity")
       let runningProfiles = profiles.filter { $0.controlState == "running" }
