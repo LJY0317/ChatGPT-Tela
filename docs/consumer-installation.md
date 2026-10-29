@@ -47,6 +47,19 @@ Before promising directory installation for local machines, verify the supported
 contract. Do not introduce a hosted relay, custom account system or new OAuth server just
 to simulate an unverified host capability.
 
+OpenAI's current contract confirms Secure MCP Tunnel can connect a private local MCP server
+to a ChatGPT custom app when `tunnel-client` is running with a `tunnel_id` and runtime API key
+and the tunnel is associated with the target ChatGPT workspace. This does not qualify as public
+plugin submission: directory submission requires a stable public HTTPS MCP endpoint. Treat the
+tunnel as the private/custom connection path, not as a replacement for a public consumer
+distribution service. See [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+and [Connect and test your plugin](https://developers.openai.com/plugins/deploy/connect-chatgpt).
+
+Tela already has an `OpenAiSecureMcpTunnelExposure` adapter, currently wired into the
+development canary. Production configuration, the packaged gateway and setup UI still use
+existing HTTPS or Tailscale Funnel. Reuse that adapter for an eligible private connection;
+its source implementation alone does not prove installed onboarding or public distribution.
+
 For currently supported private/custom MCP registration, Tela prepares its connection,
 opens the official ChatGPT Plugins entry point, and displays only the connection values
 ChatGPT needs. Reuse a valid existing registration. User sign-in, permission consent and
