@@ -124,6 +124,7 @@ export interface ChatToolRuntime {
   initialize(): Promise<void>;
   call(capability: TelaChatCapability, arguments_: unknown): Promise<unknown>;
   assertCanClose(): void;
+  waitUntilIdle(signal?: AbortSignal): Promise<void>;
   maintenanceProcesses(): Promise<readonly { workspaceId: string; workspaceName: string; operationId: string; sessionId: number; startedAt: string; state: string; liveness: string }[]>;
   close(): Promise<void>;
 }
@@ -482,6 +483,7 @@ export function createChatToolRuntime(input: {
       }
     },
     assertCanClose() { processes.assertCanClose(); },
+    waitUntilIdle(signal?: AbortSignal) { return processes.waitUntilResolved(signal); },
     async maintenanceProcesses() {
       const unresolved: { workspaceId: string; workspaceName: string; operationId: string; sessionId: number; startedAt: string; state: string; liveness: string }[] = [];
       for (const row of processes.maintenanceUnresolved()) {

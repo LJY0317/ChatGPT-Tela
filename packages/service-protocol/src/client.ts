@@ -284,6 +284,12 @@ export class CodexServiceClient extends LocalServiceClient {
 }
 
 export class ChatServiceClient extends LocalServiceClient {
+  async waitForShutdownReadiness(signal?: AbortSignal): Promise<void> {
+    const value = parseServiceStatus(await this.request("v1/wait-shutdown-readiness", "POST", {}, signal));
+    if (value.service !== "chat" || value.instanceId !== this.descriptor.instanceId
+      || value.state !== "ready" || value.shutdownReadiness !== "ready") throw new ServiceStatusValidationError("invalid Chat shutdown readiness receipt");
+  }
+
   async maintenanceProcesses(): Promise<readonly { workspaceId: string; workspaceName: string; operationId: string; sessionId: number; startedAt: string; state: string; liveness: string }[]> {
     const value = await this.request("v1/maintenance/processes", "GET") as Record<string, unknown>;
     if (value.contractVersion !== 1 || value.instanceId !== this.descriptor.instanceId || !Array.isArray(value.processes)) throw Error("invalid maintenance process inventory");

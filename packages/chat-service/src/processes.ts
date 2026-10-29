@@ -266,6 +266,23 @@ function uuid(value: string): string {
   return value;
 }
 
+function waitForProcessClose(session: LiveSession, signal?: AbortSignal): Promise<void> {
+  if (session.closed) return Promise.resolve();
+  if (signal?.aborted) return Promise.reject(new DOMException("operation aborted", "AbortError"));
+  return new Promise((resolvePromise, rejectPromise) => {
+    const cleanup = () => {
+      session.child.removeListener("close", closed);
+      signal?.removeEventListener("abort", aborted);
+    };
+    const closed = () => { cleanup(); resolvePromise(); };
+    const aborted = () => { cleanup(); rejectPromise(new DOMException("operation aborted", "AbortError")); };
+    session.child.once("close", closed);
+    signal?.addEventListener("abort", aborted, { once: true });
+    if (session.closed) closed();
+    else if (signal?.aborted) aborted();
+  });
+}
+
 
 export class ChatProcessManager {
   readonly #workspaces: ChatWorkspaceRegistry;
@@ -985,6 +1002,42 @@ export class ChatProcessManager {
       this.#reconcileOwnedCompletion(operation)).filter(operation =>
       !["exited", "signaled", "spawn_failed"].includes(operation.state))
       .map(operation => this.#statusSnapshot(operation)));
+  }
+
+  /** Wait for the exact existing executions to settle; the signal stops only this observer. */
+  async waitUntilResolved(signal?: AbortSignal): Promise<void> {
+    while (true) {
+      if (signal?.aborted) throw new DOMException("operation aborted", "AbortError");
+      const unresolved = [...this.#operations.values()].filter(operation =>
+        !["exited", "signaled", "spawn_failed"].includes(operation.state));
+      if (!unresolved.length) return;
+      for (const pending of unresolved) {
+        signal?.throwIfAborted();
+        const operation = this.#reconcileOwnedCompletion(pending);
+        if (["exited", "signaled", "spawn_failed"].includes(operation.state)) continue;
+        try {
+          if (operation.executionMode === "owned-worker-v1") {
+            const { journal, claim } = this.#ownedEvidence(operation);
+            await callProcessOwner(journal.readLive(claim), { action: "await-completion" }, signal);
+          } else {
+            const session = this.#sessions.get(operation.sessionId);
+            if (!session) throw new Error("an unresolved Chat execution has no observable owner");
+            await waitForProcessClose(session, signal);
+          }
+        } catch (error) {
+          signal?.throwIfAborted();
+          // The owner can finish and close its transport between the initial
+          // observation and our request. Its signed terminal receipt is decisive.
+          if (["exited", "signaled", "spawn_failed"].includes(this.#reconcileOwnedCompletion(operation).state)) continue;
+          throw error;
+        }
+        signal?.throwIfAborted();
+        const current = this.#reconcileOwnedCompletion(operation);
+        if (!["exited", "signaled", "spawn_failed"].includes(current.state)) {
+          throw new Error("a Chat execution completed without verifiable terminal evidence");
+        }
+      }
+    }
   }
 
   /** Bounded registry discovery only: no owner probes, output consumption or execution replay. */

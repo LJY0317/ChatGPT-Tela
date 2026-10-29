@@ -88,6 +88,45 @@ test("refused shutdown preserves the private endpoint and work; completion allow
   } finally { unresolved = false; await service.close(); rmSync(f.base, { recursive: true, force: true }); }
 });
 
+test("authenticated shutdown wait resumes only after owned work becomes ready", async () => {
+  const f = shutdownFixture();
+  let blocked = true, entered!: () => void, release!: () => void;
+  const enteredWait = new Promise<void>(resolve => { entered = resolve; });
+  const work = new Promise<void>(resolve => { release = resolve; });
+  const service = await startChatService({ bearerToken: f.token, tools: { ...f.tools,
+    assertCanClose() { if (blocked) throw new Error("unsettled work"); },
+    async waitUntilIdle() { entered(); await work; },
+  } });
+  try {
+    const waiting = fetch(new URL("v1/wait-shutdown-readiness", service.endpoint), { method: "POST",
+      headers: { authorization: `Bearer ${f.token}` }, body: "{}" });
+    await enteredWait;
+    expect(service.status().state).toBe("ready");
+    blocked = false; release();
+    const response = await waiting;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ service: "chat", instanceId: service.instanceId, shutdownReadiness: "ready" });
+  } finally { blocked = false; release(); await service.close(); rmSync(f.base, { recursive: true, force: true }); }
+});
+
+test("an idle wait returning without settling its blocker fails once instead of spinning", async () => {
+  const f = shutdownFixture();
+  let blocked = true, waits = 0;
+  const service = await startChatService({ bearerToken: f.token, tools: { ...f.tools,
+    assertCanClose() { if (blocked) throw Error("unsettled owner"); },
+    async waitUntilIdle() { if (++waits > 1) throw Error("repeated wait without a change"); },
+  } });
+  try {
+    const response = await fetch(new URL("v1/wait-shutdown-readiness", service.endpoint), {
+      method: "POST", headers: { authorization: `Bearer ${f.token}` }, body: "{}",
+    });
+    expect(response.status).toBe(409);
+    await response.json();
+    expect(waits).toBe(1);
+    expect(service.status().state).toBe("ready");
+  } finally { blocked = false; await service.close(); rmSync(f.base, { recursive: true, force: true }); }
+});
+
 test("blocked shutdown is classified without exposing unresolved owner's exception text", async () => {
   const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
   const f = shutdownFixture();
@@ -177,7 +216,10 @@ test("disconnected capability work continues to block shutdown until its actual 
   try {
     await admitted.promise; controller.abort(); await pending;
     await expect(service.close()).rejects.toThrow("active capability"); expect(service.status().state).toBe("ready");
+    const ready = fetch(new URL("v1/wait-shutdown-readiness", service.endpoint), { method: "POST",
+      headers: { authorization: `Bearer ${f.token}` }, body: "{}" });
     release.resolve(); await finished.promise;
+    expect(await (await ready).json()).toMatchObject({ state: "ready", shutdownReadiness: "ready" });
     await fetch(new URL("v1/status", service.endpoint), { headers: { authorization: `Bearer ${f.token}` } });
     await service.close();
   } finally { release.resolve(); await finished.promise; await service.close(); rmSync(f.base, { recursive: true, force: true }); }

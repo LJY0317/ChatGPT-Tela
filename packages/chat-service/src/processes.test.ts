@@ -125,8 +125,15 @@ describe("Tela Chat process operations", () => {
       await expect(f.manager.close()).rejects.toThrow("unresolved execution");
       expect(readFileSync(f.storePath, "utf8")).toBe(before);
       expect(f.manager.status(f.workspace.id, live.operationId).ioAvailable).toBe(true);
+      const observer = new AbortController();
+      const cancelledWait = f.manager.waitUntilResolved(observer.signal);
+      observer.abort();
+      await expect(cancelledWait).rejects.toMatchObject({ name: "AbortError" });
+      expect(f.manager.status(f.workspace.id, live.operationId).state).toBe("running");
+      const waiting = f.manager.waitUntilResolved();
       const completed = await f.manager.writeStdin({ workspaceId: f.workspace.id, sessionId,
         chars: "completed\n", yieldTimeMs: 1000 });
+      await waiting;
       expect(completed.state).toBe("exited");
       expect(completed.output).toBe("completed");
       await f.manager.close();

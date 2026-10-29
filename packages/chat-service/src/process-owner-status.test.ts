@@ -11,7 +11,7 @@ import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporar
 
 const removeFixture = registerTemporaryFixtureCleanup();
 
-async function fixture(options: { holdWait?: boolean } = {}) {
+async function fixture(options: { holdWait?: boolean; rejectCompletionReply?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "tela-owner-status-")), stateRoot = join(root, "state");
   mkdirSync(stateRoot);
   const registry = new ChatWorkspaceRegistry({ allowedRoots: [root], storePath: join(stateRoot, "workspaces-v1.json") });
@@ -27,6 +27,8 @@ async function fixture(options: { holdWait?: boolean } = {}) {
   let markWaitStarted!: () => void;
   const waitGate = new Promise<void>(resolve => { releaseWait = resolve; });
   const waitStarted = new Promise<void>(resolve => { markWaitStarted = resolve; });
+  let releaseCompletion!: () => void;
+  const completionGate = new Promise<void>(resolve => { releaseCompletion = resolve; });
   const running = () => ({ operationId, workspaceId: workspace.id, serverInstanceId: wrongOwner ? randomUUID() : serverInstanceId,
     sessionId: 1, state: "running", startedAt: timestamp, updatedAt: timestamp, pid: 321,
     ioAvailable: true, output: "", outputTruncated: false, outputRecovered: false });
@@ -41,6 +43,14 @@ async function fixture(options: { holdWait?: boolean } = {}) {
           updatedAt: new Date().toISOString(), ioAvailable: false,
           output: "", outputTruncated: false, outputRecovered: false };
       }, write() { writes++; },
+      async awaitCompletion() {
+        waits++; markWaitStarted(); await completionGate;
+        if (options.rejectCompletionReply) throw Error("completion reply unavailable");
+        return { operationId, workspaceId: workspace.id, serverInstanceId,
+          sessionId: 1, state: "spawn_failed", startedAt: timestamp,
+          updatedAt: new Date().toISOString(), ioAvailable: false,
+          output: "", outputTruncated: false, outputRecovered: false };
+      },
       async cancelOwnedExecution() { cancellations++; return running(); },
     } });
   journal.publishLive(claim, control.descriptor);
@@ -50,6 +60,7 @@ async function fixture(options: { holdWait?: boolean } = {}) {
     if (completed) return;
     journal.publishCompletion(claim, { state: "spawn_failed", endedAt: new Date().toISOString() });
     completed = true;
+    releaseCompletion();
   };
   return { workspace, operationId, serverInstanceId, runtime, storePath,
     complete, waitStarted, releaseWait, counts: () => ({ queries, waits, writes }),
@@ -78,6 +89,20 @@ test("public process status authenticates the current owner on demand without co
     expect(f.counts()).toEqual({ queries: 1, waits: 0, writes: 0 });
     await expect(f.runtime.call("process_status", { workspace_id: "unapproved-workspace", operation_id: f.operationId })).rejects.toThrow();
     expect(f.counts().queries).toBe(1);
+  } finally { await f.close(); }
+});
+
+test.each([false, true])("shutdown wait trusts the terminal receipt even with a lost reply: %s", async rejectCompletionReply => {
+  const f = await fixture({ rejectCompletionReply });
+  try {
+    const waiting = f.runtime.processes.waitUntilResolved();
+    await f.waitStarted;
+    expect(() => f.runtime.processes.assertCanClose()).toThrow("unresolved execution");
+    f.complete();
+    await waiting;
+    expect(f.cancelRequests()).toBe(0);
+    expect(f.runtime.processes.status(f.workspace.id, f.operationId).state).toBe("spawn_failed");
+    expect(() => f.runtime.processes.assertCanClose()).not.toThrow();
   } finally { await f.close(); }
 });
 

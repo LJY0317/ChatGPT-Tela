@@ -82,6 +82,24 @@ export async function startChatService(input: {
   const instanceId = randomUUID();
   let stopping = false;
   let activeCalls = 0;
+  let activityRevision = 0;
+  const activityWaiters = new Set<() => void>();
+  const activityChanged = () => {
+    activityRevision++;
+    for (const waiter of [...activityWaiters]) waiter();
+  };
+  const waitForActivityChange = (revision: number, signal: AbortSignal) => {
+    if (activityRevision !== revision) return Promise.resolve();
+    if (signal.aborted) return Promise.reject(new DOMException("operation aborted", "AbortError"));
+    return new Promise<void>((resolve, reject) => {
+      const cleanup = () => { activityWaiters.delete(changed); signal.removeEventListener("abort", aborted); };
+      const changed = () => { cleanup(); resolve(); };
+      const aborted = () => { cleanup(); reject(new DOMException("operation aborted", "AbortError")); };
+      activityWaiters.add(changed);
+      signal.addEventListener("abort", aborted, { once: true });
+      if (activityRevision !== revision) changed();
+    });
+  };
   const assertShutdownReady = () => {
     if (activeCalls > 0) throw new Error("Tela Chat has an active capability request; finish it before shutdown");
     input.tools?.assertCanClose();
@@ -122,6 +140,28 @@ export async function startChatService(input: {
       if (request.method === "GET" && url.pathname === "/v1/status") {
         return Response.json(status(url.searchParams.get("shutdown-readiness") === "1"));
       }
+      if (request.method === "POST" && url.pathname === "/v1/wait-shutdown-readiness") {
+        try {
+          while (true) {
+            request.signal.throwIfAborted();
+            if (stopping) return Response.json({ error: "Chat shutdown has already started" }, { status: 409 });
+            const revision = activityRevision;
+            if (activeCalls > 0) {
+              await waitForActivityChange(revision, request.signal);
+              continue;
+            }
+            await input.tools?.waitUntilIdle(request.signal);
+            request.signal.throwIfAborted();
+            if (activityRevision !== revision) continue;
+            assertShutdownReady();
+            return Response.json(status(true), {
+              headers: { "cache-control": "no-store" },
+            });
+          }
+        } catch {
+          return Response.json({ error: "Chat shutdown readiness could not be verified" }, { status: 409 });
+        }
+      }
       if (url.pathname === "/v1/maintenance/processes" && input.tools) {
         if (request.method === "GET") {
           try { return Response.json({ contractVersion: 1, instanceId, processes: await input.tools.maintenanceProcesses() }); }
@@ -142,12 +182,14 @@ export async function startChatService(input: {
       if (request.method === "POST" && url.pathname === "/v1/call") {
         if (stopping) return Response.json({ error: { type: "tela_chat_stopping", message: "Tela Chat is shutting down" } }, { status: 503 });
         activeCalls++;
+        activityChanged();
         let released = false;
         let workFinished = false, deliveryFinished = false;
         const release = () => {
           if (released || !workFinished || !deliveryFinished) return;
           released = true;
           activeCalls--;
+          activityChanged();
         };
         const delivered = () => { deliveryFinished = true; release(); };
         void lifecycle.responseFinished.then(delivered);

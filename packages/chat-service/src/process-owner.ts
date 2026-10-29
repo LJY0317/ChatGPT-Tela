@@ -16,7 +16,7 @@ export interface ProcessOwnerDescriptor extends ProcessOwnerBinding {
   readonly endpoint: string;
   readonly secret: string;
 }
-export type ProcessOwnerAction = "status" | "wait" | "stdin" | "cancel";
+export type ProcessOwnerAction = "status" | "wait" | "await-completion" | "stdin" | "cancel";
 export interface ProcessOwnerRequest {
   readonly action: ProcessOwnerAction;
   readonly requestId?: string;
@@ -26,6 +26,8 @@ export interface ProcessOwnerRequest {
 export interface ProcessOwnerAuthority {
   status(): unknown;
   wait(yieldTimeMs: number, observationSignal: AbortSignal): Promise<unknown>;
+  /** Observe terminal completion without consuming output or cancelling execution. */
+  awaitCompletion?(observationSignal: AbortSignal): Promise<unknown>;
   write(chars: string): void;
   /** Supply only when the adapter can terminate its proven owned execution tree. */
   cancelOwnedExecution?(): Promise<unknown>;
@@ -109,6 +111,10 @@ export async function startProcessOwnerControl(input: {
             result = await input.authority.wait(duration as number, request.signal);
             break;
           }
+          case "await-completion":
+            if (!input.authority.awaitCompletion) return new Response(null, { status: 409 });
+            result = await input.authority.awaitCompletion(request.signal);
+            break;
           case "stdin":
             if (typeof body.chars !== "string" || Buffer.byteLength(body.chars, "utf8") > 64 * 1024) return new Response(null, { status: 400 });
             if (writes.has(body.requestId) || writes.size >= MAX_WRITES) return new Response(null, { status: 409 });

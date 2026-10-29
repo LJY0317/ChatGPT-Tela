@@ -77,8 +77,22 @@ export async function runProcessOwnerWorker(): Promise<void> {
   const output: ProcessOutputState = { chunks: [], outputBytes: 0, baseOffset: 0, readOffset: 0, truncated: false };
   let state: ProcessOperationState = "starting", child: ChildProcessWithoutNullStreams | undefined;
   let exitCode: number | undefined, signal: string | undefined, endedAt: string | undefined;
-  let resolveCompletion!: () => void;
-  const completion = new Promise<void>(resolve => { resolveCompletion = resolve; });
+  const completionWaiters = new Set<() => void>();
+  const waitForCompletion = (observationSignal?: AbortSignal, duration?: number): Promise<void> => {
+    if (!["starting", "running"].includes(state) || observationSignal?.aborted) return Promise.resolve();
+    return new Promise(resolve => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        if (timer !== undefined) clearTimeout(timer);
+        completionWaiters.delete(finish);
+        observationSignal?.removeEventListener("abort", finish);
+        resolve();
+      };
+      completionWaiters.add(finish);
+      observationSignal?.addEventListener("abort", finish, { once: true });
+      if (duration !== undefined) timer = setTimeout(finish, duration);
+    });
+  };
   const snapshot = (consume = false) => {
     const collected = consume ? consumeProcessOutput(output) : { output: "", truncated: false };
     return { operationId: claim.operationId, workspaceId: claim.workspaceId, serverInstanceId: claim.launchingServerId,
@@ -91,14 +105,12 @@ export async function runProcessOwnerWorker(): Promise<void> {
   const control = await startProcessOwnerControl({ binding: { ownerId: claim.ownerId, operationId: claim.operationId, workspaceId: claim.workspaceId }, secret, authority: {
     status: () => snapshot(),
     async wait(duration, observationSignal) {
-      if (state === "starting" || state === "running") await new Promise<void>(resolve => {
-        const finish = () => { clearTimeout(timer); observationSignal.removeEventListener("abort", finish); resolve(); };
-        const timer = setTimeout(finish, duration);
-        observationSignal.addEventListener("abort", finish, { once: true });
-        void completion.then(finish);
-        if (observationSignal.aborted) finish();
-      });
+      await waitForCompletion(observationSignal, duration);
       return snapshot(!observationSignal.aborted);
+    },
+    async awaitCompletion(observationSignal) {
+      await waitForCompletion(observationSignal);
+      return snapshot();
     },
     write(chars) {
       workspace(); // Fresh approval and directory identity before new input authority.
@@ -135,7 +147,7 @@ export async function runProcessOwnerWorker(): Promise<void> {
           : { state: "exited", endedAt, exitCode: code ?? -1, resultFingerprint, resultTruncated: output.truncated });
       }
     } catch { state = "unknown"; }
-    resolveCompletion();
+    for (const waiter of [...completionWaiters]) waiter();
   };
   try {
     journal.publishLive(claim, control.descriptor);
@@ -148,6 +160,6 @@ export async function runProcessOwnerWorker(): Promise<void> {
     child.once("spawn", () => { state = "running"; process.stdout.write("TELA_OPERATION_READY\n"); });
     child.once("error", () => settle(null, null, true));
     child.once("close", (code, terminated) => { if (state === "starting" || state === "running") settle(code, terminated); });
-    await completion;
+    await waitForCompletion();
   } finally { await control.close(); }
 }
