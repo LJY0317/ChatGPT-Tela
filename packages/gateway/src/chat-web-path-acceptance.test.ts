@@ -33,6 +33,7 @@ describe("Web Chat independent tool path acceptance", () => {
     process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = diagnosticFile;
     const root = join(base, "project");
     mkdirSync(root);
+    writeFileSync(join(root, "AGENTS.md"), "project instruction receipt\n");
     writeFileSync(join(root, "README.md"), "before\n");
     const png = Buffer.from("89504e470d0a1a0a0000000049454e44ae426082", "hex");
     writeFileSync(join(root, "sample.png"), png);
@@ -76,7 +77,13 @@ describe("Web Chat independent tool path acceptance", () => {
       expect(available.map(item => item.capability)).toEqual(expect.arrayContaining([
         "open_workspace", "apply_patch", "exec_command", "read", "view_image", "search_files",
       ]));
-      const workspace = jsonContent(await call("open_workspace", { path: root })) as { id: string };
+      const workspace = jsonContent(await call("open_workspace", { path: root })) as {
+        id: string; instructionRevision: string; instructions: { content: string }[];
+      };
+      expect(workspace.instructions.some(row => row.content === "project instruction receipt\n")).toBe(true);
+      expect(jsonContent(await call("open_workspace", {
+        path: root, known_instruction_revision: workspace.instructionRevision,
+      }))).toMatchObject({ instructionsUnchanged: true, instructions: [] });
       expect(jsonContent(await call("search_files", {
         workspace_id: workspace.id, query: "WEB-ROUTE", case_sensitive: false, max_results: 1,
       }))).toMatchObject({ matches: ["src/web-route.ts"], hasMore: false, scanComplete: true });
@@ -170,6 +177,16 @@ describe("Web Chat independent tool path acceptance", () => {
       expect(chat.instanceId).not.toBe(previousInstanceId);
       const recovered = jsonContent(await call("open_workspace", { path: root })) as { id: string };
       expect(recovered.id).toBe(workspace.id);
+      // A restarted Chat service does not need a delivery registry to reuse a caller's retained result.
+      expect(jsonContent(await call("open_workspace", {
+        path: root, known_instruction_revision: workspace.instructionRevision,
+      }))).toMatchObject({ instructionsUnchanged: true, instructions: [] });
+      writeFileSync(join(root, "AGENTS.md"), "updated project instructions\n");
+      const updated = jsonContent(await call("open_workspace", {
+        path: root, known_instruction_revision: workspace.instructionRevision,
+      })) as { instructionsUnchanged: boolean; instructions: { content: string }[] };
+      expect(updated.instructionsUnchanged).toBe(false);
+      expect(updated.instructions.some(row => row.content === "updated project instructions\n")).toBe(true);
       expect(jsonContent(await call("process_status", {
         workspace_id: recovered.id, operation_id: operationId,
       }))).toMatchObject({ state: "exited", exitCode: 0 });
