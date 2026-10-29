@@ -86,46 +86,55 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     changed?()
     let started = ProcessInfo.processInfo.systemUptime
     NSLog("Tela update preparation started for build %@", build)
-    Task {
-      defer {
-        preparationWindow?.close()
-        preparationWindow = nil
-        NSLog("Tela update preparation ended after %.3f seconds", ProcessInfo.processInfo.systemUptime - started)
-      }
-      do {
-        let arguments = ["prepare", "--target-build", build]
-        do { _ = try await lifecycle(arguments) }
-        catch let error as NSError where error.domain == "TelaUpdateBusy" {
-          preparationWindow?.orderOut(nil)
-          let alert = NSAlert()
-          alert.messageText = "Stop tasks and update?"
-          alert.informativeText = error.localizedDescription + " Running tasks will be interrupted. Conversations and saved files are kept."
-          alert.addButton(withTitle: "Stop Tasks and Update")
-          alert.addButton(withTitle: "Later")
-          guard alert.runModal() == .alertFirstButtonReturn else { throw CancellationError() }
-          preparationWindow?.makeKeyAndOrderFront(nil)
-          _ = try await lifecycle(arguments + ["--interrupt-work"])
-        }
-        problem = nil
-        app.reply(toApplicationShouldTerminate: true)
-      } catch {
-        preparingTermination = false
-        app.reply(toApplicationShouldTerminate: false)
-        if error is CancellationError { changed?(); return }
-        preparationWindow?.orderOut(nil)
-        problem = error.localizedDescription
-        changed?()
-        let alert = NSAlert()
-        alert.messageText = "Update postponed"
-        alert.informativeText = error.localizedDescription
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-      }
-    }
+    prepareTermination(["prepare", "--target-build", build], app: app, started: started)
     return .terminateLater
   }
 
-  private func lifecycle(_ arguments: [String], observation: UpdateIdleObservation? = nil) async throws -> (ready: Bool, restored: Bool) {
+  private func prepareTermination(_ arguments: [String], app: NSApplication, started: TimeInterval) {
+    // terminateLater runs a modal loop; Swift's main-actor task queue is not
+    // serviced there. Run IPC off-main and return through that exact run loop.
+    Task.detached {
+      let result: Result<Void, Error>
+      do { _ = try await self.lifecycle(arguments); result = .success(()) }
+      catch { result = .failure(error) }
+      RunLoop.main.perform(inModes: [.default, .modalPanel]) {
+        MainActor.assumeIsolated {
+          var failure: Error?
+          if case .failure(let error) = result { failure = error }
+          if let error = failure as NSError?, error.domain == "TelaUpdateBusy", !arguments.contains("--interrupt-work") {
+            self.preparationWindow?.orderOut(nil)
+            let alert = NSAlert()
+            alert.messageText = "Stop tasks and update?"
+            alert.informativeText = error.localizedDescription + " Running tasks will be interrupted. Conversations and saved files are kept."
+            alert.addButton(withTitle: "Stop Tasks and Update")
+            alert.addButton(withTitle: "Later")
+            if alert.runModal() == .alertFirstButtonReturn {
+              self.preparationWindow?.makeKeyAndOrderFront(nil)
+              self.prepareTermination(arguments + ["--interrupt-work"], app: app, started: started)
+              return
+            }
+            failure = CancellationError()
+          }
+          self.preparationWindow?.close()
+          self.preparationWindow = nil
+          NSLog("Tela update preparation ended after %.3f seconds", ProcessInfo.processInfo.systemUptime - started)
+          self.preparingTermination = failure == nil
+          self.problem = failure is CancellationError ? nil : failure?.localizedDescription
+          app.reply(toApplicationShouldTerminate: failure == nil)
+          self.changed?()
+          if let error = failure, !(error is CancellationError) {
+            let alert = NSAlert()
+            alert.messageText = "Update postponed"
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+          }
+        }
+      }
+    }
+  }
+
+  private nonisolated func lifecycle(_ arguments: [String], observation: UpdateIdleObservation? = nil) async throws -> (ready: Bool, restored: Bool) {
     guard let launcher = Bundle.main.url(forAuxiliaryExecutable: "chatgpt-tela") else {
       throw NSError(domain: "TelaUpdate", code: 1)
     }

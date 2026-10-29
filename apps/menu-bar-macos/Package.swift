@@ -3,7 +3,7 @@ import PackageDescription
 
 let menuSources = ["main.swift", "single-instance.swift", "bridge-title-read.swift", "control-center.swift", "work-connection.swift", "sparkle-update.swift"]
 let maintenanceSources = ["maintenance.swift", "maintenance-main.swift"]
-let auxiliaryFiles = ["build.ts", "start.ts", "single-instance.test.ts", "work-connection-tests.swift", "bridge-title-read-tests.swift"]
+let auxiliaryFiles = ["build.ts", "start.ts", "single-instance.test.ts", "sparkle-update.test.ts", "work-connection-tests.swift", "bridge-title-read-tests.swift"]
 let package = Package(
   name: "TelaMenuBar",
   platforms: [.macOS(.v13)],
