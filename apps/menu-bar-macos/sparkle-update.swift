@@ -9,6 +9,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   var changed: (() -> Void)?
   private var pendingBuild: String?
   private var preparingTermination = false
+  private var idleObservation: UpdateIdleObservation?
   private var preparationWindow: NSPanel?
   private var controller: SPUStandardUpdaterController!
 
@@ -22,11 +23,11 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     set { controller.updater.automaticallyChecksForUpdates = newValue }
   }
 
-  var preparationStatus: String? { preparingTermination ? "Preparing update…" : nil }
-  var canCheck: Bool { !preparingTermination && (controller.updater.canCheckForUpdates || controller.updater.sessionInProgress) }
+  var preparationStatus: String? { idleObservation != nil ? "Waiting for tasks to finish…" : preparingTermination ? "Preparing update…" : nil }
+  var canCheck: Bool { !preparingTermination && idleObservation == nil && (controller.updater.canCheckForUpdates || controller.updater.sessionInProgress) }
   func checkForUpdates(_ sender: Any?) { controller.checkForUpdates(sender) }
 
-  private static func makePreparationWindow() -> NSPanel {
+  private static func makePreparationWindow(waiting: Bool = false) -> NSPanel {
     let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 110),
                         styleMask: [.titled], backing: .buffered, defer: false)
     panel.title = "Updating Tela"
@@ -36,10 +37,10 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     progress.isIndeterminate = true
     progress.controlSize = .small
     progress.sizeToFit()
-    progress.setAccessibilityLabel("Preparing update")
-    let title = NSTextField(labelWithString: "Preparing update…")
+    progress.setAccessibilityLabel(waiting ? "Waiting for tasks to finish" : "Preparing update")
+    let title = NSTextField(labelWithString: waiting ? "Waiting for tasks to finish…" : "Preparing update…")
     title.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-    let detail = NSTextField(labelWithString: "Tela will restart automatically.")
+    let detail = NSTextField(labelWithString: waiting ? "Tela will update when your tasks finish." : "Tela will restart automatically.")
     detail.textColor = .secondaryLabelColor
     let text = NSStackView(views: [title, detail])
     text.orientation = .vertical
@@ -73,6 +74,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
 
   /// This is the ordinary AppKit termination veto; optional relaunch callbacks are not the work guard.
   func applicationShouldTerminate(_ app: NSApplication) -> NSApplication.TerminateReply {
+    guard idleObservation == nil else { return .terminateCancel }
     guard let build = pendingBuild else { return .terminateNow }
     guard !preparingTermination else { return .terminateLater }
     preparingTermination = true
@@ -123,20 +125,20 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     return .terminateLater
   }
 
-  private func lifecycle(_ arguments: [String]) async throws -> (ready: Bool, restored: Bool) {
+  private func lifecycle(_ arguments: [String], observation: UpdateIdleObservation? = nil) async throws -> (ready: Bool, restored: Bool) {
     guard let launcher = Bundle.main.url(forAuxiliaryExecutable: "chatgpt-tela") else {
       throw NSError(domain: "TelaUpdate", code: 1)
     }
     let payload = Bundle.main.bundleURL.path
     let outcome = await Task.detached { () -> (Int32, Data) in
-      let task = Process()
+      let task = observation?.process ?? Process()
       task.executableURL = launcher
       task.arguments = ["application-update"] + arguments + ["--payload", payload]
       let output = Pipe()
       task.standardOutput = output
       task.standardError = FileHandle.standardError
       do {
-        try task.run()
+        if let observation { try observation.start() } else { try task.run() }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
         return (task.terminationStatus, data)
@@ -174,9 +176,36 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     }
   }
 
+  /// Defer through Sparkle before it asks AppKit to terminate or launches replacement.
+  func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,
+               untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
+    let observation = UpdateIdleObservation()
+    idleObservation = observation
+    pendingBuild = item.versionString
+    preparationWindow = Self.makePreparationWindow(waiting: true)
+    preparationWindow?.center()
+    preparationWindow?.makeKeyAndOrderFront(nil)
+    changed?()
+    Task {
+      do { _ = try await lifecycle(["wait"], observation: observation) }
+      catch { NSLog("Tela update idle observation ended; ordinary shutdown admission will decide: %@", error.localizedDescription) }
+      guard idleObservation === observation else { return }
+      idleObservation = nil
+      preparationWindow?.close()
+      preparationWindow = nil
+      changed?()
+      // Admission remains mandatory, including when this optional observation
+      // is unavailable or new work was admitted after its last snapshot.
+      installHandler()
+    }
+    return true
+  }
+
   func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) { pendingBuild = item.versionString }
 
   func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+    idleObservation?.cancel()
+    idleObservation = nil
     pendingBuild = nil
     preparingTermination = false
     preparationWindow?.close()
@@ -188,5 +217,27 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
       catch { problem = "Tela recovery needs attention before updating." }
       changed?()
     }
+  }
+}
+
+
+/// Cancellation owns only the read-only wait process, never a task or update worker.
+private final class UpdateIdleObservation: @unchecked Sendable {
+  let process = Process()
+  private let lock = NSLock()
+  private var cancelled = false
+
+  func start() throws {
+    lock.lock()
+    defer { lock.unlock() }
+    if cancelled { throw CancellationError() }
+    try process.run()
+  }
+
+  func cancel() {
+    lock.lock()
+    defer { lock.unlock() }
+    cancelled = true
+    if process.isRunning { process.terminate() }
   }
 }

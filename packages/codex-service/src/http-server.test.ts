@@ -22,6 +22,7 @@ function fixtureService(): CodexService {
       return { contractVersion: 1, service: "codex", instanceId: "codex-fixture", state: "ready" };
     },
     async shutdownReadiness() { return "ready"; },
+    async waitForShutdownReadiness() {},
     async profiles() { return []; },
     async startProfile() { throw new Error("not used"); },
     async waitWebPreparation() { throw new Error("not used"); },
@@ -63,6 +64,30 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("authenticated idle observation waits once and preserves the running service", async () => {
+    const service = fixtureService();
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const admission = new Promise<void>(resolve => { entered = resolve; });
+    let observations = 0, stops = 0;
+    service.waitForShutdownReadiness = async () => { observations++; entered(); await gate; };
+    service.close = async () => { stops++; };
+    const server = await startCodexServiceHttpServer({ service });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+      bearerToken: server.bearerToken, startedAt: new Date().toISOString() });
+    try {
+      const wait = client.waitForShutdownReadiness();
+      await admission;
+      expect(stops).toBe(0);
+      release(); await wait;
+      expect(observations).toBe(1); expect(stops).toBe(0);
+      service.waitForShutdownReadiness = async () => { throw new CodexShutdownNotStartedError(); };
+      await expect(client.waitForShutdownReadiness()).rejects.toThrow("could not be verified");
+      expect(stops).toBe(0);
+    } finally { release(); await server.close(); }
+  });
+
   test("a busy owner returns the exact no-start shutdown receipt", async () => {
     const service = fixtureService();
     let stopAttempts = 0;

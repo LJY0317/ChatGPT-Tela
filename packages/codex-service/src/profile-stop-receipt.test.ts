@@ -11,15 +11,18 @@ test("refused default Desktop cleanup keeps authenticated child, route and servi
   let active = false, closes = 0, parentQuits = 0, nativeBusy = false;
   const closedSlots: number[] = [];
   let onClosed = (_slot: number) => {};
+  let onNativeRead = () => {};
   const closed = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) { const slot = Number(new URL(request.url).searchParams.get("slot") ?? 1); closedSlots.push(slot); onClosed(slot); closes++; active = false; return new Response(null, { status: 204 }); } });
   const appServer = Bun.serve({ hostname: "127.0.0.1", port: 0,
     fetch(request, server) { return server.upgrade(request) ? undefined : new Response(null, { status: 400 }); },
     websocket: { message(socket, data) {
+      socket.subscribe("status");
       const request = JSON.parse(String(data));
       if (request.id === undefined) return;
       socket.send(JSON.stringify({ id: request.id, result: request.method === "thread/loaded/list"
         ? { data: nativeBusy ? ["owned-thread"] : [], nextCursor: null }
         : request.method === "thread/read" ? { thread: { id: "owned-thread", status: { type: "active" } } } : {} }));
+      if (request.method === "thread/read") onNativeRead();
     } },
   });
   const supervision = resolve(import.meta.dir, "../../../apps/profile-runtime/src/supervision.ts");
@@ -33,7 +36,7 @@ import {startCodexBridgeMcpHttpServer} from ${JSON.stringify(mcp)};
 const slot=Number(process.env.CHATGPT_TELA_PRODUCT_PROFILE_SLOT);
 const lifecycle=await createProfileSupervisorLifecycle();
 const mcp=await startCodexBridgeMcpHttpServer({bridge:{inventory(){return []},async invoke(){throw Error('unused')}},authentication:{kind:'bearer',token:process.env.CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN}});
-const preview=await startProfileBridgePreviewServer({slot,bearerToken:process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN,async observe(){return{activeSurfaceCount:0}},shutdownReadiness(){return JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).busy?'blocked':'ready'},async shutdownProfile(){const state=JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8'));if(state.refuse||state.refuseSlot===slot)throw Error('synthetic normal quit refusal');await fetch(process.env.FIXTURE_CLOSED);return{responsesRouteFingerprint:'a'.repeat(64)}}});
+const preview=await startProfileBridgePreviewServer({slot,bearerToken:process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN,async observe(){return{activeSurfaceCount:0}},webState(){return{contractVersion:1,slot,webState:"ready",webModelIds:[]}},async waitForWeb(){},shutdownReadiness(){return JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).busy?'blocked':'ready'},async shutdownProfile(){const state=JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8'));if(state.refuse||state.refuseSlot===slot)throw Error('synthetic normal quit refusal');await fetch(process.env.FIXTURE_CLOSED);return{responsesRouteFingerprint:'a'.repeat(64)}}});
 await lifecycle.publishReady({stage:'product-profile-ready',runtimeProcessId:process.pid,slot,routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:slot===1?'default':'fixture-'+slot,nativeTargetKind:'default-desktop',targetProcessId:123,nativeReady:true,webState:'preparing',profileId:'fixture',internalMcpUrl:mcp.endpointUrl.href,bridgePreviewUrl:preview.endpoint.href,terminalEndpoint:process.env.FIXTURE_APP_SERVER_ENDPOINT,responsesUrl:'http://127.0.0.1:1234/',responsesRouteFingerprint:'a'.repeat(64)});
 await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecycle.dispose();`);
   const built = await Bun.build({ entrypoints: [child], target: "bun", outdir: root, naming: "child.mjs" });
@@ -54,6 +57,18 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
   try {
     const started = await service.startProfile(1);
     expect(await service.shutdownReadiness()).toBe("ready");
+    nativeBusy = true;
+    let scanned!: () => void;
+    const scan = new Promise<void>(resolve => { scanned = resolve; });
+    onNativeRead = scanned;
+    const waiting = service.waitForShutdownReadiness();
+    await scan;
+    nativeBusy = false;
+    appServer.publish("status", JSON.stringify({ method: "thread/status/changed", params: { threadId: "owned-thread", status: { type: "idle" } } }));
+    await waiting;
+    onNativeRead = () => {};
+    expect(active).toBe(true); expect(closes).toBe(0); expect(parentQuits).toBe(0);
+
     await expect(service.close()).rejects.toThrow("Profile normal shutdown was not acknowledged");
     expect(service.activeProfileCount).toBe(1); expect(active).toBe(true); expect(closes).toBe(0); expect(parentQuits).toBe(0);
     expect((await service.profiles())[0]?.controlState).toBe("running");

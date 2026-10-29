@@ -99,6 +99,20 @@ export async function startCodexServiceHttpServer(input: {
           }
           return Response.json({ ...base, shutdownReadiness });
         }
+        if (request.method === "POST" && url.pathname === "/v1/wait-shutdown-readiness") {
+          if (input.startupComplete?.() === false) return error(409, "Profile restoration is still in progress");
+          try {
+            await input.service.waitForShutdownReadiness(request.signal);
+            const status = input.service.serviceStatus();
+            if (status.state !== "ready") return error(409, "Codex shutdown has already started");
+            return Response.json({ ...status, shutdownReadiness: "ready" }, { headers: { "cache-control": "no-store" } });
+          } catch (cause) {
+            emitDiagnosticEvent("chatgpt_tela_codex", "shutdown_observation_failed", {
+              phase: "wait", abort_observed: request.signal.aborted, ...diagnosticFailureFields(cause),
+            });
+            return error(409, "Codex shutdown readiness could not be verified");
+          }
+        }
         if (request.method === "GET" && url.pathname === "/v1/codex/profiles") {
           const profiles = await input.service.profiles();
           emitDiagnosticEvent("chatgpt_tela_codex", "profiles_inventory", { count: profiles.length });

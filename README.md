@@ -1275,10 +1275,13 @@ Use Settings → **Updates** for Sparkle's standard update window. When an updat
 the menu also shows **Check for Updates…**; it is hidden when no update is known.
 The menu-bar icon gains an arrow when an update is available; Sparkle presents update notifications.
 The menu action stays the same, and the standard window shows the version and download or installation step.
-Settings also controls automatic update checks. Downloading does not end active work; an update that cannot
-settle active tasks offers **Stop Tasks and Update** or **Later**. Stopping tasks uses normal cancellation
-and keeps conversations and saved files; unavailable or unsettled services still postpone installation.
-After **Install and Relaunch**, **Preparing update…** stays visible while Tela settles its services;
+Settings also controls automatic update checks. Downloading does not end active work. After **Install and
+Relaunch**, Tela normally waits for existing Native/Web tasks and detached Chat commands to finish before
+preparing its services. This wait does not stop tasks, resend questions or load conversation history.
+If completion cannot be verified or new work blocks termination, the existing admission check offers
+**Stop Tasks and Update** or **Later**. Stopping tasks uses normal cancellation and keeps conversations
+and saved files; unavailable or unsettled services still postpone installation.
+**Preparing update…** stays visible while Tela settles its services;
 Sparkle handles installation after the app exits. Choosing **Later** or encountering an error ends the preparation display.
 Checking again brings an existing Sparkle update back into focus, including one already waiting to install.
 Sparkle manages downloaded files and installation cleanup; checking does not discard and redownload an existing update.

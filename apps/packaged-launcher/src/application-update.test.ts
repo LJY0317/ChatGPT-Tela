@@ -217,3 +217,33 @@ for (const action of ['reinstall', 'remove'] as const) test(`manual app removal 
     }
   } finally {rmSync(root,{recursive:true,force:true});}
 });
+
+
+test("waiting for work creates no transition, stops nothing and retains ordinary install admission", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-update-idle-"));
+  try {
+    const f = await fixture(root);
+    for (const job of f.runner.jobs.values()) job.running = true;
+    const ownership = readFileSync(f.paths.installManifest, "utf8");
+    const waited: string[] = [];
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const admission = new Promise<void>(resolve => { entered = resolve; });
+    const wait = runApplicationUpdate("wait", { ...f.input, async waitForShutdownService(service) {
+      waited.push(service);
+      if (service === "codex") { entered(); await gate; }
+    } });
+    await admission;
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+    expect(readFileSync(f.paths.installManifest, "utf8")).toBe(ownership);
+    expect([...f.runner.jobs.values()].every(job => job.running)).toBe(true);
+    release();
+    expect(await wait).toEqual({ ready: true });
+    expect(waited).toEqual(["codex", "chat", "gateway"]);
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+    await expect(runApplicationUpdate("prepare", { ...f.input, targetBuild: "2", options: { ...f.input.options,
+      async prepareShutdownService(service) { throw new PackagedServiceShutdownNotStartedError(service); },
+    } })).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
+    expect([...f.runner.jobs.values()].every(job => job.running)).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

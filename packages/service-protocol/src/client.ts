@@ -81,6 +81,8 @@ export class LocalServiceClient {
           ...(body === undefined ? {} : { "content-type": "application/json" }),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        // Bun's ordinary fetch idle timer must not expire an event-driven wait.
+        ...(path === "v1/wait-shutdown-readiness" ? { timeout: false as const } : {}),
         ...(signal ? { signal } : {}),
       });
       phase = "decode";
@@ -137,6 +139,12 @@ export class CodexServiceClient extends LocalServiceClient {
   constructor(descriptor: ServiceRuntimeDescriptor & { readonly service: "codex" }) {
     super(descriptor);
     this.descriptor = descriptor;
+  }
+
+  async waitForShutdownReadiness(signal?: AbortSignal): Promise<void> {
+    const value = parseServiceStatus(await this.request("v1/wait-shutdown-readiness", "POST", {}, signal));
+    if (value.service !== "codex" || value.instanceId !== this.descriptor.instanceId
+      || value.state !== "ready" || value.shutdownReadiness !== "ready") throw new ServiceStatusValidationError("invalid Codex shutdown readiness receipt");
   }
 
   async inventory(capability: string, query = "") {

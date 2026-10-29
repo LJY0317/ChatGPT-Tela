@@ -66,7 +66,7 @@ async function main(): Promise<void> {
   }
   const lifecycleApply = ["install", "repair", "upgrade", "cancel-upgrade"].includes(args[0] ?? "")
     && parsePackagedLifecycleCommand(args).mode === "apply";
-  if ((lifecycleApply || args[0] === "application-update" || args[0] === "maintenance" && args[1] === "apply")
+  if ((lifecycleApply || args[0] === "application-update" && args[1] !== "wait" || args[0] === "maintenance" && args[1] === "apply")
     && process.env[LIFECYCLE_WORKER_ENV] !== "1") {
     const result = await runIndependentLifecycleProcess({ executable: process.execPath,
       arguments: (lifecycleApply || args[0] === "application-update") && !args.includes("--payload")
@@ -81,10 +81,10 @@ async function main(): Promise<void> {
     const interruptWork = args.includes("--interrupt-work");
     if (interruptWork) args.splice(args.indexOf("--interrupt-work"), 1);
     const action = args[1], payloadIndex = args.indexOf("--payload"), targetIndex = args.indexOf("--target-build");
-    if (!(action === "prepare" || action === "finish" || action === "cancel") || payloadIndex < 0 || !args[payloadIndex + 1]
+    if (!(action === "wait" || action === "prepare" || action === "finish" || action === "cancel") || payloadIndex < 0 || !args[payloadIndex + 1]
       || args.length !== (action === "prepare" ? 6 : 4) || (action === "prepare" && (targetIndex < 0 || !args[targetIndex + 1]))
       || interruptWork && action !== "prepare") {
-      throw Error("usage: application-update <prepare --target-build N [--interrupt-work]|finish|cancel> --payload app");
+      throw Error("usage: application-update <wait|prepare --target-build N [--interrupt-work]|finish|cancel> --payload app");
     }
     try {
       const result = await runApplicationUpdate(action, { payloadRoot: args[payloadIndex + 1]!, interruptWork,

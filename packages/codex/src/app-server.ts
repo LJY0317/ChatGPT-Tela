@@ -303,6 +303,50 @@ export async function countLoadedAppServerActiveTurns(
   }
 }
 
+/** Wait on globally broadcast thread status, without loading history or subscribing to turn items. */
+export async function waitForLoadedAppServerIdle(
+  endpoint: string,
+  options: { readonly signal?: AbortSignal; readonly connect?: CodexAppServerRpcFactory } = {},
+): Promise<void> {
+  options.signal?.throwIfAborted();
+  const connect = options.connect
+    ?? (signal => connectCodexAppServerWebSocket(endpoint, { ...(signal ? { signal } : {}) }));
+  const rpc = await connect(options.signal);
+  let unsubscribe: (() => void) | undefined;
+  let revision = 0, disconnected = false;
+  let wake: (() => void) | undefined;
+  try {
+    if (!rpc.subscribe) throw new Error("Native lifecycle status notifications unavailable");
+    unsubscribe = rpc.subscribe(method => {
+      if (method !== "thread/status/changed") return;
+      revision++; wake?.();
+    }, () => { disconnected = true; wake?.(); });
+    while (true) {
+      options.signal?.throwIfAborted();
+      if (disconnected) throw new Error("Native lifecycle status observation disconnected");
+      const observed = revision;
+      const active = await loadedAppServerActiveThreads(rpc, options.signal);
+      options.signal?.throwIfAborted();
+      if (disconnected) throw new Error("Native lifecycle status observation disconnected");
+      // A change during the asynchronous scan invalidates that snapshot.
+      if (observed !== revision) continue;
+      if (active.length === 0) return;
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => { wake = undefined; options.signal?.removeEventListener("abort", aborted); };
+        const changed = () => { cleanup(); resolve(); };
+        const aborted = () => { cleanup(); reject(abortError()); };
+        wake = changed;
+        options.signal?.addEventListener("abort", aborted, { once: true });
+        if (options.signal?.aborted) aborted();
+        else if (disconnected || observed !== revision) changed();
+      });
+    }
+  } finally {
+    unsubscribe?.();
+    await rpc.close();
+  }
+}
+
 /**
  * Gracefully interrupt only the exact currently-running turns loaded by one
  * Native app-server before an explicit Desktop restart/stop.

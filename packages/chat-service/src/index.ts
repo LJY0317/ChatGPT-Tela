@@ -158,7 +158,10 @@ export async function startChatService(input: {
               headers: { "cache-control": "no-store" },
             });
           }
-        } catch {
+        } catch (cause) {
+          emitDiagnosticEvent("chatgpt_tela_chat", "shutdown_observation_failed", {
+            phase: "wait", abort_observed: request.signal.aborted, ...diagnosticFailureFields(cause),
+          });
           return Response.json({ error: "Chat shutdown readiness could not be verified" }, { status: 409 });
         }
       }

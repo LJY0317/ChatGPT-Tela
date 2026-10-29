@@ -107,12 +107,16 @@ test("Codex activity is checked before any shutdown request", async () => {
   const home = mkdtempSync(join(tmpdir(), "tela-codex-preflight-"));
   const paths = resolveProductPaths({ platform: "linux", home, environment: {} });
   let blocked = true, shutdownCalls = 0, observations = 0;
+  let observed!: () => void, release!: () => void;
+  const observing = new Promise<void>(resolve => { observed = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
   const service = {
     serviceStatus: () => ({ contractVersion: 1, service: "codex", instanceId: "fixture-codex", state: "ready" }),
     shutdownReadiness: async () => {
       if (observations++ === 0) await Bun.sleep(1_600); // Exceeds the ordinary status budget, not the lifecycle budget.
       return blocked ? "blocked" : "ready";
     },
+    waitForShutdownReadiness: async () => { observed(); await gate; },
     close: async () => { shutdownCalls++; },
   } as unknown as CodexService;
   const http = await startCodexServiceHttpServer({ service });
@@ -125,7 +129,10 @@ test("Codex activity is checked before any shutdown request", async () => {
     const shutdown = ownedServiceShutdown("fixture", paths);
     await expect(shutdown.prepare("codex")).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
     expect(shutdownCalls).toBe(0);
-    blocked = false;
+    const wait = shutdown.wait("codex");
+    await observing;
+    expect(blocked).toBe(true); expect(shutdownCalls).toBe(0);
+    blocked = false; release(); await wait;
     await shutdown.prepare("codex");
     expect(shutdownCalls).toBe(0);
   } finally { await http.close(); rmSync(home, { recursive: true, force: true }); }

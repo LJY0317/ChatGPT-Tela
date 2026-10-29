@@ -8,6 +8,7 @@ import {
   connectCodexAppServerWebSocket,
   countLoadedAppServerActiveTurns,
   interruptLoadedAppServerTurns,
+  waitForLoadedAppServerIdle,
   type CodexAppServerRpc,
   type CodexAppServerRpcFactory,
 } from "./app-server";
@@ -854,6 +855,58 @@ for (const historyMode of ["paginated", "legacy"]) test(`lifecycle admission use
   };
   expect(await countLoadedAppServerActiveTurns("ws://127.0.0.1:1", { connect: async () => rpc })).toBe(1);
   expect(calls).toEqual(["thread/loaded/list", "thread/read", "close"]);
+});
+
+test("idle wait subscribes before scanning and rechecks a status change during the scan", async () => {
+  const calls: string[] = [];
+  let notify!: (method: string, params: unknown) => void;
+  let readStarted!: () => void, releaseRead!: () => void;
+  const scanned = new Promise<void>(resolve => { readStarted = resolve; });
+  const gate = new Promise<void>(resolve => { releaseRead = resolve; });
+  let active = true, reads = 0, unsubscribed = 0, closed = 0;
+  const rpc: CodexAppServerRpc = {
+    subscribe(listener) { calls.push("subscribe"); notify = listener; return () => { unsubscribed++; }; },
+    async request(method, params) {
+      calls.push(method);
+      if (method === "thread/loaded/list") return { data: ["thread-1"], nextCursor: null };
+      if (method !== "thread/read" || (params as { includeTurns: boolean }).includeTurns !== false) throw Error("no history hydration");
+      const status = active ? "active" : "idle";
+      if (++reads === 1) { readStarted(); await gate; }
+      return { thread: { id: "thread-1", status: { type: status } } };
+    },
+    async close() { closed++; },
+  };
+  const waiting = waitForLoadedAppServerIdle("ws://127.0.0.1:1", { connect: async () => rpc });
+  await scanned;
+  active = false;
+  notify("thread/status/changed", { threadId: "thread-1", status: { type: "idle" } });
+  releaseRead();
+  await waiting;
+  expect(calls[0]).toBe("subscribe");
+  expect(reads).toBe(2);
+  expect(unsubscribed).toBe(1);
+  expect(closed).toBe(1);
+});
+
+test.each(["abort", "disconnect"])("idle wait preserves uncertainty on %s and closes only its observer", async mode => {
+  let lost!: () => void, scanned!: () => void;
+  const observed = new Promise<void>(resolve => { scanned = resolve; });
+  let closed = 0, detached = 0;
+  const controller = new AbortController();
+  const rpc: CodexAppServerRpc = {
+    subscribe(_, disconnect) { lost = disconnect; return () => { detached++; }; },
+    async request(method) {
+      if (method === "thread/loaded/list") return { data: ["thread-1"], nextCursor: null };
+      if (method === "thread/read") { scanned(); return { thread: { id: "thread-1", status: { type: "active" } } }; }
+      throw Error("no action expected");
+    },
+    async close() { closed++; },
+  };
+  const waiting = waitForLoadedAppServerIdle("ws://127.0.0.1:1", { connect: async () => rpc, signal: controller.signal });
+  await observed;
+  if (mode === "abort") controller.abort(); else lost();
+  await expect(waiting).rejects.toThrow();
+  expect(detached).toBe(1); expect(closed).toBe(1);
 });
 
 describe("Native turn termination observation", () => {

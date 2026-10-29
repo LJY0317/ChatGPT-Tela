@@ -17,10 +17,11 @@ const stopOrder: readonly TelaServiceId[] = ["gateway", "codex", "chat"];
 const startOrder: readonly TelaServiceId[] = ["chat", "codex", "gateway"];
 
 /** Sparkle replaces the app. This command only settles existing Tela service ownership. */
-export async function runApplicationUpdate(action: "prepare" | "finish" | "cancel", input: {
+export async function runApplicationUpdate(action: "wait" | "prepare" | "finish" | "cancel", input: {
   payloadRoot: string; targetBuild?: string; interruptWork?: boolean; options?: PackagedLifecycleOptions;
   verifySignature?: (path: string) => void;
   readBuild?: (path: string) => string;
+  waitForShutdownService?: (service: TelaServiceId) => Promise<void>;
 }) {
   const options = input.options ?? {}, paths = resolveProductPaths(options);
   const step = async <T>(phase: string, run: () => T | Promise<T>, service?: TelaServiceId): Promise<T> => {
@@ -46,6 +47,23 @@ export async function runApplicationUpdate(action: "prepare" | "finish" | "cance
     || JSON.stringify(owner.resources.find(item => item.id === "product-binaries")) !== JSON.stringify(blueprint.payload.resource)) {
     throw Error("application update ownership does not match this installed app");
   }
+  const shutdown = ownedServiceShutdown(owner.installId, paths);
+  const prepare = options.prepareShutdownService ?? (options.shutdownService ? undefined : shutdown.prepare);
+  const controller = new PackagedPlatformServiceController({ blueprint,
+    shutdownService: options.shutdownService ?? shutdown,
+    prepareShutdownService: prepare ? service => step("service_prepare", () => prepare(service), service) : undefined,
+    waitUntilReady: options.waitUntilReady ?? (options.shutdownService ? undefined : shutdown.ready),
+    ...(options.runner ? { runner: options.runner } : {}), ...(options.userId === undefined ? {} : { userId: options.userId }),
+  });
+  // Observation precedes the mutation lock and creates no transition journal.
+  // Native completion precedes detached Chat work it may have launched.
+  if (action === "wait") {
+    for (const service of ["codex", "chat", "gateway"] as const) {
+      if (await step("service_inspect", () => controller.inspect(service), service) !== "running") continue;
+      await step("work_completion", () => (input.waitForShutdownService ?? shutdown.wait)(service), service);
+    }
+    return { ready: true };
+  }
   const verifySignature = input.verifySignature ?? (path => {
     execFileSync("/usr/bin/codesign", ["--verify", "--strict", "--deep", path], { stdio: "pipe" });
   });
@@ -67,14 +85,6 @@ export async function runApplicationUpdate(action: "prepare" | "finish" | "cance
     // Otherwise reuse the fingerprint already proven by ordinary installed verification.
     const fingerprint = await step("payload_verification", () => previous ? packagedPayloadFingerprint(root)
       : verifyInstalledPackage({ payloadRoot: root, pathOptions: options, menuBar: action === "finish" }).receipt.payloadFingerprint);
-    const shutdown = ownedServiceShutdown(owner.installId, paths);
-    const prepare = options.prepareShutdownService ?? (options.shutdownService ? undefined : shutdown.prepare);
-    const controller = new PackagedPlatformServiceController({ blueprint,
-      shutdownService: options.shutdownService ?? shutdown,
-      prepareShutdownService: prepare ? service => step("service_prepare", () => prepare(service), service) : undefined,
-      waitUntilReady: options.waitUntilReady ?? (options.shutdownService ? undefined : shutdown.ready),
-      ...(options.runner ? { runner: options.runner } : {}), ...(options.userId === undefined ? {} : { userId: options.userId }),
-    });
     const installer = new ServiceRegistrationInstaller({ platform: "darwin", ...(options.runner ? { runner: options.runner } : {}) });
     const finish = async (state: MacApplicationUpdate) => {
       if (state.installId !== owner.installId || state.applicationPath !== root

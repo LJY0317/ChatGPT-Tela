@@ -44,17 +44,25 @@ export function ownedServiceShutdown(installId: string, paths: ProductPaths) {
       throw error;
     }
   };
+  const prepare = async (service: TelaServiceId): Promise<void> => {
+    const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json"),
+      shutdownReadiness: true, requestTimeoutMs: PACKAGED_TRANSITION_TIMEOUT_MS });
+    if (!current || current.status.state !== "ready") throw new Error(`${service} runtime is not ready for maintenance`);
+    if (current.status.shutdownReadiness === "blocked") throw new PackagedServiceShutdownNotStartedError(service);
+    // The owner repeats admission on actual shutdown; work can begin after preflight.
+  };
   return Object.assign(shutdown, {
     async ready(service: TelaServiceId, timeoutMs: number): Promise<void> {
       await supervisor.waitUntilReady({ service, timeoutMs,
         descriptorPath: join(paths.serviceRuntime(service), "descriptor.json") });
     },
-    async prepare(service: TelaServiceId): Promise<void> {
-      const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json"),
-        shutdownReadiness: true, requestTimeoutMs: PACKAGED_TRANSITION_TIMEOUT_MS });
+    async wait(service: TelaServiceId): Promise<void> {
+      const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json") });
       if (!current || current.status.state !== "ready") throw new Error(`${service} runtime is not ready for maintenance`);
-      if (current.status.shutdownReadiness === "blocked") throw new PackagedServiceShutdownNotStartedError(service);
-      // The owner repeats admission on actual shutdown; work can begin after preflight.
+      if (service === "codex") await new CodexServiceClient(descriptorForService(current.descriptor, "codex")).waitForShutdownReadiness();
+      else if (service === "chat") await new ChatServiceClient(descriptorForService(current.descriptor, "chat")).waitForShutdownReadiness();
+      else await prepare(service);
     },
+    prepare,
   });
 }

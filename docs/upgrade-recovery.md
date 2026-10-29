@@ -221,6 +221,11 @@ are signed inside out using Sparkle's documented distribution procedure.
 Tela's `application-update` command coordinates services through the existing
 mutation owner and authenticated shutdown/readiness contracts:
 
+- `wait` observes existing Native status broadcasts, Web preparation and detached Chat
+  completion before Sparkle's postponed relaunch continues. It holds no mutation lock,
+  creates no transition journal, polls nothing and never interrupts work. Cancelling
+  Sparkle detaches only this observer. Readiness remains advisory: termination admission
+  still runs if observation fails or new work arrives afterwards.
 - `prepare --target-build N` checks active work before stopping participants,
   records the previously running services, and unloads their exact launchd jobs.
   An AppKit termination veto prevents Sparkle from proceeding when preparation

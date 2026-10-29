@@ -164,7 +164,9 @@ export async function callProcessOwner(descriptor: ProcessOwnerDescriptor, input
     workspaceId: descriptor.workspaceId, requestId });
   if (Buffer.byteLength(body) > MAX_BODY_BYTES) throw new Error("process owner request exceeds its bound");
   const response = await fetch(url, { method: "POST", redirect: "error", headers: { "x-tela-owner-request-signature": signature(descriptor.secret, body, "request"),
-    "content-type": "application/json" }, body, ...(signal ? { signal } : {}) });
+    "content-type": "application/json" }, body,
+    ...(input.action === "await-completion" ? { timeout: false as const } : {}),
+    ...(signal ? { signal } : {}) });
   if (!response.ok) throw new Error(`process owner refused request (${response.status})`);
   const text = await boundedText(response);
   if (!same(response.headers.get("x-tela-owner-signature") ?? "", signature(descriptor.secret, text, "response"))) throw new Error("process owner response authentication failed");
