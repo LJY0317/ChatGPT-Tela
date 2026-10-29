@@ -87,7 +87,8 @@ Reuse the current contracts instead of restoring their parallel registries, mani
 - **Instruction reuse.** Source `open_workspace` accepts the caller's retained `instructionRevision` as
   `known_instruction_revision`, omitting unchanged global/root instruction bodies only on a match scoped
   to that workspace. Default/new-context calls and changed sources return full bodies; no delivery cache
-  or Native revision inference. Source tests pass; installed caller use remains unverified.
+  or Native revision inference. Source tests and installed API round-trips pass; autonomous model use
+  and provider-billed token savings remain unmeasured.
 - **Workspace continuity.** macOS source now records the system volume UUID with the directory inode,
   while Native file helpers receive the current mount's device/inode. Explicit open upgrades an old
   record only while its original identity still matches; an old record already missing that proof must
