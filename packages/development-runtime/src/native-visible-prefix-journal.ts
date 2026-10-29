@@ -171,8 +171,25 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     } finally { await handle.close(); }
   }
   async #write(state: State): Promise<void> {
+    // Published heads are derived data, unlike pending execution claims. Reuse
+    // the existing retention window and byte budget without another cache owner.
+    if (state.checkpoints) {
+      const now = Date.now();
+      const checkpoints = state.checkpoints.filter(item => now - item.updatedAt <= RETENTION_MS)
+        .sort((a, b) => a.updatedAt - b.updatedAt);
+      const sizes = checkpoints.map(item => Buffer.byteLength(JSON.stringify(item), "utf8"));
+      let size = 1 + Buffer.byteLength(JSON.stringify({ ...state, checkpoints: [] }), "utf8")
+        + sizes.reduce((total, bytes) => total + bytes, 0) + Math.max(0, sizes.length - 1)
+        + state.entries.filter(entry => entry.status === "pending").length * RESERVED_ENTRY_BYTES;
+      let first = 0;
+      while (size > MAX_BYTES && first < checkpoints.length) {
+        size -= sizes[first]! + (checkpoints.length - first > 1 ? 1 : 0);
+        first++;
+      }
+      state.checkpoints = checkpoints.slice(first);
+    }
     const bytes = JSON.stringify(state);
-    if (Buffer.byteLength(bytes, "utf8") > MAX_BYTES) throw new Error("Native checkpoint execution journal byte capacity exhausted");
+    if (1 + Buffer.byteLength(bytes, "utf8") > MAX_BYTES) throw new Error("Native checkpoint execution journal byte capacity exhausted");
     const handle = await open(resolve(this.directory, "state.json"), constants.O_RDWR | (constants.O_NOFOLLOW ?? 0));
     try {
       // Flush invalidation BEFORE touching any body byte. Any interrupted body
@@ -267,11 +284,6 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
       const checkpoints = (state.checkpoints ?? []).filter(item =>
         item.scopeFingerprint !== input.scopeFingerprint || item.revisionId !== input.revisionId);
       checkpoints.push({ ...input, contentHash: sha(input.content), updatedAt: Date.now() });
-      // Bound durable summaries by bytes, not scope count. Different revisions
-      // can serve different edited branches, so keep their source-bound heads.
-      if (Buffer.byteLength(JSON.stringify({ ...state, checkpoints }), "utf8") > MAX_BYTES) {
-        throw Error("Native checkpoint journal publication byte capacity exhausted");
-      }
       state.checkpoints = checkpoints;
       await this.#write(state);
     });

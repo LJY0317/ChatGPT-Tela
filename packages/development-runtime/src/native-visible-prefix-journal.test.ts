@@ -174,3 +174,61 @@ test("published checkpoint rotation retains unique recovery heads beyond 32 scop
   expect(await journal.publishedCheckpoints(hash("published-31"))).toHaveLength(1);
   expect(await journal.publishedCheckpoints(hash("published-32"))).toHaveLength(1);
 }), 30_000);
+
+test("publication pressure retires derived heads and reserves pending completion without losing claims", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options);
+  const id = { ...identity(900), key: `native-visible-stage-v2-${hash("pressure-stage")}` }, sourceRootDigest = hash("pressure-root");
+  const claim = await journal.claim(id, hash("pressure-owner"), sourceRootDigest);
+  if (claim.status !== "claimed") throw Error("fixture");
+  await journal.complete({ ...id, status: "completed", claimId: claim.claimId, summary: "new summary" });
+  const path = join(options.directory, "state.json");
+  const state = JSON.parse((await readFile(path, "utf8")).slice(1));
+  const content = JSON.stringify({ type: "tela_native_request_prefix_checkpoint_v1",
+    sourceDigest: sourceRootDigest, completedStageKey: id.key, summary: "x".repeat(39_000) });
+  const publication = { scopeFingerprint: hash("old-scope"),
+    revisionId: `native_${hash("old-revision").slice(0, 20)}`, sourceRootDigest,
+    stageKey: id.key, content, estimatedTokens: Math.ceil(Buffer.byteLength(content) / 4),
+    contentHash: hash(content), updatedAt: Date.now() - 1000 };
+  state.checkpoints = [];
+  const entryBytes = Buffer.byteLength(JSON.stringify(publication)) + 1;
+  const count = Math.floor((16 * 1024 * 1024 - 1500 - Buffer.byteLength(JSON.stringify(state))) / entryBytes);
+  state.checkpoints = Array.from({ length: count }, (_, i) => ({ ...publication,
+    scopeFingerprint: hash(`old-scope-${i}`) }));
+  await writeFile(path, "=" + JSON.stringify(state));
+  const pending = await journal.claim(identity(901), hash("pending-owner"));
+  if (pending.status !== "claimed") throw Error("fixture");
+  const nextContent = JSON.stringify({ type: "tela_native_request_prefix_checkpoint_v1",
+    sourceDigest: sourceRootDigest, completedStageKey: id.key, summary: "new summary" });
+  const nextScope = hash("new-scope");
+  await journal.publishCheckpoint({ scopeFingerprint: nextScope,
+    revisionId: `native_${hash("new-revision").slice(0, 20)}`, sourceRootDigest,
+    stageKey: id.key, content: nextContent, estimatedTokens: Math.ceil(Buffer.byteLength(nextContent) / 4) });
+  expect(await journal.pendingOperations()).toHaveLength(1);
+  // Worst JSON escaping must fit after publications have used the available room.
+  await journal.complete({ ...identity(901), claimId: pending.claimId, status: "completed", summary: "\u0000".repeat(32 * 1024) });
+  expect(await journal.publishedCheckpoints(hash("old-scope-0"))).toHaveLength(0);
+  expect(await journal.publishedCheckpoints(nextScope)).toHaveLength(1);
+  expect(await journal.claim(identity(901))).toMatchObject({ status: "completed" });
+  expect(Buffer.byteLength(await readFile(path, "utf8"))).toBeLessThanOrEqual(16 * 1024 * 1024);
+}));
+
+test("expired derived publications leave pending and completed execution receipts intact", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options);
+  const id = { ...identity(950), key: `native-visible-stage-v2-${hash("expired-stage")}` }, sourceRootDigest = hash("expired-root");
+  const claim = await journal.claim(id, hash("expired-owner"), sourceRootDigest);
+  if (claim.status !== "claimed") throw Error("fixture");
+  await journal.complete({ ...id, claimId: claim.claimId, status: "completed", summary: "saved summary" });
+  const content = JSON.stringify({ type: "tela_native_request_prefix_checkpoint_v1",
+    sourceDigest: sourceRootDigest, completedStageKey: id.key, summary: "saved summary" });
+  const scopeFingerprint = hash("expired-scope");
+  await journal.publishCheckpoint({ scopeFingerprint, revisionId: `native_${hash("expired-revision").slice(0, 20)}`,
+    sourceRootDigest, stageKey: id.key, content, estimatedTokens: Math.ceil(Buffer.byteLength(content) / 4) });
+  const path = join(options.directory, "state.json");
+  const state = JSON.parse((await readFile(path, "utf8")).slice(1));
+  state.checkpoints[0].updatedAt -= 29 * 24 * 60 * 60 * 1000;
+  await writeFile(path, "=" + JSON.stringify(state));
+  await journal.claim(identity(951), hash("still-pending-owner"));
+  expect(await journal.publishedCheckpoints(scopeFingerprint)).toHaveLength(0);
+  expect(await journal.claim(id, hash("expired-owner"), sourceRootDigest)).toMatchObject({ status: "completed", summary: "saved summary" });
+  expect(await journal.pendingOperations()).toHaveLength(1);
+}));

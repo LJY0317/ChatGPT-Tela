@@ -154,7 +154,10 @@ paid Native fallback or fragment/merge chain is authorized by this policy.
 
 One account-scoped stage journal owns summary submissions and completed receipts.
 Caches are disposable derived data. Preserve compatible published checkpoints across
-cache loss; never clear uncertain claims to allow another send. Exact account,
+cache loss; never clear uncertain claims to allow another send. Journal writes retire
+published heads older than 28 days, then the oldest derived heads as needed within the
+existing 16 MiB budget, reserving room for pending completions. This does not expire
+pending execution claims or add background cleanup. Exact account,
 policy, source and active ancestry determine derived-summary reuse. Model/effort and task
 identity still bind execution claims and uncertain operations. Physical session reuse
 requires the same model; effort is applied per submit without retiring a proven page. Current turn identity
