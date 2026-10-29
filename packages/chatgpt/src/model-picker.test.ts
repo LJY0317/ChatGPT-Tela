@@ -16,6 +16,52 @@ function pickerSurface(page: BrowserPageAutomation): BrowserSurfaceLease {
     capability: (key: unknown) => key === BROWSER_PAGE_AUTOMATION ? page : undefined } as BrowserSurfaceLease;
 }
 
+for (const disabledBy of ["native", "aria"] as const) {
+  test(`model discovery waits for a mounted ${disabledBy}-disabled control before activation`, async () => {
+    let disabled = true, observations = 0, activations = 0;
+    class Element {
+      constructor(readonly kind: string) {}
+      get disabled() { return this.kind === "control" && disabledBy === "native" && disabled; }
+      getClientRects() { return [{}]; }
+      getBoundingClientRect() { return { left: 0, top: 0, width: 10, height: 10 }; }
+      getAttribute(name: string) { return this.kind === "control" && name === "aria-disabled"
+        && disabledBy === "aria" ? String(disabled) : null; }
+      closest() { return form; }
+      querySelector() { return null; }
+      querySelectorAll() { return this.kind === "form" ? [control] : []; }
+      contains(element: unknown) { return element === this; }
+    }
+    const form = new Element("form"), composer = new Element("composer"), control = new Element("control");
+    const page: BrowserPageAutomation = {
+      async evaluate(source) {
+        if (source.includes("chatgpt-tela-model-picker-activate-v1")) {
+          activations++;
+          throw Error(disabled ? "activated disabled control" : "enabled control reached");
+        }
+        const snapshot = runInNewContext(`(${source})()`, {
+          HTMLElement: Element,
+          getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+          document: {
+            querySelectorAll: (selector: string) => selector.includes("prompt-textarea") ? [composer]
+              : selector.includes("button[") ? [control] : [],
+            getElementById: () => null, elementFromPoint: () => control,
+            hasFocus: () => false, hidden: false, readyState: "complete", activeElement: null,
+          },
+        });
+        if (++observations === 2) disabled = false;
+        return snapshot;
+      },
+      async pressKey() { throw Error("unexpected keypress"); }, async pointerClick() { throw Error("unexpected pointer"); },
+      async typeFocusedEditable() {}, async clearFocusedEditable() {},
+      async mutationRevision() { return 0; }, async waitForDomMutation() { return 1; },
+    };
+    await expect(selectChatGptWebModel(pickerSurface(page), { familyKey: chatGptWebFamilyKey("Fixture"), effort: "low" }))
+      .rejects.toThrow("enabled control reached");
+    expect(observations).toBe(3);
+    expect(activations).toBe(1);
+  });
+}
+
 describe("ChatGPT Web model route identity", () => {
   test("a dismissed menu that reopens simple does not falsely prove advanced preference", async () => {
     let opened = true, advanced = false, pointerActivations = 0;
@@ -324,16 +370,18 @@ for (const scenario of [
 
 // Exercise the actual renderer observation, rather than returning a fabricated snapshot.
 for (const scenario of [
-  { name: "open menu with transparent presentation", open: true, rendered: true, expected: 1 },
-  { name: "closed retained menu", open: false, rendered: true, expected: 0 },
-  { name: "open control without rendered menu", open: true, rendered: false, expected: 0 },
+  { name: "open menu with transparent presentation", open: true, rendered: true, disabled: false, expected: 1 },
+  { name: "closed retained menu", open: false, rendered: true, disabled: false, expected: 0 },
+  { name: "open control without rendered menu", open: true, rendered: false, disabled: false, expected: 0 },
+  { name: "owned open menu with a disabled trigger", open: true, rendered: true, disabled: true, expected: 1 },
 ]) {
   test(`picker uses owned open state: ${scenario.name}`, async () => {
-    let observation: { menuCount: number; controlOpen: boolean } | undefined;
+    let observation: { menuCount: number; controlOpen: boolean; controlCount: number } | undefined;
     let activations = 0;
     class Element {
       isConnected = true;
       constructor(readonly kind: string) {}
+      get disabled() { return this.kind === "control" && scenario.disabled; }
       getClientRects() { return this.kind === "menu" && !scenario.rendered ? [] : [{}]; }
       getBoundingClientRect() { return { left: 0, top: 0, width: 10, height: 10 }; }
       getAttribute(name: string) {
@@ -374,7 +422,7 @@ for (const scenario of [
     const surface = pickerSurface(page);
     await expect(selectChatGptWebModel(surface, { familyKey: chatGptWebFamilyKey("Fixture"), effort: "low" }))
       .rejects.toThrow("fixture observation complete");
-    expect(observation).toMatchObject({ menuCount: scenario.expected, controlOpen: scenario.open });
+    expect(observation).toMatchObject({ menuCount: scenario.expected, controlOpen: scenario.open, controlCount: 1 });
     expect(activations).toBe(0);
   });
 }

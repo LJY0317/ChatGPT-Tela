@@ -254,7 +254,9 @@ const OBSERVE_MODEL_PICKER = String.raw`function () {
       globalControlCount: [...document.querySelectorAll(${JSON.stringify(CHATGPT_MODEL_CONTROL_SELECTOR)})].filter(visible).length,
       formButtonCount: form ? [...form.querySelectorAll('button')].filter(visible).length : 0,
     },
-    controlCount: controls.length,
+    // A mounted disabled trigger is not ready for activation. Keep raw controls
+    // in structural diagnostics while the existing control wait observes readiness.
+    controlCount: control && menuCount === 0 && (control.disabled || control.getAttribute('aria-disabled') === 'true') ? 0 : controls.length,
     controlOpen,
     controlPoint: point(control),
     menuCount,
