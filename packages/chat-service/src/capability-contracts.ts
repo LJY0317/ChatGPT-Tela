@@ -56,7 +56,10 @@ export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] =
   {
     capability: "open_workspace",
     description: "Open or reuse one locally approved workspace root. Reuse the returned workspace_id for continued work. Follow returned user-level and project-root instructions; before working under a subtree listed in availableInstructionFiles, read its applicable instruction file. If instructionScanComplete is false, do not assume undiscovered subtrees have no instructions. A Git workspace also establishes or reuses a private last-shown review baseline when safe. The workspace remains user-owned.",
-    inputSchema: object({ path }, ["path"]),
+    inputSchema: object({ path, known_instruction_revision: {
+      type: "string", pattern: "^[a-f0-9]{64}$",
+      description: "Only pass instructionRevision from this workspace's prior Tela Chat result when its full instructions remain in your current context. Omit in a new chat or after context loss. Matching sources return instructionsUnchanged=true without repeating bodies; edits return full instructions.",
+    } }, ["path"]),
   },
   {
     capability: "export_file",

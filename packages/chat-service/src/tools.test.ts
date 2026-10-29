@@ -146,6 +146,7 @@ describe("Tela Chat first vertical slice", () => {
       writeFileSync(join(f.root, "node_modules", "ignored", "AGENTS.md"), "dependency rules\n");
 
       const opened = await f.runtime.call("open_workspace", { path: f.root }) as {
+        instructionRevision: string;
         instructions: readonly { path: string; content: string; source: string; scope: string }[];
         availableInstructionFiles: readonly string[];
         instructionScanComplete: boolean;
@@ -161,6 +162,15 @@ describe("Tela Chat first vertical slice", () => {
         "packages/app/CLAUDE.MD",
       ]);
       expect(opened.instructionScanComplete).toBe(true);
+      const repeated = await f.runtime.call("open_workspace", { path: f.root,
+        known_instruction_revision: opened.instructionRevision }) as { instructions: unknown[]; instructionsUnchanged: boolean };
+      expect(repeated.instructionsUnchanged).toBe(true);
+      expect(repeated.instructions).toEqual([]);
+      writeFileSync(join(f.root, "AGENTS.md"), "updated root rules\n");
+      const changed = await f.runtime.call("open_workspace", { path: f.root,
+        known_instruction_revision: opened.instructionRevision }) as { instructions: { content: string }[]; instructionsUnchanged: boolean };
+      expect(changed.instructionsUnchanged).toBe(false);
+      expect(changed.instructions.some(row => row.content === "updated root rules\n")).toBe(true);
     } finally {
       await f.runtime.close();
       removeFixture(f.base);

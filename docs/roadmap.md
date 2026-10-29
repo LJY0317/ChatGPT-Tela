@@ -67,8 +67,9 @@ Reuse the current contracts instead of restoring their parallel registries, mani
 - **Unanswered requests.** Source now preserves new prompts/images in private journal sidecars before
   submission; local retrieval survives Native deletion and explicit review can settle a question using
   another verified job answer. Collection is not settlement. Existing retention reclaims reviewed history;
-  unresolved originals are protected. No replay scheduler. Installed acceptance remains pending; old
-  hash-only questions and external reference contents cannot be reconstructed from these sidecars.
+  unresolved originals are protected. Installed acceptance passed one new Web question through collection,
+  explicit review, archive and deletion; old hash-only questions and external reference contents cannot
+  be reconstructed from these sidecars. No replay scheduler.
 - **Advisory capacity.** Source policies now target 32 unarchived managed conversations and ten browser
   surfaces per profile through the existing archival/retirement lifecycles. Pressure archives the oldest
   idle collected conversations; ordinary chats, uncollected answers, queued/active work and manual
@@ -83,9 +84,10 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   cleanup actions remain open; do not infer that a protected result has been collected from these counts.
   These are soft targets: no numeric rejection, forced close of protected work or indefinite admission
   wait. Installed acceptance remains separate from source verification.
-- **Instruction reuse.** Explicit rediscovery may omit unchanged instruction bodies only with a matching
-  workspace-scoped source revision previously delivered to that caller. Native revision IDs do not prove
-  standalone Chat delivery; changed global/project instructions must still be returned.
+- **Instruction reuse.** Source `open_workspace` accepts the caller's retained `instructionRevision` as
+  `known_instruction_revision`, omitting unchanged global/root instruction bodies only on a match scoped
+  to that workspace. Default/new-context calls and changed sources return full bodies; no delivery cache
+  or Native revision inference. Source tests pass; installed caller use remains unverified.
 - **Workspace continuity.** macOS source now records the system volume UUID with the directory inode,
   while Native file helpers receive the current mount's device/inode. Explicit open upgrades an old
   record only while its original identity still matches; an old record already missing that proof must

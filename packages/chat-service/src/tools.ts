@@ -296,7 +296,10 @@ export function createChatToolRuntime(input: {
         case "open_workspace": {
           const workspace = workspaces.open(text(args.path, "workspace path"));
           const reviewBaseline = await changes.initializeWorkspace(workspace.id);
-          return Object.freeze({ ...workspace, ...discoverWorkspaceInstructions(workspace.root), reviewBaseline });
+          return Object.freeze({ ...workspace, ...discoverWorkspaceInstructions(workspace.root,
+            args.known_instruction_revision === undefined ? {} : {
+              knownInstructionRevision: text(args.known_instruction_revision, "known_instruction_revision"),
+            }), reviewBaseline });
         }
         case "inspect_native_work": {
           // The open workspace is a user-approved Chat context gate, not

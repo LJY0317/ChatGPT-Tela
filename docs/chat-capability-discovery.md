@@ -40,3 +40,11 @@ needed for the current action using the existing catalog filter. The source fixt
 catalog adds 5,578 UTF-8 bytes; its single `exec_command` query is 743 bytes including the input
 schema. Regression ceilings are 6 KiB of full-catalog metadata and 1 KiB for that query. These are
 local serialized-byte budgets, not provider-billed tokens, measured model savings or parity proof.
+
+`open_workspace` returns an `instructionRevision` for its global and project-root instruction set.
+Supply it as `known_instruction_revision` only when that exact prior set remains in the caller's context.
+A matching workspace-scoped revision returns `instructionsUnchanged: true` and an empty `instructions`
+array; this means reuse the retained set, not that no instructions apply. New chats or lost context omit
+the argument to receive full bodies. Changed sources return a new revision and the full current set,
+which supersedes the old set. Nested files remain explicit reads advertised by `availableInstructionFiles`;
+this revision does not attest their contents. No server-side delivery history, cache or model call is added.

@@ -33,10 +33,18 @@ describe("workspace instruction discovery", () => {
     expect(first.availableInstructionFiles).toContain("src/AGENTS.md");
     expect(first.globalInstructionStatus).toBe("loaded");
     expect(first.availableInstructionFiles).not.toContain("~/.codex/AGENTS.md");
+    const repeated = discoverWorkspaceInstructions(root, { codexHome, knownInstructionRevision: first.instructionRevision });
+    expect(repeated.instructionsUnchanged).toBe(true);
+    expect(repeated.instructions).toEqual([]);
+    expect(repeated.availableInstructionFiles).toEqual(first.availableInstructionFiles);
+    // The same files are still required for a caller that did not retain that delivery.
+    expect(discoverWorkspaceInstructions(root, { codexHome }).instructions).toEqual(first.instructions);
 
     writeFileSync(join(codexHome, "AGENTS.md"), "global-v2\n");
     unlinkSync(join(root, "AGENTS.md"));
-    const second = discoverWorkspaceInstructions(realpathSync(root), { codexHome: realpathSync(codexHome) });
+    const second = discoverWorkspaceInstructions(realpathSync(root), { codexHome: realpathSync(codexHome),
+      knownInstructionRevision: first.instructionRevision });
+    expect(second.instructionsUnchanged).toBe(false);
     expect(second.instructions).toEqual([{ path: join(codexHome, "AGENTS.md"), content: "global-v2\n", source: "global", scope: "user" }]);
     expect(second.globalInstructionStatus).toBe("loaded");
 
@@ -54,6 +62,15 @@ describe("workspace instruction discovery", () => {
     expect(result.globalInstructionStatus).toBe("oversized");
     expect(result.instructionScanComplete).toBe(false);
   });
+});
+
+test("an instruction revision from another workspace cannot suppress identical prose", () => {
+  const codexHome = realpathSync(directory()), first = realpathSync(directory()), second = realpathSync(directory());
+  for (const root of [first, second]) writeFileSync(join(root, "AGENTS.md"), "same rules");
+  const original = discoverWorkspaceInstructions(first, { codexHome });
+  const different = discoverWorkspaceInstructions(second, { codexHome, knownInstructionRevision: original.instructionRevision });
+  expect(different.instructionsUnchanged).toBe(false);
+  expect(different.instructions[0]?.content).toBe("same rules");
 });
 
  test("follows user-managed global links and keeps workspace link boundaries", () => {

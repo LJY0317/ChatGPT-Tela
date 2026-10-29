@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { relative, resolve, sep } from "node:path";
 import { resolveExistingWorkspacePath } from "./paths";
@@ -19,6 +20,8 @@ export interface ChatLoadedInstruction {
 }
 
 export interface ChatWorkspaceInstructionContext {
+  readonly instructionRevision: string;
+  readonly instructionsUnchanged: boolean;
   readonly instructions: readonly ChatLoadedInstruction[];
   readonly availableInstructionFiles: readonly string[];
   readonly instructionScanComplete: boolean;
@@ -44,7 +47,10 @@ function readInstruction(root: string, path: string): { readonly bytes: number; 
  * before work under that subtree. Directory traversal is deterministic and bounded so opening a workspace
  * cannot become an unbounded repository crawl.
  */
-export function discoverWorkspaceInstructions(root: string, options: { readonly codexHome?: string } = {}): ChatWorkspaceInstructionContext {
+export function discoverWorkspaceInstructions(root: string, options: {
+  readonly codexHome?: string;
+  readonly knownInstructionRevision?: string;
+} = {}): ChatWorkspaceInstructionContext {
   const loaded: ChatLoadedInstruction[] = [];
   const available = new Set<string>();
   let loadedBytes = 0;
@@ -137,10 +143,17 @@ export function discoverWorkspaceInstructions(root: string, options: { readonly 
     }
   }
 
-  return Object.freeze({
+  const context = {
     instructions: Object.freeze(loaded),
     availableInstructionFiles: Object.freeze([...available].sort()),
     instructionScanComplete: scanComplete,
     globalInstructionStatus,
-  });
+  };
+  // The caller supplies a revision only when its exact prior result remains in context.
+  // No server-side cache or Native revision can establish delivery to a new Chat.
+  const instructionRevision = createHash("sha256").update("tela-chat-instructions-v1\0")
+    .update(JSON.stringify({ root: resolve(root), ...context })).digest("hex");
+  const instructionsUnchanged = options.knownInstructionRevision === instructionRevision;
+  return Object.freeze({ ...context, instructionRevision, instructionsUnchanged,
+    instructions: instructionsUnchanged ? Object.freeze([]) : context.instructions });
 }
