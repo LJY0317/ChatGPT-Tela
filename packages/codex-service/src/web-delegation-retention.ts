@@ -233,9 +233,11 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           const latest = Array.isArray(tail?.data) ? object(tail.data[0]) : undefined;
           if (!latest || !["completed", "failed", "interrupted"].includes(latest.status)
             || nativeState === "active" || !jobs.some(job => job.turnId === latest.id)) continue;
-          publicOperation = "thread_queue_list";
-          const queue = object(await rpc.request("thread/queue/list", { threadId: record.threadId, limit: 1 }, input.signal));
-          if (!Array.isArray(queue?.data) || queue.data.length || queue.nextCursor != null) continue;
+          if (!present.archived) {
+            publicOperation = "thread_queue_list";
+            const queue = object(await rpc.request("thread/queue/list", { threadId: record.threadId, limit: 1 }, input.signal));
+            if (!Array.isArray(queue?.data) || queue.data.length || queue.nextCursor != null) continue;
+          }
           if (!sameAccountOwner(record, await adapters.owner(record.slot))) continue;
           historyEligible.add(`${record.slot}:${record.owner.accountFingerprint}:${record.threadId}`);
           // The receipt's file time is the exclusion boundary for old and new receipts.
@@ -279,10 +281,14 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           || jobs.some(job => !["completed", "failed", "linked"].includes(job.state))) {
           skipped("active_or_unresolved_tail"); continue;
         }
-        publicOperation = "thread_queue_list";
-        const queue = object(await rpc.request("thread/queue/list", { threadId: record.threadId, limit: 1 }, input.signal));
-        if (!Array.isArray(queue?.data)) throw Error("Native queued work inventory unavailable");
-        if (queue.data.length || queue.nextCursor != null) { skipped("queued_work", "managed"); continue; }
+        // Archived Native threads reject Queue access. Their unchanged archive
+        // receipt already proves the lifecycle boundary; only live threads need it.
+        if (!present.archived) {
+          publicOperation = "thread_queue_list";
+          const queue = object(await rpc.request("thread/queue/list", { threadId: record.threadId, limit: 1 }, input.signal));
+          if (!Array.isArray(queue?.data)) throw Error("Native queued work inventory unavailable");
+          if (queue.data.length || queue.nextCursor != null) { skipped("queued_work", "managed"); continue; }
+        }
         // Recheck the account before changing Native conversation state.
         publicOperation = "owner_recheck";
         if (!sameAccountOwner(record, await adapters.owner(record.slot))) { skipped("owner_changed_before_mutation", "managed"); continue; }

@@ -51,7 +51,10 @@ function fixture(statusShape: "object" | "string" = "object") {
             status: statusShape === "string" ? native.status : { type: native.status } }] : [], nextCursor: null };
       }
       if (method === "thread/turns/list") return { data: [{ id: native.tailId, status: native.turnStatus }] };
-      if (method === "thread/queue/list") return { data: native.queued ? [{ id: "queued" }] : [], nextCursor: null };
+      if (method === "thread/queue/list") {
+        if (native.archived) throw Error(`session ${record.threadId} is archived. Run codex unarchive first.`);
+        return { data: native.queued ? [{ id: "queued" }] : [], nextCursor: null };
+      }
       if (method === "thread/archive") {
         native.archived = true;
         native.updatedAt++;
@@ -715,6 +718,7 @@ test("excluded history waits for empty Native queue and the managed latest turn"
     f.store.collect(f.record.id, f.origin);
     f.native.archived = true;
     await f.run(f.origin + DAY);
+    f.native.archived = false; // Queue operations apply after an explicit restore.
     f.native.queued = true;
     await f.run(f.origin + 40 * DAY);
     expect(f.store.get(f.record.id)?.answer).toBe("result");
