@@ -20,6 +20,7 @@ interface RequestHeader {
   readonly createdAt: number;
   readonly inputBytes: number;
   readonly inputHash: string;
+  readonly answerEvidence?: { readonly jobId: string; readonly finalEvidence: NonNullable<WebDelegationRecord["finalEvidence"]> };
   readonly execution: Pick<WebDelegationRecord, "state" | "parentJobId" | "threadId" | "turnId" | "failure" | "failureNativeCode" | "toolItems" | "toolResultItems">;
   readonly settlement?: { readonly answerJobId: string; readonly at: number };
 }
@@ -92,17 +93,21 @@ export class WebDelegationRequests {
     if (!header) return;
     const input = JSON.parse(this.#body(record.id, header).toString()) as OriginalWebInput;
     const body = JSON.stringify({ ...input, ...(answer && !header.settlement ? { recoveredAnswer: answer } : {}) }) + "\n";
-    this.#write({ ...header, execution: execution(record), inputBytes: Buffer.byteLength(body),
+    this.#write({ ...header, execution: execution(record),
+      ...(answer && record.finalEvidence && !header.settlement ? { answerEvidence: { jobId: record.id, finalEvidence: record.finalEvidence } } : {}),
+      inputBytes: Buffer.byteLength(body),
       inputHash: createHash("sha256").update(body).digest("hex") }, body);
   }
   /** Caller has explicitly reviewed a verified answer; transport collection never calls this. */
-  settle(id: string, answerJobId: string, answer: string, now = Date.now()): void {
+  settle(id: string, answer: { readonly jobId: string; readonly text: string;
+    readonly finalEvidence: NonNullable<WebDelegationRecord["finalEvidence"]> }, now = Date.now()): void {
     const header = this.header(id);
-    if (!header || !UUID.test(answerJobId)) throw Error("Original request or answer identity is unavailable");
+    if (!header || !UUID.test(answer.jobId)) throw Error("Original request or answer identity is unavailable");
     if (header.settlement) return;
     const input = this.input(id);
-    const body = JSON.stringify({ ...input, recoveredAnswer: answer }) + "\n";
-    this.#write({ ...header, settlement: { answerJobId, at: now }, inputBytes: Buffer.byteLength(body),
+    const body = JSON.stringify({ ...input, recoveredAnswer: answer.text }) + "\n";
+    this.#write({ ...header, settlement: { answerJobId: answer.jobId, at: now },
+      answerEvidence: { jobId: answer.jobId, finalEvidence: answer.finalEvidence }, inputBytes: Buffer.byteLength(body),
       inputHash: createHash("sha256").update(body).digest("hex") }, body);
   }
   list(input: { slot?: number; after?: string; limit?: number } = {}) {

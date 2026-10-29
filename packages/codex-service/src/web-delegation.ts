@@ -457,12 +457,11 @@ export class WebDelegationStore {
     const groups = new Map<string, WebDelegationRecord[]>();
     const identity = (record: WebDelegationRecord) => `${record.slot}:${record.owner.accountFingerprint}:${record.threadId}`;
     for (const record of records) {
-      if (!record.threadId) continue;
-      const key = identity(record);
+      const key = record.threadId ? identity(record) : record.id;
       groups.set(key, [...(groups.get(key) ?? []), record]);
     }
     const candidates = [...groups.entries()].flatMap(([key, jobs]) => {
-      if (!eligible.has(key) || this.threadRetention(jobs[0]!)?.state !== "excluded"
+      if (jobs[0]!.threadId && (!eligible.has(key) || this.threadRetention(jobs[0]!)?.state !== "excluded")
         || jobs.some(job => !reclaimable(job))) return [];
       const collected = Math.max(...jobs.map(job => this.collectedAt(job.id) ?? reviewedAt(job)!));
       const size = jobs.reduce((sum, job) => sum + ["", ".collected", ".failed", ".completed", ".named", ".naming"].reduce((total, suffix) => {
@@ -482,19 +481,21 @@ export class WebDelegationStore {
         return !current || !reclaimable(current);
       })) continue;
       const record = jobs[0]!;
-      if (this.threadRetention(record)?.state !== "excluded") continue;
+      if (record.threadId && this.threadRetention(record)?.state !== "excluded") continue;
       // A continuation may have acquired its thread lease after the retention
       // pass observed the Native tail. An unknown lease is protected too.
-      if (this.#leaseOwner(this.#threadPermit(record.threadId!)) !== "free") continue;
-      const key = { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! };
+      if (record.threadId && this.#leaseOwner(this.#threadPermit(record.threadId)) !== "free") continue;
       for (const job of jobs) {
         this.requests.remember(job, verifiedWebDelegationAnswer(job));
         this.#release(job); this.#removeRecordFiles(job.id); removed++;
       }
-      delegationBoundary(record.id, "collected_history_pruned", { thread_linked: true });
+      delegationBoundary(record.id, "collected_history_pruned", { thread_linked: Boolean(record.threadId) });
       bytes -= size;
-      const receipt = webDelegationRetentionPath(this.root, key);
-      if (existsSync(receipt)) unlinkSync(receipt);
+      if (record.threadId) {
+        const receipt = webDelegationRetentionPath(this.root, { slot: record.slot,
+          accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId });
+        if (existsSync(receipt)) unlinkSync(receipt);
+      }
     }
     return { removed, ...(next === Infinity ? {} : { next }) };
   }
@@ -683,11 +684,14 @@ export class WebDelegationStore {
   /** Explicit reviewer attestation, never inferred from collecting a transport result. */
   settleRequest(id: string, answerJobId: string): void {
     const answerRecord = this.get(answerJobId);
-    const answer = answerRecord && verifiedWebDelegationAnswer(answerRecord);
-    if (!answer) throw Error("Review a verified answer before settling the original request");
+    const preserved = !answerRecord ? this.requests.header(answerJobId) : undefined;
+    const finalEvidence = answerRecord?.finalEvidence ?? preserved?.answerEvidence?.finalEvidence;
+    const answer = answerRecord ? verifiedWebDelegationAnswer(answerRecord)
+      : preserved?.answerEvidence?.jobId === answerJobId ? this.requests.input(answerJobId).recoveredAnswer : undefined;
+    if (!answer?.trim() || !finalEvidence) throw Error("Review a verified answer before settling the original request");
     const original = this.get(id);
     if (original) this.requests.remember(original);
-    this.requests.settle(id, answerJobId, answer);
+    this.requests.settle(id, { jobId: answerJobId, text: answer, finalEvidence });
   }
   save(record: WebDelegationRecord): WebDelegationRecord {
     if (this.#terminal(record)) {

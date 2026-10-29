@@ -34,7 +34,10 @@ test("original input export and explicit review work offline after source chat d
     await expect(runWebDelegationCommand(["request", "--job", record.id, "--output", output], paths)).rejects.toThrow();
     const answer = { ...record, id: randomUUID(), threadId: randomUUID() };
     store.reserve(answer);
+    store.requests.capture(answer, { prompt: "Replacement question" });
     store.save({ ...answer, state: "completed", answer: "Reviewed answer", finalEvidence: "explicit-final-phase" });
+    store.settleRequest(answer.id, answer.id);
+    store.removeDeletedThread({ slot: answer.slot, accountFingerprint: answer.owner.accountFingerprint, threadId: answer.threadId });
     await runWebDelegationCommand(["settle-request", "--job", record.id, "--answer-job", answer.id], paths);
     expect(store.requests.input(record.id).recoveredAnswer).toBe("Reviewed answer");
     expect(store.requests.list().data).toEqual([]);

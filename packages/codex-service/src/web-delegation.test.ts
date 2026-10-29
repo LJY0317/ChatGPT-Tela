@@ -210,8 +210,15 @@ test("original input survives restart and deleted Native history; collection is 
     expect(f.store.requests.input(f.id).recoveredAnswer).toBe("verified design");
     expect(f.store.requests.header(f.id)?.execution.turnId).toBe(result.turnId);
     expect(f.store.requests.list().data).toHaveLength(2);
-    // Deletion preserves proof for reading, but a removed replacement is not an unchecked settlement authority.
-    expect(() => f.store.settleRequest(f.id, replacement.id)).toThrow("verified answer");
+    // Explicit review uses the verified answer preserved before deletion, without another model request.
+    f.store.settleRequest(f.id, replacement.id);
+    expect(f.store.requests.header(f.id)?.settlement?.answerJobId).toBe(replacement.id);
+    expect(f.store.requests.input(f.id).recoveredAnswer).toBe("verified design");
+    // The replaced text must not be attributed to the original job's own answer proof.
+    const pending = randomUUID();
+    f.store.requests.capture({ ...result, id: pending }, { prompt: "Another unresolved question" });
+    expect(() => f.store.settleRequest(pending, f.id)).toThrow("verified answer");
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(2);
   } finally { f.cleanup(); }
 });
 test("failed original is retained until explicit review of a verified replacement", async () => {
@@ -253,6 +260,33 @@ test("private original images round-trip and only reviewed originals expire", as
     expect(() => f.store.requests.input(randomUUID())).toThrow("older job");
     writeFileSync(join(f.root, `${id}.request.ndjson`), readFileSync(join(f.root, `${id}.request.ndjson`), "utf8").replace("Inspect this", "Changed text"));
     expect(() => f.store.requests.input(id)).toThrow("changed");
+  } finally { f.cleanup(); }
+});
+test("reviewed failures before thread creation expire in the same local history pass", async () => {
+  const f = await fixture();
+  try {
+    const answer = await f.run();
+    const failed: WebDelegationRecord = { id: randomUUID(), state: "reserved", slot: answer.slot,
+      cwd: answer.cwd, createdAt: Date.now(), owner: answer.owner, session: answer.session };
+    f.store.reserve(failed);
+    f.store.requests.capture(failed, { prompt: "Failure before a Native chat existed" });
+    f.store.save({ ...failed, state: "failed", failure: "transport_or_ack" });
+    const pending = { ...failed, id: randomUUID() };
+    f.store.reserve(pending);
+    f.store.requests.capture(pending, { prompt: "Keep this unreviewed question" });
+    f.store.save({ ...pending, state: "failed", failure: "transport_or_ack" });
+    f.store.settleRequest(failed.id, answer.id);
+    const now = Date.now();
+    expect(f.store.pruneCollectedHistory(new Set(), now).removed).toBe(0);
+    expect(f.store.pruneCollectedHistory(new Set(), now).next).toBeGreaterThan(now);
+    const future = now + 31 * 86_400_000;
+    expect(f.store.pruneCollectedHistory(new Set(), future).removed).toBe(1);
+    f.store.requests.prune(future);
+    expect(f.store.get(failed.id)).toBeUndefined();
+    expect(f.store.requests.header(failed.id)).toBeUndefined();
+    expect(f.store.get(pending.id)).toBeDefined();
+    expect(f.store.requests.input(pending.id).prompt).toBe("Keep this unreviewed question");
+    expect(f.calls.filter(call => call.method === "thread/delete" || call.method === "thread/archive")).toHaveLength(0);
   } finally { f.cleanup(); }
 });
 test("failed result inspection names once without starting collected retention", async () => {

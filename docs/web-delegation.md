@@ -94,10 +94,13 @@ these originals or a verified answer recovered before deletion. References in a 
 this is not a snapshot of every workspace file or the entire Native history.
 
 After reviewing a verified answer against the original question, use `settle-request` explicitly.
-The answer may come from another profile. Result collection and transport completion never imply
+The answer may come from another profile or a verified answer preserved before its chat/job was deleted.
+Preserved answer evidence stays bound to its source job; plain copied text is not verification.
+Result collection and transport completion never imply
 that the question was answered; settlement does not change an execution failure into success or
 authorize replay. Reviewed answers are retained with the original input. Settled history follows the
 existing 30-day/16-MiB cleanup target after its job history is reclaimed; unresolved questions are protected.
+Reviewed terminal failures before chat creation use the same local-history cleanup without a Native operation.
 Older hash-only jobs cannot reconstruct their original input and report that limit explicitly.
 
 The optional `--image-file` sends inline PNG/JPEG/GIF/WebP image bytes with either start or continuation (at most eight images per turn). Omitting it on continuation does not resend previous images. Arbitrary file uploads are not part of the supported Native `turn/start` input here; `--file` is rejected. For an existing workspace file, give the worker its authorized path to inspect with discovered tools; a path reference is not proof of upload or read receipt.
