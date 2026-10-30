@@ -131,8 +131,10 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   ownership comparison is not an atomic cross-process compare-and-delete; distinguish that limit from
   accepted ordinary shutdown and do not add stricter startup gates to mask it.
 - **macOS application acceptance.** Packaged app discovery, accessibility and Control Center interaction
-  pass. Verify Spotlight discovery and normal reopen/menu-only quit while retaining existing services
-  and browser work; keep installation/removal ownership separate from closing the UI.
+  pass. Normal OS termination and LaunchServices relaunch preserve service/profile process identities,
+  Native routes and an active Native turn, with one menu instance after relaunch. Spotlight, the actual
+  Quit menu interaction and preservation of actively generating Web windows remain unverified; keep
+  installation/removal ownership separate from closing the UI.
 - Improve Control Center profile rows, compact contextual help and the Web-session sidebar/preview.
   Keep previews on demand and retain existing session selection and browser interaction boundaries.
 - Assess preserving compatible temporary Web conversations across update/restart without a resident
