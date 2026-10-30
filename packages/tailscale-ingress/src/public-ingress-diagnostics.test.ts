@@ -49,7 +49,7 @@ test("public failure retains TLS cause and aggregate incident; mixed relays and 
   const dns = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => Response.json({ Status: 0, Answer: [
     { type: 1, data: "192.0.2.1" }, { type: 1, data: "192.0.2.2" },
   ] }), { preconnect: globalThis.fetch.preconnect }));
-  let failAll = true, failFirst = true, verifiedCalls = 0, snapshots = 0, capabilityChecks = 0, capabilityFailure = false;
+  let failAll = true, failFirst = true, lateSocketError = false, verifiedCalls = 0, snapshots = 0, capabilityChecks = 0, capabilityFailure = false;
   const mock = spyOn(https, "request").mockImplementation(((url: URL, options: any, callback: any) => {
     let address: string | undefined;
     options.lookup(url.hostname, {}, (_error: unknown, value: string) => { address = value; });
@@ -64,6 +64,7 @@ test("public failure retains TLS cause and aggregate incident; mixed relays and 
       const response = Readable.from(["private-body"]) as any;
       response.statusCode = 400; response.headers = { "content-type": "application/json" };
       callback(response);
+      if (lateSocketError) req.emit("error", new Error("socket closed after observed response"));
     }); return req; };
     return req;
   }) as typeof https.request);
@@ -126,12 +127,15 @@ test("public failure retains TLS cause and aggregate incident; mixed relays and 
     expect(verifiedCalls).toBe(1);
     expect(snapshots).toBe(6);
     failFirst = false;
+    lateSocketError = true;
+    const privateBeforeRecovery = readdirSync(privateRoot).sort();
     let attempts = 0;
     const recovered = await diagnosePublicIngress(new URL("https://private-host.invalid/mcp"), "https://resolver.invalid", undefined, {
       async verify() { return { ready: ++attempts === 2 }; },
     });
     expect(recovered).toMatchObject({ state: "http-responsive", responsiveCount: 2, mcpContract: "verified" });
     expect(attempts).toBe(2);
+    expect(readdirSync(privateRoot).sort()).toEqual(privateBeforeRecovery);
     capabilityFailure = true;
     failAll = true;
     const debugUnavailable = await diagnosePublicIngress(new URL("https://private-host.invalid/mcp"), "https://resolver.invalid", runner);

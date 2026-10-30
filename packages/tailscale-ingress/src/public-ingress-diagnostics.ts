@@ -168,15 +168,24 @@ export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string, 
   const relays = await Promise.all(addresses.map((address, index) => new Promise<Record<string, unknown>>(resolve => {
     const started = performance.now();
     let tcpConnected = false, tlsConnected = false, settled = false;
-    const finish = (result: Record<string, unknown>) => {
+    const finish = (result: Record<string, unknown>, error?: NodeJS.ErrnoException) => {
       if (settled) return;
       settled = true;
       const durationMs = Math.round(performance.now() - started);
-      if (!options.signal?.aborted) emitDiagnosticEvent("chatgpt_tela_ingress", result.state === "unavailable" ? "public_relay_failed" : "public_relay_observed", {
-        ...identity, relay_fingerprint: diagnosticFingerprint(address), relay_index: index, tcp_connected: tcpConnected, tls_connected: tlsConnected, duration_ms: durationMs,
-        phase: String(result.stage), ...(typeof result.httpStatus === "number" ? { http_status: result.httpStatus } : {}),
-        ...(typeof result.errorCode === "string" ? { failure_class: result.errorCode.toLowerCase() } : {}),
-      });
+      if (!options.signal?.aborted) {
+        if (error) withDiagnosticContext({ operation_fingerprint: probeFingerprint }, () =>
+          capturePrivateDiagnosticValue("public_ingress_failure", {
+            stage: result.stage, relayFingerprint: diagnosticFingerprint(address),
+            error: { name: error.name, message: error.message, code: error.code },
+            bytesRead: req.socket?.bytesRead, bytesWritten: req.socket?.bytesWritten,
+            tcpConnected, tlsConnected,
+          }));
+        emitDiagnosticEvent("chatgpt_tela_ingress", result.state === "unavailable" ? "public_relay_failed" : "public_relay_observed", {
+          ...identity, relay_fingerprint: diagnosticFingerprint(address), relay_index: index, tcp_connected: tcpConnected, tls_connected: tlsConnected, duration_ms: durationMs,
+          phase: String(result.stage), ...(typeof result.httpStatus === "number" ? { http_status: result.httpStatus } : {}),
+          ...(typeof result.errorCode === "string" ? { failure_class: result.errorCode.toLowerCase() } : {}),
+        });
+      }
       resolve({ index, relayFingerprint: diagnosticFingerprint(address), tcpConnected, tlsConnected, durationMs, ...result });
     };
     // Keep the original URL, Host, SNI and certificate validation. Only DNS is pinned.
@@ -191,17 +200,8 @@ export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string, 
       socket.once("connect", () => { tcpConnected = true; });
       socket.once("secureConnect", () => { tlsConnected = true; });
     });
-    req.on("error", (error: NodeJS.ErrnoException) => {
-      const stage = tlsConnected ? "http" : tcpConnected ? "tls" : "tcp";
-      if (!options.signal?.aborted) withDiagnosticContext({ operation_fingerprint: probeFingerprint }, () =>
-        capturePrivateDiagnosticValue("public_ingress_failure", {
-          stage, relayFingerprint: diagnosticFingerprint(address),
-          error: { name: error.name, message: error.message, code: error.code },
-          bytesRead: req.socket?.bytesRead, bytesWritten: req.socket?.bytesWritten,
-          tcpConnected, tlsConnected,
-        }));
-      finish({ state: "unavailable", stage, errorCode: error.code ?? error.name });
-    });
+    req.on("error", (error: NodeJS.ErrnoException) => finish({ state: "unavailable",
+      stage: tlsConnected ? "http" : tcpConnected ? "tls" : "tcp", errorCode: error.code ?? error.name }, error));
     req.end();
   })));
   const responsive = relays.filter(row => row.state === "http-response");
