@@ -98,7 +98,12 @@ export async function createProfileSupervisorLease(input: { readonly onProgress?
         }
       };
       socket.on("data", chunk => receiveLifecycle(decoder.write(chunk)));
-      socket.once("close", () => { if (!readyReceived) rejectReady(new Error("profile supervisor closed before readiness")); });
+      const disconnected = (phase: string) => {
+        observe(phase);
+        if (!readyReceived) rejectReady(new Error("profile supervisor closed before readiness"));
+      };
+      socket.once("end", () => disconnected("connection_ended"));
+      socket.once("close", () => disconnected("connection_closed"));
       receiveLifecycle();
       socket.setTimeout(0);
       accepted = socket;
