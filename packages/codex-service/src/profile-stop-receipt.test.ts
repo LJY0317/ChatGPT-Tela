@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -68,6 +69,14 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
     await waiting;
     onNativeRead = () => {};
     expect(active).toBe(true); expect(closes).toBe(0); expect(parentQuits).toBe(0);
+    const failures: Record<string, unknown>[] = [];
+    const unobserve = observeDiagnosticEvents(row => { if (row.stage === "shutdown_wait_failed") failures.push(row); });
+    try {
+      writeFileSync(state, JSON.stringify({ refuse: true, busy: true }));
+      await expect(service.waitForShutdownReadiness()).rejects.toBeInstanceOf(CodexShutdownNotStartedError);
+      expect(failures).toMatchObject([{ phase: "final_readiness", abort_observed: false }]);
+    } finally { unobserve?.(); writeFileSync(state, JSON.stringify({ refuse: true })); }
+
 
     await expect(service.close()).rejects.toThrow("Profile normal shutdown was not acknowledged");
     expect(service.activeProfileCount).toBe(1); expect(active).toBe(true); expect(closes).toBe(0); expect(parentQuits).toBe(0);

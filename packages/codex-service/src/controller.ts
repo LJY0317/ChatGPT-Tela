@@ -512,26 +512,38 @@ export async function startCodexService(input: {
     },
     shutdownReadiness,
     async waitForShutdownReadiness(signal?: AbortSignal) {
-      const observation = input.signal && signal ? AbortSignal.any([input.signal, signal]) : signal ?? input.signal;
-      observation?.throwIfAborted();
-      if (starting.size > 0 || stopping || stoppingProfiles.size > 0) throw new CodexShutdownNotStartedError();
-      for (const profile of owned.values()) {
-        if (stopping || profile.stopping || !profile.terminalEndpoint) throw new CodexShutdownNotStartedError();
-        await waitForLoadedAppServerIdle(profile.terminalEndpoint, observation ? { signal: observation } : {});
-        // Web preparation is separate from Native inference. This existing wait
-        // joins its owner; aborting the HTTP observation cannot cancel that work.
-        const response = await fetch(new URL("v1/web-state?wait=1", profile.bridgePreviewUrl), {
-          headers: { authorization: `Bearer ${profile.uiToken}` },
-          timeout: false,
-          ...(observation ? { signal: observation } : {}),
+      let phase = "profile_registry", slot: number | undefined;
+      try {
+        const observation = input.signal && signal ? AbortSignal.any([input.signal, signal]) : signal ?? input.signal;
+        observation?.throwIfAborted();
+        if (starting.size > 0 || stopping || stoppingProfiles.size > 0) throw new CodexShutdownNotStartedError();
+        for (const profile of owned.values()) {
+          if (stopping || profile.stopping || !profile.terminalEndpoint) throw new CodexShutdownNotStartedError();
+          slot = profile.slot; phase = "native_completion";
+          await waitForLoadedAppServerIdle(profile.terminalEndpoint, observation ? { signal: observation } : {});
+          // Web preparation is separate from Native inference. This existing wait
+          // joins its owner; aborting the HTTP observation cannot cancel that work.
+          phase = "web_preparation";
+          const response = await fetch(new URL("v1/web-state?wait=1", profile.bridgePreviewUrl), {
+            headers: { authorization: `Bearer ${profile.uiToken}` },
+            timeout: false,
+            ...(observation ? { signal: observation } : {}),
+          });
+          if (!response.ok || owned.get(profile.slot) !== profile) throw new CodexShutdownNotStartedError();
+          await response.body?.cancel();
+        }
+        observation?.throwIfAborted();
+        // Account UI, unsettled delegation or a newly admitted turn is not proof
+        // of completion. Return to the caller rather than poll an unchanged gate.
+        phase = "final_readiness"; slot = undefined;
+        if (await shutdownReadiness() !== "ready") throw new CodexShutdownNotStartedError();
+      } catch (error) {
+        emitDiagnosticEvent("chatgpt_tela_codex", "shutdown_wait_failed", {
+          phase, ...(slot === undefined ? {} : { slot }), failure_class: diagnosticFailureClass(error),
+          abort_observed: signal?.aborted === true || input.signal?.aborted === true,
         });
-        if (!response.ok || owned.get(profile.slot) !== profile) throw new CodexShutdownNotStartedError();
-        await response.body?.cancel();
+        throw error;
       }
-      observation?.throwIfAborted();
-      // Account UI, unsettled delegation or a newly admitted turn is not proof
-      // of completion. Return to the caller rather than poll an unchanged gate.
-      if (await shutdownReadiness() !== "ready") throw new CodexShutdownNotStartedError();
     },
     async profiles() {
       const inventory = await targets.profiles(input.signal);
