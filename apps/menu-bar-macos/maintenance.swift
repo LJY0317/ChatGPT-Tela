@@ -321,7 +321,7 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       unresolvedProcesses = parsed.processes
       processPicker.removeAllItems()
       for entry in unresolvedProcesses {
-        let started = ISO8601DateFormatter().date(from: entry.startedAt)
+        let started = try? Date.ISO8601FormatStyle().parse(entry.startedAt)
         let when = started.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) } ?? "Unknown start time"
         processPicker.addItem(withTitle: "\(entry.workspaceName) · \(when) · task \(entry.sessionId)")
       }
