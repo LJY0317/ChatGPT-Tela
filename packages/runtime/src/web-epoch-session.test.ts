@@ -103,6 +103,36 @@ describe("retained browser epoch registry", () => {
     } finally { registry.dispose(); await host.close(); }
   });
 
+  test("expiry protects an unsettled Native task without repeatedly scheduling an elapsed deadline", async () => {
+    let now = 1_000, nativeActive = false;
+    const closed: string[] = [];
+    const host = new ControlledBrowserHost(async ({ taskId }) => ({
+      async navigate() {}, async reveal() {}, async hide() {}, async close() { closed.push(taskId); },
+    }));
+    const registry = new RetainedBrowserEpochRegistry(host, {
+      now: () => now, isTaskActive: taskId => taskId === "native" && nativeActive,
+    });
+    const originalTimeout = globalThis.setTimeout;
+    const delays: number[] = [];
+    try {
+      await registry.acquire("native", "epoch");
+      await registry.complete("native", "epoch");
+      nativeActive = true;
+      now += 7 * 24 * 60 * 60 * 1000;
+      globalThis.setTimeout = ((fn: () => void, ms: number) => {
+        delays.push(ms); return originalTimeout(fn, ms);
+      }) as typeof setTimeout;
+      await registry.retireExpired();
+      expect(closed).toEqual([]);
+      expect(registry.retention()).toMatchObject({ active: 1, reclaimable: 0 });
+      expect(delays).toEqual([]);
+      nativeActive = false;
+      await registry.retireExpired();
+      expect(closed).toEqual(["native"]);
+      expect(registry.size).toBe(0);
+    } finally { globalThis.setTimeout = originalTimeout; registry.dispose(); await host.close(); }
+  });
+
   test("one-shot deadline fires while the service is alive and disposal cancels it", async () => {
     const events: string[] = [];
     const host = new ControlledBrowserHost(async ({ taskId }) => ({

@@ -48,13 +48,17 @@ export class RetainedBrowserEpochRegistry {
     this.#now = options.now ?? Date.now;
   }
 
+  #active(taskId: string, entry: RetainedEpoch): boolean {
+    return entry.busy || this.#acquiring.has(taskId) || this.#isTaskActive(taskId);
+  }
+
   /** One next-expiry timer, owned by the runtime lifecycle. */
   #schedule(): void {
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = undefined;
     if (this.#disposed) return;
     const expiry = [...this.#byTask.entries()]
-      .filter(([task, entry]) => !entry.busy && !entry.retiring && !this.#acquiring.has(task) && entry.idleSince !== undefined)
+      .filter(([task, entry]) => !entry.retiring && !this.#active(task, entry) && entry.idleSince !== undefined)
       .reduce((first, [, entry]) => Math.min(first, entry.idleSince! + IDLE_RETENTION_MS), Infinity);
     if (expiry === Infinity) return;
     this.#timer = setTimeout(() => {
@@ -70,7 +74,7 @@ export class RetainedBrowserEpochRegistry {
     try {
       for (const [task, entry] of this.#byTask) {
         if (this.#disposed) break;
-        if (entry.idleSince === undefined || entry.busy || entry.retiring || this.#acquiring.has(task)
+        if (entry.idleSince === undefined || entry.retiring || this.#active(task, entry)
           || this.#now() - entry.idleSince < IDLE_RETENTION_MS) continue;
         await this.#release(task, entry);
       }
@@ -137,7 +141,7 @@ export class RetainedBrowserEpochRegistry {
     const counts = { active: 0, undelivered: 0, closing: 0, reclaimable: 0 };
     for (const [task, entry] of this.#byTask) {
       if (entry.retiring) counts.closing++;
-      else if (entry.busy || this.#acquiring.has(task) || this.#isTaskActive(task)) counts.active++;
+      else if (this.#active(task, entry)) counts.active++;
       else if (entry.lastCompleted === 0) counts.undelivered++;
       else counts.reclaimable++;
     }
@@ -151,12 +155,12 @@ export class RetainedBrowserEpochRegistry {
     const count = () => this.#browserHost.activeSurfaceCount ?? this.#byTask.size;
     if (count() + reserved <= this.#surfaceTarget) return;
     const idle = [...this.#byTask.entries()].filter(([task, entry]) =>
-      !entry.busy && !entry.retiring && entry.lastCompleted > 0 && !this.#acquiring.has(task) && !this.#isTaskActive(task))
+      !entry.retiring && entry.lastCompleted > 0 && !this.#active(task, entry))
       .sort(([, left], [, right]) => left.lastCompleted - right.lastCompleted);
     for (const [task, entry] of idle) {
       if (count() + reserved <= this.#surfaceTarget) break;
       // Recheck after asynchronous releases: a peer may have started its next turn meanwhile.
-      if (this.#byTask.get(task) === entry && !entry.busy && !entry.retiring && !this.#acquiring.has(task) && !this.#isTaskActive(task)) {
+      if (this.#byTask.get(task) === entry && !entry.retiring && !this.#active(task, entry)) {
         try { await this.#release(task, entry); }
         catch (error) {
           // Cleanup cannot turn a completed answer or an independent new task into a failure.
@@ -169,7 +173,7 @@ export class RetainedBrowserEpochRegistry {
     emitDiagnosticEvent("chatgpt_tela_work", "browser_retention_observed", {
       surface_count: count(), target_count: this.#surfaceTarget, reserved_count: reserved,
       protected_count: [...this.#byTask.entries()].filter(([task, entry]) =>
-        entry.busy || entry.retiring || entry.lastCompleted === 0 || this.#acquiring.has(task) || this.#isTaskActive(task)).length,
+        entry.retiring || entry.lastCompleted === 0 || this.#active(task, entry)).length,
     });
   }
 
