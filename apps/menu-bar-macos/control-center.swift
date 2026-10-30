@@ -339,7 +339,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var accountRevision = 0
   private var accountTask: Task<Void, Never>?
   private var accountRefreshPending = false
-  private var refreshing = false
+  private var refreshingPage: ControlCenterPage?
+  private var refreshing: Bool { refreshingPage != nil }
   private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
   private var changingProfile = false { didSet {
     clearResolvedProfileFailure()
@@ -2041,14 +2042,15 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func refreshCurrentPage() async {
-    if refreshing {
+    if let page = refreshingPage {
       await withCheckedContinuation { refreshWaiters.append($0) }
+      if selectedPage != page { await refreshCurrentPage() }
       return
     }
-    refreshing = true
+    refreshingPage = selectedPage
     renderCurrentPage()
     defer {
-      refreshing = false
+      refreshingPage = nil
       renderCurrentPage()
       let waiters = refreshWaiters
       refreshWaiters.removeAll()
@@ -2058,8 +2060,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let previousChatFolders = chatFolders
     let previousChatFoldersApplied = chatFoldersApplied
     let previousChatFoldersAvailable = chatFoldersAvailable
-    await loadChatFolders()
-    if selectedPage == .settings { await loadDiagnosticCaptureStatus() }
+    if selectedPage == .settings {
+      await loadChatFolders()
+      await loadDiagnosticCaptureStatus()
+    }
     let previousProfileError = workInventory.error
     let previousServices = serviceStates
     let previousIngress = ingressStatus
@@ -2167,6 +2171,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func loadIngressStatus() async -> ControlCenterIngressStatus? {
+    // Only Home presents public ingress; other pages must not wait on its network probe.
+    guard selectedPage == .home else { return ingressStatus }
     do {
       guard let descriptor = try readDescriptor("gateway") else { return nil }
       let value = try JSONDecoder().decode(ControlCenterIngressStatus.self, from: await request(descriptor, path: window?.isVisible == true ? "v1/ingress?public=1" : "v1/ingress"))
