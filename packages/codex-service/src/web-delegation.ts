@@ -338,7 +338,12 @@ export class WebDelegationStore {
       ...(record.parentJobId && record.threadId ? [this.#threadPermit(record.threadId)] : [])];
     for (const path of paths) if (this.#leaseOwner(path) === record.id) unlinkSync(path);
   }
-  capacity(slot: number, cwd?: string): WebDelegationCapacity {
+  capacity(slot: number, cwd?: string, cleanupDetails = false): WebDelegationCapacity {
+    let cleanup = this.#cleanup.get(slot);
+    if (cleanup && !cleanupDetails) {
+      const { protectedThreads, ...summary } = cleanup;
+      cleanup = summary;
+    }
     const limit = this.#limit(slot);
     const modern = this.#permits(slot).map(path => this.#leaseOwner(path));
     const legacy = this.#legacyPermits(slot).map(path => this.#leaseOwner(path));
@@ -381,7 +386,7 @@ export class WebDelegationStore {
       // Keep the historical 'limit' field for v2 clients, but explicitly mark
       // it advisory. Neither record count nor age releases or denies a lease.
       records: { retained: retained.length, limit: RECORD_REVIEW_THRESHOLD, admissionBound: false },
-      ...(this.#cleanup.has(slot) ? { cleanup: this.#cleanup.get(slot)! } : {}),
+      ...(cleanup ? { cleanup } : {}),
       available: !blockCode, ...(blockCode ? { blockCode } : {}),
       messageKo: `${statusKo}. ${reasonKo}`, messageEn: `${statusEn}. ${reasonEn}`,
       nextAction: blockCode === "UNCERTAIN_RESERVATION" ? "inspect_and_reconcile_exact_job"

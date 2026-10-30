@@ -137,8 +137,14 @@ test("capacity pressure archives oldest collected idle work, skips queued work a
     expect(f.native.get(ordinary)!.archived).toBe(false);
     expect(f.store.get(f.records[2]!.id)?.answer).toBe("result");
     expect(f.store.threadRetention(f.records[2]!)?.state).toBe("archived");
+    const pending = f.store.capacity(2, undefined, true).cleanup?.protectedThreads;
+    expect(pending?.find(item => item.threadId === f.records[1]!.threadId)).toMatchObject({ reason: "queued_work", nextAction: "wait_for_work" });
+    expect(pending?.some(item => item.threadId === ordinary)).toBe(false);
     await f.run();
     expect(f.mutations).toHaveLength(1);
+    const refreshed = f.store.capacity(2, undefined, true).cleanup?.protectedThreads?.find(item => item.threadId === f.records[1]!.threadId);
+    expect(refreshed).toMatchObject({ reason: "not_yet_due_or_unverified", nextAction: "wait_for_due_time" });
+    expect(Number.isFinite(Date.parse(refreshed!.dueAt!))).toBe(true);
   } finally { f.cleanup(); }
 });
 
@@ -155,6 +161,14 @@ test("uncollected and manually restored conversations can exceed the soft target
       cleanup: { unarchived: 33, target: 32, uncertain: false, protected: { uncollected_answers: 33 } } });
     expect(parseCodexWebDelegationCapacityContract(JSON.parse(JSON.stringify(f.store.capacity(2)))).cleanup)
       .toEqual(f.store.capacity(2).cleanup);
+    expect(f.store.capacity(2).cleanup?.protectedThreads).toBeUndefined();
+    const details = f.store.capacity(2, undefined, true).cleanup?.protectedThreads;
+    expect(details).toHaveLength(33);
+    expect(details?.find(item => item.threadId === f.record.threadId)).toMatchObject({
+      reason: "uncollected_answers", nextAction: "collect_answer",
+    });
+    expect(parseCodexWebDelegationCapacityContract(JSON.parse(JSON.stringify(f.store.capacity(2, undefined, true)))).cleanup?.protectedThreads)
+      .toEqual(details);
     for (const record of f.records) {
       f.store.collect(record.id, record.createdAt);
       writeFileSync(join(f.root, `thread-2-${record.owner.accountFingerprint}-${record.threadId}.retention`), JSON.stringify({state:"excluded"}));
@@ -162,6 +176,9 @@ test("uncollected and manually restored conversations can exceed the soft target
     await f.run();
     expect(f.mutations).toEqual([]);
     expect(f.store.capacity(2).cleanup?.protected).toEqual({ manually_managed: 33 });
+    expect(f.store.capacity(2, undefined, true).cleanup?.protectedThreads?.every(item =>
+      item.reason === "manually_managed" && item.nextAction === "keep_manual_control" && item.dueAt === undefined)).toBe(true);
+
   } finally { off?.(); f.cleanup(); }
 });
 
@@ -172,6 +189,8 @@ test("an unknown archive outcome stops further pressure mutations until fresh in
     await f.run();
     expect(f.mutations).toHaveLength(1);
     expect(f.store.capacity(2).cleanup?.uncertain).toBe(true);
+    expect(f.store.capacity(2, undefined, true).cleanup?.protectedThreads?.some(item =>
+      item.reason === "public_metadata_or_retention_error" && item.nextAction === "inspect_thread")).toBe(true);
     await f.run();
     expect(f.mutations).toHaveLength(1);
     expect(f.store.capacity(2).cleanup).toMatchObject({ unarchived: 32, uncertain: false });

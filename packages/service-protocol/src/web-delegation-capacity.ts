@@ -18,6 +18,13 @@ export interface CodexWebDelegationCapacityContract {
     readonly target: number;
     readonly uncertain: boolean;
     readonly protected: Readonly<Record<string, number>>;
+    /** Opt-in detail from that pass; dueAt is eligibility time, never mutation authority. */
+    readonly protectedThreads?: readonly {
+      readonly threadId: string;
+      readonly reason: string;
+      readonly nextAction: string;
+      readonly dueAt?: string;
+    }[];
   };
   readonly available: boolean;
   readonly blockCode?: WebDelegationBlockCode;
@@ -52,7 +59,12 @@ export function parseCodexWebDelegationCapacityContract(value: unknown): CodexWe
     || cleanup !== undefined && (!cleanup || typeof cleanup.observedAt !== "string" || !Number.isFinite(Date.parse(cleanup.observedAt))
       || !whole(cleanup.unarchived) || !whole(cleanup.target) || cleanup.target < 1 || typeof cleanup.uncertain !== "boolean"
       || !cleanup.protected || typeof cleanup.protected !== "object" || Array.isArray(cleanup.protected)
-      || !Object.values(cleanup.protected).every(whole))
+      || !Object.values(cleanup.protected).every(whole)
+      || cleanup.protectedThreads !== undefined && (!Array.isArray(cleanup.protectedThreads)
+        || !cleanup.protectedThreads.every(item => item && typeof item.threadId === "string" && item.threadId.length > 0
+          && typeof item.reason === "string" && item.reason.length > 0
+          && typeof item.nextAction === "string" && item.nextAction.length > 0
+          && (item.dueAt === undefined || typeof item.dueAt === "string" && Number.isFinite(Date.parse(item.dueAt))))))
     || typeof row.available !== "boolean"
     || row.blockCode !== undefined && !reasons.includes(row.blockCode as string)
     || row.available !== (row.blockCode === undefined)

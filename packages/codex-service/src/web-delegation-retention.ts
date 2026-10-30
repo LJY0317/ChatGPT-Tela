@@ -6,6 +6,11 @@ import { sameAccountOwner, verifiedWebDelegationAnswer, webDelegationRetentionPa
 
 const DAY = 86_400_000;
 const UNARCHIVED_THREAD_TARGET = 32;
+const cleanupActions: Readonly<Record<string, string>> = {
+  uncollected_answers: "collect_answer", manually_managed: "keep_manual_control",
+  active_or_unresolved_tail: "wait_for_work", queued_work: "wait_for_work",
+  not_yet_due_or_unverified: "wait_for_due_time",
+};
 interface Retention {
   state: "archived" | "excluded" | "deleted";
   archivedAt?: number;
@@ -111,7 +116,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
   }
   const inventories = new Map<string, Map<string, { archived: boolean; thread: Record<string, any> }>>();
   const occupancy = new Map<string, { slot: number; before: number; current: number; uncertain: boolean;
-    protected: Map<string, string> }>();
+    protected: Map<string, { reason: string; dueAt?: string }> }>();
   let pending = [...groups.values()];
   try {
   while (pending.length) {
@@ -133,7 +138,9 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     let scopeConnection: string | undefined;
     let unarchived = false;
     const protect = (reason: string) => {
-      if (unarchived && scopeConnection) occupancy.get(scopeConnection)?.protected.set(record.threadId!, reason);
+      if (unarchived && scopeConnection) occupancy.get(scopeConnection)?.protected.set(record.threadId!, {
+        reason, ...(reason === "not_yet_due_or_unverified" ? { dueAt: new Date(due).toISOString() } : {}),
+      });
     };
     const skipped = (reason: string, relation = "unknown", error?: unknown) => {
       protect(reason);
@@ -329,9 +336,11 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
   } finally {
     for (const count of occupancy.values()) {
       const protectedCounts: Record<string, number> = {};
-      for (const reason of count.protected.values()) protectedCounts[reason] = (protectedCounts[reason] ?? 0) + 1;
+      for (const { reason } of count.protected.values()) protectedCounts[reason] = (protectedCounts[reason] ?? 0) + 1;
       if (!input.signal.aborted) adapters.store.observeCleanup(count.slot, { observedAt: new Date(now).toISOString(),
-        unarchived: count.current, target: UNARCHIVED_THREAD_TARGET, uncertain: count.uncertain, protected: protectedCounts });
+        unarchived: count.current, target: UNARCHIVED_THREAD_TARGET, uncertain: count.uncertain, protected: protectedCounts,
+        protectedThreads: [...count.protected].map(([threadId, item]) => ({ threadId, ...item,
+          nextAction: cleanupActions[item.reason] ?? "inspect_thread" })) });
       if (count.before <= UNARCHIVED_THREAD_TARGET) continue;
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_capacity", {
         thread_count: count.current, target_count: UNARCHIVED_THREAD_TARGET,

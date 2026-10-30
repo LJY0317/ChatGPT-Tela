@@ -74,7 +74,7 @@ bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/tas
 bun run cli web-delegate continue --job UUID --prompt-file /path/to/followup.txt
 bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt --image-file /path/to/photo.png
 bun run cli web-delegate continue --job UUID --prompt-file /path/to/followup.txt --image-file /path/to/photo.png
-bun run cli web-delegate capacity [--slot N]
+bun run cli web-delegate capacity [--slot N] [--cleanup]
 bun run cli web-delegate status --job UUID
 bun run cli web-delegate status --job UUID --confirm-title-retry
 bun run cli web-delegate reconcile --job UUID
@@ -196,6 +196,13 @@ Control Center Work shows one managed-job occupancy row per detected profile, wi
 
 The source CLI now supports `web-delegate capacity [--slot N]`, which reads the
 owned local delegation journal without invoking a model or opening a browser.
+Add `--cleanup` to read the running Codex service's last completed cleanup observation,
+including each protected conversation's `threadId`, reason and recommended `nextAction`.
+The optional `dueAt` is age-based eligibility, not permission to archive or delete; current
+ownership, activity and user changes still apply. This lookup does not run another cleanup
+pass, read Native history, execute the recommended action, or invoke a model. It requires
+the running service; the default occupancy lookup continues to work offline.
+
 `start` acquires one cross-process task permit (configurable 1–5 per profile (default 3)) and a
 checkout writer permit before connecting to the provider. Each new task defaults
 to workspace-write authority so a read-heavy analysis can proceed to code changes
@@ -237,7 +244,7 @@ protection.
 `web-delegate capacity [--slot N]` reports the same total-task occupancy
 without a mode selector.
 The authenticated Codex service exposes the same managed-job capacity snapshot
-at `GET /v1/codex/profiles/:slot/web-delegation-capacity`; the macOS Control
+at `GET /v1/codex/profiles/:slot/web-delegation-capacity` (add `?cleanup-details=1` for per-conversation reasons); the macOS Control
 Center Work page fetches this status on demand. This reports **local CLI-managed
 delegations only**, not the availability of an arbitrary ChatGPT Web turn.
 

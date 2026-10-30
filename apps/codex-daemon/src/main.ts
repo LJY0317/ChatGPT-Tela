@@ -61,7 +61,7 @@ async function main(): Promise<void> {
     service,
     startupComplete: () => !restoring,
     inspectWork: createCodexWorkInspector({ service, logsRoot: paths.logsRoot }),
-    delegationCapacity: slot => delegationStore.capacity(slot),
+    delegationCapacity: (slot, details) => delegationStore.capacity(slot, undefined, details),
   });
   writeServiceRuntimeDescriptor(descriptorPath, {
     version: 1,

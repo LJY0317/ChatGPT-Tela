@@ -81,7 +81,11 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
   }
   if (args.includes("--mode")) throw Error("--mode has been removed; each new task uses workspace-write authority");
   if (subcommand === "capacity") {
-    console.log(JSON.stringify(store.capacity(profileSlotFromArguments(args)), null, 2));
+    const selected = profileSlotFromArguments(args);
+    const capacity = args.includes("--cleanup")
+      ? await (await getClient()).webDelegationCapacity(selected, undefined, { cleanupDetails: true })
+      : store.capacity(selected);
+    console.log(JSON.stringify(capacity, null, 2));
     return;
   }
   if (subcommand === "status" || subcommand === "result") {

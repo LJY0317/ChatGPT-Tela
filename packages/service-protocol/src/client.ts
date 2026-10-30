@@ -171,10 +171,10 @@ export class CodexServiceClient extends LocalServiceClient {
     return Object.freeze(profiles.map(parseCodexProfileStatusContract));
   }
 
-  async webDelegationCapacity(slot: number, signal?: AbortSignal) {
+  async webDelegationCapacity(slot: number, signal?: AbortSignal, options?: { readonly cleanupDetails?: boolean }) {
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw Error("invalid profile slot");
     const value = parseCodexWebDelegationCapacityContract(await this.request(
-      `v1/codex/profiles/${slot}/web-delegation-capacity`, "GET", undefined, signal));
+      `v1/codex/profiles/${slot}/web-delegation-capacity${options?.cleanupDetails ? "?cleanup-details=1" : ""}`, "GET", undefined, signal));
     if (value.profileSlot !== slot) throw Error("Web delegation capacity profile mismatch");
     return value;
   }

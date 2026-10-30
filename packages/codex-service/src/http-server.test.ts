@@ -136,7 +136,7 @@ describe("Tela Codex private HTTP server", () => {
     const server = await startCodexServiceHttpServer({
       service, bearerToken: token,
       delegationCapacity: (...args) => {
-        expect(args).toEqual([2]);
+        expect(args).toEqual([2, reads > 0]);
         const [slot] = args;
         reads++;
         return { contractVersion: 3, profileSlot: slot, source: "managed_delegation_journal",
@@ -159,6 +159,8 @@ describe("Tela Codex private HTTP server", () => {
         origin: "https://chatgpt.com" } })).status).toBe(403);
       expect((await client.webDelegationCapacity(2)).blockCode).toBe("CAPACITY_TOTAL_PROFILE");
       expect(reads).toBe(1);
+      expect((await client.webDelegationCapacity(2, undefined, { cleanupDetails: true })).total.used).toBe(3);
+      expect(reads).toBe(2);
       await expect(client.webDelegationCapacity(0)).rejects.toThrow("invalid profile slot");
     } finally { await client.close(); await server.close(); }
   });

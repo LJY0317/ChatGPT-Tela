@@ -80,8 +80,10 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   Interrupted observations are not published, and uncertain archive outcomes are identified separately.
   Browser preview and work inspection also expose on-demand ownership counts and a pressure notice.
   Closing surfaces remain owned/listed until physical close succeeds; duplicate release/shutdown calls
-  share the same close operation. Creating surfaces count toward the soft target. Detailed per-item
-  cleanup actions remain open; do not infer that a protected result has been collected from these counts.
+  share the same close operation. Creating surfaces count toward the soft target. Opt-in capacity
+  details now report protected conversation IDs, reasons, recommended next actions and eligibility times
+  from the existing completed pass; `web-delegate capacity --cleanup` retrieves them without another scan.
+  Per-item UI actions and browser-specific item details remain open; do not infer that a protected result has been collected from these counts.
   These are soft targets: no numeric rejection, forced close of protected work or indefinite admission
   wait. Installed acceptance remains separate from source verification.
 - **Instruction reuse.** Source `open_workspace` accepts the caller's retained `instructionRevision` as
