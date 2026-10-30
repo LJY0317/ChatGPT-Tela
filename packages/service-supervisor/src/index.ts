@@ -11,7 +11,6 @@ import { dirname } from "node:path";
 import { diagnosticDurationMs, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   readServiceRuntimeDescriptor,
-  removeServiceRuntimeDescriptor,
   type ServiceRuntimeDescriptor,
   type ServiceStatus,
   type TelaServiceId,
@@ -281,7 +280,7 @@ export class LocalServiceSupervisor {
       // Descriptor disappearance is not process-exit evidence. A daemon can
       // still be draining children; never restore over an unfinished shutdown.
       if (!pidAlive(running.descriptor.pid)) {
-        removeServiceRuntimeDescriptor(input.descriptorPath, running.descriptor);
+        // The daemon owns descriptor cleanup. After its exit this shared path may belong to a successor.
         emitDiagnosticEvent("chatgpt_tela_service", "shutdown_complete", {
           service: input.service,
           duration_ms: diagnosticDurationMs(startedAt),

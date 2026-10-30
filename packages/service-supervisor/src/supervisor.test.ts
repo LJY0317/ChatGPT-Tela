@@ -34,10 +34,10 @@ function isolatedProductEnvironment(home: string, installId: string): Record<str
 }
 
 describe("local service supervisor", () => {
-  async function drainFixture(delayMs: number, replacement = false, acknowledgmentDelayMs = 0) {
+  async function drainFixture(delayMs: number, replacement: boolean | number = false, acknowledgmentDelayMs = 0) {
     const root=mkdtempSync(join(tmpdir(),"tela-owned-drain-")), descriptorPath=join(root,"descriptor.json");
     const installId="drain-install", instanceId="drain-instance", token="d".repeat(48);
-    const replacementValue={version:1,service:"codex",installId,instanceId:"replacement",pid:process.pid,endpoint:"http://127.0.0.1:1/",bearerToken:token,startedAt:new Date().toISOString()};
+    const replacementValue={version:typeof replacement === "number" ? replacement : 1,service:"codex",installId,instanceId:"replacement",pid:process.pid,endpoint:"http://127.0.0.1:1/",bearerToken:token,startedAt:new Date().toISOString()};
     const script=`const fs=require('node:fs');const file=process.env.TELA_TEST_DESCRIPTOR;const delay=Number(process.env.TELA_TEST_DELAY);const server=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(req){if(req.headers.get('authorization')!=='Bearer '+${JSON.stringify(token)})return new Response(null,{status:401});if(new URL(req.url).pathname==='/v1/status')return Response.json({contractVersion:1,service:'codex',instanceId:${JSON.stringify(instanceId)},state:'ready'});if(req.method==='POST'){await new Promise(resolve=>setTimeout(resolve,Number(process.env.TELA_TEST_ACK_DELAY)));if(process.env.TELA_TEST_REPLACEMENT)fs.writeFileSync(file,process.env.TELA_TEST_REPLACEMENT);else fs.rmSync(file,{force:true});setTimeout(()=>{server.stop(true);process.exit(0);},delay);return Response.json({});}return new Response(null,{status:404});}});console.log(JSON.stringify({port:server.port}));`;
     const child=Bun.spawn([process.execPath,"-e",script],{env:{...process.env,TELA_TEST_DESCRIPTOR:descriptorPath,TELA_TEST_DELAY:String(delayMs),TELA_TEST_ACK_DELAY:String(acknowledgmentDelayMs),...(replacement?{TELA_TEST_REPLACEMENT:JSON.stringify(replacementValue)}:{})},stdout:"pipe",stderr:"pipe"});
     try {
@@ -76,6 +76,21 @@ describe("local service supervisor", () => {
       expect(await f.supervisor.shutdown({service:"codex",descriptorPath:f.descriptorPath})).toBe(true);
       expect(await f.child.exited).toBe(0);expect(existsSync(f.descriptorPath)).toBe(true);
     }finally{f.child.kill();await f.child.exited;rmSync(f.root,{recursive:true,force:true});}
+  });
+
+  test("completed shutdown does not parse or remove a successor's newer descriptor contract", async () => {
+    const f = await drainFixture(50, 2);
+    try {
+      expect(await f.supervisor.shutdown({ service: "codex", descriptorPath: f.descriptorPath })).toBe(true);
+      expect(await f.child.exited).toBe(0);
+      const replacement = JSON.parse(await Bun.file(f.descriptorPath).text());
+      expect(replacement.version).toBe(2);
+      expect(replacement.instanceId).toBe("replacement");
+    } finally {
+      f.child.kill();
+      await f.child.exited;
+      rmSync(f.root, { recursive: true, force: true });
+    }
   });
 
   test("starts, reuses, and normally shuts down one exact Chat daemon", async () => {
