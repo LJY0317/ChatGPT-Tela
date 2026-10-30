@@ -35,7 +35,7 @@ const agentId = string(512);
 export const TELA_CHAT_CAPABILITY_CONTRACTS: readonly ChatCapabilityContract[] = Object.freeze([
   {
     capability: "inspect_native_work",
-    description: "Read-only, exact UUID and profile owner-verified Native turn and Web approval status. Requires an opened Tela Chat workspace. No shell command, injected service credential, conversation body, screenshot, approval click, retry or Native turn mutation. A profile Web card is not proof of this Native thread's approval; host-platform approval cards are unobservable before tool ingress.",
+    description: "Read-only, owner-verified Native status and matching Web surface for an exact conversation UUID. Requires an opened workspace. Returns bounded state and structural evidence; attribution requires matching retained task ownership. Missing or ambiguous surfaces remain unknown. No approval or execution authority; host-platform approval prompts remain outside Tela.",
     inputSchema: object({
       workspace_id: workspaceId,
       thread_id: Object.freeze({ type: "string", format: "uuid", maxLength: 36 }),

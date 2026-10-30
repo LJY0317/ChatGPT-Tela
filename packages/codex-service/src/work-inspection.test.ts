@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { CodexServiceClient } from "@chatgpt-tela/service-protocol/client";
+import { parseCodexWorkInspectionContract } from "@chatgpt-tela/service-protocol";
 import { startCodexServiceHttpServer } from "./http-server";
 import type { CodexService } from "./controller";
 import { createCodexWorkInspector } from "./work-inspection";
@@ -37,6 +38,7 @@ function harness() {
   };
   let preview = {
     contractVersion: 1 as const, slot: 2, activeSurfaceCount: 1, previewAvailable: true,
+    selectedSurfaceId: "surface_" + "a".repeat(32),
     imageMimeType: "image/jpeg" as const, imageBase64: "SECRET_SCREENSHOT_IMAGE",
     retention: { total: 129, target: 10, active: 128, undelivered: 1, closing: 0, otherOwners: 0, reclaimable: 0 },
     approvalState: "unavailable" as const, approvalObservationReason: "dom_observation_failed" as const,
@@ -55,6 +57,34 @@ function harness() {
 }
 
 describe("profile-owned read-only Work inspection", () => {
+  test("inspection selects its exact Native task and derives attribution from the returned owner", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-work-owner-"));
+    const f = harness();
+    const selectors: unknown[] = [];
+    const preview = await f.service.bridgePreview();
+    f.service.bridgePreview = async (...args: unknown[]) => {
+      selectors.push(args);
+      return { ...preview, retention: { ...preview.retention, surface: {
+        id: preview.selectedSurfaceId, taskId: threadId, state: "active", nextAction: "wait_for_work",
+      } } } as any;
+    };
+    try {
+      const inspect = createCodexWorkInspector({ service: f.service as any, logsRoot: root, connect: f.connect });
+      const result = await inspect(2, threadId);
+      expect(selectors).toEqual([[2, undefined, threadId]]);
+      expect(result.browser.attributableToThread).toBe(true);
+      expect(result.browser.retention?.surface?.taskId).toBe(threadId);
+      expect(result.browser.approvalAuthority).toBe("observation_only");
+      expect(parseCodexWorkInspectionContract(result, 2, threadId).browser.attributableToThread).toBe(true);
+      for (const retention of [undefined, { ...result.browser.retention!, surface: {
+        ...result.browser.retention!.surface!, taskId: "another-thread",
+      } }]) {
+        expect(parseCodexWorkInspectionContract({ ...result, browser: { ...result.browser,
+          attributableToThread: true, retention } }, 2, threadId).browser.attributableToThread).toBe(false);
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   test("turn-scoped request and settlement boundaries survive an unselected browser without borrowing older finals", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-turn-boundary-"));
     const f = harness();
@@ -204,6 +234,7 @@ describe("profile-owned read-only Work inspection", () => {
       async bridgePreview() { return {
         contractVersion: 1 as const, slot: 2, activeSurfaceCount: 1, previewAvailable: true,
         imageMimeType: "image/jpeg" as const, imageBase64: "SENSITIVE_BROWSER_FRAME",
+        selectedSurfaceId: "surface_" + "b".repeat(32),
         approvalState: "pending" as const,
         approvalWait: {phase:"dispatch_sent" as const,elapsedMs:120000,unverifiedDispatchCount:1,operationState:"waiting" as const},
       }; },

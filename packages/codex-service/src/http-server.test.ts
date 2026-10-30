@@ -539,13 +539,16 @@ test("connection stream exposes Native immediately while Web waits, then preserv
 test("private service forwards exact selected preview and explicit reveal without unauthenticated actions", async () => {
   const service = fixtureService(), token = "u".repeat(48), id = "surface_" + "a".repeat(32);
   const calls: string[] = [];
-  service.bridgePreview = async (slot, selected) => {
-    calls.push(`preview:${slot}:${selected}`);
+  service.bridgePreview = async (slot, selected, threadId) => {
+    calls.push(threadId ? `thread-preview:${slot}:${threadId}` : `preview:${slot}:${selected}`);
     return { contractVersion: 1, slot, activeSurfaceCount: 0, previewAvailable: false };
   };
   const modes: boolean[] = [];
   service.revealBridgeSurface = async (slot, selected, interactive) => { calls.push(`reveal:${slot}:${selected}`); modes.push(interactive === true); };
   const server = await startCodexServiceHttpServer({service, bearerToken: token});
+  const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+    installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+    bearerToken: token, startedAt: new Date().toISOString() });
   const headers = {authorization: `Bearer ${token}`, "content-type": "application/json"};
   try {
     expect((await fetch(new URL(`v1/codex/profiles/2/bridge-preview?surfaceId=${id}`, server.endpoint), {headers})).status).toBe(200);
@@ -555,8 +558,10 @@ test("private service forwards exact selected preview and explicit reveal withou
     expect((await fetch(url, {method: "POST", headers, body})).status).toBe(204);
     expect(calls).toEqual([`preview:2:${id}`, `reveal:2:${id}`]);
     expect(modes).toEqual([false]);
+    await client.bridgePreview(2, undefined, undefined, "native-task");
+    expect(calls.at(-1)).toBe("thread-preview:2:native-task");
     expect((await fetch(url, {method:"POST",headers,body:JSON.stringify({surfaceId:id,interactive:"true"})})).status).toBe(400);
     expect((await fetch(url, {method:"POST",headers,body:JSON.stringify({surfaceId:id,interactive:true})})).status).toBe(204);
     expect(modes).toEqual([false,true]);
-  } finally {await server.close();}
+  } finally {await client.close(); await server.close();}
 });

@@ -45,7 +45,7 @@ export async function startProfileBridgePreviewServer(input: {
   readonly reveal?: (id: string, interactive?: boolean) => Promise<void>;
   readonly surfaces?: () => { readonly revision: number; readonly surfaces: readonly { readonly id: string; readonly label: string; readonly taskId?: string; readonly title?: string }[] };
   readonly onSurfacesChanged?: (listener: () => void) => () => void;
-  readonly observe: (id?: string) => Promise<{ readonly activeSurfaceCount: number; readonly retention?: import("@chatgpt-tela/core").BrowserRetentionObservation; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable"; readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed"; readonly approvalWait?: CodexApprovalWaitContract }>;
+  readonly observe: (id?: string, threadId?: string) => Promise<{ readonly activeSurfaceCount: number; readonly retention?: import("@chatgpt-tela/core").BrowserRetentionObservation; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable"; readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed"; readonly approvalWait?: CodexApprovalWaitContract }>;
   readonly probeModelSelection?: () => Promise<{
     readonly familyCount: number;
     readonly exercised: boolean;
@@ -243,7 +243,7 @@ export async function startProfileBridgePreviewServer(input: {
           { headers: { "cache-control": "no-store" } });
       }
       if (request.method !== "GET" || url.pathname !== "/v1/bridge-preview") return new Response(null, { status: 404 });
-      const observed = await input.observe(url.searchParams.get("surfaceId") ?? undefined);
+      const observed = await input.observe(url.searchParams.get("surfaceId") ?? undefined, url.searchParams.get("threadId") ?? undefined);
       const jpeg = observed.activeSurfaceCount === 1 || observed.selectedSurfaceId ? observed.jpeg : undefined;
       if (jpeg && jpeg.byteLength > MAX_JPEG_BYTES) {
         return Response.json({ error: { message: "bridge preview exceeded bounded size" } }, { status: 409 });

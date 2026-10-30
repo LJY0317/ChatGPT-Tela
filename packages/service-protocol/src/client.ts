@@ -260,10 +260,12 @@ export class CodexServiceClient extends LocalServiceClient {
     return parseCodexWorkInspectionContract(response, slot, threadId);
   }
 
-  async bridgePreview(slot: number, signal?: AbortSignal, surfaceId?: string): Promise<CodexBridgePreviewContract> {
+  async bridgePreview(slot: number, signal?: AbortSignal, surfaceId?: string, threadId?: string): Promise<CodexBridgePreviewContract> {
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw new Error("Codex profile slot must be an integer from 1 to 99");
     return parseCodexBridgePreviewContract(await this.request(
-      `v1/codex/profiles/${slot}/bridge-preview${surfaceId ? "?surfaceId=" + encodeURIComponent(surfaceId) : ""}`,
+      `v1/codex/profiles/${slot}/bridge-preview?${new URLSearchParams({
+        ...(surfaceId ? { surfaceId } : {}), ...(threadId ? { threadId } : {}),
+      })}`,
       "GET",
       undefined,
       signal,

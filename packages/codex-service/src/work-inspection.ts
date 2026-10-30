@@ -70,12 +70,12 @@ export function createCodexWorkInspector(input: {
     };
     let observedPreview: Awaited<ReturnType<typeof input.service.bridgePreview>> | undefined;
     try {
-      observedPreview = await input.service.bridgePreview(slot);
+      observedPreview = await input.service.bridgePreview(slot, undefined, threadId);
     } catch { /* Separate unknown browser state from a proven Native result. */ }
     if (observedPreview && observedPreview.slot !== slot) throw Error("browser preview owner mismatch");
     if (observedPreview) {
       const preview = observedPreview;
-      const selectedSurface = preview.selectedSurfaceId !== undefined || preview.activeSurfaceCount === 1;
+      const selectedSurface = preview.selectedSurfaceId !== undefined;
       const observationReason = !selectedSurface
         ? preview.activeSurfaceCount === 0 ? "no_active_surface" : "surface_not_selected"
         : preview.approvalObservationReason
@@ -109,7 +109,7 @@ export function createCodexWorkInspector(input: {
       observedAt: new Date().toISOString(),
       browser: Object.freeze({
         scope: "selected_profile_only" as const,
-        attributableToThread: false as const,
+        attributableToThread: browser.selectedSurface && browser.retention?.surface?.taskId === threadId,
         ...browser,
         approvalAuthority: "observation_only" as const,
       }),

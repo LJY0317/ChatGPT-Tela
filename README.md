@@ -66,8 +66,8 @@ See [diagnostics](docs/diagnostics.md) for limits.
 Tela Chat additionally exposes an optional authenticated `inspect_native_work`
 read-only capability (opened workspace ID, exact Native thread UUID and
 optional profile/window), without an arbitrary shell command. It reports
-current profile Web approval separately from the Native thread because
-profile-only browser evidence is not proof of one conversation's ownership.
+the Web surface uniquely matching that Native thread's existing task ownership.
+Absent or ambiguous matches remain unknown; profile-only browser evidence does not establish ownership.
 The host's own ChatGPT tool approval prompts are outside Tela ingress.
 For selected owned Web sessions, agents can inspect a bounded one-shot or
 conversation-scoped eligibility classification; the actual automatic click

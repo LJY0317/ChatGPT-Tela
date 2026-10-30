@@ -224,11 +224,14 @@ describe("profile bridge preview server", () => {
   });
   test("approval status belongs only to the explicitly selected surface and is observed on demand", async () => {
     const token = "p".repeat(48); const id = "surface_" + "a".repeat(32); let calls = 0;
+    const threads: (string | undefined)[] = [];
     const retention = { total: 12, target: 10, active: 1, undelivered: 1, closing: 0, otherOwners: 10, reclaimable: 0 };
     const detail = { id, taskId: "native-task", state: "active" as const, nextAction: "wait_for_work" as const };
     const server = await startProfileBridgePreviewServer({ slot: 1, bearerToken: token,
-      async observe(selected) {
+      async observe(selected, threadId) {
         calls++;
+        threads.push(threadId);
+        if (threadId === "native-task") selected = id;
         return { activeSurfaceCount: 2, surfaces: [{ id, label: "Selected task" },
           { id: "surface_" + "b".repeat(32), label: "Other task" }],
           retention: { ...retention, ...(selected === id ? { surface: detail } : {}) },
@@ -246,7 +249,10 @@ describe("profile bridge preview server", () => {
       expect(selected.selectedSurfaceId).toBe(id);
       expect(selected.previewAvailable).toBe(false);
       expect(parseCodexBridgePreviewContract(selected).retention?.surface).toEqual(detail);
-      expect(calls).toBe(2);
+      const scoped = await (await fetch(new URL("v1/bridge-preview?threadId=native-task", server.endpoint), { headers })).json();
+      expect(parseCodexBridgePreviewContract(scoped).retention?.surface).toEqual(detail);
+      expect(threads).toEqual([undefined, undefined, "native-task"]);
+      expect(calls).toBe(3);
     } finally { await server.close(); }
   });
   test("selected Web approval wait excludes private card contents", async () => {

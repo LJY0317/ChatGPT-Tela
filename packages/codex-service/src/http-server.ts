@@ -226,7 +226,7 @@ export async function startCodexServiceHttpServer(input: {
         }
         const bridgeSlot = request.method === "GET" ? previewSlot(url.pathname) : undefined;
         if (bridgeSlot !== undefined) {
-          return Response.json(await input.service.bridgePreview(bridgeSlot, url.searchParams.get("surfaceId") ?? undefined), {
+          return Response.json(await input.service.bridgePreview(bridgeSlot, url.searchParams.get("surfaceId") ?? undefined, url.searchParams.get("threadId") ?? undefined), {
             headers: { "cache-control": "no-store" },
           });
         }

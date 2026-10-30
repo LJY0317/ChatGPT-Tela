@@ -131,7 +131,7 @@ export interface CodexService {
   runSavedDeleteAcceptance?(slot: number): Promise<CodexSavedDeleteAcceptanceContract>;
   recoverSyntheticSavedChat?(slot: number): Promise<CodexSyntheticRecoveryContract>;
   bridgeSurfaces(slot: number, since?: number, signal?: AbortSignal): Promise<{ contractVersion: 1; slot: number; revision: number; surfaces: readonly { id: string; label: string; title?: string }[] }>;
-  bridgePreview(slot: number, surfaceId?: string): Promise<CodexBridgePreviewContract>;
+  bridgePreview(slot: number, surfaceId?: string, threadId?: string): Promise<CodexBridgePreviewContract>;
   accountCheck?(slot: number): Promise<CodexAccountCheckContract>;
   accountDisplay?(slot: number): Promise<CodexAccountDisplayContract>;
   contextAttachmentCanary(slot: number): Promise<CodexContextAttachmentCanaryContract>;
@@ -953,7 +953,7 @@ export async function startCodexService(input: {
       await rpc?.close().catch(() => {});
       return { contractVersion: 1 as const, slot, revision: result.revision, surfaces };
     },
-    async bridgePreview(slotValue: number, surfaceId?: string) {
+    async bridgePreview(slotValue: number, surfaceId?: string, threadId?: string) {
       const slot = slotNumber(slotValue);
       const profile = owned.get(slot);
       if (!profile || profile.child.exitCode !== null || profile.child.signalCode !== null) {
@@ -966,6 +966,7 @@ export async function startCodexService(input: {
       }
       const url = new URL("v1/bridge-preview", profile.bridgePreviewUrl);
       if (surfaceId) url.searchParams.set("surfaceId", surfaceId);
+      if (threadId) url.searchParams.set("threadId", threadId);
       const response = await fetch(url, {
         headers: { authorization: `Bearer ${profile.uiToken}` },
         signal: AbortSignal.timeout(3_000),

@@ -86,7 +86,7 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
   revealBridgeSurface(id: string, interactive?: boolean): Promise<void>;
   bridgeSurfaces(): { readonly revision: number; readonly surfaces: readonly { readonly id: string; readonly label: string; readonly taskId: string }[] };
   onBridgeSurfacesChanged(listener: () => void): () => void;
-  observeBridgePreview(id?: string): Promise<{
+  observeBridgePreview(id?: string, threadId?: string): Promise<{
     readonly retention?: import("@chatgpt-tela/core").BrowserRetentionObservation;
     readonly activeSurfaceCount: number;
     readonly surfaces?: readonly { readonly id: string; readonly label: string }[];
@@ -441,9 +441,10 @@ export async function startElectronDevelopmentRuntime(
     },
     bridgeSurfaces: () => ({ revision: browserHost.surfaceRevision, surfaces: browserHost.listSurfaces() }),
     onBridgeSurfacesChanged: (listener: () => void) => browserHost.onSurfacesChanged(listener),
-    async observeBridgePreview(id?: string) {
+    async observeBridgePreview(id?: string, threadId?: string) {
       const surfaces = browserHost.listSurfaces();
-      const selected = id ?? (surfaces.length === 1 ? surfaces[0]!.id : undefined);
+      const candidates = threadId === undefined ? surfaces : surfaces.filter(surface => surface.taskId === threadId);
+      const selected = id ?? (candidates.length === 1 ? candidates[0]!.id : undefined);
       const capability = selected ? browserHost.selectedCapability(selected, BROWSER_READ_ONLY_PREVIEW) : undefined;
       const automation = selected ? browserHost.selectedCapability(selected, BROWSER_PAGE_AUTOMATION) : undefined;
       let approvalState: "pending" | "none" | "unavailable" = "unavailable";

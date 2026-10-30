@@ -75,6 +75,10 @@ close active work, and the suggested action never automatically resends a reques
 Control Center uses its existing pressure message for advice about the selected session; below the
 soft target it adds no cleanup notice. A selected session without a captured image is identified as
 having no available snapshot, rather than asking the user to select it again.
+Native work inspection passes `threadId` through that same preview request to select the unique
+owned surface for the requested conversation. Several candidates (such as a retained task and its
+checkpoint preparation) remain unselected until ownership is unambiguous. This adds no Native title
+lookup, page search or polling. An explicit UI `surfaceId` retains its existing selection behavior.
 
 These commands require an already installed, owned Tela Work runtime and a matching signed-in Web
 profile. They do not start, update or restart services. New delegations default to the calling profile when its runtime hint or exact Native thread identifies one; otherwise the single-profile default is 1. Explicit `--slot N` selects another profile. A continuation retains its existing job profile.

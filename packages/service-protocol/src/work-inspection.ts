@@ -76,7 +76,7 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
   if (doc.contractVersion !== 1 || doc.slot !== expectedSlot || doc.threadId !== expectedThreadId
     || doc.identityVerified !== true || !["active", "idle", "notLoaded"].includes(String(native.state))
     || !["paginated", "legacy"].includes(String(native.historyMode))
-    || browser.scope !== "selected_profile_only" || browser.attributableToThread !== false
+    || browser.scope !== "selected_profile_only"
     || (browser.activeSurfaceCount !== null && (!Number.isSafeInteger(browser.activeSurfaceCount)
       || (browser.activeSurfaceCount as number) < 0))
     || typeof browser.selectedSurface !== "boolean"
@@ -88,6 +88,8 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
     && (browser.approvalState !== "unavailable" || !CAUSE.includes(browser.observationReason as typeof CAUSE[number]))) {
     throw Error("invalid browser observation reason");
   }
+  const retention = browser.retention === undefined ? undefined : parseBrowserRetentionObservation(browser.retention);
+  // Attribution comes from the retained task owner, not the sender's attribution label.
   const wait = browser.wait === undefined ? undefined : parseCodexApprovalWait(browser.wait);
   if (wait && browser.selectedSurface !== true) throw Error("unowned approval wait");
   if (!Array.isArray(native.recentTurns) || native.recentTurns.length > 4
@@ -138,9 +140,9 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
     checkpointCandidates,
     browser: Object.freeze({
       scope: "selected_profile_only" as const,
-      attributableToThread: false as const,
+      attributableToThread: browser.selectedSurface === true && retention?.surface?.taskId === expectedThreadId,
       activeSurfaceCount: browser.activeSurfaceCount as number | null,
-      ...(browser.retention === undefined ? {} : { retention: parseBrowserRetentionObservation(browser.retention) }),
+      ...(retention ? { retention } : {}),
       selectedSurface: browser.selectedSurface as boolean,
       approvalState: browser.approvalState as typeof APPROVAL[number],
       ...(browser.observationReason ? { observationReason: browser.observationReason as typeof CAUSE[number] } : {}),

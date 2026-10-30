@@ -352,7 +352,13 @@ describe("Electron development runtime composition", () => {
         id: taskSurface.id, taskId: provider.submitted!.nativeTaskId, state: "reclaimable", nextAction: "allow_idle_cleanup",
       });
       expect((await runtime.observeBridgePreview()).retention).not.toHaveProperty("surface");
+      expect((await runtime.observeBridgePreview(undefined, provider.submitted!.nativeTaskId)).retention?.surface?.id).toBe(taskSurface.id);
       await setup.close();
+      const unrelated = await runtime.observeBridgePreview(undefined, "another-native-thread");
+      expect(unrelated.activeSurfaceCount).toBe(1);
+      expect(unrelated.selectedSurfaceId).toBeUndefined();
+      expect(unrelated.retention).not.toHaveProperty("surface");
+      expect(unrelated.approvalState).toBeUndefined();
     } finally {
       await runtime.stop();
       stopSurfaces?.();

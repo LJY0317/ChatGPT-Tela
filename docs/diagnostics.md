@@ -260,9 +260,11 @@ read-only capability (opened workspace ID + exact Native thread UUID,
 optional profile slot/minutes) over composing a `bun -e` diagnostic
 script through `exec_command`. The authenticated Codex-service
 inspection checks the Native owner, projects bounded logs, observes
-current profile Web approval and reports historical approval-wait evidence.
-Web card state is **profile-scoped**, not proof it belongs to that
-Native conversation. `unavailable` includes a fixed observation
+the uniquely matching Web task surface and reports historical approval-wait evidence.
+`browser.attributableToThread` is derived from the selected retained surface's task ID,
+not a sender's attribution label or the profile's browser count. Missing or ambiguous matches
+remain unknown, even if the profile has one unrelated window. Thread attribution alone does not prove
+that the current Native turn executed in that browser. `unavailable` includes a fixed observation
 failure reason where supported; ChatGPT host-owned approval cards
 remain pre-ingress and are handled by ChatGPT.
 

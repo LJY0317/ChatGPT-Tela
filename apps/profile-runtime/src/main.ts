@@ -85,7 +85,7 @@ async function main(config: ReturnType<typeof loadProductProfileRuntimeConfig>):
       recoverSyntheticSavedChat: () => runtime.recoverSyntheticSavedChat(),
       surfaces: () => runtime.bridgeSurfaces(),
       onSurfacesChanged: listener => runtime.onBridgeSurfacesChanged(listener),
-      observe: id => runtime.webRuntime?.observeBridgePreview(id) ?? Promise.resolve({ activeSurfaceCount: 0 }),
+      observe: (id, threadId) => runtime.webRuntime?.observeBridgePreview(id, threadId) ?? Promise.resolve({ activeSurfaceCount: 0 }),
       reveal: async (id, interactive) => {
         if (!runtime.webRuntime) throw new Error("Web connection is not ready");
         await runtime.webRuntime.revealBridgeSurface(id, interactive);
