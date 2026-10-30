@@ -2,10 +2,10 @@ import { expect, test, spyOn } from "bun:test";
 import * as https from "node:https";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { observeDiagnosticEvents, listDiagnosticIncidents, readDiagnosticIncident } from "@chatgpt-tela/core";
+import { observeDiagnosticEvents, listDiagnosticIncidents, readDiagnosticIncident, setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
 import { diagnosePublicIngress } from "./public-ingress-diagnostics";
 
 test("on-demand ingress snapshot keeps only structural local state and never gates DNS evidence", async () => {
@@ -57,7 +57,8 @@ test("public failure retains TLS cause and aggregate incident; mixed relays and 
     expect(options.rejectUnauthorized).not.toBe(false);
     const req = new EventEmitter() as any;
     req.end = () => { queueMicrotask(() => {
-      const socket = new EventEmitter(); req.emit("socket", socket); socket.emit("connect");
+      const socket = Object.assign(new EventEmitter(), { bytesRead: 7, bytesWritten: 120 });
+      req.socket = socket; req.emit("socket", socket); socket.emit("connect");
       if (failAll || failFirst && address === "192.0.2.1") { req.emit("error", Object.assign(new Error("private socket detail"), { code: "ERR_SOCKET_CLOSED" })); return; }
       socket.emit("secureConnect");
       const response = Readable.from(["private-body"]) as any;
@@ -98,9 +99,19 @@ test("public failure retains TLS cause and aggregate incident; mixed relays and 
     });
     expect(persisted).not.toMatch(/private-host|private-body|private socket|192\.0\.2|private-node-key|private-peer|private-address|private-destination/);
     expect(JSON.stringify(failed)).not.toMatch(/private-node-key|private-peer|private-address|private-destination/);
+    const privateRoot = join(root, "diagnostics", "private");
+    expect(readdirSync(privateRoot)).toHaveLength(0);
+    setPrivateDiagnosticCapture(join(root, "diagnostics"), 1);
     failAll = false;
     const mixed = await diagnosePublicIngress(new URL("https://private-host.invalid/mcp"), "https://resolver.invalid", runner);
     expect(mixed).toMatchObject({ state: "http-responsive", responsiveCount: 1, mcpContract: "not-probed" });
+    const artifact = readdirSync(privateRoot).find(name => name.endsWith(".json") && !name.endsWith(".meta.json"))!;
+    const evidence = JSON.parse(readFileSync(join(privateRoot, artifact), "utf8"));
+    expect(evidence).toMatchObject({ phase: "public_ingress_failure",
+      context: { operation_fingerprint: mixed.probeFingerprint },
+      value: { stage: "tls", bytesRead: 7, bytesWritten: 120,
+        error: { message: "private socket detail", code: "ERR_SOCKET_CLOSED" } } });
+    expect(readFileSync(join(root, "gateway.diagnostics.jsonl"), "utf8")).not.toContain("private socket detail");
     expect(capabilityChecks).toBe(1);
     const mismatch = await diagnosePublicIngress(new URL("https://private-host.invalid/mcp"), "https://resolver.invalid", runner, {
       async verify(fetch, signal) {

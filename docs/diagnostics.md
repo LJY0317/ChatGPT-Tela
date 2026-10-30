@@ -1247,6 +1247,10 @@ network fingerprints and before/after Tailscale backend, online, ingress-peer an
 snapshots. Aggregate failures create incidents using the existing byte/age retention;
 no log count cap, raw addresses, SSIDs, credentials or response bodies are stored.
 `peerapi_ingress` before/after deltas are shared-daemon evidence, not request ownership.
+With private capture enabled, failed relay requests also retain their exact transport
+error and socket byte counts as `public_ingress_failure`, correlated to this probe.
+This uses the existing local private byte/age retention; it adds no requests or retries.
+Structural reports retain normalized codes only, and capture remains off by default.
 Recovery events can be compared by endpoint and relay fingerprints; recovery after a
 reconnect does not by itself prove the reconnect fixed the cause. External failures
 before ingress require this explicit local probe or an external client report.

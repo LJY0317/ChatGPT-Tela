@@ -1,5 +1,5 @@
 import type { TailscaleCommandRunner } from "./index";
-import { diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { capturePrivateDiagnosticValue, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { performance } from "node:perf_hooks";
@@ -191,8 +191,17 @@ export async function diagnosePublicIngress(endpoint: URL, resolverUrl: string, 
       socket.once("connect", () => { tcpConnected = true; });
       socket.once("secureConnect", () => { tlsConnected = true; });
     });
-    req.on("error", (error: NodeJS.ErrnoException) => finish({ state: "unavailable",
-      stage: tlsConnected ? "http" : tcpConnected ? "tls" : "tcp", errorCode: error.code ?? error.name }));
+    req.on("error", (error: NodeJS.ErrnoException) => {
+      const stage = tlsConnected ? "http" : tcpConnected ? "tls" : "tcp";
+      if (!options.signal?.aborted) withDiagnosticContext({ operation_fingerprint: probeFingerprint }, () =>
+        capturePrivateDiagnosticValue("public_ingress_failure", {
+          stage, relayFingerprint: diagnosticFingerprint(address),
+          error: { name: error.name, message: error.message, code: error.code },
+          bytesRead: req.socket?.bytesRead, bytesWritten: req.socket?.bytesWritten,
+          tcpConnected, tlsConnected,
+        }));
+      finish({ state: "unavailable", stage, errorCode: error.code ?? error.name });
+    });
     req.end();
   })));
   const responsive = relays.filter(row => row.state === "http-response");
