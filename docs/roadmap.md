@@ -116,9 +116,13 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   must reflect new running code and preserve normal recovery after failure, including actionable recovery
   when completed work leaves an idle tool process that blocks shutdown readiness. Never close ChatGPT
   for an update that preflight cannot start.
-- Complete the existing owned-process cancellation contract so abandoned tool commands can be stopped
-  and settled through their owner, including child processes. Integrate actionable cancellation into
-  update readiness without terminating active work automatically or requiring manual OS cleanup.
+- **Owned-process cancellation.** The installed macOS operation-owner worker accepts explicit owner
+  cancellation, then publishes terminal evidence after the command and its ordinary process-group
+  descendants stop. Isolated acceptance verifies maintenance blocks beforehand, allows shutdown after
+  settlement and preserves an independent process. A cancellation reply may still report running;
+  it is not completion. Source maintenance UI now preserves failed observations instead of hiding them
+  or treating an unavailable list as successful cancellation. Actual GUI cancellation and Windows/Linux
+  execution remain unverified. Update readiness never cancels active work automatically.
 - **Consumer update acceptance.** Use one menu-bar flow: Check for Updates, download/readiness progress,
   then Sparkle’s standard Install and Relaunch on macOS. Development dependency preparation and package assembly stay outside this flow.
   Ship the complete supported payload, including required helpers and runtimes; an update must not silently
