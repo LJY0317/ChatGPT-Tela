@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -38,10 +37,12 @@ if (process.argv.includes("--list")) process.exit(0);
 const failures: string[] = [];
 for (const file of files) {
   console.log(`Testing ${file}`);
-  const result = spawnSync(process.execPath, ["test", file], { stdio: "inherit", windowsHide: true });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    failures.push(`${file}: exit ${result.status}, signal ${result.signal ?? "none"}`);
+  const child = Bun.spawn([process.execPath, "test", file], {
+    stdin: "ignore", stdout: "inherit", stderr: "inherit", windowsHide: true,
+  });
+  const code = await child.exited;
+  if (code !== 0) {
+    failures.push(`${file}: exit ${code}, signal ${child.signalCode ?? "none"}`);
   }
 }
 if (failures.length > 0) {
