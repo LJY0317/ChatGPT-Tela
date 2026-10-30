@@ -67,8 +67,22 @@ test("readiness stays bounded and rejects a partial oversized publication",async
  try{socket.write("x".repeat(65537));await expect(lease.ready).rejects.toThrow("bounded");}
  finally{socket.destroy();}
 });
-test.each(["end", "destroy"] as const)("child %s before publication rejects readiness instead of leaving startup pending",async action=>{
+test("child EOF before publication rejects readiness instead of leaving startup pending",async()=>{
  const lease=await fixtureLease();const socket=await authenticated(lease);
- try { socket[action]();await expect(lease.ready).rejects.toThrow("before readiness"); }
+ try { socket.end();await expect(lease.ready).rejects.toThrow("before readiness"); }
  finally {socket.destroy();await lease.close();}
+});
+
+test("actual child exit before publication rejects readiness", async () => {
+ const lease = await fixtureLease();
+ const child = Bun.spawn([process.execPath, "-e", `
+  const {connect}=require("node:net");
+  const socket=connect({host:"127.0.0.1",port:Number(process.env.CHATGPT_TELA_PRODUCT_SUPERVISOR_PORT)});
+  socket.on("connect",()=>socket.write(process.env.CHATGPT_TELA_PRODUCT_SUPERVISOR_TOKEN+"\\n"));
+  socket.once("data",()=>process.exit(0));
+ `], {env:{...process.env,...lease.environment},stdout:"ignore",stderr:"inherit"});
+ try {
+  await expect(lease.ready).rejects.toThrow("before readiness");
+  expect(await child.exited).toBe(0);
+ } finally { if (child.exitCode === null) child.kill(); await child.exited; }
 });
