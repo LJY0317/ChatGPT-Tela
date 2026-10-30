@@ -1,9 +1,15 @@
+import { observeDiagnosticEvents, structuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { expect, test } from "bun:test";
 import { connect } from "node:net";
 import { createProfileSupervisorLease } from "./profile-supervision";
 
 test("profile supervisor accepts only its token and closes the lease with its owner", async () => {
+  const events: Record<string, unknown>[] = [];
+  const off = observeDiagnosticEvents(event => {
+    if (event.stage === "profile_supervisor_lifecycle") events.push(structuralDiagnosticEvent(event)!);
+  });
   const lease = await createProfileSupervisorLease();
+  try {
   const port = Number(lease.environment.CHATGPT_TELA_PRODUCT_SUPERVISOR_PORT);
   const token = lease.environment.CHATGPT_TELA_PRODUCT_SUPERVISOR_TOKEN!;
   const child = connect({ host: "127.0.0.1", port });
@@ -21,6 +27,11 @@ test("profile supervisor accepts only its token and closes the lease with its ow
   const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
   await lease.close();
   await closed;
+  expect(events.map(event => event.phase)).toEqual(["listen_started", "listening", "authenticated", "close_requested"]);
+  expect(new Set(events.map(event => event.lease_fingerprint)).size).toBe(1);
+  expect(events[0]!.lease_fingerprint).toMatch(/^[a-f0-9]{24}$/);
+  expect(JSON.stringify(events)).not.toContain(token);
+  } finally { off?.(); await lease.close(); }
 });
 
 async function authenticated(lease: Awaited<ReturnType<typeof createProfileSupervisorLease>>) {

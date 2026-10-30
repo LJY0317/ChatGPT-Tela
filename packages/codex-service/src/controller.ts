@@ -1,4 +1,4 @@
-import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { connectCodexAppServerWebSocket, readDynamicWebModelCatalog, waitForLoadedAppServerIdle, countLoadedAppServerActiveTurns, interruptLoadedAppServerTurns } from "@chatgpt-tela/codex";
 import { ProfileConnectionError, type ProfileConnectionPhase, type ProfileStartOptions } from "./profile-operation";
 import { parseCodexTerminalSessionContract, type CodexTerminalSessionContract } from "@chatgpt-tela/service-protocol";
@@ -682,6 +682,9 @@ export async function startCodexService(input: {
         throw error;
       }
       let ready: ChildReady;
+      emitDiagnosticEvent("chatgpt_tela_codex", "profile_runtime_spawned", {
+        slot, runtime_process_fingerprint: diagnosticFingerprint(String(child.pid)),
+      });
       try {
         ready = childReady(await waitForProfileReady(child, supervisor, input.signal), {
           slot,

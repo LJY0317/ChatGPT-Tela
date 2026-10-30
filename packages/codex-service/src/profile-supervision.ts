@@ -1,6 +1,7 @@
 import { StringDecoder } from "node:string_decoder";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
+import { diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 
 export interface ProfileSupervisorLease {
   readonly environment: Readonly<Record<string, string>>;
@@ -18,6 +19,10 @@ function sameToken(candidate: string, expected: string): boolean {
 /** One authenticated loopback connection whose lifetime is owned by the Codex service process. */
 export async function createProfileSupervisorLease(input: { readonly onProgress?: (phase: string) => void } = {}): Promise<ProfileSupervisorLease> {
   const token = randomBytes(36).toString("base64url");
+  const leaseFingerprint = diagnosticFingerprint(token), startedAt = performance.now();
+  const observe = (phase: string) => emitDiagnosticEvent("chatgpt_tela_codex", "profile_supervisor_lifecycle", {
+    lease_fingerprint: leaseFingerprint, phase, duration_ms: Math.round(performance.now() - startedAt),
+  });
   let accepted: Socket | undefined;
   let resolveConnected!: () => void;
   let rejectConnected!: (error: Error) => void;
@@ -62,6 +67,7 @@ export async function createProfileSupervisorLease(input: { readonly onProgress?
       if (newline < 0) return;
       const candidate = buffer.slice(0, newline);
       if (!sameToken(candidate, token)) return reject();
+      observe("authenticated");
       socket.removeAllListeners("data");
       const decoder = new StringDecoder("utf8");
       let lifecycleBuffer = buffer.slice(newline + 1);
@@ -83,6 +89,7 @@ export async function createProfileSupervisorLease(input: { readonly onProgress?
               && ["browser", "account", "connector", "models", "opening"].includes(value.phase)) {
               input.onProgress?.(value.phase);
             } else if (value.stage === "product-profile-ready") {
+              observe("ready");
               readyReceived = true; resolveReady(value);
             } else throw new Error("invalid lifecycle publication");
           } catch {
@@ -110,10 +117,12 @@ export async function createProfileSupervisorLease(input: { readonly onProgress?
       rejectStartup(new Error("profile supervisor listener failed", { cause: error }));
     }
   });
+  observe("listen_started");
   await new Promise<void>((resolvePromise, rejectPromise) => {
     server.once("error", rejectPromise);
     server.listen(0, "127.0.0.1", resolvePromise);
   });
+  observe("listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     server.close();
@@ -136,6 +145,7 @@ export async function createProfileSupervisorLease(input: { readonly onProgress?
     async close() {
       if (closed) return;
       closed = true;
+      observe("close_requested");
       rejectReady(new Error("profile supervisor closed before readiness"));
       accepted?.destroy();
       if (!settled) {
