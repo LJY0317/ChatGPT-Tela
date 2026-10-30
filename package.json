@@ -9,7 +9,7 @@
     "packages/*"
   ],
   "engines": {
-    "bun": "1.4.0"
+    "bun": "1.4.4"
   },
   "scripts": {
     "codex:continuity-probe": "bun run apps/codex-contract-probe/src/main.ts",

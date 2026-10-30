@@ -18,16 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.3
       - run: bun install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@stable
       - run: bun run workspace-files:test
       - run: bun run workspace-files:build
       - run: bun run verify
-        if: runner.os != 'Windows'
-      - run: bun run typecheck && bun tests/windows-ci.ts
-        if: runner.os == 'Windows'
       - name: Remove Windows test fixtures after Bun exits
         if: ${{ always() && runner.os == 'Windows' }}
         shell: pwsh

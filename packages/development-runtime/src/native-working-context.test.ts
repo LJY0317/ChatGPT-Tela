@@ -462,7 +462,7 @@ test("completed summaries reuse across model changes and exact-prefix forks, whi
     else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previousDiagnosticFile;
     rmSync(directory, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 test("a past edit cannot inherit the old derived branch; losing the entire stage journal fails closed", async () => {
   const directory = root();

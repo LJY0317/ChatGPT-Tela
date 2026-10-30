@@ -600,7 +600,7 @@ inventory through the public connector, invoked Native `exec_command`, received 
 same Native turn with the requested final response. The test Native thread was then deleted through the public
 app-server lifecycle rather than left in the user's Codex history.
 
-ChatGPT Tela currently requires Bun 1.4.0:
+ChatGPT Tela currently requires Bun 1.4.4:
 
 ```sh
 bun install --frozen-lockfile

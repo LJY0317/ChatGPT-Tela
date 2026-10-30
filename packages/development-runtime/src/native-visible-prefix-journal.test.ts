@@ -89,13 +89,14 @@ test("missing whole storage, missing state and interrupted writes never reinitia
     await expect(new FileNativeVisiblePrefixStageJournal(options).claim(identity())).rejects.toThrow();
   });
 });
+// Durable flush stress is intentionally slower on Windows; keep real I/O and ownership checks.
 test("pending admission is bounded and no pending identity is evicted", () => fixture(async options => {
   const journal = new FileNativeVisiblePrefixStageJournal(options);
   for (let i = 0; i < 64; i++) expect((await journal.claim(identity(i))).status).toBe("claimed");
   await expect(journal.claim(identity(64))).rejects.toThrow("reconciliation");
   expect(await journal.claim(identity(0))).toEqual({ status: "unknown" });
   expect((await readFile(join(options.directory, "state.json"))).length).toBeLessThan(16 * 1024 * 1024);
-}));
+}), 30_000);
 test("worst escaped completion fits reserved capacity and only completed entries can expire", () => fixture(async options => {
   const journal = new FileNativeVisiblePrefixStageJournal(options);
   const summary = "\u0001".repeat(32 * 1024);
@@ -106,7 +107,7 @@ test("worst escaped completion fits reserved capacity and only completed entries
   }
   expect((await journal.claim(identity(64))).status).toBe("completed");
   expect((await readFile(join(options.directory, "state.json"))).length).toBeLessThan(16 * 1024 * 1024);
-}), 30_000);
+}), 120_000);
 
 test("released modern operation retains original claim and unknown outcome without authorizing its retired owner", () => fixture(async options => {
   const journal = new FileNativeVisiblePrefixStageJournal(options);
@@ -130,7 +131,7 @@ test("released modern operation retains original claim and unknown outcome witho
   expect((await journal.claim(changed, owner, hash("grown source"), scope)).status).toBe("unknown");
   expect((await journal.claim(changed, hash("new Native turn"), hash("grown source"), scope)).status).toBe("claimed");
   await expect(journal.complete({ ...id, status: "completed", claimId: claim.claimId, summary: "late old result" })).rejects.toThrow("owned claim");
-}));
+}), 30_000);
 
 test("completed receipt snapshots are immutable reads and never admit a pending send", () => fixture(async options => {
   const journal = new FileNativeVisiblePrefixStageJournal(options), id = identity();
