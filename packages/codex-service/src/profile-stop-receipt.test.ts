@@ -10,6 +10,7 @@ test("refused default Desktop cleanup keeps authenticated child, route and servi
   const root = mkdtempSync(join(tmpdir(), "tela-stop-receipt-")), state = join(root, "stop.json");
   writeFileSync(state, JSON.stringify({ refuse: true }));
   let active = false, closes = 0, parentQuits = 0, nativeBusy = false;
+  let desktopPid = 123, nativeUnavailable = false;
   const closedSlots: number[] = [];
   let onClosed = (_slot: number) => {};
   let onNativeRead = () => {};
@@ -20,6 +21,9 @@ test("refused default Desktop cleanup keeps authenticated child, route and servi
       socket.subscribe("status");
       const request = JSON.parse(String(data));
       if (request.id === undefined) return;
+      if (nativeUnavailable) {
+        socket.send(JSON.stringify({ id: request.id, error: { code: -32603, message: "obsolete Native endpoint" } })); return;
+      }
       socket.send(JSON.stringify({ id: request.id, result: request.method === "thread/loaded/list"
         ? { data: nativeBusy ? ["owned-thread"] : [], nextCursor: null }
         : request.method === "thread/read" ? { thread: { id: "owned-thread", status: { type: "active" } } } : {} }));
@@ -45,7 +49,7 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
   const target = { slot: 1, adapterKind: "default-desktop" as const, id: "default", displayName: "Fixture", state: "stopped", managed: true };
   // The real default adapter intentionally has no app-server endpoint.
   const session = () => ({ targetId: "default", state: active ? "restart-required" : "available",
-    ...(active ? { desktopProcessId: 123 } : {}) });
+    ...(active ? { desktopProcessId: desktopPid } : {}) });
   const adapter: CodexNativeTargetAdapter = {
     kind: "default-desktop", async profiles() { return [{ target, session: session() }]; },
     async resolve() { return { target, session: session() }; }, async session() { return session(); },
@@ -77,6 +81,25 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
       expect(failures).toMatchObject([{ phase: "final_readiness", abort_observed: false }]);
     } finally { unobserve?.(); writeFileSync(state, JSON.stringify({ refuse: true })); }
 
+
+    // The replaced Desktop is independent; an obsolete Native endpoint must
+    // not veto maintenance, while this runtime's outstanding Web work still does.
+    nativeUnavailable = true;
+    expect(await service.shutdownReadiness()).toBe("blocked");
+    await expect(service.waitForShutdownReadiness()).rejects.toThrow("obsolete Native endpoint");
+    desktopPid = 456;
+    try {
+      expect((await service.profiles())[0]?.controlState).toBe("orphaned");
+      expect(await service.shutdownReadiness()).toBe("ready");
+      await service.waitForShutdownReadiness();
+      expect(active).toBe(true); expect(parentQuits).toBe(0); expect(closes).toBe(0);
+      writeFileSync(state, JSON.stringify({ refuse: true, busy: true }));
+      expect(await service.shutdownReadiness()).toBe("blocked");
+      await expect(service.waitForShutdownReadiness()).rejects.toBeInstanceOf(CodexShutdownNotStartedError);
+    } finally {
+      desktopPid = 123; nativeUnavailable = false;
+      writeFileSync(state, JSON.stringify({ refuse: true }));
+    }
 
     await expect(service.close()).rejects.toThrow("Profile normal shutdown was not acknowledged");
     expect(service.activeProfileCount).toBe(1); expect(active).toBe(true); expect(closes).toBe(0); expect(parentQuits).toBe(0);

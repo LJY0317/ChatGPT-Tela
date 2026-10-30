@@ -290,6 +290,16 @@ function nativeTargetRouteMatches(
     && session.responsesRouteFingerprint === owned.responsesRouteFingerprint;
 }
 
+/** Positive detachment evidence; unavailable discovery alone is not an idle receipt. */
+function nativeTargetDetached(target: CodexNativeTarget, session: CodexNativeTargetSession, owned: OwnedProfile): boolean {
+  if (session.state === "available") return true;
+  return target.adapterKind === "default-desktop"
+    ? session.desktopProcessId !== undefined && owned.targetProcessId !== undefined
+      && session.desktopProcessId !== owned.targetProcessId
+    : session.state === "ready" && session.responsesRouteFingerprint !== undefined
+      && session.responsesRouteFingerprint !== owned.responsesRouteFingerprint;
+}
+
 function statusFor(target: CodexNativeTarget, slot: number, session: CodexNativeTargetSession, owned?: OwnedProfile): CodexProfileStatus {
   const childAlive = owned?.child.exitCode === null && owned.child.signalCode === null;
   const ownershipMatches = ownsNativeTargetSession(target, session, owned);
@@ -366,8 +376,16 @@ export async function startCodexService(input: {
     // stopOwned/runtime cleanup separately prove ownership before quitting an app.
     // The built-in Desktop adapter reports process identity, not the routed
     // app-server. Use the same owned endpoint as terminalSession for all targets.
-    if (!profile.terminalEndpoint) return blocked("native_endpoint_unavailable");
-    if (await countLoadedAppServerActiveTurns(profile.terminalEndpoint, input.signal ? { signal: input.signal } : {}) > 0) return blocked("native_work");
+    const session = await targets.session(profile.target.id, input.signal);
+    try {
+      if (!profile.terminalEndpoint) throw new Error("native endpoint unavailable");
+      if (await countLoadedAppServerActiveTurns(profile.terminalEndpoint, input.signal ? { signal: input.signal } : {}) > 0) return blocked("native_work");
+    } catch (error) {
+      if (!nativeTargetDetached(profile.target, session, profile)) throw error;
+      emitDiagnosticEvent("chatgpt_tela_codex", "detached_native_observation_unavailable", { slot: profile.slot, phase: "readiness" });
+    }
+    // A replaced Desktop no longer belongs to this runtime. Drain its Web work
+    // below, but do not require its obsolete Native connection to recover.
     const response = await fetch(new URL("v1/shutdown-readiness", profile.bridgePreviewUrl), {
       headers: { authorization: `Bearer ${profile.uiToken}` },
       signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000),
@@ -518,9 +536,18 @@ export async function startCodexService(input: {
         observation?.throwIfAborted();
         if (starting.size > 0 || stopping || stoppingProfiles.size > 0) throw new CodexShutdownNotStartedError();
         for (const profile of owned.values()) {
-          if (stopping || profile.stopping || !profile.terminalEndpoint) throw new CodexShutdownNotStartedError();
-          slot = profile.slot; phase = "native_completion";
-          await waitForLoadedAppServerIdle(profile.terminalEndpoint, observation ? { signal: observation } : {});
+          if (stopping || profile.stopping) throw new CodexShutdownNotStartedError();
+          slot = profile.slot; phase = "native_ownership";
+          const session = await targets.session(profile.target.id, observation);
+          phase = "native_completion";
+          try {
+            if (!profile.terminalEndpoint) throw new CodexShutdownNotStartedError();
+            await waitForLoadedAppServerIdle(profile.terminalEndpoint, observation ? { signal: observation } : {});
+          } catch (error) {
+            observation?.throwIfAborted();
+            if (!nativeTargetDetached(profile.target, session, profile)) throw error;
+            emitDiagnosticEvent("chatgpt_tela_codex", "detached_native_observation_unavailable", { slot, phase });
+          }
           // Web preparation is separate from Native inference. This existing wait
           // joins its owner; aborting the HTTP observation cannot cancel that work.
           phase = "web_preparation";
