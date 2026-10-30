@@ -1,7 +1,32 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readServiceRuntimeDescriptor, writeServiceRuntimeDescriptor, removeServiceRuntimeDescriptor } from "./index";
 import { parseCodexTerminalSessionContract, parseCodexAccountDisplayContract, parseCodexAccountCheckContract, parseCodexProfileStatusContract, parseCodexBridgePreviewContract, parseServiceRuntimeDescriptor, parseServiceStatus, parseCodexWebDelegationCapacityContract } from "./index";
 
 describe("private service protocol", () => {
+  test("descriptor cleanup belongs to the exact publishing service, not a replacement", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-descriptor-owner-"));
+    const path = join(root, "descriptor.json");
+    const owner = { version: 1, service: "chat", instanceId: "old-chat", installId: "install-1",
+      pid: 123, endpoint: "http://127.0.0.1:32001/", bearerToken: "x".repeat(48),
+      startedAt: "2026-10-30T00:00:00Z" } as const;
+    try {
+      for (const change of [{ instanceId: "new-chat" }, { pid: 456 }, { installId: "install-2" }]) {
+        const replacement = { ...owner, ...change };
+        writeServiceRuntimeDescriptor(path, replacement);
+        removeServiceRuntimeDescriptor(path, owner);
+        expect(readServiceRuntimeDescriptor(path)).toEqual(replacement);
+      }
+      writeServiceRuntimeDescriptor(path, owner);
+      removeServiceRuntimeDescriptor(path, owner);
+      expect(readServiceRuntimeDescriptor(path)).toBeUndefined();
+      expect(() => removeServiceRuntimeDescriptor(path, owner)).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   test("terminal attachment carries its exact runtime owner with the endpoint", () => {
     const value = { contractVersion: 1 as const, slot: 2, endpoint: "ws://127.0.0.1:1234/",
       runtimeProcessId: 42, responsesRouteFingerprint: "a".repeat(64) };

@@ -115,7 +115,7 @@ async function main(): Promise<void> {
     if (!stopping) {
       stopping = (async () => {
         await service.close();
-        removeServiceRuntimeDescriptor(descriptorPath);
+        removeServiceRuntimeDescriptor(descriptorPath, { instanceId: service.instanceId, pid: process.pid, installId });
       })().catch(error => {
         stopping = undefined;
         throw error;

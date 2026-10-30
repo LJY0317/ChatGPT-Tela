@@ -281,11 +281,7 @@ export class LocalServiceSupervisor {
       // Descriptor disappearance is not process-exit evidence. A daemon can
       // still be draining children; never restore over an unfinished shutdown.
       if (!pidAlive(running.descriptor.pid)) {
-        const current = readServiceRuntimeDescriptor(input.descriptorPath);
-        if (current?.instanceId === running.descriptor.instanceId
-          && current.pid === running.descriptor.pid && current.installId === this.#installId) {
-          removeServiceRuntimeDescriptor(input.descriptorPath);
-        }
+        removeServiceRuntimeDescriptor(input.descriptorPath, running.descriptor);
         emitDiagnosticEvent("chatgpt_tela_service", "shutdown_complete", {
           service: input.service,
           duration_ms: diagnosticDurationMs(startedAt),

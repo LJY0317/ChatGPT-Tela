@@ -245,7 +245,7 @@ async function main(): Promise<void> {
           .filter((result): result is PromiseRejectedResult => result.status === "rejected")
           .map(result => result.reason);
         if (failures.length > 0) throw new AggregateError(failures, "Tela Gateway daemon shutdown was incomplete");
-        removeServiceRuntimeDescriptor(descriptorPath);
+        removeServiceRuntimeDescriptor(descriptorPath, { instanceId: gateway.instanceId, pid: process.pid, installId });
       })().catch(error => {
         stopping = undefined;
         throw error;

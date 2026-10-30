@@ -381,8 +381,13 @@ export function writeServiceRuntimeDescriptor(path: string, descriptor: ServiceR
   renameSync(temporary, path);
 }
 
-export function removeServiceRuntimeDescriptor(path: string): void {
-  rmSync(path, { force: true });
+export function removeServiceRuntimeDescriptor(
+  path: string, owner: Pick<ServiceRuntimeDescriptor, "instanceId" | "pid" | "installId">,
+): void {
+  const current = readServiceRuntimeDescriptor(path);
+  if (current?.instanceId === owner.instanceId && current.pid === owner.pid && current.installId === owner.installId) {
+    rmSync(path, { force: true });
+  }
 }
 
 export function parseServiceStatus(value: unknown): ServiceStatus {
