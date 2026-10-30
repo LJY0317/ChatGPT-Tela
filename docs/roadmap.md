@@ -83,7 +83,9 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   share the same close operation. Creating surfaces count toward the soft target. Opt-in capacity
   details now report protected conversation IDs, reasons, recommended next actions and eligibility times
   from the existing completed pass; `web-delegate capacity --cleanup` retrieves them without another scan.
-  Per-item UI actions and browser-specific item details remain open; do not infer that a protected result has been collected from these counts.
+  Selecting a retained browser in the existing preview now returns its exact lease/task protection state,
+  recommended action and known idle expiry from runtime ownership, without another page scan or index.
+  Per-item UI actions and details for non-retained browser owners remain open; do not infer that a protected result has been collected from these counts.
   These are soft targets: no numeric rejection, forced close of protected work or indefinite admission
   wait. Installed acceptance remains separate from source verification.
 - **Instruction reuse.** Source `open_workspace` accepts the caller's retained `instructionRevision` as

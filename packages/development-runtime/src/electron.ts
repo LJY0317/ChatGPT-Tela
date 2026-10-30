@@ -353,7 +353,7 @@ export async function startElectronDevelopmentRuntime(
     responses: runtime.responses,
     mcp: runtime.mcp,
     turns: runtime.turns,
-    browserRetention: () => runtime.browserRetention(),
+    browserRetention: (surfaceId?: string) => runtime.browserRetention(surfaceId),
     prepareChatGptWebSession: (options: Parameters<ChatGptProfileControl["prepareChatGptWebSession"]>[0]) => profileControl.prepareChatGptWebSession(options),
     probeChatGptReadiness: (signal?: AbortSignal) => profileControl.probeChatGptReadiness(signal),
     probeChatGptProfile: (signal?: AbortSignal) => profileControl.probeChatGptProfile(signal),
@@ -466,7 +466,7 @@ export async function startElectronDevelopmentRuntime(
       }
       const approvalWait = selected ? provider.inspectApprovalWait?.(browserHost.selectedSurfaceLease(selected)) : undefined;
       return Object.freeze({ activeSurfaceCount: surfaces.length, surfaces,
-        retention: runtime.browserRetention(),
+        retention: runtime.browserRetention(selected),
         ...(selected ? { selectedSurfaceId: selected } : {}),
         ...(selected ? { approvalState } : {}),
         ...(approvalObservationReason ? { approvalObservationReason } : {}),

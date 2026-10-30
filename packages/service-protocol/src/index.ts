@@ -249,6 +249,8 @@ export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePrev
       || !["automation_unavailable", "dom_observation_failed"].includes(String(approvalObservationReason)))) {
     throw new Error("invalid approval observation reason");
   }
+  const retention = item.retention === undefined ? undefined : parseBrowserRetentionObservation(item.retention);
+  if (retention?.surface && retention.surface.id !== selected) throw Error("selected browser retention owner mismatch");
   const approvalWait = item.approvalWait === undefined ? undefined : parseCodexApprovalWait(item.approvalWait);
   if (approvalWait && selected === undefined) throw new Error("invalid approval wait ownership");
   const imageMimeType = item.imageMimeType;
@@ -266,7 +268,7 @@ export function parseCodexBridgePreviewContract(value: unknown): CodexBridgePrev
     contractVersion: 1,
     slot: item.slot as number,
     activeSurfaceCount: item.activeSurfaceCount as number,
-    ...(item.retention === undefined ? {} : { retention: parseBrowserRetentionObservation(item.retention) }),
+    ...(retention ? { retention } : {}),
     previewAvailable: item.previewAvailable,
     ...(surfaces ? { surfaces: Object.freeze(surfaces.map(row => Object.freeze({ id: row.id, label: row.label }))) } : {}),
     ...(selected ? { selectedSurfaceId: selected as string } : {}),

@@ -136,17 +136,22 @@ export class RetainedBrowserEpochRegistry {
   }
 
   /** Read existing ownership only; observing never closes a browser or touches its page. */
-  retention(): BrowserRetentionObservation {
+  retention(surfaceId?: string): BrowserRetentionObservation {
     const total = Math.max(this.#browserHost.activeSurfaceCount ?? this.#byTask.size, this.#byTask.size);
     const counts = { active: 0, undelivered: 0, closing: 0, reclaimable: 0 };
+    let surface: BrowserRetentionObservation["surface"];
     for (const [task, entry] of this.#byTask) {
-      if (entry.retiring) counts.closing++;
-      else if (this.#active(task, entry)) counts.active++;
-      else if (entry.lastCompleted === 0) counts.undelivered++;
-      else counts.reclaimable++;
+      const state = entry.retiring ? "closing" : this.#active(task, entry) ? "active"
+        : entry.lastCompleted === 0 ? "undelivered" : "reclaimable";
+      counts[state]++;
+      if (surfaceId === entry.surface.leaseId) surface = Object.freeze({ id: surfaceId, taskId: task, state,
+        nextAction: ({ active: "wait_for_work", undelivered: "inspect_result",
+          closing: "inspect_close", reclaimable: "allow_idle_cleanup" } as const)[state],
+        ...(entry.idleSince === undefined ? {} : { idleExpiresAt: new Date(entry.idleSince + IDLE_RETENTION_MS).toISOString() }),
+      });
     }
     return Object.freeze({ total, target: this.#surfaceTarget, ...counts,
-      otherOwners: Math.max(0, total - this.#byTask.size) });
+      otherOwners: Math.max(0, total - this.#byTask.size), ...(surface ? { surface } : {}) });
   }
 
   /** On demand only. Count every host surface, but retire only settled task epochs.

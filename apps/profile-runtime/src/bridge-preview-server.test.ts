@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { startProfileBridgePreviewServer } from "./bridge-preview-server";
+import { parseCodexBridgePreviewContract } from "@chatgpt-tela/service-protocol";
 
 describe("profile bridge preview server", () => {
   test("shutdown requires owned auth, coalesces cleanup and retains a receipt without closing control", async () => {
@@ -224,10 +225,14 @@ describe("profile bridge preview server", () => {
   test("approval status belongs only to the explicitly selected surface and is observed on demand", async () => {
     const token = "p".repeat(48); const id = "surface_" + "a".repeat(32); let calls = 0;
     const retention = { total: 12, target: 10, active: 1, undelivered: 1, closing: 0, otherOwners: 10, reclaimable: 0 };
+    const detail = { id, taskId: "native-task", state: "active" as const, nextAction: "wait_for_work" as const };
     const server = await startProfileBridgePreviewServer({ slot: 1, bearerToken: token,
       async observe(selected) {
         calls++;
-        return { activeSurfaceCount: 2, retention, ...(selected === id ? { selectedSurfaceId: id, approvalState: "pending" as const } : {}) };
+        return { activeSurfaceCount: 2, surfaces: [{ id, label: "Selected task" },
+          { id: "surface_" + "b".repeat(32), label: "Other task" }],
+          retention: { ...retention, ...(selected === id ? { surface: detail } : {}) },
+          ...(selected === id ? { selectedSurfaceId: id, approvalState: "pending" as const } : {}) };
       },
     });
     try {
@@ -240,6 +245,7 @@ describe("profile bridge preview server", () => {
       expect(selected.approvalState).toBe("pending");
       expect(selected.selectedSurfaceId).toBe(id);
       expect(selected.previewAvailable).toBe(false);
+      expect(parseCodexBridgePreviewContract(selected).retention?.surface).toEqual(detail);
       expect(calls).toBe(2);
     } finally { await server.close(); }
   });

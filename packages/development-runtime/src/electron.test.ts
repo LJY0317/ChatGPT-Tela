@@ -347,6 +347,11 @@ describe("Electron development runtime composition", () => {
       expect(options[1]?.webPreferences?.partition).toBe(options[0]?.webPreferences?.partition);
       expect(options[2]?.webPreferences?.partition).toBe(options[0]?.webPreferences?.partition);
       expect(JSON.stringify(provider.submitted?.physicalContext)).toContain("desktop-native-context");
+      const taskSurface = runtime.bridgeSurfaces().surfaces.find(row => row.taskId === provider.submitted!.nativeTaskId)!;
+      expect((await runtime.observeBridgePreview(taskSurface.id)).retention?.surface).toMatchObject({
+        id: taskSurface.id, taskId: provider.submitted!.nativeTaskId, state: "reclaimable", nextAction: "allow_idle_cleanup",
+      });
+      expect((await runtime.observeBridgePreview()).retention).not.toHaveProperty("surface");
       await setup.close();
     } finally {
       await runtime.stop();

@@ -142,6 +142,16 @@ describe("private service protocol", () => {
     const id = "surface_" + "a".repeat(32);
     const selected = { contractVersion: 1, slot: 2, activeSurfaceCount: 1, previewAvailable: false,
       surfaces: [{ id, label: "Owned surface" }], selectedSurfaceId: id };
+    const detail = { id, taskId: "native-task", state: "undelivered", nextAction: "inspect_result",
+      idleExpiresAt: "2026-11-06T00:00:00Z", rawPage: "PRIVATE" };
+    const detailed = { ...selected, retention: { ...retention, surface: detail } };
+    expect(parseCodexBridgePreviewContract(detailed).retention?.surface).toEqual({ id, taskId: "native-task",
+      state: "undelivered", nextAction: "inspect_result", idleExpiresAt: "2026-11-06T00:00:00Z" });
+    expect(() => parseCodexBridgePreviewContract({ ...detailed, selectedSurfaceId: undefined })).toThrow("owner mismatch");
+    for (const change of [{ id: "another-surface" }, { state: "gone" }, { nextAction: "force_close" }, { idleExpiresAt: "invalid" }]) {
+      expect(() => parseCodexBridgePreviewContract({ ...selected,
+        retention: { ...retention, surface: { ...detail, ...change } } })).toThrow();
+    }
     expect(parseCodexBridgePreviewContract({
       ...selected, approvalState: "unavailable", approvalObservationReason: "dom_observation_failed",
     })).toMatchObject({ approvalState: "unavailable", approvalObservationReason: "dom_observation_failed" });

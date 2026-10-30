@@ -3,6 +3,32 @@ import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
 import { RetainedBrowserEpochRegistry } from "./web-epoch-session";
 
 describe("retained browser epoch registry", () => {
+  test("selected retention details reuse exact lease ownership without observing or closing a page", async () => {
+    let closes = 0, nativeActive = false;
+    const host = new ControlledBrowserHost(async () => ({
+      async navigate() {}, async reveal() {}, async hide() {}, async close() { closes++; },
+    }));
+    const registry = new RetainedBrowserEpochRegistry(host, { now: () => 1_000,
+      isTaskActive: () => nativeActive });
+    try {
+      const { surface } = await registry.acquire("task", "epoch");
+      expect(registry.retention()).not.toHaveProperty("surface");
+      expect(registry.retention("unknown")).not.toHaveProperty("surface");
+      expect(registry.retention(surface.leaseId).surface).toEqual({ id: surface.leaseId,
+        taskId: "task", state: "active", nextAction: "wait_for_work" });
+      await registry.complete("task", "epoch");
+      expect(registry.retention(surface.leaseId).surface).toMatchObject({ state: "reclaimable",
+        nextAction: "allow_idle_cleanup", idleExpiresAt: new Date(1_000 + 7 * 24 * 60 * 60 * 1000).toISOString() });
+      nativeActive = true;
+      expect(registry.retention(surface.leaseId).surface).toMatchObject({ state: "active", nextAction: "wait_for_work" });
+      nativeActive = false;
+      await registry.acquire("task", "epoch");
+      await registry.fail("task", "epoch", true);
+      expect(registry.retention(surface.leaseId).surface).toMatchObject({ state: "undelivered", nextAction: "inspect_result" });
+      expect(closes).toBe(0);
+    } finally { registry.dispose(); await host.close(); }
+  });
+
   test("defaults to ten total profile surfaces and retires the least recently completed epoch", async () => {
     const closed: string[] = [];
     const host = new ControlledBrowserHost(async ({taskId}) => ({
@@ -57,7 +83,7 @@ describe("retained browser epoch registry", () => {
     }));
     const registry = new RetainedBrowserEpochRegistry(host, {surfaceTarget: 1});
     try {
-      await registry.acquire("old", "epoch");
+      const old = await registry.acquire("old", "epoch");
       await registry.complete("old", "epoch");
       await registry.acquire("new", "epoch");
       let committed = false;
@@ -65,6 +91,7 @@ describe("retained browser epoch registry", () => {
       expect(committed).toBe(true);
       expect(oldCloses).toBe(1);
       expect(registry.retention()).toMatchObject({ closing: 1, reclaimable: 0 });
+      expect(registry.retention(old.surface.leaseId).surface).toMatchObject({ state: "closing", nextAction: "inspect_close" });
       await expect(registry.acquire("old", "epoch")).rejects.toThrow("retirement is unresolved");
     } finally { registry.dispose(); await expect(host.close()).rejects.toThrow("failed to close"); }
   });

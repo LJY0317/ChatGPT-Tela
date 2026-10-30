@@ -65,6 +65,14 @@ work. Delivery-timeout surfaces retain their existing seven-day expiry. Cleanup 
 without failing independent work or an already completed answer. This closes browser windows, not
 Native conversations or saved results.
 
+The existing authenticated bridge-preview request can select a live surface with `surfaceId`.
+Its `retention.surface` reports that retained surface's task ID, current protection state, suggested
+next action and idle expiry when known. No selection means aggregate counts only when several
+surfaces exist; a single surface is selected automatically. Setup or other non-retained owners have
+no task-retention detail. This reads existing ownership, without another page scan or cleanup pass;
+preview capture keeps its existing on-demand behavior. An expiry is eligibility, not permission to
+close active work, and the suggested action never automatically resends a request or closes a window.
+
 These commands require an already installed, owned Tela Work runtime and a matching signed-in Web
 profile. They do not start, update or restart services. New delegations default to the calling profile when its runtime hint or exact Native thread identifies one; otherwise the single-profile default is 1. Explicit `--slot N` selects another profile. A continuation retains its existing job profile.
 
