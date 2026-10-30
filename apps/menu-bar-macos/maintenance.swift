@@ -312,10 +312,12 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     } else { version.stringValue = "Installation status unavailable" }
     updateControls()
   }
-  private func refreshProcesses() async {
+  @discardableResult
+  private func refreshProcesses() async -> Bool {
     let path = launcher
     let result = await Task.detached { Self.execute(path, ["maintenance", "processes"]) }.value
-    if result.0 == 0, let parsed = try? JSONDecoder().decode(TelaMaintenanceProcesses.self, from: result.1) {
+    let observed = result.0 == 0 ? try? JSONDecoder().decode(TelaMaintenanceProcesses.self, from: result.1) : nil
+    if let parsed = observed {
       unresolvedProcesses = parsed.processes
       processPicker.removeAllItems()
       for entry in unresolvedProcesses {
@@ -326,10 +328,10 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       processInfo.stringValue = unresolvedProcesses.isEmpty ? "No unfinished Chat commands found. Review changes to check maintenance readiness." : "Wait for commands to finish, then choose Review changes again. To stop one, select it and choose Cancel selected execution."
     } else {
       unresolvedProcesses = []; processPicker.removeAllItems()
-      processInfo.stringValue = "Couldn't verify Chat execution status. Maintenance remains blocked until readiness is confirmed."
+      processInfo.stringValue = "Couldn't verify Chat execution status. Choose Review changes to check maintenance readiness again."
     }
-    processSection.isHidden = unresolvedProcesses.isEmpty
     updateControls()
+    return observed != nil
   }
   @objc private func cancelSelectedProcess() {
     guard !busy, processPicker.indexOfSelectedItem >= 0,
@@ -346,8 +348,8 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       let result = await Task.detached { Self.execute(path, ["maintenance", "cancel-process", selected.workspaceId, selected.operationId]) }.value
       busy = false
       review = nil
-      await refreshProcesses()
-      if result.0 == 0 {
+      let statusVerified = await refreshProcesses()
+      if result.0 == 0 && statusVerified {
         message.stringValue = unresolvedProcesses.contains(where: { $0.operationId == selected.operationId })
           ? "Cancellation was requested, but completion is not yet confirmed. Review the status before updating."
           : "The selected command is no longer unfinished. Review the update again to verify service readiness."
