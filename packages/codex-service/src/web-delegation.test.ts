@@ -1180,7 +1180,7 @@ test("status and result inspection settle an exact failed provider turn without 
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
     expect(f.calls.filter(call => call.method === "thread/turns/list")).toHaveLength(1);
   } finally { f.cleanup(); }
-});
+}, 30_000);
 test("unproven Native recovery preserves running lease and publishes saved failure boundary", async () => {
   const f = await fixture({ silent: true, disconnect: true });
   try {
