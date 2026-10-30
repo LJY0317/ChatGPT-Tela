@@ -151,6 +151,11 @@ export class ControlledBrowserHost implements BrowserHost {
     for (const listener of this.#listeners) listener();
   }
 
+  surfaceOwnership(id: string): { readonly taskId: string; readonly closing: boolean } | undefined {
+    const owned = this.#surfaces.get(id);
+    return owned ? Object.freeze({ taskId: owned.lease.taskId, closing: owned.closing !== undefined }) : undefined;
+  }
+
   /** Disposable leases select a view; they never grant task authority. */
   listSurfaces(): readonly { readonly id: string; readonly label: string; readonly taskId: string }[] {
     return [...this.#surfaces].map(([id, surface], index) => Object.freeze({

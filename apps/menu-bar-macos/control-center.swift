@@ -112,6 +112,7 @@ private struct ControlCenterBridgePreview: Decodable {
         case "undelivered": return "Check this session’s result before closing it."
         case "closing": return "This session’s close has not been confirmed."
         case "reclaimable": return "This session is ready for automatic cleanup."
+        case "other_owner": return "Setup or another operation owns this session; task cleanup does not close it."
         default: return nil
         }
       }

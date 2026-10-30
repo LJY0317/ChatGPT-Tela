@@ -29,6 +29,29 @@ describe("retained browser epoch registry", () => {
     } finally { registry.dispose(); await host.close(); }
   });
 
+  test("non-retained selection reports the actual owner through pending and failed close without granting cleanup", async () => {
+    let rejectClose!: (error: Error) => void;
+    let closes = 0;
+    const host = new ControlledBrowserHost(async () => ({
+      async navigate() {}, async reveal() {}, async hide() {},
+      close() { closes++; return new Promise<void>((_, reject) => { rejectClose = reject; }); },
+    }));
+    const registry = new RetainedBrowserEpochRegistry(host);
+    const lease = await host.acquire({ taskId: "preparation-owner", epochId: "preparation" });
+    const detail = { id: lease.leaseId, taskId: "preparation-owner", state: "other_owner", nextAction: "wait_for_owner" };
+    expect(registry.retention(lease.leaseId)).toMatchObject({ otherOwners: 1, reclaimable: 0, surface: detail });
+    expect(registry.retention("unknown")).not.toHaveProperty("surface");
+    expect(closes).toBe(0);
+    const closing = host.release(lease.leaseId);
+    expect(registry.retention(lease.leaseId).surface).toEqual({ ...detail, state: "closing", nextAction: "inspect_close" });
+    rejectClose(Error("platform close failed"));
+    await expect(closing).rejects.toThrow("platform close failed");
+    expect(registry.retention(lease.leaseId).surface?.state).toBe("closing");
+    expect(closes).toBe(1);
+    registry.dispose();
+    await expect(host.close()).rejects.toThrow("failed to close");
+  });
+
   test("defaults to ten total profile surfaces and retires the least recently completed epoch", async () => {
     const closed: string[] = [];
     const host = new ControlledBrowserHost(async ({taskId}) => ({

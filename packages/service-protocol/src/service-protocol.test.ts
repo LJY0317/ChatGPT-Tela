@@ -147,6 +147,9 @@ describe("private service protocol", () => {
     const detailed = { ...selected, retention: { ...retention, surface: detail } };
     expect(parseCodexBridgePreviewContract(detailed).retention?.surface).toEqual({ id, taskId: "native-task",
       state: "undelivered", nextAction: "inspect_result", idleExpiresAt: "2026-11-06T00:00:00Z" });
+    expect(parseCodexBridgePreviewContract({ ...selected, retention: { ...retention,
+      surface: { id, taskId: "preparation-owner", state: "other_owner", nextAction: "wait_for_owner" } },
+    }).retention?.surface).toEqual({ id, taskId: "preparation-owner", state: "other_owner", nextAction: "wait_for_owner" });
     expect(() => parseCodexBridgePreviewContract({ ...detailed, selectedSurfaceId: undefined })).toThrow("owner mismatch");
     for (const change of [{ id: "another-surface" }, { state: "gone" }, { nextAction: "force_close" }, { idleExpiresAt: "invalid" }]) {
       expect(() => parseCodexBridgePreviewContract({ ...selected,

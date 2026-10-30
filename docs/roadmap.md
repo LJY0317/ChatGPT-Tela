@@ -86,7 +86,9 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   Selecting a retained browser in the existing preview now returns its exact lease/task protection state,
   recommended action and known idle expiry from runtime ownership, without another page scan or index.
   Keep cleanup automatic, with existing preview guidance rather than new per-item mutation buttons.
-  Details for non-retained browser owners remain open; do not infer that a protected result has been collected from these counts.
+  Selected non-retained windows now report their existing lease owner and unconfirmed close state;
+  they remain outside task cleanup. This does not identify an operation subtype or prove a protected
+  result has been collected. Installed UI acceptance remains open.
   These are soft targets: no numeric rejection, forced close of protected work or indefinite admission
   wait. Installed acceptance remains separate from source verification.
 - **Instruction reuse.** Source `open_workspace` accepts the caller's retained `instructionRevision` as

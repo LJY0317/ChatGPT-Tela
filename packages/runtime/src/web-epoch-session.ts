@@ -150,6 +150,12 @@ export class RetainedBrowserEpochRegistry {
         ...(entry.idleSince === undefined ? {} : { idleExpiresAt: new Date(entry.idleSince + IDLE_RETENTION_MS).toISOString() }),
       });
     }
+    if (!surface && surfaceId) {
+      const owner = this.#browserHost.surfaceOwnership?.(surfaceId);
+      if (owner) surface = Object.freeze({ id: surfaceId, taskId: owner.taskId,
+        state: owner.closing ? "closing" : "other_owner",
+        nextAction: owner.closing ? "inspect_close" : "wait_for_owner" });
+    }
     return Object.freeze({ total, target: this.#surfaceTarget, ...counts,
       otherOwners: Math.max(0, total - this.#byTask.size), ...(surface ? { surface } : {}) });
   }

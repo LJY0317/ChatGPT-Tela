@@ -9,12 +9,12 @@ export interface BrowserRetentionObservation {
   /** Setup, non-task surfaces and pending acquisition outside the retained-task registry. */
   readonly otherOwners: number;
   readonly reclaimable: number;
-  /** Only the explicitly selected retained surface; no page read or cleanup authority. */
+  /** Only the explicitly selected owned surface; no page read or cleanup authority. */
   readonly surface?: {
     readonly id: string;
     readonly taskId: string;
-    readonly state: "active" | "undelivered" | "closing" | "reclaimable";
-    readonly nextAction: "wait_for_work" | "inspect_result" | "inspect_close" | "allow_idle_cleanup";
+    readonly state: "active" | "undelivered" | "closing" | "reclaimable" | "other_owner";
+    readonly nextAction: "wait_for_work" | "inspect_result" | "inspect_close" | "allow_idle_cleanup" | "wait_for_owner";
     readonly idleExpiresAt?: string;
   };
 }
@@ -30,8 +30,8 @@ export function parseBrowserRetentionObservation(value: unknown): BrowserRetenti
   const surface = row.surface as BrowserRetentionObservation["surface"];
   if (surface !== undefined && (!surface || typeof surface !== "object" || Array.isArray(surface)
     || typeof surface.id !== "string" || !surface.id || typeof surface.taskId !== "string" || !surface.taskId
-    || !["active", "undelivered", "closing", "reclaimable"].includes(surface.state)
-    || !["wait_for_work", "inspect_result", "inspect_close", "allow_idle_cleanup"].includes(surface.nextAction)
+    || !["active", "undelivered", "closing", "reclaimable", "other_owner"].includes(surface.state)
+    || !["wait_for_work", "inspect_result", "inspect_close", "allow_idle_cleanup", "wait_for_owner"].includes(surface.nextAction)
     || surface.idleExpiresAt !== undefined && (typeof surface.idleExpiresAt !== "string"
       || !Number.isFinite(Date.parse(surface.idleExpiresAt))))) {
     throw Error("Invalid selected browser retention observation");

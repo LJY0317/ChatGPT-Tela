@@ -60,6 +60,8 @@ export const BROWSER_DOCUMENT_LIFETIME = createBrowserSurfaceCapability<BrowserD
 export interface BrowserHost {
   /** All surfaces owned by this profile host, including non-task operations. */
   readonly activeSurfaceCount?: number;
+  /** Existing lease ownership only; no page observation or cleanup authority. */
+  surfaceOwnership?(id: string): { readonly taskId: string; readonly closing: boolean } | undefined;
   acquire(input: { taskId: string; epochId: string }): Promise<BrowserSurfaceLease>;
   release(leaseId: string): Promise<void>;
   close(): Promise<void>;
