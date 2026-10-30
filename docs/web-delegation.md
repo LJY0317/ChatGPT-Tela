@@ -72,6 +72,9 @@ surfaces exist; a single surface is selected automatically. Setup or other non-r
 no task-retention detail. This reads existing ownership, without another page scan or cleanup pass;
 preview capture keeps its existing on-demand behavior. An expiry is eligibility, not permission to
 close active work, and the suggested action never automatically resends a request or closes a window.
+Control Center uses its existing pressure message for advice about the selected session; below the
+soft target it adds no cleanup notice. A selected session without a captured image is identified as
+having no available snapshot, rather than asking the user to select it again.
 
 These commands require an already installed, owned Tela Work runtime and a matching signed-in Web
 profile. They do not start, update or restart services. New delegations default to the calling profile when its runtime hint or exact Native thread identifies one; otherwise the single-profile default is 1. Explicit `--slot N` selects another profile. A continuation retains its existing job profile.

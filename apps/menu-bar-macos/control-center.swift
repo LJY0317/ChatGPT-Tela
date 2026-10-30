@@ -102,13 +102,29 @@ private struct ControlCenterBridgePreview: Decodable {
     let closing: Int
     let otherOwners: Int
     let reclaimable: Int
-    var notice: String? {
+    let surface: Surface?
+    struct Surface: Decodable {
+      let id: String
+      let state: String
+      var advice: String? {
+        switch state {
+        case "active": return "This session has unfinished work."
+        case "undelivered": return "Check this session’s result before closing it."
+        case "closing": return "This session’s close has not been confirmed."
+        case "reclaimable": return "This session is ready for automatic cleanup."
+        default: return nil
+        }
+      }
+    }
+    func notice(selectedSurfaceId: String?) -> String? {
       guard total > target else { return nil }
       let details = [(active, "active"), (undelivered, "results to check"),
                      (closing, "close not confirmed"), (otherOwners, "setup or other operations"),
                      (reclaimable, "ready for cleanup")]
         .filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }.joined(separator: ", ")
-      return "Cleanup pending · \(total) browser windows\n\(details). Check uncollected answers or let active work finish."
+      let advice = surface?.id == selectedSurfaceId ? surface?.advice : nil
+      return "Cleanup pending · \(total) browser windows\n\(details). "
+        + (advice ?? "Check uncollected answers or let active work finish.")
     }
   }
   let approvalState: String?
@@ -2293,9 +2309,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       } else if preview.activeSurfaceCount == 0 {
         bridgeMessage = "This Web session has ended."
       } else {
-        bridgeMessage = "Choose a Web session to view its snapshot or open its browser."
+        bridgeMessage = "No snapshot available for this session."
       }
-      if let notice = preview.retention?.notice { bridgeMessage += "\n" + notice }
+      if let notice = preview.retention?.notice(selectedSurfaceId: selection) { bridgeMessage += "\n" + notice }
       if preview.selectedSurfaceId != nil, let wait = preview.approvalWait {
         bridgeMessage += "\n\(wait.statusText)"
       }
