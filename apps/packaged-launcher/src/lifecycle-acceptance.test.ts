@@ -138,8 +138,10 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     runner.failStopFor = codexRegistration.registrationId;
     const partial = await runPackagedServicesCommand(["services", "stop"], controls);
     expect(partial.success).toBe(false);
-    expect(partial.services).toEqual([{ service: "gateway", state: "stopped" }, { service: "codex", state: "failed" }, { service: "chat", state: "stopped" }]);
-    expect(runner.running.size).toBe(1);
+    expect(partial.services).toEqual([{ service: "gateway", state: "running" }, { service: "codex", state: "failed" }]);
+    expect(partial.restoredServices).toEqual(["gateway"]);
+    expect(partial.restoreFailures).toEqual([]);
+    expect(runner.running.size).toBe(3);
     runner.failStopFor = undefined;
     expect((await runPackagedServicesCommand(["services", "stop"], controls)).success).toBe(true);
     expect(runner.running.size).toBe(0);

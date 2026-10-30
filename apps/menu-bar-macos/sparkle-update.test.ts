@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process";
   let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     if (!existsSync(join(frameworkRoot, "Sparkle.framework"))) {
-      const build = spawnSync("/usr/bin/xcrun", ["swift", "build", "--disable-keychain", "--disable-netrc", "--package-path", "apps/menu-bar-macos", "-c", "release"], { encoding: "utf8" });
+      const build = spawnSync("/usr/bin/xcrun", ["swift", "build", "--disable-keychain", "--disable-netrc", "--package-path", "apps/menu-bar-macos", "-c", "release"], { stdio: "inherit" });
       expect(build.status).toBe(0);
     }
     mkdirSync(mac, { recursive: true });

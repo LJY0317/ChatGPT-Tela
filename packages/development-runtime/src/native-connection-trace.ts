@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { subscribe } from "node:diagnostics_channel";
+import { channel } from "node:diagnostics_channel";
 import { isIP, type Socket } from "node:net";
 import { networkInterfaces } from "node:os";
 import { performance } from "node:perf_hooks";
@@ -7,16 +7,19 @@ import { diagnosticFingerprint, networkFailureDiagnostics, type DiagnosticScalar
 
 const active = new AsyncLocalStorage<NativeConnectionTrace>();
 type Fields = Record<string, DiagnosticScalar>;
-// Passive runtime channels, isolated here because availability differs across runtimes.
-subscribe("net.client.socket", message => {
-  try { active.getStore()?.observeSocket((message as { socket: Socket }).socket); } catch { /* Diagnostics only. */ }
-});
-subscribe("undici:client:connected", message => {
-  try { active.getStore()?.connected((message as { socket: Socket & { encrypted?: boolean } }).socket); } catch { /* Diagnostics only. */ }
-});
-
 /** Request-scoped, bounded, payload-free observation. Never creates or configures a socket. */
 export class NativeConnectionTrace {
+  // Keep channel objects alive for this runtime, including before the first trace.
+  // Some runtimes retain named channels weakly even while they have subscribers.
+  static readonly #channels = [channel("net.client.socket"), channel("undici:client:connected")] as const;
+  static {
+    this.#channels[0].subscribe(message => {
+      try { active.getStore()?.observeSocket((message as { socket: Socket }).socket); } catch { /* Diagnostics only. */ }
+    });
+    this.#channels[1].subscribe(message => {
+      try { active.getStore()?.connected((message as { socket: Socket & { encrypted?: boolean } }).socket); } catch { /* Diagnostics only. */ }
+    });
+  }
   readonly #started = performance.now();
   readonly #events: Fields[] = [];
   readonly #detach: (() => void)[] = [];

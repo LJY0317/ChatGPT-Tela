@@ -6,6 +6,8 @@ import { NativeConnectionTrace, nativeInterfaceShape } from "./native-connection
 
 function socket() { return new EventEmitter() as Socket; }
 test("connection traces isolate concurrent requests, bound evidence, and leave socket behavior intact", async () => {
+  // Runtime channels must remain subscribed after an idle process is garbage-collected.
+  Bun.gc(true);
   const first = new NativeConnectionTrace(), second = new NativeConnectionTrace();
   const a = socket(), b = socket(), foreign = socket();
   const before = a.listenerCount("error");

@@ -112,7 +112,8 @@ describe("browser context checkpoint runner", () => {
       expect(invoked).toBe(0);
       if (failClose) { expect(caught).not.toBeInstanceOf(WebCheckpointOperationClosed); expect(String(caught)).toContain("physical close failed"); }
       else expect(caught).toMatchObject({ receipt: { disposition: "not_invoked" } });
-      await host.close();
+      if (failClose) await expect(host.close()).rejects.toThrow("failed to close");
+      else await host.close();
     }
   });
   test("accepts only one proven dedicated result and always releases its isolated surface", async () => {

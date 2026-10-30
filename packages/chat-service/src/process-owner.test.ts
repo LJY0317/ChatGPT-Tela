@@ -23,9 +23,10 @@ test("owner shutdown delivers an admitted terminal observation before closing tr
 
 async function fixture() {
   let writes = 0, cancels = 0;
+  let resolveObservationAborted!: () => void;
+  const observationCancelled = new Promise<void>(resolve => { resolveObservationAborted = resolve; });
   let resolveWaiting!: () => void;
   const waiting = new Promise<void>(resolve => { resolveWaiting = resolve; });
-  let observationAborted = false;
   const control = await startProcessOwnerControl({ binding: { ownerId: randomUUID(), operationId: randomUUID(), workspaceId: randomUUID() },
     secret: randomBytes(32).toString("hex"), authority: {
       status: () => ({ running: cancels === 0, writes }),
@@ -33,15 +34,16 @@ async function fixture() {
         resolveWaiting();
         await new Promise<void>(resolve => {
           const timer = setTimeout(resolve, duration);
-          if (signal.aborted) { clearTimeout(timer); observationAborted = true; resolve(); }
-          else signal.addEventListener("abort", () => { clearTimeout(timer); observationAborted = true; resolve(); }, { once: true });
+          const cancelled = () => { clearTimeout(timer); resolveObservationAborted(); resolve(); };
+          if (signal.aborted) cancelled();
+          else signal.addEventListener("abort", cancelled, { once: true });
         });
         return { running: cancels === 0 };
       },
       write: () => { writes++; },
       cancelOwnedExecution: async () => { cancels++; return { running: false }; },
     } });
-  return { control, waiting, writes: () => writes, cancels: () => cancels, aborted: () => observationAborted };
+  return { control, waiting, observationCancelled, writes: () => writes, cancels: () => cancels };
 }
 
 test("owner control authenticates exact binding and refuses uncertain stdin replay", async () => {
@@ -71,10 +73,10 @@ test("cancelled observation never calls execution cancellation", async () => {
     await f.waiting;
     controller.abort();
     await expect(pending).rejects.toThrow();
+    await f.observationCancelled;
     // A subsequent authenticated request observes the same running execution.
     expect(await callProcessOwner(f.control.descriptor, { action: "status" })).toEqual({ running: true, writes: 0 });
     expect(f.cancels()).toBe(0);
-    expect(f.aborted()).toBe(true);
   } finally { await f.control.close(); }
 });
 

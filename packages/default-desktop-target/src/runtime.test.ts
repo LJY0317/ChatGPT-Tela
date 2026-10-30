@@ -202,6 +202,7 @@ await new Promise(()=>{});
         codexHome: join(root, "home"), userDataDir: join(root, "data"), normalQuitSupported: true },
       route: createDefaultDesktopResponsesRoute({ baseUrl: "http://127.0.0.1:18741/v1", envKey: "TEST_KEY", credential: "s".repeat(48) }),
       credential: "s".repeat(48), processIds: async () => [],
+      environment: { OPENAI_ORGANIZATION: "s".repeat(48) },
       onDiagnostic: (stage, fields) => events.push({ stage, fields }),
     })).rejects.toThrow("exited before connecting");
     expect(events.find(e => e.stage === "desktop_rollback_begin")?.fields).toMatchObject({
