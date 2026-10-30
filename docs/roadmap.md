@@ -125,15 +125,14 @@ Reuse the current contracts instead of restoring their parallel registries, mani
 - **Apply after current work.** Reuse host lifecycle events to apply an authorized update after the current
   Native turn and other active work finish. Preserve the authorization across UI/service replacement,
   show why an update is deferred, and avoid manual process cleanup, repeated model calls or a new Goal engine.
-- **Prevent validation side effects.** A daemon invoked with unsupported help arguments must not start a
-  production instance or overwrite its runtime descriptor. Validate entry-point usage without inherited
-  production service authority. Runtime publication/removal must remain with the actual service owner;
-  completed validation commands must not leave a live daemon that blocks the next update.
-- Provide a normal macOS application entry point discoverable in Applications/Spotlight. Reopening should
-  reveal the existing menu UI or start it once, without restarting browser sessions or background work.
-  Keep menu-only quit distinct from stopping services and manage installation/removal ownership.
-  Verify standard computer-use discovery, accessibility and interaction with the packaged app; the
-  current standalone executable could not be selected by the available app-control adapter.
+- **Runtime ownership acceptance.** Installed daemon entry points reject help and unsupported arguments
+  before service startup or descriptor publication; isolated packaged checks pass for all three services.
+  Shutdown cleanup is publisher-owned and preserves a successor observed before cleanup. A synchronous
+  ownership comparison is not an atomic cross-process compare-and-delete; distinguish that limit from
+  accepted ordinary shutdown and do not add stricter startup gates to mask it.
+- **macOS application acceptance.** Packaged app discovery, accessibility and Control Center interaction
+  pass. Verify Spotlight discovery and normal reopen/menu-only quit while retaining existing services
+  and browser work; keep installation/removal ownership separate from closing the UI.
 - Improve Control Center profile rows, compact contextual help and the Web-session sidebar/preview.
   Keep previews on demand and retain existing session selection and browser interaction boundaries.
 - Assess preserving compatible temporary Web conversations across update/restart without a resident
