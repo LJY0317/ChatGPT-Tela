@@ -13,7 +13,7 @@
   },
   "scripts": {
     "codex:continuity-probe": "bun run apps/codex-contract-probe/src/main.ts",
-    "test": "bun test ./apps ./packages",
+    "test": "bun test --isolate ./apps ./packages",
     "typecheck": "tsc --noEmit",
     "verify": "bun run typecheck && bun run test",
     "cli": "bun run apps/cli/src/main.ts",
