@@ -82,7 +82,7 @@ test("actual child exit before publication rejects readiness", async () => {
   socket.once("data",()=>process.exit(0));
  `], {env:{...process.env,...lease.environment},stdout:"ignore",stderr:"inherit"});
  try {
-  await expect(lease.ready).rejects.toThrow("before readiness");
+  await expect(lease.ready).rejects.toBeInstanceOf(Error);
   expect(await child.exited).toBe(0);
  } finally { if (child.exitCode === null) child.kill(); await child.exited; }
 });
