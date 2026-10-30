@@ -1,9 +1,12 @@
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, watch } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, watch } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runIndependentLifecycleProcess } from "./lifecycle-process";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 test("independent lifecycle preserves CLI results and survives loss of its invoking process", async () => {
   const result = await runIndependentLifecycleProcess({ executable: process.execPath,
@@ -28,7 +31,7 @@ test("independent lifecycle preserves CLI results and survives loss of its invok
     expect(receipt!.parent).not.toBe(parent.pid);
   } finally {
     events.close();
-    if (receipt) rmSync(receipt.directory, { recursive: true, force: true });
-    rmSync(root, { recursive: true, force: true });
+    if (receipt) removeFixture(receipt.directory);
+    removeFixture(root);
   }
 });

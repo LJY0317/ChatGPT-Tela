@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +12,11 @@ import { LaunchdUpgradeRunner } from "../../../tests/support/launchd-upgrade-run
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { runApplicationUpdate } from "./application-update";
 import { verifyInstalledPackage } from "./runtime";
+
+// Synthetic launchd tests need a synthetic uid where the host has no POSIX uid.
+const needsFixtureUid = typeof process.getuid !== "function";
+beforeAll(() => { if (needsFixtureUid) Object.defineProperty(process, "getuid", { value: () => 501, configurable: true }); });
+afterAll(() => { if (needsFixtureUid) Reflect.deleteProperty(process, "getuid"); });
 
 async function fixture(root: string, application = true) {
   const path = (value: string) => application ? value : value.replace(/^Contents\//, "");

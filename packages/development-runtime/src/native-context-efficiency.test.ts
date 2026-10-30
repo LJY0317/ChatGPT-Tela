@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { NativeRequestPrefixSnapshot } from "./native-visible-prefix-checkpoint";
 import { produceNativePrefixCheckpoint, type NativePrefixCheckpointInput } from "./native-visible-prefix-checkpoint";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
@@ -255,7 +255,7 @@ test("cold Web planning reads a bounded original source and can retrieve its gia
  let current='active',sourceReads=0,bodyReads=0,summaries=0;
  const original={id:'giant-original',type:'agentMessage',text:'original-'.repeat(400_000)};
  const rpc={async request(method:string,params:any):Promise<any>{
-  if(method==='thread/read')return {thread:{id:'thread',status:{type:'active'},historyMode:'paginated',cwd:'/fixture',source:'appServer'}};
+  if(method==='thread/read')return {thread:{id:'thread',status:{type:'active'},historyMode:'paginated',cwd:resolve('/fixture'),source:'appServer'}};
   if(method==='thread/turns/list')return {data:(params.limit===4?[current,'prior']:[current])
    .map(id=>({id,status:id===current?'inProgress':'completed',itemsView:'notLoaded',items:[]})),nextCursor:null};
   if(method==='thread/items/list'){
@@ -265,7 +265,7 @@ test("cold Web planning reads a bounded original source and can retrieve its gia
   throw Error('unexpected source API');
  },async close(){}};
  const originalSource = new AppServerCurrentTurnSource(async()=>rpc);
- const canonical:import('@chatgpt-tela/codex').CanonicalCurrentTurnSource={async currentTurn(threadId:string){return {threadId,turnId:current,cwd:'/fixture',workspaceRoots:['/fixture'],
+ const canonical:import('@chatgpt-tela/codex').CanonicalCurrentTurnSource={async currentTurn(threadId:string){return {threadId,turnId:current,cwd:resolve('/fixture'),workspaceRoots:[resolve('/fixture')],
   sandbox:{kind:'native-enforced' as const},proof:'turn-context' as const,environmentSourceTurnId:current};},
   readHistoryPage:(...args)=>originalSource.readHistoryPage(...args),
   readHistoryIndex:(...args)=>originalSource.readHistoryIndex(...args)};

@@ -31,7 +31,8 @@ test("original input export and explicit review work offline after source chat d
     const output = join(root, "original.json");
     await runWebDelegationCommand(["request", "--job", record.id, "--output", output], paths);
     expect(JSON.parse(readFileSync(output, "utf8"))).toEqual(input);
-    expect(statSync(output).mode & 0o777).toBe(0o600);
+    // Windows permissions are enforced by ACLs, not POSIX mode bits.
+    if (process.platform !== "win32") expect(statSync(output).mode & 0o777).toBe(0o600);
     await expect(runWebDelegationCommand(["request", "--job", record.id, "--output", output], paths)).rejects.toThrow();
     const answer = { ...record, id: randomUUID(), threadId: randomUUID() };
     store.reserve(answer);

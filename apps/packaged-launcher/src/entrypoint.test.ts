@@ -1,11 +1,14 @@
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { ChatWorkspaceRegistry } from "../../../packages/chat-service/src/workspaces";
 import { ChatProcessManager } from "../../../packages/chat-service/src/processes";
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 test("one compiled runtime dispatches isolated daemons, CLI and a real owned command", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-shared-runtime-"));
@@ -46,6 +49,6 @@ test("one compiled runtime dispatches isolated daemons, CLI and a real owned com
     expect(readFileSync(join(root, "result.txt"), "utf8").trim()).toBe("shared-runtime-worker");
   } finally {
     await manager?.close();
-    rmSync(root, { recursive: true, force: true });
+    removeFixture(root);
   }
 }, 60_000);

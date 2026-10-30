@@ -1,5 +1,6 @@
+import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -24,6 +25,8 @@ function jsonContent(result: Awaited<ReturnType<Client["callTool"]>>): unknown {
   expect(content[0]?.type).toBe("text");
   return JSON.parse(content[0]!.text!);
 }
+
+const removeFixture = registerTemporaryFixtureCleanup();
 
 describe("Web Chat independent tool path acceptance", () => {
   test("public MCP reaches Chat workspace effects and images without invoking Native, including after a Chat outage", async () => {
@@ -197,7 +200,7 @@ describe("Web Chat independent tool path acceptance", () => {
       await chat.close();
       if (previousDiagnostics === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
       else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previousDiagnostics;
-      rmSync(base, { recursive: true, force: true });
+      removeFixture(base);
     }
   });
 });

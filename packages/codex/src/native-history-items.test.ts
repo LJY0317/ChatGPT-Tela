@@ -1,15 +1,16 @@
 import {test,expect} from 'bun:test';
+import {resolve} from 'node:path';
 import {AppServerCurrentTurnSource} from './app-server';
 import type {CanonicalCurrentTurnEvidence} from './rollout';
-const bound:CanonicalCurrentTurnEvidence={threadId:'original-thread',turnId:'active-turn',cwd:'/workspace',
- workspaceRoots:['/workspace'],sandbox:{kind:'native-enforced'},proof:'app-server-active-turn',environmentSourceTurnId:'active-turn'};
+const bound:CanonicalCurrentTurnEvidence={threadId:'original-thread',turnId:'active-turn',cwd:resolve('/workspace'),
+ workspaceRoots:[resolve('/workspace')],sandbox:{kind:'native-enforced'},proof:'app-server-active-turn',environmentSourceTurnId:'active-turn'};
 function fixture(retireDuringRead=false,items:Record<string,unknown>[]=[{id:'selected-item',type:'agentMessage',text:'원문'}]){
  let head='active-turn',mode='paginated',closed=0;
  const calls:{method:string;params:any}[]=[];
  const source=new AppServerCurrentTurnSource(async()=>({
   async request(method,params:any){
    calls.push({method,params});
-   if(method==='thread/read')return {thread:{id:bound.threadId,historyMode:mode,cwd:'/workspace',status:{type:'active'}}};
+   if(method==='thread/read')return {thread:{id:bound.threadId,historyMode:mode,cwd:resolve('/workspace'),status:{type:'active'}}};
    if(method==='thread/turns/list'){
     if(params.limit===4)return {data:[{id:head,status:'inProgress',itemsView:'notLoaded',items:[]},
       {id:'prior',status:'completed',itemsView:'notLoaded',items:[],privateField:'must not leak'}],nextCursor:'older-index-page'};

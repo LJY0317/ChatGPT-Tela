@@ -119,11 +119,12 @@ function capacityFixture(collect = true, splitProfiles = false) {
       {now:f.origin + 3600_000,signal:new AbortController().signal})};
 }
 
+// These pressure cases persist 33 real jobs; Windows CI exceeds Bun's default 5s.
 test("the conversation target is per profile rather than a shared installation-wide bound", async () => {
   const f = capacityFixture(true, true);
   try { await f.run(); expect(f.mutations).toEqual([]); }
   finally { f.cleanup(); }
-});
+}, 30_000);
 
 test("capacity pressure archives oldest collected idle work, skips queued work and ignores ordinary chats", async () => {
   const f = capacityFixture();
@@ -146,7 +147,7 @@ test("capacity pressure archives oldest collected idle work, skips queued work a
     expect(refreshed).toMatchObject({ reason: "not_yet_due_or_unverified", nextAction: "wait_for_due_time" });
     expect(Number.isFinite(Date.parse(refreshed!.dueAt!))).toBe(true);
   } finally { f.cleanup(); }
-});
+}, 30_000);
 
 test("uncollected and manually restored conversations can exceed the soft target without forced archive", async () => {
   const f = capacityFixture(false);
@@ -180,7 +181,7 @@ test("uncollected and manually restored conversations can exceed the soft target
       item.reason === "manually_managed" && item.nextAction === "keep_manual_control" && item.dueAt === undefined)).toBe(true);
 
   } finally { off?.(); f.cleanup(); }
-});
+}, 30_000);
 
 test("an unknown archive outcome stops further pressure mutations until fresh inventory", async () => {
   const f = capacityFixture();
@@ -195,7 +196,7 @@ test("an unknown archive outcome stops further pressure mutations until fresh in
     expect(f.mutations).toHaveLength(1);
     expect(f.store.capacity(2).cleanup).toMatchObject({ unarchived: 32, uncertain: false });
   } finally { f.cleanup(); }
-});
+}, 30_000);
 
 test("explicit adoption works without an execution directory or rollout and reclaims a known exclusion", async () => {
   const f = fixture();

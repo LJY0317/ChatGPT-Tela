@@ -28,7 +28,7 @@ jobs:
         if: runner.os != 'Windows'
       - run: bun run typecheck && bun tests/windows-ci.ts
         if: runner.os == 'Windows'
-      - name: Remove Windows test SQLite fixtures after Bun exits
+      - name: Remove Windows test fixtures after Bun exits
         if: ${{ always() && runner.os == 'Windows' }}
         shell: pwsh
         run: |
@@ -42,7 +42,7 @@ jobs:
               $parent = [IO.Path]::GetDirectoryName($directory).TrimEnd('\')
               $leaf = [IO.Path]::GetFileName($directory)
               if (-not $parent.Equals($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
-                  -not ($leaf.StartsWith('tela-') -or $leaf.StartsWith('chatgpt-tela-maintenance-')) -or
+                  -not ($leaf.StartsWith('tela-') -or $leaf.StartsWith('chatgpt-tela-maintenance-') -or $leaf.StartsWith('chatgpt-tela-lifecycle-')) -or
                   -not $tempRoot.Equals([IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\'),
                   [StringComparison]::OrdinalIgnoreCase)) {
                 throw 'Test fixture cleanup scope mismatch'

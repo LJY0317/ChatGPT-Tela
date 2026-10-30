@@ -126,7 +126,7 @@ describe("packaged payload builder", () => {
         const blueprint = createPackagedInstallBlueprint({ spec, platform: "darwin", home: root, environment: {} });
         expect(blueprint.payload.resource.path).toBe(join(root, "Applications", "ChatGPT Tela.app"));
         expect(blueprint.payload.resource.metadataRoot).toBe(join(root, "Library/Application Support/ChatGPT Tela/state/install/application"));
-        expect(blueprint.services[0]?.definition).toEqual(expect.objectContaining({ content: expect.stringContaining("Contents/MacOS/chatgpt-tela") }));
+        expect(blueprint.services[0]?.definition).toEqual(expect.objectContaining({ content: expect.stringContaining(join("Contents", "MacOS", "chatgpt-tela")) }));
       } });
       expect(readPackagedProductManifest(output)).toEqual(result.manifest);
       expect(existsSync(join(output, "ui"))).toBe(false);
