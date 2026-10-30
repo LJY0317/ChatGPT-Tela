@@ -74,6 +74,8 @@ class FixtureDriver implements ChatGptSurfaceDriver {
   current: ChatGptSurfaceSnapshot;
   readonly queued: ChatGptSurfaceSnapshot[] = [];
   activated: string[] = [];
+  private notifySendActivated!: () => void;
+  readonly sendActivated = new Promise<void>(resolve => { this.notifySendActivated = resolve; });
   connectorSelections: string[] = [];
   appendedTexts: string[] = [];
   corruptReadback = false;
@@ -254,6 +256,7 @@ class FixtureDriver implements ChatGptSurfaceDriver {
 
   async activateSend(controlKey: string): Promise<void> {
     this.activated.push(controlKey);
+    this.notifySendActivated();
     if (this.autoContextPreload && this.contextAcknowledgement) {
       const userKey = "user:context-preload";
       const accepted: ChatGptSurfaceSnapshot = {
@@ -2799,7 +2802,7 @@ test("a visible final without author proof cannot leave submit waiting forever o
   };
   try {
     const pending = new ChatGptSemanticProvider().submitTurn(surface.lease, request());
-    while (!driver.activated.length) await Promise.resolve();
+    await driver.sendActivated;
     driver.queued.push({ ...driver.current, revision: "final-without-author-proof", turns: [
       { key: "user", role: "user", userPayloadReason: "ambiguous_author_root",
         userPayloadStructure: { rootCount: 2, nestedRoots: true } },
@@ -2816,7 +2819,7 @@ test.each(["equivalent", "expected-inner", "expected-outer"] as const)("nested a
   const surface = await leaseFor(driver); const provider = new ChatGptSemanticProvider();
   try {
     const pending = provider.submitTurn(surface.lease, request());
-    while (!driver.activated.length) await Promise.resolve();
+    await driver.sendActivated;
     const accepted = acceptedSnapshot(driver);
     driver.queued.push({ ...accepted, turns: accepted.turns.map(turn => { const { contentFingerprint, ...withoutPayload } = turn; return ({ ...withoutPayload,
       lineageAnchor: "owned-document-turn",
@@ -2857,7 +2860,7 @@ test.each(['matching', 'normalized', 'matching-revoked', 'normalized-revoked', '
   process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
   try {
     const sending = provider.submitTurn(surface.lease, request());
-    while (!driver.activated.length) await Promise.resolve();
+    await driver.sendActivated;
     const receipt = causalSnapshot(driver), exact = acceptedSnapshot(driver).turns[0]!;
     driver.queued.push({...receipt, turns: [{...receipt.turns[0]!,
       contentFingerprint: mode.startsWith('matching') ? exact.contentFingerprint! : hash('normalized preview')}, receipt.turns[1]!]});
@@ -2901,7 +2904,7 @@ test.each(['missing-host', 'unavailable-host', 'unconsumed', 'wrong-anchor', 'co
     const provider = new ChatGptSemanticProvider();
     try {
       const sending = provider.submitTurn(surface.lease, request());
-      while (!driver.activated.length) await Promise.resolve();
+      await driver.sendActivated;
       const receipt = causalSnapshot(driver), exact = acceptedSnapshot(driver).turns[0]!;
       let accepted: ChatGptSurfaceSnapshot = {...receipt, turns: [{...receipt.turns[0]!, contentFingerprint: exact.contentFingerprint!}, receipt.turns[1]!]};
       if (mode === 'unconsumed') accepted = {...accepted, composers: driver.current.composers};
@@ -2927,7 +2930,7 @@ test.each(['present', 'unmounted', 'across-frames', 'provisional', 'presentation
   const large = {...payload, physicalContext:{...payload.physicalContext, segments:[{type:'revision' as const,revisionId:'rev-1',kind:'user' as const,content:'한글 long content '.repeat(2000)}]}};
   try {
     const sending = provider.submitTurn(surface.lease, large);
-    while (!driver.activated.length) await Promise.resolve();
+    await driver.sendActivated;
     const receipt = causalSnapshot(driver);
     if (mode === 'across-frames') driver.queued.push({...receipt,revision:'user-only',turns:[receipt.turns[0]!]},{...receipt,revision:'assistant-only',turns:[receipt.turns[1]!]});
     else driver.queued.push(mode==='provisional'?{...receipt,url:'https://chatgpt.com/c/local-chatgpt%3A00000000-0000-0000-0000-000000000001'}:receipt);
@@ -2946,10 +2949,13 @@ test.each(['present', 'unmounted', 'across-frames', 'provisional', 'presentation
 
 test.each(['missing-host','unavailable-host','changed-input','unconsumed','missing-anchor','wrong-parent','wrong-anchor','competing-parent','foreign-route'] as const)('causal receipt fails closed: %s',async mode=>{
   const driver=new FixtureDriver(fixture('ready-new-chat'));let revision=0;const inputAbort=new AbortController();
+  // Browser activation can depend on I/O; the test must let the event loop run.
+  const activate = driver.activateSend.bind(driver);
+  driver.activateSend = async key => { await new Promise<void>(resolve => setImmediate(resolve)); await activate(key); };
   const surface=await leaseFor(driver,mode==='missing-host'?undefined:{current:()=>({revision,available:mode!=='unavailable-host',signal:inputAbort.signal})});
   try{
     const sending=new ChatGptSemanticProvider().submitTurn(surface.lease,request());
-    while(!driver.activated.length)await Promise.resolve();
+    await driver.sendActivated;
     let seen=causalSnapshot(driver);
     if(mode==='changed-input')revision++;
     if(mode==='unconsumed')seen={...seen,composers:driver.current.composers};
@@ -2970,7 +2976,7 @@ test('post-acceptance input does not cancel an observer; Native cancellation sti
  const provider=new ChatGptSemanticProvider();
  try{
   const sending=provider.submitTurn(surface.lease,request());
-  while(!driver.activated.length)await Promise.resolve();
+  await driver.sendActivated;
   driver.queued.push(causalSnapshot(driver));
   const submitted=await sending;if(submitted.state!=='proven')throw Error('fixture receipt');
   driver.waitForChange=async(_revision: string,signal?: AbortSignal)=>new Promise<ChatGptSurfaceSnapshot>((_,reject)=>{

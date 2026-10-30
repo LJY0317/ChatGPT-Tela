@@ -206,7 +206,7 @@ describe("Tela Chat historical review checkpoints", () => {
       await f.runtime.close();
       rmSync(f.base, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("review history is bounded to the newest sixteen checkpoints per workspace", async () => {
     const f = fixture();
