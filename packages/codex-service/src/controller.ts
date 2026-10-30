@@ -366,6 +366,8 @@ export async function startCodexService(input: {
   };
 
   const profileShutdownReadiness = async (profile: OwnedProfile, duringStop = false): Promise<"ready" | "blocked"> => {
+    // Cancelling service work must not cancel cleanup of already-owned resources.
+    const signal = duringStop ? undefined : input.signal;
     const blocked = (reason_class: string) => {
       emitDiagnosticEvent("chatgpt_tela_codex", "profile_shutdown_blocked", { slot: profile.slot, reason_class });
       return "blocked" as const;
@@ -376,10 +378,10 @@ export async function startCodexService(input: {
     // stopOwned/runtime cleanup separately prove ownership before quitting an app.
     // The built-in Desktop adapter reports process identity, not the routed
     // app-server. Use the same owned endpoint as terminalSession for all targets.
-    const session = await targets.session(profile.target.id, input.signal);
+    const session = await targets.session(profile.target.id, signal);
     try {
       if (!profile.terminalEndpoint) throw new Error("native endpoint unavailable");
-      if (await countLoadedAppServerActiveTurns(profile.terminalEndpoint, input.signal ? { signal: input.signal } : {}) > 0) return blocked("native_work");
+      if (await countLoadedAppServerActiveTurns(profile.terminalEndpoint, signal ? { signal } : {}) > 0) return blocked("native_work");
     } catch (error) {
       if (!nativeTargetDetached(profile.target, session, profile)) throw error;
       emitDiagnosticEvent("chatgpt_tela_codex", "detached_native_observation_unavailable", { slot: profile.slot, phase: "readiness" });
@@ -388,7 +390,7 @@ export async function startCodexService(input: {
     // below, but do not require its obsolete Native connection to recover.
     const response = await fetch(new URL("v1/shutdown-readiness", profile.bridgePreviewUrl), {
       headers: { authorization: `Bearer ${profile.uiToken}` },
-      signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000),
     });
     if (!response.ok) return blocked("runtime_readiness_unavailable");
     const web = await response.json() as { contractVersion?: unknown; slot?: unknown; shutdownReadiness?: unknown };
