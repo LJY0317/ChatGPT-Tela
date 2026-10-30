@@ -154,7 +154,8 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   [consumer-installation.md](consumer-installation.md). Reuse existing lifecycle ownership and
   maintenance; distinguish computer removal, account plugin removal and saved-data removal.
   Verify official private transport/authentication and public-plugin-to-local-machine binding
-  before committing to an implementation. Avoid mandatory browser automation, duplicate
+  before committing to an implementation. Assess the approved desktop-only local MCP route separately:
+  organization eligibility and temporary Web-worker compatibility are unproven. Avoid mandatory browser automation, duplicate
   connection engines or a new hosted relay without a confirmed requirement. Consumer completion
   must include actual connection verification and explicit reporting of any remaining host step.
 

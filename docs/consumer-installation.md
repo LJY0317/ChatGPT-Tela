@@ -1,6 +1,7 @@
 # Consumer installation and removal design
 
-Status: partial source implementation; no installed rollout or account removal has been performed.
+Status: partial implementation; source checks and read-only installed Settings UI accepted.
+Full account removal and installed uninstall/reinstall acceptance remain open.
 
 The current source adds official ChatGPT plugin-management links in Settings, setup and the
 local removal window. Local maintenance explicitly reports account cleanup as not performed;
@@ -47,13 +48,21 @@ Before promising directory installation for local machines, verify the supported
 contract. Do not introduce a hosted relay, custom account system or new OAuth server just
 to simulate an unverified host capability.
 
-OpenAI's current contract confirms Secure MCP Tunnel can connect a private local MCP server
+For a remote plugin, OpenAI's current contract confirms Secure MCP Tunnel can connect a private local MCP server
 to a ChatGPT custom app when `tunnel-client` is running with a `tunnel_id` and runtime API key
 and the tunnel is associated with the target ChatGPT workspace. This does not qualify as public
-plugin submission: directory submission requires a stable public HTTPS MCP endpoint. Treat the
+remote plugin submission: that submission path requires a stable public HTTPS MCP endpoint. Treat the
 tunnel as the private/custom connection path, not as a replacement for a public consumer
 distribution service. See [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 and [Connect and test your plugin](https://developers.openai.com/plugins/deploy/connect-chatgpt).
+
+An alternative exists for approved desktop-only local MCP plugins: the organization must be
+allowlisted before submitting a bundled stdio server. Installation is through the ChatGPT desktop
+app, and use is limited to locally executing threads. This is not general submission access or
+evidence that Tela's organization qualifies. The documentation does not establish that this path
+serves Tela's temporary ChatGPT Web worker conversations. Confirm eligibility and that surface's
+tool access before replacing the current remote connection or adding a second transport. See
+[Submit desktop-only plugins](https://developers.openai.com/plugins/deploy/desktop-only).
 
 Tela already has an `OpenAiSecureMcpTunnelExposure` adapter, currently wired into the
 development canary. Production configuration, the packaged gateway and setup UI still use
@@ -137,6 +146,8 @@ revoked connection or recreate a user-removed plugin.
   supported custom MCP creation, connection methods, installation, refresh and plugin testing.
 - [OpenAI: Authentication](https://developers.openai.com/plugins/build/auth): standard MCP/OAuth
   discovery and existing identity providers; do not confuse OAuth client registration with plugin creation.
+- [OpenAI: Submit desktop-only plugins](https://developers.openai.com/plugins/deploy/desktop-only):
+  partner approval, organization allowlisting and local-thread scope for bundled local MCP submission.
 - [OpenAI tunnel-client](https://github.com/openai/tunnel-client): supported private/local MCP transport;
   its documented onboarding still distinguishes the ChatGPT custom plugin from a local Codex plugin.
 - [DevSpace setup](https://github.com/Waishnav/devspace/blob/main/docs/setup.md): ask only applicable
