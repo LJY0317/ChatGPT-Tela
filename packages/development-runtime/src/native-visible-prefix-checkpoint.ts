@@ -266,28 +266,26 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
   // One complete source, one model operation. Never create fragment/merge conversations.
   // Object embedding avoids stringifying/escaping the whole serialized source a second time.
   const physical = nativePrefixStageContext(parsed, namespace);
+  // Share structural source accounting between admitted and rejected preparation.
+  const sourceRoles = { checkpoint: { bytes: 0, count: 0 }, authority: { bytes: 0, count: 0 },
+    user: { bytes: 0, count: 0 }, assistant: { bytes: 0, count: 0 },
+    tool: { bytes: 0, count: 0 }, other: { bytes: 0, count: 0 } };
+  let largestBytes = 0;
+  let largest: Record<string, unknown> | undefined;
+  for (const value of parsed.items as unknown[]) {
+    const item = value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown> : {};
+    const role = item.type === "checkpoint" ? "checkpoint"
+      : item.type === "revision" && (item.kind === "system" || item.kind === "developer") ? "authority"
+      : item.type === "revision" && (item.kind === "user" || item.kind === "steering") ? "user"
+      : item.type === "revision" && item.kind === "assistant" ? "assistant"
+      : item.type === "revision" && (item.kind === "tool-call" || item.kind === "tool-result") ? "tool" : "other";
+    const size = Buffer.byteLength(JSON.stringify(value), "utf8");
+    sourceRoles[role].bytes += size;
+    if (size > largestBytes) { largestBytes = size; largest = item; }
+    sourceRoles[role].count++;
+  }
   if (!fits(physical)) {
-    // Bounded structural accounting distinguishes restored instructions, a prior
-    // working checkpoint and canonical suffix without recording their text.
-    const items = parsed.items as unknown[];
-    let instructionCount = 0, instructionBytes = 0, checkpointCount = 0, checkpointBytes = 0;
-    let largestBytes = 0;
-    let largest: Record<string, unknown> | undefined;
-    for (const item of items) {
-      const size = Buffer.byteLength(JSON.stringify(item), "utf8");
-      if (size > largestBytes) {
-        largestBytes = size;
-        largest = item && typeof item === "object" && !Array.isArray(item)
-          ? item as Record<string, unknown> : undefined;
-      }
-      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-      const entry = item as Record<string, unknown>;
-      if (entry.type === "revision" && (entry.kind === "system" || entry.kind === "developer")) {
-        instructionCount++; instructionBytes += size;
-      } else if (entry.type === "checkpoint") {
-        checkpointCount++; checkpointBytes += size;
-      }
-    }
     const largestType = largest?.type === "revision" || largest?.type === "checkpoint" ? largest.type
       : largest?.type === undefined ? "absent" : "other";
     const role = largest?.type === "revision" ? largest.kind : undefined;
@@ -300,8 +298,8 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
       source_estimate: chatGptCheckpointInputTokens(physical), input_budget: limit,
       source_kind: source.kind, completed_receipt_count: completed.size,
       matching_receipt_present: completed.has(stageIdentity(physical).key),
-      instruction_item_count: instructionCount, instruction_bytes: instructionBytes,
-      checkpoint_item_count: checkpointCount, checkpoint_bytes: checkpointBytes,
+      instruction_item_count: sourceRoles.authority.count, instruction_bytes: sourceRoles.authority.bytes,
+      checkpoint_item_count: sourceRoles.checkpoint.count, checkpoint_bytes: sourceRoles.checkpoint.bytes,
       largest_item_bytes: largestBytes, entry_class: largestType, request_role: largestRole,
     });
     throw new NativeHistoryBootstrapRequired("source_budget");
@@ -309,20 +307,6 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
   const cached = completedSummary(physical);
   const plannedCalls = cached === undefined ? 1 : 0;
   const plannedInput = cached === undefined ? chatGptCheckpointInputTokens(physical) : 0;
-  const sourceRoles = { checkpoint: { bytes: 0, count: 0 }, authority: { bytes: 0, count: 0 },
-    user: { bytes: 0, count: 0 }, assistant: { bytes: 0, count: 0 },
-    tool: { bytes: 0, count: 0 }, other: { bytes: 0, count: 0 } };
-  for (const value of parsed.items as unknown[]) {
-    const item = value && typeof value === "object" && !Array.isArray(value)
-      ? value as Record<string, unknown> : {};
-    const role = item.type === "checkpoint" ? "checkpoint"
-      : item.type === "revision" && (item.kind === "system" || item.kind === "developer") ? "authority"
-      : item.type === "revision" && (item.kind === "user" || item.kind === "steering") ? "user"
-      : item.type === "revision" && item.kind === "assistant" ? "assistant"
-      : item.type === "revision" && (item.kind === "tool-call" || item.kind === "tool-result") ? "tool" : "other";
-    sourceRoles[role].bytes += Buffer.byteLength(JSON.stringify(value), "utf8");
-    sourceRoles[role].count++;
-  }
   emitDiagnosticEvent("chatgpt_tela_codex", "native_checkpoint_preparation_planned", {
     source_kind: source.kind, source_bytes: sourceBytes, source_item_count: source.sourceItemCount,
     fragment_count: 1, estimate_kind: "conservative_upper_bound",

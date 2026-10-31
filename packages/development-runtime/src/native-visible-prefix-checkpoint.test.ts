@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readDiagnosticTail } from "@chatgpt-tela/core";
+import { readDiagnosticTail, observeDiagnosticEvents } from "@chatgpt-tela/core";
 import type { NativeRequestPrefixSnapshot } from "./native-visible-prefix-checkpoint";
 import { chatGptCheckpointInputTokens, chatGptWebCheckpointSourceTokenLimit } from "@chatgpt-tela/chatgpt";
 import {
@@ -49,6 +49,25 @@ function fixture(text='visible prior answer') {
  return {source,input,journal,calls,confirmations:()=>confirmations};
 }
 function payload(request:any){return JSON.parse(request.physicalContext.segments[0].content);}
+
+test('admitted preparation reports source role sizes without bodies or extra model work',async()=>{
+ const f=fixture();
+ const items=[{type:'checkpoint',content:'prior summary'},...['system','developer','user','steering','assistant','tool-call','tool-result','unknown']
+  .map((kind,i)=>({type:'revision',revisionId:`item-${i}`,kind,content:`PRIVATE-${kind}`}))];
+ const content=JSON.stringify({type:'tela_native_request_prefix_v1',items});
+ const digest=createHash('sha256').update(content).digest('hex');
+ const source={...f.source,content,contentDigest:digest,digest,sourceItemCount:items.length};
+ let event:any;
+ const stop=observeDiagnosticEvents(row=>{if(row.stage==='native_checkpoint_preparation_planned')event=row;});
+ try{await produceNativePrefixCheckpoint({...f.input,source,confirmSource:async()=>source});}finally{stop?.();}
+ const groups={checkpoint:[0],authority:[1,2],user:[3,4],assistant:[5],tool:[6,7],other:[8]};
+ for(const [role,indexes]of Object.entries(groups)){
+  expect(event[`source_${role}_count`]).toBe(indexes.length);
+  expect(event[`source_${role}_bytes`]).toBe(indexes.reduce((sum,i)=>sum+Buffer.byteLength(JSON.stringify(items[i])),0));
+ }
+ expect(JSON.stringify(event)).not.toContain('PRIVATE');
+ expect(f.calls).toHaveLength(1);
+});
 
 test('checkpoint presentation follows real phases and observer failure cannot authorize extra calls',async()=>{
  const f=fixture(),messages:string[]=[];

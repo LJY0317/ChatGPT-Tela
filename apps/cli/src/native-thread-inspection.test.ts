@@ -55,7 +55,7 @@ describe("one read-only conversation inspection by exact Native ID", () => {
           ...row, content: "PRIVATE", cookie: "PRIVATE", account_id: "PRIVATE" })),
         { ts, event: "chatgpt_tela_work", scope_fingerprint,
           turn_fingerprint: diagnosticFingerprint("another-turn"), stage: "web_turn_plan", seed_authority_bytes: 999 },
-      ].map(JSON.stringify).join("\n") + "\n");
+      ].map(row => JSON.stringify(row)).join("\n") + "\n");
       const result = inspectNativeThreadHistoricalEvidence({ threadId: THREAD, turnId: TURN,
         diagnosticPaths: [path], nowMs: NOW });
       expect(result.contextPreparationEvidence).toHaveLength(5);
