@@ -38,6 +38,36 @@ function fixtureReader(overrides: {
 }
 
 describe("one read-only conversation inspection by exact Native ID", () => {
+  test("failure and compaction breakdown survive filtered incident readback", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-reproduction-evidence-"));
+    const path = join(root, "events.jsonl"), ts = new Date(NOW).toISOString();
+    const scope_fingerprint = diagnosticFingerprint(THREAD), turn_fingerprint = diagnosticFingerprint(TURN);
+    try {
+      writeDiagnosticIncident(join(root, "diagnostics"), { stage: "native_execution_failed", observedAt: ts,
+        timeline: [
+          { ts, event: "chatgpt_tela_work", stage: "web_provider_failure_detail_classified",
+            scope_fingerprint, turn_fingerprint, phase: "direct", reason_class: "other_provider_error",
+            matched_failed_count: 1, matched_complete_count: 0, approval_pending: false,
+            provider_internal_cause_available: false, content: "PRIVATE" },
+          { ts, event: "chatgpt_tela_diagnostics", stage: "private_capture_recorded",
+            scope_fingerprint, turn_fingerprint, artifact_created: true, local_receipt_verified: true,
+            model_receipt_observable: false },
+          { ts, event: "chatgpt_tela_work", stage: "compaction_fit_breakdown",
+            scope_fingerprint, turn_fingerprint, wire_estimate: 140872, wire_budget: 98905,
+            original_readback_available: true, original_index_readable_count: 3,
+            instruction_bytes: 120889, deferred_originals: false },
+        ] });
+      const result = inspectNativeThreadHistoricalEvidence({ threadId: THREAD, turnId: TURN,
+        diagnosticPaths: [path], nowMs: NOW });
+      expect(result.providerFailureEvidence).toEqual(expect.arrayContaining([
+        expect.objectContaining({ matched_failed_count: 1, provider_internal_cause_available: false }),
+        expect.objectContaining({ local_receipt_verified: true, model_receipt_observable: false }),
+      ]));
+      expect(result.contextPreparationEvidence).toContainEqual(expect.objectContaining({
+        wire_estimate: 140872, original_index_readable_count: 3, instruction_bytes: 120889 }));
+      expect(JSON.stringify(result)).not.toContain("PRIVATE");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("historical inspection exposes archived source-fit evidence after its log rotated", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-archived-fit-")), path = join(root, "events.jsonl");
     const ts = new Date(NOW).toISOString();

@@ -49,6 +49,8 @@ test('Native local compaction must provide inline user image as a real owned sum
 });
 test('oversized local compaction refuses to send the whole logical history to a model or silently truncate',async()=>{
  let summarizerCalls=0;
+ const observed:Record<string,unknown>[]=[];
+ const stop=observeDiagnosticEvents(row=>{if(row.stage==='compaction_fit_breakdown')observed.push(row);});
  const router=createNativeLocalCompactionRouter({
   source:{currentTurn:async()=>canonical},
   summarize:async()=>{summarizerCalls++;throw Error('oversized source must never reach Web');},
@@ -61,6 +63,10 @@ test('oversized local compaction refuses to send the whole logical history to a 
   code:'tela_compaction_requires_readable_checkpoint',
  });
  expect(summarizerCalls).toBe(0);
+ expect(observed).toContainEqual(expect.objectContaining({final_source_fits:false,
+  original_readback_available:false,original_index_page_count:0,checkpoint_bytes:0,
+  deferred_originals:false,wire_budget:chatGptWebCheckpointSourceTokenLimit('medium')}));
+ stop?.();
 });
 
 for (const remote of [false,true]) test(`oversized ${remote?'remote':'local'} compaction defers only owner-indexed prior exchanges and preserves recent work`,async()=>{

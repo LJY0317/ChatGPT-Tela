@@ -1,6 +1,8 @@
 import { diagnosticContext } from "./diagnostic-context";
 import { configuredDiagnosticRoot, diagnosticFingerprint, emitDiagnosticEvent } from "./diagnostic-events";
 import { privateDiagnosticCaptureEnabled, privateDiagnosticCaptureStatus, writePrivateDiagnosticArtifact } from "./diagnostic-store";
+import { lstatSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 /** Bounded failure advice for existing result contracts. It never reads raw evidence or enables capture. */
 export function privateDiagnosticFailureGuidance(root = configuredDiagnosticRoot()) {
   if (!root) return { capture: "unavailable", evidence: "unverified", reason: "diagnostic_root_unavailable" } as const;
@@ -23,12 +25,14 @@ export function capturePrivateDiagnosticValue(phase: "tool_request" | "tool_resu
   const failure = /failure|mismatch/.test(phase);
   // Trace capture stays quiet when disabled. A failed operation needs to explain
   // why its private evidence is absent without exposing the evidence itself.
-  const report = (reason: string, bytes?: number, ref?: string) => {
+  const report = (reason: string, bytes?: number, ref?: string, verified = false) => {
     if (!failure) return;
     emitDiagnosticEvent("chatgpt_tela_diagnostics", ref ? "private_capture_recorded" : "private_capture_omitted", {
       phase, reason_class: reason,
       ...(bytes === undefined ? {} : { requested_bytes: bytes }),
       ...(ref ? { item_fingerprint: diagnosticFingerprint(ref) } : {}),
+      artifact_created: ref !== undefined, local_receipt_verified: verified,
+      model_receipt_observable: false,
     });
   };
   try {
@@ -40,6 +44,21 @@ export function capturePrivateDiagnosticValue(phase: "tool_request" | "tool_resu
     if(bytes.length>256*1024) { emitDiagnosticEvent("chatgpt_tela_diagnostics", "private_capture_omitted", { phase, reason_class: "byte_budget", requested_bytes: bytes.length }); return; }
     const ref=writePrivateDiagnosticArtifact(root,{kind:"json",bytes,operationFingerprint:operation,
       evidenceClass: failure ? "failure" : "trace"});
-    report(ref ? "captured" : "capture_not_retained", bytes.length, ref);
+    // A writer return is a local retention claim, not model receipt. Verify only
+    // private metadata and file size; never read the captured body into diagnostics.
+    let verified = false;
+    if (ref) try {
+      const file = lstatSync(join(root, "private", `${ref}.json`));
+      const metaPath = join(root, "private", `${ref}.meta.json`);
+      const metaFile = lstatSync(metaPath);
+      if (file.isFile() && !file.isSymbolicLink() && file.size === bytes.length
+        && metaFile.isFile() && !metaFile.isSymbolicLink() && metaFile.size <= 4096) {
+        const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+        verified = meta.owner === "chatgpt-tela-diagnostics-v1"
+          && meta.operationFingerprint === operation && meta.kind === "json"
+          && meta.bytes === bytes.length;
+      }
+    } catch { /* Local receipt proof is optional; the artifact is not a model receipt. */ }
+    report(ref ? "captured" : "capture_not_retained", bytes.length, ref, verified);
   } catch { report("capture_error"); /* Diagnostics cannot affect primary execution. */ }
 }

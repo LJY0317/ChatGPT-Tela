@@ -411,7 +411,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
   const turnFingerprint = input.turnId ? diagnosticFingerprint(input.turnId) : undefined;
   const events = logs.events.filter(event => event.scope_fingerprint === fingerprint
     && (turnFingerprint === undefined || event.turn_fingerprint === turnFingerprint)
-    && ["chatgpt_tela_work", "chatgpt_tela_codex", "chatgpt_tela_browser"].includes(event.event));
+    && ["chatgpt_tela_work", "chatgpt_tela_codex", "chatgpt_tela_browser", "chatgpt_tela_diagnostics"].includes(event.event));
   const toolDeliveryEvidence = turnFingerprint ? projectTurnToolEvidence({
     threadFingerprint: fingerprint,
     turnFingerprint,
@@ -529,7 +529,13 @@ export function inspectNativeThreadHistoricalEvidence(input: {
     })),
     ...(toolDeliveryEvidence ? { toolDeliveryEvidence } : {}),
     contextPreparationEvidence: events.filter(event => ["native_context_source_rejected",
-      "native_checkpoint_preparation_planned", "compaction_source_observed"].includes(event.stage)),
+      "native_checkpoint_preparation_planned", "native_working_checkpoint_selected",
+      "compaction_history_source_selected", "compaction_source_observed", "compaction_fit_breakdown"].includes(event.stage)),
+    providerFailureEvidence: events.filter(event => ["web_provider_failure_detail_classified",
+      "web_lineage_branch_anomaly", "web_turn_observed", "web_execution_exception",
+      "web_turn_failed", "web_answer_received", "web_turn_final_observed",
+      "native_outcome_committed", "native_response_body_closed",
+      "private_capture_recorded", "private_capture_omitted"].includes(event.stage)),
     recentEvents: events.slice(-MAX_TIMELINE).map(event => ({
       at: event.ts, stage: event.stage,
       ...(typeof event.reason_class === "string" ? { reasonClass: event.reason_class } : {}),

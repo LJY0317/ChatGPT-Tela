@@ -76,15 +76,31 @@ interface TrackedTurn extends TurnOwnership {
   retirement?: Promise<void>;
 }
 
-function observeProviderFailure(detail: string | undefined): void {
+function observeProviderFailure(detail: string | undefined, snapshot: ChatGptSurfaceSnapshot,
+  tracked: TrackedTurn, phase: "direct" | "post_tool_handoff" | "pending_final"): void {
   // Keep only shape evidence when the provider's rendered error differs from its
-  // underlying failure. Never retain the displayed error text.
+  // underlying failure. The renderer does not expose the provider's internal cause.
   const normalized = detail?.trim().toLowerCase() ?? "";
+  const matched = snapshot.turns.filter(item => item.role === "assistant"
+    && item.parentUserTurnKey === tracked.userTurnKey);
   emitDiagnosticEvent("chatgpt_tela_work", "web_provider_failure_detail_classified", {
+    ...tracked.diagnosticLineage,
+    phase, assistant_phase: "failed",
     reason_class: webProviderFailureReason(detail),
     detail_chars: detail?.length ?? 0,
+    detail_available: !!detail,
     contains_length_term: /\b(long|length|large|limit)\b/.test(normalized),
     contains_submission_term: /\b(message|submitted|prompt)\b/.test(normalized),
+    matched_assistant_count: matched.length,
+    matched_failed_count: matched.filter(item => item.phase === "failed").length,
+    matched_complete_count: matched.filter(item => item.phase === "complete").length,
+    unmatched_assistant_count: snapshot.turns.filter(item => item.role === "assistant"
+      && item.parentUserTurnKey !== tracked.userTurnKey).length,
+    approval_card_count: snapshot.approval?.cardCount ?? 0,
+    approval_pending: !!pendingApproval(snapshot, tracked)?.cardCount,
+    pending_final_preserved: tracked.pendingCompletedAnswer !== undefined,
+    response_retry_observed: tracked.responseRetryState === "observed",
+    provider_internal_cause_available: false,
   });
 }
 
@@ -2012,7 +2028,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       // A new approval can render after completion controls. It still blocks final delivery.
       if (assistantLifecyclePhase(snapshot, tracked, ownership.assistants[0]) === "failed") {
         signal?.throwIfAborted();
-        observeProviderFailure(ownership.assistants[0]!.failureDetail);
+        observeProviderFailure(ownership.assistants[0]!.failureDetail, snapshot, tracked, "pending_final");
         this.#retireTurn(surface, tracked);
         return { state: "proven", value: { kind: "failed", providerTurnId: tracked.handle.providerTurnId,
           detail: ownership.assistants[0]!.failureDetail ?? "ChatGPT turn failed" },
@@ -2047,6 +2063,12 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       const assistants = lineage.assistants;
       if (lineage.ambiguous || assistants.length > 1) {
+        emitDiagnosticEvent("chatgpt_tela_work", "web_lineage_branch_anomaly", {
+          ...tracked.diagnosticLineage, ...turnObservationFields(snapshot, tracked),
+          reason_class: lineage.ambiguous ? "lineage_ambiguous" : "multiple_assistant_descendants",
+          matched_complete_count: assistants.filter(item => item.phase === "complete").length,
+          matched_failed_count: assistants.filter(item => item.phase === "failed").length,
+        });
         await recordDeferredCompletion(surface, tracked, snapshot, "multiple_assistants");
       }
       if (lineage.ambiguous) {
@@ -2197,7 +2219,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         delete tracked.continuationBoundary;
         if (assistant.phase === "failed") {
           signal?.throwIfAborted();
-          observeProviderFailure(assistant.failureDetail);
+          observeProviderFailure(assistant.failureDetail, snapshot, tracked, "post_tool_handoff");
           this.#retireTurn(surface, tracked);
           return {
             state: "proven",
@@ -2236,7 +2258,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       if (assistant.phase === "failed") {
         signal?.throwIfAborted();
-        observeProviderFailure(assistant.failureDetail);
+        observeProviderFailure(assistant.failureDetail, snapshot, tracked, "direct");
         this.#retireTurn(surface, tracked);
         return {
           state: "proven",

@@ -26,7 +26,8 @@ test("failure evidence has a correlated structural receipt while raw data stays 
   withDiagnosticContext(context, () => capturePrivateDiagnosticValue("web_preparation_failure", { text: "PRIVATE evidence", token: "PRIVATE token" }));
   const rows = readDiagnosticTail(f.file).events;
   expect(rows).toHaveLength(1);
-  expect(rows[0]).toMatchObject({ ...context, stage: "private_capture_recorded", reason_class: "captured", phase: "web_preparation_failure" });
+  expect(rows[0]).toMatchObject({ ...context, stage: "private_capture_recorded", reason_class: "captured", phase: "web_preparation_failure",
+    artifact_created: true, local_receipt_verified: true, model_receipt_observable: false });
   expect(rows[0]?.item_fingerprint).toMatch(/^[a-f0-9]{24}$/);
   expect(rows[0]?.requested_bytes).toBeGreaterThan(0);
   expect(readFileSync(f.file, "utf8")).not.toContain("PRIVATE");

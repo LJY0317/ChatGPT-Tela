@@ -187,16 +187,20 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
             // Refuse an unprovable or oversized source before producing any model summary.
             operationPhase = "source_fit";
             let bounded = boundedWebCheckpointSource(physicalContext, projection.media, browserModel.effort);
+            const initialFits = !!bounded;
+            let indexRequested = 0, indexReadable = 0, indexPages = 0;
             if (!bounded && hasHistoryReadback) {
               const wanted = new Set((Array.isArray(body.input) ? body.input : []).flatMap(raw => {
                 const id = nativeRequestSourceTurnId(raw);
                 return id !== undefined && id !== claim.turnId ? [id] : [];
               }));
               const readable = new Set<string>();
+              indexRequested = wanted.size;
               let cursor: string | undefined;
               while (wanted.size) {
                 const page = await input.source.readHistoryIndex!(activeOwner, { ...(cursor ? { cursor } : {}) },
                   watch?.signal ?? new AbortController().signal);
+                indexPages++;
                 for (const item of page.data) {
                   if (wanted.delete(item.turnId) && ["completed", "failed", "interrupted"].includes(item.status)
                     && item.turnId !== claim.turnId) readable.add(item.turnId);
@@ -204,6 +208,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
                 if (!page.nextCursor) break;
                 cursor = page.nextCursor;
               }
+              indexReadable = readable.size;
               projection = projectNativeRequestContext(claim.threadId, body, continuity.visibleHistory,
                 continuity.inlineHistoryAssets, continuity.historyReferences, activeOwner.ingressMedia,
                 activeOwner.nativeGoal, activeOwner.nativeGoalState, readable);
@@ -231,6 +236,44 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
               segment_count: physicalContext.segments.length,
               working_checkpoint_reused: maintained.reused,
               working_checkpoint_advanced: maintained.produced,
+            });
+            // Compare the actual checkpoint wire estimate with the protected and
+            // historically attributable ranges. Nothing here selects or drops text.
+            const sourceSegments = physicalContext.segments;
+            const sourceBytes = (items: typeof sourceSegments) => items.reduce((sum, item) =>
+              sum + Buffer.byteLength(item.content, "utf8"), 0);
+            const revisions = projection.revisions;
+            const historicalIds = new Set(revisions.filter(item => item.historicalTurnId)
+              .map(item => item.revision.id));
+            const protectedIds = new Set(projection.protectedRevisionIds);
+            const segmentsFor = (predicate: (item: typeof sourceSegments[number]) => boolean) =>
+              sourceSegments.filter(predicate);
+            emitDiagnosticEvent("chatgpt_tela_work", "compaction_fit_breakdown", {
+              wire_estimate: chatGptCheckpointInputTokens(physicalContext, projection.media),
+              wire_budget: chatGptWebCheckpointSourceTokenLimit(browserModel.effort),
+              exact_segment_count: sourceSegments.length,
+              exact_bytes: sourceBytes(sourceSegments),
+              instruction_bytes: sourceBytes(segmentsFor(item => item.type === "revision"
+                && (item.kind === "system" || item.kind === "developer"))),
+              historical_bytes: sourceBytes(segmentsFor(item => item.type === "revision"
+                && historicalIds.has(item.revisionId))),
+              active_bytes: sourceBytes(segmentsFor(item => item.type === "revision"
+                && !historicalIds.has(item.revisionId)
+                && item.kind !== "system" && item.kind !== "developer")),
+              protected_bytes: sourceBytes(segmentsFor(item => item.type === "revision"
+                && protectedIds.has(item.revisionId))),
+              checkpoint_bytes: sourceBytes(segmentsFor(item => item.type === "checkpoint")),
+              historical_revision_count: historicalIds.size,
+              retained_historical_segment_count: segmentsFor(item => item.type === "revision"
+                && historicalIds.has(item.revisionId)).length,
+              protected_revision_count: protectedIds.size,
+              original_readback_available: hasHistoryReadback,
+              original_index_requested_count: indexRequested,
+              original_index_readable_count: indexReadable,
+              original_index_page_count: indexPages,
+              initial_source_fits: initialFits, final_source_fits: !!bounded,
+              deferred_originals: physicalContext.deferredHistory !== undefined,
+              media_count: projection.media.length,
             });
             if (!bounded && (!input.visiblePrefix || projection.media.length)) throw new NativeHistoryBootstrapRequired();
             operationPhase = "summary";

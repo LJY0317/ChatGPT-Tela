@@ -2664,7 +2664,9 @@ test("provider failure diagnostics retain shape but never the error text",async(
   expect(driver.retries).toBe(0);
   expect(driver.activated).toHaveLength(1);
   expect(rows).toEqual([expect.objectContaining({reason_class:"message_too_long",detail_chars:detail.length,
-   contains_length_term:true,contains_submission_term:true})]);
+   contains_length_term:true,contains_submission_term:true,phase:"direct",assistant_phase:"failed",
+   matched_assistant_count:1,matched_failed_count:1,matched_complete_count:0,
+   approval_pending:false,provider_internal_cause_available:false})]);
   expect(JSON.stringify(rows)).not.toContain(detail);
  }finally{stop?.();await surface.host.close();}
 });
