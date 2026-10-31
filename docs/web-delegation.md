@@ -397,6 +397,10 @@ round-trip results.
 The Codex daemon archives managed Web-delegation conversations 24 hours after
 the later of explicit result retrieval and real Native activity, or seven days
 after real Native activity when no result was retrieved. A subsequent managed continuation starts its own clock.
+An error or status inspection alone does not count as answer retrieval. Failed requests without a
+collected answer or explicit review retain the seven-day idle policy; a failed continuation can
+retain an earlier collected answer's 24-hour clock. Collecting a transport result does not settle
+the original request, which remains unanswered until explicit review of a verified answer.
 The daemon deletes its own automatically archived conversations 30 days later.
 Result receipts and local workspace files remain intact. Status reads do not
 extend either period. These rules cover journal-owned `web-delegate` threads;
