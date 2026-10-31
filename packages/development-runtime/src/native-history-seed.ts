@@ -14,7 +14,9 @@ export function prepareDeferredNativeHistory(projection: NativeRequestContextPro
       || item.revision.kind === "developer" && projection.currentGoalStatus === "active")?.revision.id ?? projection.headId,
     logicalTokens, transferTokens: 0,
     segments: all.filter(item => !deferred.has(item.revision.id)).map(item => ({ type: "revision" as const,
-      revisionId: item.revision.id, kind: item.revision.kind, content: item.content })),
+      revisionId: item.revision.id, kind: item.revision.kind, content: item.content,
+      ...(item.evidence?.length ? { evidence: item.evidence } : {}),
+    })),
     ...(deferred.size || projection.deferredHistory ? { deferredHistory: { scope: "prior-native-history" as const } } : {}),
   });
   const wireTokens = (deferred: ReadonlySet<string>) => chatGptCheckpointInputTokens(contextFor(deferred), projection.media);

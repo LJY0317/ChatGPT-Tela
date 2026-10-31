@@ -91,6 +91,33 @@ test('serialized wire overflow defers readable old turns even when logical sourc
  expect(chatGptCheckpointInputTokens(selected!.physicalContext)).toBeLessThanOrEqual(budget);
 });
 
+test('wire-fit history selection preserves owned image bytes and current work',()=>{
+ const png='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9RwvWgAAAABJRU5ErkJggg==';
+ const image={type:'message',role:'user',content:[{type:'input_text',text:'ACTIVE-IMAGE'},
+  {type:'input_image',image_url:png}]};
+ const small=projectNativeRequestContext('thread',body({input:[image]}));
+ expect(small.media).toHaveLength(1);
+ expect(prepareDeferredNativeHistory(small,webWorkingContextPolicy('medium'),98905)).toBeUndefined();
+ const attributed=(turn_id:string)=>({internal_chat_message_metadata_passthrough:{turn_id}});
+ const source=body({input:[...Array.from({length:12},(_,i)=>({role:'user',content:'\\'.repeat(40_000),
+  ...attributed(`old-${i}`)})),
+  {role:'user',content:'RECENT-EXACT',...attributed('old-11')},image]});
+ const projected=projectNativeRequestContext('thread',source,undefined,[],undefined,undefined,undefined,undefined,
+  new Set(Array.from({length:12},(_,i)=>`old-${i}`)));
+ expect(projected.media).toHaveLength(1);
+ const selected=prepareDeferredNativeHistory(projected,webWorkingContextPolicy('medium'),98905);
+ expect(selected?.physicalContext.deferredHistory).toEqual({scope:'prior-native-history'});
+ const retained=selected!.physicalContext.segments;
+ expect(retained.some(s=>s.content.includes('RECENT-EXACT'))).toBe(true);
+ expect(retained.some(s=>s.content.includes('ACTIVE-IMAGE'))).toBe(true);
+ const upload=prepareWebTurnMedia(selected!.physicalContext,projected.media);
+ expect(upload.files).toHaveLength(1);
+ expect(upload.files[0]!.bytes).toEqual(Buffer.from(png.split(',')[1]!, 'base64'));
+ expect(chatGptCheckpointInputTokens(selected!.physicalContext,projected.media)).toBeLessThanOrEqual(98905);
+ expect(() => prepareWebTurnMedia({...selected!.physicalContext,segments:retained.map(s=>
+  s.type==='revision'?{type:s.type,revisionId:s.revisionId,kind:s.kind,content:s.content}:s)},projected.media)).toThrow('ownership');
+});
+
 for (const remote of [false,true]) test(`oversized ${remote?'remote':'local'} compaction defers only owner-indexed prior exchanges and preserves recent work`,async()=>{
  let calls=0,indexReads=0;
  const attributed=(turn_id:string)=>({internal_chat_message_metadata_passthrough:{turn_id}});
