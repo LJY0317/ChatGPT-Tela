@@ -129,6 +129,29 @@ not Tela-owned simply because Tela used them. Account-side retention is governed
 local uninstall cannot promise server-side erasure. Reinstall must not silently reauthorize a
 revoked connection or recreate a user-removed plugin.
 
+## Multiple computers on one ChatGPT account
+
+A remote plugin connection targets its configured endpoint, not the computer displaying ChatGPT.
+The current gateway dispatches ordinary Chat capabilities to that endpoint's local Chat service.
+Account identity, Origin, IP and conversation IDs do not establish the caller's physical device.
+Native turn capabilities restrict an existing task; they do not move execution to the caller's machine.
+Consequently, the current remote connection does not guarantee current-device-only local access.
+
+For that requirement, prefer a supported per-device local MCP execution path, reusing the existing
+Chat service and tools. First verify a clean local installation and tool access from the temporary
+Web-worker surface. Local marketplace development support and approval for public desktop-only
+submission are separate questions. If the Web surface cannot use that local transport, report the
+unsupported workflow; do not silently substitute a remote computer or build a device-routing relay.
+Acceptance requires two computers on one account: each reaches only its own files, disconnecting
+one does not redirect to the other, and remote-device discovery is absent. Same-account conversation
+synchronization is separate from local execution authority.
+
+Reference implementations are not equivalent guarantees. [codex-chatgpt-web's security model](https://github.com/miuuyy/codex-chatgpt-web/blob/main/docs/security-model.md)
+binds tools to a local Native turn through its tunnel; it does not establish automatic caller-device
+selection for standalone ChatGPT. [Chat on Steroids' desktop-call guard](https://github.com/totec448-spec/chat-on-steroids/blob/main/src/main/mcp/desktop-caller.ts)
+records a cross-computer connector incident and checks chat correlation for desktop tools. This is a
+useful warning, not proof of isolation for all file and command capabilities.
+
 ## Refactoring order
 
 1. Trace the existing setup/maintenance UI and shared install/remove contracts. Replace duplicate
