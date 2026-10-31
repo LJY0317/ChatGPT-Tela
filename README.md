@@ -1308,6 +1308,9 @@ Settings → **Maintenance → Manage…** opens the independent repair/removal 
 Tela app matching the installed version, then **Review changes** before applying. Removal keeps settings
 and saved logins by default; removing them requires the explicit checkbox. Projects and original ChatGPT
 data are preserved. If installed files are damaged, use a trusted same-version app for repair.
+If removal was interrupted, reopen Maintenance, select **Remove Tela**, and review the remaining changes
+to continue. The CLI uses the same path: review with `uninstall --dry-run`, then `uninstall --apply`
+(add `--remove-data` only to remove saved Tela data).
 
 The previous split-payload macOS installation requires owned keep-data removal and a fresh app
 installation to enter this format. That local migration restored all three services and both configured

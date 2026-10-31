@@ -303,7 +303,9 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     if result.0 == 0, let status = try? JSONDecoder().decode(TelaMaintenanceStatus.self, from: result.1) {
       version.stringValue = "Installed: \(status.installedVersion)"
       if status.pendingTransition != "none" {
-        let recovery = status.pendingTransition == "application-update"
+        let recovery = status.pendingTransition == "uninstall"
+          ? "An earlier removal is unfinished. Select Remove Tela and review the remaining changes to continue."
+          : status.pendingTransition == "application-update"
           ? "Finish the pending update in Tela before maintenance."
           : "An earlier installation is unfinished. Use its original installer to finish recovery."
         message.stringValue = preservingOutcome && !message.stringValue.isEmpty

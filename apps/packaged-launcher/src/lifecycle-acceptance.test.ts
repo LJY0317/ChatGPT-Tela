@@ -9,6 +9,7 @@ import {
   PackagedServiceShutdownNotStartedError, packagedUpgradeJournalPath,
 } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
+import { runMaintenanceCommand } from "./maintenance";
 import { runPackagedLifecycleCommand } from "./lifecycle";
 import { runPackagedChatCommand } from "./chat";
 import { runPackagedServicesCommand } from "./services";
@@ -222,8 +223,27 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     });
     await uninstall("dry-run", false);
     expect(existsSync(paths.binaryRoot)).toBe(true);
-    const kept = await uninstall("apply", false);
-    expect(kept).toMatchObject({ failedCount: 0, manifestRemoved: false });
+    // Exit with the real SQLite writer held, after a physical effect but before
+    // manifest settlement. Recovery must observe that absence, not replay a plan.
+    const interrupted = Bun.spawn([process.execPath, "--eval", `
+      import { withPackagedTransitionOwner, resolveProductPaths } from '@chatgpt-tela/product-lifecycle';
+      import { startUninstallCheckpoint } from ${JSON.stringify(new URL("../../../packages/product-uninstall/src/coordination.ts", import.meta.url).href)};
+      import { rmSync } from 'node:fs';
+      const paths = resolveProductPaths(${JSON.stringify({ platform: "linux", home, environment: {} })});
+      await withPackagedTransitionOwner({paths,installId:${JSON.stringify(manifest.installId)}}, async()=>{
+        startUninstallCheckpoint(paths,${JSON.stringify(manifest.installId)});
+        rmSync(paths.logsRoot,{recursive:true}); process.exit(23);
+      });`], { stdout: "ignore", stderr: "pipe" });
+    expect(await interrupted.exited).toBe(23);
+    expect(await runMaintenanceCommand(["maintenance", "status"], options)).toMatchObject({ pendingTransition: "uninstall" });
+    await expect(execute("install", "apply", next)).rejects.toThrow("uninstall is incomplete");
+    const reviewed = await runMaintenanceCommand(["maintenance", "review", "uninstall"], options);
+    expect(reviewed.resources).toContainEqual({ name: "product-logs", action: "already-absent" });
+    const kept = await runMaintenanceCommand(["maintenance", "apply", "uninstall", "--review-token", reviewed.reviewToken!],
+      { ...options, executingBinaryPath: join(next, "chatgpt-tela") });
+    expect(kept).toMatchObject({ success: true, failedCount: 0 });
+    expect(existsSync(packagedUninstallJournalPath(paths))).toBe(false);
+    expect(await runMaintenanceCommand(["maintenance", "status"], options)).toMatchObject({ pendingTransition: "none" });
     expect(existsSync(paths.binaryRoot)).toBe(false);
     expect(runner.loaded.size).toBe(0);
     assertSaved();

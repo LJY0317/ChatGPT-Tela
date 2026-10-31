@@ -304,24 +304,26 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
 export async function runProductUninstall(input: ProductUninstallOptions): Promise<Readonly<Record<string, unknown>>> {
   const paths = input.paths ?? resolveProductPaths(input);
   const checkpoint = readUninstallCheckpoint(paths);
-  if (checkpoint) {
+  if (checkpoint?.phase === "finalizing") {
     if (input.mode === "dry-run") return Object.freeze({ dryRun: true, status: "uninstall-incomplete", phase: checkpoint.phase, destructiveActions: 0 });
-    if (checkpoint.phase !== "finalizing") throw new Error("uninstall removal was interrupted; reconcile its effects before retrying shutdown");
     await finalizeUninstall(paths, checkpoint);
     return Object.freeze({ applied: true, manifestRemoved: true, resumedMetadataCleanup: true });
   }
   const manifest = readOwnershipManifest(paths.installManifest);
+  if (checkpoint && (!manifest || manifest.installId !== checkpoint.installId)) throw new Error("uninstall checkpoint does not match the installed owner");
   if (input.mode === "dry-run" || !manifest) return runProductUninstallOwned(input);
   assertExternalUninstaller(manifest, input.executingBinaryPath);
   let finalizing: ReturnType<typeof startUninstallCheckpoint> | undefined;
-  const result = await withPackagedTransitionOwner({ paths, installId: manifest.installId }, async () => {
+  const result = await withPackagedTransitionOwner({ paths, installId: manifest.installId,
+    ...(checkpoint ? { uninstallOperationId: checkpoint.operationId } : {}) }, async () => {
     // Recheck under the same lock used by install, update, repair and cancellation.
     const current = readOwnershipManifest(paths.installManifest);
     if (!current || current.installId !== manifest.installId || current.productVersion !== manifest.productVersion) throw new Error("uninstall ownership changed while awaiting admission");
     if (readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths)) || readPackagedRepairJournal(packagedRepairJournalPath(paths))) {
       throw new Error("packaged transition is incomplete; restore it before uninstall apply");
     }
-    const owned = startUninstallCheckpoint(paths, manifest.installId);
+    const owned = checkpoint ? { ...checkpoint, ownerPid: process.pid } : startUninstallCheckpoint(paths, manifest.installId);
+    if (checkpoint) writeUninstallCheckpoint(paths, owned);
     const removed = await runProductUninstallOwned(input);
     if (removed.coordinatorCleanupReady === true) {
       finalizing = { ...owned, phase: "finalizing" };

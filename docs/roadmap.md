@@ -168,6 +168,9 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   organization eligibility and temporary Web-worker compatibility are unproven. Avoid mandatory browser automation, duplicate
   connection engines or a new hosted relay without a confirmed requirement. Consumer completion
   must include actual connection verification and explicit reporting of any remaining host step.
+- Interrupted removal reuses the existing review/apply flow and OS writer lock to inspect remaining
+  resources. Subprocess-crash recovery, keep-data reinstall and complete removal pass in an isolated
+  lifecycle fixture; installed removal and platform service-manager acceptance remain separate.
 
 ## Remaining acceptance
 

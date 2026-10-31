@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { chmodSync, copyFileSync, cpSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { readOwnershipManifest, resolveProductPaths, readPackagedUpgradeJournal, readPackagedRepairJournal,
-  packagedUpgradeJournalPath, packagedRepairJournalPath, readMacApplicationUpdate, PackagedServiceShutdownNotStartedError } from "@chatgpt-tela/product-lifecycle";
+  packagedUpgradeJournalPath, packagedRepairJournalPath, packagedUninstallJournalPath, readMacApplicationUpdate, PackagedServiceShutdownNotStartedError } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { parsePackagedLifecycleCommand, runPackagedLifecycleCommand, type PackagedLifecycleOptions } from "./lifecycle";
 import { packagedPayloadFingerprint, readPackagedProductManifest } from "@chatgpt-tela/product-lifecycle";
@@ -43,7 +43,7 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
     const ownership = readOwnershipManifest(paths.installManifest);
     const upgrade = readPackagedUpgradeJournal(packagedUpgradeJournalPath(paths));
     return { installedVersion: ownership?.productVersion ?? "Not installed", pendingTransition:
-      readMacApplicationUpdate(paths) ? "application-update" : upgrade ? "upgrade" : readPackagedRepairJournal(packagedRepairJournalPath(paths)) ? "repair" : "none" };
+      existsSync(packagedUninstallJournalPath(paths)) ? "uninstall" : readMacApplicationUpdate(paths) ? "application-update" : upgrade ? "upgrade" : readPackagedRepairJournal(packagedRepairJournalPath(paths)) ? "repair" : "none" };
   }
   if (args[1] === "processes" && args.length === 2) {
     const client = await maintenanceChatClient(options);

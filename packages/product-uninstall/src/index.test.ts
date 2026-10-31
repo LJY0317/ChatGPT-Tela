@@ -63,7 +63,57 @@ test("uninstall cannot remove binaries or start shutdown under another transitio
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-for (const phase of ["finalizing", "removing"] as const) test(`interrupted uninstall ${phase} reconciles only proven metadata cleanup`, async () => {
+test("removal resumes only after the OS writer releases, including in the same process", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-uninstall-resume-owner-"));
+  try {
+    const f = await binaryFixture(root);
+    await withPackagedTransitionOwner({ paths: f.paths, installId: "install-uninstall-fixture" }, async () => {
+      startUninstallCheckpoint(f.paths, "install-uninstall-fixture");
+      const before = readFileSync(packagedUninstallJournalPath(f.paths));
+      await expect(runProductUninstall({ mode: "apply", removeData: true, ...f.options })).rejects.toThrow("another installer owns");
+      expect(readFileSync(packagedUninstallJournalPath(f.paths))).toEqual(before);
+      expect(existsSync(f.paths.binaryRoot)).toBe(true);
+    });
+    await expect(runProductUninstall({ mode: "apply", removeData: true, ...f.options })).resolves.toMatchObject({ manifestRemoved: true });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("resumed removal preserves a replaced resource and rejects a foreign checkpoint", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-uninstall-resume-replaced-"));
+  try {
+    const f = await binaryFixture(root);
+    await withPackagedTransitionOwner({ paths: f.paths, installId: "install-uninstall-fixture" }, async () => {
+      startUninstallCheckpoint(f.paths, "install-uninstall-fixture");
+    });
+    rmSync(f.paths.binaryRoot, { recursive: true });
+    mkdirSync(f.paths.binaryRoot); writeFileSync(join(f.paths.binaryRoot, "user.txt"), "external replacement");
+    const checkpoint = JSON.parse(readFileSync(packagedUninstallJournalPath(f.paths), "utf8"));
+    writeUninstallCheckpoint(f.paths, { ...checkpoint, installId: "other-install" });
+    await expect(runProductUninstall({ mode: "apply", removeData: true, ...f.options })).rejects.toThrow("does not match");
+    writeUninstallCheckpoint(f.paths, checkpoint);
+    expect(await runProductUninstall({ mode: "apply", removeData: true, ...f.options })).toMatchObject({ preservedCount: 1, manifestRemoved: false });
+    expect(readFileSync(join(f.paths.binaryRoot, "user.txt"), "utf8")).toBe("external replacement");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a returned shutdown failure can be resolved without deleting its removal checkpoint", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-uninstall-resume-shutdown-"));
+  try {
+    const f = await binaryFixture(root), runtime = f.paths.serviceRuntime("chat");
+    mkdirSync(runtime, { recursive: true });
+    const descriptor = join(runtime, "descriptor.json"); writeFileSync(descriptor, "unreadable descriptor");
+    const failed = await runProductUninstall({ mode: "apply", removeData: true, ...f.options });
+    expect(failed.shutdownFailures).toMatchObject([{ owner: "chat" }]);
+    expect(existsSync(f.paths.binaryRoot)).toBe(true);
+    expect(existsSync(packagedUninstallJournalPath(f.paths))).toBe(true);
+    // The service's own repair/stop has now settled its unusable descriptor.
+    rmSync(descriptor);
+    expect(await runProductUninstall({ mode: "apply", removeData: true, ...f.options })).toMatchObject({ manifestRemoved: true });
+    expect(existsSync(packagedUninstallJournalPath(f.paths))).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const phase of ["finalizing", "removing"] as const) test(`interrupted uninstall ${phase} completes from current ownership`, async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-uninstall-interrupted-")), home = join(root, "home"); mkdirSync(home);
   const options = { platform: "linux" as const, home, environment: {} }, paths = resolveProductPaths(options);
   const manifest = createOwnershipManifest("fixture"); writeOwnershipManifest(paths.installManifest, manifest);
@@ -77,17 +127,11 @@ for (const phase of ["finalizing", "removing"] as const) test(`interrupted unins
     let serviceCalls = 0;
     const invoke = () => runProductUninstall({ mode: "apply", removeData: true, ...options,
       serviceRegistrationRunner: { async run() { serviceCalls++; throw new Error("service actions forbidden"); } } });
-    if (phase === "finalizing") {
-      expect(await invoke()).toMatchObject({ manifestRemoved: true, resumedMetadataCleanup: true });
-      expect(existsSync(paths.installManifest)).toBe(false);
-      expect(existsSync(join(paths.stateRoot, "install", "coordinator"))).toBe(false);
-      expect(existsSync(packagedUninstallJournalPath(paths))).toBe(false);
-    } else {
-      const before = readFileSync(packagedUninstallJournalPath(paths));
-      await expect(invoke()).rejects.toThrow("reconcile its effects");
-      expect(readFileSync(packagedUninstallJournalPath(paths))).toEqual(before);
-      expect(existsSync(paths.installManifest)).toBe(true);
-    }
+    expect(await invoke()).toMatchObject({ manifestRemoved: true,
+      ...(phase === "finalizing" ? { resumedMetadataCleanup: true } : {}) });
+    expect(existsSync(paths.installManifest)).toBe(false);
+    expect(existsSync(join(paths.stateRoot, "install", "coordinator"))).toBe(false);
+    expect(existsSync(packagedUninstallJournalPath(paths))).toBe(false);
     expect(serviceCalls).toBe(0);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -3,6 +3,11 @@
 Status: partial implementation; source checks and read-only installed Settings UI accepted.
 Full account removal and installed uninstall/reinstall acceptance remain open.
 
+Interrupted removal now resumes through the same review/apply path after reacquiring the existing OS
+writer lock. It observes remaining ownership and actual resources again; it does not replay the old plan.
+A subprocess-exit test covers an already-removed directory, preserved settings, reinstall and complete
+removal with an isolated filesystem and simulated service manager. Real consumer removal remains unverified.
+
 The current source adds official ChatGPT plugin-management links in Settings, setup and the
 local removal window. Local maintenance explicitly reports account cleanup as not performed;
 the completion screen says removal was from this computer. Existing optional saved-data removal
