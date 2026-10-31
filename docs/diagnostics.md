@@ -77,9 +77,11 @@ checkpoint-restored instruction counts; they never contain instruction text.
 Trace answer delivery separately: `web_public_progress_extraction` records browser phase,
 completion controls, body availability and character count; controls alone do not prove completion.
 `checkpoint_operation_observed` identifies a completed preparation summary before envelope validation;
-`web_answer_received` identifies a task answer before Native outcome settlement. Join these with
-`native_outcome_committed` and `native_response_body_closed` (or `public_progress_stream_closed`
-for live progress) to separate extraction, validation, settlement and HTTP consumption failures.
+`web_answer_received` identifies a Web-epoch answer before Native outcome settlement. Native
+`native_public_item_observed`, `native_outcome_committed` and `native_response_body_closed` are
+matched to the exact Native turn and may lack the Web operation fingerprint, so keep those receipts
+separate from Web-epoch filtering. A body drain is final-delivery evidence only with `outcome=final`
+and `reason_class=drained`. Use `public_progress_stream_closed` for live progress.
 Native execution failures returned as HTTP 400 emit `native_response_body_closed` only after
 body consumption or cancellation (`outcome=failed`, `outcome_committed=false`), correlated by
 the existing request fingerprint; a failed producer never commits a Native final.
