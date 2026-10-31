@@ -367,6 +367,10 @@ test.each(["object", "string"] as const)("active or queued work is protected wit
 test("manual archive, restore, activity and delete relinquish automatic ownership without recreating threads", async () => {
   for (const action of ["archive", "restore", "activity", "delete", "direct-turn"] as const) {
     const f = fixture();
+    const exclusions: Record<string, unknown>[] = [];
+    const off = observeDiagnosticEvents(event => {
+      if (event.stage === "web_delegation_retention_excluded") exclusions.push(structuralDiagnosticEvent(event)!);
+    });
     try {
       if (action === "restore" || action === "activity") await f.run(f.origin + 7 * DAY);
       if (action === "archive") f.native.archived = true;
@@ -378,7 +382,15 @@ test("manual archive, restore, activity and delete relinquish automatic ownershi
       await f.run(f.origin + 40 * DAY);
       expect(f.calls.filter(c => c.method === "thread/delete")).toHaveLength(0);
       expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(action === "restore" || action === "activity" || action === "direct-turn" ? 1 : 0);
-    } finally { f.cleanup(); }
+      if (["archive", "restore", "activity"].includes(action)) {
+        const reason = action === "activity" ? "archived_metadata_changed" : "archive_state_changed";
+        expect(f.store.threadRetention(f.record)?.reason).toBe(reason);
+        expect(exclusions).toHaveLength(1);
+        expect(exclusions[0]).toMatchObject({ slot: 2, reason_class: reason });
+        expect(exclusions[0]!.thread_fingerprint).toMatch(/^[a-f0-9]{24}$/);
+        expect(JSON.stringify(exclusions)).not.toContain(f.record.threadId!);
+      }
+    } finally { off?.(); f.cleanup(); }
   }
 });
 test("manual archive then delete cleans an excluded thread before its due date", async () => {
@@ -628,7 +640,7 @@ test("stale deleted receipt is rechecked; a living moved thread keeps terminal r
     f.native.cwd = join(f.root, "moved");
     await f.run(f.origin + 40 * DAY);
     expect(f.store.get(f.record.id)?.answer).toBe("result");
-    expect(f.store.threadRetention(f.record)?.state).toBe("excluded");
+    expect(f.store.threadRetention(f.record)).toMatchObject({ state: "excluded", reason: "deleted_thread_present" });
     expect(f.calls.some(c => c.method === "thread/delete")).toBe(false);
   } finally { f.cleanup(); }
 });

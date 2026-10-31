@@ -220,6 +220,7 @@ function delegationBoundary(id: string, phase: string, fields: Record<string, bo
 export type WebDelegationRetentionState = "archived" | "excluded" | "deleted";
 export interface WebDelegationRetentionReceipt {
   readonly state: WebDelegationRetentionState;
+  readonly reason?: "archive_state_changed" | "archived_metadata_changed" | "deleted_thread_present";
   readonly archivedAt?: number;
   /** Native metadata after our archive, used to detect subsequent manual changes. */
   readonly updatedAt?: number;

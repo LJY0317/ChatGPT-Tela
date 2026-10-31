@@ -1,8 +1,8 @@
 import { watch, existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { isExactDeletedNativeThreadAbsent } from "./one-chat-native-destination";
-import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { sameAccountOwner, verifiedWebDelegationAnswer, webDelegationRetentionPath, type WebDelegationAdapters, type WebDelegationRecord, type WebDelegationThreadKey } from "./web-delegation";
+import { diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { sameAccountOwner, verifiedWebDelegationAnswer, webDelegationRetentionPath, type WebDelegationAdapters, type WebDelegationRecord, type WebDelegationThreadKey, type WebDelegationRetentionReceipt as Retention } from "./web-delegation";
 
 const DAY = 86_400_000;
 const UNARCHIVED_THREAD_TARGET = 32;
@@ -11,12 +11,6 @@ const cleanupActions: Readonly<Record<string, string>> = {
   active_or_unresolved_tail: "wait_for_work", queued_work: "wait_for_work",
   not_yet_due_or_unverified: "wait_for_due_time",
 };
-interface Retention {
-  state: "archived" | "excluded" | "deleted";
-  archivedAt?: number;
-  /** Native metadata after our archive, used to detect subsequent manual changes. */
-  updatedAt?: number;
-}
 function object(value: unknown): Record<string, any> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : undefined;
 }
@@ -58,6 +52,12 @@ function save(path: string, value: Retention): void {
   try { writeFileSync(tmp, JSON.stringify(value), { mode: 0o600, flag: "wx" }); renameSync(tmp, path); }
   finally { if (existsSync(tmp)) unlinkSync(tmp); }
 }
+function exclude(adapters: WebDelegationAdapters, record: WebDelegationRecord, reason: NonNullable<Retention["reason"]>): void {
+  save(statePath(adapters, record), { state: "excluded", reason });
+  emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_excluded", {
+    slot: record.slot, thread_fingerprint: diagnosticFingerprint(record.threadId!), reason_class: reason,
+  });
+}
 
 /** One daemon-owned retention pass. Terminal result receipts remain immutable.
  * Only threads already owned by the managed journal can be archived/deleted. */
@@ -87,7 +87,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
       const read = object(await rpc.request("thread/read", { threadId: key.threadId, includeTurns: false }, input.signal));
       // A missing list entry is not a user opt-out. Only a stale deletion
       // receipt must relinquish deletion authority when the thread still exists.
-      if (object(read?.thread)?.id === key.threadId && load(path)?.state === "deleted") save(path, { state: "excluded" });
+      if (object(read?.thread)?.id === key.threadId && load(path)?.state === "deleted") exclude(adapters, record, "deleted_thread_present");
       return;
     } catch (error) {
       if (!isExactDeletedNativeThreadAbsent(error, key.threadId)) throw error;
@@ -263,7 +263,8 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           // Manual archive, restore or an observed change while archived hands
           // control to the user. Never delete such a thread automatically.
           protect("manually_managed");
-          save(path, { state: "excluded" }); continue;
+          exclude(adapters, record, present.archived !== (retained?.state === "archived")
+            ? "archive_state_changed" : "archived_metadata_changed"); continue;
         }
         // Pressure may shorten the age policy only for collected answers. Keep
         // uncollected sibling results and uncertain/failed latest work on their
