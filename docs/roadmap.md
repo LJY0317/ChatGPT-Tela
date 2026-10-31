@@ -122,8 +122,10 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   settlement and preserves an independent process. A cancellation reply may still report running;
   it is not completion. Source maintenance UI now preserves failed observations instead of hiding them
   or treating an unavailable list as successful cancellation. Actual source-controller buttons and
-  confirmation dialog have also been accepted with an isolated launcher and the installed worker;
-  installed maintenance-to-production-service integration and Windows/Linux execution remain unverified.
+  confirmation dialog have also been accepted with an isolated launcher and the installed worker.
+  Installed macOS maintenance-to-production-service acceptance also verified one selected command and
+  its ordinary child stopped, terminal status was published and Chat shutdown readiness passed.
+  Repair/uninstall was not applied; Windows/Linux execution remains unverified.
   Update readiness never cancels active work automatically.
 - **Consumer update acceptance.** Use one menu-bar flow: Check for Updates, download/readiness progress,
   then Sparkle’s standard Install and Relaunch on macOS. Development dependency preparation and package assembly stay outside this flow.
