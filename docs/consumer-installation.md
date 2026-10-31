@@ -69,6 +69,20 @@ serves Tela's temporary ChatGPT Web worker conversations. Confirm eligibility an
 tool access before replacing the current remote connection or adding a second transport. See
 [Submit desktop-only plugins](https://developers.openai.com/plugins/deploy/desktop-only).
 
+### Local execution support by surface
+
+| Surface | Current evidence |
+| --- | --- |
+| Native/Codex local host | Local plugin installation, stdio startup and Chat tool calls pass in an isolated profile. |
+| ChatGPT desktop local Work | Official local-plugin route exists; Tela's actual UI workflow is not yet accepted. |
+| Regular web Chat and Tela's Electron Web workers | Not covered by the desktop-only local-thread contract. Tela currently loads the web client without a local plugin executor; the stdio candidate is not a drop-in replacement. |
+| Another computer using the same account | No local discovery, registration or remote fallback is intended. Two physical computers remain an acceptance requirement. |
+
+Electron being a desktop program does not make its hosted web conversation a ChatGPT local thread.
+Do not label the existing remote connector as current-device-only, silently replace its registration,
+or add a custom relay to bridge this unsupported surface. Preserve the working route until an explicit
+supported migration is available; its configured-host limitation remains visible above.
+
 Tela already has an `OpenAiSecureMcpTunnelExposure` adapter, currently wired into the
 development canary. Production configuration, the packaged gateway and setup UI still use
 existing HTTPS or Tailscale Funnel. Reuse that adapter for an eligible private connection;
