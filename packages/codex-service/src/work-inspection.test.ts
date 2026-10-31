@@ -94,6 +94,7 @@ describe("profile-owned read-only Work inspection", () => {
       previewAvailable: false, approvalState: "unavailable" } as any);
     const at = new Date().toISOString();
     const scope = diagnosticFingerprint(threadId), current = diagnosticFingerprint(turnId);
+    const operation = diagnosticFingerprint("current-web-epoch");
     const other = diagnosticFingerprint("22222222-3333-7444-8555-666666666666");
     const rows = [
       { ts: at, event: "chatgpt_tela_work", stage: "native_outcome_committed",
@@ -102,6 +103,11 @@ describe("profile-owned read-only Work inspection", () => {
         scope_fingerprint: scope, turn_fingerprint: current },
       { ts: at, event: "chatgpt_tela_work", stage: "web_turn_identity_pending",
         scope_fingerprint: scope, turn_fingerprint: current, reason_class: "user_not_rendered" },
+      { ts: at, event: "chatgpt_tela_work", stage: "web_turn_identity_accepted",
+        scope_fingerprint: scope, turn_fingerprint: current, operation_fingerprint: operation },
+      { ts: at, event: "chatgpt_tela_work", stage: "native_response_body_closed",
+        scope_fingerprint: scope, turn_fingerprint: current, outcome: "tool_call",
+        reason_class: "drained", delivery: "http_body_consumer", ui_observed: false },
     ];
     mkdirSync(join(root, "logs"), { recursive: true });
     writeFileSync(join(root, "logs", "codex.diagnostics.jsonl"), rows.map(row => JSON.stringify(row)).join("\n")+"\n");
@@ -111,7 +117,8 @@ describe("profile-owned read-only Work inspection", () => {
       expect(result.browser.selectedSurface).toBe(false);
       expect(result.diagnostics.activeRequestBoundary).toMatchObject({
         turnFingerprint: current, turnStatus: "inProgress", nativeFinalCommitted: false,
-        observedStages: ["native_response_observer_started", "web_turn_identity_pending"],
+        nativeResponseDrained: false,
+        observedStages: ["native_response_observer_started", "web_turn_identity_accepted", "native_response_body_closed"],
       });
       expect(parseCodexWorkInspectionContract(result, 2, threadId).diagnostics.activeRequestBoundary).toMatchObject({
         turnStatus: "inProgress", nativeFinalCommitted: false,
@@ -119,11 +126,14 @@ describe("profile-owned read-only Work inspection", () => {
       });
       const completed = [
         { ts: at, event: "chatgpt_tela_work", stage: "web_turn_final_observed",
-          scope_fingerprint: scope, turn_fingerprint: current, assistant_phase: "complete" },
+          scope_fingerprint: scope, turn_fingerprint: current, operation_fingerprint: operation,
+          assistant_phase: "complete" },
+        { ts: at, event: "chatgpt_tela_codex", stage: "native_public_item_observed",
+          scope_fingerprint: scope, turn_fingerprint: current, kind: "agent_message", phase: "final_answer" },
         { ts: at, event: "chatgpt_tela_work", stage: "native_outcome_committed",
           scope_fingerprint: scope, turn_fingerprint: current, outcome: "final" },
         { ts: at, event: "chatgpt_tela_work", stage: "native_response_body_closed",
-          scope_fingerprint: scope, turn_fingerprint: current, reason_class: "drained",
+          scope_fingerprint: scope, turn_fingerprint: current, outcome: "final", reason_class: "drained",
           delivery: "http_body_consumer", ui_observed: false },
       ];
       writeFileSync(join(root, "logs", "codex.diagnostics.jsonl"),
@@ -131,7 +141,8 @@ describe("profile-owned read-only Work inspection", () => {
       const settled = await createCodexWorkInspector({ service: f.service as any,
         logsRoot: join(root, "logs"), connect: f.connect })(2, threadId);
       expect(settled.diagnostics.activeRequestBoundary).toMatchObject({
-        browserFinalObserved: true, nativeFinalCommitted: true, nativeResponseDrained: true,
+        browserFinalObserved: true, nativeFinalItemObserved: true,
+        nativeFinalCommitted: true, nativeResponseDrained: true,
         turnFingerprint: current, turnStatus: "inProgress",
       });
       expect(parseCodexWorkInspectionContract(settled, 2, threadId).diagnostics.activeRequestBoundary).toMatchObject({

@@ -292,8 +292,12 @@ export async function inspectNativeThread(input: {
   const boundaryStages = new Set([
     "native_response_observer_started", "web_turn_plan", "web_send_activation_started",
     "web_turn_identity_pending", "web_turn_identity_accepted", "web_public_progress_extraction",
-    "native_outcome_committed", "native_response_body_closed", "native_turn_retired",
+    "native_public_item_observed", "native_outcome_committed", "native_response_body_closed", "native_turn_retired",
     "native_execution_failed", "web_turn_failed",
+  ]);
+  const nativeTurnStages = new Set([
+    "native_response_observer_started", "native_public_item_observed", "native_outcome_committed",
+    "native_response_body_closed", "native_turn_retired", "native_execution_failed",
   ]);
   const boundaries = activeEvents.filter(event => boundaryStages.has(event.stage));
   const latestOperation = [...boundaries].reverse().find(event =>
@@ -301,27 +305,34 @@ export async function inspectNativeThread(input: {
   const requestEvents = latestOperation
     ? activeEvents.filter(event => event.operation_fingerprint === latestOperation)
     : activeEvents;
-  const stages = [...new Set(requestEvents.filter(event => boundaryStages.has(event.stage)).map(event => event.stage))];
+  // Native delivery records are emitted with the exact Native turn identity,
+  // but not the browser's Web-epoch operation identity. Keep that proof at its
+  // actual turn scope instead of dropping it or attributing it to a Web epoch.
+  const nativeTurnEvents = activeEvents.filter(event => nativeTurnStages.has(event.stage));
+  const boundaryEvents = latestOperation
+    ? activeEvents.filter(event => event.operation_fingerprint === latestOperation || nativeTurnStages.has(event.stage))
+    : activeEvents;
+  const stages = [...new Set(boundaryEvents.filter(event => boundaryStages.has(event.stage)).map(event => event.stage))];
   const pending = requestEvents.filter(event => event.stage === "approval_wait_transition").at(-1);
   const pendingStillObserved = activeTurn?.status === "inProgress" && pending?.phase === "pending";
   const webAnswerReceived = requestEvents.some(event => event.stage === "web_answer_received");
-  const nativeFinalItemObserved = requestEvents.some(event => event.stage === "native_public_item_observed"
+  const nativeFinalItemObserved = nativeTurnEvents.some(event => event.stage === "native_public_item_observed"
     && event.kind === "agent_message" && event.phase === "final_answer");
   const activeRequestBoundary = activeTurn ? {
     turnFingerprint: activeTurnFingerprint,
     turnStatus: activeTurn.status,
     operationFingerprint: latestOperation ?? null,
-    observedAt: requestEvents.at(-1)?.ts ?? null,
+    observedAt: boundaryEvents.at(-1)?.ts ?? null,
     observedStages: stages,
     accepted: stages.includes("web_turn_identity_accepted"),
     browserFinalObserved: requestEvents.some(event =>
       event.stage === "web_turn_completed" || event.stage === "web_turn_final_observed"),
     webAnswerReceived,
     nativeFinalItemObserved,
-    nativeFinalCommitted: requestEvents.some(event =>
+    nativeFinalCommitted: nativeTurnEvents.some(event =>
       event.stage === "native_outcome_committed" && event.outcome === "final"),
-    nativeResponseDrained: requestEvents.some(event =>
-      event.stage === "native_response_body_closed" && event.reason_class === "drained"),
+    nativeResponseDrained: nativeTurnEvents.some(event =>
+      event.stage === "native_response_body_closed" && event.outcome === "final" && event.reason_class === "drained"),
     proof: "turn_scoped_local_events_only" as const,
   } : null;
   const coverage = {
