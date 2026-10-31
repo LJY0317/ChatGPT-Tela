@@ -129,10 +129,11 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     const ownCollection = collections.get(record.id) ?? reviewedAt;
     const collected = ownCollection ?? (record.state === "failed" && !verifiedWebDelegationAnswer(record)
       ? Math.max(0, ...jobs.map(job => collections.get(job.id) ?? 0)) || undefined : undefined);
+    const archiveDue = (activity: number) => Math.max(collected ?? 0, activity) + (collected === undefined ? 7 : 1) * DAY;
     let dueBasis = retained?.archivedAt !== undefined ? "archive_expiry"
       : collected !== undefined ? "collected_result" : "idle_activity";
     let due = retained?.archivedAt !== undefined ? retained.archivedAt + 30 * DAY
-      : collected !== undefined ? collected + DAY : record.createdAt + 7 * DAY;
+      : archiveDue(record.createdAt);
     if (due > now && retained?.state !== "excluded") next = Math.min(next, due);
     let publicOperation = "owner_resolution";
     let scopeConnection: string | undefined;
@@ -221,12 +222,39 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
         if (!Number.isFinite(updatedAt)) throw Error("Native thread activity time unavailable");
         const activity = Math.max(record.createdAt, Number(updatedAt) * 1000);
         if (retained?.archivedAt !== undefined) dueBasis = "archive_expiry";
-        else if (collected !== undefined) {
-          due = Math.max(collected, activity) + DAY;
-          dueBasis = "collection_and_activity";
-        } else {
-          due = activity + 7 * DAY;
-          dueBasis = "native_activity";
+        else {
+          due = archiveDue(activity);
+          dueBasis = collected !== undefined ? "collection_and_activity" : "native_activity";
+        }
+        // Native updatedAt includes metadata edits. When that clock extends
+        // the journal deadline, prefer the public last turn's actual timing.
+        const journalActivity = Math.max(...jobs.map(job => job.createdAt));
+        if (!present.archived && retained?.state !== "excluded" && due > archiveDue(journalActivity)) {
+          try {
+            const tail = object(await rpc.request("thread/turns/list", {
+              threadId: record.threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded",
+            }, input.signal));
+            const latest = Array.isArray(tail?.data) ? object(tail.data[0]) : undefined;
+            const completedAt = Number(latest?.completedAt);
+            const startedAt = Number(latest?.startedAt);
+            const lastTurnAt = Number.isFinite(completedAt) && completedAt > 0 ? completedAt * 1000
+              : Number.isFinite(startedAt) && startedAt > 0 ? startedAt * 1000 : undefined;
+            if (lastTurnAt !== undefined) {
+              due = archiveDue(Math.max(journalActivity, lastTurnAt));
+              dueBasis = "native_turn_activity";
+            } else if (now >= archiveDue(journalActivity)) {
+              emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_skipped", {
+                reason_class: "native_metadata_clock_unattributed", due_at: due,
+                kind: latest?.id && jobs.some(job => job.turnId === latest.id)
+                  ? "managed_tail" : latest?.id ? "other_tail" : "unknown_tail",
+                policy: dueBasis, next_action: "inspect_native_activity_source",
+              });
+            }
+          } catch (error) {
+            emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_failed", {
+              failure_class: diagnosticFailureClass(error), kind: publicErrorKind(error), next_action: "thread_turns_list",
+            });
+          }
         }
         if (due > now && retained?.state !== "excluded") next = Math.min(next, due);
         if (retained?.state === "excluded") {
@@ -235,7 +263,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           // is reclaimable only after a fresh idle/queue/turn proof.
           publicOperation = "thread_turns_list";
           const tail = object(await rpc.request("thread/turns/list", {
-            threadId: record.threadId, limit: 1, sortDirection: "desc", itemsView: "summary",
+            threadId: record.threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded",
           }, input.signal));
           const latest = Array.isArray(tail?.data) ? object(tail.data[0]) : undefined;
           if (!latest || !["completed", "failed", "interrupted"].includes(latest.status)
@@ -254,8 +282,8 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
             || !jobs.some(job => job.createdAt > excludedAt && job.turnId === latest.id)) continue;
           unlinkSync(path);
           const activity = Math.max(record.createdAt, Number(present.thread.updatedAt) * 1000);
-          const archiveDue = collected !== undefined ? Math.max(collected, activity) + DAY : activity + 7 * DAY;
-          if (Number.isFinite(archiveDue)) next = Math.min(next, archiveDue);
+          const dueAfterReuse = archiveDue(activity);
+          if (Number.isFinite(dueAfterReuse)) next = Math.min(next, dueAfterReuse);
           continue;
         }
         if (present.archived !== (retained?.state === "archived")

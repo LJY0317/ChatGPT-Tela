@@ -354,6 +354,53 @@ test("uncollected results use seven actual idle days, polling never resets activ
     await f.run(f.origin + 8 * DAY); expect(f.native.archived).toBe(true);
   } finally { f.cleanup(); }
 });
+test("metadata clock extending an expired journal due date reports bounded attribution", async () => {
+  const f = fixture();
+  const events: any[] = [];
+  const off = observeDiagnosticEvents(event => {
+    if (event.stage === "web_delegation_retention_skipped") events.push(structuralDiagnosticEvent(event));
+  });
+  try {
+    f.native.updatedAt = (f.origin + 9 * DAY) / 1000;
+    await f.run(f.origin + 8 * DAY);
+    expect(f.native.archived).toBe(false);
+    expect(events.find(event => event?.reason_class === "native_metadata_clock_unattributed"))
+      .toMatchObject({ kind: "managed_tail", policy: "native_activity", next_action: "inspect_native_activity_source" });
+    expect(JSON.stringify(events)).not.toContain(f.record.threadId!);
+  } finally { off?.(); f.cleanup(); }
+});
+test("verified latest turn time prevents metadata-only retention extension", async () => {
+  const f = fixture();
+  try {
+    f.native.updatedAt = (f.origin + 9 * DAY) / 1000;
+    const rpc = await f.adapters.connect();
+    const adapters = { ...f.adapters, connect: async () => ({ ...rpc, request: async (method: string, params: any, signal?: AbortSignal) =>
+      method === "thread/turns/list"
+        ? { data: [{ id: f.record.turnId, status: "completed", startedAt: f.origin / 1000, completedAt: (f.origin + DAY) / 1000 }] }
+        : rpc.request(method, params, signal) }) };
+    await settleWebDelegationRetention(adapters, { now: f.origin + 7 * DAY, signal: new AbortController().signal });
+    expect(f.native.archived).toBe(false);
+    await settleWebDelegationRetention(adapters, { now: f.origin + 8 * DAY, signal: new AbortController().signal });
+    expect(f.native.archived).toBe(true);
+  } finally { f.cleanup(); }
+});
+test("a real unjournaled follow-up extends retention by its turn time, not metadata time", async () => {
+  const f = fixture();
+  try {
+    f.store.collect(f.record.id, f.origin);
+    f.native.updatedAt = (f.origin + 9 * DAY) / 1000;
+    const rpc = await f.adapters.connect();
+    const adapters = { ...f.adapters, connect: async () => ({ ...rpc, request: async (method: string, params: any, signal?: AbortSignal) =>
+      method === "thread/turns/list"
+        ? { data: [{ id: "user-follow-up", status: "completed", completedAt: (f.origin + 3 * DAY) / 1000 }] }
+        : rpc.request(method, params, signal) }) };
+    expect(await settleWebDelegationRetention(adapters, { now: f.origin + 4 * DAY - 1, signal: new AbortController().signal }))
+      .toBe(f.origin + 4 * DAY);
+    expect(f.native.archived).toBe(false);
+    await settleWebDelegationRetention(adapters, { now: f.origin + 4 * DAY, signal: new AbortController().signal });
+    expect(f.native.archived).toBe(true);
+  } finally { f.cleanup(); }
+});
 test.each(["object", "string"] as const)("active or queued work is protected with %s Native status", async statusShape => {
   const f = fixture(statusShape);
   try {

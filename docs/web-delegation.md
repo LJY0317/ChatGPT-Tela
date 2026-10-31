@@ -401,6 +401,11 @@ An error or status inspection alone does not count as answer retrieval. Failed r
 collected answer or explicit review retain the seven-day idle policy; a failed continuation can
 retain an earlier collected answer's 24-hour clock. Collecting a transport result does not settle
 the original request, which remains unanswered until explicit review of a verified answer.
+Native `updatedAt` can change for metadata-only edits. When it extends the journal-based deadline,
+the pass reads only the latest turn's timing metadata and uses its completion/start time instead.
+Real follow-up turns still extend retention, including those entered directly by the user. If public
+turn timing is unavailable, the existing metadata basis remains and attribution failures are diagnosed;
+no rollout body, new polling or extra retention ledger is required.
 The daemon deletes its own automatically archived conversations 30 days later.
 Result receipts and local workspace files remain intact. Status reads do not
 extend either period. These rules cover journal-owned `web-delegate` threads;
