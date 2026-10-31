@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -10,7 +10,8 @@ const launcher = values.launcher ? resolve(values.launcher) : undefined;
 const destination = resolve(positionals[0] ?? "build/local-mcp");
 const plugin = join(destination, "plugins", "tela-local-chat");
 mkdirSync(plugin, { recursive: true });
-for (const [file, entry] of launcher ? [] : [["server.cjs", "apps/local-mcp/src/main.ts"], ["probe.cjs", "apps/local-mcp/src/probe.ts"]] as const) {
+for (const [file, entry] of [["server.cjs", "apps/local-mcp/src/main.ts"], ["probe.cjs", "apps/local-mcp/src/probe.ts"]] as const) {
+  if (launcher) { rmSync(join(plugin, file), { force: true }); continue; }
   const result = spawnSync("bun", ["build", entry, "--target=node", "--format=cjs", "--outfile=" + join(plugin, file)], { stdio: "inherit" });
   if (result.status !== 0) throw Error("MCP bundle failed: " + entry);
 }

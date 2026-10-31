@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, cpSync, rmSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, cpSync, rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -9,18 +9,22 @@ import { createChatToolRuntime, startChatService } from "@chatgpt-tela/chat-serv
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 
-test("launcher-backed plugin reuses the installed runtime without bundling another server", () => {
+test("regenerating a launcher plugin removes old bundles and preserves unrelated files", () => {
   const destination = mkdtempSync(join(tmpdir(), "tela-mcp-launcher-"));
   try {
+    const initial = spawnSync("bun", ["run", "apps/local-mcp/src/package.ts", destination], { encoding: "utf8" });
+    expect(initial.status).toBe(0);
+    const plugin = join(destination, "plugins", "tela-local-chat");
+    expect(readdirSync(plugin)).toContain("server.cjs");
+    writeFileSync(join(plugin, "keep.txt"), "unrelated");
     const build = spawnSync("bun", ["run", "apps/local-mcp/src/package.ts", destination,
       "--launcher", process.execPath], { encoding: "utf8" });
     expect(build.status).toBe(0);
-    const plugin = join(destination, "plugins", "tela-local-chat");
     const config = JSON.parse(readFileSync(join(plugin, "mcp.json"), "utf8"));
     expect(config.mcpServers["tela-local-chat"]).toEqual({ type: "stdio", command: basename(process.execPath),
       env: { PATH: dirname(process.execPath) },
       args: ["local-mcp"], cwd: "${PLUGIN_ROOT}" });
-    expect(readdirSync(plugin).sort()).toEqual(["mcp.json", "plugin.json"]);
+    expect(readdirSync(plugin).sort()).toEqual(["keep.txt", "mcp.json", "plugin.json"]);
   } finally { rmSync(destination, { recursive: true, force: true }); }
 });
 
