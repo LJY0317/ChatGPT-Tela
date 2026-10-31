@@ -1,8 +1,43 @@
 import { describe, expect, test } from "bun:test";
 import { forwardNativeCodexRequest, scrubTelaResponsesArtifacts } from "./native-passthrough";
 import { readFileSync } from "node:fs";
-import { withDiagnosticContext } from "@chatgpt-tela/core";
+import { structuralDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import { encodeTelaCompactionSummary } from "@chatgpt-tela/codex";
+import { createServer } from "node:http";
+import { gzipSync } from "node:zlib";
+import { startWebHttpServer } from "../../http-host/src/server";
+
+test("compressed upstream Native responses survive the real Fetch-to-HTTP forwarding path", async () => {
+  const wire = 'data: {"type":"response.completed"}\n\n';
+  const encoded = gzipSync(wire);
+  const upstream = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/event-stream", "content-encoding": "gzip", "content-length": encoded.length });
+    response.end(encoded);
+  });
+  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const port = (upstream.address() as { port: number }).port;
+  let forwardedEncoding: string | null = null, calls = 0;
+  const proxy = await startWebHttpServer({ hostname: "127.0.0.1", maxRequestBodyBytes: 4096,
+    fetch: request => forwardNativeCodexRequest({ request, endpoint: "responses", runtimeHeaderName: "x-tela",
+      backendBaseUrl: `http://127.0.0.1:${port}`, fetchUpstream: async request => {
+        calls++; forwardedEncoding = request.headers.get("accept-encoding"); return fetch(request);
+      } }) });
+  try {
+    const response = await fetch(`http://127.0.0.1:${proxy.port}/v1/responses`, {
+      method: "POST", headers: { authorization: "Bearer synthetic", "accept-encoding": "gzip" }, body: "{}"
+    });
+    expect(await response.text()).toBe(wire);
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(forwardedEncoding).toBeNull();
+    expect(calls).toBe(1);
+    const header = readFileSync(process.env.CHATGPT_TELA_DIAGNOSTIC_FILE!, "utf8").trim().split("\n")
+      .map(line => JSON.parse(line)).filter(row => row.stage === "native_dispatch_headers_received").at(-1);
+    expect(structuralDiagnosticEvent(header)).toMatchObject({ response_format: "sse", encoding_present: true });
+  } finally {
+    await proxy.stop();
+    await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
+  }
+});
 
 test("Web-to-Native switching translates only Tela summaries and preserves unknown opaque Native state", () => {
   const native = { type: "compaction", encrypted_content: "opaque-native-state" };

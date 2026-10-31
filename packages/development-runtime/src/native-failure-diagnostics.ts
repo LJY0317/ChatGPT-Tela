@@ -116,7 +116,10 @@ export function nativeErrorFields(bytes: Uint8Array, shape: NativeRequestShape):
 
 /** Numeric seconds or standard HTTP-date only; no raw header value is retained. */
 export function nativeResponseEvidence(upstream: Response, now = Date.now()): Fields {
-  const fields: Fields = { status_code: upstream.status };
+  const media = upstream.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  const fields: Fields = { status_code: upstream.status,
+    response_format: media === "text/event-stream" ? "sse" : media === "application/json" ? "json" : media ? "other" : "missing",
+    encoding_present: upstream.headers.has("content-encoding") };
   const serverId = upstream.headers.get("x-request-id");
   if (opaqueId(serverId)) fields.upstream_fingerprint = diagnosticFingerprint(serverId);
   const value = upstream.headers.get("retry-after")?.trim();

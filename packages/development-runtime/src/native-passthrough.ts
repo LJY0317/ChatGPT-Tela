@@ -3,7 +3,7 @@ import { decodeTelaCompactionSummary, telaCompactionSummaryText } from "@chatgpt
 import { getDefaultAutoSelectFamily, getDefaultAutoSelectFamilyAttemptTimeout, isIP } from "node:net";
 import { getDefaultResultOrder } from "node:dns";
 import { capturePrivateDiagnosticValue, networkFailureDiagnostics, emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { diagnoseNativeFailure, nativeRequestShape } from "./native-failure-diagnostics";
+import { diagnoseNativeFailure, nativeRequestShape, nativeResponseEvidence } from "./native-failure-diagnostics";
 import { observeNativeResponse } from "./native-reasoning-observation";
 const DEFAULT_CODEX_BACKEND = "https://chatgpt.com/backend-api/codex";
 const HOP_BY_HOP_HEADERS = new Set([
@@ -115,6 +115,8 @@ export async function forwardNativeCodexRequest(input: {
   const backend = (input.backendBaseUrl ?? DEFAULT_CODEX_BACKEND).replace(/\/$/, "");
   const incoming = new URL(input.request.url);
   const headers = forwardedHeaders(input.request.headers, input.runtimeHeaderName);
+  // Fetch owns transfer compression; negotiate only encodings its runtime can decode.
+  headers.delete("accept-encoding");
   const method = input.endpoint === "models" ? "GET" : "POST";
   let body: BodyInit | undefined;
   let shape = nativeRequestShape(undefined);
@@ -210,12 +212,13 @@ export async function forwardNativeCodexRequest(input: {
   }
   if (input.endpoint === "models" || input.endpoint === "responses" || input.endpoint === "responses/compact") {
     emitDiagnosticEvent("chatgpt_tela_network", "native_dispatch_headers_received", {
-      route_kind: input.endpoint.replaceAll("/", "_"), status_code: upstream.status, ...transport.fields(),
+      route_kind: input.endpoint.replaceAll("/", "_"), ...nativeResponseEvidence(upstream), ...transport.fields(),
       duration_ms: Date.now() - started,
     });
   }
   const responseHeaders = forwardedHeaders(upstream.headers, input.runtimeHeaderName);
-  if (input.endpoint.startsWith("images/")) responseHeaders.delete("content-encoding");
+  // Fetch already decoded the upstream body; retaining this header would decode it twice.
+  responseHeaders.delete("content-encoding");
   // The observer returns error bodies untouched; existing failure inspection remains authoritative.
   const responseBody = input.endpoint === "responses" ? observeNativeResponse(upstream, shape) : upstream.body;
   const diagnosedBody = upstream.status >= 400
