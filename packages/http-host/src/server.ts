@@ -145,7 +145,7 @@ export async function startWebHttpServer(input: {
           request_timeout_ms: server.requestTimeout, headers_timeout_ms: server.headersTimeout,
           socket_timeout_ms: incoming.socket.timeout ?? 0,
         }));
-        controller.abort(new Error("HTTP client disconnected"));
+        controller.abort(new DOMException("HTTP client disconnected", "AbortError"));
       }
     };
     const requestAborted = () => disconnected("request_aborted");
@@ -256,7 +256,7 @@ export async function startWebHttpServer(input: {
       if (!stopping) {
         stopping = new Promise<void>((resolve, reject) => {
           server.close(error => error ? reject(error) : resolve());
-          for (const controller of activeRequests) controller.abort(new Error("HTTP server stopped"));
+          for (const controller of activeRequests) controller.abort(new DOMException("HTTP server stopped", "AbortError"));
           server.closeAllConnections();
         });
       }

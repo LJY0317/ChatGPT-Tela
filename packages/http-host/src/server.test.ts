@@ -48,7 +48,7 @@ test("client closure before response headers records the transport boundary and 
       if (new URL(request.url).pathname === "/peer") return new Response("peer works");
       entered();
       await new Promise<void>(resolve => request.signal.addEventListener("abort", () => resolve(), { once: true }));
-      return new Response("cancelled");
+      throw request.signal.reason;
     } });
   const abort = new AbortController();
   try {
@@ -62,6 +62,9 @@ test("client closure before response headers records the transport boundary and 
     // Node/Bun may emit request-aborted or response-close first; preserve the observed source.
     expect(["request_aborted", "response_closed"]).toContain(closed[0].close_source);
     expect(typeof closed[0].request_complete).toBe("boolean");
+    expect(events.find(event => event.stage === "http_request_failed")).toMatchObject({
+      network_kind: "cancelled", abort_observed: true,
+    });
     expect(events.some(event => event.stage === "http_request_start" && event.request_fingerprint === closed[0].request_fingerprint)).toBe(true);
     await Bun.sleep(0);
   } finally {
@@ -110,6 +113,7 @@ test("owner shutdown cancels an open stream and its request without waiting for 
       new Promise<string>(resolve => setTimeout(() => resolve("still waiting"), 500))]);
     expect(outcome).toBe("stopped");
     expect(requestSignal.aborted).toBe(true);
+    expect(requestSignal.reason.name).toBe("AbortError");
     for (let i = 0; i < 20 && !cancelled; i++) await Bun.sleep(10);
     expect(cancelled).toBe(true);
     await server.stop();
