@@ -13,8 +13,9 @@ import { FileNativeVisiblePrefixStageJournal } from './native-visible-prefix-jou
 import { ActiveTurnRegistry, NativeResponsesGateway, settleNativeCompactionToolResult } from '@chatgpt-tela/runtime';
 import { handleNativeResponsesHttp } from '@chatgpt-tela/responses';
 import { bindNativeTurnRequest, decodeTelaCompactionSummary, NativeHistoryBootstrapRequired } from '@chatgpt-tela/codex';
-import { createNativeRequestDevelopmentWebTurnPlanner } from './native-request-planner';
+import { createNativeRequestDevelopmentWebTurnPlanner, projectNativeRequestContext } from './native-request-planner';
 import { webWorkingContextPolicy } from './web-working-context-policy';
+import { prepareDeferredNativeHistory } from './native-history-seed';
 const canonical:CanonicalCurrentTurnEvidence={threadId:'thread',turnId:'turn',cwd:'/fixture',workspaceRoots:['/fixture'],sandbox:{kind:'native-enforced'},proof:'app-server-active-turn',environmentSourceTurnId:'turn'};
 function body(extra:any={}){return {model:chatGptWebModelId(chatGptWebFamilyKey('Fixture')),reasoning:{effort:'medium'},tools:[],input:[{type:'message',role:'user',content:'Observed old result'},{type:'message',role:'user',content:'Summarize the task'}],client_metadata:{'x-codex-turn-metadata':JSON.stringify({request_kind:'compaction',thread_id:'thread',turn_id:'turn'})},...extra}}
 function request(value:any){return new Request('http://127.0.0.1/v1/responses',{method:'POST',body:JSON.stringify(value)})}
@@ -67,6 +68,27 @@ test('oversized local compaction refuses to send the whole logical history to a 
   original_readback_available:false,original_index_page_count:0,checkpoint_bytes:0,
   deferred_originals:false,wire_budget:chatGptWebCheckpointSourceTokenLimit('medium')}));
  stop?.();
+});
+
+test('serialized wire overflow defers readable old turns even when logical source is below budget',()=>{
+ const attributed=(turn_id:string)=>({internal_chat_message_metadata_passthrough:{turn_id}});
+ const escaped='\\'.repeat(26_000);
+ const input=body({input:[...Array.from({length:12},(_,i)=>({role:'user',content:escaped,...attributed(`old-${i}`)})),
+  {role:'assistant',content:'RECENT-EXACT',...attributed('old-11')},
+  {role:'user',content:'ACTIVE-EXACT',...attributed('turn')}]});
+ const projected=projectNativeRequestContext('thread',input,undefined,[],undefined,undefined,undefined,undefined,
+  new Set(Array.from({length:12},(_,i)=>`old-${i}`)));
+ // Fixture controls logical estimates independently of the actual serialized payload.
+ const projection={...projected,revisions:projected.revisions.map(item=>({...item,
+  revision:{...item.revision,estimatedTokens:100}}))};
+ const policy=webWorkingContextPolicy('medium');
+ const budget=chatGptWebCheckpointSourceTokenLimit('medium');
+ expect(projection.revisions.reduce((sum,item)=>sum+item.revision.estimatedTokens,0)).toBeLessThan(budget);
+ const selected=prepareDeferredNativeHistory(projection,policy,budget);
+ expect(selected?.physicalContext.deferredHistory).toEqual({scope:'prior-native-history'});
+ expect(selected?.physicalContext.segments.some(s=>s.content.includes('ACTIVE-EXACT'))).toBe(true);
+ expect(selected?.physicalContext.segments.some(s=>s.content.includes('RECENT-EXACT'))).toBe(true);
+ expect(chatGptCheckpointInputTokens(selected!.physicalContext)).toBeLessThanOrEqual(budget);
 });
 
 for (const remote of [false,true]) test(`oversized ${remote?'remote':'local'} compaction defers only owner-indexed prior exchanges and preserves recent work`,async()=>{
