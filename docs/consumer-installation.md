@@ -144,8 +144,11 @@ The copied SDK probe runs outside the checkout under Node. Isolated Chat instanc
 workspace IDs, and an unavailable instance returns an error while its peer remains usable.
 The current ChatGPT Native plugin APIs recognize the generated marketplace and its `tela-local-chat`
 MCP entry as available but uninstalled/disabled. This proves package discovery, not tool execution.
-Actual ChatGPT Desktop plugin installation, temporary Web-worker access and two-computer execution
-remain unverified. Local marketplace development and public desktop-only submission approval are separate.
+The ChatGPT-bundled official Native host also starts the bundled stdio server and reads a temporary
+file through an isolated Tela Chat service using `mcpServer/tool/call`. This acceptance uses a
+process-only MCP configuration and ephemeral thread, without a model turn or user config changes.
+It proves Native-host MCP execution, not installation-cache invocation or general ChatGPT Work support.
+Actual plugin installation, temporary Web-worker access and two-computer execution remain unverified. Local marketplace development and public desktop-only submission approval are separate.
 If the Web surface cannot use that local transport, report the unsupported workflow without remote fallback.
 
 The macOS **Computers** menu shows this Mac's name and the existing local Chat status. It does not
