@@ -137,22 +137,22 @@ Account identity, Origin, IP and conversation IDs do not establish the caller's 
 Native turn capabilities restrict an existing task; they do not move execution to the caller's machine.
 Consequently, the current remote connection does not guarantee current-device-only local access.
 
-The developer candidate `bun run local-mcp:package` creates a Chat-only stdio plugin under
-`build/local-mcp`. It reuses the installed local Chat service and omits Native tools. The generated
-manifest currently requires Node on PATH; it is not consumer onboarding or a portable runtime installer.
-The copied SDK probe runs outside the checkout under Node. Isolated Chat instances reject each other's
-workspace IDs, and an unavailable instance returns an error while its peer remains usable.
-The current ChatGPT Native plugin APIs recognize the generated marketplace and its `tela-local-chat`
-MCP entry as available but uninstalled/disabled. This proves package discovery, not tool execution.
-The ChatGPT-bundled official Native host also starts the bundled stdio server and reads a temporary
-file through an isolated Tela Chat service using `mcpServer/tool/call`. This acceptance uses a
-process-only MCP configuration and ephemeral thread, without a model turn or user config changes.
-A separate temporary host profile also passes official marketplace registration, plugin installation,
-cache-based startup, a capability-inventory call to the existing local Chat service, and official
-plugin/marketplace removal. The cache path comes from the installation response, not a version guess.
-This proves Native/Codex plugin execution and cleanup without model inference or changes to the user's
-profile. General ChatGPT Work, temporary Web-worker access and two-computer execution remain unverified. Local marketplace development and public desktop-only submission approval are separate.
-If the Web surface cannot use that local transport, report the unsupported workflow without remote fallback.
+`bun run local-mcp:package` creates a Chat-only stdio developer plugin under `build/local-mcp`.
+After installing a Tela launcher that supports `local-mcp`, generate its per-device configuration with
+`bun run local-mcp:package build/local-mcp --launcher /path/to/chatgpt-tela`. This mode reuses Tela's
+embedded runtime and creates only plugin manifests; it needs neither system Node nor another runtime
+copy. Keep the stable installed launcher path across upgrades. The manifest uses a bare executable
+name and process-local PATH because Agent Plugins do not accept absolute stdio commands.
+The default developer bundle still uses Node on PATH for its self-contained SDK probe.
+
+Isolated Chat instances reject each other's workspace IDs and do not fail over when one stops.
+The official Native/Codex host passes temporary-profile plugin installation, cache-based startup,
+capability-inventory forwarding to the local Chat service, and official removal. The launcher-backed
+mode also passes with no Node on the host PATH. No model turn or user config change is required.
+A separate process-only host test reads a temporary file through an isolated Chat service.
+These checks do not establish general ChatGPT Work, temporary Web-worker support or two-physical-device
+isolation. Local marketplace development and public desktop-only submission approval are separate.
+If a host surface cannot use the local transport, report that limit without remote fallback.
 
 The macOS **Computers** menu shows this Mac's name and the existing local Chat status. It does not
 identify a ChatGPT conversation's execution host, which is displayed as unverified. No remote-device

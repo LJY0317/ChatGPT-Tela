@@ -1,13 +1,28 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, cpSync, rmSync } from "node:fs";
+import { mkdtempSync, cpSync, rmSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { createChatToolRuntime, startChatService } from "@chatgpt-tela/chat-service";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
+
+test("launcher-backed plugin reuses the installed runtime without bundling another server", () => {
+  const destination = mkdtempSync(join(tmpdir(), "tela-mcp-launcher-"));
+  try {
+    const build = spawnSync("bun", ["run", "apps/local-mcp/src/package.ts", destination,
+      "--launcher", process.execPath], { encoding: "utf8" });
+    expect(build.status).toBe(0);
+    const plugin = join(destination, "plugins", "tela-local-chat");
+    const config = JSON.parse(readFileSync(join(plugin, "mcp.json"), "utf8"));
+    expect(config.mcpServers["tela-local-chat"]).toEqual({ type: "stdio", command: basename(process.execPath),
+      env: { PATH: dirname(process.execPath) },
+      args: ["local-mcp"], cwd: "${PLUGIN_ROOT}" });
+    expect(readdirSync(plugin).sort()).toEqual(["mcp.json", "plugin.json"]);
+  } finally { rmSync(destination, { recursive: true, force: true }); }
+});
 
 test("copied SDK stdio package initializes, lists, calls and exits without checkout", async () => {
   const destination = mkdtempSync(join(tmpdir(), "tela-mcp-portable-"));

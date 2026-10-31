@@ -10,6 +10,9 @@ if (process.argv[2] === "--tela-operation-owner-v1") {
     case "codex": await import("../../codex-daemon/src/main"); break;
     default: throw new Error("packaged daemon must be gateway, chat, or codex");
   }
+} else if (process.argv[2] === "local-mcp") {
+  const { serveDeviceLocalChatStdio } = await import("../../local-mcp/src/main");
+  await serveDeviceLocalChatStdio();
 } else {
   await import("./main");
 }
