@@ -16,5 +16,8 @@
     "@chatgpt-tela/service-protocol": "workspace:*",
     "@chatgpt-tela/service-supervisor": "workspace:*",
     "@chatgpt-tela/chat-service": "workspace:*"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }

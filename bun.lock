@@ -115,6 +115,9 @@
         "@chatgpt-tela/service-supervisor": "workspace:*",
         "@chatgpt-tela/tailscale-ingress": "workspace:*",
       },
+      "devDependencies": {
+        "@modelcontextprotocol/sdk": "^1.30.0",
+      },
     },
     "apps/profile-runtime": {
       "name": "@chatgpt-tela/profile-runtime",

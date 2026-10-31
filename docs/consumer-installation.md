@@ -151,21 +151,40 @@ Account identity, Origin, IP and conversation IDs do not establish the caller's 
 Native turn capabilities restrict an existing task; they do not move execution to the caller's machine.
 Consequently, the current remote connection does not guarantee current-device-only local access.
 
-`bun run local-mcp:package` creates a Chat-only stdio developer plugin under `build/local-mcp`.
-After installing a Tela launcher that supports `local-mcp`, generate its per-device configuration with
-`bun run local-mcp:package build/local-mcp --launcher /path/to/chatgpt-tela`. This mode reuses Tela's
-embedded runtime and creates only plugin manifests; it needs neither system Node nor another runtime
-copy. Keep the stable installed launcher path across upgrades. The manifest uses a bare executable
-name and process-local PATH because Agent Plugins do not accept absolute stdio commands.
-The default developer bundle still uses Node on PATH for its self-contained SDK probe.
+The source now supports `chatgpt-tela local-mcp package <new-output-directory>` in the packaged
+launcher. It generates a Chat-only stdio plugin and inactive marketplace using the running Tela
+executable; no development checkout, Bun/Node installation or runtime copy is needed. The output
+directory must not already exist, so this command cannot replace an existing marketplace or README.
+Keep the installed launcher at a stable path across upgrades. The manifest uses a bare executable
+name and process-local PATH because Agent Plugins do not accept absolute stdio commands. A compiled
+runtime test exports the plugin, moves it into a host-style cache, removes the original package and
+reads a file through an isolated Chat service with only the Tela executable on PATH. This is source
+acceptance, not installed ChatGPT Desktop acceptance.
+
+For development, `bun run local-mcp:package` still creates a Node-based candidate under
+`build/local-mcp`; `--launcher /path/to/chatgpt-tela` selects the installed-runtime mode instead.
+Packaging also writes a local development marketplace at `<output>/.agents/plugins/marketplace.json`;
+it neither installs the marketplace nor changes ChatGPT Desktop configuration. Desktop's supported
+personal and repository sources are `~/.agents/plugins/marketplace.json` and
+`$REPO_ROOT/.agents/plugins/marketplace.json`; a generated copy outside those roots is not automatically
+discovered. Local `source.path` resolves from the marketplace root, not its `.agents/plugins` folder.
+OpenAI documents local stdio plugins as Desktop-only and allows local-MCP directory submissions only
+from approved partners whose organization is allowlisted; the plugin runs only in locally executed
+ChatGPT Desktop threads, not Web or mobile. Its desktop client also supports personal and repository
+local marketplaces as a separate install source. See [desktop-only submission](https://developers.openai.com/plugins/deploy/desktop-only)
+and [local marketplace packaging](https://developers.openai.com/plugins/build/plugins).
 
 Isolated Chat instances reject each other's workspace IDs and do not fail over when one stops.
 The official Native/Codex host passes temporary-profile plugin installation, cache-based startup,
 capability-inventory forwarding to the local Chat service, and official removal. The launcher-backed
 mode also passes with no Node on the host PATH. No model turn or user config change is required.
 A separate process-only host test reads a temporary file through an isolated Chat service.
+The signed packaged launcher also completed MCP initialize/tools-list and a local-file read over
+stdio against this computer's existing Chat service; this does not prove ChatGPT Desktop plugin installation.
 These checks do not establish general ChatGPT Work, temporary Web-worker support or two-physical-device
-isolation. Local marketplace development and public desktop-only submission approval are separate.
+isolation. Tela's local marketplace package has not yet passed clean consumer-install acceptance.
+Public directory submission still requires organization allowlisting; do not conflate it with the
+per-device local-marketplace path.
 If a host surface cannot use the local transport, report that limit without remote fallback.
 
 The macOS **This Mac** menu shows the existing local Chat status. It does not identify a ChatGPT
@@ -179,8 +198,10 @@ without treating a past invocation as a current connection. See the [client meta
 [Tailscale Services](https://tailscale.com/docs/features/tailscale-services) can route a service address
 among available hosts, which does not meet this local-only execution policy.
 
-Acceptance requires two computers: each reaches only its own files and disconnecting one cannot redirect
-to the other. Same-account conversation synchronization is separate from local execution authority.
+Acceptance requires two ChatGPT Desktop computers using the same account and separate local sentinel
+files: each local thread must read/write only its own file; stopping one computer's local service must
+make that computer unavailable while the other still works. Web/mobile threads must remain unavailable,
+with no remote fallback. Same-account conversation sync is separate from local execution authority.
 
 Reference implementations are not equivalent guarantees. [codex-chatgpt-web's security model](https://github.com/miuuyy/codex-chatgpt-web/blob/main/docs/security-model.md)
 binds tools to a local Native turn through its tunnel; it does not establish automatic caller-device
@@ -192,8 +213,14 @@ useful warning, not proof of isolation for all file and command capabilities.
 
 1. Trace the existing setup/maintenance UI and shared install/remove contracts. Replace duplicate
    UI readiness checks with actual lifecycle results; keep local readiness separate from host linkage.
-2. Prove the official connection adapter and public-plugin/per-machine binding contract. Choose
-   the smallest supported release path before implementing distribution or authentication changes.
+2. Use the documented per-device Desktop local marketplace for local stdio execution. Place a
+   personal `~/.agents/plugins/marketplace.json` or repository
+   `$REPO_ROOT/.agents/plugins/marketplace.json` source and install/test it in ChatGPT Desktop's
+   Plugins Directory. `codex plugin marketplace add` only registers a source with the Codex CLI; its
+   plugin install/remove commands do not establish Desktop installation or removal. The current
+   `build/local-mcp` output is only a package candidate; validate manifest discovery, local source
+   resolution and the Desktop lifecycle in a clean host before wiring it into setup/removal. Keep
+   public Directory submission separate; never fall back to a remote host.
 3. Consolidate setup/reconnect into the existing connection path, with short contextual guidance
    and actual harmless round-trip verification. Remove name-only connector identification where
    supported stable identity/served-request proof exists; isolate host-page dependencies.
@@ -212,6 +239,9 @@ useful warning, not proof of isolation for all file and command capabilities.
   discovery and existing identity providers; do not confuse OAuth client registration with plugin creation.
 - [OpenAI: Submit desktop-only plugins](https://developers.openai.com/plugins/deploy/desktop-only):
   partner approval, organization allowlisting and local-thread scope for bundled local MCP submission.
+- [OpenAI: Package your plugin](https://developers.openai.com/plugins/build/plugins): personal/repository
+  marketplace sources and Desktop installation. The separate bundled Codex CLI can register a
+  marketplace source and manage its own plugin cache; that is not ChatGPT Desktop lifecycle evidence.
 - [OpenAI tunnel-client](https://github.com/openai/tunnel-client): supported private/local MCP transport;
   its documented onboarding still distinguishes the ChatGPT custom plugin from a local Codex plugin.
 - [DevSpace setup](https://github.com/Waishnav/devspace/blob/main/docs/setup.md): ask only applicable
