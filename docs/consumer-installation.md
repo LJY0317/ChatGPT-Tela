@@ -147,8 +147,11 @@ MCP entry as available but uninstalled/disabled. This proves package discovery, 
 The ChatGPT-bundled official Native host also starts the bundled stdio server and reads a temporary
 file through an isolated Tela Chat service using `mcpServer/tool/call`. This acceptance uses a
 process-only MCP configuration and ephemeral thread, without a model turn or user config changes.
-It proves Native-host MCP execution, not installation-cache invocation or general ChatGPT Work support.
-Actual plugin installation, temporary Web-worker access and two-computer execution remain unverified. Local marketplace development and public desktop-only submission approval are separate.
+A separate temporary host profile also passes official marketplace registration, plugin installation,
+cache-based startup, a capability-inventory call to the existing local Chat service, and official
+plugin/marketplace removal. The cache path comes from the installation response, not a version guess.
+This proves Native/Codex plugin execution and cleanup without model inference or changes to the user's
+profile. General ChatGPT Work, temporary Web-worker access and two-computer execution remain unverified. Local marketplace development and public desktop-only submission approval are separate.
 If the Web surface cannot use that local transport, report the unsupported workflow without remote fallback.
 
 The macOS **Computers** menu shows this Mac's name and the existing local Chat status. It does not
