@@ -142,6 +142,8 @@ The developer candidate `bun run local-mcp:package` creates a Chat-only stdio pl
 manifest currently requires Node on PATH; it is not consumer onboarding or a portable runtime installer.
 The copied SDK probe runs outside the checkout under Node. Isolated Chat instances reject each other's
 workspace IDs, and an unavailable instance returns an error while its peer remains usable.
+The current ChatGPT Native plugin APIs recognize the generated marketplace and its `tela-local-chat`
+MCP entry as available but uninstalled/disabled. This proves package discovery, not tool execution.
 Actual ChatGPT Desktop plugin installation, temporary Web-worker access and two-computer execution
 remain unverified. Local marketplace development and public desktop-only submission approval are separate.
 If the Web surface cannot use that local transport, report the unsupported workflow without remote fallback.
@@ -151,6 +153,12 @@ identify a ChatGPT conversation's execution host, which is displayed as unverifi
 registry, discovery or polling is added. An optional list of explicitly registered Tela computers still
 requires a supported source of device bindings; same-account login and Tailscale membership are insufficient.
 Such a user-facing list must not grant model-side device discovery or remote execution authority.
+Existing MCP diagnostics already correlate local tool execution with the host-supplied `openai/session`;
+that identifies a conversation, not its originating computer. Reuse these events for local activity,
+without treating a past invocation as a current connection. See the [client metadata contract](https://developers.openai.com/plugins/reference).
+Optional Tailscale integration needs device-specific binding: [Tailscale Services](https://tailscale.com/docs/features/tailscale-services)
+can route a service address among available hosts, which does not meet device-pinned execution.
+
 Acceptance requires two computers: each reaches only its own files and disconnecting one cannot redirect
 to the other. Same-account conversation synchronization is separate from local execution authority.
 
