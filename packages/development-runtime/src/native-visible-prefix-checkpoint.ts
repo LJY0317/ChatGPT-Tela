@@ -309,12 +309,29 @@ export async function produceNativePrefixCheckpoint(input: NativePrefixCheckpoin
   const cached = completedSummary(physical);
   const plannedCalls = cached === undefined ? 1 : 0;
   const plannedInput = cached === undefined ? chatGptCheckpointInputTokens(physical) : 0;
+  const sourceRoles = { checkpoint: { bytes: 0, count: 0 }, authority: { bytes: 0, count: 0 },
+    user: { bytes: 0, count: 0 }, assistant: { bytes: 0, count: 0 },
+    tool: { bytes: 0, count: 0 }, other: { bytes: 0, count: 0 } };
+  for (const value of parsed.items as unknown[]) {
+    const item = value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown> : {};
+    const role = item.type === "checkpoint" ? "checkpoint"
+      : item.type === "revision" && (item.kind === "system" || item.kind === "developer") ? "authority"
+      : item.type === "revision" && (item.kind === "user" || item.kind === "steering") ? "user"
+      : item.type === "revision" && item.kind === "assistant" ? "assistant"
+      : item.type === "revision" && (item.kind === "tool-call" || item.kind === "tool-result") ? "tool" : "other";
+    sourceRoles[role].bytes += Buffer.byteLength(JSON.stringify(value), "utf8");
+    sourceRoles[role].count++;
+  }
   emitDiagnosticEvent("chatgpt_tela_codex", "native_checkpoint_preparation_planned", {
     source_kind: source.kind, source_bytes: sourceBytes, source_item_count: source.sourceItemCount,
     fragment_count: 1, estimate_kind: "conservative_upper_bound",
     planned_model_calls: plannedCalls, planned_transfer_estimate: plannedInput,
     model_call_budget: budget.policy.maxModelCalls, transfer_budget: budget.policy.maxInputTokens,
     elapsed_budget_ms: budget.policy.maxElapsedMs, completed_receipt_count: completed.size,
+    ...Object.fromEntries(Object.entries(sourceRoles).flatMap(([role, value]) => [
+      [`source_${role}_bytes`, value.bytes], [`source_${role}_count`, value.count],
+    ])),
   });
   budget.admitPlan(plannedCalls, plannedInput);
   emitDiagnosticEvent("chatgpt_tela_codex", "native_visible_prefix_checkpoint_started", {

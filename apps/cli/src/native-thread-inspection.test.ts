@@ -38,6 +38,34 @@ function fixtureReader(overrides: {
 }
 
 describe("one read-only conversation inspection by exact Native ID", () => {
+  test("exact-turn cost evidence exposes existing structured fields without leaking bodies or other turns", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-cost-evidence-"));
+    const path = join(root, "events.jsonl"), ts = new Date(NOW).toISOString();
+    const scope_fingerprint = diagnosticFingerprint(THREAD), turn_fingerprint = diagnosticFingerprint(TURN);
+    const rows = [
+      { stage: "native_checkpoint_preparation_planned", source_authority_bytes: 40, source_authority_count: 2 },
+      { stage: "native_seed_authority_observed", restored_authority_bytes: 90, duplicate_authority_bytes: 10 },
+      { stage: "web_turn_plan", seed_authority_bytes: 90, seed_user_bytes: 5, transfer_estimate: 300 },
+      { stage: "web_retained_context_decision", reason_class: "input_head_missing" },
+      { stage: "browser_message_prepared", composer_wire_bytes: 100, context_wire_bytes: 70 },
+    ];
+    try {
+      writeFileSync(path, [
+        ...rows.map(row => ({ ts, event: "chatgpt_tela_work", scope_fingerprint, turn_fingerprint,
+          ...row, content: "PRIVATE", cookie: "PRIVATE", account_id: "PRIVATE" })),
+        { ts, event: "chatgpt_tela_work", scope_fingerprint,
+          turn_fingerprint: diagnosticFingerprint("another-turn"), stage: "web_turn_plan", seed_authority_bytes: 999 },
+      ].map(JSON.stringify).join("\n") + "\n");
+      const result = inspectNativeThreadHistoricalEvidence({ threadId: THREAD, turnId: TURN,
+        diagnosticPaths: [path], nowMs: NOW });
+      expect(result.contextPreparationEvidence).toHaveLength(5);
+      for (const [index, row] of rows.entries()) {
+        expect(result.contextPreparationEvidence[index]).toMatchObject(row);
+      }
+      expect(JSON.stringify(result)).not.toContain("PRIVATE");
+      expect(JSON.stringify(result)).not.toContain("999");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("failure and compaction breakdown survive filtered incident readback", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-reproduction-evidence-"));
     const path = join(root, "events.jsonl"), ts = new Date(NOW).toISOString();

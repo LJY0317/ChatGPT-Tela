@@ -541,6 +541,8 @@ export function inspectNativeThreadHistoricalEvidence(input: {
     ...(toolDeliveryEvidence ? { toolDeliveryEvidence } : {}),
     contextPreparationEvidence: events.filter(event => ["native_context_source_rejected",
       "native_checkpoint_preparation_planned", "native_working_checkpoint_selected",
+      "native_seed_authority_observed", "web_turn_plan", "web_retained_context_decision",
+      "browser_message_prepared",
       "compaction_history_source_selected", "compaction_source_observed", "compaction_fit_breakdown"].includes(event.stage)),
     providerFailureEvidence: events.filter(event => ["web_provider_failure_detail_classified",
       "web_lineage_branch_anomaly", "web_turn_observed", "web_execution_exception",
