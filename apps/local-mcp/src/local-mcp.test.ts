@@ -6,7 +6,6 @@ import { spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { createChatToolRuntime, startChatService } from "@chatgpt-tela/chat-service";
-import { DynamicChatBackend, createPublicMcpServer } from "@chatgpt-tela/gateway";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 
@@ -19,7 +18,7 @@ test("copied SDK stdio package initializes, lists, calls and exits without check
     const plugin = join(built, "plugins", "tela-local-chat");
     const copy = join(destination, "standalone");
     cpSync(plugin, copy, { recursive: true });
-    const transport = new StdioClientTransport({ command: process.execPath, args: [join(copy, "probe.cjs")], cwd: copy });
+    const transport = new StdioClientTransport({ command: "node", args: [join(copy, "probe.cjs")], cwd: copy });
     const client = new Client({ name: "portable-probe", version: "0.0.1" }, { capabilities: {} });
     try {
       await client.connect(transport);
@@ -35,6 +34,10 @@ test("copied SDK stdio package initializes, lists, calls and exits without check
 test("Chat-only MCP has no Native tools and two independent Chat instances never fall back", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-local-chat-"));
   const instances = [];
+  const clients: Client[] = [];
+  const servers = [];
+  const workspaces: { id: string }[] = [];
+  const stopped = new Set<string>();
   try {
     for (const label of ["one", "two"]) {
       const home = join(root, label);
@@ -62,20 +65,34 @@ test("Chat-only MCP has no Native tools and two independent Chat instances never
       await server.connect(serverTransport);
       const client = new Client({ name: "local", version: "0.0.1" }, { capabilities: {} });
       await client.connect(clientTransport);
-      try {
-        expect((await client.listTools()).tools.map(x => x.name).sort()).toEqual([
-          "chatgpt_tela_chat_capability_call", "chatgpt_tela_chat_capability_inventory"
-        ]);
-        const result = await client.callTool({ name: "chatgpt_tela_chat_capability_call",
-          arguments: { capability: "open_workspace", arguments: { path: instance.allowed } } });
-        const workspace = JSON.parse(((result as { content: readonly { text: string }[] }).content[0]!).text) as { id: string };
-        const read = await client.callTool({ name: "chatgpt_tela_chat_capability_call",
-          arguments: { capability: "read", arguments: { workspace_id: workspace.id, path: "sample.txt" } } });
-        expect(JSON.stringify((read as { content: unknown }).content)).toContain(instance.label);
-      } finally { await client.close(); await server.close(); }
+      clients.push(client); servers.push(server);
+      expect((await client.listTools()).tools.map(x => x.name).sort()).toEqual([
+        "chatgpt_tela_chat_capability_call", "chatgpt_tela_chat_capability_inventory"
+      ]);
+      const result = await client.callTool({ name: "chatgpt_tela_chat_capability_call",
+        arguments: { capability: "open_workspace", arguments: { path: instance.allowed } } });
+      const workspace = JSON.parse(((result as { content: readonly { text: string }[] }).content[0]!).text) as { id: string };
+      workspaces.push(workspace);
+      const read = await client.callTool({ name: "chatgpt_tela_chat_capability_call",
+        arguments: { capability: "read", arguments: { workspace_id: workspace.id, path: "sample.txt" } } });
+      expect(JSON.stringify((read as { content: unknown }).content)).toContain(instance.label);
     }
+    for (const index of [0, 1]) {
+      const cross = await clients[index]!.callTool({ name: "chatgpt_tela_chat_capability_call",
+        arguments: { capability: "read", arguments: { workspace_id: workspaces[1 - index]!.id, path: "sample.txt" } } });
+      expect(cross.isError).toBe(true);
+    }
+    await instances[0]!.service.close(); stopped.add(instances[0]!.label);
+    const unavailable = await clients[0]!.callTool({ name: "chatgpt_tela_chat_capability_inventory", arguments: {} });
+    expect(unavailable.isError).toBe(true);
+    const available = await clients[1]!.callTool({ name: "chatgpt_tela_chat_capability_call",
+      arguments: { capability: "read", arguments: { workspace_id: workspaces[1]!.id, path: "sample.txt" } } });
+    expect(available.isError).not.toBe(true);
+    expect(JSON.stringify(available.content)).toContain("two");
   } finally {
-    await Promise.all(instances.map(i => i.service.close()));
+    await Promise.all(clients.map(client => client.close()));
+    await Promise.all(servers.map(server => server.close()));
+    await Promise.all(instances.filter(i => !stopped.has(i.label)).map(i => i.service.close()));
     rmSync(root, { recursive: true, force: true });
   }
 });

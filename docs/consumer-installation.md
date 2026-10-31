@@ -137,14 +137,22 @@ Account identity, Origin, IP and conversation IDs do not establish the caller's 
 Native turn capabilities restrict an existing task; they do not move execution to the caller's machine.
 Consequently, the current remote connection does not guarantee current-device-only local access.
 
-For that requirement, prefer a supported per-device local MCP execution path, reusing the existing
-Chat service and tools. First verify a clean local installation and tool access from the temporary
-Web-worker surface. Local marketplace development support and approval for public desktop-only
-submission are separate questions. If the Web surface cannot use that local transport, report the
-unsupported workflow; do not silently substitute a remote computer or build a device-routing relay.
-Acceptance requires two computers on one account: each reaches only its own files, disconnecting
-one does not redirect to the other, and remote-device discovery is absent. Same-account conversation
-synchronization is separate from local execution authority.
+The developer candidate `bun run local-mcp:package` creates a Chat-only stdio plugin under
+`build/local-mcp`. It reuses the installed local Chat service and omits Native tools. The generated
+manifest currently requires Node on PATH; it is not consumer onboarding or a portable runtime installer.
+The copied SDK probe runs outside the checkout under Node. Isolated Chat instances reject each other's
+workspace IDs, and an unavailable instance returns an error while its peer remains usable.
+Actual ChatGPT Desktop plugin installation, temporary Web-worker access and two-computer execution
+remain unverified. Local marketplace development and public desktop-only submission approval are separate.
+If the Web surface cannot use that local transport, report the unsupported workflow without remote fallback.
+
+The macOS **Computers** menu shows this Mac's name and the existing local Chat status. It does not
+identify a ChatGPT conversation's execution host, which is displayed as unverified. No remote-device
+registry, discovery or polling is added. An optional list of explicitly registered Tela computers still
+requires a supported source of device bindings; same-account login and Tailscale membership are insufficient.
+Such a user-facing list must not grant model-side device discovery or remote execution authority.
+Acceptance requires two computers: each reaches only its own files and disconnecting one cannot redirect
+to the other. Same-account conversation synchronization is separate from local execution authority.
 
 Reference implementations are not equivalent guarantees. [codex-chatgpt-web's security model](https://github.com/miuuyy/codex-chatgpt-web/blob/main/docs/security-model.md)
 binds tools to a local Native turn through its tunnel; it does not establish automatic caller-device

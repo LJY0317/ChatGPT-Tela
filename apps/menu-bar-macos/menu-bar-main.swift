@@ -73,6 +73,7 @@ enum TelaPreferencesStore {
 
 private struct MenuSnapshot {
   let services: [(String, String)]
+  let localChatState: String
   let runtimeReady: Bool
   let workInventory: TelaWorkInventory
 }
@@ -557,6 +558,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       services: [
         ("Chat", chatState == "Stopped" ? "Off" : connection.status)
       ],
+      localChatState: chatState,
       runtimeReady: gatewayState == "Ready" && chatState == "Ready" && codexState == "Ready",
       workInventory: workInventory
     )
@@ -601,6 +603,15 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     profileToggleRows.removeAll()
     profileConnectionItems.removeAll(); profileOpenItems.removeAll()
     menu.removeAllItems()
+    let computers = NSMenuItem(title: "Computers", action: nil, keyEquivalent: "")
+    let computerMenu = NSMenu(title: "Computers")
+    addDisabled("\(Host.current().localizedName ?? ProcessInfo.processInfo.hostName) (This Mac)", to: computerMenu)
+    addDisabled("Local Chat: \(snapshot?.localChatState ?? "Not checked")", to: computerMenu)
+    addDisabled("ChatGPT execution: Not verified", to: computerMenu)
+    computerMenu.items.last?.toolTip = "Local service status does not identify where a ChatGPT conversation executes. Other computers are not automatically discovered."
+    computers.submenu = computerMenu
+    menu.addItem(computers)
+    menu.addItem(.separator())
     if let connectionProgress {
       addDisabled(connectionProgress, to: menu)
     } else if loading || snapshot == nil {
