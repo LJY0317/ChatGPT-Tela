@@ -255,19 +255,25 @@ describe("development MCP Streamable HTTP server", () => {
       maxSessions: 1,
       sessionIdleTimeoutMs: 20,
     });
-    const transport = new StreamableHTTPClientTransport(server.endpointUrl, {
-      requestInit: { headers: { authorization: `Bearer ${server.bearerToken}` } },
-    });
-    const client = new Client({ name: "chatgpt-tela-idle-expiry", version: "0.0.0" }, { capabilities: {} });
     try {
-      await client.connect(transport as unknown as Transport);
-      expect(server.activeSessionCount).toBe(1);
+      // Abandon after initialization: a full SDK connect sends another request,
+      // which can legitimately arrive after this deliberately short idle expiry.
+      const response = await fetch(server.endpointUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${server.bearerToken}`, "content-type": "application/json",
+          accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+          protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "idle-expiry", version: "1" },
+        } }),
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("mcp-session-id")).toBeTruthy();
+      await response.text();
       for (let index = 0; index < 50 && server.activeSessionCount !== 0; index += 1) {
         await new Promise(resolve => setTimeout(resolve, 5));
       }
       expect(server.activeSessionCount).toBe(0);
     } finally {
-      await client.close().catch(() => {});
       await server.stop();
     }
   });
