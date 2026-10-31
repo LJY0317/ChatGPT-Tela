@@ -54,14 +54,14 @@ private struct ControlCenterDelegationCapacity: Decodable {
       return unarchived > target ? "Cleanup pending · \(unarchived) conversations" : nil
     }
     var help: String {
-      let labels = ["manually_managed": "manually managed", "uncollected_answers": "answers to collect",
+      let labels = ["manually_managed": "outside automatic cleanup", "uncollected_answers": "answers to collect",
                     "active_or_unresolved_tail": "active or unresolved", "queued_work": "queued work",
                     "not_yet_due_or_unverified": "not yet due or unverified"]
       let reasons = protected.sorted { $0.key < $1.key }.filter { $0.value > 0 }
         .map { "\($0.value) \(labels[$0.key] ?? "need another check")" }.joined(separator: ", ")
       return "Last cleanup: \(unarchived) unarchived conversations (target \(target)). "
         + (reasons.isEmpty ? "" : "Protected: \(reasons). ")
-        + "Collect completed answers or let active work finish. Manually managed chats stay yours. This target does not block new tasks."
+        + "Collect completed answers or let active work finish. Chats outside automatic cleanup won't be archived or deleted automatically. This target does not block new tasks."
     }
   }
   struct Total: Decodable { let used: Int; let limit: Int }
