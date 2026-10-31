@@ -268,6 +268,11 @@ that the current Native turn executed in that browser. `unavailable` includes a 
 failure reason where supported; ChatGPT host-owned approval cards
 remain pre-ingress and are handled by ChatGPT.
 
+`diagnostics.activeRequestBoundary` keeps the latest official Native turn status beside exact-turn
+local receipts for browser completion, Web answer receipt, Native final commit and response-body drain.
+A completed Native turn without a local final receipt means delivery was not observed by Tela; it does
+not mean the turn is still running or prove what ChatGPT rendered. The projection contains no answer body.
+
 When a current selected Web card is pending, `browser.approvalState` and the
 optional `browser.approvalWait` report only the existing owner-bound waiting
 state. No second agent classifier or authority is involved. An unresolved
