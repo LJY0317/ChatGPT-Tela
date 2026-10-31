@@ -52,14 +52,15 @@ function jsonText(value: unknown): string {
 
 export function createPublicMcpServer(input: {
   readonly chat: PublicChatBackend;
-  readonly codex: TurnBridgeBackend;
+  readonly codex?: TurnBridgeBackend;
 }): McpServer {
   const server = new McpServer({
     name: CHATGPT_TELA_MCP_SERVER_NAME,
     version: CHATGPT_TELA_MCP_SERVER_VERSION,
   }, {
     capabilities: { tools: { listChanged: false } },
-    instructions: CHATGPT_TELA_PUBLIC_INSTRUCTIONS,
+    instructions: input.codex ? CHATGPT_TELA_PUBLIC_INSTRUCTIONS
+      : "Local Tela Chat tools operate through this computer's existing Tela Chat service. Open a local approved workspace before file operations. No Native Codex tools or remote-device routing are available.",
   });
 
   const rawRegisterTool = server.registerTool.bind(server) as unknown as (
@@ -178,15 +179,17 @@ export function createPublicMcpServer(input: {
     }
   });
 
-  registerTurnBridgeTools(server, input.codex, {
-    inventory: CHATGPT_TELA_CODEX_TOOL_INVENTORY,
-    call: CHATGPT_TELA_CODEX_TOOL_CALL,
-  }, {
-    inventoryTitle: "Native Codex tool inventory",
-    inventoryDescription: "List Native Codex tools for one exact active Native turn identified by its opaque turn capability. Regular Tela Chat workflows use the Chat capability inventory instead.",
-    callTitle: "Native Codex tool call",
-    callDescription: "Invoke one runtime-discovered tool from the exact active Native Codex turn inventory. A valid opaque turn capability is required.",
-  });
+  if (input.codex) {
+    registerTurnBridgeTools(server, input.codex, {
+      inventory: CHATGPT_TELA_CODEX_TOOL_INVENTORY,
+      call: CHATGPT_TELA_CODEX_TOOL_CALL,
+    }, {
+      inventoryTitle: "Native Codex tool inventory",
+      inventoryDescription: "List Native Codex tools for one exact active Native turn identified by its opaque turn capability. Regular Tela Chat workflows use the Chat capability inventory instead.",
+      callTitle: "Native Codex tool call",
+      callDescription: "Invoke one runtime-discovered tool from the exact active Native Codex turn inventory. A valid opaque turn capability is required.",
+    });
+  }
 
   return server;
 }

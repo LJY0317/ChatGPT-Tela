@@ -1,0 +1,13 @@
+{
+  "name": "@chatgpt-tela/local-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@chatgpt-tela/gateway": "workspace:*",
+    "@chatgpt-tela/product-lifecycle": "workspace:*",
+    "@chatgpt-tela/service-protocol": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.0"
+  }
+}

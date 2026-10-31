@@ -74,6 +74,17 @@
         "@chatgpt-tela/tailscale-ingress": "workspace:*",
       },
     },
+    "apps/local-mcp": {
+      "name": "@chatgpt-tela/local-mcp",
+      "version": "0.0.0",
+      "dependencies": {
+        "@chatgpt-tela/gateway": "workspace:*",
+        "@chatgpt-tela/product-lifecycle": "workspace:*",
+        "@chatgpt-tela/service-protocol": "workspace:*",
+        "@modelcontextprotocol/sdk": "^1.30.0",
+        "zod": "^3.25.0",
+      },
+    },
     "apps/package-build": {
       "name": "@chatgpt-tela/package-build",
       "version": "0.0.0",
@@ -375,6 +386,8 @@
     "@chatgpt-tela/gateway-daemon": ["@chatgpt-tela/gateway-daemon@workspace:apps/gateway-daemon"],
 
     "@chatgpt-tela/http-host": ["@chatgpt-tela/http-host@workspace:packages/http-host"],
+
+    "@chatgpt-tela/local-mcp": ["@chatgpt-tela/local-mcp@workspace:apps/local-mcp"],
 
     "@chatgpt-tela/local-server": ["@chatgpt-tela/local-server@workspace:packages/local-server"],
 

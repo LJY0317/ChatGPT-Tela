@@ -38,7 +38,9 @@
     "package:native-helper-test": "bun run packages/product-lifecycle/src/fixtures/native-engine-helper-package.ts",
     "codex:cleanup-test": "bun run packages/codex-service/src/fixtures/cleanup-after-abort.ts",
     "codex:unexpected-exit-test": "bun run packages/codex-service/src/fixtures/unexpected-child-exit.ts",
-    "menu-bar:test": "bun run apps/menu-bar-macos/build.ts --test"
+    "menu-bar:test": "bun run apps/menu-bar-macos/build.ts --test",
+    "local-mcp:package": "bun run apps/local-mcp/src/package.ts",
+    "local-mcp:test": "bun test apps/local-mcp/src/local-mcp.test.ts"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",
