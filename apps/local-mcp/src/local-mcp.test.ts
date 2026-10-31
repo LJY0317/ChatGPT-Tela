@@ -100,6 +100,11 @@ test("Chat-only MCP has no Native tools and two independent Chat instances never
       const cross = await clients[index]!.callTool({ name: "chatgpt_tela_chat_capability_call",
         arguments: { capability: "read", arguments: { workspace_id: workspaces[1 - index]!.id, path: "sample.txt" } } });
       expect(cross.isError).toBe(true);
+      const crossWrite = await clients[index]!.callTool({ name: "chatgpt_tela_chat_capability_call",
+        arguments: { capability: "apply_patch", arguments: { workspace_id: workspaces[1 - index]!.id,
+          patch: `*** Begin Patch\n*** Update File: sample.txt\n@@\n-${instances[1 - index]!.label}\n+cross-write\n*** End Patch` } } });
+      expect(crossWrite.isError).toBe(true);
+      expect(readFileSync(join(instances[1 - index]!.allowed, "sample.txt"), "utf8")).toBe(instances[1 - index]!.label);
     }
     await instances[0]!.service.close(); stopped.add(instances[0]!.label);
     const unavailable = await clients[0]!.callTool({ name: "chatgpt_tela_chat_capability_inventory", arguments: {} });
