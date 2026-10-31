@@ -603,12 +603,11 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     profileToggleRows.removeAll()
     profileConnectionItems.removeAll(); profileOpenItems.removeAll()
     menu.removeAllItems()
-    let computers = NSMenuItem(title: "Computers", action: nil, keyEquivalent: "")
-    let computerMenu = NSMenu(title: "Computers")
-    addDisabled("\(Host.current().localizedName ?? ProcessInfo.processInfo.hostName) (This Mac)", to: computerMenu)
+    let computers = NSMenuItem(title: "This Mac", action: nil, keyEquivalent: "")
+    let computerMenu = NSMenu(title: "This Mac")
     addDisabled("Local Chat: \(snapshot?.localChatState ?? "Not checked")", to: computerMenu)
     addDisabled("ChatGPT execution: Not verified", to: computerMenu)
-    computerMenu.items.last?.toolTip = "Local service status does not identify where a ChatGPT conversation executes. Other computers are not automatically discovered."
+    computerMenu.items.last?.toolTip = "Local service status does not identify where a ChatGPT conversation executes."
     computers.submenu = computerMenu
     menu.addItem(computers)
     menu.addItem(.separator())

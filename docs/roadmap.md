@@ -169,8 +169,9 @@ Reuse the current contracts instead of restoring their parallel registries, mani
   connection engines or a new hosted relay without a confirmed requirement. Consumer completion
   must include actual connection verification and explicit reporting of any remaining host step.
 - **Current-device-only execution.** A shared-account remote plugin targets its configured host, not
-  the current laptop. The Chat-only stdio developer candidate is implemented; verify host installation and temporary Web-worker compatibility
-  before consumer integration; acceptance must cover two computers, no cross-device file access or discovery,
+  the current laptop. The Chat-only stdio candidate passes Native host installation and local invocation;
+  general Work and temporary Web-worker compatibility remain unverified before consumer integration.
+  Device registration and shared device lists are outside scope. Acceptance must cover two computers, no cross-device file access or discovery,
   and no redirection when one is offline. See [the connection contract](consumer-installation.md#multiple-computers-on-one-chatgpt-account).
 - Interrupted removal reuses the existing review/apply flow and OS writer lock to inspect remaining
   resources. Subprocess-crash recovery, keep-data reinstall and complete removal pass in an isolated

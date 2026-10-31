@@ -154,16 +154,16 @@ These checks do not establish general ChatGPT Work, temporary Web-worker support
 isolation. Local marketplace development and public desktop-only submission approval are separate.
 If a host surface cannot use the local transport, report that limit without remote fallback.
 
-The macOS **Computers** menu shows this Mac's name and the existing local Chat status. It does not
-identify a ChatGPT conversation's execution host, which is displayed as unverified. No remote-device
-registry, discovery or polling is added. An optional list of explicitly registered Tela computers still
-requires a supported source of device bindings; same-account login and Tailscale membership are insufficient.
-Such a user-facing list must not grant model-side device discovery or remote execution authority.
+The macOS **This Mac** menu shows the existing local Chat status. It does not identify a ChatGPT
+conversation's execution host, which is displayed as unverified. Device registration, discovery and
+account-based device-list synchronization are outside the intended local-only design. Each computer
+must use its own local transport; an unavailable local service must remain unavailable without remote
+fallback. Same-account conversation synchronization does not grant access to another computer's files.
 Existing MCP diagnostics already correlate local tool execution with the host-supplied `openai/session`;
 that identifies a conversation, not its originating computer. Reuse these events for local activity,
 without treating a past invocation as a current connection. See the [client metadata contract](https://developers.openai.com/plugins/reference).
-Optional Tailscale integration needs device-specific binding: [Tailscale Services](https://tailscale.com/docs/features/tailscale-services)
-can route a service address among available hosts, which does not meet device-pinned execution.
+[Tailscale Services](https://tailscale.com/docs/features/tailscale-services) can route a service address
+among available hosts, which does not meet this local-only execution policy.
 
 Acceptance requires two computers: each reaches only its own files and disconnecting one cannot redirect
 to the other. Same-account conversation synchronization is separate from local execution authority.
