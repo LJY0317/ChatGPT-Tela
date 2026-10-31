@@ -2,10 +2,9 @@ import { expect, test } from 'bun:test';
 import { startCodexBridgeMcpHttpServer } from './http-server';
 import { connectCodexTurnBridge } from './remote-turn-bridge';
 
-test('remote bridge remains usable after idle session reclamation and never replays calls', async () => {
+test('each remote operation releases its session and never replays calls', async () => {
   let calls = 0;
   const server = await startCodexBridgeMcpHttpServer({
-    sessionIdleTimeoutMs: 20,
     bridge: {
       inventory() { return [{wireName:'fixture_read', name:'fixture_read', kind:'function' as const,
         description:'Read fixture', inputSchema:{type:'object'}, observedFrom:['fixture']}]; },
@@ -18,10 +17,9 @@ test('remote bridge remains usable after idle session reclamation and never repl
   });
   const bridge = await connectCodexTurnBridge({endpoint:server.endpointUrl, bearerToken:server.bearerToken!});
   try {
-    await new Promise(resolve => setTimeout(resolve, 60));
     expect(server.activeSessionCount).toBe(0);
     expect((await bridge.inventory('turnr_Fixture1_opaque_capability')).length).toBe(1);
-    await new Promise(resolve => setTimeout(resolve, 60));
+    expect(server.activeSessionCount).toBe(0);
     const result = await bridge.invoke('turnr_Fixture1_opaque_capability', {
       callId:'fixture-call', wireName:'fixture_read', mode:'structured', arguments:{},
     });
