@@ -20,6 +20,7 @@ const profile = {
 };
 function harness() {
   let current = profile;
+  let currentTurnStatus = "inProgress";
   const calls: { method: string; args: any }[] = [];
   let closed = false;
   const rpc = {
@@ -30,7 +31,7 @@ function harness() {
         updatedAt: 1792224222, cwd: "/PRIVATE/OWNER",
       } };
       if (method === "thread/turns/list") return { data: [
-        { id: turnId, status: "inProgress", itemsView: "notLoaded", items: [] },
+        { id: turnId, status: currentTurnStatus, itemsView: "notLoaded", items: [] },
       ], nextCursor: null };
       throw Error("unexpected Native call");
     },
@@ -52,6 +53,7 @@ function harness() {
     rpc, calls, service,
     connect: async () => rpc as unknown as CodexAppServerRpc,
     changeOwner() { current = { ...current, childProcessId: current.childProcessId + 1 }; },
+    setTurnStatus(status: string) { currentTurnStatus = status; },
     get closed() { return closed; },
   };
 }
@@ -111,6 +113,10 @@ describe("profile-owned read-only Work inspection", () => {
         turnFingerprint: current, turnStatus: "inProgress", nativeFinalCommitted: false,
         observedStages: ["native_response_observer_started", "web_turn_identity_pending"],
       });
+      expect(parseCodexWorkInspectionContract(result, 2, threadId).diagnostics.activeRequestBoundary).toMatchObject({
+        turnStatus: "inProgress", nativeFinalCommitted: false,
+        proof: "turn_scoped_local_events_only",
+      });
       const completed = [
         { ts: at, event: "chatgpt_tela_work", stage: "web_turn_final_observed",
           scope_fingerprint: scope, turn_fingerprint: current, assistant_phase: "complete" },
@@ -128,7 +134,34 @@ describe("profile-owned read-only Work inspection", () => {
         browserFinalObserved: true, nativeFinalCommitted: true, nativeResponseDrained: true,
         turnFingerprint: current, turnStatus: "inProgress",
       });
+      expect(parseCodexWorkInspectionContract(settled, 2, threadId).diagnostics.activeRequestBoundary).toMatchObject({
+        browserFinalObserved: true, nativeFinalCommitted: true, nativeResponseDrained: true,
+      });
       expect(JSON.stringify(settled)).not.toContain("private assistant body");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("official Native completion is exposed separately from a missing local delivery receipt", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-native-complete-boundary-"));
+    const f = harness();
+    f.setTurnStatus("completed");
+    try {
+      const result = await createCodexWorkInspector({ service: f.service as any,
+        logsRoot: root, connect: f.connect })(2, threadId);
+      expect(result.native.recentTurns[0]?.status).toBe("completed");
+      expect(result.diagnostics.activeRequestBoundary).toMatchObject({
+        turnStatus: "completed", nativeFinalCommitted: false, nativeResponseDrained: false,
+        proof: "turn_scoped_local_events_only",
+      });
+      const projected = parseCodexWorkInspectionContract(result, 2, threadId);
+      expect(projected.diagnostics.activeRequestBoundary).toMatchObject({
+        turnStatus: "completed", nativeFinalCommitted: false, nativeResponseDrained: false,
+      });
+      expect(() => parseCodexWorkInspectionContract({
+        ...result, diagnostics: { ...result.diagnostics, activeRequestBoundary: {
+          ...result.diagnostics.activeRequestBoundary, turnStatus: "inProgress",
+        } },
+      }, 2, threadId)).toThrow("invalid Native-to-local response boundary evidence");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
   test("passes bounded checkpoint decisions for the exact selected slot and rejects private fields", async () => {

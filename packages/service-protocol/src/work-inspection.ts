@@ -98,6 +98,25 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
       return typeof row.id !== "string" || !ID.test(row.id)
         || !STATUS.includes(row.status as typeof STATUS[number]);
     })) throw Error("invalid Native turn statuses");
+  const boundary = diag.activeRequestBoundary === null ? null : object(diag.activeRequestBoundary);
+  if (boundary) {
+    const recent = native.recentTurns[0] as Record<string, unknown> | undefined;
+    const observedStages = boundary.observedStages;
+    if (!recent || boundary.turnFingerprint !== diagnosticFingerprint(recent.id as string)
+      || boundary.turnStatus !== recent.status
+      || (boundary.operationFingerprint !== null
+        && (typeof boundary.operationFingerprint !== "string" || !/^[a-f0-9]{24}$/.test(boundary.operationFingerprint)))
+      || (boundary.observedAt !== null && time(boundary.observedAt) === null)
+      || !Array.isArray(observedStages) || observedStages.length > 24
+      || observedStages.some(stage => typeof stage !== "string" || !SAFE_STAGE.test(stage))
+      || ["accepted", "browserFinalObserved", "webAnswerReceived", "nativeFinalItemObserved",
+        "nativeFinalCommitted", "nativeResponseDrained"].some(key => typeof boundary[key] !== "boolean")
+      || boundary.proof !== "turn_scoped_local_events_only") {
+      throw Error("invalid Native-to-local response boundary evidence");
+    }
+  } else if (diag.activeRequestBoundary !== null) {
+    throw Error("invalid Native-to-local response boundary evidence");
+  }
   if (!Array.isArray(diag.recentEvents) || diag.recentEvents.length > 24
     || diag.recentEvents.some(item => {
       const row = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
@@ -136,6 +155,20 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
         at: time(item.at), stage: item.stage as string,
         ...(reason(item.reasonClass) ? { reasonClass: reason(item.reasonClass)! } : {}),
       })),
+      activeRequestBoundary: boundary ? Object.freeze({
+        turnFingerprint: boundary.turnFingerprint as string,
+        turnStatus: boundary.turnStatus as typeof STATUS[number],
+        operationFingerprint: boundary.operationFingerprint as string | null,
+        observedAt: time(boundary.observedAt),
+        observedStages: Object.freeze([...(boundary.observedStages as string[])]),
+        accepted: boundary.accepted as boolean,
+        browserFinalObserved: boundary.browserFinalObserved as boolean,
+        webAnswerReceived: boundary.webAnswerReceived as boolean,
+        nativeFinalItemObserved: boundary.nativeFinalItemObserved as boolean,
+        nativeFinalCommitted: boundary.nativeFinalCommitted as boolean,
+        nativeResponseDrained: boundary.nativeResponseDrained as boolean,
+        proof: "turn_scoped_local_events_only" as const,
+      }) : null,
     }),
     checkpointCandidates,
     browser: Object.freeze({
