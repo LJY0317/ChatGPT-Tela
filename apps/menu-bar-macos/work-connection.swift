@@ -1,5 +1,19 @@
 import Foundation
 
+// Launcher receipt describes only Tela's owned marketplace entry, never host installation.
+struct TelaLocalPluginRegistration: Decodable {
+  let result: String
+  var guidance: String? {
+    switch result {
+    case "registered", "already-registered":
+      return "Local plugin source ready. Install it in ChatGPT Desktop to finish connecting."
+    case "preserved-user-change":
+      return "An existing local plugin entry was changed and preserved. Review your personal marketplace before continuing."
+    default: return nil
+    }
+  }
+}
+
 // Display-only, memory-only data from the authenticated local UI endpoint.
 struct TelaAccountDisplay: Decodable, Equatable {
   struct Account: Decodable, Equatable {

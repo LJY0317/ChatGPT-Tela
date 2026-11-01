@@ -382,6 +382,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var savingConfiguration = false
   private var settingUp = false
   private var setupMessage: String?
+  private var preparingLocalPlugin = false
+  private var localPluginMessage: String?
   private var endpointField: NSTextField?
   private var portField: NSTextField?
   private var exposurePicker: NSPopUpButton?
@@ -399,7 +401,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var chatFolderMessage = ""
   private var changingChatFolders = false
   private var launchingMaintenance = false
-  private var operationInProgress: Bool { changingDiagnosticCapture || changingProfile || changingServices || changingChatFolders || savingConfiguration || settingUp || launchingMaintenance }
+  private var operationInProgress: Bool { changingDiagnosticCapture || changingProfile || changingServices || changingChatFolders || savingConfiguration || settingUp || preparingLocalPlugin || launchingMaintenance }
   private var approvalAutomation = "off"
   private var approvalDelay = "instant"
   private var delegationLimits: [String: Int] = [:]
@@ -1089,6 +1091,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       stack.addArrangedSubview(actionButton("Refresh status", action: #selector(refreshPage)))
     case .settings:
       pageHeader("Make Tela work the way you want.")
+      addLocalChatPluginSetup()
       let diagnostics = card("Detailed diagnostics")
       append(secondary("Off by default. Private evidence may include conversation text, local paths, and browser screens. It stays on this device, up to 7 days / 64 MB. Capture cannot guarantee a diagnosis."), to: diagnostics)
       let capturePicker = NSPopUpButton()
@@ -1173,7 +1176,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         row("Background activity", subtitle: changingServices ? "Updating…" : nil, control: button, in: background)
       }
       let support = card()
-      row("ChatGPT plugin", subtitle: "Manage or remove the plugin in ChatGPT. Tela stays installed on this computer.",
+      row("ChatGPT plugin", subtitle: "Manage account plugins in ChatGPT. Local plugin installation is completed in ChatGPT Desktop.",
           control: actionButton("Manage…", action: #selector(openChatGPTPlugins)), in: support)
       let updates = card("Updates")
       updatesSection = updates
@@ -1237,6 +1240,37 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private func installedServiceControlsAvailable() -> Bool {
     guard let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"] else { return false }
     return fileManager.isExecutableFile(atPath: launcher)
+  }
+
+  private func addLocalChatPluginSetup() {
+    guard installedServiceControlsAvailable() else { return }
+    let local = card("Chat · This Mac")
+    append(secondary("For ChatGPT Desktop local threads. Tela Chat must be running on this Mac."), to: local)
+    let prepare = actionButton("Prepare local plugin", action: #selector(prepareLocalChatPlugin))
+    prepare.isEnabled = !operationInProgress
+    local.addArrangedSubview(prepare)
+    if preparingLocalPlugin { append(secondary("Preparing local plugin…"), to: local) }
+    if let localPluginMessage { append(secondary(localPluginMessage), to: local) }
+    append(secondary("In ChatGPT Desktop's Plugins Directory, install tela-local-chat from your personal marketplace and test a Chat tool. Web conversations use a separate connection."), to: local)
+  }
+
+  @objc private func prepareLocalChatPlugin() {
+    guard !operationInProgress, installedServiceControlsAvailable(),
+          let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"] else { return }
+    preparingLocalPlugin = true
+    localPluginMessage = nil
+    renderCurrentPage()
+    Task {
+      let result = await Task.detached { Self.runLauncher(launcher, arguments: ["local-mcp", "register"], capture: true) }.value
+      preparingLocalPlugin = false
+      if result.0 == 0, let receipt = try? JSONDecoder().decode(TelaLocalPluginRegistration.self, from: result.1),
+         let message = receipt.guidance {
+        localPluginMessage = message
+      } else {
+        localPluginMessage = "Couldn't prepare the local plugin source. Check Tela's installation and personal marketplace."
+      }
+      renderCurrentPage()
+    }
   }
 
   private nonisolated static func runChatFolderCommand(_ launcher: String, _ args: [String]) -> (Int32, Data) {
@@ -1391,8 +1425,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       help.addArrangedSubview(actionButton("Check again", action: #selector(refreshPage)))
       return
     }
-    append(secondary("This preview needs a reachable HTTPS address before you sign in and connect ChatGPT."), to: stack)
-    let connection = card("1. Connection address")
+    append(secondary("Prepare the local Desktop plugin below. To start Tela's services and use Web connections, finish the existing HTTPS setup."), to: stack)
+    addLocalChatPluginSetup()
+    let connection = card("Web connection address (development)")
     let endpoint = NSTextField(string: endpointDraft)
     endpoint.placeholderString = "https://your-server.example/mcp"
     append(endpoint, to: connection)
