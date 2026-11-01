@@ -532,6 +532,11 @@ The remote preview above targets the computer hosting its configured endpoint. S
 ChatGPT account on another computer does not redirect that connection to the new computer. Do not use
 this route when you require access to the current computer only.
 
+If an existing remote plugin returns HTTP 404 while Tela reports ready, compare its complete server
+URL, including the path, with the current connection details in Settings. A saved URL can point to an
+obsolete endpoint even when the local service is healthy. Reconnect the affected plugin through the
+host's supported connection flow; reinstalling Tela does not update a URL saved in ChatGPT.
+
 The packaged launcher can prepare a Chat-only local stdio plugin without a source checkout or Node:
 
 ```sh
