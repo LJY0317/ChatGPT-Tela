@@ -2,8 +2,8 @@
 
 **One ChatGPT integration, two independent local runtimes: Chat and Codex.**
 
-ChatGPT Tela is being refactored into one installable product with one **ChatGPT Tela Plugin** created by
-connecting one MCP endpoint in ChatGPT, while keeping its two execution paths independent:
+ChatGPT Tela is being refactored into one installable product with a **ChatGPT Tela Plugin**,
+while keeping its two execution paths independent:
 
 - **Tela Chat** — a new workspace/process/agent service built from first principles, using the local DevSpace
   patches as a behavioral reference rather than copied implementation;
@@ -82,7 +82,9 @@ trusted-input, cancellation and one-shot dispatch checks.
 - Present one **ChatGPT Tela** integration. The mainstream setup is ChatGPT's built-in
   **Plugins -> + -> MCP app** flow, while the natural-language **Create plugin** path remains a supported
   long-term packaging surface for richer skills/references without creating a second Tela runtime identity.
-  The user supplies one endpoint/tunnel and its authentication once; ChatGPT owns that connection metadata.
+  The current remote preview uses a configured endpoint/tunnel; ChatGPT owns that connection metadata.
+  A remote connection executes on that endpoint's computer, not necessarily the computer running ChatGPT.
+  Current-device-only Chat requires the separate local transport described below.
 - Keep `ChatGPT Tela` as the current exact connector display identity until stable end-to-end validation is
   complete, then decouple the stored binding identity from the display name so users may rename the app/plugin
   without weakening exact connector proof.
@@ -524,11 +526,33 @@ Existing configurations are preserved and skip the first-use form. An invalid or
 shows a repair instruction rather than being replaced. Extra profiles appear only when an optional
 multi-profile adapter is already configured and detected.
 
+### Connection target and local Chat candidate
+
+The remote preview above targets the computer hosting its configured endpoint. Signing into the same
+ChatGPT account on another computer does not redirect that connection to the new computer. Do not use
+this route when you require access to the current computer only.
+
+The packaged launcher can prepare a Chat-only local stdio plugin without a source checkout or Node:
+
+```sh
+"$HOME/Applications/ChatGPT Tela.app/Contents/MacOS/chatgpt-tela" local-mcp package /path/to/new-local-plugin-folder
+```
+
+The destination must be new. Preparation writes a plugin and an inactive marketplace; it does not install
+or enable them. Use a supported personal/repository marketplace and install through ChatGPT Desktop's
+Plugins Directory, following the [official packaging guide](https://developers.openai.com/plugins/build/plugins).
+The local Chat service must already be running. This candidate has no remote fallback or other-device
+discovery. Actual Desktop installation and two-computer isolation acceptance remain unverified; the
+[desktop-only contract](https://developers.openai.com/plugins/deploy/desktop-only) does not establish support
+for regular Web/mobile chats or Tela's Electron Web workers. See [connection scope and remaining
+acceptance](docs/consumer-installation.md#multiple-computers-on-one-chatgpt-account) before switching routes.
+
 ### Everyday use and restarting your computer
 
 The Tela menu bar opens when you sign in to macOS. Choose **Start Tela** from its menu if Tela is off;
-the spinning indicator shows startup and connection progress. **Chat: Ready** means the ChatGPT Tela
-connector can reach your local Chat tools. Chat needs no Work profile switch.
+the spinning indicator shows startup and connection progress. **Chat: Ready** reports local Chat service
+readiness; it does not prove that ChatGPT installed or can reach the plugin. Verify the intended connection
+with an actual tool result. Chat needs no Work profile switch.
 
 For Web models in Work, turn on **Web models** for your ChatGPT app, then choose **Open ChatGPT**.
 Saved connections are restored when their apps are fully stopped; an already-open app may need the
