@@ -1,4 +1,4 @@
-import { readDiagnosticSources } from "@chatgpt-tela/core";
+import { inspectMcpSessionCalls, readDiagnosticSources } from "@chatgpt-tela/core";
 
 const MAX_TIMELINE_EVENTS = 128;
 const SAFE_NAME = /^[a-z][a-z0-9_]{0,63}$/;
@@ -73,7 +73,7 @@ export function summarizeWorkIncident(input: {
   }
   const nowMs = input.nowMs ?? Date.now();
   const fromMs = nowMs - minutes * 60_000;
-  const source = readDiagnosticSources(input.paths);
+  const source = readDiagnosticSources(input.paths, { fromMs, toMs: nowMs + 60000 });
   const events = source.events.flatMap(row => { const item=structuralEvent(row,fromMs,nowMs+60000);return item?[item]:[]; })
     .sort((left, right) => left.at.localeCompare(right.at));
   let failureIndex = -1;
@@ -95,6 +95,8 @@ export function summarizeWorkIncident(input: {
     mutating: false,
     window: Object.freeze({ minutes, from: new Date(fromMs).toISOString(), to: new Date(nowMs).toISOString() }),
     observedEvents: events.length,
+    mcpCalls: Object.freeze(inspectMcpSessionCalls(source.events).slice(-MAX_TIMELINE_EVENTS)),
+    mcpAttribution: "session_only_native_turn_unproven",
     sourceCoverage: source.coverage,
     timeline: Object.freeze(timeline),
   });

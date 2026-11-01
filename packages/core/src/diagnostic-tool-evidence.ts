@@ -1,51 +1,62 @@
 import { createHmac, randomBytes } from "node:crypto";
 import type { NativeToolCatalogEntry } from "./tools";
 import type { DiagnosticScalar } from "./diagnostic-events";
-import { structuralDiagnosticEvent, type StructuralDiagnosticEvent } from "./diagnostic-store";
+import type { StructuralDiagnosticEvent } from "./diagnostic-store";
 
-/** Per-call MCP evidence for a caller-supplied, host-observed session fingerprint.
- * An MCP session is never inferred from a Native thread or browser URL. */
-export function inspectMcpSessionCalls(events: readonly StructuralDiagnosticEvent[], scopeFingerprint: string) {
-  if (!/^[a-f0-9]{24}$/.test(scopeFingerprint)) throw new Error("invalid MCP scope fingerprint");
-  const rows = events.flatMap(value => {
-    const row = structuralDiagnosticEvent(value);
-    return row?.event === "chatgpt_tela_mcp" ? [row] : [];
-  });
-  const received = rows.filter(row => row.stage === "mcp_rpc_received"
-    && row.scope_fingerprint === scopeFingerprint && row.method_class === "tools_call");
-  return received.map(start => {
-    const connection = start.connection_fingerprint;
-    const rpc = start.rpc_fingerprint;
-    const samePair = rows.filter(row => row.connection_fingerprint === connection
-      && row.rpc_fingerprint === rpc);
-    const starts = samePair.filter(row => row.stage === "mcp_rpc_received");
-    const emissions = samePair.filter(row => row.stage === "mcp_rpc_emitted");
-    // SDK tool callbacks carry openai/session and requestId but not the HTTP
-    // transport's generated connection fingerprint. Only join a callback when
-    // the session+RPC pair identifies exactly one HTTP request.
-    const sessionPair = rows.filter(row => row.scope_fingerprint === scopeFingerprint
-      && row.rpc_fingerprint === rpc);
-    const scopedStarts = sessionPair.filter(row => row.stage === "mcp_rpc_received");
-    const settled = sessionPair.filter(row => row.stage === "tool_settled");
-    const callbacks = sessionPair.filter(row => row.stage === "tool_started");
-    const failures = sessionPair.filter(row => row.stage === "tool_failed" || row.stage === "tool_error");
-    const unique = typeof connection === "string" && /^[a-f0-9]{24}$/.test(connection)
-      && typeof rpc === "string" && /^[a-f0-9]{24}$/.test(rpc)
-      && starts.length === 1 && starts[0] === start && emissions.length <= 1
-      && scopedStarts.length === 1 && callbacks.length <= 1 && settled.length <= 1
-      && failures.length <= 1;
-    const emitted = unique ? emissions[0] : undefined;
+/** One scan of already-sanitized diagnostic-store events. MCP openai/session is
+ * not proof of a Native turn or browser conversation's identity. */
+export function inspectMcpSessionCalls(events: readonly StructuralDiagnosticEvent[]) {
+  type Group = { received: StructuralDiagnosticEvent[]; emitted: StructuralDiagnosticEvent[];
+    started: StructuralDiagnosticEvent[]; settled: StructuralDiagnosticEvent[]; failed: StructuralDiagnosticEvent[] };
+  const groups = () => ({ received: [], emitted: [], started: [], settled: [], failed: [] } as Group);
+  const byConnection = new Map<string, Group>(), bySession = new Map<string, Group>();
+  const starts: StructuralDiagnosticEvent[] = [];
+  const fp = (value: unknown) => typeof value === "string" && /^[a-f0-9]{24}$/.test(value) ? value : undefined;
+  for (const row of events) {
+    if (row.event !== "chatgpt_tela_mcp") continue;
+    const connection = fp(row.connection_fingerprint), scope = fp(row.scope_fingerprint), rpc = fp(row.rpc_fingerprint);
+    if (connection && rpc) {
+      const key = connection + ":" + rpc, group = byConnection.get(key) ?? groups();
+      byConnection.set(key, group);
+      if (row.stage === "mcp_rpc_received") group.received.push(row);
+      if (row.stage === "mcp_rpc_emitted") group.emitted.push(row);
+    }
+    if (!scope || !rpc) continue;
+    const key = scope + ":" + rpc, group = bySession.get(key) ?? groups();
+    bySession.set(key, group);
+    if (row.stage === "mcp_rpc_received") {
+      group.received.push(row);
+      if (row.method_class === "tools_call") starts.push(row);
+    }
+    if (row.stage === "tool_started") group.started.push(row);
+    if (row.stage === "tool_settled") group.settled.push(row);
+    if (row.stage === "tool_failed" || row.stage === "tool_error") group.failed.push(row);
+  }
+  return starts.map(start => {
+    const scope = fp(start.scope_fingerprint)!;
+    const connection = fp(start.connection_fingerprint), rpc = fp(start.rpc_fingerprint)!;
+    const transport = connection ? byConnection.get(connection + ":" + rpc) : undefined;
+    const session = bySession.get(scope + ":" + rpc)!;
+    // Callbacks lack connection identity; a reused scope+RPC cannot be assigned
+    // to either request, even when connection+RPC uniquely identifies its send.
+    const unique = transport?.received.length === 1 && transport.received[0] === start
+      && transport.emitted.length <= 1 && session.received.length === 1
+      && session.received[0] === start && session.started.length <= 1
+      && session.settled.length <= 1 && session.failed.length <= 1;
+    const emitted = unique ? transport?.emitted[0] : undefined;
     return Object.freeze({
-      scopeFingerprint, connectionFingerprint: connection ?? null, rpcFingerprint: rpc ?? null,
+      at: start.ts, scopeFingerprint: scope, connectionFingerprint: connection ?? null, rpcFingerprint: rpc,
       correlation: unique ? "unique_connection_rpc" as const : "ambiguous_or_missing" as const,
-      kind: start.kind ?? "other",
-      callback: unique ? (failures.some(row => row.stage === "tool_failed") ? "threw"
-        : failures.some(row => row.stage === "tool_error") ? "returned_error"
-        : settled.length === 1 ? "settled" : "not_observed") : "unattributed",
+      kind: ["chat_call", "chat_inventory", "codex_call", "codex_inventory"].includes(String(start.kind))
+        ? start.kind : "other",
+      callback: unique ? (session.failed.some(row => row.stage === "tool_failed") ? "threw"
+        : session.failed.some(row => row.stage === "tool_error") ? "returned_error"
+        : session.settled.length === 1 ? "settled" : "not_observed") : "unattributed",
       transport: emitted?.delivery === "transport_send_returned" ? "send_returned" : "not_observed",
       errorResult: emitted?.error_result ?? null,
       errorCode: typeof emitted?.error_code === "number" ? emitted.error_code : null,
       modelReceipt: "not_observed" as const,
+      nativeTurnAttribution: "not_proven" as const,
     });
   });
 }

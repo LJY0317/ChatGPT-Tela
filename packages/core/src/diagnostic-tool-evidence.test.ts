@@ -23,12 +23,12 @@ test("MCP session evidence keeps two conversations separate and rejects reused R
     row("tool_failed",{scope_fingerprint:s2,rpc_fingerprint:rpc,delivery:"mcp_callback_thrown"}),
     row("tool_settled",{scope_fingerprint:s2,rpc_fingerprint:rpc,outcome:"failed"}),
   ];
-  expect(inspectMcpSessionCalls(rows,s1)).toMatchObject([{correlation:"unique_connection_rpc",
+  expect(inspectMcpSessionCalls(rows).filter(row=>row.scopeFingerprint===s1)).toMatchObject([{correlation:"unique_connection_rpc",
     callback:"returned_error",transport:"send_returned",errorResult:true,modelReceipt:"not_observed"}]);
-  expect(inspectMcpSessionCalls(rows,s2)).toMatchObject([{correlation:"unique_connection_rpc",
+  expect(inspectMcpSessionCalls(rows).filter(row=>row.scopeFingerprint===s2)).toMatchObject([{correlation:"unique_connection_rpc",
     callback:"threw",transport:"not_observed",modelReceipt:"not_observed"}]);
   rows.push(row("mcp_rpc_received",{scope_fingerprint:s1,connection_fingerprint:c1,rpc_fingerprint:rpc,method_class:"tools_call"}));
-  expect(inspectMcpSessionCalls(rows,s1)[0]?.correlation).toBe("ambiguous_or_missing");
+  expect(inspectMcpSessionCalls(rows).find(row=>row.scopeFingerprint===s1)?.correlation).toBe("ambiguous_or_missing");
 });
 
 

@@ -49,3 +49,27 @@ test("model delivery and lifecycle fields remain available to Work incident anal
   const result=summarizeWorkIncident({paths:[path],mode:"incident",nowMs});const text=JSON.stringify(result);expect(text).toContain('"web_model_count":3');expect(text).toContain('"kind":"external_client"');expect(text).toContain('"status":"client_closed"');expect(text).toContain('"phase":"connecting"');expect(text).toContain('"connection_fingerprint":"'+"b".repeat(24)+'"');expect(text).not.toContain("private");
  }finally{rmSync(directory,{recursive:true,force:true});}
 });
+
+test("existing trace separates MCP sessions, callback errors and transport receipts",()=>{
+ const directory=mkdtempSync(join(tmpdir(),"tela-mcp-trace-")),path=join(directory,"diagnostics.jsonl");
+ const nowMs=Date.parse("2026-11-01T12:00:00Z"),a="a".repeat(24),b="b".repeat(24),c="c".repeat(24),d="d".repeat(24),rpc="e".repeat(24);
+ const row=(stage:string,fields:Record<string,unknown>)=>({ts:new Date(nowMs).toISOString(),event:"chatgpt_tela_mcp",stage,...fields});
+ try{
+  writeFileSync(path,[
+   row("mcp_rpc_received",{scope_fingerprint:a,connection_fingerprint:c,rpc_fingerprint:rpc,method_class:"tools_call",kind:"chat_call",arguments:"PRIVATE"}),
+   row("tool_started",{scope_fingerprint:a,rpc_fingerprint:rpc}),
+   row("tool_error",{scope_fingerprint:a,rpc_fingerprint:rpc,delivery:"mcp_callback_returned"}),
+   row("tool_settled",{scope_fingerprint:a,rpc_fingerprint:rpc}),
+   row("mcp_rpc_emitted",{connection_fingerprint:c,rpc_fingerprint:rpc,delivery:"transport_send_returned",error_result:true,content:"PRIVATE"}),
+   row("mcp_rpc_received",{scope_fingerprint:b,connection_fingerprint:d,rpc_fingerprint:rpc,method_class:"tools_call",kind:"chat_call"}),
+   row("tool_started",{scope_fingerprint:b,rpc_fingerprint:rpc}),
+   row("tool_failed",{scope_fingerprint:b,rpc_fingerprint:rpc,delivery:"mcp_callback_thrown"}),
+  ].map(x=>JSON.stringify(x)).join("\n"));
+  const result=summarizeWorkIncident({paths:[path],mode:"trace",nowMs});
+  const calls=result.mcpCalls as Record<string,unknown>[];
+  expect(calls).toHaveLength(2);
+  expect(calls[0]).toMatchObject({scopeFingerprint:a,callback:"returned_error",transport:"send_returned",nativeTurnAttribution:"not_proven",modelReceipt:"not_observed"});
+  expect(calls[1]).toMatchObject({scopeFingerprint:b,callback:"threw",transport:"not_observed"});
+  expect(JSON.stringify(result)).not.toContain("PRIVATE");
+ }finally{rmSync(directory,{recursive:true,force:true});}
+});
