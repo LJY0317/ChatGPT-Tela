@@ -2,9 +2,34 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { diagnosticToolContract } from "./diagnostic-tool-evidence";
+import { diagnosticToolContract, inspectMcpSessionCalls } from "./diagnostic-tool-evidence";
 import { traceDiagnosticToolCall } from "./diagnostic-trace";
 import { structuralDiagnosticEvent } from "./diagnostic-store";
+
+test("MCP session evidence keeps two conversations separate and rejects reused RPC identities", () => {
+  const s1="a".repeat(24), s2="b".repeat(24), c1="c".repeat(24), c2="d".repeat(24), rpc="e".repeat(24);
+  let n=0;
+  const row=(stage:string, fields:Record<string,string|number|boolean>)=>structuralDiagnosticEvent({
+    ts:new Date(Date.UTC(2026,10,1,0,0,n++)).toISOString(),event:"chatgpt_tela_mcp",stage,...fields,
+  })!;
+  const rows=[
+    row("mcp_rpc_received",{scope_fingerprint:s1,connection_fingerprint:c1,rpc_fingerprint:rpc,method_class:"tools_call",kind:"chat_call"}),
+    row("tool_started",{scope_fingerprint:s1,rpc_fingerprint:rpc}),
+    row("tool_error",{scope_fingerprint:s1,rpc_fingerprint:rpc,delivery:"mcp_callback_returned"}),
+    row("tool_settled",{scope_fingerprint:s1,rpc_fingerprint:rpc,outcome:"completed"}),
+    row("mcp_rpc_emitted",{connection_fingerprint:c1,rpc_fingerprint:rpc,error_result:true,delivery:"transport_send_returned"}),
+    row("mcp_rpc_received",{scope_fingerprint:s2,connection_fingerprint:c2,rpc_fingerprint:rpc,method_class:"tools_call",kind:"chat_call"}),
+    row("tool_started",{scope_fingerprint:s2,rpc_fingerprint:rpc}),
+    row("tool_failed",{scope_fingerprint:s2,rpc_fingerprint:rpc,delivery:"mcp_callback_thrown"}),
+    row("tool_settled",{scope_fingerprint:s2,rpc_fingerprint:rpc,outcome:"failed"}),
+  ];
+  expect(inspectMcpSessionCalls(rows,s1)).toMatchObject([{correlation:"unique_connection_rpc",
+    callback:"returned_error",transport:"send_returned",errorResult:true,modelReceipt:"not_observed"}]);
+  expect(inspectMcpSessionCalls(rows,s2)).toMatchObject([{correlation:"unique_connection_rpc",
+    callback:"threw",transport:"not_observed",modelReceipt:"not_observed"}]);
+  rows.push(row("mcp_rpc_received",{scope_fingerprint:s1,connection_fingerprint:c1,rpc_fingerprint:rpc,method_class:"tools_call"}));
+  expect(inspectMcpSessionCalls(rows,s1)[0]?.correlation).toBe("ambiguous_or_missing");
+});
 
 
 test("contract fingerprints ignore property order, distinguish contracts, and never expose descriptor text", () => {
