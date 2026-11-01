@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { applyPackagedInstallFromPayload, planPackagedInstallFromPayload } from "./packaged-install";
@@ -110,7 +110,11 @@ macTest("a wrapper PID alone cannot acknowledge GUI startup, including an old in
   abort.abort();await expect(pending).rejects.toThrow("did not acknowledge startup");
   const ready=waitForPackagedMenuBar({paths,parentPid:4321,productVersion:"2.0.0",signal:new AbortController().signal});
   await new Promise<void>(resolve=>setImmediate(()=>{
-   writeFileSync(packagedMenuBarReadyPath(paths),JSON.stringify({pid:process.pid,parentPid:4321,productVersion:"2.0.0"}));
+   // Match the Swift UI's Data.write(options: .atomic): publish a new
+   // directory entry instead of relying on in-place file-write notifications.
+   const receipt=packagedMenuBarReadyPath(paths);
+   writeFileSync(receipt+".tmp",JSON.stringify({pid:process.pid,parentPid:4321,productVersion:"2.0.0"}));
+   renameSync(receipt+".tmp",receipt);
    resolve();
   }));
   await ready;
