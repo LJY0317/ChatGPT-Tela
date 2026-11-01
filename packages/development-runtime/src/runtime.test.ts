@@ -59,96 +59,8 @@ function nativeRequest(input: unknown[] = []): Record<string, unknown> {
   };
 }
 
-class ConnectorRoundProvider implements WebConversationProvider {
-  #request: WebTurnRequest | undefined;
-  #toolCall: Promise<void> | undefined;
-  #continuationEmitted = false;
-
-  constructor(
-    readonly client: Client,
-    readonly toolName = "chatgpt_tela_dev_tool_call",
-    readonly expectedContract: "development" | "stable" = "development",
-  ) {}
-
-  async observeCapabilities() {
-    return {
-      state: "proven" as const,
-      value: { observed: new Set(["composer", "send"]) },
-      evidence: ["fixture"],
-    };
-  }
-
-  async submitTurn(_surface: unknown, request: WebTurnRequest) {
-    this.#request = request;
-    return {
-      state: "proven" as const,
-      value: {
-        nativeTaskId: request.nativeTaskId,
-        nativeTurnId: request.nativeTurnId,
-        webEpochId: request.webEpochId,
-        providerTurnId: "web-turn-1",
-      },
-      evidence: ["fixture"],
-    };
-  }
-
-  async observeTurn(): Promise<SemanticObservation<{ providerTurnId: string; phase: "accepted" }>> {
-    return {
-      state: "proven",
-      value: { providerTurnId: "web-turn-1", phase: "accepted" },
-      evidence: ["fixture"],
-    };
-  }
-
-  async armToolContinuation(_surface: unknown, turn: WebTurnHandle, callId: string) {
-    return {
-      state: "proven" as const,
-      value: { providerTurnId: turn.providerTurnId, callId },
-      evidence: ["fixture"],
-    };
-  }
-
-  async waitForTurnEvent(_surface?: unknown, _turn?: WebTurnHandle, signal?: AbortSignal): Promise<SemanticObservation<WebTurnEvent>> {
-    const request = this.#request;
-    if (!request?.toolBridge) throw new Error("development turn is missing its MCP capability");
-    if (request.toolBridge.contract !== this.expectedContract) {
-      throw new Error(`unexpected MCP bridge contract: ${request.toolBridge.contract}`);
-    }
-    if (!this.#toolCall) {
-      this.#toolCall = this.client.callTool({
-          name: this.toolName,
-          arguments: {
-            turn_capability: request.toolBridge.turnCapability,
-            call_id: "call-1",
-            wire_name: "exec_command",
-            mode: "structured",
-            arguments: { cmd: ["printf", "ok"] },
-          },
-        })
-        .then(result => {
-          if (result.isError) throw new Error("fixture MCP tool call failed");
-        });
-    }
-    await this.#toolCall;
-    if (signal?.aborted) throw new DOMException("aborted", "AbortError");
-    if (!this.#continuationEmitted) {
-      this.#continuationEmitted = true;
-      return {
-        state: "proven",
-        value: { kind: "continuing", providerTurnId: "web-turn-1" },
-        evidence: ["fixture"],
-      };
-    }
-    return {
-      state: "proven",
-      value: { kind: "completed", providerTurnId: "web-turn-1", answer: "web-final" },
-      evidence: ["fixture"],
-    };
-  }
-}
-
 class ExternalContractProvider implements WebConversationProvider {
-  observedContract: "development" | "stable" | undefined;
+  observedChatTools = false;
 
   async observeCapabilities() {
     return {
@@ -159,8 +71,8 @@ class ExternalContractProvider implements WebConversationProvider {
   }
 
   async submitTurn(_surface: unknown, request: WebTurnRequest) {
-    if (!request.toolBridge) throw new Error("external contract fixture requires a tool bridge");
-    this.observedContract = request.toolBridge.contract;
+    if (!request.chatTools || request.toolBridge) throw new Error("external fixture requires Tela Chat tools");
+    this.observedChatTools = true;
     return {
       state: "proven" as const,
       value: {
@@ -745,121 +657,7 @@ describe("development runtime composition", () => {
     expect(browserClosed).toBe(browserCreated);
   });
 
-  test("owns one Native HTTP -> browser -> MCP -> Native result -> Web final lifecycle", async () => {
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: "chatgpt-tela-dev-runtime-test", version: "0.0.0" }, { capabilities: {} });
-    const browserEvents: string[] = [];
-    const browserHost = new ControlledBrowserHost(async () => ({
-      async navigate() {},
-      async reveal() {},
-      async hide() {},
-      async close() { browserEvents.push("surface-close"); },
-    }));
-    const provider = new ConnectorRoundProvider(client);
-    const runtime = await startDevelopmentRuntime({
-      currentTurnSource: source,
-      browserHost,
-      mcp: { kind: "transport", transport: serverTransport },
-      provider,
-      planWebTurn(turn) {
-        return {
-          nativeTaskId: turn.channel.binding.authority.threadId,
-          legacyNativeToolBridge: true,
-          webEpochId: "epoch-1",
-          physicalContext: {
-            headRevisionId: "revision-1",
-            mode: "full",
-            logicalTokens: 1,
-            transferTokens: 1,
-            segments: [{
-              type: "revision",
-              revisionId: "revision-1",
-              kind: "user",
-              content: "do the work",
-            }],
-          },
-        };
-      },
-    });
-
-    try {
-      await client.connect(clientTransport);
-
-      const first = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, nativeRequest());
-      expect(first.status).toBe(200);
-      const firstText = await first.text();
-      expect(firstText).toContain('"call_id":"call-1"');
-      expect(firstText).toContain('"name":"exec_command"');
-
-      const second = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, nativeRequest([
-        { type: "function_call_output", call_id: "call-1", output: "ok" },
-      ]));
-      expect(second.status).toBe(200);
-      const secondText = await second.text();
-      expect(secondText).toContain('"delta":"web-final"');
-      expect(runtime.turns.size).toBe(1);
-      // A successful task epoch remains physically retained for a later Native turn.
-      expect(browserEvents).toEqual([]);
-    } finally {
-      await runtime.stop();
-      await client.close();
-    }
-    expect(browserEvents).toEqual(["surface-close"]);
-  });
-
-  test("can run the same exact-turn lifecycle through the stable Codex bridge contract", async () => {
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: "chatgpt-tela-stable-runtime-test", version: "1.0.0" }, { capabilities: {} });
-    const browserHost = new ControlledBrowserHost(async () => ({
-      async navigate() {},
-      async reveal() {},
-      async hide() {},
-      async close() {},
-    }));
-    const provider = new ConnectorRoundProvider(client, CHATGPT_TELA_CODEX_TOOL_CALL, "stable");
-    const runtime = await startDevelopmentRuntime({
-      currentTurnSource: source,
-      browserHost,
-      mcp: { kind: "transport", abi: "stable", transport: serverTransport },
-      provider,
-      planWebTurn(turn) {
-        return {
-          nativeTaskId: turn.channel.binding.authority.threadId,
-          legacyNativeToolBridge: true,
-          webEpochId: "epoch-stable",
-          physicalContext: {
-            headRevisionId: "revision-stable",
-            mode: "full",
-            logicalTokens: 1,
-            transferTokens: 1,
-            segments: [{
-              type: "revision",
-              revisionId: "revision-stable",
-              kind: "user",
-              content: "do the work through the stable bridge",
-            }],
-          },
-        };
-      },
-    });
-
-    try {
-      expect(runtime.mcp.abi).toBe("stable");
-      await client.connect(clientTransport);
-      const first = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, nativeRequest());
-      expect(first.status).toBe(200);
-      const second = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, nativeRequest([
-        { type: "function_call_output", call_id: "call-1", output: "ok" },
-      ]));
-      expect(second.status).toBe(200);
-      expect(await second.text()).toContain('"delta":"web-final"');
-    } finally {
-      await runtime.stop();
-      await client.close();
-    }
-  });
-
-  test("external stable connector projects the stable Web contract without starting a local public MCP server", async () => {
+  test("external stable connector uses Tela Chat backend without starting a local public MCP server", async () => {
     const browserHost = new ControlledBrowserHost(async () => ({
       async navigate() {},
       async reveal() {},
@@ -875,7 +673,6 @@ describe("development runtime composition", () => {
       planWebTurn(turn) {
         return {
           nativeTaskId: turn.channel.binding.authority.threadId,
-          legacyNativeToolBridge: true,
           webEpochId: "epoch-stable-external",
           physicalContext: {
             headRevisionId: "revision-stable-external",
@@ -897,7 +694,7 @@ describe("development runtime composition", () => {
       const response = await post(runtime.responses.baseUrl, runtime.responses.runtimeToken, nativeRequest());
       expect(response.status).toBe(200);
       expect(await response.text()).toContain('"delta":"external-v2-final"');
-      expect(provider.observedContract).toBe("stable");
+      expect(provider.observedChatTools).toBe(true);
     } finally {
       await runtime.stop();
     }
@@ -1335,7 +1132,7 @@ test("Native cancellation immediately after context planning releases its pendin
       const result = await actualPlanner(turn, request, preparation);
       planned += 1;
       if (planned === 1) firstOwner.abort(new Error("original Native turn retired after planning"));
-      return { ...result, legacyNativeToolBridge: true };
+      return result;
     },
   });
   const request = () => ({
@@ -1380,7 +1177,7 @@ test("same Native turn continuation runs two settled Web cycles through the real
         capability(capability) { return capability === BROWSER_DOCUMENT_LIFETIME ? { current: () => ({ generation: 1, signal: new AbortController().signal }) } as never : undefined; } };
     }), provider, mcp: { kind: "external", abi: "stable" },
     async planWebTurn(turn, request, preparation) {
-      return { ...await retainedPlanner(turn, request, preparation), legacyNativeToolBridge: true };
+      return retainedPlanner(turn, request, preparation);
     },
   });
   try {
@@ -1391,7 +1188,7 @@ test("same Native turn continuation runs two settled Web cycles through the real
     expect(second.status).toBe(200); expect(await second.text()).toContain("external-v2-final");
     expect(submitted).toHaveLength(2); expect(acquisitions).toBe(1);
     expect(submitted[1]!.nativeTurnId).toBe(submitted[0]!.nativeTurnId);
-    expect(submitted[1]!.toolBridge?.turnCapability).not.toBe(submitted[0]!.toolBridge?.turnCapability);
+    expect(submitted.every(request => request.toolBridge === undefined && request.chatTools !== undefined)).toBe(true);
     expect(submitted[1]!.physicalContext.mode).toBe("retained-delta");
     expect(JSON.stringify(submitted[1]!.physicalContext)).toContain("followup");
     const rows = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
