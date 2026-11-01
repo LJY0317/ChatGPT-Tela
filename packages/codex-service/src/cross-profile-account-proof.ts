@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { connectCodexAppServerWebSocket, type CodexAppServerRpc } from "@chatgpt-tela/codex";
+import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { accountDisplayEmail } from "@chatgpt-tela/service-protocol";
 import type { LocalProfileBinding } from "./cross-profile-thread-relay";
 
@@ -89,26 +90,38 @@ export function createLocalNativeAccountProof(adapters: LocalNativeAccountProofA
     if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) {
       throw new Error("Native selected account proof requires a valid exact profile slot");
     }
-    const first = checkedSession(await adapters.resolveOwnedSession(slot), slot);
-    const rpc = await connect(first.terminalEndpoint, AbortSignal.timeout(8000));
+    let phase = "session_resolution";
     try {
-      const one = chatgptSelectedLoginBinding(
-        await rpc.request("account/read", { refreshToken: false }, AbortSignal.timeout(8000)),
-      );
-      const two = chatgptSelectedLoginBinding(
-        await rpc.request("account/read", { refreshToken: false }, AbortSignal.timeout(8000)),
-      );
-      if (one !== two) throw new Error("Native account binding changed while observing selected workspace");
-      const last = checkedSession(await adapters.resolveOwnedSession(slot), slot);
-      if (!sameSession(first, last)) throw new Error("Native account owner session changed during proof");
-      return Object.freeze({
-        slot,
-        accountFingerprint: hmac("selected-native-login-and-routing", one),
-        sessionFingerprint: hmac("owned-runtime", `${first.runtimeProcessId}:${first.responsesRouteFingerprint}`),
-        routeFingerprint: first.responsesRouteFingerprint,
+      const first = checkedSession(await adapters.resolveOwnedSession(slot), slot);
+      phase = "connect";
+      const rpc = await connect(first.terminalEndpoint, AbortSignal.timeout(8000));
+      try {
+        phase = "account_read_first";
+        const firstAccount = await rpc.request("account/read", { refreshToken: false }, AbortSignal.timeout(8000));
+        phase = "account_binding_first";
+        const one = chatgptSelectedLoginBinding(firstAccount);
+        phase = "account_read_second";
+        const secondAccount = await rpc.request("account/read", { refreshToken: false }, AbortSignal.timeout(8000));
+        phase = "account_binding_second";
+        const two = chatgptSelectedLoginBinding(secondAccount);
+        if (one !== two) throw new Error("Native account binding changed while observing selected workspace");
+        phase = "session_confirmation";
+        const last = checkedSession(await adapters.resolveOwnedSession(slot), slot);
+        if (!sameSession(first, last)) throw new Error("Native account owner session changed during proof");
+        return Object.freeze({
+          slot,
+          accountFingerprint: hmac("selected-native-login-and-routing", one),
+          sessionFingerprint: hmac("owned-runtime", `${first.runtimeProcessId}:${first.responsesRouteFingerprint}`),
+          routeFingerprint: first.responsesRouteFingerprint,
+        });
+      } finally {
+        await rpc.close();
+      }
+    } catch (error) {
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_account_owner_proof_failed", {
+        slot, phase, failure_class: diagnosticFailureClass(error),
       });
-    } finally {
-      await rpc.close();
+      throw error;
     }
   };
 }

@@ -579,13 +579,18 @@ test("a managed continuation resets the thread policy, not an older collected jo
   } finally { f.cleanup(); }
 });
 test("daemon lifecycle starts due maintenance without polling and closes its watcher", async () => {
-  const f = fixture(), abort = new AbortController();
+  const f = fixture(), abort = new AbortController(), phases: any[] = [];
+  const off = observeDiagnosticEvents(event => {
+    if (event.stage === "web_delegation_retention_started" || event.stage === "web_delegation_retention_completed") phases.push(event);
+  });
   const retention = startWebDelegationRetention(f.adapters, abort.signal);
   try {
     // Close drains the already-started pass; fixture dates are in the past.
     await retention.close();
     expect(f.native.archived).toBe(true);
-  } finally { abort.abort(); f.cleanup(); }
+    expect(phases.map(event => event.stage)).toEqual(["web_delegation_retention_started", "web_delegation_retention_completed"]);
+    expect(phases[1].duration_ms).toBeGreaterThanOrEqual(0);
+  } finally { off?.(); abort.abort(); f.cleanup(); }
 });
 
 test("confirmed deletion removes only matching thread jobs and survives interrupted cleanup", async () => {

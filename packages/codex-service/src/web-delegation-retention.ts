@@ -407,7 +407,13 @@ export function startWebDelegationRetention(adapters: WebDelegationAdapters, sig
     running = (async () => {
       do {
         dirty = false;
+        const started = performance.now();
+        emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_started", {});
         const next = await settleWebDelegationRetention(adapters, { signal });
+        emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_completed", {
+          duration_ms: Math.round(performance.now() - started),
+          ...(next === undefined ? {} : { next_due_at: next }),
+        });
         if (!dirty && next !== undefined && !closed && !signal.aborted) {
           timer = setTimeout(wake, Math.max(1, Math.min(next - Date.now(), 2_147_483_647)));
           timer.unref?.();

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
 import {
   createLocalNativeAccountProof, type TrustedNativeProfileSession,
@@ -90,6 +91,22 @@ describe("authenticated selected Native account routing (isolated owner only)", 
     });
     await expect(f.profile(1)).rejects.toThrow("session changed");
     expect(f.counts()).toMatchObject({ closes: 1, connects: 1 });
+  });
+
+  test("proof diagnostics distinguish transport, binding and session failures without account contents", async () => {
+    const events:any[]=[];
+    const stop=observeDiagnosticEvents(event=>{if(event.stage==='native_account_owner_proof_failed')events.push(event);});
+    try {
+      const read=fixture();read.onRead(()=>{throw Error('PRIVATE read failure');});
+      await expect(read.profile(1)).rejects.toThrow('PRIVATE read failure');
+      expect(read.counts()).toMatchObject({reads:1,closes:1});
+      const binding=fixture();binding.accounts.delete(1);
+      await expect(binding.profile(1)).rejects.toThrow('login and routing are unavailable');
+      const session=fixture();session.sessions.delete(1);
+      await expect(session.profile(1)).rejects.toThrow('No exact runtime owner');
+      expect(events.map(event=>event.phase)).toEqual(['account_read_first','account_binding_first','session_resolution']);
+      expect(JSON.stringify(events)).not.toMatch(/PRIVATE|first-user|shared-workspace-route|terminalEndpoint/);
+    } finally {stop?.();}
   });
 
   test("missing selected ChatGPT account ID cannot be replaced by email or native signed-in status", async () => {
