@@ -34,7 +34,8 @@ export async function waitForPackagedMenuBar(input: {
       } catch { /* The UI publishes atomically after creating its status item. */ }
     };
     const aborted = () => finish(new Error("updated menu bar did not acknowledge startup; resume installation to finish UI refresh"));
-    const observer = watch(input.paths.runtimeRoot, (_event, name) => { if (name?.toString() === "menu-bar-ready.json") check(); });
+    // Event filenames are optional; the owned receipt itself proves readiness.
+    const observer = watch(input.paths.runtimeRoot, check);
     observer.once("error", finish);
     input.signal.addEventListener("abort", aborted, { once: true });
     if (input.signal.aborted) aborted(); else check();

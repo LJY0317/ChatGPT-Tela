@@ -54,6 +54,34 @@ async function fixture() {
   return {root,source,options,blueprint:planned.blueprint,services,calls,events,fail(){failRefresh=true;},recover(){failRefresh=false;}};
 }
 
+test("menu startup observes a valid receipt even when fs.watch omits the filename", async()=>{
+ const moduleUrl=new URL('./packaged-menu-bar.ts',import.meta.url).href;
+ const source=`
+  import {mock} from 'bun:test';
+  import * as fs from 'node:fs';
+  import {join} from 'node:path';
+  import {tmpdir} from 'node:os';
+  import {EventEmitter} from 'node:events';
+  let notify;
+  mock.module('node:fs',()=>({...fs,watch:(_path,listener)=>{
+   notify=listener;const observer=new EventEmitter();observer.close=()=>{};return observer;
+  }}));
+  const {waitForPackagedMenuBar,packagedMenuBarReadyPath}=await import(${JSON.stringify(moduleUrl)});
+  const runtimeRoot=fs.mkdtempSync(join(tmpdir(),'tela-menu-watch-'));
+  try {
+   const paths={runtimeRoot},abort=new AbortController();
+   const pending=waitForPackagedMenuBar({paths,parentPid:4321,productVersion:'2.0.0',signal:abort.signal});
+   fs.writeFileSync(packagedMenuBarReadyPath(paths),JSON.stringify({pid:process.pid,parentPid:4321,productVersion:'2.0.0'}));
+   notify('rename',null);
+   abort.abort();
+   await pending;
+  } finally {fs.rmSync(runtimeRoot,{recursive:true,force:true});}
+ `;
+ const child=Bun.spawn([process.execPath,'--eval',source],{stdout:'pipe',stderr:'pipe'});
+ const error=await new Response(child.stderr).text();
+ expect({code:await child.exited,error}).toEqual({code:0,error:''});
+});
+
 const macTest=process.platform === "darwin" ? test : test.skip;
 macTest("healthy repair also refreshes UI; changed registration never receives restart authority",async()=>{
  const f=await fixture();try{
