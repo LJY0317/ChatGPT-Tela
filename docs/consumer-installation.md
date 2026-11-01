@@ -181,8 +181,11 @@ mode also passes with no Node on the host PATH. No model turn or user config cha
 A separate process-only host test reads a temporary file through an isolated Chat service.
 The signed packaged launcher also completed MCP initialize/tools-list and a local-file read over
 stdio against this computer's existing Chat service; this does not prove ChatGPT Desktop plugin installation.
-These checks do not establish general ChatGPT Work, temporary Web-worker support or two-physical-device
-isolation. Tela's local marketplace package has not yet passed clean consumer-install acceptance.
+The launcher-backed personal marketplace is now discovered in two installed macOS Desktop profiles.
+A user-selected local Desktop thread invoked the plugin's workspace-open and file-read tools, returned
+the exact synthetic file content and completed with an empty queue. The test file was removed afterward.
+This establishes one local Desktop read workflow, not cloud Work, temporary Web-worker support or
+two-physical-device isolation. Clean consumer-install acceptance remains separate.
 Public directory submission still requires organization allowlisting; do not conflate it with the
 per-device local-marketplace path.
 If a host surface cannot use the local transport, report that limit without remote fallback.

@@ -547,7 +547,8 @@ The destination must be new. Preparation writes a plugin and an inactive marketp
 or enable them. Use a supported personal/repository marketplace and install through ChatGPT Desktop's
 Plugins Directory, following the [official packaging guide](https://developers.openai.com/plugins/build/plugins).
 The local Chat service must already be running. This candidate has no remote fallback or other-device
-discovery. Actual Desktop installation and two-computer isolation acceptance remain unverified; the
+discovery. A macOS Desktop local-thread file read is verified. Clean consumer installation and
+two-computer isolation remain unverified; the
 [desktop-only contract](https://developers.openai.com/plugins/deploy/desktop-only) does not establish support
 for regular Web/mobile chats or Tela's Electron Web workers. See [connection scope and remaining
 acceptance](docs/consumer-installation.md#multiple-computers-on-one-chatgpt-account) before switching routes.
