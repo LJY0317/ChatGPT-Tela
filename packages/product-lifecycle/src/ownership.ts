@@ -56,7 +56,7 @@ export type OwnedResource =
       readonly pluginName: string;
       readonly entryFingerprint: string;
       readonly createdFile: boolean;
-      readonly state?: "pending" | "owned";
+      readonly state: "pending" | "owned";
     }
   | {
       readonly kind: "tailscale-route";
@@ -180,9 +180,9 @@ export function parseOwnedResource(value: unknown): OwnedResource {
     if (!/^[a-z0-9][a-z0-9._-]*$/.test(pluginName) || !/^[a-f0-9]{64}$/.test(entryFingerprint)) {
       throw new Error("marketplace entry identity is invalid");
     }
-    if (item.state !== undefined && item.state !== "pending" && item.state !== "owned") throw Error("invalid marketplace state");
+    if (item.state !== "pending" && item.state !== "owned") throw Error("invalid marketplace state");
     return Object.freeze({ kind, id, owner: "product", path: absolutePath(item.path, "marketplace file"),
-      pluginName, entryFingerprint, createdFile: item.createdFile, ...(item.state ? { state: item.state } : {}) });
+      pluginName, entryFingerprint, createdFile: item.createdFile, state: item.state });
   }
   if (kind === "tailscale-route") {
     if (owner !== "gateway") throw new Error("Tailscale route must be gateway-owned");

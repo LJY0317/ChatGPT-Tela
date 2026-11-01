@@ -81,7 +81,7 @@ test("uncommitted marketplace intent cannot adopt an identical external entry", 
     const paths = resolveProductPaths(options), manifest = createOwnershipManifest("1", new Date(), "fixture");
     writeOwnershipManifest(paths.installManifest, manifest);
     const marketplace = join(home, ".agents", "plugins", "marketplace.json");
-    const pluginPath = join(root, "plugin");
+    const pluginPath = join(home, "plugin");
     const entry = { name: "tela-local-chat", source: { source: "local", path: "./plugin" },
       policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" }, category: "Productivity" };
     const { createHash } = await import("node:crypto");
@@ -96,6 +96,14 @@ test("uncommitted marketplace intent cannot adopt an identical external entry", 
     const result = await runProductUninstall({ mode: "apply", removeData: true, ...options });
     expect(result.preservedCount).toBeGreaterThan(0);
     expect(JSON.parse(readFileSync(marketplace, "utf8")).plugins).toEqual([entry]);
+    // Once the external entry is explicitly removed, the same pending intent can resume.
+    writeFileSync(marketplace, JSON.stringify({ name: "personal", plugins: [] }));
+    expect(await registerLocalMarketplace({ manifestPath: paths.installManifest, marketplacePath: marketplace,
+      pluginPath })).toBe("registered");
+    expect(readOwnershipManifest(paths.installManifest)?.resources.find(r => r.id === "local-chat-personal-marketplace"))
+      .toMatchObject({ state: "owned" });
+    await runProductUninstall({ mode: "apply", removeData: true, ...options });
+    expect(JSON.parse(readFileSync(marketplace, "utf8")).plugins).toEqual([]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -33,18 +33,18 @@ if (process.argv[2] === "--tela-operation-owner-v1") {
     const resource = { kind: "directory" as const, id: "local-chat-plugin-source", owner: "product" as const,
       path: root, dataClass: "binary" as const };
     const result = await withPackagedTransitionOwner({ paths, installId: manifest.installId }, async () => {
-    const prepared = await prepareOwnedDirectory({ manifestPath: paths.installManifest,
-      installId: manifest.installId, productVersion: manifest.productVersion, resource });
-    if (prepared.state === "external-existing") throw Error("local plugin source belongs to another owner");
-    const { prepareLocalChatPlugin } = await import("../../local-mcp/src/plugin-package");
-    const contents = readdirSync(root).filter(name => name !== ".chatgpt-tela-owner.json");
-    const plugin = join(root, "plugins", "tela-local-chat");
-    if (contents.length === 0) prepareLocalChatPlugin(root, process.execPath);
-    else if (!existsSync(join(plugin, "plugin.json")) || !existsSync(join(plugin, "mcp.json"))) {
-      throw Error("existing local plugin source was modified; preserved");
-    }
-    return registerLocalMarketplace({ manifestPath: paths.installManifest,
-      marketplacePath: join(homedir(), ".agents", "plugins", "marketplace.json"), pluginPath: plugin });
+      const prepared = await prepareOwnedDirectory({ manifestPath: paths.installManifest,
+        installId: manifest.installId, productVersion: manifest.productVersion, resource });
+      if (prepared.state === "external-existing") throw Error("local plugin source belongs to another owner");
+      const { prepareLocalChatPlugin } = await import("../../local-mcp/src/plugin-package");
+      const contents = readdirSync(root).filter(name => name !== ".chatgpt-tela-owner.json");
+      const plugin = join(root, "plugins", "tela-local-chat");
+      if (contents.length === 0) prepareLocalChatPlugin(root, process.execPath);
+      else if (!existsSync(join(plugin, "plugin.json")) || !existsSync(join(plugin, "mcp.json"))) {
+        throw Error("existing local plugin source was modified; preserved");
+      }
+      return registerLocalMarketplace({ manifestPath: paths.installManifest,
+        marketplacePath: join(homedir(), ".agents", "plugins", "marketplace.json"), pluginPath: plugin });
     });
     process.stdout.write(JSON.stringify({ result }) + "\n");
   } else throw new Error("usage: chatgpt-tela local-mcp [package <destination>|register]");

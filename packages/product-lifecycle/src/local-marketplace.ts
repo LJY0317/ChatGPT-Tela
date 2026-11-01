@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep, isAbsolute } from "node:path";
 import { readOwnershipManifest, withOwnedResource, type OwnedResource } from "./ownership";
-import { mutateOwnershipManifest, registerOwnedResource, unregisterOwnedResource } from "./ownership-store";
+import { mutateOwnershipManifest, registerOwnedResource } from "./ownership-store";
 import type { OwnershipObservation } from "./uninstall";
 
 type Entry = Extract<OwnedResource, { kind: "marketplace-entry" }>;
@@ -55,13 +55,13 @@ export function removeLocalMarketplaceEntry(resource: Entry): { removed: boolean
   try { marketplace = load(resource.path); } catch {
     return { removed: false, detail: "personal marketplace unreadable; preserved" };
   }
+  if (!marketplace) return { removed: false, detail: "personal marketplace absent; preserved" };
   const entry = ownedEntry(marketplace, resource);
   if (resource.state === "pending" || !entry
     || marketplace!.plugins.filter(x => x.name === resource.pluginName).length !== 1
     || fingerprint(entry) !== resource.entryFingerprint) {
     return { removed: false, detail: "personal marketplace entry changed; preserved" };
   }
-  if (!marketplace) return { removed: false, detail: "personal marketplace absent; preserved" };
   const rest = marketplace.plugins.filter(x => x.name !== resource.pluginName);
   if (resource.createdFile && rest.length === 0
     && Object.keys(marketplace).sort().join(",") === "name,plugins"
@@ -89,49 +89,30 @@ export async function registerLocalMarketplace(input: {
   if (existing && (existing.kind !== "marketplace-entry" || existing.path !== path)) {
     throw Error("local marketplace resource identity changed");
   }
-  if (existing?.kind === "marketplace-entry") {
-    if (existing.state !== "pending") {
-      return observeLocalMarketplaceEntry(existing) === "owned" ? "already-registered" : "preserved-user-change";
-    }
-    // A pending intent is never proof of creation. Resume only when the name
-    // remains absent; an identical external entry must never be adopted.
-    const current = load(path);
-    if (existing.entryFingerprint !== fingerprint(entry) || current?.plugins.some(x => x.name === NAME)) {
-      return "preserved-user-change";
-    }
-    write(path, { ...(current ?? { name: "tela-local-development", plugins: [] }),
-      plugins: [...(current?.plugins ?? []), entry] });
-    await mutateOwnershipManifest({ path: input.manifestPath, installId: manifest.installId,
-      productVersion: manifest.productVersion, mutate(currentManifest) {
-        if (JSON.stringify(currentManifest.resources.find(x => x.id === ID)) !== JSON.stringify(existing)) throw Error("marketplace intent changed");
-        return withOwnedResource({ ...currentManifest, resources: currentManifest.resources.filter(x => x.id !== ID) },
-          { ...existing, state: "owned" });
-      } });
-    return "registered";
+  if (existing?.state === "owned") {
+    return observeLocalMarketplaceEntry(existing) === "owned" ? "already-registered" : "preserved-user-change";
   }
   const current = load(path);
-  if (current?.plugins.some(x => x.name === NAME)) return "preserved-user-change";
-  const resource: Entry = { kind: "marketplace-entry", id: ID, owner: "product",
+  // An intent alone never proves creation, even if an external entry is identical.
+  if (current?.plugins.some(x => x.name === NAME)
+    || existing && existing.entryFingerprint !== fingerprint(entry)) return "preserved-user-change";
+  const resource: Entry = existing ?? { kind: "marketplace-entry", id: ID, owner: "product",
     path, pluginName: NAME, entryFingerprint: fingerprint(entry), createdFile: !current, state: "pending" };
-  // Persist exact intent before touching the shared file, allowing uninstall to resume after interruption.
-  await registerOwnedResource({ path: input.manifestPath, installId: manifest.installId,
-    productVersion: manifest.productVersion, resource });
-  try {
-    const latest = load(path);
-    if (latest?.plugins.some(x => x.name === NAME)) return "preserved-user-change";
-    write(path, { ...(latest ?? { name: "tela-local-development", plugins: [] }), plugins: [...(latest?.plugins ?? []), entry] });
-    await mutateOwnershipManifest({ path: input.manifestPath, installId: manifest.installId,
-      productVersion: manifest.productVersion, mutate(currentManifest) {
-        if (JSON.stringify(currentManifest.resources.find(x => x.id === ID)) !== JSON.stringify(resource)) throw Error("marketplace intent changed");
-        return withOwnedResource({ ...currentManifest, resources: currentManifest.resources.filter(x => x.id !== ID) },
-          { ...resource, state: "owned" });
-      } });
-  } catch (error) {
-    if (observeLocalMarketplaceEntry(resource) === "missing") {
-      await unregisterOwnedResource({ path: input.manifestPath, installId: manifest.installId,
-        productVersion: manifest.productVersion, resourceId: ID });
-    }
-    throw error;
+  if (!existing) {
+    await registerOwnedResource({ path: input.manifestPath, installId: manifest.installId,
+      productVersion: manifest.productVersion, resource });
   }
+  const latest = load(path);
+  if (latest?.plugins.some(x => x.name === NAME)) return "preserved-user-change";
+  write(path, { ...(latest ?? { name: "tela-local-development", plugins: [] }),
+    plugins: [...(latest?.plugins ?? []), entry] });
+  await mutateOwnershipManifest({ path: input.manifestPath, installId: manifest.installId,
+    productVersion: manifest.productVersion, mutate(currentManifest) {
+      if (JSON.stringify(currentManifest.resources.find(x => x.id === ID)) !== JSON.stringify(resource)) {
+        throw Error("marketplace intent changed");
+      }
+      return withOwnedResource({ ...currentManifest, resources: currentManifest.resources.filter(x => x.id !== ID) },
+        { ...resource, state: "owned" });
+    } });
   return "registered";
 }

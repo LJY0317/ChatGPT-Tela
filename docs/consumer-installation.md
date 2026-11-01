@@ -155,6 +155,16 @@ The source now supports `chatgpt-tela local-mcp package <new-output-directory>` 
 launcher. It generates a Chat-only stdio plugin and inactive marketplace using the running Tela
 executable; no development checkout, Bun/Node installation or runtime copy is needed. The output
 directory must not already exist, so this command cannot replace an existing marketplace or README.
+An explicit packaged `local-mcp register` operation now prepares an install-owned metadata source
+and adds only its own entry to the documented personal marketplace. Existing same-name entries are
+preserved rather than adopted. The product manifest distinguishes an unfinished registration intent
+from a proven entry; uninstall removes only the unchanged owned entry and owned source directory,
+leaving other entries and user edits intact. This local cleanup does not require the Desktop host to
+be reachable and does not remove its plugin cache or account authorization. Product writers use the
+existing transition lock; an unrelated external writer does not participate in that lock, so atomic
+replacement is not a cross-application compare-and-swap guarantee. Host installation and actual
+consumer migration from an experimental personal registration remain separate acceptance steps.
+
 Keep the installed launcher at a stable path across upgrades. The manifest uses a bare executable
 name and process-local PATH because Agent Plugins do not accept absolute stdio commands. A compiled
 runtime test exports the plugin, moves it into a host-style cache, removes the original package and

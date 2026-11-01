@@ -29,8 +29,8 @@ test("one compiled runtime dispatches isolated daemons, CLI and a real owned com
     expect(built).toBe(0);
     // Match package finalization: Bun appends the bundle after its runtime's signed bytes.
     if (process.platform === "darwin") execFileSync("/usr/bin/codesign", ["--force", "--sign", "-", executable]);
-    const run = async (args: string[]) => {
-      const child = Bun.spawn([executable, ...args], { env: { PATH: process.env.PATH }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const run = async (args: string[], environment: Record<string, string> = {}) => {
+      const child = Bun.spawn([executable, ...args], { env: { PATH: process.env.PATH, ...environment }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
       const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
       return { code, out, err };
     };
@@ -79,6 +79,18 @@ test("one compiled runtime dispatches isolated daemons, CLI and a real owned com
     service = await startChatService({ bearerToken: "x".repeat(48), tools });
     const owned = createOwnershipManifest("test", new Date(), "compiled-local-plugin");
     writeOwnershipManifest(paths.installManifest, owned);
+    const localEnvironment = { HOME: home, USERPROFILE: home,
+      APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local"),
+      XDG_DATA_HOME: join(home, ".local", "share"), XDG_CONFIG_HOME: join(home, ".config"),
+      XDG_STATE_HOME: join(home, ".local", "state"), XDG_CACHE_HOME: join(home, ".cache"), XDG_RUNTIME_DIR: "" };
+    const registered = await run(["local-mcp", "register"], localEnvironment);
+    expect(registered.code).toBe(0);
+    expect(JSON.parse(registered.out).result).toBe("registered");
+    const personal = JSON.parse(readFileSync(join(home, ".agents", "plugins", "marketplace.json"), "utf8"));
+    expect(personal.plugins[0].source.path.startsWith("./")).toBe(true);
+    const ownedPlugin = join(home, personal.plugins[0].source.path);
+    expect(readdirSync(ownedPlugin).sort()).toEqual(["mcp.json", "plugin.json"]);
+    expect(JSON.parse((await run(["local-mcp", "register"], localEnvironment)).out).result).toBe("already-registered");
     writeServiceRuntimeDescriptor(join(paths.serviceRuntime("chat"), "descriptor.json"), {
       version: 1, service: "chat", instanceId: service.instanceId, installId: owned.installId,
       pid: process.pid, endpoint: service.endpoint.href, bearerToken: service.bearerToken, startedAt: new Date().toISOString()
