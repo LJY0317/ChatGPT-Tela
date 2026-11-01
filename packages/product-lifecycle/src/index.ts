@@ -1,4 +1,5 @@
 export * from "./layout";
+export * from "./local-marketplace";
 export * from "./activity";
 export * from "./directory-registration";
 export * from "./install";

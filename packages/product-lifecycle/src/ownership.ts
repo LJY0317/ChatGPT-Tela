@@ -49,6 +49,15 @@ export type OwnedResource =
       readonly identity?: ServiceRegistrationIdentity;
     }
   | {
+      readonly kind: "marketplace-entry";
+      readonly id: string;
+      readonly owner: "product";
+      readonly path: string;
+      readonly pluginName: string;
+      readonly entryFingerprint: string;
+      readonly createdFile: boolean;
+    }
+  | {
       readonly kind: "tailscale-route";
       readonly id: string;
       readonly owner: "gateway";
@@ -160,6 +169,18 @@ export function parseOwnedResource(value: unknown): OwnedResource {
     return Object.freeze({ kind, id, owner: owner as "product" | TelaServiceId,
       registrationId: nonEmpty(item.registrationId, "service registration id"),
       ...(identity ? { identity } : {}) });
+  }
+  if (kind === "marketplace-entry") {
+    if (owner !== "product" || typeof item.createdFile !== "boolean") {
+      throw new Error("marketplace entry owner or creation evidence is invalid");
+    }
+    const pluginName = nonEmpty(item.pluginName, "marketplace plugin name");
+    const entryFingerprint = nonEmpty(item.entryFingerprint, "marketplace entry fingerprint");
+    if (!/^[a-z0-9][a-z0-9._-]*$/.test(pluginName) || !/^[a-f0-9]{64}$/.test(entryFingerprint)) {
+      throw new Error("marketplace entry identity is invalid");
+    }
+    return Object.freeze({ kind, id, owner: "product", path: absolutePath(item.path, "marketplace file"),
+      pluginName, entryFingerprint, createdFile: item.createdFile });
   }
   if (kind === "tailscale-route") {
     if (owner !== "gateway") throw new Error("Tailscale route must be gateway-owned");

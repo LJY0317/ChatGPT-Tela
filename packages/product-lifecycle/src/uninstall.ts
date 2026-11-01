@@ -63,6 +63,7 @@ function priority(resource: OwnedResource): number {
     return resource.owner === "gateway" ? 0 : 1;
   }
   if (resource.kind === "tailscale-route") return 2;
+  if (resource.kind === "marketplace-entry") return 2;
   if (resource.kind === "managed-worktree") return 3;
   if (resource.kind === "credential") return 4;
   if (resource.kind === "directory" && resource.dataClass === "binary") return 9;
@@ -135,7 +136,7 @@ export async function applyUninstallPlan(input: {
     }
     // Product resources are shared dependencies, not independently removable service state.
     // A live/uncertain service must retain its binaries, shared configuration and recovery UI.
-    const sharedProductBlocked = resource.owner === "product"
+    const sharedProductBlocked = resource.owner === "product" && resource.kind !== "marketplace-entry"
       && (["gateway", "chat", "codex"] as const).some(owner => input.blockedOwners?.has(owner));
     if (input.blockedOwners?.has(resource.owner) || sharedProductBlocked) {
       steps.push(Object.freeze({ resourceId: resource.id, owner: resource.owner, resourceKind: resource.kind,
