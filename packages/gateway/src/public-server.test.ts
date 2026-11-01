@@ -42,8 +42,7 @@ describe("ChatGPT Tela frozen ABI", () => {
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("ordinary conversation or knowledge work");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("independent backends");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("reuse its workspace_id");
-    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("Omit it or use an empty string to discover all capabilities");
-    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("Do not paste a user's full request, conversation titles");
+    expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("case-insensitive literal substring");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("Inventory is read-only");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("process_status before starting the command again");
     expect(CHATGPT_TELA_PUBLIC_INSTRUCTIONS).toContain("identifying that exact local task for routing");
