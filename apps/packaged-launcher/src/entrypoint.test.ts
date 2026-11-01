@@ -129,9 +129,9 @@ test("one compiled runtime dispatches isolated daemons, CLI and a real owned com
     expect(JSON.stringify(read.content)).toContain("shared-runtime-worker");
     const write = await client.callTool({ name: "chatgpt_tela_chat_capability_call",
       arguments: { capability: "exec_command", arguments: { workspace_id: localWorkspace.id,
-        cmd: "printf upgraded-runtime > upgraded.txt" } } });
+        cmd: "echo upgraded-runtime > upgraded.txt" } } });
     expect(write.isError).not.toBe(true);
-    expect(readFileSync(join(root, "upgraded.txt"), "utf8")).toBe("upgraded-runtime");
+    expect(readFileSync(join(root, "upgraded.txt"), "utf8").trim()).toBe("upgraded-runtime");
   } finally {
     await client?.close();
     await service?.close();
