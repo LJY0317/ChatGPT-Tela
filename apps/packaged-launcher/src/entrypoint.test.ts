@@ -1,6 +1,7 @@
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 import { expect, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,6 +96,23 @@ test("one compiled runtime dispatches isolated daemons, CLI and a real owned com
       version: 1, service: "chat", instanceId: service.instanceId, installId: owned.installId,
       pid: process.pid, endpoint: service.endpoint.href, bearerToken: service.bearerToken, startedAt: new Date().toISOString()
     });
+    // Keep the installed path while replacing actual executable bytes. The
+    // cached host plugin must use the replacement without re-registration.
+    const digest = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+    const versionA = digest(executable);
+    const replacement = join(root, process.platform === "win32" ? "tela-next.exe" : "tela-next");
+    const upgrade = Bun.spawn([process.execPath, "build", fileURLToPath(new URL("./entrypoint.ts", import.meta.url)),
+      "--compile", "--minify", `--outfile=${replacement}`], { stdout: "pipe", stderr: "pipe" });
+    const [upgraded, , upgradeError] = await Promise.all([upgrade.exited,
+      new Response(upgrade.stdout).text(), new Response(upgrade.stderr).text()]);
+    expect(upgraded).toBe(0);
+    expect(upgradeError).not.toContain("error:");
+    if (process.platform === "darwin") execFileSync("/usr/bin/codesign", ["--force", "--sign", "-", replacement]);
+    const versionB = digest(replacement);
+    expect(versionB).not.toBe(versionA);
+    renameSync(replacement, executable);
+    expect(digest(executable)).toBe(versionB);
+    expect((await run(["--help"])).code).toBe(0);
     client = new Client({ name: "compiled-local-plugin", version: "0.0.1" }, { capabilities: {} });
     await client.connect(new StdioClientTransport({ command: config.command, args: config.args,
       cwd: cached, env: { ...config.env, HOME: home, USERPROFILE: home,
@@ -109,6 +127,11 @@ test("one compiled runtime dispatches isolated daemons, CLI and a real owned com
       arguments: { capability: "read", arguments: { workspace_id: localWorkspace.id, path: "result.txt" } } });
     expect(read.isError).not.toBe(true);
     expect(JSON.stringify(read.content)).toContain("shared-runtime-worker");
+    const write = await client.callTool({ name: "chatgpt_tela_chat_capability_call",
+      arguments: { capability: "exec_command", arguments: { workspace_id: localWorkspace.id,
+        cmd: "printf upgraded-runtime > upgraded.txt" } } });
+    expect(write.isError).not.toBe(true);
+    expect(readFileSync(join(root, "upgraded.txt"), "utf8")).toBe("upgraded-runtime");
   } finally {
     await client?.close();
     await service?.close();

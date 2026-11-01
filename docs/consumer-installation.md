@@ -170,6 +170,10 @@ name and process-local PATH because Agent Plugins do not accept absolute stdio c
 runtime test exports the plugin, moves it into a host-style cache, removes the original package and
 reads a file through an isolated Chat service with only the Tela executable on PATH. This is source
 acceptance, not installed ChatGPT Desktop acceptance.
+The same isolated test also replaces the compiled executable with different binary bytes at the
+same installed path: the previously cached plugin continues to read and write through the local Chat
+service without re-registering. The host cache keeps the executable directory in PATH; an upgrade
+that moves or renames the installed launcher is outside this verified contract.
 
 For development, `bun run local-mcp:package` still creates a Node-based candidate under
 `build/local-mcp`; `--launcher /path/to/chatgpt-tela` selects the installed-runtime mode instead.
