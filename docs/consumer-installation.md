@@ -155,6 +155,11 @@ The source now supports `chatgpt-tela local-mcp package <new-output-directory>` 
 launcher. It generates a Chat-only stdio plugin and inactive marketplace using the running Tela
 executable; no development checkout, Bun/Node installation or runtime copy is needed. The output
 directory must not already exist, so this command cannot replace an existing marketplace or README.
+The macOS setup and Settings UI expose **Start Tela Chat** and **Prepare local plugin**.
+Local Chat startup does not read public HTTPS configuration; folder approval remains available in
+Settings before optional Web setup. `services start chat` uses the existing Chat registration only,
+while `services start` retains the full-service behavior. Desktop host installation remains explicit.
+
 An explicit packaged `local-mcp register` operation now prepares an install-owned metadata source
 and adds only its own entry to the documented personal marketplace. Existing same-name entries are
 preserved rather than adopted. The product manifest distinguishes an unfinished registration intent

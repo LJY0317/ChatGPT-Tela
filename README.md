@@ -508,12 +508,19 @@ package copy so Windows and other platforms are not asked to delete the executab
 The macOS control center guides first use from the **installed** package; it needs no source checkout
 or separate Electron build. A fresh installation opens **Set up ChatGPT Tela** automatically.
 
+For local Desktop threads, use **Start Tela Chat** and **Prepare local plugin** in setup or Settings.
+Approve local folders in Settings, then install `tela-local-chat` from your personal marketplace in
+ChatGPT Desktop's Plugins Directory. This source flow does not require a public HTTPS address.
+The plugin preparation button does not install or authorize the plugin in ChatGPT.
+
+The optional development Web connection uses the following separate flow:
+
 1. Install the signed preview with the plan/apply commands above. The menu bar opens on macOS.
 2. In the setup screen, enter your reachable HTTPS connection address and local port. Choose an existing
    HTTPS route or your Tailscale Funnel. The existing route must forward to that port; Tailscale must already
    be installed and signed in. This preview requires explicit consent to **development-only unauthenticated
    exposure**: anyone with the endpoint address can reach its exposed tools. It is not consumer-safe yet.
-3. Save and continue, then choose **Start Tela** from the menu bar or Home. Select **Open ChatGPT login** or the profile's
+3. Choose **Save Web connection**, then choose **Start Tela** from the menu bar or Home. Select **Open ChatGPT login** or the profile's
    **Sign in / manage connection…** button. Connected profiles must first be disconnected.
 4. Sign in yourself in the visible login window. Copy the connection address from Work and create the
    **ChatGPT Tela** Plugin using the connection instructions below. Close the login window or choose
