@@ -150,7 +150,7 @@ export function resolvePackagedServiceLaunch(input: {
       manifest,
       installId: ownership.installId,
       payloadRoot,
-      productConfig,
+      ...(productConfig ? { productConfig } : {}),
     }),
   });
   return Object.freeze({
