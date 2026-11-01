@@ -819,7 +819,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     if let consent = exposureConsent { consentDraft = consent.state == .on }
     endpointField = nil; portField = nil; exposurePicker = nil; exposureConsent = nil
     clearDetail()
-    if installedServiceControlsAvailable() && bootstrapState != "configured" {
+    // Folder permissions and local Chat setup must remain reachable without HTTPS configuration.
+    if installedServiceControlsAvailable() && bootstrapState != "configured" && selectedPage != .settings {
       renderFirstUse()
       return
     }
@@ -1168,7 +1169,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         row(profiles.count == 1 ? "Concurrent tasks" : "\(profile.targetDisplayName) · Concurrent tasks",
             control: picker, in: delegations)
       }
-      if installedServiceControlsAvailable() {
+      if installedServiceControlsAvailable() && bootstrapState == "configured" {
         let background = card("Tela")
         let running = serviceStates.values.contains("Ready")
         let button = actionButton(running ? "Stop Tela…" : "Start Tela", action: running ? #selector(stopServices) : #selector(startServices))
@@ -1245,13 +1246,19 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private func addLocalChatPluginSetup() {
     guard installedServiceControlsAvailable() else { return }
     let local = card("Chat · This Mac")
-    append(secondary("For ChatGPT Desktop local threads. Tela Chat must be running on this Mac."), to: local)
+    let chatReady = serviceStates["chat"] == "Ready"
+    append(secondary("Tela Chat: \(serviceStates["chat"] ?? "Checking…"). For ChatGPT Desktop local threads on this Mac."), to: local)
+    if !chatReady {
+      let start = actionButton("Start Tela Chat", action: #selector(startLocalChat))
+      start.isEnabled = !operationInProgress
+      local.addArrangedSubview(start)
+    }
     let prepare = actionButton("Prepare local plugin", action: #selector(prepareLocalChatPlugin))
     prepare.isEnabled = !operationInProgress
     local.addArrangedSubview(prepare)
     if preparingLocalPlugin { append(secondary("Preparing local plugin…"), to: local) }
     if let localPluginMessage { append(secondary(localPluginMessage), to: local) }
-    append(secondary("In ChatGPT Desktop's Plugins Directory, install tela-local-chat from your personal marketplace and test a Chat tool. Web conversations use a separate connection."), to: local)
+    append(secondary("Approve local folders in Settings, then install tela-local-chat from your personal marketplace in ChatGPT Desktop's Plugins Directory and test a Chat tool. Web conversations use a separate connection."), to: local)
   }
 
   @objc private func prepareLocalChatPlugin() {
@@ -1425,9 +1432,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       help.addArrangedSubview(actionButton("Check again", action: #selector(refreshPage)))
       return
     }
-    append(secondary("Prepare the local Desktop plugin below. To start Tela's services and use Web connections, finish the existing HTTPS setup."), to: stack)
+    append(secondary("For local ChatGPT Desktop threads, start Tela Chat and prepare its plugin below. You can approve folders in Settings without an HTTPS address. The Web connection is optional."), to: stack)
     addLocalChatPluginSetup()
-    let connection = card("Web connection address (development)")
+    let connection = card("Optional Web connection (development)")
     let endpoint = NSTextField(string: endpointDraft)
     endpoint.placeholderString = "https://your-server.example/mcp"
     append(endpoint, to: connection)
@@ -1450,7 +1457,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     append(consent, to: connection)
     exposureConsent = consent
     append(secondary("This preview has no authentication on the public endpoint. Anyone with its address can reach the exposed tools. Use only a controlled development environment. Consumer-safe sign-in is not available yet."), to: connection)
-    let save = actionButton("Save and continue", action: #selector(saveFirstUseConfiguration))
+    let save = actionButton("Save Web connection", action: #selector(saveFirstUseConfiguration))
     save.isEnabled = !operationInProgress
     connection.addArrangedSubview(save)
     if savingConfiguration { append(secondary("Saving Tela settings…"), to: connection) }
@@ -1578,6 +1585,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   @objc private func startServices() { changeBackgroundServices(start: true) }
+  @objc private func startLocalChat() { changeBackgroundServices(start: true, chatOnly: true) }
   func startTelaFromMenu() {
     show()
     Task {
@@ -1588,7 +1596,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
   @objc private func stopServices() { changeBackgroundServices(start: false) }
 
-  private func changeBackgroundServices(start: Bool) {
+  private func changeBackgroundServices(start: Bool, chatOnly: Bool = false) {
     guard !operationInProgress, installedServiceControlsAvailable() else { return }
     if !start {
       let alert = NSAlert()
@@ -1600,7 +1608,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       guard alert.runModal() == .alertFirstButtonReturn else { return }
     }
     changingServices = true
-    serviceAction = start ? "Starting Tela…" : "Stopping Tela…"
+    serviceAction = chatOnly ? "Starting Tela Chat…" : start ? "Starting Tela…" : "Stopping Tela…"
     renderCurrentPage()
     let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"]
     Task {
@@ -1608,7 +1616,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         guard let launcher else { return false }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launcher)
-        process.arguments = ["services", start ? "start" : "stop"]
+        process.arguments = ["services", start ? "start" : "stop"] + (chatOnly ? ["chat"] : [])
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do { try process.run(); process.waitUntilExit(); return process.terminationStatus == 0 }

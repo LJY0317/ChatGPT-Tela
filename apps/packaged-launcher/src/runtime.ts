@@ -54,29 +54,32 @@ function derivedEnvironment(input: {
   readonly manifest: PackagedProductManifest;
   readonly installId: string;
   readonly payloadRoot: string;
-  readonly productConfig: ProductConfig;
+  readonly productConfig?: ProductConfig;
 }): Readonly<Record<string, string>> {
   const result: Record<string, string> = {
     CHATGPT_TELA_INSTALL_ID: input.installId,
     CHATGPT_TELA_PRODUCT_VERSION: input.manifest.productVersion,
   };
-  if (input.service === "gateway") {
-    result.CHATGPT_TELA_GATEWAY_PUBLIC_MCP_URL = input.productConfig.exposure.publicUrl;
-    result.CHATGPT_TELA_GATEWAY_LOCAL_MCP_PORT = String(input.productConfig.exposure.localPort);
-    result.CHATGPT_TELA_GATEWAY_ALLOW_UNAUTHENTICATED_PUBLIC_MCP = "1";
-    result.CHATGPT_TELA_GATEWAY_PUBLIC_MCP_ABI = input.productConfig.publicMcpAbi;
-    if (input.productConfig.exposure.kind === "tailscale-funnel") {
-      result.CHATGPT_TELA_GATEWAY_MANAGE_TAILSCALE_FUNNEL = "1";
-      result.CHATGPT_TELA_TAILSCALE_CLI = input.productConfig.exposure.tailscaleCli;
-    }
-  }
   if (input.service === "chat") {
-    // Empty explicitly clears stale inherited configuration for packages without this capability.
+    // Local Chat needs its installed helpers and ownership, not a public MCP endpoint.
     result.CHATGPT_TELA_WORKSPACE_FILES_EXECUTABLE = input.manifest.workspaceFiles
       ? regularPayloadFile(input.payloadRoot, input.manifest.workspaceFiles.executable, "file publisher executable") : "";
+    return Object.freeze(result);
+  }
+  const config = input.productConfig;
+  if (!config) throw new Error("packaged public services require product configuration");
+  if (input.service === "gateway") {
+    result.CHATGPT_TELA_GATEWAY_PUBLIC_MCP_URL = config.exposure.publicUrl;
+    result.CHATGPT_TELA_GATEWAY_LOCAL_MCP_PORT = String(config.exposure.localPort);
+    result.CHATGPT_TELA_GATEWAY_ALLOW_UNAUTHENTICATED_PUBLIC_MCP = "1";
+    result.CHATGPT_TELA_GATEWAY_PUBLIC_MCP_ABI = config.publicMcpAbi;
+    if (config.exposure.kind === "tailscale-funnel") {
+      result.CHATGPT_TELA_GATEWAY_MANAGE_TAILSCALE_FUNNEL = "1";
+      result.CHATGPT_TELA_TAILSCALE_CLI = config.exposure.tailscaleCli;
+    }
   }
   if (input.service === "codex") {
-    result.CHATGPT_TELA_PRODUCT_PUBLIC_MCP_ABI = input.productConfig.publicMcpAbi;
+    result.CHATGPT_TELA_PRODUCT_PUBLIC_MCP_ABI = config.publicMcpAbi;
     if (!input.manifest.profileRuntime) throw new Error("packaged Codex service requires profile runtime metadata");
     result.CHATGPT_TELA_PRODUCT_PROFILE_RUNTIME_EXECUTABLE = regularPayloadFile(
       input.payloadRoot,
@@ -88,8 +91,8 @@ function derivedEnvironment(input: {
       input.manifest.profileRuntime.entrypoint,
       "packaged profile runtime entrypoint",
     );
-    if (input.productConfig.multiProfile) {
-      result.CHATGPT_TELA_CODEX_MULTI_PROFILE_LAUNCHER_CLI = input.productConfig.multiProfile.launcherCli;
+    if (config.multiProfile) {
+      result.CHATGPT_TELA_CODEX_MULTI_PROFILE_LAUNCHER_CLI = config.multiProfile.launcherCli;
     }
   }
   return Object.freeze(result);
@@ -135,7 +138,8 @@ export function resolvePackagedServiceLaunch(input: {
 }): ResolvedPackagedServiceLaunch {
   const { payloadRoot, manifest, paths, ownership } = verifyInstalledPackage(input);
   if (input.service === "chat") assertChatProcessStoreCompatible(paths, manifest.chatProcessStore);
-  const productConfig = input.productConfig ?? readProductConfig(join(paths.configRoot, "product-v1.json"));
+  const productConfig = input.service === "chat"
+    ? undefined : input.productConfig ?? readProductConfig(join(paths.configRoot, "product-v1.json"));
   const entry = manifest.services[input.service];
   const executable = regularPayloadFile(payloadRoot, entry.executable, `packaged ${input.service} executable`);
   const environment = Object.freeze({

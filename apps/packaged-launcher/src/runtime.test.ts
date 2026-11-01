@@ -208,6 +208,11 @@ describe("packaged service launcher", () => {
       });
 
       const paths = resolveProductPaths(pathOptions);
+      // The local Chat service does not consume a public endpoint or first-use HTTPS settings.
+      const local = resolvePackagedServiceLaunch({ service: "chat", payloadRoot: paths.binaryRoot, pathOptions });
+      expect(local.environment.CHATGPT_TELA_WORKSPACE_FILES_EXECUTABLE).toBeDefined();
+      expect(local.environment.CHATGPT_TELA_GATEWAY_PUBLIC_MCP_URL).toBeUndefined();
+      expect(() => resolvePackagedServiceLaunch({ service: "gateway", payloadRoot: paths.binaryRoot, pathOptions })).toThrow("config is missing");
       writeProductConfig({
         version: 1,
         publicMcpAbi: "stable",
@@ -279,6 +284,10 @@ describe("packaged service launcher", () => {
       });
       await applyPackagedInstallFromPayload({ planned, payloadSourcePath: payload, ...pathOptions, runner });
       const paths = resolveProductPaths(pathOptions);
+      const localChat = resolvePackagedServiceLaunch({ service: "chat", payloadRoot: paths.binaryRoot, pathOptions });
+      expect(localChat.environment.CHATGPT_TELA_WORKSPACE_FILES_EXECUTABLE).toBeDefined();
+      expect(localChat.environment.CHATGPT_TELA_GATEWAY_PUBLIC_MCP_URL).toBeUndefined();
+      expect(() => resolvePackagedServiceLaunch({ service: "gateway", payloadRoot: paths.binaryRoot, pathOptions })).toThrow("config is missing");
       writeProductConfig({
         version: 1,
         publicMcpAbi: "stable",

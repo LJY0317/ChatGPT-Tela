@@ -95,6 +95,10 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     })).rejects.toThrow();
     expect(existsSync(join(paths.configRoot, "product-v1.json"))).toBe(false);
     const controls = { ...bootstrap, runner, shutdownService };
+    expect(await runPackagedServicesCommand(["services", "start", "chat"], controls)).toMatchObject({
+      success: true, services: [{ service: "chat", state: "running" }],
+    });
+    expect(runner.running.size).toBe(1);
     const project = join(root,"approved-project"); mkdirSync(project); writeFileSync(join(project,"notes.txt"),"user data");
     expect((await runPackagedChatCommand(["chat","roots"],bootstrap)).roots).toEqual([]);
     const approved = await runPackagedChatCommand(["chat","allow-root","--path",project],bootstrap);

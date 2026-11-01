@@ -29,6 +29,7 @@ Usage:
   chatgpt-tela setup [--slot <profile>]
   chatgpt-tela ingress status --public [--public-dns-url <DNS-JSON-URL>]
   chatgpt-tela services <start|stop>
+  chatgpt-tela services start chat
   chatgpt-tela services restart chat
   chatgpt-tela chat roots
   chatgpt-tela local-mcp [package <destination>|register]
