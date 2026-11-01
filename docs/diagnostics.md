@@ -308,6 +308,14 @@ Historical and live thread inspection also reuse canonical incident timelines
 after rotating logs expire. The common reader filters the same time window,
 test origins and duplicate events; source-fit evidence includes the retained
 input estimates, limits and item-byte accounting without source text.
+`contextPreparationEvidence` also returns the same turn's existing seed-authority,
+Web-plan, retained-decision and prepared-message events. Compare restored/duplicate
+instruction bytes and `seed_*_bytes` with the recorded reuse reason. Successful
+`native_checkpoint_preparation_planned` events partition serialized source items by
+checkpoint, authority, user, assistant, tool and other roles (`source_*_bytes/count`).
+These source-item sizes, message wire sizes and input estimates measure different
+boundaries; none measures provider billing or plugin-schema tokens. Missing older
+fields remain unmeasured rather than zero, and collection cannot reconstruct them.
 For a Web identity rejection, the historical inspector also gives a
 time-bounded structural sequence of renderer unresponsiveness, input
 ownership revocation, input classification, and later Native failure,
