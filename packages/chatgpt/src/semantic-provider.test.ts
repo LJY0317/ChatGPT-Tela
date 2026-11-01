@@ -55,17 +55,6 @@ function request(): WebTurnRequest {
   };
 }
 
-function toolRequest(): WebTurnRequest {
-  return {
-    ...request(),
-    toolBridge: {
-      protocol: "mcp",
-      contract: "development",
-      turnCapability: "turn-capability-0123456789abcdef",
-    },
-  };
-}
-
 const recognizedApproval = { cardCount: 1, denyCount: 1, allowCount: 0, allowOnceCount: 1,
   alwaysAllowCount: 0, unknownCount: 0, revisionFingerprint: "approval-proof",
   cardFingerprint: "a".repeat(24), inputReceived: false };
@@ -1010,48 +999,8 @@ describe("ChatGPT semantic provider", () => {
     }
   });
 
-  test("tool bridge refuses submission without an explicit ChatGPT connector identity", async () => {
-    const driver = new FixtureDriver(fixture("ready-new-chat"));
-    const surface = await leaseFor(driver);
-    try {
-      await expect(new ChatGptSemanticProvider().submitTurn(surface.lease, toolRequest()))
-        .rejects.toThrow("requires an explicit connector identity");
-      expect(driver.connectorSelections).toEqual([]);
-      expect(driver.activated).toEqual([]);
-    } finally {
-      await surface.host.close();
-    }
-  });
-
-  test("tool bridge selects one exact connector and appends payload without removing its pill", async () => {
-    const driver = new FixtureDriver(fixture("ready-new-chat"));
-    const surface = await leaseFor(driver);
-    const provider = new ChatGptSemanticProvider({ connectorName: "ChatGPT Tela Development" });
-    try {
-      const submitting = provider.submitTurn(surface.lease, toolRequest());
-      while (!driver.current.revision.includes(":appended")) await Promise.resolve();
-      expect(driver.current.composers[0]?.connectorFingerprints)
-        .toEqual([hash("ChatGPT Tela Development")]);
-      expect(driver.appendedTexts).toHaveLength(1);
-      expect(driver.appendedTexts[0]).toContain("<chatgpt_tela_transport_contract>");
-      expect(driver.appendedTexts[0]).toContain("system context outranks developer context");
-      expect(driver.appendedTexts[0]).toContain('"activeRequestRevisionId":"rev-1"');
-      expect(driver.appendedTexts[0]).toContain("opaque per-turn routing metadata");
-      expect(driver.appendedTexts[0]).toContain("turn-capability-0123456789abcdef");
-      expect(driver.appendedTexts[0]).toContain("<chatgpt_tela_transport_resume>");
-      driver.queued.push(acceptedSnapshot(driver));
-
-      const observed = await submitting;
-      expect(observed.state).toBe("proven");
-      expect(driver.connectorSelections).toEqual(["ChatGPT Tela Development"]);
-      expect(driver.activated).toEqual(["send-main"]);
-    } finally {
-      await surface.host.close();
-    }
-  });
-
   test("Goal-only routing metadata keeps Native work tools outside the Tela Chat contract", () => {
-    const payload = formatWebPhysicalContext(request().physicalContext, undefined, undefined, [], {
+    const payload = formatWebPhysicalContext(request().physicalContext, undefined, [], {
       defaultProfileSlot: 2, nativeGoalControl: "opaque-goal-only-control", nativeHistoryControl: "opaque-history-control",
     });
     expect(payload).toContain('"nativeGoalControl":"opaque-goal-only-control"');
@@ -1337,7 +1286,7 @@ describe("ChatGPT semantic provider", () => {
     const surface = await leaseFor(driver);
     try {
       await expect(new ChatGptSemanticProvider({ connectorName: "ChatGPT Tela Development" })
-        .submitTurn(surface.lease, toolRequest()))
+        .submitTurn(surface.lease, { ...request(), chatTools: {} }))
         .rejects.toThrow("fixture connector selection failed");
       expect(driver.activated).toEqual([]);
       expect(driver.current.composers[0]?.textLength).toBe(0);
@@ -1357,7 +1306,7 @@ describe("ChatGPT semantic provider", () => {
     try {
       await expect(provider.probeConnector(surface.lease))
         .rejects.toThrow("integration catalog does not expose the configured connector");
-      await expect(provider.submitTurn(surface.lease, toolRequest()))
+      await expect(provider.submitTurn(surface.lease, { ...request(), chatTools: {} }))
         .rejects.toThrow("integration catalog does not expose the configured connector");
       expect(driver.activated).toEqual([]);
       expect(driver.current.composers[0]?.textLength).toBe(0);
@@ -1373,7 +1322,7 @@ describe("ChatGPT semantic provider", () => {
     const surface = await leaseFor(driver);
     try {
       const observed = await new ChatGptSemanticProvider({ connectorName: "ChatGPT Tela Development" })
-        .submitTurn(surface.lease, toolRequest());
+        .submitTurn(surface.lease, { ...request(), chatTools: {} });
       expect(observed.state).toBe("probable");
       expect(driver.activated).toEqual([]);
       expect(driver.current.composers[0]?.textLength).toBe(0);
@@ -2725,7 +2674,7 @@ test("prepared input diagnostics survive emission and sanitized readback without
   expect(seen).toEqual([expect.objectContaining(expected)]);
   expect(recorded).toEqual([expect.objectContaining(expected)]);
   expect(recorded[0]!.composer_wire_bytes).toBeGreaterThan(recorded[0]!.context_wire_bytes as number);
-  expect(recorded[0]!.message_fingerprint).toBe(diagnosticFingerprint(hash(formatWebPhysicalContext(context, undefined))));
+  expect(recorded[0]!.message_fingerprint).toBe(diagnosticFingerprint(hash(formatWebPhysicalContext(context))));
   expect(readDiagnosticTail(file).events.find(row=>row.stage==="web_turn_identity_accepted")?.operation_fingerprint).toBe(operation);
   expect(readFileSync(file,"utf8")).not.toContain(source);
   // Identical text in a new Native request is valid; correlate it without suppressing it.
@@ -2777,7 +2726,7 @@ test("inert checkpoint source rejects tool authority, preloads, retained deltas 
   const attachment = createChatGptContextAttachment(payload.physicalContext);
   const source = { attachment, receipt: `ctxr_${"a".repeat(32)}` };
   const cases: WebTurnRequest[] = [
-    { ...toolRequest(), inertSourceAttachment: source },
+    { ...payload, chatTools: {}, inertSourceAttachment: source },
     { ...payload, inertSourceAttachment: source, contextAttachment: attachment },
     { ...payload, inertSourceAttachment: source, physicalContext: { ...payload.physicalContext, mode: "retained-delta" } },
     { ...payload, inertSourceAttachment: { ...source, attachment: { ...attachment, sha256: "0".repeat(64) } } },

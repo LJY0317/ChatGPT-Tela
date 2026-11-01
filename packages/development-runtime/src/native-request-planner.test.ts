@@ -2244,7 +2244,7 @@ test('oversized indexed originals use a scoped exact seed and retain the same We
     expect(context.segments.some(item => item.type === 'checkpoint')).toBe(false);
     expect(context.logicalTokens).toBeGreaterThan(hard);
     expect(context.transferTokens).toBeLessThan(24_000);
-    const wire = formatWebPhysicalContext(context, undefined, undefined, [], { nativeHistoryControl: 'scoped-source' });
+    const wire = formatWebPhysicalContext(context, undefined, [], { nativeHistoryControl: 'scoped-source' });
     expect(wire).toContain('NOT supplied or summarized');
     expect(wire).toContain('"deferredHistory"');
     expect(wire).not.toContain('Z'.repeat(100));
@@ -2254,7 +2254,7 @@ test('oversized indexed originals use a scoped exact seed and retain the same We
     expect(next.physicalContext.mode).toBe('retained-delta');
     expect(next.retainedSurfaceLeaseId).toBe('same-page');
     expect(next.physicalContext.deferredHistory).toEqual(context.deferredHistory);
-    const deltaWire = formatWebPhysicalContext(next.physicalContext, undefined, undefined, [], { nativeHistoryControl: 'renewed-scope' });
+    const deltaWire = formatWebPhysicalContext(next.physicalContext, undefined, [], { nativeHistoryControl: 'renewed-scope' });
     expect(deltaWire).not.toContain('"deferredHistory"');
     expect(deltaWire).toContain('renewed-scope');
     expect(next.physicalContext.segments).toHaveLength(1);

@@ -70,7 +70,7 @@ test("Native request with image and document retains ordered references and exac
   expect(serialized).not.toContain(png);
   expect(serialized).not.toContain(pdf);
   expect(serialized).not.toContain("private-name.pdf");
-  const message = formatWebPhysicalContext(context, undefined, undefined, projection.media);
+  const message = formatWebPhysicalContext(context, undefined, projection.media);
   expect(message).toContain("mediaManifest");
   expect(message).toContain(projection.media[0]!.evidence.id);
   expect(message).not.toContain("data:image");

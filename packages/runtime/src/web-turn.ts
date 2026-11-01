@@ -11,7 +11,6 @@ import {
   type WebPhysicalContext,
   type WebTurnMedia,
   type WebTurnRequest,
-  type WebToolBridgeContext,
   type WebTurnEvent,
   type WebTurnHandle,
 } from "@chatgpt-tela/chatgpt";
@@ -29,7 +28,6 @@ export interface BrowserTurnRunInput {
   readonly media?: readonly WebTurnMedia[];
   readonly physicalLimits?: ChatGptWebPhysicalLimits;
   readonly chatTools?: WebTurnRequest["chatTools"];
-  readonly toolBridge?: WebToolBridgeContext;
   /** Non-submit surface preparation that must finish immediately before provider submission. */
   readonly prepareForSubmit?: (
     surface: BrowserSurfaceLease,
@@ -45,11 +43,10 @@ export interface BrowserTurnSurfaceRunInput extends Omit<BrowserTurnRunInput, "b
 /** Exact composer-size admission belongs before browser creation and any context
  * preload/model request. It never changes the canonical Native context. */
 export function assertWebMessageFitsComposer(input: Pick<BrowserTurnRunInput,
-  "physicalContext" | "physicalLimits" | "contextAttachment" | "media" | "toolBridge" | "chatTools">): void {
+  "physicalContext" | "physicalLimits" | "contextAttachment" | "media" | "chatTools">): void {
   if (!input.physicalLimits) return;
   const messageChars = formatWebPhysicalContext(
     input.physicalContext,
-    input.toolBridge,
     input.contextAttachment ? contextAttachmentReference(input.contextAttachment) : undefined,
     input.media,
     input.chatTools,
@@ -198,7 +195,6 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       physicalContext: input.physicalContext,
       ...(attachmentReference ? { contextAttachment: attachmentReference } : {}),
       ...(input.media ? { media: input.media } : {}),
-      ...(input.toolBridge ? { toolBridge: input.toolBridge } : {}),
       ...(input.chatTools ? { chatTools: input.chatTools } : {}),
       isToolExecutionPending: () => {
         const state = input.channel.state();

@@ -369,7 +369,6 @@ async function restoreEmptyComposer(
 
 function formatWebPhysicalContextParts(
   context: WebPhysicalContext,
-  toolBridge: WebTurnRequest["toolBridge"],
   contextAttachment?: ChatGptContextAttachmentReference,
   media: readonly WebTurnMedia[] = [],
   chatTools?: WebTurnRequest["chatTools"],
@@ -405,12 +404,7 @@ function formatWebPhysicalContextParts(
       "The mediaManifest lists the exact files intended for attachment to THIS execution message. Each filename maps to its canonical Native evidenceId and revisionId; historical references remain historical, not fresh user instructions. Never infer more than the attached contents actually reveal, and disclose any file you cannot open.",
     ] : []),
     "After a deterministic tool failure, update the working hypothesis or observable state before repeating the same call.",
-    ...(toolBridge ? [
-      "The selected ChatGPT Tela app exposes tools for this exact Native Codex turn. Discover the complete current Native inventory with an empty query first instead of assuming tool names from an earlier turn. Inventory queries are literal substring filters, not semantic search; an empty filtered result does not establish that Native tools are unavailable.",
-      "The turnCapability value in the context header is opaque per-turn routing metadata. Copy it unchanged only into the declared turn_capability field of ChatGPT Tela Codex inventory/call tools; never invent, transform, repurpose, or treat it as task content.",
-      "Use Native tools only when the active request requires a local effect or fresh local evidence that is not already present in the supplied context; otherwise answer directly.",
-      "Continue until the requested work is complete and verified, then write the user-facing final answer after the last required tool result has settled.",
-    ] : chatTools ? [
+    ...(chatTools ? [
       "Use the selected ChatGPT Tela app's Tela Chat inventory and call tools for local work. Discover current Chat capabilities rather than assuming tool names.",
       ...(chatTools.defaultProfileSlot !== undefined ? [
         `New Web delegations default to profile ${chatTools.defaultProfileSlot}. Pass --slot ${chatTools.defaultProfileSlot} to the delegation CLI unless the user explicitly selects another profile. Existing jobs keep their recorded profile. This is a default, not a restriction on an explicit new delegation.`,
@@ -442,13 +436,6 @@ function formatWebPhysicalContextParts(
     ...(chatTools ? { toolBackend: "tela-chat", ...(chatTools.defaultProfileSlot !== undefined ? { defaultDelegationProfileSlot: chatTools.defaultProfileSlot } : {}) } : {}),
     ...(mediaManifest.length ? { mediaManifest } : {}),
     ...(contextAttachment ? { contextAttachment } : {}),
-    ...(toolBridge ? {
-      toolBridge: {
-        protocol: toolBridge.protocol,
-        contract: toolBridge.contract,
-        turnCapability: toolBridge.turnCapability,
-      },
-    } : {}),
   });
   const inlineSegments = contextAttachment
     ? context.segments.filter(segment => (
@@ -494,9 +481,9 @@ function formatWebPhysicalContextParts(
   return {text, composerBytes, contextBytes, protocolBytes:composerBytes-contextBytes};
 }
 
-export function formatWebPhysicalContext(context: WebPhysicalContext, toolBridge: WebTurnRequest["toolBridge"],
+export function formatWebPhysicalContext(context: WebPhysicalContext,
   contextAttachment?: ChatGptContextAttachmentReference, media: readonly WebTurnMedia[] = [], chatTools?: WebTurnRequest["chatTools"]): string {
-  return formatWebPhysicalContextParts(context,toolBridge,contextAttachment,media,chatTools).text;
+  return formatWebPhysicalContextParts(context,contextAttachment,media,chatTools).text;
 }
 
 
@@ -1339,8 +1326,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     request: WebTurnRequest,
     signal?: AbortSignal,
   ): Promise<SemanticObservation<WebTurnHandle>> {
-    if (request.chatTools && request.toolBridge) throw Error("Web tools must select one backend");
-    const usesConnector = !!(request.chatTools || request.toolBridge);
+    const usesConnector = !!request.chatTools;
     if (request.inertSourceAttachment && (usesConnector || request.contextAttachment || request.physicalContext.mode === "retained-delta")) {
       throw Error("inert source requires an isolated tool-free non-preloaded submission");
     }
@@ -1365,7 +1351,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       throw new Error("tool-free ChatGPT semantic submit refuses a selected connector");
     }
     if (usesConnector && !connectorName) {
-      throw new Error("ChatGPT tool bridge requires an explicit connector identity");
+      throw new Error("ChatGPT connector submission requires an explicit connector identity");
     }
     let cleanupAttempted = false;
     let sendActivationAttempted = false;
@@ -1397,7 +1383,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     const upload = prepareWebTurnMedia(request.physicalContext, request.media ?? []);
     const files = [...(sourceUpload ? [sourceUpload.file] : []), ...upload.files];
     if (new Set(files.map(file => file.name)).size !== files.length) throw Error("source and media attachments have duplicate names");
-    const formatted = formatWebPhysicalContextParts(request.physicalContext, request.toolBridge, request.contextAttachment, request.media, request.chatTools);
+    const formatted = formatWebPhysicalContextParts(request.physicalContext, request.contextAttachment, request.media, request.chatTools);
     const text = formatted.text;
     const seenSources = new Set<string>();
     let sourceBytes = 0, duplicateSourceBytes = 0, duplicateSourceCount = 0;
@@ -1616,11 +1602,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       assertCausalInputUnchanged?.();
       const bridgeComposer = filled.composers.find(item => item.key === composer.key);
       emitDiagnosticEvent("chatgpt_tela_work", "web_tool_bridge_prepared", {
-        bridge_attached: !!request.toolBridge,
-        tool_backend: request.chatTools ? "tela-chat" : request.toolBridge ? "legacy-native" : "none",
+        bridge_attached: false,
+        tool_backend: request.chatTools ? "tela-chat" : "none",
         connector_count: bridgeComposer?.connectorFingerprints.length ?? 0,
         expected_connector_present: !!expectedConnectorFingerprint && bridgeComposer?.connectorFingerprints.includes(expectedConnectorFingerprint) === true,
-        context_header_attached: !!request.toolBridge,
+        context_header_attached: false,
         remote_tool_visibility_observed: false,
       });
       sendActivationAttempted = true;

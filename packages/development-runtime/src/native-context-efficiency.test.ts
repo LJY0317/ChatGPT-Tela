@@ -302,7 +302,7 @@ test("cold Web planning reads a bounded original source and can retrieve its gia
   expect(next.physicalContext.mode).toBe('retained-delta');
   expect(next.retainedSurfaceLeaseId).toBe('same-original-page');
   expect(next.physicalContext.deferredHistory).toEqual(plan.physicalContext.deferredHistory);
-  expect(formatWebPhysicalContext(next.physicalContext,undefined,undefined,[],{nativeHistoryControl:'fresh-control'})).not.toContain('"deferredHistory"');
+  expect(formatWebPhysicalContext(next.physicalContext,undefined,[],{nativeHistoryControl:'fresh-control'})).not.toContain('"deferredHistory"');
   expect(sourceReads).toBe(1);expect(bodyReads).toBe(1);expect(summaries).toBe(0);
   next.settle?.({status:'failed'});
  }finally{turns.cancelAll();await rm(root,{recursive:true,force:true});}

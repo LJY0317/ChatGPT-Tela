@@ -93,14 +93,14 @@ function fixture(change: (value: any) => any = value => value,
   }));
   return {provider, submitted:()=>submitted!, preloads:()=>preloads, submits:()=>submits};
 }
-test('dedicated summary has no tool bridge and keeps the complete source inert', async () => {
+test('dedicated summary is tool-free and keeps the complete source inert', async () => {
   const f = fixture();
   const result = await f.provider.createContextCheckpoint(surface,source);
   expect(result.state).toBe('proven');
   if (result.state !== 'proven') throw new Error('expected proof');
   expect(result.value.sourceRevisionId).toBe('r2');
   expect(result.value.content).toContain('abc');
-  expect(f.submitted().toolBridge).toBeUndefined();
+  expect(f.submitted().chatTools).toBeUndefined();
   expect(f.submitted().physicalContext.segments.at(-1)!.content).toContain('single fenced json code block');
   expect(JSON.parse(f.submitted().physicalContext.segments[1]!.content).segments).toEqual(source.physicalContext.segments);
   expect(f.preloads()).toBe(0);
@@ -180,9 +180,9 @@ test('checkpoint source rebinds media references to the inert summary request wi
  expect(f.submitted().media![0]!.revisionId).toBe(mediaSource.revisionId);
  expect(f.submitted().media![0]!.evidence.id).toBe(evidence.id);
  expect(f.submitted().media![0]!.file.bytes).toEqual(inline.bytes);
- expect(f.submitted().toolBridge).toBeUndefined();
+ expect(f.submitted().chatTools).toBeUndefined();
  const sent=f.submitted();
- const actualTransfer=Math.ceil((Buffer.byteLength(formatWebPhysicalContext(sent.physicalContext,undefined,undefined,sent.media),'utf8')+inline.bytes.byteLength)/4);
+ const actualTransfer=Math.ceil((Buffer.byteLength(formatWebPhysicalContext(sent.physicalContext,undefined,sent.media),'utf8')+inline.bytes.byteLength)/4);
  expect(sent.physicalContext.transferTokens).toBe(actualTransfer);
  expect(chatGptCheckpointInputTokens(withImage.physicalContext,withImage.media)).toBe(actualTransfer);
  expect(f.submitted().physicalContext.segments[1]!.content).not.toContain(data);
@@ -218,7 +218,7 @@ test('checkpoint forwards only proven public progress, preserving the source/res
   const result = await p.createContextCheckpoint(surface,source,undefined,value=>progress.push(value));
   expect(progress).toEqual(['Checking the prior decisions']);
   expect(result.state).toBe('proven');
-  expect(f.submitted().toolBridge).toBeUndefined();
+  expect(f.submitted().chatTools).toBeUndefined();
 });
 
 test('inline checkpoint budget measures serialized UTF8 including escaped source and policy',async()=>{
@@ -228,7 +228,7 @@ test('inline checkpoint budget measures serialized UTF8 including escaped source
  }))}};
  await f.provider.createContextCheckpoint(surface,request);
  const physical=f.submitted().physicalContext;
- const actual=Math.ceil(Buffer.byteLength(formatWebPhysicalContext(physical,undefined),'utf8')/4);
+ const actual=Math.ceil(Buffer.byteLength(formatWebPhysicalContext(physical),'utf8')/4);
  expect(physical.transferTokens).toBe(actual);
  expect(chatGptCheckpointInputTokens(request.physicalContext)).toBe(actual);
  expect(actual).toBeGreaterThan(Math.ceil(serializeChatGptContextAttachment(request.physicalContext).length/4));
@@ -241,11 +241,11 @@ test('file-backed checkpoint input counts the exact attachment and composer wire
     const f=fixture();await f.provider.createContextCheckpoint(surface,request);
     const sent=f.submitted(), attachment=sent.inertSourceAttachment!;
     expect(attachment).toBeDefined();
-    const wire=Buffer.byteLength(formatWebPhysicalContext(sent.physicalContext,undefined),'utf8')
+    const wire=Buffer.byteLength(formatWebPhysicalContext(sent.physicalContext),'utf8')
       +formatInertSourceAttachment(attachment.attachment,attachment.receipt).file.bytes.byteLength;
     expect(sent.physicalContext.transferTokens).toBe(Math.ceil(wire/4));
     expect(chatGptCheckpointInputTokens(request.physicalContext)).toBe(Math.ceil(wire/4));
-    expect(formatWebPhysicalContext(sent.physicalContext,undefined).length)
+    expect(formatWebPhysicalContext(sent.physicalContext).length)
       .toBeLessThan(chatGptWebPhysicalLimits('medium').composerCharLimit);
     expect(sent.physicalContext.transferTokens).toBeGreaterThan(98_905);
   }

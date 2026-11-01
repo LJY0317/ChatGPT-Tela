@@ -71,7 +71,7 @@ class ExternalContractProvider implements WebConversationProvider {
   }
 
   async submitTurn(_surface: unknown, request: WebTurnRequest) {
-    if (!request.chatTools || request.toolBridge) throw new Error("external fixture requires Tela Chat tools");
+    if (!request.chatTools) throw new Error("external fixture requires Tela Chat tools");
     this.observedChatTools = true;
     return {
       state: "proven" as const,
@@ -386,7 +386,6 @@ describe("development runtime composition", () => {
       // Even when the Native request advertises a command tool, the default
       // Web route carries no exact Native turn bearer to either submission.
       expect(submitted).toHaveLength(2);
-      expect(submitted.map(request => Object.hasOwn(request, "toolBridge"))).toEqual([false, false]);
       expect(submitted.map(request => request.chatTools)).toEqual([{ defaultProfileSlot: 2 }, { defaultProfileSlot: 2 }]);
       expect(submitted.map(request => request.physicalContext.mode)).toEqual(["full", "retained-delta"]);
       expect(submitted[0]!.webEpochId).toBe(submitted[1]!.webEpochId);
@@ -1188,7 +1187,7 @@ test("same Native turn continuation runs two settled Web cycles through the real
     expect(second.status).toBe(200); expect(await second.text()).toContain("external-v2-final");
     expect(submitted).toHaveLength(2); expect(acquisitions).toBe(1);
     expect(submitted[1]!.nativeTurnId).toBe(submitted[0]!.nativeTurnId);
-    expect(submitted.every(request => request.toolBridge === undefined && request.chatTools !== undefined)).toBe(true);
+    expect(submitted.every(request => request.chatTools !== undefined)).toBe(true);
     expect(submitted[1]!.physicalContext.mode).toBe("retained-delta");
     expect(JSON.stringify(submitted[1]!.physicalContext)).toContain("followup");
     const rows = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
@@ -1229,7 +1228,7 @@ for (const deferred of [true, false]) test(`runtime keeps owner-bound original h
   const submit = provider.submitTurn.bind(provider), finish = provider.waitForTurnEvent.bind(provider);
   provider.submitTurn = async (surface, request) => {
     historyControl = request.chatTools?.nativeHistoryControl ?? '';
-    expect(historyControl).not.toBe(''); expect(request.toolBridge).toBeUndefined();
+    expect(historyControl).not.toBe('');
     return submit(surface, request);
   };
   let runtime!: Awaited<ReturnType<typeof startDevelopmentRuntime>>;

@@ -70,7 +70,7 @@ function checkpointInput(context: WebPhysicalContext, operation: string,
   const reboundMedia = media.map(item => ({ ...item, revisionId: `checkpoint-source-${operation}` }));
   const upload = prepareWebTurnMedia(physicalContext, reboundMedia);
   physicalContext = { ...physicalContext, transferTokens:
-    Math.ceil((Buffer.byteLength(formatWebPhysicalContext(physicalContext, undefined, undefined, reboundMedia), "utf8") + fileBytes + upload.statistics.uniqueBytes) / 4) };
+    Math.ceil((Buffer.byteLength(formatWebPhysicalContext(physicalContext, undefined, reboundMedia), "utf8") + fileBytes + upload.statistics.uniqueBytes) / 4) };
   return { physicalContext, sourceDigest, attachment, receipt };
 }
 

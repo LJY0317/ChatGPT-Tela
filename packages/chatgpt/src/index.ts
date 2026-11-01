@@ -67,13 +67,6 @@ export interface WebPhysicalContext {
   readonly deferredHistory?: DeferredNativeHistory;
 }
 
-export interface WebToolBridgeContext {
-  readonly protocol: "mcp";
-  readonly contract: "development" | "stable";
-  /** Opaque response-cycle bearer capability bound to an exact Native turn. Invalid after cycle retirement. */
-  readonly turnCapability: string;
-}
-
 export interface WebTurnRequest {
   readonly nativeTaskId: string;
   readonly nativeTurnId: string;
@@ -81,14 +74,13 @@ export interface WebTurnRequest {
   readonly physicalContext: WebPhysicalContext;
   readonly contextAttachment?: ChatGptContextAttachmentReference;
   /** One tool-free response consumes this inert source AND returns its file receipt.
-   * It cannot be combined with a preloaded reference, retained delta or tool bridge. */
+   * It cannot be combined with a preloaded reference, retained delta or Chat tools. */
   readonly inertSourceAttachment?: { readonly attachment: ChatGptContextAttachment; readonly receipt: string };
   readonly media?: readonly import("./turn-media").WebTurnMedia[];
   /** Independent work tools, optionally carrying a Goal-only control capability. */
   readonly chatTools?: { readonly defaultProfileSlot?: number; readonly nativeGoalControl?: string; readonly nativeHistoryControl?: string };
   /** Local execution lifecycle only; never serialized into the Web prompt. */
   readonly isToolExecutionPending?: () => boolean;
-  readonly toolBridge?: WebToolBridgeContext;
 }
 
 export interface WebContextAttachmentPreloadRequest {
@@ -149,9 +141,8 @@ export interface WebToolContinuationBoundary {
 /**
  * One-purpose, tool-free request for a disposable physical context checkpoint.
  *
- * There is intentionally no WebToolBridgeContext here. A checkpoint provider may summarize the
- * exact canonical prefix supplied by the runtime, but it cannot acquire the Native turn bearer or
- * become a route for tool execution.
+ * A checkpoint provider may summarize the exact canonical prefix supplied by the runtime,
+ * but it cannot become a route for tool execution.
  */
 export interface WebContextCheckpointRequest {
   readonly nativeTaskId: string;
