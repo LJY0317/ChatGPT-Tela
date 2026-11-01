@@ -165,6 +165,12 @@ existing transition lock; an unrelated external writer does not participate in t
 replacement is not a cross-application compare-and-swap guarantee. Host installation and actual
 consumer migration from an experimental personal registration remain separate acceptance steps.
 
+On macOS, the installed launcher's `local-mcp register` was also exercised with an isolated home
+and ownership manifest. Registration and reuse, settings-preserving removal, registration again
+without duplicates, and explicit saved-data removal passed while preserving an unrelated marketplace
+entry. Registration used the installed executable; removal used the product uninstaller. This checks
+the local registration lifecycle, not OS app/service installation or Desktop plugin authorization.
+
 Keep the installed launcher at a stable path across upgrades. The manifest uses a bare executable
 name and process-local PATH because Agent Plugins do not accept absolute stdio commands. A compiled
 runtime test exports the plugin, moves it into a host-style cache, removes the original package and
@@ -174,6 +180,11 @@ The same isolated test also replaces the compiled executable with different bina
 same installed path: the previously cached plugin continues to read and write through the local Chat
 service without re-registering. The host cache keeps the executable directory in PATH; an upgrade
 that moves or renames the installed launcher is outside this verified contract.
+
+After an installed update, an existing enabled Desktop local plugin also returned exact file contents
+through the official Native host's direct tool-call API without reinstallation or registration changes.
+That acceptance made no model request; a model-mediated UI turn and a second physical device remain
+separate checks.
 
 For development, `bun run local-mcp:package` still creates a Node-based candidate under
 `build/local-mcp`; `--launcher /path/to/chatgpt-tela` selects the installed-runtime mode instead.
