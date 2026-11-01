@@ -256,17 +256,6 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
           }
           const absolute = resolve(resource.path);
           if (dirname(absolute) === absolute) throw new Error("refusing to remove a filesystem root");
-          if (resource.id === "local-chat-plugin-source") {
-            const expected = (path: string, entries: readonly string[]) =>
-              readdirSync(path).every(name => entries.includes(name));
-            if (!expected(absolute, [OWNERSHIP_MARKER, "plugins", ".agents", "README.md"])
-              || !expected(join(absolute, "plugins"), ["tela-local-chat"])
-              || !expected(join(absolute, "plugins", "tela-local-chat"), ["plugin.json", "mcp.json"])
-              || !expected(join(absolute, ".agents"), ["plugins"])
-              || !expected(join(absolute, ".agents", "plugins"), ["marketplace.json"])) {
-              return { removed: false, detail: "local plugin source contains user files; preserved" };
-            }
-          }
           if (resource.metadataRoot && readdirSync(resource.metadataRoot).some(name => ![OWNERSHIP_MARKER, PACKAGED_PAYLOAD_RECEIPT].includes(name))) {
             return { removed: false, detail: "binary metadata contains files outside this resource" };
           }
