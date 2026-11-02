@@ -15,10 +15,10 @@ not coordinator inference. Uncertain sends retain their stable message ID withou
 blind resend. Original input retrieval and settlement remain available through
 the existing journal commands.
 
-Current source also preserves an acknowledged Queue result if the subsequent
-RPC close throws. A scoped regression checks the single add and retained Queue
-and client message IDs. This later fix has not been accepted in the installed
-candidate; an ACK before transport loss and an ambiguous send remain distinct.
+The currently installed source preserves an acknowledged Queue result
+if the subsequent RPC close throws. A scoped regression checks the single add
+and retained Queue and client message IDs; no live installed RPC-close failure
+has been accepted. An ACK before transport loss and an ambiguous send remain distinct.
 An exception before Queue ACK or a mismatched ACK retains `delivery_uncertain`;
 rejected coordinator ownership retains `owner_unverified`. Neither causes an
 automatic second send.

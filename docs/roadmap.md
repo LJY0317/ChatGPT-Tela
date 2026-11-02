@@ -6,9 +6,12 @@ service transition. A separate one-shot synthetic failure reached the actual
 Native Queue with matching ACK and journal IDs; the existing Web receiver read
 the exact synthetic turn and its Goal was settled. This does not establish a
 real user-job failure, dormant Native coordinator wakeup or consumer onboarding.
-The later source fix preserving a Queue ACK across an RPC close failure has
-scoped regression coverage but no installed acceptance yet. Exact build versions
-and receipt locations belong in local release state.
+The source candidate is now locally installed, with post-install
+readiness and feed restoration accepted. Its Queue ACK/RPC-close regression has
+source coverage, but the installed failure edge itself has no live acceptance.
+An installed Goal-control live attempt ended at a provider message-stream failure
+before any Goal ingress, invocation or return was observed; it does not establish
+that the host attempted a Goal tool call. Exact receipt locations remain local.
 
 ## Implemented or accepted boundaries — not new implementation tasks
 
@@ -32,8 +35,9 @@ and receipt locations belong in local release state.
   Fresh failure metadata and orphan notice cleanup are integrated. One isolated
   synthetic failure passed actual Queue ACK, journal matching and model-input
   readback in an already active Web receiver. The later source fix also preserves
-  an acknowledged Queue result when RPC close fails; this fix remains unaccepted
-  in the installed build. Queue acceptance alone does not prove a model resumed.
+  an acknowledged Queue result when RPC close fails. That source is included in
+  the installed candidate, while this failure edge has no installed live acceptance.
+  Queue acceptance alone does not prove a dormant coordinator resumed.
 - **Recovery, retention and ownership.** Supported indexed checkpoint/history retrieval,
   a long-thread resume and bounded checkpoint storage have acceptance; older missing
   source history is not reconstructed. Existing soft targets of 32 managed conversations
@@ -61,6 +65,12 @@ and receipt locations belong in local release state.
   paths, and job-to-browser attribution with one-shot approval boundaries on disposable
   owned tasks. Source coverage or a collected transport result alone is insufficient.
   New tasks need their own owned workspace and reviewed changes.
+- **Installed Goal-control acceptance.** The isolated same-turn Goal completion
+  previously passed, but the installed live recurrence failed during provider
+  message streaming with zero observed Goal-tool rounds or returns. Treat this as
+  a failed acceptance attempt with unknown upstream cause, not proof of a Goal
+  tool defect or of successful installed Goal control. Preserve the earlier
+  accepted behavior without repeating its settled task.
 - **Visible presentation.** The one-time `[Tela Agent]` title is source-implemented;
   live sidebar behavior remains unaccepted. Improve the existing Work session preview
   and contextual help without a new observer or browser bridge. Discover useful task

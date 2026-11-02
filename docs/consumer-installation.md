@@ -6,9 +6,12 @@ ready services, two profiles, unchanged configuration and no unexpected service
 transition. A separate synthetic failure passed one real Native Queue add with
 matching ACK/journal receipt and exact input readback by an existing Web receiver;
 this is scoped delivery acceptance, not consumer onboarding. The later source
-fix for preserving an acknowledged notice when RPC close fails has not been
-installed and accepted. Clean consumer onboarding, live account removal,
-installed uninstall/reinstall and two-computer acceptance remain open. Current
+fix for preserving an acknowledged notice when RPC close fails is present in
+the installed candidate, but has no installed live failure-edge
+acceptance. Feed restoration and post-install readiness passed; a separate
+installed Goal-control recurrence failed during provider message streaming
+before any Goal-tool return was observed. Clean consumer onboarding, live
+account removal, installed uninstall/reinstall and two-computer acceptance remain open. Current
 build identifiers and local receipt paths are maintained in local release state.
 
 Interrupted removal now resumes through the same review/apply path after reacquiring the existing OS
