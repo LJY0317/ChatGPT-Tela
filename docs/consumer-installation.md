@@ -64,9 +64,10 @@ and [Connect and test your plugin](https://developers.openai.com/plugins/deploy/
 An alternative exists for approved desktop-only local MCP plugins: the organization must be
 allowlisted before submitting a bundled stdio server. Installation is through the ChatGPT desktop
 app, and use is limited to locally executing threads. This is not general submission access or
-evidence that Tela's organization qualifies. The documentation does not establish that this path
-serves Tela's temporary ChatGPT Web worker conversations. Confirm eligibility and that surface's
-tool access before replacing the current remote connection or adding a second transport. See
+evidence that Tela's organization qualifies. The contract limits use to locally executed Desktop
+threads and does not grant Tela's temporary ChatGPT Web worker access. Public submission additionally
+requires partner approval, identity verification and plugin review; a personal marketplace entry
+does not grant submission eligibility. See
 [Submit desktop-only plugins](https://developers.openai.com/plugins/deploy/desktop-only).
 
 ### Local execution support by surface
@@ -74,7 +75,7 @@ tool access before replacing the current remote connection or adding a second tr
 | Surface | Current evidence |
 | --- | --- |
 | Native/Codex local host | Local plugin installation, stdio startup and Chat tool calls pass in an isolated profile. |
-| ChatGPT desktop local Work | Official local-plugin route exists; Tela's actual UI workflow is not yet accepted. |
+| ChatGPT Desktop local thread | The launcher-backed personal marketplace was discovered in two installed macOS Desktop profiles; a user-selected local thread read an isolated test file through Tela tools. This does not establish every Desktop thread or account state. |
 | Regular web Chat and Tela's Electron Web workers | Not covered by the desktop-only local-thread contract. Tela currently loads the web client without a local plugin executor; the stdio candidate is not a drop-in replacement. |
 | Another computer using the same account | No local discovery, registration or remote fallback is intended. Two physical computers remain an acceptance requirement. |
 
@@ -249,14 +250,11 @@ useful warning, not proof of isolation for all file and command capabilities.
 
 1. Trace the existing setup/maintenance UI and shared install/remove contracts. Replace duplicate
    UI readiness checks with actual lifecycle results; keep local readiness separate from host linkage.
-2. Use the documented per-device Desktop local marketplace for local stdio execution. Place a
-   personal `~/.agents/plugins/marketplace.json` or repository
-   `$REPO_ROOT/.agents/plugins/marketplace.json` source and install/test it in ChatGPT Desktop's
-   Plugins Directory. `codex plugin marketplace add` only registers a source with the Codex CLI; its
-   plugin install/remove commands do not establish Desktop installation or removal. The current
-   `build/local-mcp` output is only a package candidate; validate manifest discovery, local source
-   resolution and the Desktop lifecycle in a clean host before wiring it into setup/removal. Keep
-   public Directory submission separate; never fall back to a remote host.
+2. Retain the accepted per-device Desktop local marketplace and stdio workflow. Clean consumer
+   installation and permissions still need separate acceptance. `codex plugin marketplace add`
+   registers a Codex CLI source; its plugin commands do not prove Desktop installation or removal.
+   Public Directory submission requires separate organization allowlisting and review; never
+   substitute remote fallback for a missing local executor.
 3. Consolidate setup/reconnect into the existing connection path, with short contextual guidance
    and actual harmless round-trip verification. Remove name-only connector identification where
    supported stable identity/served-request proof exists; isolate host-page dependencies.
