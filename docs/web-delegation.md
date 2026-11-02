@@ -1,5 +1,28 @@
 # Separate Web tasks
 
+## Coordinator failure delivery boundary (2026-11-02)
+
+At source commit `fb519688`, a failed managed delegation already queues one
+deduplicated notice to its explicitly owned Native coordinator with the original
+job/turn, failure stage and local incident reference (`thread/queue/add`). The
+receipt `coordinatorNotice: queued` proves queue acceptance only; it does not
+prove that the host resumed coordinator inference. Uncertain sends retain their
+stable message ID for reconciliation. Original input retrieval and settlement
+remain available through the existing journal commands.
+
+The public Codex app-server protocol exposes `turn/completed`, queue changes,
+`thread/resume` and turn submission, but no host-owned park-and-automatically-
+resume-coordinator contract triggered by a queued delegation failure. A client
+could submit a new turn, but that would itself be another model request and
+cannot substantiate zero coordinator requests/tokens during waiting. Neither
+goal token counters nor UI progress establishes that measurement. Accordingly,
+automatic unattended follow-through and zero additional coordinator requests
+remain host-dependent and unverified; no scheduler, replay loop or relay is added.
+
+Public contract references inspected 2026-11-02:
+https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/typescript/ServerNotificationEnvelope.ts
+and https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/thread.rs .
+
 ## Explicit ownership handoff for Native-created threads
 
 Direct Native RPC conversations are outside the managed Web delegation journal by default.
