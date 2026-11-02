@@ -157,8 +157,11 @@ executable; no development checkout, Bun/Node installation or runtime copy is ne
 directory must not already exist, so this command cannot replace an existing marketplace or README.
 The macOS setup and Settings UI expose **Start Tela Chat** and **Prepare local plugin**.
 Local Chat startup does not read public HTTPS configuration; folder approval remains available in
-Settings before optional Web setup. `services start chat` uses the existing Chat registration only,
-while `services start` retains the full-service behavior. Desktop host installation remains explicit.
+Settings before optional Web setup. `services start chat` and `services stop chat` use the existing
+Chat registration and shutdown protections without closing Work/Codex connections. Control Center
+shows the corresponding Start/Stop action. Reopening the menu without Web configuration does not
+restart a user-stopped Chat; the menu's explicit Start action can start local Chat. Configured Web
+startup and full-service controls keep their existing behavior. Desktop host installation remains explicit.
 
 An explicit packaged `local-mcp register` operation now prepares an install-owned metadata source
 and adds only its own entry to the documented personal marketplace. Existing same-name entries are

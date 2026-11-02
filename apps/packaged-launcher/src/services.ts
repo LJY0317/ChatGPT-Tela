@@ -16,10 +16,9 @@ async function runPackagedServicesOwned(args: readonly string[], input: {
   readonly shutdownService?: (service: TelaServiceId) => Promise<void>;
 }) {
   const action = args[1];
-  const chatRestart = args.length === 3 && action === "restart" && args[2] === "chat";
-  const chatStart = args.length === 3 && action === "start" && args[2] === "chat";
-  const chatStop = args.length === 3 && action === "stop" && args[2] === "chat";
-  if (args[0] !== "services" || (!chatRestart && !chatStart && !chatStop && (args.length !== 2 || (action !== "start" && action !== "stop")))) {
+  const chatOnly = args.length === 3 && args[2] === "chat";
+  const chatRestart = chatOnly && action === "restart";
+  if (args[0] !== "services" || !((action === "start" || action === "stop") && (args.length === 2 || chatOnly) || chatRestart)) {
     throw new Error("usage: services <start|stop> [chat] | services restart chat");
   }
   const { ownership } = verifyInstalledPackage(input);
@@ -29,7 +28,7 @@ async function runPackagedServicesOwned(args: readonly string[], input: {
   }
   const blueprint: PackagedServiceControlIdentity = {
     platform,
-    services: (chatRestart || chatStart || chatStop ? ["chat"] as const : ["gateway", "chat", "codex"] as const).map(service => {
+    services: (chatOnly ? ["chat"] as const : ["gateway", "chat", "codex"] as const).map(service => {
       const resource = ownership.resources.find(resource => resource.id === `${service}-service`);
       if (resource?.kind !== "service-registration" || resource.owner !== service) {
         throw new Error(`installed ${service} registration is missing; services preserved`);
@@ -56,7 +55,7 @@ async function runPackagedServicesOwned(args: readonly string[], input: {
   });
   const services: Array<{ service: "gateway" | "chat" | "codex"; state: "running" | "stopped" | "failed" }> = [];
   const stopped: TelaServiceId[] = [], restoredServices: TelaServiceId[] = [], restoreFailures: TelaServiceId[] = [];
-  const order = chatRestart || chatStart || chatStop ? ["chat"] as const : action === "start" ? ["chat", "codex", "gateway"] as const : ["gateway", "codex", "chat"] as const;
+  const order = chatOnly ? ["chat"] as const : action === "start" ? ["chat", "codex", "gateway"] as const : ["gateway", "codex", "chat"] as const;
   if (action !== "start") await controller.prepare(order);
   for (const service of order) {
     try {

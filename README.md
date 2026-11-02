@@ -512,6 +512,8 @@ For local Desktop threads, use **Start Tela Chat** and **Prepare local plugin** 
 Approve local folders in Settings, then install `tela-local-chat` from your personal marketplace in
 ChatGPT Desktop's Plugins Directory. This source flow does not require a public HTTPS address.
 The plugin preparation button does not install or authorize the plugin in ChatGPT.
+Use **Stop Tela Chat…** to stop only Chat while keeping Work/Codex connections open. With no Web
+configuration, reopening the menu does not restart Chat; use **Start Tela Chat** when needed.
 
 The optional development Web connection uses the following separate flow:
 
