@@ -2,7 +2,7 @@
 
 ## Coordinator failure delivery boundary (2026-11-02)
 
-At source commit `fb519688`, the underlying delegation service can queue one
+At installed source commit `fb519688`, the underlying delegation service can queue one
 deduplicated notice when an explicitly owned Native coordinator binding is supplied, with the original
 job/turn, failure stage and local incident reference (`thread/queue/add`). The
 receipt `coordinatorNotice: queued` proves queue acceptance only; it does not
@@ -17,6 +17,11 @@ before recording the link. This proves current access, not historic authorship;
 only supply a coordinator conversation you explicitly own and authorize to receive
 failure notices. `continue` inherits the recorded binding. Without the start
 option, CLI delegation has no coordinator notification target.
+
+The separately validated but uninstalled candidate (`63d7e87d`) also projects
+coordinator binding, Queue notice outcome and follow-through through existing
+status/reconcile output. The P2A orphan/notice follow-up remains in progress.
+Neither source validation nor queue acceptance proves an installed wakeup.
 
 The public Codex app-server protocol exposes `turn/completed`, queue changes,
 `thread/resume` and turn submission, but no host-owned park-and-automatically-
@@ -358,8 +363,8 @@ permission. Do not treat prompt instructions as a filesystem or MCP security bou
 
 ## Remaining product work
 
-- Durable completion delivery and a result inbox; native automatic wakeup requires a supported host contract.
-- Exact cancellation, unknown-ACK reconciliation and owned removal of job/engine resources.
+- End-to-end caller delivery after result collection; automatic wakeup requires a supported host contract.
+- Live exact cancellation and uncertain-ACK recovery across restarts, beyond existing bounded reconciliation and owned cleanup.
 - A structured task specification, bounded file evidence and stale-result detection.
 - Exact job-to-browser association and reliable one-shot approvals.
 - Consumer UI, installed Windows/Linux acceptance and broader platform verification.

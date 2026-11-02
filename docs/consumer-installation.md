@@ -1,7 +1,10 @@
 # Consumer installation and removal design
 
-Status: partial implementation; source checks and read-only installed Settings UI accepted.
-Full account removal and installed uninstall/reinstall acceptance remain open.
+Status (2026-11-02): installed macOS local-only release `fb519688` accepts Chat
+start/stop and an exact existing-plugin host read while preserving the menu,
+services and two profiles. Candidate `63d7e87d` passed scoped fixtures and types,
+but is not merged or installed. Neither proves fresh consumer onboarding or live
+account removal. Installed uninstall/reinstall and two-computer acceptance remain open.
 
 Interrupted removal now resumes through the same review/apply path after reacquiring the existing OS
 writer lock. It observes remaining ownership and actual resources again; it does not replay the old plan.
@@ -74,7 +77,7 @@ does not grant submission eligibility. See
 
 | Surface | Current evidence |
 | --- | --- |
-| Native/Codex local host | Local plugin installation, stdio startup and Chat tool calls pass in an isolated profile. |
+| Native/Codex local host | Local plugin installation, stdio startup and Chat calls pass in an isolated profile; installed macOS Profile 1 also returned an exact read through its existing plugin without re-registration. |
 | ChatGPT Desktop local thread | The launcher-backed personal marketplace was discovered in two installed macOS Desktop profiles; a user-selected local thread read an isolated test file through Tela tools. This does not establish every Desktop thread or account state. |
 | Regular web Chat and Tela's Electron Web workers | Not covered by the desktop-only local-thread contract. Tela currently loads the web client without a local plugin executor; the stdio candidate is not a drop-in replacement. |
 | Another computer using the same account | No local discovery, registration or remote fallback is intended. Two physical computers remain an acceptance requirement. |
@@ -246,24 +249,20 @@ selection for standalone ChatGPT. [Chat on Steroids' desktop-call guard](https:/
 records a cross-computer connector incident and checks chat correlation for desktop tools. This is a
 useful warning, not proof of isolation for all file and command capabilities.
 
-## Refactoring order
+## Remaining consumer acceptance
 
-1. Trace the existing setup/maintenance UI and shared install/remove contracts. Replace duplicate
-   UI readiness checks with actual lifecycle results; keep local readiness separate from host linkage.
-2. Retain the accepted per-device Desktop local marketplace and stdio workflow. Clean consumer
-   installation and permissions still need separate acceptance. `codex plugin marketplace add`
-   registers a Codex CLI source; its plugin commands do not prove Desktop installation or removal.
-   Public Directory submission requires separate organization allowlisting and review; never
-   substitute remote fallback for a missing local executor.
-3. Consolidate setup/reconnect into the existing connection path, with short contextual guidance
-   and actual harmless round-trip verification. Remove name-only connector identification where
-   supported stable identity/served-request proof exists; isolate host-page dependencies.
-4. Finish the existing maintenance UI's remove/reinstall flow, including account cleanup guidance,
-   saved-data choice and staged external execution. Reuse update/repair journals and ownership.
-5. Validate consumer install→connect→update→remove→reinstall on supported platforms. Cover
-   account-only removal, offline host cleanup, interrupted maintenance, a manually removed plugin,
-   and retained versus deleted data. Confirm original ChatGPT still launches and updates normally.
-   Keep source tests, installed acceptance and unverified platform coverage distinct.
+1. Keep the accepted local marketplace, stdio, registration ownership and Chat
+   start/stop paths. Check fresh Desktop consumer installation and permissions
+   separately; Codex CLI marketplace operations are not Desktop receipts.
+   Public Directory submission requires separate allowlisting and review.
+2. Verify setup/reconnect with a harmless account-scoped tool result using supported
+   host identity and permission flows. Local readiness and login are insufficient.
+3. Accept installed maintenance UI removal/reinstall with account cleanup guidance,
+   saved-data choices and preservation of unrelated resources. Source fixtures
+   already cover interrupted removal and keep-data reinstall.
+4. Check install→connect→update→remove→reinstall on supported systems, two physical
+   computers, offline local-service isolation and no remote fallback. Original
+   ChatGPT must remain independently functional.
 
 ## Research basis
 
