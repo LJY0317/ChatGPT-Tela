@@ -37,6 +37,9 @@ export class McpTurnBridge implements TurnBridgeBackend {
       };
     } catch { return tools; }
     emitDiagnosticEvent("chatgpt_tela_work", "native_tool_inventory_queried", fields);
+    if (goalControl) emitDiagnosticEvent("chatgpt_tela_work", "native_goal_control_resolved", {
+      ...fields, phase: "inventory", control_fingerprint: diagnosticFingerprint(capability),
+    });
     return tools;
   }
 
@@ -64,6 +67,11 @@ export class McpTurnBridge implements TurnBridgeBackend {
     }
     const goalControl = this.turns.resolveGoalControl?.(capability);
     const channel = goalControl ?? this.turns.resolve(capability);
+    if (goalControl) emitDiagnosticEvent("chatgpt_tela_work", "native_goal_control_resolved", {
+      scope_fingerprint: diagnosticFingerprint(channel.binding.authority.threadId),
+      turn_fingerprint: diagnosticFingerprint(channel.binding.authority.turnId),
+      control_fingerprint: diagnosticFingerprint(capability), phase: "call",
+    });
     const tool = channel.binding.tools.exact(invocation.wireName);
     const goalTool = !!goalControl && !!tool && isNativeGoalTool(tool);
     // An exact, bounded Goal intent groups repeated logical requests without

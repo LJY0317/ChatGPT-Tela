@@ -49,6 +49,12 @@ export class DynamicChatBackend {
         mode: "structured", arguments: selection });
     }
     if (this.goalBridge && (capability === "goal_control_inventory" || capability === "goal_control_call")) {
+      emitDiagnosticEvent("chatgpt_tela_chat", "native_goal_control_received", {
+        phase: capability === "goal_control_inventory" ? "inventory" : "call",
+        control_present: typeof arguments_.goal_control === "string",
+        ...(typeof arguments_.goal_control === "string"
+          ? { control_fingerprint: diagnosticFingerprint(arguments_.goal_control) } : {}),
+      });
       if (typeof arguments_.goal_control !== "string") throw Error("Goal control capability is required");
       const tools = (await this.goalBridge.inventory(arguments_.goal_control)).filter(isNativeGoalTool);
       if (capability === "goal_control_inventory") return tools;

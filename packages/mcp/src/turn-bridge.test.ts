@@ -124,6 +124,12 @@ test("Goal-only capability reuses Native tool delivery and expires with its resp
   registered.channel.releaseNativeToolResultToWeb(nativeCall.call_id);
   expect(await result).toMatchObject({ callId: "native-complete", content: body, isError: false });
   expect(events.find(event => event.stage === "native_tool_inventory_queried")).toMatchObject({ goal_only: true, count: 1 });
+  expect(events.find(event => event.stage === "native_goal_control_resolved" && event.phase === "inventory"))
+    .toMatchObject({ goal_only: true, control_fingerprint: diagnosticFingerprint(control),
+      turn_fingerprint: diagnosticFingerprint("turn-1") });
+  expect(events.find(event => event.stage === "native_goal_control_resolved" && event.phase === "call"))
+    .toMatchObject({ control_fingerprint: diagnosticFingerprint(control),
+      turn_fingerprint: diagnosticFingerprint("turn-1") });
   const returned = events.find(event => event.stage === "native_tool_bridge_invoke_returned");
   expect(returned).toMatchObject({ goal_only: true, goal_tool: true, is_error: false,
     kind: "string", body_present: true, body_bytes: Buffer.byteLength(body), status: "complete",
