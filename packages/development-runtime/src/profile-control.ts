@@ -276,9 +276,22 @@ export function createChatGptProfileControl(input: {
       requireOpen();
       signal?.throwIfAborted();
       const acquireStartedAt = Date.now();
-      const lease = await input.browserHost.acquire({
-        taskId: "chatgpt-tela-account-observation", epochId: `account-${randomUUID()}`,
-      });
+      let lease: BrowserSurfaceLease;
+      try {
+        lease = await input.browserHost.acquire({
+          taskId: "chatgpt-tela-account-observation", epochId: `account-${randomUUID()}`,
+        });
+      } catch (error) {
+        const fields = { probe_kind: "identity", auth_state: "unavailable", reason_class: "lease_acquire_failed",
+          lease_acquire_duration_ms: Math.max(0, Date.now() - acquireStartedAt),
+          cancellation_source: signal?.aborted ? "external_signal" : "unknown" };
+        withDiagnosticContext(input.diagnosticProfileFingerprint
+          ? { profile_fingerprint: input.diagnosticProfileFingerprint } : {}, () => {
+          emitDiagnosticEvent("chatgpt_tela_web_auth", "session_probe_observed", fields);
+          emitDiagnosticEvent("chatgpt_tela_web_auth", "auth_probe_failed", fields);
+        });
+        throw error;
+      }
       try {
         signal?.throwIfAborted();
         return await accountIdentityObserver(lease, signal, { leaseAcquireDurationMs: Math.max(0, Date.now() - acquireStartedAt) });

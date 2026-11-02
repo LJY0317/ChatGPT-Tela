@@ -30,6 +30,9 @@ test("identity timeout records fetch deadline separately from external evaluatio
     await expect(observeChatGptAccountIdentity(externallyAborted, controller.signal)).rejects.toThrow();
     expect(rows.at(-1)).toMatchObject({ reason_class: "observation_aborted", cancellation_source: "external_signal" });
     expect(rows.at(-1)).not.toHaveProperty("fetch_duration_ms");
+    const unknownAbort = surface(async () => { throw new DOMException("aborted", "AbortError"); });
+    await expect(observeChatGptAccountIdentity(unknownAbort)).rejects.toThrow();
+    expect(rows.at(-1)).toMatchObject({ reason_class: "observation_aborted", cancellation_source: "unknown" });
   } finally { stop?.(); }
 }, 10000);
 
@@ -69,7 +72,7 @@ test("session authentication is explicit, bounded and never inferred from transp
   await expect(observeChatGptAccountIdentity(surface)).rejects.toBeInstanceOf(ChatGptWebLoginRequiredError);
   for (const unavailable of [429, 503]) {
     status = unavailable;
-    await expect(observeChatGptAccountIdentity(surface)).rejects.not.toBeInstanceOf(ChatGptWebLoginRequiredError);
+    await expect(observeChatGptAccountIdentity(surface)).rejects.toThrow("ChatGPT account identity is unavailable");
     await expect(observeChatGptAccountDisplay(surface)).rejects.toThrow();
   }
   status = 200; body = { unexpected: true };

@@ -147,7 +147,8 @@ function recordAccountProbe(input: {
     ...(Number.isSafeInteger(input.fetchStartMs) && input.fetchStartMs! >= 0 ? { fetch_start_ms: input.fetchStartMs! } : {}),
     ...(Number.isSafeInteger(input.fetchDurationMs) && input.fetchDurationMs! >= 0 ? { fetch_duration_ms: input.fetchDurationMs! } : {}),
     ...(Number.isSafeInteger(input.leaseAcquireDurationMs) && input.leaseAcquireDurationMs! >= 0 ? { lease_acquire_duration_ms: input.leaseAcquireDurationMs! } : {}),
-    cancellation_source: input.externalAborted ? "external_signal" : input.deadlineFired ? "fetch_deadline" : "none",
+    cancellation_source: input.externalAborted ? "external_signal" : input.deadlineFired ? "fetch_deadline"
+      : input.reasonClass === "observation_aborted" || (input.state === "unavailable" && input.fetchStartMs === undefined) ? "unknown" : "none",
     ...(typeof input.shape?.userPresent === "boolean" ? { user_present: input.shape.userPresent } : {}),
     ...(typeof input.shape?.userIdValid === "boolean" ? { user_key_valid: input.shape.userIdValid } : {}),
     ...(typeof input.shape?.accountPresent === "boolean" ? { account_present: input.shape.accountPresent } : {}),
@@ -216,7 +217,7 @@ export async function observeChatGptAccountIdentity(
   recordAccountProbe({ kind: "identity", state, reasonClass, shape: identity, ...timing, externalAborted: signal?.aborted,
     fetchStartMs: identity?.fetchStartMs, fetchDurationMs: identity?.fetchDurationMs, deadlineFired: identity?.deadlineFired,
     ...(typeof identity?.httpStatus === "number" ? { httpStatus: identity.httpStatus } : {}), startedAt });
-  if (state === "unavailable") throw new Error("ChatGPT account identity is unavailable; sign in and retry");
+  if (state === "unavailable") throw new Error("ChatGPT account identity is unavailable");
   if (identity?.state === "signed-out") throw new ChatGptWebLoginRequiredError();
   if (!/^[a-f0-9]{64}$/.test(identity.accountFingerprint ?? "")) {
     throw new Error("ChatGPT account identity probe returned an invalid fingerprint");

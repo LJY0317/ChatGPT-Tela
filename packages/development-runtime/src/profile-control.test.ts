@@ -2,6 +2,28 @@ import {expect, test} from 'bun:test';
 import {ControlledBrowserHost} from '@chatgpt-tela/browser-host';
 import {ChatGptConnectorCatalogUnavailableError,ChatGptWebModelPickerControlUnavailableError,ChatGptWebLoginRequiredError} from '@chatgpt-tela/chatgpt';
 import {createChatGptProfileControl, webPreparationFailureDetail} from './profile-control';
+import {observeDiagnosticEvents, type StructuralDiagnosticEvent} from '@chatgpt-tela/core';
+
+test('failed account lease preserves failure and emits bounded phase evidence', async () => {
+  const rows: StructuralDiagnosticEvent[] = [];
+  const stop = observeDiagnosticEvents(row => rows.push(row));
+  const failure = new Error('fixture acquisition failed');
+  const control = createChatGptProfileControl({
+    browserHost: new ControlledBrowserHost(async () => { throw failure; }),
+    provider: { async observeCapabilities() { throw Error('must not observe'); } },
+  });
+  try {
+    await expect(control.probeChatGptAccount()).rejects.toBe(failure);
+    expect(rows.filter(row => row.event === 'chatgpt_tela_web_auth')).toEqual([
+      expect.objectContaining({ stage: 'session_probe_observed', reason_class: 'lease_acquire_failed',
+        auth_state: 'unavailable', cancellation_source: 'unknown' }),
+      expect.objectContaining({ stage: 'auth_probe_failed', reason_class: 'lease_acquire_failed',
+        auth_state: 'unavailable', cancellation_source: 'unknown' }),
+    ]);
+    expect(rows.at(-1)?.lease_acquire_duration_ms).toBeGreaterThanOrEqual(0);
+    expect(JSON.stringify(rows)).not.toContain('fixture acquisition failed');
+  } finally { stop?.(); await control.close(); }
+});
 
 test('account-only observation needs no composer, submits nothing and releases its hidden page on failure',async()=>{
   let created=0,closed=0,observed=0;
