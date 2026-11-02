@@ -1,10 +1,14 @@
 # Remaining product work
 
-Status as of 2026-11-02: the installed macOS local-only release (`fb519688`)
-and current source are distinct. Coordinator notices, account diagnostics and their
-orphan cleanup are integrated in source; 155 scoped tests and the TypeScript check
-passed on Bun 1.4.4. These changes are not installed. Source, isolated fixture,
-installed-host and public consumer acceptance must remain separate.
+The locally installed macOS candidate has post-install acceptance for the menu,
+three ready services, two profiles, preserved configuration and no unexpected
+service transition. A separate one-shot synthetic failure reached the actual
+Native Queue with matching ACK and journal IDs; the existing Web receiver read
+the exact synthetic turn and its Goal was settled. This does not establish a
+real user-job failure, dormant Native coordinator wakeup or consumer onboarding.
+The later source fix preserving a Queue ACK across an RPC close failure has
+scoped regression coverage but no installed acceptance yet. Exact build versions
+and receipt locations belong in local release state.
 
 ## Implemented or accepted boundaries — not new implementation tasks
 
@@ -22,11 +26,14 @@ installed-host and public consumer acceptance must remain separate.
   file upload has no supported Native input contract. Goal-only control uses original
   Native tools only when advertised, with isolated same-turn completion acceptance.
   See [Web delegation](web-delegation.md).
-- **Coordinator notice source path.** The uninstalled source binds an
+- **Coordinator notice path.** The source binds an
   explicitly authorized Native coordinator at CLI start, inherits that binding on
   continuation, and projects notice/Queue/follow-through observations in status output.
-  Queue acceptance does not prove a model resumed. Fresh failure metadata and orphan
-  notice cleanup are included in the scoped source verification.
+  Fresh failure metadata and orphan notice cleanup are integrated. One isolated
+  synthetic failure passed actual Queue ACK, journal matching and model-input
+  readback in an already active Web receiver. The later source fix also preserves
+  an acknowledged Queue result when RPC close fails; this fix remains unaccepted
+  in the installed build. Queue acceptance alone does not prove a model resumed.
 - **Recovery, retention and ownership.** Supported indexed checkpoint/history retrieval,
   a long-thread resume and bounded checkpoint storage have acceptance; older missing
   source history is not reconstructed. Existing soft targets of 32 managed conversations
@@ -43,11 +50,12 @@ installed-host and public consumer acceptance must remain separate.
 
 - **Unattended coordinator recovery and idle usage.** The public host contract does
   not currently prove that a queued failure automatically parks/wakes/resumes the
-  owning coordinator. Verify actual Queue delivery, exact failure ownership and model
-  resumption only under an available supported contract. Measure coordinator requests
-  during a waiting interval before claiming zero additional requests/tokens; no polling,
-  replay scheduler, blind retry or independent Goal engine.
-  Do not call it shipped or operationally accepted until its own evidence is settled.
+  owning coordinator. Actual Queue delivery and model consumption are accepted only
+  for the isolated synthetic failure sent to an existing Web receiver. Real failed
+  job ownership and dormant Native coordinator resumption remain open. Measure
+  coordinator requests during a waiting interval before claiming zero additional
+  requests/tokens; no polling, replay scheduler, blind retry or independent Goal
+  engine. Do not call unattended recovery shipped or operationally accepted.
 - **End-to-end Web acceptance.** Confirm durable result delivery to the calling task,
   simultaneous live jobs, exact cancellation/uncertain-ACK recovery, full image/continuation
   paths, and job-to-browser attribution with one-shot approval boundaries on disposable
@@ -101,5 +109,5 @@ installed-host and public consumer acceptance must remain separate.
   against the actual host contract; preserve checkpoints when restore is unsupported.
 
 Use exact observable effects for remaining acceptance. Do not relabel previously
-accepted source work as an unimplemented feature, and do not present this candidate
-as an installed or publicly released product.
+accepted source work as unimplemented, source-only fixes as installed, or this
+local candidate as a publicly released consumer product.

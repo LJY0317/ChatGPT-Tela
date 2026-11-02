@@ -1,14 +1,27 @@
 # Separate Web tasks
 
-## Coordinator failure delivery boundary (2026-11-02)
+## Coordinator failure delivery boundary
 
-At installed source commit `fb519688`, the underlying delegation service can queue one
-deduplicated notice when an explicitly owned Native coordinator binding is supplied, with the original
-job/turn, failure stage and local incident reference (`thread/queue/add`). The
-receipt `coordinatorNotice: queued` proves queue acceptance only; it does not
-prove that the host resumed coordinator inference. Uncertain sends retain their
-stable message ID for reconciliation. Original input retrieval and settlement
-remain available through the existing journal commands.
+The locally installed macOS candidate can queue one deduplicated failure notice
+when an explicitly owned Native coordinator binding is supplied, with the
+original job/turn, failure stage and local incident reference (`thread/queue/add`).
+One isolated synthetic failed job was accepted through the actual Native Queue:
+one add, verified owner, fresh metadata, matching ACK and journal IDs. An existing
+Web receiver subsequently read the exact synthetic job/turn and failure stage;
+its Goal was settled. This establishes scoped Queue delivery and model-input
+consumption, not a real user-job failure or automatic wakeup of an idle Native
+coordinator. The receipt `coordinatorNotice: queued` alone proves Queue acceptance,
+not coordinator inference. Uncertain sends retain their stable message ID without
+blind resend. Original input retrieval and settlement remain available through
+the existing journal commands.
+
+Current source also preserves an acknowledged Queue result if the subsequent
+RPC close throws. A scoped regression checks the single add and retained Queue
+and client message IDs. This later fix has not been accepted in the installed
+candidate; an ACK before transport loss and an ambiguous send remain distinct.
+An exception before Queue ACK or a mismatched ACK retains `delivery_uncertain`;
+rejected coordinator ownership retains `owner_unverified`. Neither causes an
+automatic second send.
 
 For source CLI `web-delegate start`, opt in with `--coordinator-thread UUID`
 and optionally `--coordinator-slot N` (defaults to the selected worker profile).
@@ -18,10 +31,10 @@ only supply a coordinator conversation you explicitly own and authorize to recei
 failure notices. `continue` inherits the recorded binding. Without the start
 option, CLI delegation has no coordinator notification target.
 
-The validated but uninstalled source also projects
+The current source also projects
 coordinator binding, Queue notice outcome and follow-through through existing
 status/reconcile output. Fresh failure evidence and orphan notice cleanup are included.
-Neither source validation nor queue acceptance proves an installed wakeup.
+Neither source validation nor the synthetic Queue acceptance proves unattended wakeup.
 
 The public Codex app-server protocol exposes `turn/completed`, queue changes,
 `thread/resume` and turn submission, but no host-owned park-and-automatically-
