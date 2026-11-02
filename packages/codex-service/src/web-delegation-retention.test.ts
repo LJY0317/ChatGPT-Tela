@@ -9,6 +9,20 @@ import { parseCodexWebDelegationCapacityContract } from "@chatgpt-tela/service-p
 import { WebDelegationStore, linkNativeThreadForRetention, type WebDelegationRecord } from "./web-delegation";
 import { settleWebDelegationRetention, startWebDelegationRetention } from "./web-delegation-retention";
 const DAY = 86_400_000;
+test("interrupted deletion sweeps an orphan notice while preserving a live claim", () => {
+  const f = fixture();
+  try {
+    const liveNotice = join(f.root, `${f.record.id}.json.notice`);
+    expect(f.store.claimCoordinatorNotice(f.record.id, randomUUID())).toBe(true);
+    const orphan = randomUUID();
+    const orphanNotice = join(f.root, `${orphan}.json.notice`);
+    writeFileSync(orphanNotice, readFileSync(liveNotice));
+    f.store.pruneOrphanedExcludedReceipts();
+    expect(existsSync(liveNotice)).toBe(true);
+    expect(existsSync(orphanNotice)).toBe(false);
+    expect(f.store.get(orphan)).toBeUndefined();
+  } finally { f.cleanup(); }
+});
 test("exact Native creation ACK links once without sending or reserving a task", async () => {
   const f = fixture();
   try {

@@ -540,7 +540,7 @@ export class WebDelegationStore {
     const owned = new Set(this.records().filter(record => record.threadId).map(record =>
       webDelegationRetentionPath(this.root, { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! })));
     for (const name of readdirSync(this.root)) {
-      const collectedId = /^([0-9a-f-]{36})\.json\.(?:collected|named)$/.exec(name)?.[1];
+      const collectedId = /^([0-9a-f-]{36})\.json\.(?:collected|named|notice)$/.exec(name)?.[1];
       if (collectedId && UUID.test(collectedId) && !retained.has(`${collectedId}.json`)) {
         unlinkSync(join(this.root, name));
         continue;
