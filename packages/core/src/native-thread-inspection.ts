@@ -429,6 +429,27 @@ export function inspectNativeThreadHistoricalEvidence(input: {
     allEvents,
     limited: logs.incidentsUnavailable > 0 || logs.byteLimitReached || logs.sourceLimitReached || logs.coverage.some(item => item.truncated || item.eventLimitReached),
   }) : undefined;
+  // Ingress has no Native owner. Attribute it only through a unique resolved
+  // control fingerprint already bound to this exact thread and turn.
+  const resolutions = allEvents.filter(row => row.stage === "native_goal_control_resolved"
+    && diagnosticFingerprintField(row.control_fingerprint));
+  const goalControlEvidence = turnFingerprint ? resolutions.filter(row =>
+    row.scope_fingerprint === fingerprint && row.turn_fingerprint === turnFingerprint).map(row => {
+    const control = row.control_fingerprint;
+    const owners = new Set(resolutions.filter(other => other.control_fingerprint === control)
+      .map(other => `${other.scope_fingerprint}:${other.turn_fingerprint}`));
+    const ingress = allEvents.filter(other => other.event === "chatgpt_tela_chat"
+      && other.stage === "native_goal_control_received" && other.control_fingerprint === control
+      && typeof other.ts === "string" && other.ts <= row.ts);
+    return Object.freeze({ at: row.ts, phase: row.phase === "call" ? "call" as const : "inventory" as const,
+      controlFingerprint: control as string,
+      attribution: owners.size === 1 ? "exact_turn_resolved" as const : "ambiguous_control_owner" as const,
+      ingressObservation: owners.size !== 1 ? "unattributed" as const
+        : ingress.length ? "server_received" as const : "not_observed" as const,
+      // A received request is not proof that its Native tool was called or returned.
+      outcome: "not_inferred_from_ingress" as const,
+    });
+  }) : [];
   const last = (stage: string) => events.filter(event => event.stage === stage).at(-1);
   const pending = events.filter(event => event.stage === "approval_wait_transition"
     && event.phase === "pending").at(-1);
@@ -538,6 +559,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       action: event.action ?? "unknown", status: event.status ?? "unknown",
       isError: event.is_error ?? null, bodyPresent: event.body_present ?? null,
     })),
+    goalControlEvidence,
     ...(toolDeliveryEvidence ? { toolDeliveryEvidence } : {}),
     contextPreparationEvidence: events.filter(event => ["native_context_source_rejected",
       "native_checkpoint_preparation_planned", "native_working_checkpoint_selected",

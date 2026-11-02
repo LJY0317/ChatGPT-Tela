@@ -191,6 +191,32 @@ describe("one read-only conversation inspection by exact Native ID", () => {
       expect(JSON.stringify(result)).not.toContain("PRIVATE");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+  test("persisted Goal ingress is attributed only by a unique exact-turn control resolution", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tela-goal-ingress-"));
+    const path = join(dir, "events.jsonl");
+    const scope = diagnosticFingerprint(THREAD), turn = diagnosticFingerprint(TURN);
+    const other = diagnosticFingerprint("bbbbbbbb-cccc-7ddd-8eee-ffffffffffff");
+    const matched = diagnosticFingerprint("matched-control"), ambiguous = diagnosticFingerprint("ambiguous-control");
+    const at = "2026-10-17T08:18:00Z";
+    const rows = [
+      {event:"chatgpt_tela_chat",stage:"native_goal_control_received",control_fingerprint:matched,phase:"inventory",control_present:true},
+      {event:"chatgpt_tela_work",stage:"native_goal_control_resolved",scope_fingerprint:scope,turn_fingerprint:turn,control_fingerprint:matched,phase:"inventory"},
+      {event:"chatgpt_tela_chat",stage:"native_goal_control_received",control_fingerprint:ambiguous,phase:"call",control_present:true},
+      {event:"chatgpt_tela_work",stage:"native_goal_control_resolved",scope_fingerprint:scope,turn_fingerprint:turn,control_fingerprint:ambiguous,phase:"call"},
+      {event:"chatgpt_tela_work",stage:"native_goal_control_resolved",scope_fingerprint:scope,turn_fingerprint:other,control_fingerprint:ambiguous,phase:"call"},
+      {event:"chatgpt_tela_chat",stage:"native_goal_control_received",control_fingerprint:diagnosticFingerprint("unresolved"),phase:"call",control_present:true},
+    ];
+    try {
+      writeFileSync(path, rows.map(row => JSON.stringify({ts:at,...row,content:"PRIVATE"})).join("\n")+"\n");
+      const result=inspectNativeThreadHistoricalEvidence({threadId:THREAD,turnId:TURN,diagnosticPaths:[path],nowMs:NOW});
+      expect(result.goalControlEvidence.map(row=>[row.attribution,row.ingressObservation,row.outcome])).toEqual([
+        ["exact_turn_resolved","server_received","not_inferred_from_ingress"],
+        ["ambiguous_control_owner","unattributed","not_inferred_from_ingress"],
+      ]);
+      expect(JSON.stringify(result)).not.toContain("PRIVATE");
+      expect(result.goalControlReturns).toEqual([]);
+    } finally { rmSync(dir,{recursive:true,force:true}); }
+  });
   test("historical tool evidence selects the exact turn and joins unique MCP RPC metadata without payloads", () => {
     const dir = mkdtempSync(join(tmpdir(), "tela-tool-delivery-evidence-"));
     const path = join(dir, "events.jsonl");
