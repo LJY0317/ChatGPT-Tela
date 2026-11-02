@@ -406,7 +406,36 @@ export class WebDelegationStore {
     // A proven final receipt wins over an earlier failure receipt, including
     // when the exact Native turn remains failed. Late observers cannot erase it.
     const record = this.#read(`${path}.completed`, id) ?? this.#read(`${path}.failed`, id) ?? this.#read(path, id);
-    return record && !this.#deleted(record) ? record : undefined;
+    if (!record || this.#deleted(record)) return undefined;
+    const notice = `${path}.notice`;
+    if (!existsSync(notice)) return record;
+    const detail = JSON.parse(readFileSync(notice, "utf8")) as Pick<WebDelegationRecord,
+      "coordinatorClientUserMessageId" | "coordinatorQueueItemId" | "coordinatorNotice" | "coordinatorFollowThrough">;
+    return { ...record, ...detail };
+  }
+  /** Atomic cross-process intent, durable before a possible Queue side effect. */
+  claimCoordinatorNotice(id: string, messageId: string): boolean {
+    const path = `${this.#path(id)}.notice`, temporary = `${path}.${randomUUID()}.tmp`;
+    const fd = openSync(temporary, "wx", 0o600);
+    try {
+      try {
+        writeFileSync(fd, JSON.stringify({ coordinatorClientUserMessageId: messageId,
+          coordinatorNotice: "delivery_uncertain", coordinatorFollowThrough: "unobserved" }));
+        fsyncSync(fd);
+      } finally { closeSync(fd); }
+      try { linkSync(temporary, path); return true; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return false; throw error; }
+    } finally { if (existsSync(temporary)) unlinkSync(temporary); }
+  }
+  updateCoordinatorNotice(id: string, fields: Pick<WebDelegationRecord,
+    "coordinatorClientUserMessageId" | "coordinatorNotice" | "coordinatorFollowThrough"> &
+    Pick<WebDelegationRecord, "coordinatorQueueItemId">): void {
+    const path = `${this.#path(id)}.notice`, temporary = `${path}.${randomUUID()}.tmp`;
+    const fd = openSync(temporary, "wx", 0o600);
+    try {
+      try { writeFileSync(fd, JSON.stringify(fields)); fsyncSync(fd); } finally { closeSync(fd); }
+      renameSync(temporary, path);
+    } finally { if (existsSync(temporary)) unlinkSync(temporary); }
   }
   /** Only managed entries are eligible; deleted threads are hidden during cleanup. */
   records(): WebDelegationRecord[] {
@@ -446,7 +475,7 @@ export class WebDelegationStore {
     // Keep collection proof until all answer-bearing records are gone. An
     // interrupted prune can then resume from its terminal sidecar; a final
     // collected-only marker is removed by the existing orphan sweep.
-    for (const suffix of ["", ".failed", ".completed", ".collected", ".named", ".naming"]) {
+    for (const suffix of ["", ".failed", ".completed", ".collected", ".named", ".naming", ".notice"]) {
       const path = this.#path(id) + suffix;
       if (existsSync(path)) { unlinkSync(path); files++; }
     }
@@ -470,7 +499,7 @@ export class WebDelegationStore {
       if (jobs[0]!.threadId && (!eligible.has(key) || this.threadRetention(jobs[0]!)?.state !== "excluded")
         || jobs.some(job => !reclaimable(job))) return [];
       const collected = Math.max(...jobs.map(job => this.collectedAt(job.id) ?? reviewedAt(job)!));
-      const size = jobs.reduce((sum, job) => sum + ["", ".collected", ".failed", ".completed", ".named", ".naming"].reduce((total, suffix) => {
+      const size = jobs.reduce((sum, job) => sum + ["", ".collected", ".failed", ".completed", ".named", ".naming", ".notice"].reduce((total, suffix) => {
         const path = this.#path(job.id) + suffix;
         return total + (existsSync(path) ? lstatSync(path).size : 0);
       }, 0), 0);
@@ -758,26 +787,31 @@ export interface WebDelegationAdapters {
 async function notifyFailureCoordinator(adapters: WebDelegationAdapters, record: WebDelegationRecord): Promise<WebDelegationRecord> {
   if (!record.coordinator || record.coordinatorNotice) return record;
   const clientUserMessageId = randomUUID();
-  let updated = adapters.store.save({ ...record, coordinatorClientUserMessageId: clientUserMessageId,
-    coordinatorNotice: "delivery_uncertain", coordinatorFollowThrough: "unobserved" });
+  if (!adapters.store.claimCoordinatorNotice(record.id, clientUserMessageId)) return adapters.store.get(record.id)!;
+  let updated = adapters.store.get(record.id)!;
   adapters.changed?.(updated);
+  const persist = (notice: NonNullable<WebDelegationRecord["coordinatorNotice"]>, queueId?: string): WebDelegationRecord => {
+    adapters.store.updateCoordinatorNotice(record.id, {
+      coordinatorClientUserMessageId: clientUserMessageId, coordinatorNotice: notice,
+      coordinatorFollowThrough: "unobserved", ...(queueId ? { coordinatorQueueItemId: queueId } : {}),
+    });
+    const latest = adapters.store.get(record.id)!;
+    adapters.changed?.(latest);
+    return latest;
+  };
   try {
     const current = await adapters.owner(record.coordinator.slot);
     const proof: WebDelegationRecord = { ...record, slot: record.coordinator.slot,
       owner: { ...current.binding, accountFingerprint: record.coordinator.accountFingerprint },
       session: current.session };
     if (!sameAccountOwner(proof, current) || current.binding.accountFingerprint !== record.coordinator.accountFingerprint) {
-      updated = adapters.store.save({ ...updated, coordinatorNotice: "owner_unverified" });
-      adapters.changed?.(updated);
-      return updated;
+      return persist("owner_unverified");
     }
     const rpc = await adapters.connect(current.session.terminalEndpoint);
     try {
       const read = object(await rpc.request("thread/read", { threadId: record.coordinator.threadId, includeTurns: false }));
       if (object(read?.thread)?.id !== record.coordinator.threadId) {
-        updated = adapters.store.save({ ...updated, coordinatorNotice: "owner_unverified" });
-        adapters.changed?.(updated);
-        return updated;
+        return persist("owner_unverified");
       }
       const text = [
         "Tela delegated job needs inspection; the outcome may be uncertain. Check this exact job before any retry.",
@@ -796,20 +830,13 @@ async function notifyFailureCoordinator(adapters: WebDelegationAdapters, record:
         input: [{ type: "text", text }],
       }));
       const queued = object(response?.queuedSubmission);
-      if (typeof queued?.id !== "string" || queued.clientUserMessageId !== clientUserMessageId) {
-        updated = adapters.store.save({ ...updated, coordinatorNotice: "delivery_uncertain" });
-      } else {
-        updated = adapters.store.save({ ...updated, coordinatorQueueItemId: queued.id, coordinatorNotice: "queued" });
-      }
-      adapters.changed?.(updated);
-      return updated;
+      return typeof queued?.id === "string" && queued.clientUserMessageId === clientUserMessageId
+        ? persist("queued", queued.id) : persist("delivery_uncertain");
     } finally { await rpc.close(); }
   } catch {
     // The request may have reached Native before the transport failed. Keep the
     // stable message ID and never submit a second notification blindly.
-    updated = adapters.store.save({ ...updated, coordinatorNotice: "delivery_uncertain" });
-    adapters.changed?.(updated);
-    return updated;
+    return persist("delivery_uncertain");
   }
 }
 /** Journal a single coordinator attempt before publishing an immutable terminal failure. */
@@ -817,8 +844,6 @@ async function settleFailure(adapters: WebDelegationAdapters, failed: WebDelegat
   let current = adapters.store.get(failed.id);
   if (!current) throw Error("Web job was not reserved");
   if (failed.coordinator && !current.coordinatorNotice) {
-    current = adapters.store.save({ ...failed, state: "uncertain" });
-    adapters.changed?.(current);
     current = await notifyFailureCoordinator(adapters, current);
   }
   const settled = adapters.store.save({ ...failed,

@@ -181,6 +181,31 @@ test("reconciled failure journals one coordinator notice before terminal settlem
   } finally { f.cleanup(); }
 });
 
+test("a stale second store cannot replace a claimed coordinator notice", async () => {
+  const f = await fixture({ silent: true });
+  try {
+    const pending = f.run();
+    void pending.catch(() => {});
+    await new Promise<void>(resolve => {
+      const check = () => f.store.get(f.id)?.state === "running" ? resolve() : queueMicrotask(check);
+      check();
+    });
+    const stale = f.store.get(f.id)!;
+    const other = new WebDelegationStore(f.root);
+    const firstId = randomUUID();
+    const secondId = randomUUID();
+    expect(f.store.claimCoordinatorNotice(f.id, firstId)).toBe(true);
+    expect(other.claimCoordinatorNotice(f.id, secondId)).toBe(false);
+    other.save({ ...stale, state: "uncertain" });
+    expect(other.get(f.id)).toMatchObject({ coordinatorClientUserMessageId: firstId,
+      coordinatorNotice: "delivery_uncertain" });
+    f.store.updateCoordinatorNotice(f.id, { coordinatorClientUserMessageId: firstId,
+      coordinatorNotice: "queued", coordinatorFollowThrough: "unobserved", coordinatorQueueItemId: randomUUID() });
+    const failed = other.save({ ...stale, state: "failed", failure: "turn_failed" });
+    expect(failed).toMatchObject({ coordinatorClientUserMessageId: firstId, coordinatorNotice: "queued" });
+  } finally { f.cleanup(); }
+});
+
 test("a continuation inherits the coordinator binding and queues one failure notice", async () => {
   const f = await fixture({ failContinuation: true });
   try {
