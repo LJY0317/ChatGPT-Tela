@@ -12,6 +12,16 @@ import { WebDelegationStore, inspectWebDelegationResult, collectWebDelegationRes
 import { selectDelegationWebModel } from "../../../packages/codex-service/src/web-delegation-model";
 import { profileSlotFromArguments, delegationProfileSlot } from "./profile-selection";
 
+/** Queue acceptance records notification delivery only; Native model resumption is unobserved. */
+function coordinatorNoticeOutput(record: NonNullable<ReturnType<WebDelegationStore["get"]>>) {
+  return {
+    coordinatorNotice: record.coordinatorNotice,
+    coordinatorQueueItemId: record.coordinatorQueueItemId,
+    coordinatorFollowThrough: record.coordinatorFollowThrough,
+    coordinatorWake: "unsupported_public_contract",
+  };
+}
+
 /** On-demand source CLI first. No new daemon, poller, paid API provider or product lifecycle mutation. */
 export async function runWebDelegationCommand(args: readonly string[], paths: ReturnType<typeof resolveProductPaths>): Promise<void> {
   const subcommand = args[0];
@@ -94,7 +104,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
       console.log(await collectWebDelegationResult(adapters, id, args.includes("--confirm-title-retry")));
     } else {
       const record = await inspectWebDelegationResult(adapters, option("--job"), args.includes("--confirm-title-retry"));
-      console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", reconciliation: record.reconciliation ?? "not-observed", progress: record.progress, parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure, failureStage: record.failureStage, failureClass: record.failureClass, failureNativeCode: record.failureNativeCode, failureProviderReason: record.failureProviderReason, failureIncidentRef: record.failureIncidentRef, failureNextAction: record.failureNextAction, failureDiagnostics: record.failureDiagnostics, coordinatorWake: "unsupported_public_contract" }, null, 2));
+      console.log(JSON.stringify({ jobId: record.id, state: record.state, taskOutcome: record.taskOutcome ?? "unassessed", finalEvidence: record.finalEvidence ?? "unproven", observation: "journal", reconciliation: record.reconciliation ?? "not-observed", progress: record.progress, parentJobId: record.parentJobId, threadId: record.threadId, turnId: record.turnId, selection: record.selection, toolItems: record.toolItems ?? 0, toolItemCoverage: record.toolItemCoverage ?? "unverified", toolResultItems: record.toolResultItems ?? 0, toolResultCoverage: record.toolResultCoverage ?? "unverified", toolCountProvesNoExecution: false, failure: record.failure, failureStage: record.failureStage, failureClass: record.failureClass, failureNativeCode: record.failureNativeCode, failureProviderReason: record.failureProviderReason, failureIncidentRef: record.failureIncidentRef, failureNextAction: record.failureNextAction, failureDiagnostics: record.failureDiagnostics, ...coordinatorNoticeOutput(record) }, null, 2));
     }
     return;
   }
@@ -135,7 +145,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
       resultAvailable: Boolean(answer), failure: record.failure, failureStage: record.failureStage,
       failureClass: record.failureClass, failureNativeCode: record.failureNativeCode, failureProviderReason: record.failureProviderReason, failureIncidentRef: record.failureIncidentRef,
       failureNextAction: record.failureNextAction, failureDiagnostics: record.failureDiagnostics,
-      coordinatorWake: "unsupported_public_contract", ...(answer ? { finalEvidence: record.finalEvidence, answer } : {}) }));
+      ...coordinatorNoticeOutput(record), ...(answer ? { finalEvidence: record.finalEvidence, answer } : {}) }));
     return;
   }
   const profile = (await client.profiles()).find(row => row.slot === slot);
