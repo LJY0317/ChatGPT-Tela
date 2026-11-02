@@ -22,6 +22,12 @@ function coordinatorNoticeOutput(record: NonNullable<ReturnType<WebDelegationSto
   };
 }
 
+function requiredOption(args: readonly string[], name: string): string {
+  const indexes = args.flatMap((value, index) => value === name ? [index] : []);
+  if (indexes.length !== 1 || !args[indexes[0]! + 1] || args[indexes[0]! + 1]!.startsWith("--")) throw Error(`${name} requires one value`);
+  return args[indexes[0]! + 1]!;
+}
+
 /** CLI-only syntax; the selected thread is separately verified against its Native owner. */
 export function parseCoordinatorOptions(args: readonly string[], defaultSlot: number, continuing: boolean) {
   if (continuing && (args.includes("--coordinator-thread") || args.includes("--coordinator-slot"))) {
@@ -31,13 +37,8 @@ export function parseCoordinatorOptions(args: readonly string[], defaultSlot: nu
     throw Error("--coordinator-slot requires --coordinator-thread");
   }
   if (!args.includes("--coordinator-thread")) return undefined;
-  const option = (name: string) => {
-    const indexes = args.flatMap((value, index) => value === name ? [index] : []);
-    if (indexes.length !== 1 || !args[indexes[0]! + 1] || args[indexes[0]! + 1]!.startsWith("--")) throw Error(`${name} requires one value`);
-    return args[indexes[0]! + 1]!;
-  };
-  const threadId = option("--coordinator-thread");
-  const slot = args.includes("--coordinator-slot") ? Number(option("--coordinator-slot")) : defaultSlot;
+  const threadId = requiredOption(args, "--coordinator-thread");
+  const slot = args.includes("--coordinator-slot") ? Number(requiredOption(args, "--coordinator-slot")) : defaultSlot;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId)
     || !Number.isSafeInteger(slot) || slot < 1 || slot > 99) {
     throw Error("Invalid explicit coordinator thread/profile");
@@ -48,11 +49,7 @@ export function parseCoordinatorOptions(args: readonly string[], defaultSlot: nu
 /** On-demand source CLI first. No new daemon, poller, paid API provider or product lifecycle mutation. */
 export async function runWebDelegationCommand(args: readonly string[], paths: ReturnType<typeof resolveProductPaths>): Promise<void> {
   const subcommand = args[0];
-  const option = (name: string) => {
-    const indexes = args.flatMap((value, index) => value === name ? [index] : []);
-    if (indexes.length !== 1 || !args[indexes[0]! + 1] || args[indexes[0]! + 1]!.startsWith("--")) throw Error(`${name} requires one value`);
-    return args[indexes[0]! + 1]!;
-  };
+  const option = (name: string) => requiredOption(args, name);
   const store = new WebDelegationStore(join(paths.serviceState("codex"), "web-delegations"),
     slot => webDelegationLimit(readProductPreferences(), slot));
   let connectedClient: CodexServiceClient | undefined;
