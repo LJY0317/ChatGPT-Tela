@@ -22,6 +22,29 @@ function coordinatorNoticeOutput(record: NonNullable<ReturnType<WebDelegationSto
   };
 }
 
+/** CLI-only syntax; the selected thread is separately verified against its Native owner. */
+export function parseCoordinatorOptions(args: readonly string[], defaultSlot: number, continuing: boolean) {
+  if (continuing && (args.includes("--coordinator-thread") || args.includes("--coordinator-slot"))) {
+    throw Error("Continuation inherits its original coordinator; coordinator options are start-only");
+  }
+  if (args.includes("--coordinator-slot") && !args.includes("--coordinator-thread")) {
+    throw Error("--coordinator-slot requires --coordinator-thread");
+  }
+  if (!args.includes("--coordinator-thread")) return undefined;
+  const option = (name: string) => {
+    const indexes = args.flatMap((value, index) => value === name ? [index] : []);
+    if (indexes.length !== 1 || !args[indexes[0]! + 1] || args[indexes[0]! + 1]!.startsWith("--")) throw Error(`${name} requires one value`);
+    return args[indexes[0]! + 1]!;
+  };
+  const threadId = option("--coordinator-thread");
+  const slot = args.includes("--coordinator-slot") ? Number(option("--coordinator-slot")) : defaultSlot;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId)
+    || !Number.isSafeInteger(slot) || slot < 1 || slot > 99) {
+    throw Error("Invalid explicit coordinator thread/profile");
+  }
+  return { threadId, slot };
+}
+
 /** On-demand source CLI first. No new daemon, poller, paid API provider or product lifecycle mutation. */
 export async function runWebDelegationCommand(args: readonly string[], paths: ReturnType<typeof resolveProductPaths>): Promise<void> {
   const subcommand = args[0];
@@ -181,20 +204,10 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     return inline;
   });
   const id = continuation ? randomUUID() : args.includes("--job") ? option("--job") : randomUUID();
-  if (continuation && (args.includes("--coordinator-thread") || args.includes("--coordinator-slot"))) {
-    throw Error("Continuation inherits its original coordinator; coordinator options are start-only");
-  }
-  if (args.includes("--coordinator-slot") && !args.includes("--coordinator-thread")) {
-    throw Error("--coordinator-slot requires --coordinator-thread");
-  }
+  const requestedCoordinator = parseCoordinatorOptions(args, slot, Boolean(continuation));
   let coordinator: { slot: number; threadId: string; accountFingerprint: string } | undefined;
-  if (args.includes("--coordinator-thread")) {
-    const threadId = option("--coordinator-thread");
-    const coordinatorSlot = args.includes("--coordinator-slot") ? Number(option("--coordinator-slot")) : slot;
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId)
-      || !Number.isSafeInteger(coordinatorSlot) || coordinatorSlot < 1 || coordinatorSlot > 99) {
-      throw Error("Invalid explicit coordinator thread/profile");
-    }
+  if (requestedCoordinator) {
+    const { threadId, slot: coordinatorSlot } = requestedCoordinator;
     const current = await owner(coordinatorSlot);
     const rpc = await connectCodexAppServerWebSocket(current.session.terminalEndpoint);
     try {

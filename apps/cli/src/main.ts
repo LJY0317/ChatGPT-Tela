@@ -1125,7 +1125,7 @@ async function main(): Promise<void> {
     + "  version\n"
     + "  web-delegate catalog [--slot N]\n"
     + "  web-delegate capacity [--slot N] [--cleanup] (local admission; optional service cleanup details)\n"
-    + "  web-delegate start --cwd <workspace> --prompt-file <file> [--image-file <png|jpg|gif|webp>] [--slot N] [--job UUID]\n"
+    + "  web-delegate start --cwd <workspace> --prompt-file <file> [--image-file <png|jpg|gif|webp>] [--slot N] [--job UUID] [--coordinator-thread UUID] [--coordinator-slot N]\n"
     + "  web-delegate continue --job UUID --prompt-file <file> [--image-file <png|jpg|gif|webp>]\n"
     + "  web-delegate <status|result|reconcile> --job UUID\n"
     + "  web-delegate unanswered [--slot N] [--after UUID] [--limit N]\n"

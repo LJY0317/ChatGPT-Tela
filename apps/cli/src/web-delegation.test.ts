@@ -6,7 +6,19 @@ import { join } from "node:path";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 import { WebDelegationStore, type WebDelegationRecord } from "../../../packages/codex-service/src/web-delegation";
-import { runWebDelegationCommand } from "./web-delegation";
+import { parseCoordinatorOptions, runWebDelegationCommand } from "./web-delegation";
+
+test("start coordinator flags parse once; continuation cannot replace inherited binding", () => {
+  const thread = randomUUID();
+  expect(parseCoordinatorOptions(["start", "--coordinator-thread", thread], 3, false)).toEqual({ threadId: thread, slot: 3 });
+  expect(parseCoordinatorOptions(["start", "--coordinator-thread", thread, "--coordinator-slot", "5"], 3, false)).toEqual({ threadId: thread, slot: 5 });
+  expect(parseCoordinatorOptions(["continue"], 3, true)).toBeUndefined();
+  expect(() => parseCoordinatorOptions(["continue", "--coordinator-thread", thread], 3, true)).toThrow("inherits");
+  expect(() => parseCoordinatorOptions(["start", "--coordinator-slot", "5"], 3, false)).toThrow("requires");
+  expect(() => parseCoordinatorOptions(["start", "--coordinator-thread", "invalid"], 3, false)).toThrow("Invalid");
+  expect(() => parseCoordinatorOptions(["start", "--coordinator-thread", thread, "--coordinator-thread", thread], 3, false)).toThrow("requires one value");
+  expect(() => parseCoordinatorOptions(["start", "--coordinator-thread", thread, "--coordinator-slot", "0"], 3, false)).toThrow("Invalid");
+});
 
 test("original input export and explicit review work offline after source chat deletion", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-request-cli-"));
