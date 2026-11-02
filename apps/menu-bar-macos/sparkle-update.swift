@@ -219,6 +219,9 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) { pendingBuild = item.versionString }
 
   func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+    // A newly created UI can encounter an unrelated Sparkle check failure.
+    // It does not own a previous process's prepared service handoff.
+    let ownedInstallation = pendingBuild != nil || preparingTermination
     idleObservation?.cancel()
     idleObservation = nil
     pendingBuild = nil
@@ -227,6 +230,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     preparationWindow = nil
     problem = error.localizedDescription
     changed?()
+    guard ownedInstallation else { return }
     Task {
       do { _ = try await lifecycle(["cancel"]); recoveredPendingUpdate = false }
       catch { problem = "Tela recovery needs attention before updating." }
