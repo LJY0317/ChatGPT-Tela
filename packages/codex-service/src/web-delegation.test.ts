@@ -158,6 +158,11 @@ test("failure notice queues once to the explicitly owned coordinator and preserv
     const notice = f.calls.filter(call => call.method === "thread/queue/add");
     expect(notice).toHaveLength(1);
     expect((notice[0]?.params as { input: { text: string }[] }).input[0]?.text).toContain("outcome may be uncertain");
+    const queueText = (notice[0]?.params as { input: { text: string }[] }).input[0]!.text;
+    expect(failed.failureStage).toBe("turn_complete");
+    expect(queueText).toContain(`failure_stage: ${failed.failureStage}`);
+    expect(queueText).toContain(`failure_class: ${failed.failureClass}`);
+    expect(queueText).toContain(`incident_ref: ${failed.failureIncidentRef ?? "unavailable"}`);
     expect(notice[0]?.params).toMatchObject({ threadId: failed.coordinator?.threadId,
       clientUserMessageId: failed.coordinatorClientUserMessageId,
       input: [{ type: "text", text: expect.stringContaining(`job_id: ${f.id}`) }] });

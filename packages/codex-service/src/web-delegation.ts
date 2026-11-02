@@ -844,7 +844,7 @@ async function settleFailure(adapters: WebDelegationAdapters, failed: WebDelegat
   let current = adapters.store.get(failed.id);
   if (!current) throw Error("Web job was not reserved");
   if (failed.coordinator && !current.coordinatorNotice) {
-    current = await notifyFailureCoordinator(adapters, current);
+    current = await notifyFailureCoordinator(adapters, failed);
   }
   const settled = adapters.store.save({ ...failed,
     ...(current.coordinatorClientUserMessageId ? { coordinatorClientUserMessageId: current.coordinatorClientUserMessageId } : {}),
