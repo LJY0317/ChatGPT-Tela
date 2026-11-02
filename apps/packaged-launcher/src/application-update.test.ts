@@ -153,6 +153,27 @@ test("an aborted Sparkle install restores the unchanged source without another s
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("UI process loss after preparation leaves a handoff for explicit restart settlement", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-sparkle-process-exit-"));
+  try {
+    const f = await fixture(root);
+    await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" });
+    const afterPreparation = [...f.runner.calls];
+    // All Swift callbacks and their installHandler belong to the exited UI process.
+    // A newly launched UI can only ask the existing lifecycle to reconcile bytes.
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: false, prepared: true });
+    expect(f.runner.calls).toEqual(afterPreparation);
+    expect(readMacApplicationUpdate(f.paths)).toMatchObject({ phase: "ready", targetBuild: "2" });
+    // Explicit cancellation after the replacement was not observed is the only
+    // source restoration; the stale approval cannot install anything by itself.
+    expect(await runApplicationUpdate("cancel", f.input)).toMatchObject({ ready: true, restored: true });
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+    const afterCancellation = [...f.runner.calls];
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true });
+    expect(f.runner.calls).toEqual(afterCancellation);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 
 test("interrupted readiness resumes the target without re-stopping or restarting ready peers", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-resume-"));

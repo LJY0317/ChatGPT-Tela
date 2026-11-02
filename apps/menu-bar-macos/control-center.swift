@@ -1181,7 +1181,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           control: actionButton("Manage…", action: #selector(openChatGPTPlugins)), in: support)
       let updates = card("Updates")
       updatesSection = updates
-      let check = actionButton("Check for Updates…", action: #selector(checkForUpdates))
+      let check = actionButton(updater?.recoveredPendingUpdate == true ? "Resume Update…" : "Check for Updates…", action: #selector(checkForUpdates))
       check.isEnabled = updater?.canCheck == true && !operationInProgress
       let installed = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
       row(updater?.preparationStatus ?? updater?.availableVersion.map { "Version \($0) available" } ?? "ChatGPT Tela",

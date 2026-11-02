@@ -6,6 +6,7 @@ import Sparkle
 final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
   private(set) var availableVersion: String?
   private(set) var problem: String?
+  private(set) var recoveredPendingUpdate = false
   var changed: (() -> Void)?
   private var pendingBuild: String?
   private var preparingTermination = false
@@ -62,7 +63,9 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     do {
       let result = try await lifecycle(["finish"])
       try controller.updater.start()
-      problem = result.ready ? nil : "Finish the pending update to restart Tela."
+      recoveredPendingUpdate = !result.ready && result.prepared
+      problem = recoveredPendingUpdate ? "An update is prepared. Choose Resume Update… to continue." : result.ready ? nil : "Finish the pending update to restart Tela."
+      if recoveredPendingUpdate { NSLog("Tela update startup found a prepared Sparkle handoff; awaiting a new user-initiated update session") }
       changed?()
       return result.ready && !result.restored
     } catch {
@@ -134,7 +137,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     }
   }
 
-  private nonisolated func lifecycle(_ arguments: [String], observation: UpdateIdleObservation? = nil) async throws -> (ready: Bool, restored: Bool) {
+  private nonisolated func lifecycle(_ arguments: [String], observation: UpdateIdleObservation? = nil) async throws -> (ready: Bool, restored: Bool, prepared: Bool) {
     guard let launcher = Bundle.main.url(forAuxiliaryExecutable: "chatgpt-tela") else {
       throw NSError(domain: "TelaUpdate", code: 1)
     }
@@ -164,7 +167,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
       throw NSError(domain: "TelaUpdate", code: 2,
         userInfo: [NSLocalizedDescriptionKey: "Tela could not prepare its services for updating. Check service status and try again. Your conversations are kept."])
     }
-    return (value["ready"] as? Bool == true, value["restored"] as? Bool == true)
+    return (value["ready"] as? Bool == true, value["restored"] as? Bool == true, value["prepared"] as? Bool == true)
   }
 
   func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
@@ -189,12 +192,14 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,
                untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
     let observation = UpdateIdleObservation()
+    recoveredPendingUpdate = false
     idleObservation = observation
     pendingBuild = item.versionString
     preparationWindow = Self.makePreparationWindow(waiting: true)
     preparationWindow?.center()
     preparationWindow?.makeKeyAndOrderFront(nil)
     changed?()
+    NSLog("Tela update deferred by Sparkle; observing current work before invoking the install handler")
     Task {
       do { _ = try await lifecycle(["wait"], observation: observation) }
       catch { NSLog("Tela update idle observation ended; ordinary shutdown admission will decide: %@", error.localizedDescription) }
@@ -205,6 +210,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
       changed?()
       // Admission remains mandatory, including when this optional observation
       // is unavailable or new work was admitted after its last snapshot.
+      NSLog("Tela update idle observation settled; invoking Sparkle install handler")
       installHandler()
     }
     return true
@@ -222,7 +228,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     problem = error.localizedDescription
     changed?()
     Task {
-      do { _ = try await lifecycle(["cancel"]) }
+      do { _ = try await lifecycle(["cancel"]); recoveredPendingUpdate = false }
       catch { problem = "Tela recovery needs attention before updating." }
       changed?()
     }
