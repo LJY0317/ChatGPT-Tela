@@ -31,6 +31,7 @@ export interface ChatGptProfileObservation {
 export type ChatGptAccountIdentityObserver = (
   surface: BrowserSurfaceLease,
   signal?: AbortSignal,
+  timing?: { readonly leaseAcquireDurationMs?: number },
 ) => Promise<ChatGptAccountIdentity>;
 
 export interface ElectronProfileSetupSurface {
@@ -153,9 +154,9 @@ export function createChatGptProfileControl(input: {
     if (closed || closing) throw new Error("ChatGPT profile control is closing");
   };
   const identityObserver = input.accountIdentityObserver ?? observeChatGptAccountIdentity;
-  const accountIdentityObserver: ChatGptAccountIdentityObserver = (surface, signal) => input.diagnosticProfileFingerprint
-    ? withDiagnosticContext({ profile_fingerprint: input.diagnosticProfileFingerprint }, () => identityObserver(surface, signal))
-    : identityObserver(surface, signal);
+  const accountIdentityObserver: ChatGptAccountIdentityObserver = (surface, signal, timing) => input.diagnosticProfileFingerprint
+    ? withDiagnosticContext({ profile_fingerprint: input.diagnosticProfileFingerprint }, () => identityObserver(surface, signal, timing))
+    : identityObserver(surface, signal, timing);
 
   async function withConnectorSurface<T>(
     signal: AbortSignal | undefined,
@@ -274,12 +275,13 @@ export function createChatGptProfileControl(input: {
     async probeChatGptAccount(signal?: AbortSignal) {
       requireOpen();
       signal?.throwIfAborted();
+      const acquireStartedAt = Date.now();
       const lease = await input.browserHost.acquire({
         taskId: "chatgpt-tela-account-observation", epochId: `account-${randomUUID()}`,
       });
       try {
         signal?.throwIfAborted();
-        return await accountIdentityObserver(lease, signal);
+        return await accountIdentityObserver(lease, signal, { leaseAcquireDurationMs: Math.max(0, Date.now() - acquireStartedAt) });
       } finally {
         await input.browserHost.release(lease.leaseId);
       }

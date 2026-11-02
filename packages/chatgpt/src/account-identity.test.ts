@@ -7,6 +7,32 @@ import {
 import { ChatGptWebLoginRequiredError, observeChatGptAccountDisplay, observeChatGptAccountIdentity } from "./account-identity";
 import { observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 
+test("identity timeout records fetch deadline separately from external evaluation abort", async () => {
+  const rows: StructuralDiagnosticEvent[] = [];
+  const stop = observeDiagnosticEvents(row => rows.push(row));
+  const surface = (evaluate: BrowserPageAutomation["evaluate"]) => ({ capability: () => ({ evaluate }) }) as unknown as BrowserSurfaceLease;
+  try {
+    const timedOut = surface(async source => {
+      const run = new Function("fetch", "location", `return (${source})();`);
+      return run((_url: string, options: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      }), { origin: "https://chatgpt.com" });
+    });
+    await expect(observeChatGptAccountIdentity(timedOut, undefined, { leaseAcquireDurationMs: 12 })).rejects.toThrow();
+    expect(rows.at(-1)).toMatchObject({ reason_class: "probe_timeout", cancellation_source: "fetch_deadline", lease_acquire_duration_ms: 12 });
+    expect(rows.at(-1)?.fetch_duration_ms).toBeGreaterThanOrEqual(4900);
+
+    const controller = new AbortController();
+    const externallyAborted = surface(async (_source, _argument, signal) => {
+      controller.abort();
+      throw new DOMException("aborted", "AbortError");
+    });
+    await expect(observeChatGptAccountIdentity(externallyAborted, controller.signal)).rejects.toThrow();
+    expect(rows.at(-1)).toMatchObject({ reason_class: "observation_aborted", cancellation_source: "external_signal" });
+    expect(rows.at(-1)).not.toHaveProperty("fetch_duration_ms");
+  } finally { stop?.(); }
+}, 10000);
+
 test("schema failure preserves presence evidence without account values", async () => {
   const rows: StructuralDiagnosticEvent[] = [];
   const stop = observeDiagnosticEvents(row => rows.push(row));

@@ -26,17 +26,27 @@ export class ChatGptWebLoginRequiredError extends Error {
 }
 
 const ACCOUNT_IDENTITY_PROBE = `async () => {
-  const result = (state, reasonClass, fields = {}) => ({ state, reasonClass, ...fields });
+  const started = performance.now();
+  let fetchStarted;
+  let fetchEnded;
+  let deadlineFired = false;
+  const result = (state, reasonClass, fields = {}) => ({ state, reasonClass, ...fields,
+    ...(fetchStarted === undefined ? {} : { fetchStartMs: Math.round(fetchStarted - started) }),
+    ...(fetchEnded === undefined ? {} : { fetchDurationMs: Math.round(fetchEnded - fetchStarted) }),
+    deadlineFired });
   if (location.origin !== "https://chatgpt.com") return result("unavailable", "wrong_origin");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
+  const timeout = setTimeout(() => { deadlineFired = true; controller.abort(); }, 5000);
   try {
     let response;
     try {
+      fetchStarted = performance.now();
       response = await fetch("/api/auth/session", {
         credentials: "same-origin", cache: "no-store", signal: controller.signal,
       });
+      fetchEnded = performance.now();
     } catch {
+      fetchEnded = performance.now();
       return result("unavailable", controller.signal.aborted ? "probe_timeout" : "network_error");
     }
     const url = new URL(response.url);
@@ -122,6 +132,11 @@ function recordAccountProbe(input: {
   readonly httpStatus?: number;
   readonly shape?: AuthShapeObservation;
   readonly startedAt: number;
+  readonly fetchStartMs?: number | undefined;
+  readonly fetchDurationMs?: number | undefined;
+  readonly deadlineFired?: boolean | undefined;
+  readonly externalAborted?: boolean | undefined;
+  readonly leaseAcquireDurationMs?: number;
 }): void {
   const reasonClass = AUTH_REASON_CLASSES.has(input.reasonClass) ? input.reasonClass : "page_evaluation_failed";
   const fields = {
@@ -129,6 +144,10 @@ function recordAccountProbe(input: {
     auth_state: input.state,
     reason_class: reasonClass,
     duration_ms: diagnosticDurationMs(input.startedAt),
+    ...(Number.isSafeInteger(input.fetchStartMs) && input.fetchStartMs! >= 0 ? { fetch_start_ms: input.fetchStartMs! } : {}),
+    ...(Number.isSafeInteger(input.fetchDurationMs) && input.fetchDurationMs! >= 0 ? { fetch_duration_ms: input.fetchDurationMs! } : {}),
+    ...(Number.isSafeInteger(input.leaseAcquireDurationMs) && input.leaseAcquireDurationMs! >= 0 ? { lease_acquire_duration_ms: input.leaseAcquireDurationMs! } : {}),
+    cancellation_source: input.externalAborted ? "external_signal" : input.deadlineFired ? "fetch_deadline" : "none",
     ...(typeof input.shape?.userPresent === "boolean" ? { user_present: input.shape.userPresent } : {}),
     ...(typeof input.shape?.userIdValid === "boolean" ? { user_key_valid: input.shape.userIdValid } : {}),
     ...(typeof input.shape?.accountPresent === "boolean" ? { account_present: input.shape.accountPresent } : {}),
@@ -178,22 +197,24 @@ export async function observeChatGptAccountDisplay(surface: BrowserSurfaceLease,
 export async function observeChatGptAccountIdentity(
   surface: BrowserSurfaceLease,
   signal?: AbortSignal,
+  timing?: { readonly leaseAcquireDurationMs?: number },
 ): Promise<ChatGptAccountIdentity> {
   const page = surface.capability(BROWSER_PAGE_AUTOMATION);
   const startedAt = Date.now();
   if (!page) {
-    recordAccountProbe({ kind: "identity", state: "unavailable", reasonClass: "page_evaluation_failed", startedAt });
+    recordAccountProbe({ kind: "identity", state: "unavailable", reasonClass: "page_evaluation_failed", startedAt, ...timing, externalAborted: signal?.aborted });
     throw new Error("browser surface does not expose page automation for ChatGPT account identity");
   }
-  let identity: AuthShapeObservation & { state?: string; reasonClass?: string; httpStatus?: number; accountFingerprint?: string; containerFingerprint?: string; accountStructure?: string };
+  let identity: AuthShapeObservation & { state?: string; reasonClass?: string; httpStatus?: number; accountFingerprint?: string; containerFingerprint?: string; accountStructure?: string; fetchStartMs?: number; fetchDurationMs?: number; deadlineFired?: boolean };
   try { identity = await page.evaluate<null, typeof identity>(ACCOUNT_IDENTITY_PROBE, null, signal); }
   catch (error) {
-    recordAccountProbe({ kind: "identity", state: "unavailable", reasonClass: probeFailureReason(error, signal), startedAt });
+    recordAccountProbe({ kind: "identity", state: "unavailable", reasonClass: probeFailureReason(error, signal), startedAt, ...timing, externalAborted: signal?.aborted });
     throw new Error("ChatGPT account identity observation failed");
   }
   const state = identity?.state === "signed-in" || identity?.state === "signed-out" ? identity.state : "unavailable";
   const reasonClass = typeof identity?.reasonClass === "string" && AUTH_REASON_CLASSES.has(identity.reasonClass) ? identity.reasonClass : "page_evaluation_failed";
-  recordAccountProbe({ kind: "identity", state, reasonClass, shape: identity,
+  recordAccountProbe({ kind: "identity", state, reasonClass, shape: identity, ...timing, externalAborted: signal?.aborted,
+    fetchStartMs: identity?.fetchStartMs, fetchDurationMs: identity?.fetchDurationMs, deadlineFired: identity?.deadlineFired,
     ...(typeof identity?.httpStatus === "number" ? { httpStatus: identity.httpStatus } : {}), startedAt });
   if (state === "unavailable") throw new Error("ChatGPT account identity is unavailable; sign in and retry");
   if (identity?.state === "signed-out") throw new ChatGptWebLoginRequiredError();
