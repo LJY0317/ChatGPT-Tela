@@ -10,7 +10,7 @@ import { observeDiagnosticEvents, diagnosticFingerprint, readDiagnosticTail, typ
 import { runWebDelegation, inspectWebDelegationResult, collectWebDelegationResult, WebDelegationStore, reconcileWebDelegation, reconcileWebDelegationCapacity, verifiedWebDelegationAnswer, type WebDelegationRecord } from "./web-delegation";
 import { WebDelegationProgressProjection, indexedWebDelegationProgress } from "./web-delegation-progress";
 
-async function fixture(options: { nativeFailureCode?: string; nativeFailureJson?: boolean; titleReadFails?: boolean; titleReadAfterSetFails?: boolean; titleSetFails?: boolean; titleSetAckLost?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; latestStatus?: "failed" | "interrupted"; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
+async function fixture(options: { failContinuation?: boolean; nativeFailureCode?: string; nativeFailureJson?: boolean; titleReadFails?: boolean; titleReadAfterSetFails?: boolean; titleSetFails?: boolean; titleSetAckLost?: boolean; slot?: number; uncertain?: boolean; changedOwner?: boolean; foreignFinal?: boolean; silent?: boolean; finalPhase?: string | null; answer?: string; collaboration?: boolean; summaryToolResult?: boolean; failedTool?: boolean; enormousOutput?: boolean; closeFails?: boolean; disconnect?: boolean; failedTurn?: boolean; latestStatus?: "failed" | "interrupted"; manualTurn?: boolean; ambiguousFirstTurn?: boolean; publicProgress?: boolean; indexedProgress?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "tela-web-delegate-")));
   const slot = options.slot ?? 1;
   const store = new WebDelegationStore(root), id = randomUUID(), threadId = randomUUID(), turnId = randomUUID();
@@ -75,7 +75,7 @@ async function fixture(options: { nativeFailureCode?: string; nativeFailureJson?
           status: options.failedTool ? "failed" : "completed",
           aggregatedOutput: options.enormousOutput ? "x".repeat(140 * 1024) : "fixture-result-not-in-journal" } });
         if (options.collaboration) notify("item/completed", { threadId, turnId: currentTurnId, item: { id: "collab", type: "collabAgentToolCall" } });
-        notify("turn/completed", { threadId, turn: { id: currentTurnId, status: options.failedTurn ? "failed" : "completed", ...(options.nativeFailureCode ? { error: options.nativeFailureJson ? { message: JSON.stringify({ error: { type: "invalid_request_error", code: options.nativeFailureCode, message: "private native error" } }) } : { code: options.nativeFailureCode, message: "private native error" } } : {}) } });
+        notify("turn/completed", { threadId, turn: { id: currentTurnId, status: options.failedTurn || (options.failContinuation && calls.filter(call => call.method === "turn/start").length > 1) ? "failed" : "completed", ...(options.nativeFailureCode ? { error: options.nativeFailureJson ? { message: JSON.stringify({ error: { type: "invalid_request_error", code: options.nativeFailureCode, message: "private native error" } }) } : { code: options.nativeFailureCode, message: "private native error" } } : {}) } });
         return { turn: { id: currentTurnId } };
       }
       if (method === "thread/turns/list") {
@@ -161,6 +161,18 @@ test("failure notice queues once to the explicitly owned coordinator and preserv
       clientUserMessageId: failed.coordinatorClientUserMessageId,
       input: [{ type: "text", text: expect.stringContaining(`job_id: ${f.id}`) }] });
     await expect(f.runWithCoordinator()).rejects.toThrow();
+    expect(f.calls.filter(call => call.method === "thread/queue/add")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
+test("a continuation inherits the coordinator binding and queues one failure notice", async () => {
+  const f = await fixture({ failContinuation: true });
+  try {
+    const first = await f.runWithCoordinator();
+    await expect(f.continue(first.id)).rejects.toThrow("Web job turn failed");
+    const follow = [...f.changes].reverse().find(row => row.parentJobId === first.id && row.state === "failed");
+    expect(follow?.coordinator).toEqual(first.coordinator);
+    expect(follow?.coordinatorNotice).toBe("queued");
     expect(f.calls.filter(call => call.method === "thread/queue/add")).toHaveLength(1);
   } finally { f.cleanup(); }
 });

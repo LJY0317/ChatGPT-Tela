@@ -2,13 +2,21 @@
 
 ## Coordinator failure delivery boundary (2026-11-02)
 
-At source commit `fb519688`, a failed managed delegation already queues one
-deduplicated notice to its explicitly owned Native coordinator with the original
+At source commit `fb519688`, the underlying delegation service can queue one
+deduplicated notice when an explicitly owned Native coordinator binding is supplied, with the original
 job/turn, failure stage and local incident reference (`thread/queue/add`). The
 receipt `coordinatorNotice: queued` proves queue acceptance only; it does not
 prove that the host resumed coordinator inference. Uncertain sends retain their
 stable message ID for reconciliation. Original input retrieval and settlement
 remain available through the existing journal commands.
+
+For source CLI `web-delegate start`, opt in with `--coordinator-thread UUID`
+and optionally `--coordinator-slot N` (defaults to the selected worker profile).
+The CLI verifies the coordinator's current account proof and exact `thread/read`
+before recording the link. This proves current access, not historic authorship;
+only supply a coordinator conversation you explicitly own and authorize to receive
+failure notices. `continue` inherits the recorded binding. Without the start
+option, CLI delegation has no coordinator notification target.
 
 The public Codex app-server protocol exposes `turn/completed`, queue changes,
 `thread/resume` and turn submission, but no host-owned park-and-automatically-

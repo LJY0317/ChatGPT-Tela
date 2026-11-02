@@ -171,6 +171,28 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     return inline;
   });
   const id = continuation ? randomUUID() : args.includes("--job") ? option("--job") : randomUUID();
+  if (continuation && (args.includes("--coordinator-thread") || args.includes("--coordinator-slot"))) {
+    throw Error("Continuation inherits its original coordinator; coordinator options are start-only");
+  }
+  if (args.includes("--coordinator-slot") && !args.includes("--coordinator-thread")) {
+    throw Error("--coordinator-slot requires --coordinator-thread");
+  }
+  let coordinator: { slot: number; threadId: string; accountFingerprint: string } | undefined;
+  if (args.includes("--coordinator-thread")) {
+    const threadId = option("--coordinator-thread");
+    const coordinatorSlot = args.includes("--coordinator-slot") ? Number(option("--coordinator-slot")) : slot;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId)
+      || !Number.isSafeInteger(coordinatorSlot) || coordinatorSlot < 1 || coordinatorSlot > 99) {
+      throw Error("Invalid explicit coordinator thread/profile");
+    }
+    const current = await owner(coordinatorSlot);
+    const rpc = await connectCodexAppServerWebSocket(current.session.terminalEndpoint);
+    try {
+      const read = await rpc.request("thread/read", { threadId, includeTurns: false }) as { thread?: { id?: string } };
+      if (read.thread?.id !== threadId) throw Error("Coordinator thread ownership is not verified");
+    } finally { await rpc.close(); }
+    coordinator = { slot: coordinatorSlot, threadId, accountFingerprint: current.binding.accountFingerprint };
+  }
   const lifecycle = new AbortController();
   const interrupt = () => lifecycle.abort(new Error("CLI interrupted"));
   process.once("SIGINT", interrupt);
@@ -179,7 +201,7 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     const result = await runWebDelegation({
       ...adapters,
       changed: record => console.log(JSON.stringify({ jobId: record.id, state: record.state, selection: record.selection, toolItems: record.toolItems ?? 0 })),
-    }, { id, slot, cwd, prompt, ...(images.length ? { images } : {}), ...(continuation ? { parentJobId: continuation.id } : {}), signal: lifecycle.signal });
+    }, { id, slot, cwd, prompt, ...(images.length ? { images } : {}), ...(continuation ? { parentJobId: continuation.id } : {}), ...(coordinator ? { coordinator } : {}), signal: lifecycle.signal });
     const answer = verifiedWebDelegationAnswer(result);
     if (answer) {
       await collectWebDelegationResult(adapters, result.id);
