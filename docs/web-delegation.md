@@ -185,6 +185,13 @@ one turn are unchanged. The capability expires with the response cycle. When no 
 Goal tool is advertised, no completion capability is supplied: report that limit
 instead of creating a shell/RPC completion helper.
 
+A queued follow-up is a new Native turn: `thread/queue/add` and `thread/resume`
+do not register a new Goal. A completed earlier Goal does not transfer to that
+turn. If `thread/goal/get` returns `goal: null`, first check whether the
+coordinator explicitly registered a Goal for this turn; null alone is not a
+Tela tool connection failure. Distinguish a missing Goal control capability
+from an inventory rejection or an actual transport error when reporting a limit.
+
 Completion requires the full objective's evidence before the original Goal update
 call, followed by a final answer. An isolated installed acceptance verified an actual
 file read, the original completion result, normal Native turn completion and no
