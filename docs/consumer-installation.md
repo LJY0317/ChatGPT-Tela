@@ -2,8 +2,9 @@
 
 Status (2026-11-02): installed macOS local-only release `fb519688` accepts Chat
 start/stop and an exact existing-plugin host read while preserving the menu,
-services and two profiles. Candidate `63d7e87d` passed scoped fixtures and types,
-but is not merged or installed. Neither proves fresh consumer onboarding or live
+services and two profiles. The current source integrates coordinator notices, account
+diagnostics and orphan cleanup; 155 scoped tests and types passed, but these changes
+are not installed. Neither proves fresh consumer onboarding or live
 account removal. Installed uninstall/reinstall and two-computer acceptance remain open.
 
 Interrupted removal now resumes through the same review/apply path after reacquiring the existing OS

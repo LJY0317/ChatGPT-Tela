@@ -18,9 +18,9 @@ only supply a coordinator conversation you explicitly own and authorize to recei
 failure notices. `continue` inherits the recorded binding. Without the start
 option, CLI delegation has no coordinator notification target.
 
-The separately validated but uninstalled candidate (`63d7e87d`) also projects
+The validated but uninstalled source also projects
 coordinator binding, Queue notice outcome and follow-through through existing
-status/reconcile output. The P2A orphan/notice follow-up remains in progress.
+status/reconcile output. Fresh failure evidence and orphan notice cleanup are included.
 Neither source validation nor queue acceptance proves an installed wakeup.
 
 The public Codex app-server protocol exposes `turn/completed`, queue changes,

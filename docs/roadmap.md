@@ -1,10 +1,10 @@
 # Remaining product work
 
-Status as of 2026-11-02: `main` (`75528cea`), the installed macOS local-only release
-(`fb519688`), and the validated integration candidate (`63d7e87d`) are distinct.
-The candidate passed its scoped CLI, failure-settlement, account/profile fixtures and
-TypeScript check, but has not been merged into `main` or installed. Source, isolated
-fixture, installed-host and public consumer acceptance must remain separate.
+Status as of 2026-11-02: the installed macOS local-only release (`fb519688`)
+and current source are distinct. Coordinator notices, account diagnostics and their
+orphan cleanup are integrated in source; 155 scoped tests and the TypeScript check
+passed on Bun 1.4.4. These changes are not installed. Source, isolated fixture,
+installed-host and public consumer acceptance must remain separate.
 
 ## Implemented or accepted boundaries — not new implementation tasks
 
@@ -22,11 +22,11 @@ fixture, installed-host and public consumer acceptance must remain separate.
   file upload has no supported Native input contract. Goal-only control uses original
   Native tools only when advertised, with isolated same-turn completion acceptance.
   See [Web delegation](web-delegation.md).
-- **Coordinator notice source path.** The uninstalled integration candidate binds an
+- **Coordinator notice source path.** The uninstalled source binds an
   explicitly authorized Native coordinator at CLI start, inherits that binding on
   continuation, and projects notice/Queue/follow-through observations in status output.
-  Queue acceptance does not prove a model resumed. The P2A orphan/notice follow-up
-  remains in progress and is not included in this acceptance.
+  Queue acceptance does not prove a model resumed. Fresh failure metadata and orphan
+  notice cleanup are included in the scoped source verification.
 - **Recovery, retention and ownership.** Supported indexed checkpoint/history retrieval,
   a long-thread resume and bounded checkpoint storage have acceptance; older missing
   source history is not reconstructed. Existing soft targets of 32 managed conversations
@@ -47,7 +47,6 @@ fixture, installed-host and public consumer acceptance must remain separate.
   resumption only under an available supported contract. Measure coordinator requests
   during a waiting interval before claiming zero additional requests/tokens; no polling,
   replay scheduler, blind retry or independent Goal engine.
-- **P2A failure notice follow-up.** Orphan/notice handling remains under separate review.
   Do not call it shipped or operationally accepted until its own evidence is settled.
 - **End-to-end Web acceptance.** Confirm durable result delivery to the calling task,
   simultaneous live jobs, exact cancellation/uncertain-ACK recovery, full image/continuation
@@ -75,9 +74,10 @@ fixture, installed-host and public consumer acceptance must remain separate.
 
 ## Desktop lifecycle and consumer distribution still open
 
-- **Apply after current work (P1A).** An independent lifecycle audit is in progress.
-  Preserve authorization and explain deferral until active Native and other owned work
-  finishes; do not mark this complete before that audit concludes.
+- **Deferred-update process exit.** Normal “Apply after current work” authorization,
+  readiness events and callback continuation passed source/fixture review. Recovery of
+  an unconsumed approval after an unexpected UI-process exit remains unverified; this
+  is separate from the supported normal deferral path.
 - **Installed UI and release readiness.** Verify the real Quit-menu/Spotlight paths,
   actively generating Web-window preservation, and complete consumer update/repair
   with target services and profiles running afterward. Existing macOS menu relaunch,
