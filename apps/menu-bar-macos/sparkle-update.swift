@@ -64,7 +64,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
       let result = try await lifecycle(["finish"])
       try controller.updater.start()
       recoveredPendingUpdate = !result.ready && result.prepared
-      problem = recoveredPendingUpdate ? "An update is prepared. Choose Resume Update… to continue." : result.ready ? nil : "Finish the pending update to restart Tela."
+      problem = recoveredPendingUpdate ? "An update is prepared. Review it in Sparkle to see whether it can continue." : result.ready ? nil : "Finish the pending update to restart Tela."
       if recoveredPendingUpdate { NSLog("Tela update startup found a prepared Sparkle handoff; awaiting a new user-initiated update session") }
       changed?()
       return result.ready && !result.restored

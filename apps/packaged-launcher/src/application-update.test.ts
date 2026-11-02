@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -174,6 +174,67 @@ test("UI process loss after preparation leaves a handoff for explicit restart se
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+
+test("killing the deferred wait worker leaves no install authority for the recreated process", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-sparkle-wait-exit-"));
+  const entered = join(root, "wait-entered"), effects = join(root, "effects");
+  let child: ReturnType<typeof Bun.spawn> | undefined;
+  let observer: ReturnType<typeof watch> | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const f = await fixture(root);
+    for (const job of f.runner.jobs.values()) job.running = true;
+    const beforeManifest = readFileSync(f.paths.installManifest, "utf8");
+    const code = [
+      'import { appendFileSync, watch, writeFileSync } from "node:fs";',
+      'import { runApplicationUpdate } from "./apps/packaged-launcher/src/application-update.ts";',
+      'import { LaunchdUpgradeRunner } from "./tests/support/launchd-upgrade-runner.ts";',
+      'const runner = new LaunchdUpgradeRunner();',
+      'for (const [label, job] of JSON.parse(process.env.TELA_FIXTURE_JOBS!)) runner.jobs.set(label, job);',
+      'const originalRun = runner.run.bind(runner);',
+      'runner.run = async (command, args) => { if (args[0] !== "print") appendFileSync(process.env.TELA_FIXTURE_EFFECTS!, args[0] + "\\n"); return originalRun(command, args); };',
+      'await runApplicationUpdate("wait", { payloadRoot: process.env.TELA_FIXTURE_APP!,',
+      '  options: { home: process.env.TELA_FIXTURE_HOME!, platform: "darwin", environment: {}, runner },',
+      '  waitForShutdownService: async (service) => {',
+      '    writeFileSync(process.env.TELA_FIXTURE_ENTERED!, service);',
+      '    await new Promise<void>(() => { watch(process.env.TELA_FIXTURE_HOME!, () => {}); });',
+      '  }',
+      '});',
+    ].join("\n");
+    const ready = new Promise<void>(resolve => {
+      observer = watch(root, () => {
+        if (existsSync(entered)) { observer?.close(); resolve(); }
+      });
+      if (existsSync(entered)) { observer.close(); resolve(); }
+    });
+    child = Bun.spawn([process.execPath, "-e", code], {
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin",
+        TELA_FIXTURE_APP: f.sourceRoot, TELA_FIXTURE_HOME: join(root, "home"),
+        TELA_FIXTURE_JOBS: JSON.stringify([...f.runner.jobs]),
+        TELA_FIXTURE_ENTERED: entered, TELA_FIXTURE_EFFECTS: effects },
+      stdout: "ignore", stderr: "ignore",
+    });
+    const running = child;
+    deadline = setTimeout(() => running.kill("SIGKILL"), 15_000);
+    await Promise.race([ready, running.exited.then(code => { throw Error(`observer exited before entering wait (${code})`); })]);
+    expect(child.exitCode).toBeNull();
+    child.kill("SIGKILL");
+    expect(await child.exited).not.toBe(0);
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+    expect(readFileSync(f.paths.installManifest, "utf8")).toBe(beforeManifest);
+    expect(existsSync(effects)).toBe(false);
+    expect([...f.runner.jobs.values()].every(job => job.running)).toBe(true);
+    // Fresh UI startup has no stale application-update approval to settle.
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true });
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+  } finally {
+    if (deadline) clearTimeout(deadline);
+    observer?.close();
+    if (child && child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
 
 test("interrupted readiness resumes the target without re-stopping or restarting ready peers", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-resume-"));

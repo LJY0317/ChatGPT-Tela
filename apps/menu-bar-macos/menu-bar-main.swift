@@ -678,7 +678,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         item.isEnabled = false
         menu.addItem(item)
       } else {
-        let item = actionItem(updater.recoveredPendingUpdate ? "Resume Update…" : "Check for Updates…", action: #selector(openUpdates))
+        let item = actionItem(updater.recoveredPendingUpdate ? "Review Pending Update…" : "Check for Updates…", action: #selector(openUpdates))
         item.isEnabled = updater.canCheck
         if #available(macOS 14.4, *), let problem = updater.problem { item.subtitle = problem }
         menu.addItem(item)
