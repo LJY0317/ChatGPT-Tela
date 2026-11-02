@@ -1252,6 +1252,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       let start = actionButton("Start Tela Chat", action: #selector(startLocalChat))
       start.isEnabled = !operationInProgress
       local.addArrangedSubview(start)
+    } else {
+      let stop = actionButton("Stop Tela Chat…", action: #selector(stopLocalChat))
+      stop.isEnabled = !operationInProgress
+      local.addArrangedSubview(stop)
     }
     let prepare = actionButton("Prepare local plugin", action: #selector(prepareLocalChatPlugin))
     prepare.isEnabled = !operationInProgress
@@ -1581,17 +1585,21 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   func startServicesAtLaunch() async {
     guard installedServiceControlsAvailable(),
           let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"] else { return }
+    // Local Chat is user-started when Web setup is absent; preserve explicit Stop across launches.
+    let status = await Task.detached { Self.runLauncher(launcher, arguments: ["bootstrap-status"], capture: true) }.value
+    guard status.0 == 0, let bootstrap = try? JSONDecoder().decode(TelaBootstrapStatus.self, from: status.1),
+          bootstrap.configuration == "configured" else { return }
     _ = await Task.detached { Self.runLauncher(launcher, arguments: ["services", "start"]) }.value
   }
 
   @objc private func startServices() { changeBackgroundServices(start: true) }
   @objc private func startLocalChat() { changeBackgroundServices(start: true, chatOnly: true) }
+  @objc private func stopLocalChat() { changeBackgroundServices(start: false, chatOnly: true) }
   func startTelaFromMenu() {
     show()
     Task {
       await refreshCurrentPage()
-      guard bootstrapState == "configured" else { return }
-      changeBackgroundServices(start: true)
+      changeBackgroundServices(start: true, chatOnly: bootstrapState != "configured")
     }
   }
   @objc private func stopServices() { changeBackgroundServices(start: false) }
@@ -1601,14 +1609,16 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     if !start {
       let alert = NSAlert()
       alert.alertStyle = .warning
-      alert.messageText = "Stop Tela background services?"
-      alert.informativeText = "This stops Chat and Work connections. ChatGPT profiles connected through Tela may close, and their running work may be interrupted."
+      alert.messageText = chatOnly ? "Stop Tela Chat?" : "Stop Tela background services?"
+      alert.informativeText = chatOnly
+        ? "Running Chat commands may be interrupted. Work / Codex connections stay open."
+        : "This stops Chat and Work connections. ChatGPT profiles connected through Tela may close, and their running work may be interrupted."
       alert.addButton(withTitle: "Stop services")
       alert.addButton(withTitle: "Cancel")
       guard alert.runModal() == .alertFirstButtonReturn else { return }
     }
     changingServices = true
-    serviceAction = chatOnly ? "Starting Tela Chat…" : start ? "Starting Tela…" : "Stopping Tela…"
+    serviceAction = chatOnly ? (start ? "Starting Tela Chat…" : "Stopping Tela Chat…") : start ? "Starting Tela…" : "Stopping Tela…"
     renderCurrentPage()
     let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"]
     Task {

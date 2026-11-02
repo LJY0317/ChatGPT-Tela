@@ -99,6 +99,13 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
       success: true, services: [{ service: "chat", state: "running" }],
     });
     expect(runner.running.size).toBe(1);
+    expect(await runPackagedServicesCommand(["services", "stop", "chat"], controls)).toMatchObject({
+      success: true, services: [{ service: "chat", state: "stopped" }],
+    });
+    expect(runner.running.size).toBe(0);
+    expect(await runPackagedServicesCommand(["services", "start", "chat"], controls)).toMatchObject({
+      success: true, services: [{ service: "chat", state: "running" }],
+    });
     const project = join(root,"approved-project"); mkdirSync(project); writeFileSync(join(project,"notes.txt"),"user data");
     expect((await runPackagedChatCommand(["chat","roots"],bootstrap)).roots).toEqual([]);
     const approved = await runPackagedChatCommand(["chat","allow-root","--path",project],bootstrap);
