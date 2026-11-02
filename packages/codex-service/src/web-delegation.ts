@@ -832,7 +832,7 @@ async function notifyFailureCoordinator(adapters: WebDelegationAdapters, record:
       const queued = object(response?.queuedSubmission);
       return typeof queued?.id === "string" && queued.clientUserMessageId === clientUserMessageId
         ? persist("queued", queued.id) : persist("delivery_uncertain");
-    } finally { await rpc.close(); }
+    } finally { try { await rpc.close(); } catch { /* Closing cannot revoke an acknowledged Queue result. */ } }
   } catch {
     // The request may have reached Native before the transport failed. Keep the
     // stable message ID and never submit a second notification blindly.

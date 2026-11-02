@@ -171,6 +171,19 @@ test("failure notice queues once to the explicitly owned coordinator and preserv
   } finally { f.cleanup(); }
 });
 
+test("acknowledged failure notice survives RPC close failure", async () => {
+  const f = await fixture({ failedTurn: true, answer: "", closeFails: true });
+  try {
+    await expect(f.runWithCoordinator()).rejects.toThrow("Web job turn failed");
+    const queued = f.calls.filter(call => call.method === "thread/queue/add");
+    expect(queued).toHaveLength(1);
+    expect(f.store.get(f.id)).toMatchObject({ state: "failed", failure: "turn_failed",
+      coordinatorNotice: "queued", coordinatorQueueItemId: expect.any(String) });
+    expect(f.store.get(f.id)?.coordinatorClientUserMessageId).toBe(
+      (queued[0]?.params as { clientUserMessageId: string }).clientUserMessageId);
+  } finally { f.cleanup(); }
+});
+
 test("reconciled failure journals one coordinator notice before terminal settlement", async () => {
   const f = await fixture({ silent: true, disconnect: true, latestStatus: "failed" });
   try {
