@@ -157,10 +157,26 @@ test("failure notice queues once to the explicitly owned coordinator and preserv
       coordinatorQueueItemId: expect.any(String), coordinatorClientUserMessageId: expect.any(String), coordinatorFollowThrough: "unobserved" });
     const notice = f.calls.filter(call => call.method === "thread/queue/add");
     expect(notice).toHaveLength(1);
+    expect((notice[0]?.params as { input: { text: string }[] }).input[0]?.text).toContain("outcome may be uncertain");
     expect(notice[0]?.params).toMatchObject({ threadId: failed.coordinator?.threadId,
       clientUserMessageId: failed.coordinatorClientUserMessageId,
       input: [{ type: "text", text: expect.stringContaining(`job_id: ${f.id}`) }] });
     await expect(f.runWithCoordinator()).rejects.toThrow();
+    expect(f.calls.filter(call => call.method === "thread/queue/add")).toHaveLength(1);
+  } finally { f.cleanup(); }
+});
+
+test("reconciled failure journals one coordinator notice before terminal settlement", async () => {
+  const f = await fixture({ silent: true, disconnect: true, latestStatus: "failed" });
+  try {
+    await expect(f.run()).rejects.toThrow("connection lost");
+    const pending = f.store.get(f.id)!;
+    f.store.save({ ...pending, coordinator: { slot: f.slot, threadId: pending.threadId!, accountFingerprint: pending.owner.accountFingerprint } });
+    expect(f.calls.filter(call => call.method === "thread/queue/add")).toHaveLength(0);
+    const settled = await f.reconcile();
+    expect(settled).toMatchObject({ state: "failed", failure: "turn_failed", coordinatorNotice: "queued" });
+    expect(f.calls.filter(call => call.method === "thread/queue/add")).toHaveLength(1);
+    expect((await f.reconcile()).coordinatorClientUserMessageId).toBe(settled.coordinatorClientUserMessageId);
     expect(f.calls.filter(call => call.method === "thread/queue/add")).toHaveLength(1);
   } finally { f.cleanup(); }
 });

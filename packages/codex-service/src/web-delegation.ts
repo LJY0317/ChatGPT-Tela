@@ -780,7 +780,7 @@ async function notifyFailureCoordinator(adapters: WebDelegationAdapters, record:
         return updated;
       }
       const text = [
-        "Tela delegated job failed; inspect this exact job before any retry.",
+        "Tela delegated job needs inspection; the outcome may be uncertain. Check this exact job before any retry.",
         `job_id: ${record.id}`,
         ...(adapters.store.requests.header(record.id) ? [`original_input: web-delegate request --job ${record.id}`] : []),
         `thread_id: ${record.threadId ?? "unavailable"}`,
@@ -811,6 +811,23 @@ async function notifyFailureCoordinator(adapters: WebDelegationAdapters, record:
     adapters.changed?.(updated);
     return updated;
   }
+}
+/** Journal a single coordinator attempt before publishing an immutable terminal failure. */
+async function settleFailure(adapters: WebDelegationAdapters, failed: WebDelegationRecord): Promise<WebDelegationRecord> {
+  let current = adapters.store.get(failed.id);
+  if (!current) throw Error("Web job was not reserved");
+  if (failed.coordinator && !current.coordinatorNotice) {
+    current = adapters.store.save({ ...failed, state: "uncertain" });
+    adapters.changed?.(current);
+    current = await notifyFailureCoordinator(adapters, current);
+  }
+  const settled = adapters.store.save({ ...failed,
+    ...(current.coordinatorClientUserMessageId ? { coordinatorClientUserMessageId: current.coordinatorClientUserMessageId } : {}),
+    ...(current.coordinatorQueueItemId ? { coordinatorQueueItemId: current.coordinatorQueueItemId } : {}),
+    ...(current.coordinatorNotice ? { coordinatorNotice: current.coordinatorNotice } : {}),
+    ...(current.coordinatorFollowThrough ? { coordinatorFollowThrough: current.coordinatorFollowThrough } : {}) });
+  adapters.changed?.(settled);
+  return settled;
 }
 /** Maintenance reuses exact-turn recovery; a lost observer cannot pin a completed job forever. */
 export async function reconcileWebDelegationCapacity(adapters: WebDelegationAdapters, slot: number, signal: AbortSignal): Promise<WebDelegationCapacity> {
@@ -1206,16 +1223,7 @@ export async function runWebDelegation(adapters: WebDelegationAdapters, input: {
       const failedRecord: WebDelegationRecord = { ...record, state, failure: turnFailed ? "turn_failed" : resultUnavailable ? "result_unavailable" : "transport_or_ack",
         ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
           ...(record.turnId ? { turnId: record.turnId } : {}), stage, error, nativeCode: reportedNativeCode, providerReason: reportedProviderReason, diagnosticRoot: adapters.diagnosticRoot }) };
-      // Persist the failure evidence before any coordinator side effect. Keep
-      // the receipt mutable until the Queue acknowledgement has been journaled.
-      record = adapters.store.save({ ...failedRecord, state: "uncertain" }); adapters.changed?.(record);
-      record = await notifyFailureCoordinator(adapters, record);
-      record = adapters.store.save({ ...failedRecord,
-        ...(record.coordinatorClientUserMessageId ? { coordinatorClientUserMessageId: record.coordinatorClientUserMessageId } : {}),
-        ...(record.coordinatorQueueItemId ? { coordinatorQueueItemId: record.coordinatorQueueItemId } : {}),
-        ...(record.coordinatorNotice ? { coordinatorNotice: record.coordinatorNotice } : {}),
-        ...(record.coordinatorFollowThrough ? { coordinatorFollowThrough: record.coordinatorFollowThrough } : {}) });
-      adapters.changed?.(record);
+      record = await settleFailure(adapters, failedRecord);
     } else {
       failureMetadata({ id: input.id, ...(record?.threadId ? { threadId: record.threadId } : {}),
         ...(record?.turnId ? { turnId: record.turnId } : {}), stage: failureStage(error, "admission"), error, diagnosticRoot: adapters.diagnosticRoot });
@@ -1276,21 +1284,19 @@ export async function reconcileWebDelegation(adapters: WebDelegationAdapters, id
       toolResultCoverage: record.toolResultCoverage ?? "history-summary",
     } as const : {};
     if (turn.status === "failed" || turn.status === "interrupted") {
-      const settled = adapters.store.save({ ...record, ...observations, state: "failed", failure: "turn_failed",
+      const settled = await settleFailure(adapters, { ...record, ...observations, state: "failed", failure: "turn_failed",
         ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
           ...(record.turnId ? { turnId: record.turnId } : {}), stage: "turn_complete", error: new Error("Web job turn failed"), nativeCode: nativeTurnFailureCode(turn), providerReason: nativeTurnProviderReason(turn), diagnosticRoot: adapters.diagnosticRoot }),
         ...(turn.status === "failed" && final?.finalEvidence === "explicit-final-phase"
           ? { ...final, taskOutcome: "unassessed" as const } : {}) });
-      adapters.changed?.(settled);
       return settled;
     }
     // Both live and recovery paths release the permit only after the exact
     // completed turn's bounded indexed items prove no deliverable final.
     if (!final) {
-      const settled = adapters.store.save({ ...record, ...observations, state: "failed", failure: "result_unavailable",
+      const settled = await settleFailure(adapters, { ...record, ...observations, state: "failed", failure: "result_unavailable",
         ...failureMetadata({ id: record.id, ...(record.threadId ? { threadId: record.threadId } : {}),
           ...(record.turnId ? { turnId: record.turnId } : {}), stage: "reconcile_result", error: new Error("Web job completed without a proven final answer"), diagnosticRoot: adapters.diagnosticRoot }) });
-      adapters.changed?.(settled);
       return settled;
     }
     const { failure: _failure, failureStage: _stage, failureClass: _class, failureNativeCode: _code,
