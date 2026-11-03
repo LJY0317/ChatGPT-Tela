@@ -203,6 +203,24 @@ If the assigned work is blocked, record the remaining dependency and stop automa
 repetition instead of leaving the Goal active to rerun unchanged checks. Tela Chat
 execution must not regain the legacy Native work-tool bridge to change Goal state.
 
+`thread/goal/get` reports Native Goal progress accounting, not a provider billing
+receipt. In particular, `tokensUsed: 0` on a Goal update/return does **not** prove
+that a Web-backed turn used zero inference tokens or was free. The local bridge
+passes Native's reported counter through without adding Web usage, and the public
+Goal contract does not specify an inclusive cross-provider billing total. For
+waiting-cost analysis, distinguish the no-model-call CLI/event wait from a new
+Native automatic Goal turn, a Web task Send, and a Web checkpoint provider call.
+The existing exact-turn diagnostic stages (`native_cycle_observation_started`,
+`web_turn_plan`, `web_send_activation_started`, `web_turn_identity_accepted`,
+`context_checkpoint_provider_invoked`, `checkpoint_operation_observed`, and
+`native_outcome_committed`) support bounded attribution where present. Send
+activation alone does not prove remote acceptance, and an empty or clipped
+event window never proves zero requests. Native Goal continuations are eligible
+at idle safe boundaries under the official Goal lifecycle; the host's response
+to a delegation Queue notice, including dormant coordinator wakeup, remains
+unverified. No provider bill or idle-window-wide zero-usage claim follows from
+these local structural events.
+
 ## Evidence and comparisons
 
 Report task/preparation calls, completed reuse, fresh seed, suffix, summary and physical
