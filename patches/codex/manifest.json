@@ -26,7 +26,7 @@
     "automaticWebCompactionVerified": true
   },
   "modelSwitchVerification": {
-    "status": "15-mocked-engine-tests-passed-release-building",
+    "status": "15-mocked-engine-tests-passed-source-build-succeeded",
     "previousModelCompactionSkippedForLocal": true,
     "installed": false,
     "liveWebAcceptance": false,
@@ -34,7 +34,23 @@
     "providerDefaultSwitchTests": 11,
     "catalogSeedTests": 2,
     "catalogSeedContract": "startup seed with ordinary remote discovery",
-    "releaseEngineBuild": "pending-rebuild-with-seed"
+    "releaseEngineBuild": "succeeded-macos-arm64-with-seed"
+  },
+  "sourceBuildVerification": {
+    "target": "aarch64-apple-darwin",
+    "profile": "release",
+    "buildExitCode": 0,
+    "engineVersion": "codex-cli 0.159.0",
+    "codeModeHostBuilt": true,
+    "v8Version": "15.0.245.2",
+    "v8CrateVersion": "150.4.0",
+    "v8ArchiveSha256": "00adbb48798848c77550441c68673a5e8529b8e1b73eabcdee232cb39b40f4a1",
+    "v8BindingSha256": "ca5adf0cf89c9a70ad460ae73648b2fe89b74aa113b3cb7f757b6a02b758394f",
+    "metadataAndArtifactVerifier": "passed-three-capabilities",
+    "isolatedCatalogRefreshAndModelList": "passed-mock-provider",
+    "liveDesktopPickerAcceptance": false,
+    "packagedOrInstalled": false,
+    "publicV8DistributionProvenanceVerified": false
   },
   "catalogPatchFile": "model-catalog-refresh.patch",
   "catalogPatchSha256": "f23fdd788003c1d610d853409fce3968f97aad13c1c6e73273a635c3ad63d4a1",

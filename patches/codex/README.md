@@ -4,7 +4,7 @@ This patch lets an explicitly opted-in model use Codex's existing local, plainte
 while other models keep the provider's default compaction. It does not change provider identity,
 authentication, usage limits, tool execution, permissions, or the official Desktop installation.
 
-The upstream revision, toolchain, patch digest, and verification status are in `manifest.json`.
+The upstream revision, toolchain, patch digests, and verification status are in [manifest.json](manifest.json).
 The current candidate keeps pre-turn compaction on the selected local-compaction model,
 rather than invoking the previous model on a compatibility-hash change or context-window
 downshift. Ordinary provider-default model switches retain upstream behavior. This change
@@ -20,7 +20,8 @@ the optional engine keep using the official engine.
 The package builder accepts an optional `--native-engine` executable together with
 `--native-engine-metadata` JSON. Metadata uses the package's `nativeEngine` schema: portable executable
 path, semantic version, SHA-256, Node platform (`darwin`, `linux`, `win32`), architecture (`arm64`, `x64`),
-upstream commit, patch SHA-256, and `capabilities: ["model-local-compaction-v1"]`.
+upstream commit, patch SHA-256, and an ordered capability list. The verified combined
+candidate declares all three capabilities listed below.
 
 The builder verifies the supplied bytes/version/platform and includes the engine inside the signed
 Tela payload. macOS code signing precedes the final executable digest and payload signature.
@@ -52,10 +53,47 @@ or Desktop picker invalidation. Tela must compare the result with the exact admi
 Web projection before claiming ready.
 
 For this combined candidate, engine metadata declares the ordered capabilities
-`["model-local-compaction-v1", "model-catalog-refresh-v1"]` and binds the digest of
+`["model-local-compaction-v1", "model-catalog-refresh-v1", "model-catalog-seed-v1"]` and binds the digest of
 the compaction patch followed by this patch. Build the CLI and its code-mode helper
 together with the exact upstream-pinned sandbox V8 archive/binding pair; ordinary
 upstream V8 download URLs do not publish that pair.
+
+### Reproducing the verified macOS arm64 source build
+
+At upstream `rust-v0.159.0` (`687a119f0fcaace47e1f1abcc77cec6c813fd6da`), use Rust
+1.95.0 and apply the two patches in order. The combined SHA-256 is over their concatenated
+bytes (`6f85ea769e0be852ad13e4291201607b0eedd57c810b8c0a68428e661dfb8395`).
+The successful source build used V8 `15.0.245.2` / Rust `v8` crate `150.4.0` with the
+`ptrcomp_sandbox_release` `aarch64-apple-darwin` archive and matching generated Rust binding:
+
+| Required V8 input | SHA-256 of observed file |
+| --- | --- |
+| `librusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.a.gz` | `00adbb48798848c77550441c68673a5e8529b8e1b73eabcdee232cb39b40f4a1` |
+| `src_binding_ptrcomp_sandbox_release_aarch64-apple-darwin.rs` | `ca5adf0cf89c9a70ad460ae73648b2fe89b74aa113b3cb7f757b6a02b758394f` |
+
+Obtain and verify this *matching pair* before building. These are observed local checksums,
+not an authenticated public download location or signing provenance; an ordinary public clone
+cannot be assumed to build without the independently supplied pair. From this Tela repository
+and a separate clean upstream Codex checkout, respectively:
+
+```sh
+# In the upstream Codex checkout after checking out the pinned commit:
+git apply /path/to/ChatGPT-Tela/patches/codex/model-compaction-mode.patch
+git apply /path/to/ChatGPT-Tela/patches/codex/model-catalog-refresh.patch
+cd codex-rs
+RUSTY_V8_ARCHIVE=/path/to/verified/librusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.a.gz \
+RUSTY_V8_SRC_BINDING_PATH=/path/to/verified/src_binding_ptrcomp_sandbox_release_aarch64-apple-darwin.rs \
+cargo build --target aarch64-apple-darwin --profile release --bin codex --bin codex-code-mode-host
+```
+
+The isolated source build exited successfully and produced `codex-cli 0.159.0` and its
+Mach-O arm64 code-mode host. Product metadata parsing and artifact checks accepted all
+three declared capabilities. An isolated mock-provider app-server test accepted
+`initialize`, fetched an updated catalog via `tela/modelCatalog/refresh`, and returned
+that catalog in subsequent `model/list`. This verifies the source/transport contract
+under that fixture; it does not verify a live ChatGPT browser, Desktop picker, consumer
+installation, signing/notarization, or Windows/Linux release builds. The resulting
+binary was not packaged or installed in this build run.
 
 This is a Tela extension, not an upstream API. Some installed previews advertise this
 capability; inspect the owned payload metadata rather than infer it from this patch file.
@@ -74,10 +112,11 @@ also does not invalidate Desktop's picker cache. Keep existing preview compatibi
 while validating the standard path; do not expand the fork to repair proxy ownership
 or terminal-response replay. See [the responsibility review](../../docs/token-efficiency.md#standard-engine-and-optional-fork).
 
-The catalog patch also reproduces the installed `model-catalog-seed-v1` contract:
+The catalog patch also reproduces the existing `model-catalog-seed-v1` contract:
 `features.tela_seeded_model_catalog=true` treats `model_catalog_json` as an initial
 snapshot for the ordinary OpenAI model manager, preserving its remote/cache lifecycle.
 Without this opt-in the upstream static-catalog behavior remains unchanged. The owned
 engine capability list includes `model-catalog-seed-v1` only after startup and remote
-refresh acceptance. The manifest binds both ordered patch files; an engine built from
+refresh acceptance. These conditions passed in the isolated mock-provider source test;
+live Desktop picker acceptance remains outstanding. The manifest binds both ordered patch files; an engine built from
 only the compaction patch must not replace a preview declaring both catalog capabilities.
