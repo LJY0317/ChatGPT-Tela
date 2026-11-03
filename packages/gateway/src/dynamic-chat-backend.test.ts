@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWebHttpServer } from "@chatgpt-tela/http-host";
+import { diagnosticFingerprint, observeDiagnosticEvents } from "@chatgpt-tela/core";
 import { DynamicChatBackend } from "./dynamic-chat-backend";
 
 describe("dynamic Tela Chat backend", () => {
@@ -103,6 +104,28 @@ test("Tela Chat Goal calls forward only original Goal tools without a second sta
   expect(calls).toHaveLength(0);
   expect(await backend.call("goal_control_call", { goal_control: "scoped-control", call_id: "complete", wire_name: "functions.update_goal", arguments: { status: "complete" } })).toMatchObject({ isError: false, content: { status: "complete" } });
   expect(calls).toEqual([{ capability: "scoped-control", invocation: { callId: "complete", wireName: "functions.update_goal", mode: "structured", arguments: { status: "complete" } } }]);
+});
+
+test("expired Goal control is reported as inventory rejection before Native invocation", async () => {
+  const rows: Array<{ stage: string; [key: string]: unknown }> = [];
+  const stop = observeDiagnosticEvents(event => { if (event.stage === "native_goal_control_inventory_rejected") rows.push(event); });
+  let invoked = 0;
+  const backend = new DynamicChatBackend(() => undefined, {
+    inventory() { throw Error("unknown or retired turn capability"); },
+    async invoke() { invoked++; throw Error("must not invoke Native"); },
+  });
+  try {
+    await expect(backend.call("goal_control_call", {
+      goal_control: "expired-goal-control", call_id: "one",
+      wire_name: "update_goal", arguments: { status: "complete" },
+    })).rejects.toThrow("unknown or retired turn capability");
+    expect(invoked).toBe(0);
+    expect(rows).toEqual([expect.objectContaining({
+      phase: "call", reason_class: "unknown_or_retired_control",
+      control_fingerprint: diagnosticFingerprint("expired-goal-control"),
+    })]);
+    expect(JSON.stringify(rows)).not.toContain("expired-goal-control");
+  } finally { stop?.(); }
 });
 
 

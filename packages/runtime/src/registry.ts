@@ -134,6 +134,11 @@ export class ActiveTurnRegistry {
     for (const [control, scope] of this.#controls) if (scope.kind === "goal" && scope.owner === token) return control;
     const control = capability(this.#routeId);
     this.#controls.set(control, { kind: "goal", owner: token });
+    emitDiagnosticEvent("chatgpt_tela_codex", "native_goal_control_issued", {
+      control_fingerprint: diagnosticFingerprint(control),
+      scope_fingerprint: diagnosticFingerprint(channel.binding.authority.threadId),
+      turn_fingerprint: diagnosticFingerprint(channel.binding.authority.turnId),
+    });
     return control;
   }
 

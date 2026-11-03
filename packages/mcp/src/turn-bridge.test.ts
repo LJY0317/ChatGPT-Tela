@@ -109,6 +109,10 @@ test("Goal-only capability reuses Native tool delivery and expires with its resp
   ]);
   const registered = turns.register(bound), bridge = new McpTurnBridge(turns);
   const control = turns.goalControl(registered.capability)!;
+  expect(events.find(event => event.stage === "native_goal_control_issued")).toMatchObject({
+    control_fingerprint: diagnosticFingerprint(control),
+    turn_fingerprint: diagnosticFingerprint("turn-1"),
+  });
   expect(control).not.toBe(registered.capability);
   expect(turns.goalControl(registered.capability)).toBe(control);
   expect(bridge.inventory(control).map(tool => tool.wireName)).toEqual(["update_goal"]);

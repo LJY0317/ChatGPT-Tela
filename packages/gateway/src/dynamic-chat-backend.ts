@@ -56,7 +56,20 @@ export class DynamicChatBackend {
           ? { control_fingerprint: diagnosticFingerprint(arguments_.goal_control) } : {}),
       });
       if (typeof arguments_.goal_control !== "string") throw Error("Goal control capability is required");
-      const tools = (await this.goalBridge.inventory(arguments_.goal_control)).filter(isNativeGoalTool);
+      let tools;
+      try {
+        tools = (await this.goalBridge.inventory(arguments_.goal_control)).filter(isNativeGoalTool);
+      } catch (error) {
+        // Distinguish a rejected per-cycle Goal bearer from a transport
+        // failure. Do not retain the bearer or the exception message.
+        emitDiagnosticEvent("chatgpt_tela_chat", "native_goal_control_inventory_rejected", {
+          phase: capability === "goal_control_inventory" ? "inventory" : "call",
+          control_fingerprint: diagnosticFingerprint(arguments_.goal_control),
+          reason_class: error instanceof Error && error.message === "unknown or retired turn capability"
+            ? "unknown_or_retired_control" : "inventory_error",
+        });
+        throw error;
+      }
       if (capability === "goal_control_inventory") return tools;
       if (typeof arguments_.call_id !== "string" || typeof arguments_.wire_name !== "string"
         || !tools.some(tool => tool.wireName === arguments_.wire_name)
