@@ -2110,6 +2110,30 @@ describe("ChatGPT semantic provider", () => {
       expect(completed).toMatchObject({
         state: "proven", value: { kind: "completed", answer: "Verified final result" },
       });
+      const retained = { ...request(), nativeTurnId: "turn-2",
+        physicalContext: { ...request().physicalContext, mode: "retained-delta" as const,
+          baseRevisionId: "rev-1" } };
+      const finalSnapshot = { ...driver.current,
+        composers: driver.current.composers.map(({ textFingerprint: _unused, ...composer }) =>
+          ({ ...composer, textLength: 0 })) };
+      // The retained anchor belongs to the second observation, not the
+      // earlier tool-result prose. Reusing the old body must not send.
+      driver.current = { ...finalSnapshot, revision: "stale-tool-result",
+        turns: finalSnapshot.turns.map(turn => turn.role === "assistant"
+          ? { ...turn, text: "Provisional tool result" } : turn) };
+      await expect(provider.submitTurn(surface.lease, retained)).rejects.toMatchObject({
+        code: "tela_web_retained_context_unproven", reason: "semantic_digest_mismatch",
+        retryable: false,
+      });
+      expect(driver.activated).toHaveLength(1);
+      driver.current = { ...finalSnapshot, revision: "verified-retained-final" };
+      const continuing = provider.submitTurn(surface.lease, retained);
+      while (driver.activated.length < 2) await Promise.resolve();
+      driver.queued.push({ ...driver.current, revision: "next-owned-turn",
+        turns: [...driver.current.turns, { key: "user-turn-next", role: "user",
+          contentFingerprint: driver.current.composers[0]!.textFingerprint! }] });
+      expect((await continuing).state).toBe("proven");
+      expect(driver.activated).toHaveLength(2);
     } finally { await surface.host.close(); }
   });
 
