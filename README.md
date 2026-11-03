@@ -405,6 +405,9 @@ staging folders are preserved and further imports in that workspace stop until r
 delete folders based only on the `.tela-import-*` filename prefix. Uninstall with saved-data removal preserves
 pending recovery records and ownership state until recovery is resolved.
 
+The package manifest records the helper protocol in `workspaceFiles`. Its absence means the package
+does not provide workspace import/export support; `productVersion` alone does not identify this capability.
+
 On macOS, the package builder produces a single `.app` and requires `--output <name>.app`,
 `--build-number <increasing-number>`, `--update-feed-url <HTTPS-appcast>`,
 `--update-public-key <base64-Ed25519-public-key>`. Sparkle is pinned by
@@ -1170,6 +1173,16 @@ and Windows/Linux release binaries remain unverified. Build metadata and the por
 The optional engine is owned inside the product payload and follows the normal signed
 install/update/remove lifecycle. Removing Tela removes that engine, while canonical plaintext
 summaries stay in the original Codex conversation history.
+
+To include the experimental engine, build the exact upstream-pinned Codex source and its matching
+`codex-code-mode-host` sibling, then pass both `--native-engine <codex>` and
+`--native-engine-metadata <metadata.json>` to `bun run package:build`. The metadata binds the
+binary SHA-256, semantic version, platform, architecture, upstream commit, combined patch SHA-256,
+and ordered capability list. The current combined candidate requires `model-local-compaction-v1`,
+`model-catalog-refresh-v1`, and `model-catalog-seed-v1`. The package manifest records these inputs
+in `nativeEngine`; its absence means the ordinary official engine path is used. `productVersion`
+alone does not identify engine capabilities. See [the experimental engine source contract](patches/codex/README.md)
+for the pinned V8 archive/binding pair and current release limitations.
 
 Work opens each browser task in ChatGPT Temporary Chat. Before the first browser send, Tela checks
 that the leased surface still has the Temporary Chat URL; it refuses to send if ChatGPT returned to
