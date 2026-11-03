@@ -1,123 +1,25 @@
 # Remaining product work
 
-The locally installed macOS candidate has post-install acceptance for the menu,
-three ready services, two profiles, preserved configuration and no unexpected
-service transition. A separate one-shot synthetic failure reached the actual
-Native Queue with matching ACK and journal IDs; the existing Web receiver read
-the exact synthetic turn and its Goal was settled. This does not establish a
-real user-job failure, dormant Native coordinator wakeup or consumer onboarding.
-The source candidate is now locally installed, with post-install
-readiness and feed restoration accepted. Its Queue ACK/RPC-close regression has
-source coverage, but the installed failure edge itself has no live acceptance.
-An installed Goal-control live attempt ended at a provider message-stream failure
-before any Goal ingress, invocation or return was observed; it does not establish
-that the host attempted a Goal tool call. Exact receipt locations remain local.
+Only work without sufficient acceptance evidence is listed here. Existing source and fixture acceptance remains recorded in the private release evidence; reopen it only when new evidence changes the next action.
 
-## Implemented or accepted boundaries — not new implementation tasks
+## Delegation and host behavior
 
-- **Local Chat and plugin preparation.** The installed macOS release has working
-  Chat start/stop controls and preserves the two existing profiles, menu, three services,
-  configuration and feed. The existing Profile 1 local plugin returned an exact file
-  read through the official host without a new registration or model request. Packaged
-  local stdio and personal-marketplace workflows also have limited host acceptance;
-  preparing a plugin does not authorize it in ChatGPT. The installed receipt did not
-  exercise setup/removal buttons or a second physical computer.
-- **Managed delegation.** The journal preserves new original prompts/inline images,
-  exact job/turn references and verified answers through explicit result collection and
-  question settlement. `status`/`reconcile` observe existing jobs without replay.
-  Supported `start`/`continue` inputs include text and inline images; arbitrary
-  file upload has no supported Native input contract. Goal-only control uses original
-  Native tools only when advertised, with isolated same-turn completion acceptance.
-  See [Web delegation](web-delegation.md).
-- **Coordinator notice path.** The source binds an
-  explicitly authorized Native coordinator at CLI start, inherits that binding on
-  continuation, and projects notice/Queue/follow-through observations in status output.
-  Fresh failure metadata and orphan notice cleanup are integrated. One isolated
-  synthetic failure passed actual Queue ACK, journal matching and model-input
-  readback in an already active Web receiver. The later source fix also preserves
-  an acknowledged Queue result when RPC close fails. That source is included in
-  the installed candidate, while this failure edge has no installed live acceptance.
-  Queue acceptance alone does not prove a dormant coordinator resumed.
-- **Recovery, retention and ownership.** Supported indexed checkpoint/history retrieval,
-  a long-thread resume and bounded checkpoint storage have acceptance; older missing
-  source history is not reconstructed. Existing soft targets of 32 managed conversations
-  and ten browser surfaces, protected work/manual restores, request review/settlement,
-  and managed archive/delete lifecycles are implemented. Isolated cancellation, macOS
-  process ownership and ordinary menu relaunch have scoped acceptance; do not restore
-  retired registries, schedulers, capacity gates or legacy recovery paths.
-- **Instruction and workspace identity.** Instruction revision reuse passed source and
-  installed API checks; macOS volume/inode continuity passed targeted checks and a Native
-  read. Automatic model use, billed savings, reboot and other-OS identity acceptance
-  are unverified.
+- **Unattended coordinator recovery and idle usage.** The isolated synthetic failure reached an existing Web receiver and was read back. Real failed-job ownership, dormant Native coordinator wakeup/resumption, and coordinator request/token usage during a waiting interval remain unaccepted. Do not add polling, replay scheduling, blind retries, or a second Goal engine.
+- **End-to-end Web acceptance.** Verify durable result delivery to the calling task, simultaneous live jobs, exact cancellation and uncertain-ACK recovery, image and continuation paths, and job-to-browser attribution with one-shot approval boundaries on disposable owned tasks.
+- **Installed Goal control.** An isolated same-turn completion passed. The installed live attempt ended during provider streaming before a Goal tool invocation or return was observed; its upstream cause remains unknown. Do not treat it as proof of a Goal-tool defect or successful installed control.
+- **Visible presentation.** Live sidebar title behavior remains unaccepted. Review the existing Work session preview and contextual help without adding an observer or browser bridge.
 
-## Delegation and host contracts still open
+## Context preservation and failure recovery
 
-- **Unattended coordinator recovery and idle usage.** The public host contract does
-  not currently prove that a queued failure automatically parks/wakes/resumes the
-  owning coordinator. Actual Queue delivery and model consumption are accepted only
-  for the isolated synthetic failure sent to an existing Web receiver. Real failed
-  job ownership and dormant Native coordinator resumption remain open. Measure
-  coordinator requests during a waiting interval before claiming zero additional
-  requests/tokens; no polling, replay scheduler, blind retry or independent Goal
-  engine. Do not call unattended recovery shipped or operationally accepted.
-- **End-to-end Web acceptance.** Confirm durable result delivery to the calling task,
-  simultaneous live jobs, exact cancellation/uncertain-ACK recovery, full image/continuation
-  paths, and job-to-browser attribution with one-shot approval boundaries on disposable
-  owned tasks. Source coverage or a collected transport result alone is insufficient.
-  New tasks need their own owned workspace and reviewed changes.
-- **Installed Goal-control acceptance.** The isolated same-turn Goal completion
-  previously passed, but the installed live recurrence failed during provider
-  message streaming with zero observed Goal-tool rounds or returns. Treat this as
-  a failed acceptance attempt with unknown upstream cause, not proof of a Goal
-  tool defect or of successful installed Goal control. Preserve the earlier
-  accepted behavior without repeating its settled task.
-- **Visible presentation.** The one-time `[Tela Agent]` title is source-implemented;
-  live sidebar behavior remains unaccepted. Improve the existing Work session preview
-  and contextual help without a new observer or browser bridge. Discover useful task
-  tools through supported contracts instead of duplicating existing inventories.
+- Audit concrete checkpoint or stream failures using exact request and turn evidence; separate installed behavior from later source changes and failures before submission. Do not replay settled turns.
+- Two historically missing summary inputs remain unrecovered. If the original provider/history surface cannot supply them, record that contract limit rather than reconstructing or reactivating retired chats.
+- Automatic use of reused instruction revisions and actual context/token savings remain unverified; preserve the existing single-summary and on-demand history paths.
+- Retention-pressure UI on installed workloads, reboot continuity, and other-OS workspace identity remain unaccepted.
 
-## Context preservation and failure recovery still open
+## Desktop lifecycle and consumer distribution
 
-- Audit only concrete current checkpoint/stream failures using exact request/turn
-  evidence, separating installed behavior from later source changes and failures before
-  submission from those after it. An earlier long-thread exact-read/resume succeeded;
-  this does not prove all compaction sizes or media types. Do not replay settled turns.
-- Two historically missing summary inputs were not recovered; their loss attribution
-  audit remains unfinished. If the original provider/history surface cannot supply
-  them, record that contract limit rather than reconstructing or reactivating retired
-  chats. Compare cold seeds only when a current reproducible omission supplies evidence.
-- Retention pressure UI on installed live workloads, reboot continuity and other-OS
-  identity remain acceptance gaps. Existing cleanup is advisory and protects active,
-  uncollected, queued, uncertain and manually restored work.
-
-## Desktop lifecycle and consumer distribution still open
-
-- **Deferred-update process exit.** Normal “Apply after current work” authorization,
-  readiness events and callback continuation passed source/fixture review. Recovery of
-  an unconsumed approval after an unexpected UI-process exit remains unverified; this
-  is separate from the supported normal deferral path.
-- **Installed UI and release readiness.** Verify the real Quit-menu/Spotlight paths,
-  actively generating Web-window preservation, and complete consumer update/repair
-  with target services and profiles running afterward. Existing macOS menu relaunch,
-  owned cancellation and packaged daemon-entry checks already passed within their
-  stated limits. Windows/Linux execution and release binaries remain unverified.
-- **Connection, authorization and removal.** Complete a clean consumer
-  install/connect/update/remove/reinstall through supported ChatGPT host operations.
-  Local service readiness, prepared marketplace, installed host read, account-plugin
-  installation, saved-data removal and public distribution approval are distinct.
-  Source removal/reinstall fixtures and local registration cleanup are accepted;
-  live account cleanup and installed consumer removal remain open. See
-  [consumer installation](consumer-installation.md).
-- **Same-account device isolation.** Exercise two physical computers with local
-  sentinels and one service offline. A remote connector targets its configured host;
-  Desktop local stdio acceptance does not establish general Work, temporary Web worker
-  or mobile access. Organization allowlisting, public plugin review and authenticated
-  consumer transport remain external prerequisites where applicable.
-- **Other release gates.** Check final disk/download footprint, repeated update/uninstall
-  residue, supported Windows/Linux lifecycle, and background Web model selection
-  without disturbing an already-open menu. Evaluate temporary Web-chat continuity
-  against the actual host contract; preserve checkpoints when restore is unsupported.
-
-Use exact observable effects for remaining acceptance. Do not relabel previously
-accepted source work as unimplemented, source-only fixes as installed, or this
-local candidate as a publicly released consumer product.
+- **Deferred update exit.** Recovery of an unconsumed update approval after an unexpected UI-process exit remains unverified; the normal deferral path is accepted.
+- **Installed UI and release readiness.** Verify Quit-menu and Spotlight launch paths, preservation of actively generating Web windows, and a complete consumer update/repair with the expected services and profiles running afterward. Windows and Linux execution and release binaries remain unverified.
+- **Consumer lifecycle.** Complete fresh install, ChatGPT host authorization and a harmless tool round trip, installed maintenance removal, keep-data reinstall, and separate account-plugin cleanup through supported host operations. Source fixtures cover interrupted removal and keep-data reinstall; they do not establish installed consumer acceptance.
+- **Same-account device isolation.** Test two physical computers with separate local sentinel files and one local service offline. Each local thread must access only its own computer; Web and mobile must remain unavailable without remote fallback. Public distribution approval and authenticated transport remain external prerequisites where applicable.
+- **Other release gates.** Check download and disk footprint, repeated update/uninstall residue, supported Windows/Linux lifecycle, background Web model selection while a menu is open, and temporary Web-chat continuity against the actual host contract. Preserve checkpoints where restore is unsupported.
