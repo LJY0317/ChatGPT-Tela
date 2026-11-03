@@ -205,6 +205,27 @@ coordinator explicitly registered a Goal for this turn; null alone is not a
 Tela tool connection failure. Distinguish a missing Goal control capability
 from an inventory rejection or an actual transport error when reporting a limit.
 
+**Original-question and retention boundary for subsequent Goals.** For every new
+question that must remain retrievable and reviewable in the managed delegation
+journal, submit its exact prompt through `web-delegate start --prompt-file ...`
+or, for an eligible proven-completed parent, `web-delegate continue --job ... --prompt-file ...`.
+Each call creates its own job and original-input sidecar before turn submission;
+after verifying the answer, use `unanswered`, `request --job ...`, and explicit
+`settle-request --job ... --answer-job ...` to account for unanswered scope.
+Using the same Native conversation, `thread/queue/add`, direct Goal activation,
+or Goal-only completion does **not** create a managed job, capture that turn's
+question, or settle an earlier question. A `linkNativeThreadForRetention` call
+only opts an explicitly owned Native thread into archive/delete management; it
+does not capture prior or future turn prompts, results, or per-question review.
+For direct Native Goal/Queue turns, the coordinator must therefore preserve the
+exact objective, originating thread/turn, unresolved work, and any successor in
+its existing durable coordination notes, and review actual results before
+marking the request answered. Keep those notes under coordinator ownership;
+do not treat a journal link or completed Goal as an original-request receipt.
+Manual archive/restore relinquishes automatic retention management; manual
+delete must be treated as a separate conversation action, while verified managed
+input and results remain governed by their existing journal retention policy.
+
 Completion requires the full objective's evidence before the original Goal update
 call, followed by a final answer. An isolated installed acceptance verified an actual
 file read, the original completion result, normal Native turn completion and no
