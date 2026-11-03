@@ -49,22 +49,26 @@ export class DynamicChatBackend {
         mode: "structured", arguments: selection });
     }
     if (this.goalBridge && (capability === "goal_control_inventory" || capability === "goal_control_call")) {
+      const control = arguments_.goal_control;
+      let controlFingerprint: string | undefined;
+      if (typeof control === "string") {
+        try { controlFingerprint = diagnosticFingerprint(control); } catch { /* Invalid input remains a normal capability error. */ }
+      }
       emitDiagnosticEvent("chatgpt_tela_chat", "native_goal_control_received", {
         phase: capability === "goal_control_inventory" ? "inventory" : "call",
-        control_present: typeof arguments_.goal_control === "string",
-        ...(typeof arguments_.goal_control === "string"
-          ? { control_fingerprint: diagnosticFingerprint(arguments_.goal_control) } : {}),
+        control_present: typeof control === "string",
+        ...(controlFingerprint ? { control_fingerprint: controlFingerprint } : {}),
       });
-      if (typeof arguments_.goal_control !== "string") throw Error("Goal control capability is required");
+      if (typeof control !== "string") throw Error("Goal control capability is required");
       let tools;
       try {
-        tools = (await this.goalBridge.inventory(arguments_.goal_control)).filter(isNativeGoalTool);
+        tools = (await this.goalBridge.inventory(control)).filter(isNativeGoalTool);
       } catch (error) {
         // Distinguish a rejected per-cycle Goal bearer from a transport
         // failure. Do not retain the bearer or the exception message.
         emitDiagnosticEvent("chatgpt_tela_chat", "native_goal_control_inventory_rejected", {
           phase: capability === "goal_control_inventory" ? "inventory" : "call",
-          control_fingerprint: diagnosticFingerprint(arguments_.goal_control),
+          ...(controlFingerprint ? { control_fingerprint: controlFingerprint } : {}),
           reason_class: error instanceof Error && error.message === "unknown or retired turn capability"
             ? "unknown_or_retired_control" : "inventory_error",
         });
@@ -76,7 +80,7 @@ export class DynamicChatBackend {
         || !arguments_.arguments || typeof arguments_.arguments !== "object" || Array.isArray(arguments_.arguments)) {
         throw Error("Goal control call must match an advertised Native Goal tool");
       }
-      return this.goalBridge.invoke(arguments_.goal_control, { callId: arguments_.call_id,
+      return this.goalBridge.invoke(control, { callId: arguments_.call_id,
         wireName: arguments_.wire_name, mode: "structured", arguments: arguments_.arguments as Record<string, unknown> });
     }
     return dynamicBackendCall({

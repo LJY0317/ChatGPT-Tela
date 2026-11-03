@@ -128,6 +128,37 @@ test("expired Goal control is reported as inventory rejection before Native invo
   } finally { stop?.(); }
 });
 
+test("schema-valid but un-fingerprintable Goal controls preserve inventory errors", async () => {
+  for (const [capability, control] of [
+    ["goal_control_inventory", ""],
+    ["goal_control_call", "x".repeat(16_385)],
+  ] as const) {
+    const rows: Array<{ stage: string; [key: string]: unknown }> = [];
+    const stop = observeDiagnosticEvents(event => {
+      if (event.event === "chatgpt_tela_chat" && event.stage.startsWith("native_goal_control_")) rows.push(event);
+    });
+    const failure = new Error("original inventory rejection");
+    let received = "";
+    let invoked = 0;
+    const backend = new DynamicChatBackend(() => undefined, {
+      inventory(value) { received = value; throw failure; },
+      async invoke() { invoked++; throw Error("must not invoke Native"); },
+    });
+    try {
+      const args = capability === "goal_control_inventory" ? { goal_control: control }
+        : { goal_control: control, call_id: "one", wire_name: "update_goal", arguments: { status: "complete" } };
+      await expect(backend.call(capability, args)).rejects.toBe(failure);
+      expect(received).toBe(control);
+      expect(invoked).toBe(0);
+      expect(rows.map(row => row.stage)).toEqual([
+        "native_goal_control_received", "native_goal_control_inventory_rejected",
+      ]);
+      expect(rows.every(row => !("control_fingerprint" in row))).toBe(true);
+      if (control) expect(JSON.stringify(rows)).not.toContain(control);
+    } finally { stop?.(); }
+  }
+});
+
 
 test("Tela Chat history read uses the existing turn transport without inventory or a Native model call", async () => {
   const calls: unknown[] = [];
