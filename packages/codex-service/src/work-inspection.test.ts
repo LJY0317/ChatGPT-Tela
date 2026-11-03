@@ -59,6 +59,55 @@ function harness() {
 }
 
 describe("profile-owned read-only Work inspection", () => {
+  test("existing picker structure and owner fields survive official inspection parsing without leaking unrelated fields", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-picker-inspect-"));
+    const f = harness();
+    const ts = new Date().toISOString();
+    const scope = diagnosticFingerprint(threadId), turn = diagnosticFingerprint(turnId);
+    const rows = [
+      { stage: "web_model_picker_timeout", control_count: 0, composer_count: 1,
+        global_control_count: 0, menu_count: 0, composer_form_present: true,
+        private_html: "PRIVATE_MARKUP", document_revoked: true },
+      { stage: "web_model_picker_failed", reason_class: "model_picker_control_unavailable",
+        snapshot_available: false, control_count: 0, unrelated_count: 77 },
+      { stage: "web_model_picker_owner_observed", document_observed: true,
+        document_revoked: false, input_observed: false, input_available: false,
+        input_revoked: false, observation_pending: false, private_url: "PRIVATE_URL" },
+      { stage: "web_turn_observed", control_count: 5,
+        composer_form_present: true, document_observed: true, private_value: "PRIVATE_OTHER" },
+    ];
+    mkdirSync(join(root, "logs"), { recursive: true });
+    writeFileSync(join(root, "logs", "codex.diagnostics.jsonl"), rows.map(row => JSON.stringify({
+      ts, event: "chatgpt_tela_work", scope_fingerprint: scope,
+      turn_fingerprint: turn, ...row,
+    })).join("\n") + "\n");
+    try {
+      const report = await createCodexWorkInspector({ service: f.service as any,
+        logsRoot: join(root, "logs"), connect: f.connect })(2, threadId);
+      const parsed = parseCodexWorkInspectionContract(report, 2, threadId);
+      expect(parsed.diagnostics.recentEvents as unknown[]).toEqual([
+        { at: ts, stage: "web_model_picker_timeout", control_count: 0, composer_count: 1,
+          global_control_count: 0, menu_count: 0, composer_form_present: true },
+        { at: ts, stage: "web_model_picker_failed", reasonClass: "model_picker_control_unavailable",
+          snapshot_available: false, control_count: 0 },
+        { at: ts, stage: "web_model_picker_owner_observed", document_observed: true,
+          document_revoked: false, input_observed: false, input_available: false,
+          input_revoked: false, observation_pending: false },
+        { at: ts, stage: "web_turn_observed" },
+      ]);
+      expect(JSON.stringify(parsed)).not.toContain("PRIVATE");
+      expect(JSON.stringify(parsed)).not.toContain("unrelated_count");
+      expect(parsed.diagnostics.recentEvents[0]).not.toHaveProperty("document_revoked");
+      expect(parsed.diagnostics.recentEvents[2]).not.toHaveProperty("control_count");
+      // The public parser validates rather than trusts the incoming stage-specific field types.
+      const altered = structuredClone(report);
+      const alteredRow = altered.diagnostics.recentEvents[0] as Record<string, unknown>;
+      alteredRow.control_count = "private raw value";
+      expect(parseCodexWorkInspectionContract(altered, 2, threadId).diagnostics.recentEvents[0])
+        .not.toHaveProperty("control_count");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   test("inspection selects its exact Native task and derives attribution from the returned owner", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-work-owner-"));
     const f = harness();

@@ -671,14 +671,14 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     if workInventory.profiles.isEmpty {
       addProfileOpen(1, name: "ChatGPT", to: menu)
     }
-    if updater.availableVersion != nil || updater.preparationStatus != nil {
+    if updater.availableVersion != nil || updater.preparationStatus != nil || updater.recoveredPendingUpdate {
       menu.addItem(.separator())
       if let status = updater.preparationStatus {
         let item = NSMenuItem(title: status, action: nil, keyEquivalent: "")
         item.isEnabled = false
         menu.addItem(item)
       } else {
-        let item = actionItem("Check for Updates…", action: #selector(openUpdates))
+        let item = actionItem(updater.recoveredPendingUpdate ? "Review Pending Update…" : "Check for Updates…", action: #selector(openUpdates))
         item.isEnabled = updater.canCheck
         if #available(macOS 14.4, *), let problem = updater.problem { item.subtitle = problem }
         menu.addItem(item)

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -153,6 +153,193 @@ test("an aborted Sparkle install restores the unchanged source without another s
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("UI process loss after preparation leaves a handoff for explicit restart settlement", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-sparkle-process-exit-"));
+  try {
+    const f = await fixture(root);
+    await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" });
+    const afterPreparation = [...f.runner.calls];
+    // All Swift callbacks and their installHandler belong to the exited UI process.
+    // A newly launched UI can only ask the existing lifecycle to reconcile bytes.
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: false, prepared: true });
+    expect(f.runner.calls).toEqual(afterPreparation);
+    expect(readMacApplicationUpdate(f.paths)).toMatchObject({ phase: "ready", targetBuild: "2" });
+    // Explicit cancellation after the replacement was not observed is the only
+    // source restoration; the stale approval cannot install anything by itself.
+    expect(await runApplicationUpdate("cancel", f.input)).toMatchObject({ ready: true, restored: true });
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+    const afterCancellation = [...f.runner.calls];
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true });
+    expect(f.runner.calls).toEqual(afterCancellation);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("killing the deferred wait worker leaves no install authority for the recreated process", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-sparkle-wait-exit-"));
+  const entered = join(root, "wait-entered"), effects = join(root, "effects");
+  let child: ReturnType<typeof Bun.spawn> | undefined;
+  let observer: ReturnType<typeof watch> | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const f = await fixture(root);
+    for (const job of f.runner.jobs.values()) job.running = true;
+    const beforeManifest = readFileSync(f.paths.installManifest, "utf8");
+    const code = [
+      'import { appendFileSync, watch, writeFileSync } from "node:fs";',
+      'import { runApplicationUpdate } from "./apps/packaged-launcher/src/application-update.ts";',
+      'import { LaunchdUpgradeRunner } from "./tests/support/launchd-upgrade-runner.ts";',
+      'const runner = new LaunchdUpgradeRunner();',
+      'for (const [label, job] of JSON.parse(process.env.TELA_FIXTURE_JOBS!)) runner.jobs.set(label, job);',
+      'const originalRun = runner.run.bind(runner);',
+      'runner.run = async (command, args) => { if (args[0] !== "print") appendFileSync(process.env.TELA_FIXTURE_EFFECTS!, args[0] + "\\n"); return originalRun(command, args); };',
+      'await runApplicationUpdate("wait", { payloadRoot: process.env.TELA_FIXTURE_APP!,',
+      '  options: { home: process.env.TELA_FIXTURE_HOME!, platform: "darwin", environment: {}, runner },',
+      '  waitForShutdownService: async (service) => {',
+      '    writeFileSync(process.env.TELA_FIXTURE_ENTERED!, service);',
+      '    await new Promise<void>(() => { watch(process.env.TELA_FIXTURE_HOME!, () => {}); });',
+      '  }',
+      '});',
+    ].join("\n");
+    const ready = new Promise<void>(resolve => {
+      observer = watch(root, () => {
+        if (existsSync(entered)) { observer?.close(); resolve(); }
+      });
+      if (existsSync(entered)) { observer.close(); resolve(); }
+    });
+    child = Bun.spawn([process.execPath, "-e", code], {
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin",
+        TELA_FIXTURE_APP: f.sourceRoot, TELA_FIXTURE_HOME: join(root, "home"),
+        TELA_FIXTURE_JOBS: JSON.stringify([...f.runner.jobs]),
+        TELA_FIXTURE_ENTERED: entered, TELA_FIXTURE_EFFECTS: effects },
+      stdout: "ignore", stderr: "ignore",
+    });
+    const running = child;
+    deadline = setTimeout(() => running.kill("SIGKILL"), 15_000);
+    await Promise.race([ready, running.exited.then(code => { throw Error(`observer exited before entering wait (${code})`); })]);
+    expect(child.exitCode).toBeNull();
+    child.kill("SIGKILL");
+    expect(await child.exited).not.toBe(0);
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+    expect(readFileSync(f.paths.installManifest, "utf8")).toBe(beforeManifest);
+    expect(existsSync(effects)).toBe(false);
+    expect([...f.runner.jobs.values()].every(job => job.running)).toBe(true);
+    // Fresh UI startup has no stale application-update approval to settle.
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true });
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+  } finally {
+    if (deadline) clearTimeout(deadline);
+    observer?.close();
+    if (child && child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("UI-only exit closes wait owner pipe and settles its abandoned observer", async () => {
+  // Disposable UI parent + read-only Tela wait worker. No Sparkle helper,
+  // signed archive, real service, or installed consumer app is exercised.
+  const root = mkdtempSync(join(tmpdir(), "tela-sparkle-ui-exit-"));
+  const entered = join(root, "wait-entered");
+  const done = join(root, "wait-settled"), pidFile = join(root, "observer-pid");
+  const effects = join(root, "effects");
+  let ui: ReturnType<typeof Bun.spawn> | undefined;
+  let waitPid: number | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const observers = new Set<ReturnType<typeof watch>>();
+  const whenCreated = (path: string) => new Promise<void>(resolve => {
+    const observer = watch(root, () => {
+      if (!existsSync(path)) return;
+      observer.close();
+      observers.delete(observer);
+      resolve();
+    });
+    observers.add(observer);
+    if (existsSync(path)) { observer.close(); observers.delete(observer); resolve(); }
+  });
+  try {
+    const f = await fixture(root);
+    for (const job of f.runner.jobs.values()) job.running = true;
+    const beforeManifest = readFileSync(f.paths.installManifest, "utf8");
+    const waitCode = [
+      'import { appendFileSync, writeFileSync } from "node:fs";',
+      'import { runApplicationUpdate } from "./apps/packaged-launcher/src/application-update.ts";',
+      'import { LaunchdUpgradeRunner } from "./tests/support/launchd-upgrade-runner.ts";',
+      'const runner = new LaunchdUpgradeRunner();',
+      'for (const [label, job] of JSON.parse(process.env.TELA_FIXTURE_JOBS!)) runner.jobs.set(label, job);',
+      'const originalRun = runner.run.bind(runner);',
+      'runner.run = async (command, args) => {',
+      '  if (args[0] !== "print") appendFileSync(process.env.TELA_FIXTURE_EFFECTS!, args[0] + "\\n");',
+      '  return originalRun(command, args);',
+      '};',
+      'const owner = new AbortController();',
+      'process.stdin.once("end", () => owner.abort());',
+      'process.stdin.resume();',
+      'try { await runApplicationUpdate("wait", { payloadRoot: process.env.TELA_FIXTURE_APP!,',
+      '  waitSignal: owner.signal,',
+      '  options: { home: process.env.TELA_FIXTURE_HOME!, platform: "darwin", environment: {}, runner },',
+      '  waitForShutdownService: async (service, signal) => {',
+      '    if (service !== "codex") return;',
+      '    writeFileSync(process.env.TELA_FIXTURE_ENTERED!, "waiting");',
+      '    await new Promise<void>((_, reject) => {',
+      '      signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });',
+      '    });',
+      '  },',
+      '}); } catch (error) { if (!owner.signal.aborted) throw error; }',
+      'finally { process.stdin.pause(); writeFileSync(process.env.TELA_FIXTURE_DONE!, "owner-closed"); }',
+    ].join("\n");
+    const uiCode = [
+      'import { spawn } from "node:child_process";',
+      'import { watch, writeFileSync } from "node:fs";',
+      'const worker = spawn(process.execPath, ["-e", process.env.TELA_FIXTURE_WAIT_CODE!],',
+      '  { detached: true, stdio: ["pipe", "ignore", "ignore"], cwd: process.cwd(), env: process.env });',
+      'if (!worker.pid) throw Error("fixture worker did not start");',
+      'worker.unref();',
+      'writeFileSync(process.env.TELA_FIXTURE_PID!, String(worker.pid));',
+      'watch(process.env.TELA_FIXTURE_ROOT!, () => {});',
+    ].join("\n");
+    ui = Bun.spawn([process.execPath, "-e", uiCode], {
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin",
+        TELA_FIXTURE_WAIT_CODE: waitCode,
+        TELA_FIXTURE_ROOT: root, TELA_FIXTURE_APP: f.sourceRoot,
+        TELA_FIXTURE_HOME: join(root, "home"),
+        TELA_FIXTURE_JOBS: JSON.stringify([...f.runner.jobs]),
+        TELA_FIXTURE_ENTERED: entered,
+        TELA_FIXTURE_DONE: done, TELA_FIXTURE_PID: pidFile,
+        TELA_FIXTURE_EFFECTS: effects },
+      stdout: "ignore", stderr: "ignore",
+    });
+    const running = ui;
+    const timeout = new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => reject(Error("isolated UI exit fixture timed out")), 15_000);
+    });
+    await Promise.race([whenCreated(entered), running.exited.then(code => { throw Error(`UI fixture exited before waiting (${code})`); }), timeout]);
+    waitPid = Number(readFileSync(pidFile, "utf8"));
+    expect(Number.isSafeInteger(waitPid) && waitPid > 0).toBe(true);
+    ui.kill("SIGKILL"); // Only the disposable parent UI fixture, not its waiting child.
+    expect(await ui.exited).not.toBe(0);
+    await Promise.race([whenCreated(done), timeout]);
+    expect(readFileSync(done, "utf8")).toBe("owner-closed");
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+    expect(readFileSync(f.paths.installManifest, "utf8")).toBe(beforeManifest);
+    expect(existsSync(effects)).toBe(false);
+    expect([...f.runner.jobs.values()].every(job => job.running)).toBe(true);
+    // A newly constructed UI starts without any persisted "apply after work" callback.
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true });
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+    expect(existsSync(effects)).toBe(false);
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+  } finally {
+    if (deadline) clearTimeout(deadline);
+    for (const observer of observers) observer.close();
+    if (ui && ui.exitCode === null) { ui.kill("SIGKILL"); await ui.exited; }
+    if (waitPid && !existsSync(done)) {
+      try { process.kill(waitPid, "SIGKILL"); } catch { /* worker already exited */ }
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
 
 test("interrupted readiness resumes the target without re-stopping or restarting ready peers", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-resume-"));

@@ -56,7 +56,7 @@ interface TrackedTurn extends TurnOwnership {
     readonly assistantFingerprint: string;
 
   };
-  pendingCompletedAnswer?: Pick<Extract<WebTurnEvent, { kind: "completed" }>, "answer" | "plainAnswer">;
+  pendingCompletion?: true;
   waitState?: string;
   deferredCompletionEvidence?: Set<string>;
   waitSnapshotCount?: number;
@@ -98,7 +98,7 @@ function observeProviderFailure(detail: string | undefined, snapshot: ChatGptSur
       && item.parentUserTurnKey !== tracked.userTurnKey).length,
     approval_card_count: snapshot.approval?.cardCount ?? 0,
     approval_pending: !!pendingApproval(snapshot, tracked)?.cardCount,
-    pending_final_preserved: tracked.pendingCompletedAnswer !== undefined,
+    pending_final_preserved: tracked.pendingCompletion === true,
     response_retry_observed: tracked.responseRetryState === "observed",
     provider_internal_cause_available: false,
   });
@@ -2000,7 +2000,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     signal = AbortSignal.any([...(signal ? [signal] : []), tracked.operationAbort.signal]);
     const driver = driverFor(surface);
 
-    if (tracked.pendingCompletedAnswer !== undefined) {
+    if (tracked.pendingCompletion) {
       const { snapshot } = await waitOwned(signal, () => waitForLineage(surface, driver, tracked, signal));
       signal.throwIfAborted();
       this.#tracked(surface, turn);
@@ -2009,8 +2009,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         throw new Error("ChatGPT pending completion no longer has one proven assistant identity");
       }
       this.#observeApproval(surface, tracked, snapshot, ownership.assistants[0]);
-      const answer = tracked.pendingCompletedAnswer;
-      delete tracked.pendingCompletedAnswer;
+      delete tracked.pendingCompletion;
       // A new approval can render after completion controls. It still blocks final delivery.
       if (assistantLifecyclePhase(snapshot, tracked, ownership.assistants[0]) === "failed") {
         signal?.throwIfAborted();
@@ -2020,13 +2019,16 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           detail: ownership.assistants[0]!.failureDetail ?? "ChatGPT turn failed" },
           evidence: evidence("assistant failure superseded pending completion") };
       }
-      if (!pendingApproval(snapshot, tracked)?.cardCount) {
+      if (!pendingApproval(snapshot, tracked)?.cardCount
+        && ownership.assistants[0]!.phase === "complete") {
         signal?.throwIfAborted();
+        this.#commitAnswer(surface, tracked, ownership.assistants[0]!, snapshot, "post_tool_handoff");
         this.#retireTurn(surface, tracked);
         reportWebFinalObserved(tracked);
         return {
           state: "proven",
-          value: { kind: "completed", providerTurnId: tracked.handle.providerTurnId, ...answer },
+          value: { kind: "completed", providerTurnId: tracked.handle.providerTurnId,
+            ...completedAnswerBody(ownership.assistants[0]!) },
           evidence: evidence("assistant completion followed a proven post-tool continuation boundary"),
         };
       }
@@ -2218,8 +2220,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           };
         }
         if (assistant.phase === "complete") {
-          this.#commitAnswer(surface, tracked, assistant, snapshot, "post_tool_handoff");
-          tracked.pendingCompletedAnswer = completedAnswerBody(assistant);
+          tracked.pendingCompletion = true;
         }
         return {
           state: "proven",

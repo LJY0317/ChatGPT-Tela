@@ -1,4 +1,4 @@
-import { diagnosticFingerprint, parseBrowserRetentionObservation } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, parseBrowserRetentionObservation, pickerInspectionFields } from "@chatgpt-tela/core";
 import { parseCodexApprovalWait } from "./approval-review";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -154,6 +154,7 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
       recentEvents: (diag.recentEvents as Record<string, unknown>[]).map(item => Object.freeze({
         at: time(item.at), stage: item.stage as string,
         ...(reason(item.reasonClass) ? { reasonClass: reason(item.reasonClass)! } : {}),
+        ...pickerInspectionFields(item),
       })),
       activeRequestBoundary: boundary ? Object.freeze({
         turnFingerprint: boundary.turnFingerprint as string,

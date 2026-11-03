@@ -56,11 +56,13 @@ export function ownedServiceShutdown(installId: string, paths: ProductPaths) {
       await supervisor.waitUntilReady({ service, timeoutMs,
         descriptorPath: join(paths.serviceRuntime(service), "descriptor.json") });
     },
-    async wait(service: TelaServiceId): Promise<void> {
+    async wait(service: TelaServiceId, signal?: AbortSignal): Promise<void> {
+      signal?.throwIfAborted();
       const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json") });
       if (!current || current.status.state !== "ready") throw new Error(`${service} runtime is not ready for maintenance`);
-      if (service === "codex") await new CodexServiceClient(descriptorForService(current.descriptor, "codex")).waitForShutdownReadiness();
-      else if (service === "chat") await new ChatServiceClient(descriptorForService(current.descriptor, "chat")).waitForShutdownReadiness();
+      signal?.throwIfAborted();
+      if (service === "codex") await new CodexServiceClient(descriptorForService(current.descriptor, "codex")).waitForShutdownReadiness(signal);
+      else if (service === "chat") await new ChatServiceClient(descriptorForService(current.descriptor, "chat")).waitForShutdownReadiness(signal);
       else await prepare(service);
     },
     prepare,

@@ -8,6 +8,31 @@ const THREAD_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[
 const TURN_STATUS = new Set(["inProgress", "completed", "failed", "interrupted"]);
 const MAX_TURNS = 4;
 const MAX_TIMELINE = 24;
+// Existing picker diagnostics only. Keep absent evidence absent (zero and false
+// are meaningful), and never project arbitrary browser or tool fields.
+const PICKER_STRUCTURE_STAGES = new Set(["web_model_picker_timeout", "web_model_picker_failed"]);
+const PICKER_OWNERSHIP_STAGE = "web_model_picker_owner_observed";
+const PICKER_COUNTS = ["control_count", "composer_count", "global_control_count", "menu_count"] as const;
+const PICKER_STRUCTURE_FLAGS = ["composer_form_present", "snapshot_available"] as const;
+const PICKER_OWNERSHIP_FLAGS = ["document_observed", "document_revoked", "input_observed",
+  "input_available", "input_revoked", "observation_pending", "owner_probe_available"] as const;
+export function pickerInspectionFields(event: Record<string, unknown>): Record<string, number | boolean> {
+  const fields: Record<string, number | boolean> = {};
+  if (typeof event.stage === "string" && PICKER_STRUCTURE_STAGES.has(event.stage)) {
+    for (const key of PICKER_COUNTS) {
+      const value = event[key];
+      if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) fields[key] = value;
+    }
+    for (const key of PICKER_STRUCTURE_FLAGS) {
+      if (typeof event[key] === "boolean") fields[key] = event[key] as boolean;
+    }
+  } else if (event.stage === PICKER_OWNERSHIP_STAGE) {
+    for (const key of PICKER_OWNERSHIP_FLAGS) {
+      if (typeof event[key] === "boolean") fields[key] = event[key] as boolean;
+    }
+  }
+  return fields;
+}
 const TOOL_EVIDENCE_STAGES = new Set([
   "native_tool_inventory_queried", "native_tool_queued", "native_tool_result_received",
   "native_tool_result_released", "native_tool_result_error", "native_tool_bridge_invoke_started",
@@ -376,6 +401,7 @@ export async function inspectNativeThread(input: {
         ...(typeof event.turn_phase === "string" ? { turnPhase: event.turn_phase } : {}),
         ...(typeof event.reason_class === "string" ? { reasonClass: event.reason_class } : {}),
         ...(typeof event.phase === "string" ? { phase: event.phase } : {}),
+        ...pickerInspectionFields(event),
       })),
     },
     continuation: {
