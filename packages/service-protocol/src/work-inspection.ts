@@ -1,4 +1,4 @@
-import { diagnosticFingerprint, parseBrowserRetentionObservation } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, parseBrowserRetentionObservation, pickerInspectionFields } from "@chatgpt-tela/core";
 import { parseCodexApprovalWait } from "./approval-review";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -8,30 +8,6 @@ const STATUS = ["inProgress", "completed", "failed", "interrupted"] as const;
 const APPROVAL = ["pending", "none", "unavailable"] as const;
 const CAUSE = ["automation_unavailable", "dom_observation_failed", "bridge_preview_failed", "no_active_surface", "surface_not_selected"] as const;
 const CHECKPOINT_REASON = ["owner_unavailable", "storage_unavailable", "no_local_candidates", "projection_unavailable"] as const;
-const PICKER_STRUCTURE_STAGES = new Set(["web_model_picker_timeout", "web_model_picker_failed"]);
-const PICKER_OWNERSHIP_STAGE = "web_model_picker_owner_observed";
-const PICKER_COUNTS = ["control_count", "composer_count", "global_control_count", "menu_count"] as const;
-const PICKER_STRUCTURE_FLAGS = ["composer_form_present", "snapshot_available"] as const;
-const PICKER_OWNERSHIP_FLAGS = ["document_observed", "document_revoked", "input_observed",
-  "input_available", "input_revoked", "observation_pending", "owner_probe_available"] as const;
-
-function pickerInspectionFields(row: Record<string, unknown>): Record<string, number | boolean> {
-  const fields: Record<string, number | boolean> = {};
-  if (PICKER_STRUCTURE_STAGES.has(String(row.stage))) {
-    for (const key of PICKER_COUNTS) {
-      const value = row[key];
-      if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) fields[key] = value;
-    }
-    for (const key of PICKER_STRUCTURE_FLAGS) {
-      if (typeof row[key] === "boolean") fields[key] = row[key] as boolean;
-    }
-  } else if (row.stage === PICKER_OWNERSHIP_STAGE) {
-    for (const key of PICKER_OWNERSHIP_FLAGS) {
-      if (typeof row[key] === "boolean") fields[key] = row[key] as boolean;
-    }
-  }
-  return fields;
-}
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("invalid work inspection contract");

@@ -16,9 +16,9 @@ const PICKER_COUNTS = ["control_count", "composer_count", "global_control_count"
 const PICKER_STRUCTURE_FLAGS = ["composer_form_present", "snapshot_available"] as const;
 const PICKER_OWNERSHIP_FLAGS = ["document_observed", "document_revoked", "input_observed",
   "input_available", "input_revoked", "observation_pending", "owner_probe_available"] as const;
-function pickerInspectionFields(event: EvidenceRow): Record<string, number | boolean> {
+export function pickerInspectionFields(event: Record<string, unknown>): Record<string, number | boolean> {
   const fields: Record<string, number | boolean> = {};
-  if (PICKER_STRUCTURE_STAGES.has(event.stage)) {
+  if (typeof event.stage === "string" && PICKER_STRUCTURE_STAGES.has(event.stage)) {
     for (const key of PICKER_COUNTS) {
       const value = event[key];
       if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) fields[key] = value;

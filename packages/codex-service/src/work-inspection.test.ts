@@ -73,6 +73,8 @@ describe("profile-owned read-only Work inspection", () => {
       { stage: "web_model_picker_owner_observed", document_observed: true,
         document_revoked: false, input_observed: false, input_available: false,
         input_revoked: false, observation_pending: false, private_url: "PRIVATE_URL" },
+      { stage: "web_turn_observed", control_count: 5,
+        composer_form_present: true, document_observed: true, private_value: "PRIVATE_OTHER" },
     ];
     mkdirSync(join(root, "logs"), { recursive: true });
     writeFileSync(join(root, "logs", "codex.diagnostics.jsonl"), rows.map(row => JSON.stringify({
@@ -91,6 +93,7 @@ describe("profile-owned read-only Work inspection", () => {
         { at: ts, stage: "web_model_picker_owner_observed", document_observed: true,
           document_revoked: false, input_observed: false, input_available: false,
           input_revoked: false, observation_pending: false },
+        { at: ts, stage: "web_turn_observed" },
       ]);
       expect(JSON.stringify(parsed)).not.toContain("PRIVATE");
       expect(JSON.stringify(parsed)).not.toContain("unrelated_count");
