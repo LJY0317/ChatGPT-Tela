@@ -79,22 +79,56 @@ function diagnosticFingerprintField(value: unknown): string | undefined {
   return typeof value === "string" && /^[a-f0-9]{24}$/.test(value) ? value : undefined;
 }
 
-/** Ingress/rejection has no Native owner. Attribute it only when a Goal
- * control was issued or resolved by one unique exact thread/turn owner. */
-function ownedGoalRejections(allEvents: readonly EvidenceRow[], scope: string, turn?: string) {
+/** One ephemeral batch index; never persist a bearer, owner or ingress state. */
+function goalControlEvents(allEvents: readonly EvidenceRow[]) {
+  const byControl = new Map<string, {
+    owners: Map<string, string>;
+    resolvedOwners: Set<string>;
+    firstIngressAt?: string;
+  }>();
+  const resolutions: EvidenceRow[] = [];
+  const rejections: EvidenceRow[] = [];
+  for (const row of allEvents) {
+    const control = diagnosticFingerprintField(row.control_fingerprint);
+    if (!control) continue;
+    const resolved = row.stage === "native_goal_control_resolved";
+    const issued = row.stage === "native_goal_control_issued";
+    const received = row.event === "chatgpt_tela_chat" && row.stage === "native_goal_control_received";
+    const rejected = row.event === "chatgpt_tela_chat"
+      && row.stage === "native_goal_control_inventory_rejected";
+    if (!resolved && !issued && !received && !rejected) continue;
+    let entry = byControl.get(control);
+    if (!entry) {
+      entry = { owners: new Map(), resolvedOwners: new Set() };
+      byControl.set(control, entry);
+    }
+    if (resolved) {
+      resolutions.push(row);
+      entry.resolvedOwners.add(`${row.scope_fingerprint}:${row.turn_fingerprint}`);
+    }
+    if ((resolved || issued) && diagnosticFingerprintField(row.scope_fingerprint)
+      && diagnosticFingerprintField(row.turn_fingerprint)) {
+      const owner = `${row.scope_fingerprint}:${row.turn_fingerprint}`;
+      const first = entry.owners.get(owner);
+      if (first === undefined || row.ts < first) entry.owners.set(owner, row.ts);
+    }
+    if (received && typeof row.ts === "string"
+      && (entry.firstIngressAt === undefined || row.ts < entry.firstIngressAt)) {
+      entry.firstIngressAt = row.ts;
+    }
+    if (rejected) rejections.push(row);
+  }
+  return { byControl, resolutions, rejections };
+}
+
+/** Ownerless rejection can be attached only to one unique, prior owner. */
+function ownedGoalRejections(batch: ReturnType<typeof goalControlEvents>, scope: string, turn?: string) {
   if (!turn) return [];
-  const owners = allEvents.filter(row =>
-    (row.stage === "native_goal_control_issued" || row.stage === "native_goal_control_resolved")
-    && diagnosticFingerprintField(row.control_fingerprint)
-    && diagnosticFingerprintField(row.scope_fingerprint)
-    && diagnosticFingerprintField(row.turn_fingerprint));
-  return allEvents.filter(row => row.event === "chatgpt_tela_chat"
-    && row.stage === "native_goal_control_inventory_rejected"
-    && diagnosticFingerprintField(row.control_fingerprint)
-    && new Set(owners.filter(owner => owner.control_fingerprint === row.control_fingerprint)
-      .map(owner => `${owner.scope_fingerprint}:${owner.turn_fingerprint}`)).size === 1
-    && owners.some(owner => owner.control_fingerprint === row.control_fingerprint
-      && owner.scope_fingerprint === scope && owner.turn_fingerprint === turn && owner.ts <= row.ts));
+  const owner = `${scope}:${turn}`;
+  return batch.rejections.filter(row => {
+    const owners = batch.byControl.get(row.control_fingerprint as string)?.owners;
+    return owners?.size === 1 && owners.has(owner) && owners.get(owner)! <= row.ts;
+  });
 }
 
 function goalInspectionEvent(row: EvidenceRow) {
@@ -340,6 +374,7 @@ export async function inspectNativeThread(input: {
   }, incidentRoots(input.diagnosticPaths));
   const correlated = logs.events.filter(event => event.scope_fingerprint === fingerprint
     && (event.event === "chatgpt_tela_work" || event.event === "chatgpt_tela_codex"));
+  const goalControls = goalControlEvents(logs.events as readonly EvidenceRow[]);
   const last = (stage: string) => correlated.filter(event => event.stage === stage).at(-1);
   const lastPlan = last("web_turn_plan");
   const lastObserved = correlated.at(-1);
@@ -432,7 +467,7 @@ export async function inspectNativeThread(input: {
       activeRequestBoundary,
       approvalWaitEvidence,
       recentEvents: recentGoalEvents(correlated,
-        ownedGoalRejections(logs.events as readonly EvidenceRow[], fingerprint, activeTurnFingerprint)).map(event => ({
+        ownedGoalRejections(goalControls, fingerprint, activeTurnFingerprint)).map(event => ({
         ...goalInspectionEvent(event),
         ...(typeof event.turn_phase === "string" ? { turnPhase: event.turn_phase } : {}),
         ...pickerInspectionFields(event),
@@ -479,6 +514,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
     fromMs: nowMs - minutes * 60_000, toMs: nowMs,
   }, incidentRoots(input.diagnosticPaths));
   const allEvents = logs.events as readonly EvidenceRow[];
+  const goalControls = goalControlEvents(allEvents);
   const turnFingerprint = input.turnId ? diagnosticFingerprint(input.turnId) : undefined;
   const events = logs.events.filter(event => event.scope_fingerprint === fingerprint
     && (turnFingerprint === undefined || event.turn_fingerprint === turnFingerprint)
@@ -491,21 +527,17 @@ export function inspectNativeThreadHistoricalEvidence(input: {
   }) : undefined;
   // Ingress has no Native owner. Attribute it only through a unique resolved
   // control fingerprint already bound to this exact thread and turn.
-  const resolutions = allEvents.filter(row => row.stage === "native_goal_control_resolved"
-    && diagnosticFingerprintField(row.control_fingerprint));
-  const goalControlEvidence = turnFingerprint ? resolutions.filter(row =>
+  const goalControlEvidence = turnFingerprint ? goalControls.resolutions.filter(row =>
     row.scope_fingerprint === fingerprint && row.turn_fingerprint === turnFingerprint).map(row => {
-    const control = row.control_fingerprint;
-    const owners = new Set(resolutions.filter(other => other.control_fingerprint === control)
-      .map(other => `${other.scope_fingerprint}:${other.turn_fingerprint}`));
-    const ingress = allEvents.filter(other => other.event === "chatgpt_tela_chat"
-      && other.stage === "native_goal_control_received" && other.control_fingerprint === control
-      && typeof other.ts === "string" && other.ts <= row.ts);
+    const control = row.control_fingerprint as string;
+    const batch = goalControls.byControl.get(control)!;
+    const owners = batch.resolvedOwners;
+    const ingress = batch.firstIngressAt !== undefined && batch.firstIngressAt <= row.ts;
     return Object.freeze({ at: row.ts, phase: row.phase === "call" ? "call" as const : "inventory" as const,
-      controlFingerprint: control as string,
+      controlFingerprint: control,
       attribution: owners.size === 1 ? "exact_turn_resolved" as const : "ambiguous_control_owner" as const,
       ingressObservation: owners.size !== 1 ? "unattributed" as const
-        : ingress.length ? "server_received" as const : "not_observed" as const,
+        : ingress ? "server_received" as const : "not_observed" as const,
       // A received request is not proof that its Native tool was called or returned.
       outcome: "not_inferred_from_ingress" as const,
     });
@@ -632,7 +664,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       "native_outcome_committed", "native_response_body_closed", "approval_wait_transition",
       "private_capture_recorded", "private_capture_omitted"].includes(event.stage)),
     recentEvents: recentGoalEvents(events,
-      ownedGoalRejections(allEvents, fingerprint, turnFingerprint)).map(event => ({
+      ownedGoalRejections(goalControls, fingerprint, turnFingerprint)).map(event => ({
       ...goalInspectionEvent(event),
       ...(typeof event.manual_consent === "boolean" ? { manualConsent: event.manual_consent } : {}),
     })),

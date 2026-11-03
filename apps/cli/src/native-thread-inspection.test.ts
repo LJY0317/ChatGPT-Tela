@@ -200,12 +200,14 @@ describe("one read-only conversation inspection by exact Native ID", () => {
     const rejected = diagnosticFingerprint("rejected-control"), unrelated = diagnosticFingerprint("other-control");
     const at = "2026-10-17T08:18:00Z";
     const rows = [
+      {ts:"2026-10-17T08:17:59Z",event:"chatgpt_tela_chat",stage:"native_goal_control_inventory_rejected",control_fingerprint:rejected,phase:"call",reason_class:"unknown_or_retired_control"},
       {event:"chatgpt_tela_codex",stage:"native_goal_control_issued",scope_fingerprint:scope,turn_fingerprint:turn,control_fingerprint:rejected},
-      {event:"chatgpt_tela_chat",stage:"native_goal_control_inventory_rejected",control_fingerprint:rejected,phase:"call",reason_class:"unknown_or_retired_control"},
+      {ts:"2026-10-17T08:18:01Z",event:"chatgpt_tela_chat",stage:"native_goal_control_inventory_rejected",control_fingerprint:rejected,phase:"call",reason_class:"unknown_or_retired_control"},
       {event:"chatgpt_tela_codex",stage:"native_goal_control_issued",scope_fingerprint:scope,turn_fingerprint:other,control_fingerprint:unrelated},
       {event:"chatgpt_tela_chat",stage:"native_goal_control_inventory_rejected",control_fingerprint:unrelated,phase:"call",reason_class:"inventory_error"},
       {event:"chatgpt_tela_chat",stage:"native_goal_control_received",control_fingerprint:matched,phase:"inventory",control_present:true},
       {event:"chatgpt_tela_work",stage:"native_goal_control_resolved",scope_fingerprint:scope,turn_fingerprint:turn,control_fingerprint:matched,phase:"inventory"},
+      {ts:"2026-10-17T08:18:01Z",event:"chatgpt_tela_chat",stage:"native_goal_control_inventory_rejected",control_fingerprint:matched,phase:"call",reason_class:"inventory_error"},
       {event:"chatgpt_tela_chat",stage:"native_goal_control_received",control_fingerprint:ambiguous,phase:"call",control_present:true},
       {event:"chatgpt_tela_work",stage:"native_goal_control_resolved",scope_fingerprint:scope,turn_fingerprint:turn,control_fingerprint:ambiguous,phase:"call"},
       {event:"chatgpt_tela_work",stage:"native_goal_control_resolved",scope_fingerprint:scope,turn_fingerprint:other,control_fingerprint:ambiguous,phase:"call"},
@@ -225,8 +227,13 @@ describe("one read-only conversation inspection by exact Native ID", () => {
         stage:"native_goal_control_issued",controlFingerprint:rejected,
       }));
       expect(result.recentEvents).toContainEqual(expect.objectContaining({
-        stage:"native_goal_control_inventory_rejected",controlFingerprint:rejected,
+        at:"2026-10-17T08:18:01.000Z",stage:"native_goal_control_inventory_rejected",controlFingerprint:rejected,
         reasonClass:"unknown_or_retired_control",phase:"call",
+      }));
+      expect(result.recentEvents.filter(row=>row.stage==="native_goal_control_inventory_rejected"
+        && row.controlFingerprint===rejected)).toHaveLength(1);
+      expect(result.recentEvents).toContainEqual(expect.objectContaining({
+        stage:"native_goal_control_inventory_rejected",controlFingerprint:matched,reasonClass:"inventory_error",
       }));
       expect(result.recentEvents.some(row=>row.controlFingerprint===unrelated)).toBe(false);
       expect(result.recentEvents.some(row=>row.stage==="native_goal_control_inventory_rejected"
