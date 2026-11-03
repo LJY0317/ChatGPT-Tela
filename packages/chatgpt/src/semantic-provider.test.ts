@@ -2086,6 +2086,33 @@ describe("ChatGPT semantic provider", () => {
     }
   });
 
+  test("post-tool completion uses the answer observed at final delivery, not earlier provisional prose", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider();
+    try {
+      const submitting = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await submitting;
+      if (submitted.state !== "proven") throw Error("expected accepted turn");
+      expect((await provider.armToolContinuation(surface.lease, submitted.value, "call-1")).state).toBe("proven");
+      driver.queued.push({ ...driver.current, revision: "provisional-complete", turns: [
+        ...driver.current.turns,
+        { key: "assistant-1", role: "assistant", parentUserTurnKey: "user-turn-1",
+          phase: "complete", text: "Provisional tool result" },
+      ] });
+      expect(await provider.waitForTurnEvent(surface.lease, submitted.value))
+        .toMatchObject({ state: "proven", value: { kind: "continuing" } });
+      driver.current = { ...driver.current, revision: "revised-final", turns: driver.current.turns.map(turn =>
+        turn.role === "assistant" ? { ...turn, phase: "complete" as const, text: "Verified final result" } : turn) };
+      const completed = await provider.waitForTurnEvent(surface.lease, submitted.value);
+      expect(completed).toMatchObject({
+        state: "proven", value: { kind: "completed", answer: "Verified final result" },
+      });
+    } finally { await surface.host.close(); }
+  });
+
   test.each([false, true])("tool continuation and buffered final preserve ownership across loading: %s", async loading => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     const surface = await leaseFor(driver);
