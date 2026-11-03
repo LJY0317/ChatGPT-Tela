@@ -351,21 +351,17 @@ is not a write sandbox and therefore cannot prove workspace-only authority. Prov
 opaque durable OpenAI Conversation id; provider-side conversation state contains the prompts/tool traffic sent
 to the API, while Tela still does not persist submitted prompts in its own agent store.
 
-The source pre-alpha CLI and packaged launcher now share the same reviewable uninstall runtime:
+Source preview uninstall uses the same ownership-aware packaged lifecycle:
 
 ```sh
 bun run cli uninstall --dry-run --remove-data
 bun run cli uninstall --apply --remove-data
 ```
 
-Apply stops Gateway first and then attempts Chat/Codex shutdown independently. It re-observes every resource
-immediately before destruction. Exact owned Funnel paths, exact evidenced OS service registrations, and
-clean/base managed worktrees can be removed. Marker-owned browser/account state is preserved by default and
-is removable only with explicit `--remove-data` after profile setup/runtime activity has stopped; dirty,
-committed, drifted, ambiguous, or service-blocked resources are preserved. User repositories are
-never uninstall targets. Legacy name-only service registrations stay preserved. The signed multi-file
-application/binary layout and packaged uninstall entrypoint now exist, but Developer ID/notarization plus the
-final signed end-user installer/updater UX remain release work.
+The uninstall plan protects user repositories and any dirty, ambiguous or unproven resource. Saved
+Tela data requires explicit `--remove-data`; consumer signing/notarization and the guided installer
+remain release work. See [consumer removal](docs/consumer-installation.md#local-recovery-and-removal)
+and [owned resources](docs/product-lifecycle.md#product-owned-resources).
 
 The product-lifecycle package also has a concrete packaged-install operator. It plans without touching disk,
 fingerprints the exact staged payload, creates only a marker-owned binary root, and registers the three
@@ -436,43 +432,13 @@ registration, after which the installed compiled `chatgpt-tela service chat` lau
 compiled Chat daemon, returned authenticated `ready`, accepted `/v1/shutdown`, exited normally, and removed
 its runtime descriptor. No real user launchd registration, Tailscale route, or ChatGPT profile was modified.
 
-Cross-version packaged upgrade also has an interruption-safe state machine. It requires stable service
-registration identities, durably records which services were running, quiesces all three before binary
-replacement, commits the target product version only after exact payload verification, and restores only the
-services that were previously running. A failed restart leaves the journal at the committed target version so
-a retry resumes only the outstanding restart. Restart completion requires authenticated runtime readiness
-after normal OS start, including services whose OS registration is already running. Ordinary `start` and destructive uninstall apply refuse to run
-while that journal exists. The source service controller uses authenticated owned-service shutdown and normal status/start for
-launchd, systemd user units, and Windows per-user Scheduled Tasks; a signed updater UI and real-OS packaged
-E2E validation still need to drive/prove this lifecycle for end users.
-
-Install, update, repair, removal and installed service controls share one mutation owner. Interrupted
-removal blocks new mutations; proven final metadata cleanup can resume without repeating shutdown.
-
-The launcher automatically retains a verified source recovery package before stopping
-services. Recoverable failures restore the previous services; uncertain shutdown remains paused with
-its checkpoint. Restoration is reported as an unsuccessful update. See [upgrade recovery](docs/upgrade-recovery.md).
-
-The source launcher also provides `cancel-upgrade` with explicit `--dry-run` or `--apply`,
-`--payload` pointing to the retained **source** package. Cancellation
-is allowed only before binary replacement starts and after proving that the source files, installation
-and data format remain compatible. It preserves running services and restores only prior running
-services that stopped. If restoration fails, repeat that cancellation to finish its checkpoint before
-starting another upgrade. This is source-preview functionality; older installed launchers may not
-support it. Cancellation checks the source package’s lifecycle support declaration and refuses before
-changing its checkpoint when support is absent. Use a verified updater from the new package for
-version transitions; do not remove pending update records to work around an older launcher. Actual
-OS restoration and consumer updater UI acceptance remain open.
-
-Same-version packaged **repair** is a separate interruption-safe transition rather than a reinstall
-shortcut. Normal install still preserves completed payload byte drift. Repair may restore payload bytes only
-when the exact install manifest, binary-directory ownership marker, and original payload receipt still prove
-the same install/version/payload fingerprint. Missing exact service registrations can be recreated; foreign or
-replaced service definitions remain preserved. Binary repair writes its own durable journal before quiescing
-exact-owned services, verifies payload and registrations after repair, and resumes only services that were
-running before the repair. A restart failure leaves the journal for idempotent retry of only outstanding work.
-Repair and upgrade journals are mutually exclusive, and packaged service launch/install, ordinary source
-start, and destructive uninstall apply refuse to cross an incomplete transition.
+Packaged upgrade, repair and removal use the same ownership-aware lifecycle. They preserve foreign or
+drifted resources, record interrupted transitions and restore only previously running services when
+recovery is proven. Use a verified package for a version transition; do not delete pending update
+records to bypass a failed operation. The source `cancel-upgrade` flow is available only before binary
+replacement and may not exist in older installed launchers. Consumer updater UI and real-OS recovery
+acceptance remain release work. See [product lifecycle](docs/product-lifecycle.md) and
+[upgrade recovery](docs/upgrade-recovery.md) for transition and cancellation contracts.
 
 Install, repair and upgrade use one lifecycle path. Choose a package from a trusted source; there is no
 separate Tela public-key file to select. Platform code signing remains part of distribution, while payload
@@ -566,7 +532,7 @@ discovery. A macOS Desktop local-thread file read is verified. Clean consumer in
 two-computer isolation remain unverified; the
 [desktop-only contract](https://developers.openai.com/plugins/deploy/desktop-only) does not establish support
 for regular Web/mobile chats or Tela's Electron Web workers. See [connection scope and remaining
-acceptance](docs/consumer-installation.md#multiple-computers-on-one-chatgpt-account) before switching routes.
+acceptance](docs/consumer-installation.md#host-and-transport-boundaries) before switching routes.
 
 ### Everyday use and restarting your computer
 
@@ -1112,7 +1078,7 @@ profile processes accept `CHATGPT_TELA_CHECKPOINT_PREPARATION_POLICY` as a JSON 
 nonnegative integer fields: `maxModelCalls`, `maxInputTokens` (estimated) and `maxElapsedMs` (new-call
 admission only). For example: `{"maxModelCalls":4,"maxInputTokens":300000,"maxElapsedMs":300000}`.
 These settings control Tela preparation costs and do not enlarge a model's context window. Defaults
-and exact behavior are documented in [the efficiency contract](docs/token-efficiency.md#capacity-ownership-and-preparation-policy).
+and exact behavior are documented in [the efficiency contract](docs/token-efficiency.md#continuation-and-preparation).
 
 #### Terminal Work preview
 
@@ -1143,46 +1109,23 @@ CLI can choose its configured default model when resuming; use `/model` or expli
 to select Web before sending when Native usage is exhausted. The wrapper never changes your
 saved default model or grants new permissions.
 
-Oversized readable Web context can now use a separate tool-free Temporary Chat to summarize
-its historical prefix. The latest request stays exact, and Native history is unchanged. Derived
-summaries are replaceable caches; they do not decode Native encrypted compaction records.
-After Native compaction, Tela can reconstruct historical visible conversation and tool evidence
-through the public task API for the next Web turn. Hidden reasoning and encrypted model state
-are not reconstructed. Unknown or incomplete evidence is rejected. A disposable Native tool
-read → Native compaction → Web recall → Native recall test passed; Native state stayed unchanged.
-This does not implement Web-initiated remote compaction.
+For oversized Web context, derived historical summaries and public Native-history recovery preserve
+the latest request and canonical Native state. Hidden reasoning and encrypted model state cannot be
+reconstructed; incomplete evidence is rejected, and Web-initiated remote compaction remains unsupported.
+See [token efficiency](docs/token-efficiency.md) and
+[context continuity](docs/context-continuity-contract.md) for history and checkpoint limits.
 
 #### Optional Web compaction engine preview
 
-An experimental package can include a separately built official Codex engine with a narrow
-model-level compaction patch. When its signed package, ownership receipt and executable bytes
-are verified, Web models use the existing plaintext local-compaction path. Native models keep
-their normal compaction behavior. No original application or default provider configuration is
-modified. Packages without this engine reject unsupported Web compaction explicitly.
-
-A macOS arm64 release build passed actual Web summarization, two consecutive canonical
-compactions and exact identifier recall after each in a live profile. The unmodified official
-engine also cold-resumed the resulting plaintext history in an isolated fixture; its Native
-responses were mocked. This is a local ad-hoc signed preview, not a notarized consumer release.
-Automatic Web compaction also passed with a reduced budget on a disposable thread, followed
-by exact recall and an unmodified official-engine resume. The engine uses its existing local
-history estimate to judge Web context pressure without inventing backend usage or changing
-Native quota. Long-running default-budget operation, exhausted-quota Desktop submission,
-and Windows/Linux release binaries remain unverified. Build metadata and the portable patch are in [patches/codex](patches/codex/README.md).
-
-The optional engine is owned inside the product payload and follows the normal signed
-install/update/remove lifecycle. Removing Tela removes that engine, while canonical plaintext
-summaries stay in the original Codex conversation history.
-
-To include the experimental engine, build the exact upstream-pinned Codex source and its matching
-`codex-code-mode-host` sibling, then pass both `--native-engine <codex>` and
-`--native-engine-metadata <metadata.json>` to `bun run package:build`. The metadata binds the
-binary SHA-256, semantic version, platform, architecture, upstream commit, combined patch SHA-256,
-and ordered capability list. The current combined candidate requires `model-local-compaction-v1`,
-`model-catalog-refresh-v1`, and `model-catalog-seed-v1`. The package manifest records these inputs
-in `nativeEngine`; its absence means the ordinary official engine path is used. `productVersion`
-alone does not identify engine capabilities. See [the experimental engine source contract](patches/codex/README.md)
-for the pinned V8 archive/binding pair and current release limitations.
+An optional, separately built and verified Codex engine enables experimental Web plaintext
+compaction while Native models retain their normal behavior. Packages without the required engine
+capability reject unsupported Web compaction. A local macOS arm64 preview passed live and automatic
+Web compaction with exact recall, but long-running default-budget behavior, exhausted-quota Desktop
+submission, Windows/Linux binaries and a notarized consumer release remain unverified. The engine
+is removed with Tela; canonical plaintext summaries remain in Codex history. Build inputs, required
+`nativeEngine` capabilities and the pinned source are documented in
+[the experimental engine source contract](patches/codex/README.md); the standard-engine comparison
+and research evidence are in [the efficiency contract](docs/token-efficiency.md#standard-engine-and-optional-fork).
 
 Work opens each browser task in ChatGPT Temporary Chat. Before the first browser send, Tela checks
 that the leased surface still has the Temporary Chat URL; it refuses to send if ChatGPT returned to
