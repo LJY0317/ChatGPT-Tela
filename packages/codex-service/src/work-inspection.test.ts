@@ -75,12 +75,19 @@ describe("profile-owned read-only Work inspection", () => {
         input_revoked: false, observation_pending: false, private_url: "PRIVATE_URL" },
       { stage: "web_turn_observed", control_count: 5,
         composer_form_present: true, document_observed: true, private_value: "PRIVATE_OTHER" },
+      { stage: "native_goal_control_issued", control_fingerprint: diagnosticFingerprint("goal-control") },
+      { stage: "native_goal_control_inventory_rejected", event: "chatgpt_tela_chat",
+        control_fingerprint: diagnosticFingerprint("goal-control"),
+        phase: "call", reason_class: "unknown_or_retired_control" },
     ];
     mkdirSync(join(root, "logs"), { recursive: true });
-    writeFileSync(join(root, "logs", "codex.diagnostics.jsonl"), rows.map(row => JSON.stringify({
-      ts, event: "chatgpt_tela_work", scope_fingerprint: scope,
-      turn_fingerprint: turn, ...row,
-    })).join("\n") + "\n");
+    writeFileSync(join(root, "logs", "codex.diagnostics.jsonl"), rows.map(row => JSON.stringify(
+      row.stage === "native_goal_control_inventory_rejected"
+        ? { ts, event: "chatgpt_tela_chat", stage: row.stage,
+          control_fingerprint: row.control_fingerprint, phase: row.phase, reason_class: row.reason_class }
+        : { ts, event: row.stage === "native_goal_control_issued" ? "chatgpt_tela_codex" : "chatgpt_tela_work",
+          scope_fingerprint: scope, turn_fingerprint: turn, ...row },
+    )).join("\n") + "\n");
     try {
       const report = await createCodexWorkInspector({ service: f.service as any,
         logsRoot: join(root, "logs"), connect: f.connect })(2, threadId);
@@ -94,6 +101,11 @@ describe("profile-owned read-only Work inspection", () => {
           document_revoked: false, input_observed: false, input_available: false,
           input_revoked: false, observation_pending: false },
         { at: ts, stage: "web_turn_observed" },
+        { at: ts, stage: "native_goal_control_issued",
+          controlFingerprint: diagnosticFingerprint("goal-control") },
+        { at: ts, stage: "native_goal_control_inventory_rejected", phase: "call",
+          controlFingerprint: diagnosticFingerprint("goal-control"),
+          reasonClass: "unknown_or_retired_control" },
       ]);
       expect(JSON.stringify(parsed)).not.toContain("PRIVATE");
       expect(JSON.stringify(parsed)).not.toContain("unrelated_count");

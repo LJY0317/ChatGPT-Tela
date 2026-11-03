@@ -154,6 +154,16 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
       recentEvents: (diag.recentEvents as Record<string, unknown>[]).map(item => Object.freeze({
         at: time(item.at), stage: item.stage as string,
         ...(reason(item.reasonClass) ? { reasonClass: reason(item.reasonClass)! } : {}),
+        ...((item.stage === "native_goal_control_issued"
+          || item.stage === "native_goal_control_inventory_rejected"
+          || item.stage === "native_goal_control_resolved")
+          && typeof item.controlFingerprint === "string"
+          && /^[a-f0-9]{24}$/.test(item.controlFingerprint)
+          ? { controlFingerprint: item.controlFingerprint } : {}),
+        ...((item.stage === "native_goal_control_inventory_rejected"
+          || item.stage === "native_goal_control_resolved")
+          && (item.phase === "inventory" || item.phase === "call")
+          ? { phase: item.phase as "inventory" | "call" } : {}),
         ...pickerInspectionFields(item),
       })),
       activeRequestBoundary: boundary ? Object.freeze({

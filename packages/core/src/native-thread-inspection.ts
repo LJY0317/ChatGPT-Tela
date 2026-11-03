@@ -79,6 +79,41 @@ function diagnosticFingerprintField(value: unknown): string | undefined {
   return typeof value === "string" && /^[a-f0-9]{24}$/.test(value) ? value : undefined;
 }
 
+/** Ingress/rejection has no Native owner. Attribute it only when a Goal
+ * control was issued or resolved by one unique exact thread/turn owner. */
+function ownedGoalRejections(allEvents: readonly EvidenceRow[], scope: string, turn?: string) {
+  if (!turn) return [];
+  const owners = allEvents.filter(row =>
+    (row.stage === "native_goal_control_issued" || row.stage === "native_goal_control_resolved")
+    && diagnosticFingerprintField(row.control_fingerprint)
+    && diagnosticFingerprintField(row.scope_fingerprint)
+    && diagnosticFingerprintField(row.turn_fingerprint));
+  return allEvents.filter(row => row.event === "chatgpt_tela_chat"
+    && row.stage === "native_goal_control_inventory_rejected"
+    && diagnosticFingerprintField(row.control_fingerprint)
+    && new Set(owners.filter(owner => owner.control_fingerprint === row.control_fingerprint)
+      .map(owner => `${owner.scope_fingerprint}:${owner.turn_fingerprint}`)).size === 1
+    && owners.some(owner => owner.control_fingerprint === row.control_fingerprint
+      && owner.scope_fingerprint === scope && owner.turn_fingerprint === turn && owner.ts <= row.ts));
+}
+
+function goalInspectionEvent(row: EvidenceRow) {
+  return {
+    at: row.ts, stage: row.stage,
+    ...(typeof row.reason_class === "string" ? { reasonClass: row.reason_class } : {}),
+    ...(typeof row.phase === "string" ? { phase: row.phase } : {}),
+    ...((row.stage === "native_goal_control_issued" || row.stage === "native_goal_control_inventory_rejected"
+      || row.stage === "native_goal_control_resolved")
+      && diagnosticFingerprintField(row.control_fingerprint)
+      ? { controlFingerprint: row.control_fingerprint as string } : {}),
+  };
+}
+
+function recentGoalEvents(events: readonly EvidenceRow[], rejected: readonly EvidenceRow[]) {
+  return [...events, ...rejected].sort((a, b) => a.ts.localeCompare(b.ts)).slice(-MAX_TIMELINE);
+}
+
+
 function projectToolEvidenceEvent(event: EvidenceRow, turnFingerprint: string, correlation: string) {
   const projected: Record<string, EvidenceValue> = {
     at: event.ts,
@@ -396,11 +431,10 @@ export async function inspectNativeThread(input: {
       lastWebPlan,
       activeRequestBoundary,
       approvalWaitEvidence,
-      recentEvents: correlated.slice(-MAX_TIMELINE).map(event => ({
-        at: event.ts, stage: event.stage,
+      recentEvents: recentGoalEvents(correlated,
+        ownedGoalRejections(logs.events as readonly EvidenceRow[], fingerprint, activeTurnFingerprint)).map(event => ({
+        ...goalInspectionEvent(event),
         ...(typeof event.turn_phase === "string" ? { turnPhase: event.turn_phase } : {}),
-        ...(typeof event.reason_class === "string" ? { reasonClass: event.reason_class } : {}),
-        ...(typeof event.phase === "string" ? { phase: event.phase } : {}),
         ...pickerInspectionFields(event),
       })),
     },
@@ -597,10 +631,9 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       "web_turn_failed", "web_answer_received", "web_turn_final_observed",
       "native_outcome_committed", "native_response_body_closed", "approval_wait_transition",
       "private_capture_recorded", "private_capture_omitted"].includes(event.stage)),
-    recentEvents: events.slice(-MAX_TIMELINE).map(event => ({
-      at: event.ts, stage: event.stage,
-      ...(typeof event.reason_class === "string" ? { reasonClass: event.reason_class } : {}),
-      ...(typeof event.phase === "string" ? { phase: event.phase } : {}),
+    recentEvents: recentGoalEvents(events,
+      ownedGoalRejections(allEvents, fingerprint, turnFingerprint)).map(event => ({
+      ...goalInspectionEvent(event),
       ...(typeof event.manual_consent === "boolean" ? { manualConsent: event.manual_consent } : {}),
     })),
     continuation: {

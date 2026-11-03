@@ -197,13 +197,19 @@ describe("one read-only conversation inspection by exact Native ID", () => {
     const scope = diagnosticFingerprint(THREAD), turn = diagnosticFingerprint(TURN);
     const other = diagnosticFingerprint("bbbbbbbb-cccc-7ddd-8eee-ffffffffffff");
     const matched = diagnosticFingerprint("matched-control"), ambiguous = diagnosticFingerprint("ambiguous-control");
+    const rejected = diagnosticFingerprint("rejected-control"), unrelated = diagnosticFingerprint("other-control");
     const at = "2026-10-17T08:18:00Z";
     const rows = [
+      {event:"chatgpt_tela_codex",stage:"native_goal_control_issued",scope_fingerprint:scope,turn_fingerprint:turn,control_fingerprint:rejected},
+      {event:"chatgpt_tela_chat",stage:"native_goal_control_inventory_rejected",control_fingerprint:rejected,phase:"call",reason_class:"unknown_or_retired_control"},
+      {event:"chatgpt_tela_codex",stage:"native_goal_control_issued",scope_fingerprint:scope,turn_fingerprint:other,control_fingerprint:unrelated},
+      {event:"chatgpt_tela_chat",stage:"native_goal_control_inventory_rejected",control_fingerprint:unrelated,phase:"call",reason_class:"inventory_error"},
       {event:"chatgpt_tela_chat",stage:"native_goal_control_received",control_fingerprint:matched,phase:"inventory",control_present:true},
       {event:"chatgpt_tela_work",stage:"native_goal_control_resolved",scope_fingerprint:scope,turn_fingerprint:turn,control_fingerprint:matched,phase:"inventory"},
       {event:"chatgpt_tela_chat",stage:"native_goal_control_received",control_fingerprint:ambiguous,phase:"call",control_present:true},
       {event:"chatgpt_tela_work",stage:"native_goal_control_resolved",scope_fingerprint:scope,turn_fingerprint:turn,control_fingerprint:ambiguous,phase:"call"},
       {event:"chatgpt_tela_work",stage:"native_goal_control_resolved",scope_fingerprint:scope,turn_fingerprint:other,control_fingerprint:ambiguous,phase:"call"},
+      {event:"chatgpt_tela_chat",stage:"native_goal_control_inventory_rejected",control_fingerprint:ambiguous,phase:"call",reason_class:"inventory_error"},
       {event:"chatgpt_tela_chat",stage:"native_goal_control_received",control_fingerprint:diagnosticFingerprint("unresolved"),phase:"call",control_present:true},
     ];
     try {
@@ -215,6 +221,16 @@ describe("one read-only conversation inspection by exact Native ID", () => {
       ]);
       expect(JSON.stringify(result)).not.toContain("PRIVATE");
       expect(result.goalControlReturns).toEqual([]);
+      expect(result.recentEvents).toContainEqual(expect.objectContaining({
+        stage:"native_goal_control_issued",controlFingerprint:rejected,
+      }));
+      expect(result.recentEvents).toContainEqual(expect.objectContaining({
+        stage:"native_goal_control_inventory_rejected",controlFingerprint:rejected,
+        reasonClass:"unknown_or_retired_control",phase:"call",
+      }));
+      expect(result.recentEvents.some(row=>row.controlFingerprint===unrelated)).toBe(false);
+      expect(result.recentEvents.some(row=>row.stage==="native_goal_control_inventory_rejected"
+        && row.controlFingerprint===ambiguous)).toBe(false);
     } finally { rmSync(dir,{recursive:true,force:true}); }
   });
   test("historical tool evidence selects the exact turn and joins unique MCP RPC metadata without payloads", () => {
