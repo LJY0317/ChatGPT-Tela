@@ -236,11 +236,11 @@ test("killing the deferred wait worker leaves no install authority for the recre
   }
 }, 30_000);
 
-test("UI-only process exit leaves an unconsumed wait callback without installation authority", async () => {
-  // Disposable UI parent + detached read-only Tela wait worker; no Sparkle
-  // helper, real application, signed archive or installed service is exercised.
+test("UI-only exit closes wait owner pipe and settles its abandoned observer", async () => {
+  // Disposable UI parent + read-only Tela wait worker. No Sparkle helper,
+  // signed archive, real service, or installed consumer app is exercised.
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-ui-exit-"));
-  const entered = join(root, "wait-entered"), release = join(root, "work-completed");
+  const entered = join(root, "wait-entered");
   const done = join(root, "wait-settled"), pidFile = join(root, "observer-pid");
   const effects = join(root, "effects");
   let ui: ReturnType<typeof Bun.spawn> | undefined;
@@ -262,7 +262,7 @@ test("UI-only process exit leaves an unconsumed wait callback without installati
     for (const job of f.runner.jobs.values()) job.running = true;
     const beforeManifest = readFileSync(f.paths.installManifest, "utf8");
     const waitCode = [
-      'import { appendFileSync, existsSync, watch, writeFileSync } from "node:fs";',
+      'import { appendFileSync, writeFileSync } from "node:fs";',
       'import { runApplicationUpdate } from "./apps/packaged-launcher/src/application-update.ts";',
       'import { LaunchdUpgradeRunner } from "./tests/support/launchd-upgrade-runner.ts";',
       'const runner = new LaunchdUpgradeRunner();',
@@ -272,26 +272,27 @@ test("UI-only process exit leaves an unconsumed wait callback without installati
       '  if (args[0] !== "print") appendFileSync(process.env.TELA_FIXTURE_EFFECTS!, args[0] + "\\n");',
       '  return originalRun(command, args);',
       '};',
-      'await runApplicationUpdate("wait", { payloadRoot: process.env.TELA_FIXTURE_APP!,',
+      'const owner = new AbortController();',
+      'process.stdin.once("end", () => owner.abort());',
+      'process.stdin.resume();',
+      'try { await runApplicationUpdate("wait", { payloadRoot: process.env.TELA_FIXTURE_APP!,',
+      '  waitSignal: owner.signal,',
       '  options: { home: process.env.TELA_FIXTURE_HOME!, platform: "darwin", environment: {}, runner },',
-      '  waitForShutdownService: async (service) => {',
+      '  waitForShutdownService: async (service, signal) => {',
       '    if (service !== "codex") return;',
       '    writeFileSync(process.env.TELA_FIXTURE_ENTERED!, "waiting");',
-      '    await new Promise<void>(resolve => {',
-      '      const observer = watch(process.env.TELA_FIXTURE_ROOT!, () => {',
-      '        if (!existsSync(process.env.TELA_FIXTURE_RELEASE!)) return;',
-      '        observer.close(); resolve();',
-      '      });',
+      '    await new Promise<void>((_, reject) => {',
+      '      signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });',
       '    });',
       '  },',
-      '});',
-      'writeFileSync(process.env.TELA_FIXTURE_DONE!, "settled");',
+      '}); } catch (error) { if (!owner.signal.aborted) throw error; }',
+      'finally { process.stdin.pause(); writeFileSync(process.env.TELA_FIXTURE_DONE!, "owner-closed"); }',
     ].join("\n");
     const uiCode = [
       'import { spawn } from "node:child_process";',
       'import { watch, writeFileSync } from "node:fs";',
       'const worker = spawn(process.execPath, ["-e", process.env.TELA_FIXTURE_WAIT_CODE!],',
-      '  { detached: true, stdio: "ignore", cwd: process.cwd(), env: process.env });',
+      '  { detached: true, stdio: ["pipe", "ignore", "ignore"], cwd: process.cwd(), env: process.env });',
       'if (!worker.pid) throw Error("fixture worker did not start");',
       'worker.unref();',
       'writeFileSync(process.env.TELA_FIXTURE_PID!, String(worker.pid));',
@@ -304,7 +305,7 @@ test("UI-only process exit leaves an unconsumed wait callback without installati
         TELA_FIXTURE_ROOT: root, TELA_FIXTURE_APP: f.sourceRoot,
         TELA_FIXTURE_HOME: join(root, "home"),
         TELA_FIXTURE_JOBS: JSON.stringify([...f.runner.jobs]),
-        TELA_FIXTURE_ENTERED: entered, TELA_FIXTURE_RELEASE: release,
+        TELA_FIXTURE_ENTERED: entered,
         TELA_FIXTURE_DONE: done, TELA_FIXTURE_PID: pidFile,
         TELA_FIXTURE_EFFECTS: effects },
       stdout: "ignore", stderr: "ignore",
@@ -318,8 +319,8 @@ test("UI-only process exit leaves an unconsumed wait callback without installati
     expect(Number.isSafeInteger(waitPid) && waitPid > 0).toBe(true);
     ui.kill("SIGKILL"); // Only the disposable parent UI fixture, not its waiting child.
     expect(await ui.exited).not.toBe(0);
-    expect(() => process.kill(waitPid!, 0)).not.toThrow();
-    expect(existsSync(done)).toBe(false);
+    await Promise.race([whenCreated(done), timeout]);
+    expect(readFileSync(done, "utf8")).toBe("owner-closed");
     expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
     expect(readFileSync(f.paths.installManifest, "utf8")).toBe(beforeManifest);
     expect(existsSync(effects)).toBe(false);
@@ -327,8 +328,6 @@ test("UI-only process exit leaves an unconsumed wait callback without installati
     // A newly constructed UI starts without any persisted "apply after work" callback.
     expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true });
     expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
-    writeFileSync(release, "completed");
-    await Promise.race([whenCreated(done), timeout]);
     expect(existsSync(effects)).toBe(false);
     expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
   } finally {

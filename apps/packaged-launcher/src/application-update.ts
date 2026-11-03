@@ -21,7 +21,8 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
   payloadRoot: string; targetBuild?: string; interruptWork?: boolean; options?: PackagedLifecycleOptions;
   verifySignature?: (path: string) => void;
   readBuild?: (path: string) => string;
-  waitForShutdownService?: (service: TelaServiceId) => Promise<void>;
+  waitForShutdownService?: (service: TelaServiceId, signal?: AbortSignal) => Promise<void>;
+  waitSignal?: AbortSignal;
 }) {
   const options = input.options ?? {}, paths = resolveProductPaths(options);
   const step = async <T>(phase: string, run: () => T | Promise<T>, service?: TelaServiceId): Promise<T> => {
@@ -59,8 +60,9 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
   // Native completion precedes detached Chat work it may have launched.
   if (action === "wait") {
     for (const service of ["codex", "chat", "gateway"] as const) {
+      input.waitSignal?.throwIfAborted();
       if (await step("service_inspect", () => controller.inspect(service), service) !== "running") continue;
-      await step("work_completion", () => (input.waitForShutdownService ?? shutdown.wait)(service), service);
+      await step("work_completion", () => (input.waitForShutdownService ?? shutdown.wait)(service, input.waitSignal), service);
     }
     return { ready: true };
   }

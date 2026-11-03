@@ -89,13 +89,29 @@ async function main(): Promise<void> {
       || interruptWork && action !== "prepare") {
       throw Error("usage: application-update <wait|prepare --target-build N [--interrupt-work]|finish|cancel> --payload app");
     }
+    // Unlike the independently owned prepare/finish/cancel worker, wait is
+    // purely observational and has no purpose after its UI owner's stdin
+    // pipe closes. Abort only its in-flight readiness request on EOF.
+    const observation = action === "wait" ? new AbortController() : undefined;
+    const ownerClosed = () => observation?.abort();
+    if (observation) {
+      process.stdin.once("end", ownerClosed);
+      process.stdin.resume();
+    }
     try {
       const result = await runApplicationUpdate(action, { payloadRoot: args[payloadIndex + 1]!, interruptWork,
-        ...(targetIndex >= 0 ? { targetBuild: args[targetIndex + 1]! } : {}) });
+        ...(targetIndex >= 0 ? { targetBuild: args[targetIndex + 1]! } : {}),
+        ...(observation ? { waitSignal: observation.signal } : {}) });
       process.stdout.write(JSON.stringify(result) + "\n");
     } catch (error) {
+      if (observation?.signal.aborted) return; // UI departed; no update action or fatal diagnostic.
       if (!(error instanceof PackagedServiceShutdownNotStartedError)) throw error;
       process.stdout.write(JSON.stringify({ prepared: false, blockedService: error.service }) + "\n");
+    } finally {
+      if (observation) {
+        process.stdin.off("end", ownerClosed);
+        process.stdin.pause();
+      }
     }
     return;
   }

@@ -138,6 +138,44 @@ test("Codex activity is checked before any shutdown request", async () => {
   } finally { await http.close(); rmSync(home, { recursive: true, force: true }); }
 });
 
+test("orphaned update wait aborts the Codex readiness request without shutdown", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tela-orphaned-update-wait-"));
+  const paths = resolveProductPaths({ platform: "linux", home, environment: {} });
+  let entered!: () => void, release!: () => void;
+  const admitted = new Promise<void>(resolve => { entered = resolve; });
+  let shutdownCalls = 0;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const service = {
+    serviceStatus: () => ({ contractVersion: 1, service: "codex", instanceId: "fixture-orphan", state: "ready" }),
+    shutdownReadiness: async () => "blocked",
+    async waitForShutdownReadiness() {
+      entered();
+      await waiting;
+    },
+    close: async () => { shutdownCalls++; },
+  } as unknown as CodexService;
+  const http = await startCodexServiceHttpServer({ service });
+  try {
+    mkdirSync(paths.serviceRuntime("codex"), { recursive: true });
+    writeServiceRuntimeDescriptor(join(paths.serviceRuntime("codex"), "descriptor.json"), {
+      version: 1, service: "codex", instanceId: "fixture-orphan", installId: "fixture",
+      pid: process.pid, endpoint: http.endpoint.href, bearerToken: http.bearerToken,
+      startedAt: new Date().toISOString(),
+    });
+    const owner = new AbortController();
+    const observation = ownedServiceShutdown("fixture", paths).wait("codex", owner.signal);
+    await admitted;
+    owner.abort();
+    await expect(observation).rejects.toThrow();
+    // No task cancellation or service shutdown is authorized by dropping the observer.
+    expect(shutdownCalls).toBe(0);
+    expect(service.serviceStatus().state).toBe("ready");
+    // The fetch abort is observable at the client. The remote HTTP server's
+    // request.signal may be delivered later; this fixture does not claim that
+    // the server also released its handler before task completion.
+  } finally { release(); await http.close(); rmSync(home, { recursive: true, force: true }); }
+});
+
 test("consented update interruption uses the owned Native endpoint and exact active turn", async () => {
   const home = mkdtempSync(join(tmpdir(), "tela-update-interrupt-native-"));
   const paths = resolveProductPaths({ platform: "linux", home, environment: {} });

@@ -147,6 +147,10 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
       task.executableURL = launcher
       task.arguments = ["application-update"] + arguments + ["--payload", payload]
       let output = Pipe()
+      // Only the read-only wait observes this UI's lifetime. When this UI
+      // exits unexpectedly, its pipe closes and the observer can release its
+      // pending readiness request without affecting user work.
+      if observation != nil { task.standardInput = Pipe() }
       task.standardOutput = output
       task.standardError = FileHandle.standardError
       do {
