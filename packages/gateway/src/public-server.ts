@@ -29,7 +29,7 @@ export interface PublicChatBackend {
   call(capability: string, arguments_: Readonly<Record<string, unknown>>): Promise<unknown>;
 }
 
-const CHAT_INVENTORY_QUERY_INSTRUCTIONS = "Inventory is read-only. Its query is a case-insensitive literal substring over capability names and descriptions. Omit it for all capabilities or use one short keyword; an empty match does not mean tools are unavailable.";
+const CHAT_INVENTORY_QUERY_INSTRUCTIONS = "Inventory is read-only. Query matches one case-insensitive literal substring of capability names or descriptions, not natural-language search. Omit it or use an empty string for all capabilities; [] means no matches, not that tools are unavailable.";
 
 export const CHATGPT_TELA_PUBLIC_INSTRUCTIONS = [
   "Use ChatGPT Tela when the request needs the user's connected local workspace or the exact active Native Codex turn; do not invoke it for ordinary conversation or knowledge work that needs neither.",
