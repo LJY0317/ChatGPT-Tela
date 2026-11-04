@@ -196,9 +196,12 @@ An active Goal can continue through a Native developer message without a new use
 message; preserve that role and send only the verified retained suffix.
 
 Native owns Goal scheduling and its public `thread/goal/*` lifecycle. A final answer
-or “done” phrase does not complete a Goal. For coordinated Web workers, the Native
-coordinator reviews the assigned result and explicitly settles that worker's Goal;
-installation or integration outside its assignment belongs to the parent Goal.
+or “done” phrase does not complete a Goal. Managed Web delegation uses the CLI
+`start`/`continue` path for a single worker turn without automatically registering
+a worker Goal. The coordinator reviews the actual result, retains the original
+request in its delegation journal, and settles its own parent objective. If a
+worker Goal was explicitly registered, the coordinator also settles that Goal;
+installation or integration outside the worker assignment belongs to the parent Goal.
 If the assigned work is blocked, record the remaining dependency and stop automatic
 repetition instead of leaving the Goal active to rerun unchanged checks. Tela Chat
 execution must not regain the legacy Native work-tool bridge to change Goal state.
