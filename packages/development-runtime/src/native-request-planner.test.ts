@@ -1817,6 +1817,35 @@ describe("Native request development Web planner", () => {
 });
 
 
+test("Native reasoning configuration update retains its order, source and compaction identity", () => {
+  const update = { type: "configuration_update", reasoning: { effort: "ultra" } };
+  const input = [
+    { type: "message", role: "user", content: "Before configuration." },
+    update,
+    { type: "message", role: "user", content: "After configuration." },
+  ];
+  const projected = projectNativeRequestContext("thread-1", { input });
+  expect(projected.revisions.map(item => item.revision.kind)).toEqual(["user", "tool-result", "user"]);
+  expect(JSON.parse(projected.revisions[1]!.content)).toEqual(update);
+  expect(projected.protectedRevisionIds).toContain(projected.revisions[1]!.revision.id);
+  expect(projectNativeRequestContext("thread-1", { input: [input[0],
+    { type: "configuration_update", reasoning: { effort: "high" } }, input[2]] }).headId)
+    .not.toBe(projected.headId);
+  for (const invalid of [
+    { type: "configuration_update", reasoning: {} },
+    { type: "configuration_update", reasoning: { effort: 7 } },
+    { type: "configuration_update", reasoning: { effort: "high", extra: "opaque" } },
+    { type: "configuration_update", reasoning: { effort: "high" }, unsupported: { image: "opaque" } },
+  ]) {
+    expect(() => projectNativeRequestContext("thread-1", { input: [invalid] }))
+      .toThrow("cannot safely project to Web");
+  }
+  expect(() => projectNativeRequestContext("thread-1", { input: [
+    { type: "message", role: "user", content: [{ type: "input_image", image_url: "opaque" }] },
+    update,
+  ] })).toThrow();
+});
+
 describe("Native inter-agent request projection", () => {
   const agent = { type: "agent_message", author: "worker", recipient: "manager",
     content: [{ type: "input_text", text: "First evidence" }, { type: "input_text", text: "Second evidence" }] };

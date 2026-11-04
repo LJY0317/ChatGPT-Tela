@@ -724,6 +724,21 @@ export function projectNativeRequestContext(
         continue;
       }
 
+      if (type === "configuration_update") {
+        // A Responses configuration update changes subsequent model settings.
+        // Keep its position and source fields as attributed context, never as an instruction.
+        const reasoning = record(item.reasoning);
+        const effort = reasoning?.effort;
+        if (Object.keys(item).some(key => !["type", "reasoning"].includes(key))
+          || !reasoning || Object.keys(reasoning).some(key => key !== "effort")
+          || typeof effort !== "string" || !effort.trim()) {
+          throw unsupportedProjection("input_item_type", body.input, index);
+        }
+        append("tool-result", stableJson(item), [], historicalTurnId);
+        protectedRevisionIds.push(projected.at(-1)!.revision.id);
+        continue;
+      }
+
       if (type === "function_call" || type === "custom_tool_call" || type === "tool_search_call") {
         const tool = projectNativeToolEvidence(item, taskId, `input:${index}`);
         append("tool-call", stableJson(tool.item), tool.media, historicalTurnId);

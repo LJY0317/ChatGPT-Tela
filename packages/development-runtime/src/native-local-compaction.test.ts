@@ -27,6 +27,22 @@ test('local compaction retains full source, returns an ordinary summary and coal
  const out=await router(request(body()));expect((await out?.json()).output[0]).toMatchObject({type:'message',role:'assistant',content:[{type:'output_text',text:'Readable Native summary',annotations:[]}]});
 });
 
+test('local compaction accepts a durable Native reasoning configuration update in source order',async()=>{
+ const update={type:'configuration_update',reasoning:{effort:'high'}};
+ const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical},summarize:async source=>{
+  const segments=source.physicalContext.segments.map(item=>item.content);
+  expect(segments[0]).toBe('Earlier task');
+  expect(JSON.parse(segments[1]!)).toEqual(update);
+  expect(segments[2]).toBe('Summarize after configuration');
+  return 'Configuration-bearing source summarized';
+ }});
+ const result=await router(request(body({input:[
+  {type:'message',role:'user',content:'Earlier task'},update,
+  {type:'message',role:'user',content:'Summarize after configuration'},
+ ]})));
+ expect(result?.status).toBe(200);
+});
+
 test('Native local compaction must provide inline user image as a real owned summary attachment',async()=>{
  const png='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9RwvWgAAAABJRU5ErkJggg==';
  let count=0;
