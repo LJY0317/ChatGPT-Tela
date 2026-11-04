@@ -137,6 +137,8 @@ export interface CodexProfileStatusContract {
   readonly connectionInProgress?: boolean;
   readonly webModelsReady?: boolean;
   readonly webState?: CodexWebState;
+  /** Last on-demand Web authentication observation; independent of Web admission. */
+  readonly webSignIn?: "signed-in" | "signed-out" | "unavailable";
   /** UI-only hint: this exact owner's account browser has suspended Web admission. */
   readonly accountManagementActive?: boolean;
   readonly responsesRouteFingerprint?: string;
@@ -196,6 +198,7 @@ export function parseCodexProfileStatusContract(value: unknown): CodexProfileSta
     throw new Error("Codex profile Desktop process id is invalid");
   }
   if (item.webState !== undefined && !["preparing", "ready", "login-required", "failed", "closed"].includes(item.webState as string)) throw new Error("invalid Web connection state");
+  if (item.webSignIn !== undefined && !["signed-in", "signed-out", "unavailable"].includes(item.webSignIn as string)) throw new Error("invalid Web sign-in state");
   if (item.webModelsReady !== undefined && typeof item.webModelsReady !== "boolean") throw new Error("invalid Web model readiness");
   if (item.accountManagementActive !== undefined && typeof item.accountManagementActive !== "boolean") {
     throw new Error("invalid account management state");
@@ -218,6 +221,7 @@ export function parseCodexProfileStatusContract(value: unknown): CodexProfileSta
     ...(item.childProcessId === undefined ? {} : { childProcessId: item.childProcessId as number }),
     ...(item.desktopProcessId === undefined ? {} : { desktopProcessId: item.desktopProcessId as number }),
     ...(item.webState === undefined ? {} : { webState: item.webState as CodexWebState }),
+    ...(item.webSignIn === undefined ? {} : { webSignIn: item.webSignIn as NonNullable<CodexProfileStatusContract["webSignIn"]> }),
     ...(item.webModelsReady === undefined ? {} : { webModelsReady: item.webModelsReady as boolean }),
     ...(item.accountManagementActive === undefined ? {} : { accountManagementActive: item.accountManagementActive as boolean }),
     ...(item.connectionInProgress === undefined ? {} : { connectionInProgress: item.connectionInProgress as boolean }),

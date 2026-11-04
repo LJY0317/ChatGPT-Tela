@@ -104,6 +104,7 @@ interface OwnedProfile {
   readonly uiToken: string;
   readonly unmount: () => void;
   webState: CodexWebState;
+  webSignIn?: "signed-in" | "signed-out" | "unavailable";
   webModelsReady: boolean;
   accountManagementActive: boolean;
   catalogCheck?: Promise<boolean>;
@@ -315,6 +316,7 @@ function statusFor(target: CodexNativeTarget, slot: number, session: CodexNative
     targetState: target.state,
     targetSessionState: ownershipMatches ? "ready" : session.state,
     ...(ownershipMatches && owned ? { webModelsReady: owned.webModelsReady, webState: owned.webState,
+      ...(owned.webSignIn === undefined ? {} : { webSignIn: owned.webSignIn }),
       ...(owned.accountManagementActive ? { accountManagementActive: true } : {}) } : {}),
     controlState,
     ...(session.desktopProcessId ? { desktopProcessId: session.desktopProcessId } : {}),
@@ -519,6 +521,10 @@ export async function startCodexService(input: {
     if (!response.ok) throw new Error("Account observation unavailable. Check the profile connection.");
     const value = parse(await response.json());
     if (value.slot !== slot || await controlledProfile(slot) !== profile) throw new Error("account observation ownership changed");
+    const webSignIn = "webSignIn" in value ? value.webSignIn
+      : "web" in value && value.web && typeof value.web === "object"
+        ? (value.web as { readonly state?: unknown }).state : undefined;
+    if (webSignIn === "signed-in" || webSignIn === "signed-out" || webSignIn === "unavailable") profile.webSignIn = webSignIn;
     return value;
   }
 

@@ -652,7 +652,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         }
         let web = TelaWebPresentation(profile: profile)
         if connection.buttonTitle == nil,
-           profile.webState != "ready" || profile.webModelsReady == false || profile.accountManagementActive == true,
+           profile.webSignIn != "signed-in" || profile.webState != "ready" || profile.webModelsReady == false || profile.accountManagementActive == true,
            let title = web.buttonTitle {
           let selector: Selector
           switch web.action {

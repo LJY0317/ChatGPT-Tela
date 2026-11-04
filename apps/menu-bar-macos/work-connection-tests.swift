@@ -90,6 +90,14 @@ precondition(signedOutWeb.connectionLabel == "Web sign-in required")
 precondition(!TelaProfilePresentation(profile: signedOutWeb, inventoryError: nil, localProgress: nil).busy)
 var readyWeb = preparingWeb; readyWeb.webState = "ready"; readyWeb.webModelsReady = true
 precondition(readyWeb.connectionLabel == "Connected" && TelaWebPresentation(profile: readyWeb).status == "Verified" && TelaWebPresentation(profile: readyWeb).buttonTitle == "Manage…")
+var observedLogout = readyWeb; observedLogout.webSignIn = "signed-out"
+precondition(TelaWebPresentation(profile: observedLogout).status == "Sign-in required")
+precondition(TelaWebPresentation(profile: observedLogout).buttonTitle == "Sign in…")
+var unavailableLogin = readyWeb; unavailableLogin.webSignIn = "unavailable"
+precondition(TelaWebPresentation(profile: unavailableLogin).status == "Not verified")
+precondition(TelaWebPresentation(profile: unavailableLogin).buttonTitle == "Verify…")
+var restoredLogin = observedLogout; restoredLogin.webSignIn = "signed-in"
+precondition(TelaWebPresentation(profile: restoredLogin).status == "Verified")
 precondition(TelaWebConnectionPresentation(profile: readyWeb, wantedTargets: []).status == "Ready")
 precondition(TelaWebConnectionPresentation(profile: failedWeb, wantedTargets: []).status == "Connection failed")
 precondition(TelaWebConnectionPresentation(profile: accountBrowserWeb, wantedTargets: []).status == "Paused")

@@ -53,6 +53,7 @@ struct TelaWorkProfile: Decodable, Equatable {
   var connectionInProgress: Bool? = nil
   var webModelsReady: Bool? = nil
   var webState: String? = nil
+  var webSignIn: String? = nil
   var accountManagementActive: Bool? = nil
   var needsWebSignIn: Bool { connected && webState == "login-required" }
   var canReconnectWeb: Bool { connected && (webState == "failed" || webState == "ready") }
@@ -109,14 +110,17 @@ struct TelaWebPresentation {
       result = ("Finish in the browser", .finish, "Done")
     } else if profile.connectionInProgress == true || profile.webState == "preparing" {
       result = ("Checking…", .none, nil)
-    } else if profile.needsWebSignIn || account?.web.state == "signed-out" {
+    } else if profile.needsWebSignIn || profile.webSignIn == "signed-out" || account?.web.state == "signed-out" {
       result = ("Sign-in required", .account, "Sign in…")
+    } else if profile.webSignIn == "unavailable" || account?.web.state == "unavailable" {
+      result = ("Not verified", .account, "Verify…")
     } else if account?.comparison == "different" {
       result = ("Different account", .account, "Manage…")
-    } else if profile.webState == "ready" && profile.webModelsReady != false {
+    } else if profile.webSignIn == "signed-in" || account?.web.state == "signed-in" {
+      result = ("Verified", profile.webState == "failed" ? .reconnect : .account,
+        profile.webState == "failed" ? "Try again" : "Manage…")
+    } else if profile.webSignIn == nil && account?.web.state == nil && profile.webState == "ready" && profile.webModelsReady != false {
       result = ("Verified", .account, "Manage…")
-    } else if account?.web.state == "signed-in" && profile.canReconnectWeb {
-      result = ("Verified", .reconnect, "Try again")
     } else {
       result = ("Not verified", .account, "Verify…")
     }

@@ -186,6 +186,8 @@ test("Web admission is explicit and does not imply visible models or Native shut
   const base = { slot: 1, targetId: "default", targetDisplayName: "ChatGPT", targetState: "running", targetSessionState: "ready", controlState: "running" };
   expect(parseCodexProfileStatusContract({ ...base, webState: "failed", webModelsReady: false }).controlState).toBe("running");
   expect(parseCodexProfileStatusContract({ ...base, webState: "login-required", webModelsReady: false }).webState).toBe("login-required");
+  expect(parseCodexProfileStatusContract({ ...base, webState: "ready", webSignIn: "signed-out" }).webSignIn).toBe("signed-out");
+  expect(() => parseCodexProfileStatusContract({ ...base, webSignIn: "unknown" })).toThrow();
   expect(parseCodexWebStateContract({ contractVersion: 1, slot: 1, webState: "login-required", webModelIds: [] }).webState).toBe("login-required");
   expect(() => parseCodexWebStateContract({ contractVersion: 1, slot: 1, webState: "login-required", webModelIds: ["chatgpt-tela-web/fixture"] })).toThrow();
   expect(parseCodexProfileStatusContract({ ...base, webState: "preparing", webModelsReady: false }).webState).toBe("preparing");
