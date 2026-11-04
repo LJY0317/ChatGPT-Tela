@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { ChatGptWebLoginRequiredError } from "@chatgpt-tela/chatgpt";
 import { createAccountCheck } from "./account-check";
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 const account = digest("synthetic-user-and-container");
@@ -8,7 +9,7 @@ const native = async () => ({ account: { type: "chatgpt", email: "private@exampl
 
 test("shared container is not a proven user match; response contains no identity", async () => {
   const value = await createAccountCheck({ native, web, binding: () => account })();
-  expect(value).toEqual({nativeSignIn:"signed-in",webBinding:"matching",nativeWebContainer:"matching",userIdentity:"unverified"});
+  expect(value).toEqual({nativeSignIn:"signed-in",webSignIn:"signed-in",webBinding:"matching",nativeWebContainer:"matching",userIdentity:"unverified"});
   expect(JSON.stringify(value)).not.toContain("private@");
   expect(JSON.stringify(value)).not.toContain(account);
   expect(JSON.stringify(value)).not.toContain("synthetic-container");
@@ -47,4 +48,19 @@ test("runtime shutdown settles a stuck observation and prevents new reads", asyn
   const after = await check();
   expect(after.nativeSignIn).toBe("unavailable");
   expect(calls).toBe(1);
+});
+
+
+test("Web logout stays distinct from observation failure and the next check sees relogin", async () => {
+  let state: "signed-out" | "unavailable" | "signed-in" = "signed-out";
+  const check = createAccountCheck({ native, binding: () => account, web: async () => {
+    if (state === "signed-out") throw new ChatGptWebLoginRequiredError();
+    if (state === "unavailable") throw Error("transport failed");
+    return web();
+  } });
+  expect(await check()).toMatchObject({ nativeSignIn: "signed-in", webSignIn: "signed-out", webBinding: "unavailable" });
+  state = "unavailable";
+  expect(await check()).toMatchObject({ webSignIn: "unavailable", webBinding: "unavailable" });
+  state = "signed-in";
+  expect(await check()).toMatchObject({ webSignIn: "signed-in", webBinding: "matching", nativeWebContainer: "matching" });
 });

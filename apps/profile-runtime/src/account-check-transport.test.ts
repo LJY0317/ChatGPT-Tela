@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
+import { ChatGptWebLoginRequiredError } from "@chatgpt-tela/chatgpt";
 import { createAccountCheck } from "./account-check";
 import { startProfileBridgePreviewServer } from "./bridge-preview-server";
 
 test("authenticated HTTP account checks use fresh Native RPC and never mutate authentication", async () => {
   let container = "synthetic-container-a";
+  let signedIn = true;
   const requests: { method: string; params?: unknown }[] = [];
   const native = Bun.serve({
     hostname: "127.0.0.1", port: 0,
@@ -34,7 +36,10 @@ test("authenticated HTTP account checks use fresh Native RPC and never mutate au
         try { return await rpc.request("account/read", { refreshToken: false }, signal); }
         finally { await rpc.close(); }
       },
-      web: async () => ({ accountFingerprint: binding, containerFingerprint: hash("synthetic-container-a"), accountStructure: "workspace" }),
+      web: async () => {
+        if (!signedIn) throw new ChatGptWebLoginRequiredError();
+        return { accountFingerprint: binding, containerFingerprint: hash("synthetic-container-a"), accountStructure: "workspace" };
+      },
       binding: () => binding,
     }),
   });
@@ -54,9 +59,14 @@ test("authenticated HTTP account checks use fresh Native RPC and never mutate au
     expect(second.nativeWebContainer).toBe("different");
     expect(second.webBinding).toBe("matching");
     expect(second.userIdentity).toBe("unverified");
+    signedIn = false;
+    const loggedOut = await (await fetch(url, { headers })).json() as any;
+    expect(loggedOut).toMatchObject({ nativeSignIn: "signed-in", webSignIn: "signed-out", webBinding: "unavailable" });
+    signedIn = true;
+    container = "synthetic-container-a";
+    expect(await (await fetch(url, { headers })).json()).toMatchObject({ webSignIn: "signed-in", webBinding: "matching" });
     expect(requests.filter(row => row.method === "account/read")).toEqual([
-      { method: "account/read", params: { refreshToken: false } },
-      { method: "account/read", params: { refreshToken: false } },
+      ...Array.from({ length: 4 }, () => ({ method: "account/read", params: { refreshToken: false } })),
     ]);
     expect(requests.every(row => ["initialize", "initialized", "account/read"].includes(row.method))).toBe(true);
   } finally {

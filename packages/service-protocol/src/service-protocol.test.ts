@@ -60,7 +60,8 @@ describe("private service protocol", () => {
   test("account observation rejects false user equality and strips identities", () => {
     const value = { contractVersion: 1, slot: 1, nativeSignIn: "signed-in", webBinding: "matching", nativeWebContainer: "matching", userIdentity: "unverified" } as const;
     expect(parseCodexAccountCheckContract({ ...value, email: "private@example.invalid", accountId: "private" })).toEqual(value);
-    for (const invalid of [{ slot: 0 }, { slot: 100 }, { contractVersion: 2 }, { userIdentity: "matching" }, { nativeSignIn: "unknown" }, { webBinding: "ready" }, { nativeWebContainer: "ready" }]) {
+    expect(parseCodexAccountCheckContract({ ...value, webSignIn: "signed-out" }).webSignIn).toBe("signed-out");
+    for (const invalid of [{ webSignIn: "unknown" }, { slot: 0 }, { slot: 100 }, { contractVersion: 2 }, { userIdentity: "matching" }, { nativeSignIn: "unknown" }, { webBinding: "ready" }, { nativeWebContainer: "ready" }]) {
       expect(() => parseCodexAccountCheckContract({ ...value, ...invalid })).toThrow();
     }
   });

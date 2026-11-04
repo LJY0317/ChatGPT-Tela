@@ -64,6 +64,8 @@ export interface CodexAccountCheckContract {
   readonly contractVersion: 1;
   readonly slot: number;
   readonly nativeSignIn: "signed-in" | "signed-out" | "unavailable";
+  /** Login observation is separate from matching the two accounts. */
+  readonly webSignIn?: "signed-in" | "signed-out" | "unavailable";
   readonly webBinding: "matching" | "different" | "unbound" | "unavailable";
   readonly nativeWebContainer: "matching" | "different" | "unavailable";
   readonly userIdentity: "unverified";
@@ -111,11 +113,13 @@ export function parseCodexAccountCheckContract(value: unknown): CodexAccountChec
   if (item.contractVersion !== 1 || !Number.isSafeInteger(item.slot)
     || (item.slot as number) < 1 || (item.slot as number) > 99
     || !["signed-in", "signed-out", "unavailable"].includes(item.nativeSignIn as string)
+    || (item.webSignIn !== undefined && !["signed-in", "signed-out", "unavailable"].includes(item.webSignIn as string))
     || !["matching", "different", "unbound", "unavailable"].includes(item.webBinding as string)
     || !["matching", "different", "unavailable"].includes(item.nativeWebContainer as string)
     || item.userIdentity !== "unverified") throw new Error("Invalid Codex account observation");
   return Object.freeze({ contractVersion: 1, slot: item.slot as number,
     nativeSignIn: item.nativeSignIn as CodexAccountCheckContract["nativeSignIn"],
+    ...(item.webSignIn === undefined ? {} : { webSignIn: item.webSignIn as CodexAccountCheckContract["nativeSignIn"] }),
     webBinding: item.webBinding as CodexAccountCheckContract["webBinding"],
     nativeWebContainer: item.nativeWebContainer as CodexAccountCheckContract["nativeWebContainer"],
     userIdentity: "unverified" });

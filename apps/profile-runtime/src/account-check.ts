@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { ChatGptAccountIdentity } from "@chatgpt-tela/chatgpt";
+import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { ChatGptWebLoginRequiredError, type ChatGptAccountIdentity } from "@chatgpt-tela/chatgpt";
 import type { CodexAccountCheckContract } from "@chatgpt-tela/service-protocol";
 
 /** Shared workspace identity never establishes the same human user or Desktop UI session. */
@@ -34,17 +35,23 @@ export function createAccountCheck(input: {
           }
         }
       }
+      let webSignIn: AccountCheck["webSignIn"] = web.status === "rejected"
+        && web.reason instanceof ChatGptWebLoginRequiredError ? "signed-out" : "unavailable";
       let webBinding: AccountCheck["webBinding"] = "unavailable";
       let nativeWebContainer: AccountCheck["nativeWebContainer"] = "unavailable";
       if (web.status === "fulfilled" && /^[a-f0-9]{64}$/.test(web.value.accountFingerprint)
         && /^[a-f0-9]{64}$/.test(web.value.containerFingerprint)) {
+        webSignIn = "signed-in";
         try {
           const binding = input.binding();
           webBinding = binding === undefined ? "unbound" : binding === web.value.accountFingerprint ? "matching" : "different";
         } catch { /* Invalid binding is unavailable, never matching. */ }
         if (nativeContainer) nativeWebContainer = nativeContainer === web.value.containerFingerprint ? "matching" : "different";
       }
-      return Object.freeze({ nativeSignIn, webBinding, nativeWebContainer, userIdentity: "unverified" as const });
+      emitDiagnosticEvent("chatgpt_tela_profile_startup", "account_check_observed", {
+        native_signin: nativeSignIn, web_signin: webSignIn,
+      });
+      return Object.freeze({ nativeSignIn, webSignIn, webBinding, nativeWebContainer, userIdentity: "unverified" as const });
     })().finally(() => { pending = undefined; });
     return pending;
   };

@@ -110,8 +110,8 @@ export async function startProfileBridgePreviewServer(input: {
           { headers: { "cache-control": "no-store" } });
       }
       if (request.method === "GET" && url.pathname === "/v1/account-check" && input.accountCheck) {
-        const { nativeSignIn, webBinding, nativeWebContainer, userIdentity } = await input.accountCheck();
-        return Response.json({ contractVersion: 1, slot: input.slot, nativeSignIn, webBinding, nativeWebContainer, userIdentity },
+        const { nativeSignIn, webSignIn, webBinding, nativeWebContainer, userIdentity } = await input.accountCheck();
+        return Response.json({ contractVersion: 1, slot: input.slot, nativeSignIn, webSignIn, webBinding, nativeWebContainer, userIdentity },
           { headers: { "cache-control": "no-store" } });
       }
       if (request.method === "GET" && url.pathname === "/v1/web-state" && input.webState) {

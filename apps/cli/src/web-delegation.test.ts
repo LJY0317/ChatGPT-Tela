@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 import { WebDelegationStore, type WebDelegationRecord } from "../../../packages/codex-service/src/web-delegation";
+import { ChatGptWebLoginRequiredError } from "@chatgpt-tela/chatgpt";
 import { parseCoordinatorOptions, runWebDelegationCommand } from "./web-delegation";
 
 test("start coordinator flags parse once; continuation cannot replace inherited binding", () => {
@@ -91,4 +92,38 @@ test("cleanup details reuse the running service observation while default capaci
     ]);
     expect(requests).toEqual(["/v1/status", "/v1/codex/profiles/2/web-delegation-capacity?cleanup-details=1"]);
   } finally { log.mockRestore(); server.stop(true); rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("Web logout gets the existing sign-in guidance while an unavailable account is not called logged out", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-login-cli-"));
+  const paths = resolveProductPaths({ platform: "darwin", home: root, environment: {} });
+  const token = "c".repeat(48), installId = randomUUID(), instanceId = randomUUID();
+  let webSignIn = "signed-out", webState = "ready";
+  const requests: string[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    expect(request.headers.get("authorization")).toBe(`Bearer ${token}`);
+    const route = new URL(request.url).pathname;
+    requests.push(route);
+    if (route === "/v1/status") return Response.json({ contractVersion: 1, service: "codex", instanceId, state: "ready" });
+    if (route === "/v1/codex/profiles") return Response.json({ profiles: [{ slot: 2, targetId: "fixture", targetDisplayName: "Fixture",
+      targetState: "running", targetSessionState: "ready", controlState: "running", webState }] });
+    if (route === "/v1/codex/profiles/2/account-check") return Response.json({ contractVersion: 1, slot: 2,
+      nativeSignIn: "signed-in", webSignIn, webBinding: "unavailable", nativeWebContainer: "unavailable", userIdentity: "unverified" });
+    throw Error("A blocked request must not submit any work");
+  } });
+  try {
+    writeOwnershipManifest(paths.installManifest, createOwnershipManifest("fixture", new Date(), installId));
+    writeServiceRuntimeDescriptor(join(paths.serviceRuntime("codex"), "descriptor.json"), {
+      version: 1, service: "codex", instanceId, installId, pid: process.pid,
+      endpoint: server.url.href, bearerToken: token, startedAt: new Date().toISOString(),
+    });
+    await expect(runWebDelegationCommand(["catalog", "--slot", "2"], paths)).rejects.toBeInstanceOf(ChatGptWebLoginRequiredError);
+    webSignIn = "unavailable";
+    await expect(runWebDelegationCommand(["catalog", "--slot", "2"], paths)).rejects.toThrow("Couldn't verify the account connection");
+    webState = "login-required";
+    await expect(runWebDelegationCommand(["catalog", "--slot", "2"], paths)).rejects.toBeInstanceOf(ChatGptWebLoginRequiredError);
+    expect(requests.filter(route => route.endsWith("account-check"))).toHaveLength(2);
+    expect(requests.every(route => ["/v1/status", "/v1/codex/profiles", "/v1/codex/profiles/2/account-check"].includes(route))).toBe(true);
+  } finally { server.stop(true); rmSync(root, { recursive: true, force: true }); }
 });

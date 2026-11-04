@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ChatGptWebLoginRequiredError } from "@chatgpt-tela/chatgpt";
 import { readProductPreferences, webDelegationLimit } from "@chatgpt-tela/product-config";
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -169,9 +170,11 @@ export async function runWebDelegationCommand(args: readonly string[], paths: Re
     return;
   }
   const profile = (await client.profiles()).find(row => row.slot === slot);
+  if (profile?.webState === "login-required") throw new ChatGptWebLoginRequiredError();
   if (profile?.webState !== "ready" || profile.accountManagementActive) throw Error("Selected Web profile is not ready");
   const account = await client.accountCheck(slot);
-  if (account.nativeSignIn !== "signed-in" || account.webBinding !== "matching" || account.nativeWebContainer !== "matching") throw Error("Native/Web account binding is not proven");
+  if (account.webSignIn === "signed-out") throw new ChatGptWebLoginRequiredError();
+  if (account.nativeSignIn !== "signed-in" || account.webBinding !== "matching" || account.nativeWebContainer !== "matching") throw Error("Couldn't verify the account connection. Open Tela to check sign-in.");
   if (subcommand === "catalog") {
     const current = await owner(slot);
     const rpc = await connectCodexAppServerWebSocket(current.session.terminalEndpoint);
