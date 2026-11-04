@@ -55,8 +55,8 @@ Web projection before claiming ready.
 For this combined candidate, engine metadata declares the ordered capabilities
 `["model-local-compaction-v1", "model-catalog-refresh-v1", "model-catalog-seed-v1"]` and binds the digest of
 the compaction patch followed by this patch. Build the CLI and its code-mode helper
-together with the exact upstream-pinned sandbox V8 archive/binding pair; ordinary
-upstream V8 download URLs do not publish that pair.
+together with the pinned `aarch64-apple-darwin` `ptrcomp-sandbox` V8 archive/binding
+pair from [OpenAI's official release](https://github.com/openai/codex/releases/tag/rusty-v8-v150.4.0).
 
 ### Reproducing the verified macOS arm64 source build
 
@@ -71,10 +71,18 @@ The successful source build used V8 `15.0.245.2` / Rust `v8` crate `150.4.0` wit
 | `librusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.a.gz` | `00adbb48798848c77550441c68673a5e8529b8e1b73eabcdee232cb39b40f4a1` |
 | `src_binding_ptrcomp_sandbox_release_aarch64-apple-darwin.rs` | `ca5adf0cf89c9a70ad460ae73648b2fe89b74aa113b3cb7f757b6a02b758394f` |
 
-Obtain and verify this *matching pair* before building. These are observed local checksums,
-not an authenticated public download location or signing provenance; an ordinary public clone
-cannot be assumed to build without the independently supplied pair. From this Tela repository
-and a separate clean upstream Codex checkout, respectively:
+Download the matching [archive](https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/librusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.a.gz)
+and [Rust binding](https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/src_binding_ptrcomp_sandbox_release_aarch64-apple-darwin.rs)
+from the official OpenAI Codex release, then verify both SHA-256 values against the
+[public pair manifest](https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/rusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.sha256)
+and the table above. Upstream Codex also pins the manifest in
+`third_party/v8/rusty_v8_150_4_0_release_manifests.sha256` and each asset in
+`MODULE.bazel`. The crate's default `denoland/rusty_v8` URL is a different distribution.
+OpenAI's [release CI](https://github.com/openai/codex/actions/runs/30401869566) built
+and published this target pair. Public checksums establish artifact integrity; a signed
+artifact-to-workflow attestation remains unavailable as an additional provenance
+assurance, not a documented upstream build prerequisite or a new consumer release gate.
+From this Tela repository and a separate clean upstream Codex checkout, respectively:
 
 ```sh
 # In the upstream Codex checkout after checking out the pinned commit:

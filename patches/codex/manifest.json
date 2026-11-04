@@ -6,7 +6,7 @@
   "rustToolchain": "1.95.0",
   "patchFile": "model-compaction-mode.patch",
   "patchSha256": "33476f370d250706c3d858c532689ac3e5c09c1d046fd21f99e9679ecf414f77",
-  "status": "experimental-model-switch-tests-verified",
+  "status": "isolated-macos-arm64-engine-and-package-accepted",
   "capability": {
     "modelCatalogField": "compaction_mode",
     "localValue": "local",
@@ -48,9 +48,33 @@
     "v8BindingSha256": "ca5adf0cf89c9a70ad460ae73648b2fe89b74aa113b3cb7f757b6a02b758394f",
     "metadataAndArtifactVerifier": "passed-three-capabilities",
     "isolatedCatalogRefreshAndModelList": "passed-mock-provider",
+    "isolatedCatalogSeedEnabledAndDisabled": true,
+    "isolatedLocalCompaction": {
+      "providerDefaultRemoteCompactionPreserved": true,
+      "selectedLocalModelCompactionAccepted": true,
+      "canonicalTypedSummaryPersisted": true,
+      "canonicalSummaryContentKind": "compaction.summary",
+      "followupResponsesRequestExactMatch": true,
+      "markerOnlyUserTextRejected": true
+    },
+    "isolatedMacosPackage": {
+      "packageBuildExitCode": 0,
+      "nativeEngineAndCodeModeHostIncluded": true,
+      "workspaceFilesIncluded": true,
+      "finalPayloadFingerprintVerified": true,
+      "adHocCodeSignatureVerified": true,
+      "packagedAppServerInitializeAccepted": true,
+      "actualInstall": false,
+      "developerIdSigned": false,
+      "notarized": false,
+      "consumerRelease": false
+    },
     "liveDesktopPickerAcceptance": false,
+    "otherOperatingSystemsVerified": false,
     "packagedOrInstalled": false,
-    "publicV8DistributionProvenanceVerified": false
+    "publicV8DistributionProvenanceVerified": false,
+    "v8OfficialReleaseAssetAndWorkflowMapped": true,
+    "v8SignedArtifactToWorkflowAttestationVerified": false
   },
   "catalogPatchFile": "model-catalog-refresh.patch",
   "catalogPatchSha256": "f23fdd788003c1d610d853409fce3968f97aad13c1c6e73273a635c3ad63d4a1",
