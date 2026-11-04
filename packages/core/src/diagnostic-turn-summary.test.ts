@@ -113,9 +113,8 @@ test('checkpoint rejection keeps its exact reason through the live cycle receipt
  try{
   // Isolated summarizer events have the preparation request, not the Native turn context.
   withDiagnosticContext({request_fingerprint:request,operation_fingerprint:op},()=>{
-   emitDiagnosticEvent('chatgpt_tela_work','checkpoint_json_parse_failed',{body_bytes:9379,json_error_offset:2724});
-   emitDiagnosticEvent('chatgpt_tela_work','checkpoint_response_rejected',{reason_class:'json_invalid'});
-   emitDiagnosticEvent('chatgpt_tela_work','checkpoint_operation_failed',{phase:'completed',completion_observed:true,reason_class:'json_invalid'});
+   emitDiagnosticEvent('chatgpt_tela_work','checkpoint_response_rejected',{reason_class:'receipt_mismatch'});
+   emitDiagnosticEvent('chatgpt_tela_work','checkpoint_operation_failed',{phase:'completed',completion_observed:true,reason_class:'receipt_mismatch'});
   },false);
   withDiagnosticContext({scope_fingerprint:scope,turn_fingerprint:turn,request_fingerprint:request},()=>{
    emitDiagnosticEvent('chatgpt_tela_work','web_preparation_failed',{reason_class:'history_bootstrap_required'});
@@ -123,8 +122,8 @@ test('checkpoint rejection keeps its exact reason through the live cycle receipt
   });
   observer.finish();
   const rows=readFileSync(file,'utf8').trim().split('\n').map(s=>JSON.parse(s));
-  expect(rows.find(x=>x.stage==='native_cycle_summary').first_reason_class).toBe('json_invalid');
-  expect(summarizeTurnDiagnostics(rows).diagnosis.firstFailure).toMatchObject({stage:'checkpoint_response_rejected',reason:'json_invalid'});
+  expect(rows.find(x=>x.stage==='native_cycle_summary').first_reason_class).toBe('receipt_mismatch');
+  expect(summarizeTurnDiagnostics(rows).diagnosis.firstFailure).toMatchObject({stage:'checkpoint_response_rejected',reason:'receipt_mismatch'});
   const diagnostics=join(root,'diagnostics'),incidents=listDiagnosticIncidents(diagnostics);
   expect(incidents.some(item=>JSON.stringify(readDiagnosticIncident(diagnostics,item.ref)).includes('checkpoint_response_rejected'))).toBe(true);
  }finally{observer.finish();if(old===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=old;rmSync(root,{recursive:true,force:true});}
@@ -194,7 +193,7 @@ test('failed and duplicate provider events count one real invocation and its fai
   e('context_checkpoint_provider_invoked',{operation_fingerprint:stage}),
   e('checkpoint_operation_observed',{operation_fingerprint:stage,submission_accepted:true}),
   e('checkpoint_transfer_planned',{operation_fingerprint:stage,model_calls:1}),
-  e('checkpoint_response_rejected',{operation_fingerprint:stage,reason_class:'json_invalid'}),
+  e('checkpoint_response_rejected',{operation_fingerprint:stage,reason_class:'receipt_mismatch'}),
   e('native_checkpoint_model_failed',{operation_fingerprint:stage,duration_ms:34601}),
   e('native_checkpoint_model_failed',{operation_fingerprint:stage,duration_ms:34601})]);
  expect(r.cost.preparationModelCalls).toEqual({observed:1,total:1,complete:true});
