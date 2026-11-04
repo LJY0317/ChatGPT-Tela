@@ -35,14 +35,14 @@ ChatGPT plugin disconnection or deletion is a separate host operation. When the 
 
 Run the install commands from the package being installed. The package directory defaults to the directory containing the launcher; pass `--payload` when using another matching package directory.
 
+On macOS, update from Tela's menu-bar **Check for Updates…** action (when shown), or **Settings → Updates → Check for Updates…**, then follow the Sparkle dialog to **Install and Relaunch** when offered. Tela coordinates active work and running services before relaunch; defer the update if work cannot safely finish, and do not force-quit active sessions. The cross-platform CLI help lists `upgrade`, but both `upgrade --dry-run` and `upgrade --apply` are unsupported on macOS.
+
 ```sh
 chatgpt-tela install --dry-run
 chatgpt-tela install --apply
 chatgpt-tela bootstrap-status
 chatgpt-tela configure --stdin --if-missing < product-config.json
 chatgpt-tela services start chat
-chatgpt-tela upgrade --dry-run --payload <new-package-directory>
-chatgpt-tela upgrade --apply --payload <new-package-directory>
 chatgpt-tela repair --dry-run --payload <matching-package-directory>
 chatgpt-tela repair --apply --payload <matching-package-directory>
 chatgpt-tela uninstall --dry-run
@@ -51,7 +51,14 @@ chatgpt-tela uninstall --dry-run --remove-data
 
 Install first. `bootstrap-status`, `configure`, and service control require the installed package and its ownership receipt. `configure --if-missing` preserves an existing configuration. The `services start chat` command controls the local Chat service only.
 
-Upgrade uses the new package directory and the same review/apply sequence. Repair uses the matching package to restore the installed version.
+For Windows/Linux packaged installations, when a matching new package is available, review and then apply the CLI upgrade from that package:
+
+```sh
+chatgpt-tela upgrade --dry-run --payload <new-package-directory>
+chatgpt-tela upgrade --apply --payload <new-package-directory>
+```
+
+Repair uses the matching package to restore the installed version.
 
 For uninstall, the default keeps configuration, state, browser profiles, and credentials. Add `--remove-data` only when the user explicitly chooses to remove saved Tela data. `uninstall --apply` must run from a separately extracted package copy, not from the installed binary directory; the maintenance window stages the existing external runner for this purpose.
 
