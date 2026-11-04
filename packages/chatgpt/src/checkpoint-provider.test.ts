@@ -147,23 +147,47 @@ test('large prefixes use one source-and-receipt summary submission with no prelo
   expect(f.submitted().physicalContext.activeRequestRevisionId).toBe(f.submitted().physicalContext.headRevisionId);
 });
 
-test('file-only receipt is required in the SAME summary; no missing receipt retry or ACK fallback', async () => {
+test('file-only receipt must appear in the owned plain answer without retry or ACK fallback', async () => {
   const large = {...source, physicalContext: {...source.physicalContext, segments: [source.physicalContext.segments[0]!,
     {type:'revision' as const,revisionId:'r2',kind:'assistant' as const,content:'x'.repeat(250000)}]}};
   for (const change of [
-    (value:string)=>value.replace(/TELA_CONTEXT_ACK ctxr_[a-f0-9]{32}/,'TELA_CONTEXT_ACK ctxr_'+'f'.repeat(32)),
-    (value:string)=>value.split('\n').slice(0,-1).join('\n'),
-    (value:string)=>value+'\ntrailing text',
-    (value:string)=>value+'\n'+value.split('\n').at(-1),
+    (value:string)=>value.replace(/TELA_CONTEXT_ACK ctxr_[a-f0-9]{32}/,'TELA_CONTEXT_ACK ctxr_'+'z'.repeat(32)),
+    (value:string)=>value.replace(/TELA_CONTEXT_ACK ctxr_[a-f0-9]{32}/,''),
   ]) {
     const f=fixture(change);
     await expect(f.provider.createContextCheckpoint(surface,large)).rejects.toThrow('file receipt');
     expect(f.submits()).toBe(1); expect(f.preloads()).toBe(0);
   }
+  for (const change of [
+    (value:string)=>value.slice(value.indexOf('TELA_CONTEXT_ACK ')),
+    (value:string)=>' \r\n'+value.slice(value.indexOf('TELA_CONTEXT_ACK ')),
+  ]) {
+    const f=fixture(change);
+    await expect(f.provider.createContextCheckpoint(surface,large)).rejects.toThrow('checkpoint summary is empty');
+    expect(f.submits()).toBe(1); expect(f.preloads()).toBe(0);
+  }
   const f=fixture(); const result=await f.provider.createContextCheckpoint(surface,large);
-  expect(result.state === 'proven' && result.value.content).toContain('Keep abc');
+  expect(result.state === 'proven' && result.value.content).toBe('Keep abc; result observed; action pending.\n');
   expect(JSON.stringify(f.submitted().physicalContext)).not.toContain(f.submitted().inertSourceAttachment!.receipt);
   expect(f.submitted().inertSourceAttachment!.attachment.contextJson).toBe(serializeChatGptContextAttachment(large.physicalContext));
+});
+
+test('file receipt is removed at any position and multiplicity without changing other summary bytes', async () => {
+  const large = {...source, physicalContext: {...source.physicalContext, segments: [source.physicalContext.segments[0]!,
+    {type:'revision' as const,revisionId:'r2',kind:'assistant' as const,content:'x'.repeat(250000)}]}};
+  const cases: readonly [(value: string) => string, string][] = [
+    [value=>value.replace('\nTELA_CONTEXT_ACK', 'TELA_CONTEXT_ACK')+'\nmore', 'Keep abc; result observed; action pending.\nmore'],
+    [value=>value.replace('\nTELA_CONTEXT_ACK', '\r\nTELA_CONTEXT_ACK')+'\r\n', 'Keep abc; result observed; action pending.\r\n\r\n'],
+    [value=>value+'\n'+value.split('\n').at(-1), 'Keep abc; result observed; action pending.\n\n'],
+    [value=>value.slice(value.indexOf('TELA_CONTEXT_ACK '))+value.slice(0,value.indexOf('TELA_CONTEXT_ACK ')), 'Keep abc; result observed; action pending.\n'],
+    [value=>value.replace('Keep abc; result observed; action pending.', '{"value":"**literal**_\\\\path"}\n다음 작업'), '{"value":"**literal**_\\\\path"}\n다음 작업\n'],
+  ];
+  for (const [change, expected] of cases) {
+    const f=fixture(change);
+    const result=await f.provider.createContextCheckpoint(surface,large);
+    expect(result.state === 'proven' && result.value.content).toBe(expected);
+    expect(f.submits()).toBe(1); expect(f.preloads()).toBe(0);
+  }
 });
 
 test('checkpoint source rebinds media references to the inert summary request without tool authority',async()=>{
