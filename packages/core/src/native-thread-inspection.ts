@@ -659,6 +659,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       "browser_message_prepared", "web_tool_bridge_prepared",
       "compaction_history_source_selected", "compaction_source_observed", "compaction_fit_breakdown"].includes(event.stage)),
     providerFailureEvidence: events.filter(event => ["web_provider_failure_detail_classified",
+      "web_submission_multiple_users_observed",
       "web_lineage_branch_anomaly", "web_turn_observed", "web_execution_exception",
       "web_turn_failed", "web_answer_received", "web_turn_final_observed",
       "native_outcome_committed", "native_response_body_closed", "approval_wait_transition",

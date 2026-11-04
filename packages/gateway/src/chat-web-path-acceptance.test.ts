@@ -95,16 +95,25 @@ describe("Web Chat independent tool path acceptance", () => {
         patch: "*** Begin Patch\n*** Add File: notes.txt\n+created-through-chat\n*** End Patch",
       }));
       expect(readFileSync(join(root, "notes.txt"), "utf8")).toBe("created-through-chat\n");
-      expect((jsonContent(await call("read", {
+      const readback = jsonContent(await call("read", {
         workspace_id: workspace.id, path: "notes.txt",
-      })) as { content: string }).content).toContain("created-through-chat");
+      })) as { content: string };
+      expect(readback.content).toContain("created-through-chat");
       const rows = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const completedRead = rows.find(row => row.stage === "capability_call_complete" && row.capability === "read");
       const returned = rows.find(row => row.stage === "backend_call_complete" && row.kind === "object"
-        && typeof row.request_fingerprint === "string" && typeof row.rpc_fingerprint === "string"
-        && rows.some(child => child.stage === "capability_call_complete" && child.parent_fingerprint === row.request_fingerprint));
+        && row.request_fingerprint === completedRead?.parent_fingerprint);
       const returnedRpc = returned?.rpc_fingerprint;
+      const receivedRead = rows.find(row => row.stage === "mcp_rpc_received"
+        && row.kind === "chat_call" && row.chat_action_class === "read"
+        && row.rpc_fingerprint === returnedRpc);
+      expect(receivedRead).toMatchObject({ connection_fingerprint: expect.any(String),
+        rpc_fingerprint: returnedRpc });
       expect(returned).toMatchObject({ service: "chat", kind: "object", result_bytes: expect.any(Number),
         rpc_fingerprint: expect.any(String), request_fingerprint: expect.any(String) });
+      expect(completedRead).toMatchObject({ result_kind: "object", result_present: true, result_empty: false,
+          result_is_error: false, result_bytes: expect.any(Number) });
+      expect(JSON.stringify(rows)).not.toContain("created-through-chat");
 
       const operationId = randomUUID();
       const command = process.platform === "win32"
@@ -135,9 +144,13 @@ describe("Web Chat independent tool path acceptance", () => {
       expect(extensionless.isError).not.toBe(true);
       expect(extensionless.content).toEqual([{ type: "image", mimeType: "image/png", data: png.toString("base64") }]);
       const delivered = readFileSync(diagnosticFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
-      expect(delivered.find(row => row.stage === "mcp_rpc_emitted" && row.rpc_fingerprint === returnedRpc))
-        .toMatchObject({ delivery: "transport_send_returned", kind: "text",
-          part_count: 1, body_bytes: expect.any(Number), result_bytes: expect.any(Number), error_result: false });
+      expect(delivered.find(row => row.stage === "mcp_rpc_emitted"
+        && row.rpc_fingerprint === returnedRpc))
+        .toMatchObject({ kind: "text", part_count: 1, text_part_count: 1,
+          connection_fingerprint: receivedRead.connection_fingerprint,
+          text_measurement_complete: true, text_bytes: Buffer.byteLength(JSON.stringify(readback)),
+          body_bytes: expect.any(Number), result_bytes: expect.any(Number),
+          error_result: false, delivery: "transport_send_returned" });
       expect(readDiagnosticTail(diagnosticFile).events.find(row => row.stage === "mcp_rpc_emitted"
         && row.rpc_fingerprint === returnedRpc)).toMatchObject({ kind: "text", part_count: 1,
           body_bytes: expect.any(Number), result_bytes: expect.any(Number) });

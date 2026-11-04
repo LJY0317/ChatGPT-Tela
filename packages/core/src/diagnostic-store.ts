@@ -71,6 +71,7 @@ export function isWebContextPlannerSubstage(value: unknown): value is WebContext
 }
 const STRINGS = new Set(["cancellation_source", "observation_failure", "failure_class", "failure_stage", "service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "result_kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "route_class", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "request_role", "browser_response", "next_action", "probe_kind", "auth_state", "entry_class", "removal_cause", "expiry_class", "domain_class", "storage_state", "observation_source", "accepted_observation_source"]);
 const PROJECTION_ENUMS: Readonly<Record<string, readonly string[]>> = {
+  chat_action_class: ["read", "read_many", "other", "unknown"],
   observation_state: ["probable", "ambiguous"],
   observation_evidence_class: WEB_OBSERVATION_DIAGNOSTIC_REASONS,
   response_format: ["sse", "json", "other", "missing"],

@@ -15,7 +15,7 @@ test.each([false,true])('Native MCP projection bounds UTF-8 measurement without 
   expect(result.content).toEqual([{type:'text',text}]);expect(invoked).toBe(1);
   const raw=readFileSync(file,'utf8'),rows=raw.trim().split('\n').map(line=>JSON.parse(line));
   const measurement=rows.find(row=>row.stage==='mcp_native_result_projected');
-  expect(measurement).toMatchObject({operation_fingerprint:diagnosticFingerprint('PRIVATE_CALL'),text_measurement_complete:!large,part_count:1,image_bytes:0});
+  expect(measurement).toMatchObject({operation_fingerprint:diagnosticFingerprint('PRIVATE_CALL'),text_measurement_complete:!large,part_count:1,text_part_count:1,image_part_count:0,resource_part_count:0,structured_present:false,image_bytes:0});
   if(large)expect(measurement.text_bytes).toBeUndefined();else expect(measurement.text_bytes).toBe(Buffer.byteLength(text));
   expect(raw).not.toContain('PRIVATE_');
  }finally{if(previous===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;rmSync(root,{recursive:true,force:true});}

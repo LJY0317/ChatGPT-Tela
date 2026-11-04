@@ -66,6 +66,24 @@ describe("one read-only conversation inspection by exact Native ID", () => {
       expect(JSON.stringify(result)).not.toContain("999");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+  test("exact-turn inspection retains multiple-user structural diagnostic without identifiers", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-multiple-user-evidence-"));
+    const path = join(root, "events.jsonl"), ts = new Date(NOW).toISOString();
+    try {
+      writeFileSync(path, JSON.stringify({ ts, event: "chatgpt_tela_work", stage: "web_submission_multiple_users_observed",
+        scope_fingerprint: diagnosticFingerprint(THREAD), turn_fingerprint: diagnosticFingerprint(TURN),
+        reason_class: "submission_user_turns_multiple", baseline_user_count: 1, current_user_count: 2,
+        candidate_count: 2, retained_baseline_anchor_count: 1,
+        candidate_baseline_anchor_count: 1, candidate_distinct_anchor_count: 2,
+        candidate_missing_anchor_count: 0, user_id: "PRIVATE_USER", raw_text: "PRIVATE_TEXT" }) + "\n");
+      const result = inspectNativeThreadHistoricalEvidence({ threadId: THREAD, turnId: TURN,
+        diagnosticPaths: [path], nowMs: NOW });
+      expect(result.providerFailureEvidence).toEqual([expect.objectContaining({
+        stage: "web_submission_multiple_users_observed", candidate_baseline_anchor_count: 1,
+        candidate_distinct_anchor_count: 2, candidate_missing_anchor_count: 0 })]);
+      expect(JSON.stringify(result)).not.toContain("PRIVATE");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("failure and compaction breakdown survive filtered incident readback", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-reproduction-evidence-"));
     const path = join(root, "events.jsonl"), ts = new Date(NOW).toISOString();

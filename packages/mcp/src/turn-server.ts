@@ -51,6 +51,10 @@ export function observeNativeMcpResultProjection(
   emitDiagnosticEvent("chatgpt_tela_work", "mcp_native_result_projected", {
     ...(textMeasured ? { text_bytes: textBytes } : {}), text_characters: textCharacters,
     text_measurement_complete: textMeasured, part_count: mapped.content.length,
+    text_part_count: mapped.content.filter(part => part.type === "text").length,
+    image_part_count: mapped.content.filter(part => part.type === "image").length,
+    resource_part_count: mapped.content.filter(part => part.type === "resource").length,
+    structured_present: false,
     image_bytes: mapped.uniqueImageBytes, error_result_reported: result.isError === true,
     kind: mapped.content.length === 0 ? "empty" : mapped.content.every(part => part.type === "text") ? "text" : "mixed",
   });

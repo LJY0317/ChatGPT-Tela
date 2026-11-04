@@ -1717,6 +1717,22 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           emitDiagnosticEvent("chatgpt_tela_work", "web_turn_acceptance_observed", { ...fields, witness_count: witnessCount });
         }
         if (newUserTurns.length > 1) {
+          // Count stable keys and logical lineage separately. A renderer remount can
+          // change a pre-existing turn's key and make one send look like two sends.
+          // This receipt is diagnostic only: no ambiguous submission is adopted.
+          const baselineUsers = filled.turns.filter(turn => turn.role === "user");
+          const currentUsers = snapshot.turns.filter(turn => turn.role === "user");
+          const baselineAnchors = new Set(baselineUsers.flatMap(turn => turn.lineageAnchor ? [turn.lineageAnchor] : []));
+          emitDiagnosticEvent("chatgpt_tela_work", "web_submission_multiple_users_observed", {
+            reason_class: "submission_user_turns_multiple",
+            baseline_user_count: baselineUsers.length,
+            current_user_count: currentUsers.length,
+            candidate_count: newUserTurns.length,
+            retained_baseline_anchor_count: currentUsers.filter(turn => !!turn.lineageAnchor && baselineAnchors.has(turn.lineageAnchor)).length,
+            candidate_baseline_anchor_count: newUserTurns.filter(turn => !!turn.lineageAnchor && baselineAnchors.has(turn.lineageAnchor)).length,
+            candidate_distinct_anchor_count: new Set(newUserTurns.flatMap(turn => turn.lineageAnchor ? [turn.lineageAnchor] : [])).size,
+            candidate_missing_anchor_count: newUserTurns.filter(turn => !turn.lineageAnchor).length,
+          });
           return {
             state: "ambiguous",
             candidates: Object.freeze(newUserTurns.map(turn => ({

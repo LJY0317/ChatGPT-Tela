@@ -2033,6 +2033,40 @@ describe("ChatGPT semantic provider", () => {
     }
   });
 
+  test.each(["remounted-baseline-key", "two-distinct-new-users"] as const)(
+    "multiple-user diagnostic distinguishes %s without accepting an ambiguous send", async scenario => {
+      const driver = new FixtureDriver(fixture("ready-new-chat"));
+      driver.current = { ...driver.current, turns: [{ key: "old-key", role: "user", lineageAnchor: "old-anchor" }] };
+      const surface = await leaseFor(driver);
+      const provider = new ChatGptSemanticProvider();
+      const diagnostics: Record<string, string | number | boolean>[] = [];
+      const stop = observeDiagnosticEvents(event => {
+        if (event.stage === "web_submission_multiple_users_observed") diagnostics.push(event);
+      });
+      try {
+        const submitting = provider.submitTurn(surface.lease, request());
+        while (driver.current.revision === "r1") await Promise.resolve();
+        const newUser = { key: "new-key", role: "user" as const, lineageAnchor: "new-anchor",
+          ...(driver.current.composers[0]!.textFingerprint
+            ? { contentFingerprint: driver.current.composers[0]!.textFingerprint } : {}) };
+        driver.queued.push({ ...driver.current, revision: "ambiguous-users", turns: scenario === "remounted-baseline-key"
+          ? [{ key: "remounted-key", role: "user", lineageAnchor: "old-anchor" }, newUser]
+          : [{ key: "old-key", role: "user", lineageAnchor: "old-anchor" }, newUser,
+            { ...newUser, key: "second-new-key", lineageAnchor: "second-anchor" }] });
+        const observed = await submitting;
+        expect(observed.state).toBe("ambiguous");
+        expect(driver.activated).toHaveLength(1);
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]).toMatchObject({ reason_class: "submission_user_turns_multiple",
+          baseline_user_count: 1, current_user_count: scenario === "remounted-baseline-key" ? 2 : 3,
+          candidate_count: 2,
+          retained_baseline_anchor_count: 1, candidate_baseline_anchor_count: scenario === "remounted-baseline-key" ? 1 : 0,
+          candidate_distinct_anchor_count: 2, candidate_missing_anchor_count: 0 });
+        expect(JSON.stringify(diagnostics)).not.toContain("old-anchor");
+        expect(JSON.stringify(diagnostics)).not.toContain("new-key");
+      } finally { stop?.(); await surface.host.close(); }
+    });
+
   test("exact MCP result handoff must be armed before post-tool continuation is proven", async () => {
     const driver = new FixtureDriver(fixture("ready-new-chat"));
     const surface = await leaseFor(driver);

@@ -135,6 +135,12 @@ function resultEvidence(result: NativeToolResult, goalTool: boolean): Record<str
     body_present: body !== undefined && body !== null && body !== "",
     body_size_known: false,
   };
+  if (Array.isArray(body)) {
+    fields.part_count = body.length;
+    fields.text_part_count = body.filter(part => part?.type === "text" || part?.type === "output_text").length;
+    fields.image_part_count = body.filter(part => part?.type === "image").length;
+    fields.resource_part_count = body.filter(part => part?.type === "resource").length;
+  }
   try {
     const serialized = typeof body === "string" ? body : JSON.stringify(body);
     if (serialized !== undefined) {

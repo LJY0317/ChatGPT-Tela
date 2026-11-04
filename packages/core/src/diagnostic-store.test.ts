@@ -13,6 +13,19 @@ function fixture() { const root = mkdtempSync(join(tmpdir(),"tela-diagnostics-te
 afterEach(async () => { await new Promise<void>(resolve => setImmediate(resolve)); if (original) process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=original; else delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE; for (const root of directories.splice(0)) rmSync(root,{recursive:true,force:true}); });
 const fp = (value: string) => diagnosticFingerprint(value);
 const event = (stage: string, extra: Record<string,unknown> = {}, at = "2026-10-05T00:00:00.000Z") => structuralDiagnosticEvent({ts:at,event:"chatgpt_tela_test",stage,...extra})!;
+test("Chat read action classification survives structural diagnostic storage with closed values", () => {
+  for (const value of ["read", "read_many", "other", "unknown"]) {
+    expect(event("mcp_rpc_received", { chat_action_class: value }).chat_action_class).toBe(value);
+  }
+  for (const value of ["private_path", "read:private", "", null, true, 1]) {
+    expect(event("mcp_rpc_received", { chat_action_class: value })).not.toHaveProperty("chat_action_class");
+  }
+  const file = join(fixture(), "events.jsonl");
+  writeFileSync(file, JSON.stringify({ ts: "2026-10-05T00:00:00.000Z", event: "chatgpt_tela_mcp",
+    stage: "mcp_rpc_received", chat_action_class: "read_many", secret: "private source" }) + "\n");
+  expect(readDiagnosticTail(file).events[0]).toMatchObject({ chat_action_class: "read_many" });
+  expect(JSON.stringify(readDiagnosticTail(file))).not.toContain("private source");
+});
 test("provider restriction classification survives structural projection without arbitrary error text", () => {
   expect(event("web_delegation_failed", { provider_reason: "unusual_activity" }).provider_reason).toBe("unusual_activity");
   expect(event("web_delegation_failed", { provider_reason: "private_error_text" })).not.toHaveProperty("provider_reason");

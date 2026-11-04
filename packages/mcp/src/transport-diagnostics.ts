@@ -35,14 +35,37 @@ export function observeMcpEnvelope(value: unknown, connection: string | undefine
       if (row.method === "tools/call") {
         const name = row.params?.name;
         fields.kind = typeof name === "string" && Object.hasOwn(tools, name) ? tools[name]! : "other";
+        if (fields.kind === "chat_call") {
+          const action = row.params?.arguments?.capability;
+          // Only these closed classes identify Chat file reads; never record
+          // arbitrary capability names, paths or argument values.
+          fields.chat_action_class = action === "read" || action === "read_many" ? action
+            : typeof action === "string" ? "other" : "unknown";
+        }
       }
     } else {
       fields.delivery = "transport_send_returned";
       fields.error_result = row.error !== undefined || row.result?.isError === true;
       if (Number.isSafeInteger(row.error?.code)) fields.error_code = row.error.code;
       const content = row.result?.content;
+      fields.structured_present = row.result != null
+        && typeof row.result === "object" && Object.hasOwn(row.result, "structuredContent");
       if (Array.isArray(content)) {
         fields.part_count = content.length;
+        fields.text_part_count = content.filter(item => item?.type === "text").length;
+        fields.image_part_count = content.filter(item => item?.type === "image").length;
+        fields.resource_part_count = content.filter(item => item?.type === "resource").length;
+        let textBytes = 0, textCharacters = 0;
+        let textMeasured = true;
+        for (const item of content) if (item?.type === "text") {
+          if (typeof item.text !== "string") { textMeasured = false; break; }
+          textCharacters += item.text.length;
+          if (textCharacters > 1_048_576) { textMeasured = false; break; }
+          textBytes += Buffer.byteLength(item.text);
+        }
+        fields.text_measurement_complete = textMeasured;
+        fields.text_characters = textCharacters;
+        if (textMeasured) fields.text_bytes = textBytes;
         fields.kind = content.length === 0 ? "empty"
           : content.every(item => item?.type === "text") ? "text"
           : content.every(item => item?.type === "image") ? "image"
