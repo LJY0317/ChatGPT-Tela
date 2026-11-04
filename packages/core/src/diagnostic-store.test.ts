@@ -17,6 +17,25 @@ test("provider restriction classification survives structural projection without
   expect(event("web_delegation_failed", { provider_reason: "unusual_activity" }).provider_reason).toBe("unusual_activity");
   expect(event("web_delegation_failed", { provider_reason: "private_error_text" })).not.toHaveProperty("provider_reason");
 });
+test("observation provenance survives structural event and incident readback with closed values", () => {
+  const root = fixture(), center = join(root, "diagnostics"), file = join(root, "events.jsonl");
+  const ts = new Date().toISOString();
+  writeFileSync(file, JSON.stringify({ ts, event: "chatgpt_tela_work", stage: "web_observation_failed",
+    observation_state: "probable", observation_evidence_class: "composer_readback_unproven",
+    observation_evidence_count: 20, prompt: "private prompt", provider_detail: "private provider detail" }) + "\n");
+  const row = readDiagnosticTail(file).events.at(-1)!;
+  expect(row).toMatchObject({ observation_state: "probable", observation_evidence_class: "composer_readback_unproven",
+    observation_evidence_count: 20 });
+  expect(JSON.stringify(row)).not.toContain("private");
+  const ref = writeDiagnosticIncident(center, { stage: row.stage, observedAt: ts, timeline: [row] });
+  expect(readDiagnosticIncident(center, ref)).toMatchObject({ timeline: [expect.objectContaining({
+    observation_state: "probable", observation_evidence_class: "composer_readback_unproven",
+    observation_evidence_count: 20,
+  })] });
+  const invalid = event("web_observation_failed", { observation_state: "private", observation_evidence_class: "private browser detail" });
+  expect(invalid).not.toHaveProperty("observation_state");
+  expect(invalid).not.toHaveProperty("observation_evidence_class");
+});
 test("canonical evidence survives log rotation with common window, privacy, origin and duplicate filtering", () => {
   const root = fixture(), center = join(root, "diagnostics"), path = join(root, "events.jsonl");
   const at = Date.now(), ts = new Date(at).toISOString();
@@ -195,6 +214,63 @@ test("private capture is off, expires without polling, and pairs are bounded", (
   const incident=JSON.stringify(readDiagnosticIncident(root,ref)); expect(incident).toContain("privateArtifacts"); expect(incident).not.toContain("private conversation");
   writeFileSync(join(root,"capture-policy.json"),JSON.stringify({owner:"chatgpt-tela-diagnostics-v1",enabledUntil:Date.now()-1})); expect(capture()).toBeUndefined();
 });
+test("normal producer order retains exact capture receipt and availability after pruning", () => {
+  const root = fixture(); setPrivateDiagnosticCapture(root, "until-disabled");
+  const operation = fp("availability-one-operation");
+  const older = writePrivateDiagnosticArtifact(root, { kind: "jpg", bytes: Buffer.from("older screen"), operationFingerprint: operation })!;
+  const previous = new Date(Date.now() - 120000);
+  for (const suffix of [".jpg", ".meta.json"]) utimesSync(join(root, "private", older + suffix), previous, previous);
+  const current = writePrivateDiagnosticArtifact(root, { kind: "html", bytes: Buffer.from("current screen"), operationFingerprint: operation })!;
+  const eventAt = new Date().toISOString();
+  const ref = writeDiagnosticIncident(root, { stage: "web_turn_failed", observedAt: eventAt,
+    timeline: [event("private_capture_recorded", { operation_fingerprint: operation }, eventAt),
+      event("web_turn_failed", { operation_fingerprint: operation }, eventAt)], capturedArtifactRefs: [current] });
+  const stored = readDiagnosticIncident(root, ref) as any;
+  expect(stored.privateArtifacts.map((item: any) => item.ref)).toEqual([current]);
+  expect(stored.privateArtifactCount).toBe(1);
+  expect(stored.availablePrivateArtifactCount).toBe(1);
+  expect(listDiagnosticIncidents(root, true)[0]!.availablePrivateArtifactCount).toBe(1);
+
+  // Simulate normal age eviction with the existing retention pass. No live evidence is touched.
+  const expired = new Date(Date.now() - DIAGNOSTIC_LIMITS.privateAgeMs - 60000);
+  for (const suffix of [".html", ".meta.json"]) utimesSync(join(root, "private", current + suffix), expired, expired);
+  listDiagnosticIncidents(root);
+  const inspected = readDiagnosticIncident(root, ref) as any;
+  expect(inspected.privateArtifactCount).toBe(1);
+  expect(inspected.privateArtifacts[0].ref).toBe(current);
+  expect(inspected.availablePrivateArtifactCount).toBe(0);
+  expect(inspected.availablePrivateArtifacts).toEqual([]);
+  expect(listDiagnosticIncidents(root, true)[0]!.availablePrivateArtifactCount).toBe(0);
+  expect(readdirSync(join(root, "private"))).not.toContain(current + ".html");
+  expect(readdirSync(join(root, "private"))).toContain(older + ".jpg");
+});
+
+test("prior capture is excluded despite matching operation and earlier event", () => {
+  const root=fixture(); setPrivateDiagnosticCapture(root,"until-disabled");
+  const operation=fp("prior-capture");
+  const older=writePrivateDiagnosticArtifact(root,{kind:"jpg",bytes:Buffer.from("earlier"),operationFingerprint:operation})!;
+  const current=writePrivateDiagnosticArtifact(root,{kind:"html",bytes:Buffer.from("current"),operationFingerprint:operation})!;
+  const at=new Date().toISOString();
+  const ref=writeDiagnosticIncident(root,{stage:"private_capture_recorded",observedAt:at,
+    timeline:[event("private_capture_recorded",{operation_fingerprint:operation},new Date(Date.now()-60000).toISOString()),
+      event("private_capture_recorded",{operation_fingerprint:operation},at)],capturedArtifactRefs:[current]});
+  expect((readDiagnosticIncident(root,ref) as any).privateArtifacts.map((a:any)=>a.ref)).toEqual([current]);
+  expect(readdirSync(join(root,"private"))).toContain(older+".jpg");
+});
+
+test("same-operation other capture is not attributed to another incident", () => {
+  const root=fixture(); setPrivateDiagnosticCapture(root,"until-disabled");
+  const operation=fp("shared-operation");
+  const first=writePrivateDiagnosticArtifact(root,{kind:"html",bytes:Buffer.from("first"),operationFingerprint:operation})!;
+  const second=writePrivateDiagnosticArtifact(root,{kind:"jpg",bytes:Buffer.from("second"),operationFingerprint:operation})!;
+  const at=new Date().toISOString();
+  const timeline=[event("private_capture_recorded",{operation_fingerprint:operation},at)];
+  const a=writeDiagnosticIncident(root,{stage:"first_capture",observedAt:at,timeline,capturedArtifactRefs:[first]});
+  const b=writeDiagnosticIncident(root,{stage:"second_capture",observedAt:at,timeline,capturedArtifactRefs:[second]});
+  expect((readDiagnosticIncident(root,a) as any).privateArtifacts.map((v:any)=>v.ref)).toEqual([first]);
+  expect((readDiagnosticIncident(root,b) as any).privateArtifacts.map((v:any)=>v.ref)).toEqual([second]);
+});
+
 test("JSON private artifacts resolve their existing metadata pair during retention scans", () => {
   const root=fixture(); setPrivateDiagnosticCapture(root,"until-disabled");
   const ref=writePrivateDiagnosticArtifact(root,{kind:"json",bytes:Buffer.from("private JSON evidence"),operationFingerprint:fp("json-artifact")});

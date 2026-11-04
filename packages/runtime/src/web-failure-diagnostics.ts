@@ -1,4 +1,4 @@
-import { webContextFitFailureReason, webRetainedContextFailureReason, webSubmissionFailureReason } from "@chatgpt-tela/core";
+import { WebObservationUnproven, webContextFitFailureReason, webObservationDiagnostic, webObservationFailureReason, webRetainedContextFailureReason, webSubmissionFailureReason } from "@chatgpt-tela/core";
 
 /** Classify only owned failure boundaries; exception prose and identifiers never leave this adapter. */
 export function webExecutionFailureFields(error: unknown, signal?: AbortSignal) {
@@ -17,10 +17,9 @@ export function webExecutionFailureFields(error: unknown, signal?: AbortSignal) 
     "ChatGPT accepted user identity changed during the active Web turn": "accepted_user_changed",
     "ChatGPT assistant parent does not prove the accepted request identity": "assistant_parent_unproven",
     "ChatGPT renderer rekey does not prove the accepted request identity": "renderer_rekey_unproven",
-    "consequential action requires proven state; observed probable": "observation_probable",
-    "consequential action requires proven state; observed ambiguous": "observation_ambiguous",
   };
   const kind = (value: unknown) => {
+    if (value instanceof WebObservationUnproven) return webObservationFailureReason(value) ?? "unclassified";
     const fitReason = webContextFitFailureReason(value);
     if (fitReason) return fitReason;
     const submissionReason = webSubmissionFailureReason(value);
@@ -36,6 +35,13 @@ export function webExecutionFailureFields(error: unknown, signal?: AbortSignal) 
     if (value.message.startsWith("unexpected Web continuation from turn phase ")) return "continuation_phase_mismatch";
     return "unclassified";
   };
-  return { reason_class: kind(error), owner_aborted: signal?.aborted === true,
-    abort_reason_class: signal?.aborted ? kind(signal.reason) : "none" };
+  try {
+    const observation = error instanceof WebObservationUnproven ? webObservationDiagnostic(error) : undefined;
+    return { reason_class: observation ? `observation_${observation.state}` : kind(error), owner_aborted: signal?.aborted === true,
+      abort_reason_class: signal?.aborted ? kind(signal.reason) : "none",
+      ...(observation ? { observation_state: observation.state, observation_evidence_class: observation.reason,
+        observation_evidence_count: observation.evidenceCount } : {}) };
+  } catch {
+    return { reason_class: "unclassified", owner_aborted: signal?.aborted === true, abort_reason_class: "unclassified" };
+  }
 }

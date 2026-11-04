@@ -1,4 +1,5 @@
 import type { BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import { WebObservationUnproven, type WebObservationDiagnosticReason } from "@chatgpt-tela/core";
 export { WebCheckpointOperationClosed, WebCheckpointResponseRejected } from "./checkpoint-settlement";
 import type {
   ChatGptContextAttachment,
@@ -7,14 +8,19 @@ import type {
 
 export type ProofState = "proven" | "probable" | "ambiguous";
 
+export type SemanticObservationReason = WebObservationDiagnosticReason;
+
 export type SemanticObservation<T> =
   | { readonly state: "proven"; readonly value: T; readonly evidence: readonly string[] }
-  | { readonly state: "probable"; readonly value: T; readonly evidence: readonly string[] }
-  | { readonly state: "ambiguous"; readonly candidates: readonly T[]; readonly evidence: readonly string[] };
+  | { readonly state: "probable"; readonly value: T; readonly evidence: readonly string[]; readonly reason?: SemanticObservationReason }
+  | { readonly state: "ambiguous"; readonly candidates: readonly T[]; readonly evidence: readonly string[]; readonly reason?: SemanticObservationReason };
 
 export function requireProven<T>(observation: SemanticObservation<T>): T {
   if (observation.state !== "proven") {
-    throw new Error(`consequential action requires proven state; observed ${observation.state}`);
+    const reason = observation.reason ?? "unknown";
+    throw new WebObservationUnproven(reason,
+      `consequential action requires proven state; observed ${observation.state}`,
+      { state: observation.state, evidenceCount: observation.evidence.length });
   }
   return observation.value;
 }

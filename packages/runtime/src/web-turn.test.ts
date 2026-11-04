@@ -209,6 +209,31 @@ describe("browser turn runner", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+  test("throwing observation code getter cannot replace the original Web turn failure", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "tela-observation-code-getter-"));
+    const file = join(directory, "events.jsonl");
+    const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+    const failure = new WebObservationUnproven("unknown", "original proof failure");
+    Object.defineProperty(failure, "code", { get() { throw new Error("private code getter"); } });
+    try {
+      const released: string[] = [];
+      const fixture = provider(new EventQueue());
+      const wrapped: WebConversationProvider = { ...fixture, async waitForTurnEvent() { throw failure; } };
+      await expect(runBrowserTurn({ browserHost: browserHost(released), provider: wrapped,
+        channel: new RuntimeTurnChannel(binding()), nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext }))
+        .rejects.toBe(failure);
+      const events = readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(events.find(event => event.stage === "web_execution_exception")).toMatchObject({
+        reason_class: "unclassified", boundary: "event_wait", accepted: true,
+      });
+      expect(released).toEqual(["surface-1"]);
+    } finally {
+      if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
   test("a real submission needs no separate preflight readiness mutation", async () => {
     const events = new EventQueue();
     events.push({ kind: "completed", providerTurnId: "web-turn-1", answer: "done" });

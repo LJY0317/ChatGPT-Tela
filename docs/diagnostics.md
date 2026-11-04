@@ -471,6 +471,15 @@ Tela logs directory contains `diagnostics/START-HERE.md`, a rebuildable `INDEX.j
 `incidents/`, and separately protected `private/`. No reference checkout is a runtime dependency.
 Source development uses `bun run cli` in place of `chatgpt-tela`.
 
+Incident `privateArtifactCount` and `privateArtifacts` are historical capture references.
+`availablePrivateArtifactCount` and `availablePrivateArtifacts` are checked against
+the currently owned payload/metadata pairs when listing or inspecting. An older capture
+on the same operation does not establish evidence for a newer incident; producers
+pass exact captured artifact references to incident records. Legacy events without
+an exact capture receipt cannot establish incident-specific artifact ownership. The 7-day/64 MiB
+private retention may remove previously captured files before an incident expires.
+A retained reference is not a downloadable artifact or proof of present availability.
+
 To align local evidence with something you saw:
 
 ```sh

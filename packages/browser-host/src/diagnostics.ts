@@ -185,10 +185,11 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_pick
     }
     if (!enabled || snapshot.capture_safe!==true) return;
     let retained=0, omitted=0;
+    const capturedArtifactRefs: string[]=[];
     // A stuck delivery boundary must not lose its renderer evidence to routine tool traces.
     // Reuse the existing failure-priority retention, with the same byte/age budget.
     const failure = (reason === "completion_deferred" || reason === "identity_pending") ? { evidenceClass: "failure" as const } : {};
-    const record=(ref: string | undefined)=>{ if(ref) retained++; else omitted++; };
+    const record=(ref: string | undefined)=>{ if(ref) {retained++; capturedArtifactRefs.push(ref);} else omitted++; };
     if (typeof snapshot.html==="string") record(writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.html),operationFingerprint:operation,captureScope:"document", ...failure }));
     if (typeof snapshot.focus_html==="string") record(writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.focus_html),operationFingerprint:operation,captureScope:"latest_turn_shell", ...failure }));
     const preview=surface.capability(BROWSER_READ_ONLY_PREVIEW);
@@ -199,7 +200,7 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_pick
     const stage=retained ? "private_capture_recorded" : "private_capture_omitted";
     emitDiagnosticEvent("chatgpt_tela_browser",stage,{...fields,retained_count:retained,omitted_count:omitted});
     const row=structuralDiagnosticEvent({ ts:new Date().toISOString(), event:"chatgpt_tela_browser", stage, operation_fingerprint:operation, ...fields, retained_count:retained, omitted_count:omitted });
-    if (row && !controller.signal.aborted) writeDiagnosticIncident(root,{stage:row.stage,observedAt:row.ts,timeline:[row]});
+    if (row && !controller.signal.aborted) writeDiagnosticIncident(root,{stage:row.stage,observedAt:row.ts,timeline:[row],capturedArtifactRefs});
   };
   try {
     await Promise.race([run(),new Promise<void>(resolve=> { onAbort=()=>resolve(); controller.signal.addEventListener("abort",onAbort,{once:true}); })]);

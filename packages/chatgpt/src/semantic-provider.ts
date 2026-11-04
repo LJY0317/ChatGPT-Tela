@@ -40,6 +40,7 @@ import type {
   WebTurnRequest,
   WebTurnState,
   WebApprovalWaitProjection,
+  SemanticObservationReason,
 } from "./index";
 import { isChatGptTemporaryChatUrl, isChatGptProvisionalConversationUrl } from "./session";
 
@@ -731,6 +732,7 @@ function stateFromSnapshot(
   const assistants = lineage.assistants;
   if (lineage.identityPending) return {
     state: "probable", value: { providerTurnId: tracked.handle.providerTurnId, phase: "accepted" },
+    reason: "accepted_identity_unobserved",
     evidence: evidence("accepted request retained; current renderer does not expose its user identity"),
   };
   if (lineage.ambiguous) {
@@ -740,6 +742,7 @@ function stateFromSnapshot(
         providerTurnId: tracked.handle.providerTurnId,
         phase: assistant.phase === "complete" ? "completed" as const : "continuing" as const,
       }))),
+      reason: "assistant_lineages_multiple",
       evidence: evidence("multiple new assistant lineages appeared after one accepted ChatGPT turn"),
     };
   }
@@ -750,6 +753,7 @@ function stateFromSnapshot(
         providerTurnId: tracked.handle.providerTurnId,
         phase: assistant.phase === "complete" ? "completed" as const : "continuing" as const,
       }))),
+      reason: "assistant_descendants_multiple",
       evidence: evidence("multiple assistant descendants for one accepted user turn"),
     };
   }
@@ -935,6 +939,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       return {
         state: "probable",
         value: { observed: new Set<string>() },
+        reason: hydrated.timedOut ? "composer_readiness_deadline" : "composer_unavailable",
         evidence: evidence(
           hydrated.timedOut
             ? "no visible editable ChatGPT-owned composer before readiness deadline"
@@ -948,6 +953,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         candidates: Object.freeze(composers.map(composer => ({
           observed: new Set([`composer:${composer.key}`]),
         }))),
+        reason: "composer_multiple",
         evidence: evidence("multiple visible editable ChatGPT-owned composers"),
       };
     }
@@ -961,6 +967,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       return {
         state: "probable",
         value: { observed: new Set(["composer"]) },
+        reason: settled.timedOut ? "composer_draft_not_settled" : "composer_existing_draft",
         evidence: evidence(
           settled.timedOut
             ? "composer retained a non-empty draft after hydration settle deadline"
@@ -976,6 +983,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       return {
         state: "probable",
         value: { observed: new Set(["composer"]) },
+        reason: "composer_connector_retained",
         evidence: evidence("composer retains a selected connector from prior browser state"),
       };
     }
@@ -1178,6 +1186,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             attachmentSha256: request.attachment.sha256,
             providerOperationId: turn.key,
           }))),
+          reason: "context_user_turns_multiple",
           evidence: evidence("multiple new user turns appeared after one inert context preload send"),
         };
       }
@@ -1212,6 +1221,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
               attachmentSha256: request.attachment.sha256,
               providerOperationId: parent,
             }))),
+            reason: "context_assistant_lineages_multiple",
             evidence: evidence("multiple assistant lineages appeared after the context preload"),
           };
         }
@@ -1231,6 +1241,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             attachmentSha256: request.attachment.sha256,
             providerOperationId: assistant.key,
           }))),
+          reason: "context_assistant_descendants_multiple",
           evidence: evidence("multiple assistant descendants appeared after the context preload"),
         };
       }
@@ -1273,6 +1284,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           return {
             state: "probable",
             value: result,
+            reason: "context_attachment_receipt_unverified",
             evidence: evidence("context attachment assistant completed without the exact file-only receipt"),
           };
         }
@@ -1362,6 +1374,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     };
     const probableBeforeSend = async (
       revision: string,
+      reason: SemanticObservationReason,
       detail: string,
     ): Promise<SemanticObservation<WebTurnHandle>> => {
       await cleanupPreparedComposer();
@@ -1373,6 +1386,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           webEpochId: request.webEpochId,
           providerTurnId: `unaccepted:${revision}`,
         },
+        reason,
         evidence: evidence(detail),
       };
     };
@@ -1515,6 +1529,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         if (filledComposer?.key === composer.key && filledComposer.textLength > 0 && !exactReadback) {
           return await probableBeforeSend(
             filled.revision,
+            "composer_readback_unproven",
             "composer readback did not prove the exact prepared payload",
           );
         }
@@ -1536,6 +1551,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           if (settle.timeout.aborted) {
             return await probableBeforeSend(
               filled.revision,
+              exactReadback ? "send_control_unavailable" : "composer_readback_deadline",
               exactReadback
                 ? "send control was not uniquely enabled after exact composer readback before submit deadline"
                 : "composer readback did not prove the exact prepared payload before submit deadline",
@@ -1547,6 +1563,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       if (baselineSendKey && sendAfterFill.key !== baselineSendKey) {
         return await probableBeforeSend(
           filled.revision,
+          "send_control_identity_changed",
           "send control identity changed after exact composer readback",
         );
       }
@@ -1708,6 +1725,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
               webEpochId: request.webEpochId,
               providerTurnId: turn.key,
             }))),
+            reason: "submission_user_turns_multiple",
             evidence: evidence("multiple new user turns appeared after one exact send activation"),
           };
         }
@@ -1876,6 +1894,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           providerTurnId: tracked.handle.providerTurnId,
           callId,
         }))),
+        reason: "tool_result_assistant_lineages_multiple",
         evidence: evidence("multiple new assistant lineages exist at the exact tool-result boundary"),
       };
     }
@@ -1886,6 +1905,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           providerTurnId: tracked.handle.providerTurnId,
           callId,
         }))),
+        reason: "tool_result_assistant_descendants_multiple",
         evidence: evidence("multiple assistant descendants exist at the exact tool-result boundary"),
       };
     }
@@ -1900,6 +1920,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       return {
         state: "probable",
         value: { providerTurnId: tracked.handle.providerTurnId, callId },
+        reason: assistant!.phase === "failed" ? "assistant_already_failed" : "assistant_already_complete",
         evidence: evidence(`assistant was already ${assistant!.phase} before MCP result handoff`),
       };
     }
@@ -2066,6 +2087,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             kind: "continuing" as const,
             providerTurnId: tracked.handle.providerTurnId,
           }))),
+          reason: "assistant_lineages_multiple",
           evidence: evidence("multiple new assistant lineages appeared after one accepted ChatGPT turn"),
         };
       }
@@ -2076,6 +2098,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             kind: "continuing" as const,
             providerTurnId: tracked.handle.providerTurnId,
           }))),
+          reason: "assistant_descendants_multiple",
           evidence: evidence("multiple assistant descendants for one accepted user turn"),
         };
       }

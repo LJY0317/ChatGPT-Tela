@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { WEB_OBSERVATION_DIAGNOSTIC_REASONS } from "./web-observation-error";
 
 const LOG_FILE_BYTES = 4 * 1024 * 1024;
 const LOG_TOTAL_BYTES = 32 * 1024 * 1024;
@@ -70,6 +71,8 @@ export function isWebContextPlannerSubstage(value: unknown): value is WebContext
 }
 const STRINGS = new Set(["cancellation_source", "observation_failure", "failure_class", "failure_stage", "service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "result_kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "route_class", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "request_role", "browser_response", "next_action", "probe_kind", "auth_state", "entry_class", "removal_cause", "expiry_class", "domain_class", "storage_state", "observation_source", "accepted_observation_source"]);
 const PROJECTION_ENUMS: Readonly<Record<string, readonly string[]>> = {
+  observation_state: ["probable", "ambiguous"],
+  observation_evidence_class: WEB_OBSERVATION_DIAGNOSTIC_REASONS,
   response_format: ["sse", "json", "other", "missing"],
   provider_reason: ["unusual_activity"],
   input_container_kind: ["array", "string", "absent", "null", "record", "scalar"],
@@ -405,15 +408,56 @@ export function listDiagnosticIncidents(root: string, readOnly = false) {
   } else ownedRoot(resolve(root));
   const incidents = files(root,"incidents");
   const kept = readOnly ? new Set(incidents.map(item => item.name)) : prune(root,"incidents", Date.now(), incidents);
-  if (!readOnly) prune(root,"private");
+  const privateEntries = files(root,"private");
+  const retainedPrivate = readOnly ? undefined : prune(root,"private",Date.now(),privateEntries);
+  const currentPrivate = retainedPrivate ? privateEntries.filter(item => retainedPrivate.has(item.name)) : privateEntries;
+  const available = availablePrivateInventory(currentPrivate);
   const records = incidents.filter(item => kept.has(item.name)).flatMap(item => {
     if (item.bytes > 128 * 1024) return [];
     try { const record = item.proof;
-      return record.owner === OWNER && record.schemaVersion === 1 ? [{ ref: item.name.replace(/\.json$/,""), recordedAt: record.recordedAt, observedAt: record.observedAt, stage: record.stage, symptom: record.hostReported?.symptom ?? "unknown", privateArtifactCount: record.privateArtifactCount ?? 0, occurrences: record.occurrences ?? 1, firstObservedAt: record.firstObservedAt ?? record.observedAt }] : [];
+      return record.owner === OWNER && record.schemaVersion === 1 ? [{ ref: item.name.replace(/\.json$/,""), recordedAt: record.recordedAt, observedAt: record.observedAt, stage: record.stage, symptom: record.hostReported?.symptom ?? "unknown", privateArtifactCount: record.privateArtifactCount ?? 0, availablePrivateArtifactCount: availablePrivateArtifacts(root, record.privateArtifacts, available).length, occurrences: record.occurrences ?? 1, firstObservedAt: record.firstObservedAt ?? record.observedAt }] : [];
     } catch { return []; }
   });
   if (!readOnly) atomic(join(root,"INDEX.json"), { owner: OWNER, schemaVersion: 1, generatedAt: new Date().toISOString(), entryPoint: "START-HERE.md", retention: DIAGNOSTIC_LIMITS, incidents: records });
   return records;
+}
+type PrivateArtifactReference = { ref: string; kind: "html" | "jpg" | "json"; bytes: number; privacy: "private" };
+/** Reuse the existing retention scan's validated owned entries for INDEX availability. */
+function availablePrivateInventory(entries: ReturnType<typeof files>): Map<string, PrivateArtifactReference> {
+  const byName = new Map(entries.map(item => [item.name, item]));
+  const available = new Map<string, PrivateArtifactReference>();
+  for (const item of entries) {
+    if (!item.name.endsWith(".meta.json")) continue;
+    const ref = item.name.slice(0, -".meta.json".length), metadata = item.proof;
+    if (!["html", "jpg", "json"].includes(metadata.kind)
+      || !Number.isSafeInteger(metadata.bytes) || metadata.bytes < 0
+      || metadata.bytes > DIAGNOSTIC_LIMITS.privateFileBytes || metadata.privacy !== "private") continue;
+    if (byName.get(ref+"."+metadata.kind)?.bytes !== metadata.bytes) continue;
+    available.set(ref, { ref, kind: metadata.kind, bytes: metadata.bytes, privacy: "private" });
+  }
+  return available;
+}
+/** Availability describes the current owned payload/metadata pair, not an old capture receipt. */
+function availablePrivateArtifacts(root: string, references: unknown, inventory?: ReadonlyMap<string, PrivateArtifactReference>): PrivateArtifactReference[] {
+  if (!Array.isArray(references)) return [];
+  return references.filter((item): item is { ref: string; kind: "html" | "jpg" | "json"; bytes: number; privacy: "private" } => {
+    if (!item || typeof item !== "object" || !/^artifact_[0-9a-f-]{36}$/.test(item.ref)
+      || !["html", "jpg", "json"].includes(item.kind) || !Number.isSafeInteger(item.bytes)
+      || item.bytes < 0 || item.bytes > DIAGNOSTIC_LIMITS.privateFileBytes || item.privacy !== "private") return false;
+    if (inventory) {
+      const present = inventory.get(item.ref);
+      return present?.kind === item.kind && present?.bytes === item.bytes;
+    }
+    try {
+      const path = join(root, "private", item.ref + "." + item.kind);
+      const metaPath = join(root, "private", item.ref + ".meta.json");
+      const payload = lstatSync(path), meta = lstatSync(metaPath);
+      if (!payload.isFile() || payload.isSymbolicLink() || payload.size !== item.bytes
+        || !meta.isFile() || meta.isSymbolicLink() || meta.size > 4096) return false;
+      const proof = JSON.parse(readFileSync(metaPath, "utf8"));
+      return proof.owner === OWNER && proof.kind === item.kind && proof.bytes === item.bytes;
+    } catch { return false; }
+  });
 }
 interface AutomaticDiagnosticIncident {
   readonly stage: string;
@@ -422,6 +466,8 @@ interface AutomaticDiagnosticIncident {
   readonly occurrences?: number;
   readonly firstObservedAt?: string;
   readonly failure?: StructuralDiagnosticEvent;
+  /** Exact IDs returned to this producer by the private artifact writer. */
+  readonly capturedArtifactRefs?: readonly string[];
 }
 
 /** Repeated automatic failures share a structural signature, never a raw message or request ID.
@@ -441,27 +487,46 @@ export function writeDiagnosticIncident(root: string, data: ReturnType<typeof an
   const ref = failure ? diagnosticFailureIncidentRef(failure) : `incident_${randomUUID()}`;
   const path = join(root,"incidents",`${ref}.json`);
   const previous = failure && (() => {
-    try { return readDiagnosticIncident(root, ref) as Record<string, any>; }
+    try {
+      const previousPath = join(root,"incidents",ref+".json"), stat = lstatSync(previousPath);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 128*1024) throw new Error("unsafe incident");
+      const record = JSON.parse(readFileSync(previousPath,"utf8"));
+      if (record.owner !== OWNER) throw new Error("incident ownership mismatch");
+      return record as Record<string,any>;
+    }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
   })();
-  const last = failure ?? data.timeline.at(-1);
-  const fingerprint = last?.operation_fingerprint ?? last?.request_fingerprint;
-  const retainedRefs = new Set<string>((previous?.privateArtifacts ?? []).flatMap((artifact: { ref?: unknown }) =>
-    typeof artifact?.ref === "string" && /^artifact_[a-f0-9-]{36}$/.test(artifact.ref) ? [artifact.ref] : []));
-  const artifacts = files(root,"private").filter(item => item.name.endsWith(".meta.json")).flatMap(item => {
+  const previousRefs = (previous?.privateArtifacts ?? []) as PrivateArtifactReference[];
+  const directRefs = "capturedArtifactRefs" in data ? data.capturedArtifactRefs ?? [] : [];
+  const historical = new Map<string, PrivateArtifactReference>();
+  for (const item of previousRefs) {
+    if (!item || typeof item.ref !== "string" || !/^artifact_[0-9a-f-]{36}$/.test(item.ref)
+      || !["html", "jpg", "json"].includes(item.kind) || !Number.isSafeInteger(item.bytes)
+      || item.bytes < 0 || item.bytes > DIAGNOSTIC_LIMITS.privateFileBytes || item.privacy !== "private") continue;
+    historical.set(item.ref,item);
+  }
+  for (const ref of directRefs) {
+    if (typeof ref !== "string" || !/^artifact_[0-9a-f-]{36}$/.test(ref)) continue;
     try {
-      const metadata = item.proof;
-      const artifactRef = item.name.replace(/\.meta\.json$/,"");
-      return ((fingerprint && metadata.operationFingerprint === fingerprint) || retainedRefs.has(artifactRef))
-        && ["html","jpg","json"].includes(metadata.kind)
-        ? [{ ref: item.name.replace(/\.meta\.json$/,""), kind: metadata.kind, bytes: metadata.bytes, privacy: "private" }] : [];
-    } catch { return []; }
-  });
+      const metadataPath = join(root,"private",ref+".meta.json");
+      const metadataStat = lstatSync(metadataPath);
+      if (!metadataStat.isFile() || metadataStat.isSymbolicLink() || metadataStat.size > 4096) continue;
+      const metadata = JSON.parse(readFileSync(metadataPath,"utf8"));
+      if (metadata.owner !== OWNER || metadata.privacy !== "private"
+        || !["html","jpg","json"].includes(metadata.kind)
+        || !Number.isSafeInteger(metadata.bytes) || metadata.bytes < 0
+        || metadata.bytes > DIAGNOSTIC_LIMITS.privateFileBytes) continue;
+      const item: PrivateArtifactReference = { ref, kind: metadata.kind, bytes: metadata.bytes, privacy: "private" };
+      if (availablePrivateArtifacts(root,[item]).length) historical.set(ref,item);
+    } catch { /* Producer may have lost its artifact to normal retention. */ }
+  }
+  const artifacts = [...historical.values()];
   const firstObservedAt = previous?.firstObservedAt ?? previous?.observedAt ?? ("firstObservedAt" in data ? data.firstObservedAt : undefined) ?? data.observedAt;
   const occurrences = Math.min(Number.MAX_SAFE_INTEGER, Number(previous?.occurrences ?? 0) + ("occurrences" in data ? data.occurrences ?? 1 : 1));
   const firstTimeline: StructuralDiagnosticEvent[] = failure
     ? (previous?.firstTimeline ?? previous?.timeline ?? data.timeline).slice(0,32) : [];
-  const record = { ...data, timeline: data.timeline.slice(-DIAGNOSTIC_LIMITS.timeline),
+  const { capturedArtifactRefs: _capturedArtifactRefs, ...incidentData } = data as typeof data & { capturedArtifactRefs?: readonly string[] };
+  const record = { ...incidentData, timeline: data.timeline.slice(-DIAGNOSTIC_LIMITS.timeline),
     ...(failure ? { firstTimeline, firstObservedAt, occurrences } : {}),
     owner: OWNER, schemaVersion: 1, ref, recordedAt: new Date().toISOString(),
     privateArtifactCount: artifacts.length, privateArtifacts: artifacts };
@@ -476,7 +541,9 @@ export function readDiagnosticIncident(root: string, ref: string): unknown {
   if (!INCIDENT_NAME.test(`${ref}.json`)) throw new Error("invalid incident reference");
   const path = join(root,"incidents",`${ref}.json`);
   const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 128*1024) throw new Error("unsafe incident");
-  const record = JSON.parse(readFileSync(path,"utf8")); if (record.owner !== OWNER) throw new Error("incident ownership mismatch"); return record;
+  const record = JSON.parse(readFileSync(path,"utf8")); if (record.owner !== OWNER) throw new Error("incident ownership mismatch");
+  const available = availablePrivateArtifacts(root, record.privateArtifacts);
+  return { ...record, availablePrivateArtifactCount: available.length, availablePrivateArtifacts: available };
 }
 export function setPrivateDiagnosticCapture(root: string, duration: number | "until-disabled") {
   if (duration !== "until-disabled" && (!Number.isInteger(duration) || duration < 0 || duration > 60)) throw new Error("capture minutes must be 0..60");

@@ -814,6 +814,7 @@ describe("ChatGPT semantic provider", () => {
     try {
       const observed = await provider.observeCapabilities(ambiguousSurface.lease);
       expect(observed.state).toBe("ambiguous");
+      if (observed.state === "ambiguous") expect(observed.reason).toBe("composer_multiple");
     } finally {
       await ambiguousSurface.host.close();
     }
@@ -1543,7 +1544,10 @@ describe("ChatGPT semantic provider", () => {
       });
       const observed = await provider.waitForTurnEvent(surface.lease, submitted.value);
       expect(observed.state).toBe("ambiguous");
-      if (observed.state === "ambiguous") expect(observed.candidates).toHaveLength(2);
+      if (observed.state === "ambiguous") {
+        expect(observed.candidates).toHaveLength(2);
+        expect(observed.reason).toBe("assistant_lineages_multiple");
+      }
     } finally {
       await surface.host.close();
     }
@@ -2002,6 +2006,7 @@ describe("ChatGPT semantic provider", () => {
     try {
       const observed = await provider.submitTurn(surface.lease, request());
       expect(observed.state).toBe("probable");
+      if (observed.state === "probable") expect(observed.reason).toBe("composer_readback_unproven");
       expect(driver.activated).toEqual([]);
     } finally {
       await surface.host.close();
@@ -2019,7 +2024,10 @@ describe("ChatGPT semantic provider", () => {
 
       const observed = await submitting;
       expect(observed.state).toBe("ambiguous");
-      if (observed.state === "ambiguous") expect(observed.candidates).toHaveLength(2);
+      if (observed.state === "ambiguous") {
+        expect(observed.candidates).toHaveLength(2);
+        expect(observed.reason).toBe("submission_user_turns_multiple");
+      }
     } finally {
       await surface.host.close();
     }

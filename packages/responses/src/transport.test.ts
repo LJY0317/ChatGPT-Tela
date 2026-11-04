@@ -13,6 +13,7 @@ import {
 import { handleNativeResponsesHttp } from "./transport";
 import { WebRetainedContextUnproven, WEB_RETAINED_CONTEXT_REASONS } from "@chatgpt-tela/core";
 import { NativeProjectionUnsupported, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
+import { webContinuityRecovery } from "./web-continuity-recovery";
 
 const source: CanonicalCurrentTurnSource = {
   async currentTurn(threadId) {
@@ -154,6 +155,13 @@ describe("Native Responses HTTP transport", () => {
       const replay=await handleNativeResponsesHttp(post(body()),gateway);
       expect(replay.status).toBe(400); expect(await replay.json()).toEqual(receipt); expect(sends).toBe(1);
     } finally {await gateway.close();}
+  });
+
+  test("pre-acceptance semantic observations do not claim accepted-turn recovery", () => {
+    const error = new WebObservationUnproven("composer_readback_unproven", "private composer detail", {
+      state: "probable", evidenceCount: 1,
+    });
+    expect(webContinuityRecovery(error)).toBeUndefined();
   });
 
   test("accepted observation failure after progress has identical SSE and retired replay recovery", async () => {
