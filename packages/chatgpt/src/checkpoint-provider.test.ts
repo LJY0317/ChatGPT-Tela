@@ -1,14 +1,13 @@
-import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import { expect, test } from 'bun:test';
-import {mkdtempSync, readFileSync, readdirSync, rmSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import type { BrowserSurfaceLease } from '@chatgpt-tela/browser-host';
 import type { WebContextCheckpointRequest, WebTurnRequest, WebContextAttachmentPreloadRequest } from './index';
 import { ChatGptContextCheckpointProvider, chatGptCheckpointInputTokens } from './checkpoint-provider';
 import { serializeChatGptContextAttachment } from './context-attachment';
-import { decodeNativeInlineEvidence, nativeEvidenceRef, setPrivateDiagnosticCapture, withDiagnosticContext } from '@chatgpt-tela/core';
+import { decodeNativeInlineEvidence, nativeEvidenceRef } from '@chatgpt-tela/core';
 import { webEvidenceFilename } from './turn-media';
 import { formatWebPhysicalContext } from './semantic-provider';
 import { chatGptWebCheckpointSourceTokenLimit, chatGptWebPhysicalLimits } from './physical-limits';
@@ -39,7 +38,7 @@ test.each(['submitting', 'accepted', 'completed'] as const)('checkpoint failure 
     async waitForTurnEvent(_surface, handle) {
       if (phase === 'accepted') throw Error('private observation detail');
       return {state: 'proven', value: {kind: 'completed', providerTurnId: handle.providerTurnId,
-        answer: 'private response', plainAnswer: '{}'}, evidence: []};
+        answer: 'private response', plainAnswer: ''}, evidence: []};
     },
   }));
   try {
@@ -48,7 +47,7 @@ test.each(['submitting', 'accepted', 'completed'] as const)('checkpoint failure 
     const rows = readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(rows.find(row => row.stage === 'checkpoint_operation_failed')).toMatchObject({
       phase, submission_accepted: phase !== 'submitting', completion_observed: phase === 'completed',
-      reason_class: phase === 'completed' ? 'envelope_invalid' : 'provider_error',
+      reason_class: phase === 'completed' ? 'summary_empty' : 'provider_error',
     });
     expect(JSON.stringify(rows)).not.toContain('private');
     expect(JSON.stringify(rows)).not.toContain('synthetic-operation');
@@ -64,7 +63,7 @@ function presentation(plain: string): string {
   }
   return runInNewContext(`(${assistantMarkdown.toString()})(root)`, {root:new Element(),HTMLElement:Element});
 }
-function fixture(change: (value: any) => any = value => value,
+function fixture(change: (value: string) => string = value => value,
   complete: (value: {answer:string;plainAnswer:string}) => {answer:string;plainAnswer?:string} = value => value) {
   let submitted: WebTurnRequest | undefined;
   let preloads = 0;
@@ -83,10 +82,10 @@ function fixture(change: (value: any) => any = value => value,
         webEpochId:request.webEpochId,providerTurnId:'accepted-op'},evidence:[]};
     },
     async waitForTurnEvent(_surface, handle) {
-      const data = submitted!.inertSourceAttachment?.attachment.contextJson ?? submitted!.physicalContext.segments[1]!.content;
-      const plainAnswer = JSON.stringify(change({type:'tela_context_checkpoint_v1',operation:handle.nativeTurnId,
-        sourceDigest:createHash('sha256').update(data).digest('hex'),
-        ...(submitted!.inertSourceAttachment ? {receipt:`TELA_CONTEXT_ACK ${submitted!.inertSourceAttachment.receipt}`} : {}),summary:'Keep abc; result observed; action pending.'}));
+      const summary = 'Keep abc; result observed; action pending.';
+      const receipt = submitted!.inertSourceAttachment
+        ? `\nTELA_CONTEXT_ACK ${submitted!.inertSourceAttachment.receipt}` : '';
+      const plainAnswer = change(summary + receipt);
       return {state:'proven',value:{kind:'completed',providerTurnId:handle.providerTurnId,
         ...complete({answer:presentation(plainAnswer),plainAnswer})},evidence:[]};
     },
@@ -101,34 +100,41 @@ test('dedicated summary is tool-free and keeps the complete source inert', async
   expect(result.value.sourceRevisionId).toBe('r2');
   expect(result.value.content).toContain('abc');
   expect(f.submitted().chatTools).toBeUndefined();
-  expect(f.submitted().physicalContext.segments.at(-1)!.content).toContain('single fenced json code block');
+  expect(f.submitted().physicalContext.segments.at(-1)!.content).toContain('summary as plain text');
   expect(JSON.parse(f.submitted().physicalContext.segments[1]!.content).segments).toEqual(source.physicalContext.segments);
   expect(f.preloads()).toBe(0);
 });
-test('checkpoint consumes unformatted JSON while Markdown preserves literal syntax for display', async () => {
-  const summary = 'Preserve file_name, **bold**, `code`, [link], \\path and the exact identifier.\n다음 작업';
-  const f = fixture(value=>({...value,summary}), event=> {
-    expect(()=>JSON.parse(event.answer)).toThrow();
-    expect(event.answer).toContain('tela\\_context\\_checkpoint\\_v1');
-    expect(JSON.parse(event.plainAnswer).summary).toBe(summary);
+test('checkpoint preserves literal unformatted text including JSON-like fragments and Markdown characters', async () => {
+  const summary = 'Preserve file_name, **bold**, `code`, [link], \\\\path and {\\\"json\\\": broken}\n다음 작업';
+  const f = fixture(() => summary, event => {
+    expect(event.answer).not.toBe(summary);
+    expect(event.plainAnswer).toBe(summary);
     return event;
   });
   const result = await f.provider.createContextCheckpoint(surface,source);
   expect(result.state === 'proven' && result.value.content).toBe(summary);
 });
-test('missing or malformed unformatted body cannot fall back to presentation text', async () => {
+test('checkpoint never infers a missing unformatted body from the presentation', async () => {
   await expect(fixture(value=>value, ({plainAnswer})=>({answer:plainAnswer}))
     .provider.createContextCheckpoint(surface,source)).rejects.toThrow('no proven unformatted body');
-  await expect(fixture(value=>value, ({plainAnswer})=>({answer:plainAnswer,plainAnswer:'not JSON'}))
-    .provider.createContextCheckpoint(surface,source)).rejects.toThrow('not an exact JSON envelope');
 });
-test('foreign source, empty and oversized summaries are rejected rather than cached', async () => {
-  for (const change of [
-    (x: any)=>({...x,sourceDigest:'foreign'}), (x: any)=>({...x,operation:'foreign'}),
-    (x: any)=>({...x,summary:''}), (x: any)=>({...x,summary:'한'.repeat(12000)}),
-  ]) {
-    await expect(fixture(change).provider.createContextCheckpoint(surface,source)).rejects.toThrow('does not prove');
+test('empty and oversized plain summaries are rejected after a proven completion', async () => {
+  for (const summary of ['', ' ', '한'.repeat(12000)]) {
+    await expect(fixture(() => summary).provider.createContextCheckpoint(surface,source)).rejects.toThrow('checkpoint summary');
   }
+});
+test('foreign completed providerTurnId cannot be used as checkpoint success', async () => {
+  const f = fixture(value=>value, value=>value);
+  const base = (f.provider as any).transportFactory;
+  const provider = new ChatGptContextCheckpointProvider(() => {
+    const transport = base();
+    return { ...transport, async waitForTurnEvent(surface: any, handle: any, signal: any) {
+      const completed = await transport.waitForTurnEvent(surface,handle,signal);
+      return { ...completed, value: {...completed.value,providerTurnId:'foreign'} };
+    }};
+  });
+  await expect(provider.createContextCheckpoint(surface,source)).rejects.toThrow('different operation');
+  expect(f.submits()).toBe(1);
 });
 test('large prefixes use one source-and-receipt summary submission with no preload response', async () => {
   const large: WebContextCheckpointRequest = {...source,physicalContext:{...source.physicalContext,
@@ -144,12 +150,18 @@ test('large prefixes use one source-and-receipt summary submission with no prelo
 test('file-only receipt is required in the SAME summary; no missing receipt retry or ACK fallback', async () => {
   const large = {...source, physicalContext: {...source.physicalContext, segments: [source.physicalContext.segments[0]!,
     {type:'revision' as const,revisionId:'r2',kind:'assistant' as const,content:'x'.repeat(250000)}]}};
-  for (const change of [(v:any)=>({...v,receipt:'foreign'}),(v:any)=>{delete v.receipt;return v;}]) {
+  for (const change of [
+    (value:string)=>value.replace(/TELA_CONTEXT_ACK ctxr_[a-f0-9]{32}/,'TELA_CONTEXT_ACK ctxr_'+'f'.repeat(32)),
+    (value:string)=>value.split('\n').slice(0,-1).join('\n'),
+    (value:string)=>value+'\ntrailing text',
+    (value:string)=>value+'\n'+value.split('\n').at(-1),
+  ]) {
     const f=fixture(change);
-    await expect(f.provider.createContextCheckpoint(surface,large)).rejects.toThrow('does not prove');
+    await expect(f.provider.createContextCheckpoint(surface,large)).rejects.toThrow('file receipt');
     expect(f.submits()).toBe(1); expect(f.preloads()).toBe(0);
   }
-  const f=fixture(); await f.provider.createContextCheckpoint(surface,large);
+  const f=fixture(); const result=await f.provider.createContextCheckpoint(surface,large);
+  expect(result.state === 'proven' && result.value.content).toContain('Keep abc');
   expect(JSON.stringify(f.submitted().physicalContext)).not.toContain(f.submitted().inertSourceAttachment!.receipt);
   expect(f.submitted().inertSourceAttachment!.attachment.contextJson).toBe(serializeChatGptContextAttachment(large.physicalContext));
 });
@@ -251,75 +263,23 @@ test('file-backed checkpoint input counts the exact attachment and composer wire
   }
 });
 
-test('checkpoint rejection diagnostics distinguish validation causes without saving source or summary', async () => {
-  const {mkdtempSync,readFileSync,rmSync}=await import('node:fs');
-  const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+test('checkpoint failure diagnostics omit private text but distinguish terminal summary reasons', async () => {
   const root=mkdtempSync(join(tmpdir(),'tela-checkpoint-rejection-'));
-  const file=join(root,'events.jsonl');const previous=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
-  const large={...source,physicalContext:{...source.physicalContext,segments:[
-    {type:'revision' as const,revisionId:'r2',kind:'user' as const,content:'private-source-marker'.repeat(12000)}]}};
+  const file=join(root,'events.jsonl'), previous=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
   try {
     process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
-    const cases:[string,(value:any)=>any][]=[
-      ['envelope_invalid',v=>({...v,type:'foreign'})],
-      ['operation_mismatch',v=>({...v,operation:'foreign'})],
-      ['source_mismatch',v=>({...v,sourceDigest:'foreign'})],
-      ['receipt_mismatch',v=>({...v,receipt:'foreign'})],
-      ['summary_empty',v=>({...v,summary:''})],
-      ['summary_budget',v=>({...v,summary:'private-summary-marker'.repeat(2000)})],
-    ];
-    for(const [,change] of cases){
-      const f=fixture(change);
-      await expect(f.provider.createContextCheckpoint(surface,large)).rejects.toThrow('does not prove');
-      expect(f.submits()).toBe(1);expect(f.preloads()).toBe(0);
+    for (const text of ['', 'private-summary-marker'.repeat(2000)]) {
+      const f=fixture(()=>text);
+      await expect(f.provider.createContextCheckpoint(surface,source)).rejects.toThrow('checkpoint summary');
+      expect(f.submits()).toBe(1);
     }
-    const malformed='{"summary":"private-summary-marker\nvalue"}';
-    const invalid=fixture(v=>v,()=>({answer:'unused',plainAnswer:malformed}));
-    await expect(invalid.provider.createContextCheckpoint(surface,large)).rejects.toThrow('exact JSON');
-    const lines=readFileSync(file,'utf8');
-    const rows=lines.split('\n').filter(Boolean).map(s=>JSON.parse(s));
-    expect(rows.filter(d=>d.stage==='checkpoint_response_rejected').map(d=>d.reason_class)).toEqual([...cases.map(([reason])=>reason),'json_invalid']);
-    expect(rows.find(d=>d.stage==='checkpoint_json_parse_failed')).toMatchObject({
-      body_characters:malformed.length,body_bytes:Buffer.byteLength(malformed),line_break_count:1,
-    });
-    expect(lines).not.toContain('private-source-marker');expect(lines).not.toContain('private-summary-marker');
+    const rows=readFileSync(file,'utf8').split('\n').filter(Boolean).map(line=>JSON.parse(line));
+    expect(rows.filter(row=>row.stage==='checkpoint_response_rejected').map(row=>row.reason_class))
+      .toEqual(['summary_empty','summary_budget']);
+    expect(JSON.stringify(rows)).not.toContain('private-summary-marker');
   } finally {
-    if(previous===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;
+    if(previous===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=previous;
     rmSync(root,{recursive:true,force:true});
-  }
-});
-
-test.each([false, true])('invalid checkpoint JSON captures both renderer representations only with existing opt-in=%s', async enabled => {
-  const root = mkdtempSync(join(tmpdir(), 'tela-checkpoint-private-'));
-  const file = join(root, 'events.jsonl');
-  const prior = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
-  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
-  if (enabled) setPrivateDiagnosticCapture(join(root, 'diagnostics'), 1);
-  const malformed = '{"summary":"synthetic\\qbad"}';
-  const formatted = '```json\n' + malformed + '\n```';
-  const f = fixture(value => value, () => ({answer: formatted, plainAnswer: malformed}));
-  try {
-    await expect(withDiagnosticContext({ operation_fingerprint: 'a'.repeat(24) }, () =>
-      f.provider.createContextCheckpoint(surface, source))).rejects.toThrow('exact JSON');
-    expect(f.submits()).toBe(1);
-    const rows = readFileSync(file, 'utf8');
-    expect(rows).toContain('checkpoint_json_parse_failed');
-    expect(rows).not.toContain(malformed);
-    expect(rows).not.toContain(formatted);
-    const directory = join(root, 'diagnostics', 'private');
-    const files = enabled ? readdirSync(directory).filter(name => name.endsWith('.json') && !name.endsWith('.meta.json')) : [];
-    expect(files).toHaveLength(enabled ? 1 : 0);
-    if (enabled) {
-      const record = JSON.parse(readFileSync(join(directory, files[0]!), 'utf8'));
-      expect(record.phase).toBe('web_execution_failure');
-      expect(record.context.operation_fingerprint).toBe('a'.repeat(24));
-      expect(record.value).toMatchObject({ checkpointPhase: 'json_parse_failed', plainDomText: malformed,
-        formattedMarkdown: formatted });
-      expect(record.value.jsonErrorOffset).toBe(-1); // Runtime-dependent SyntaxError wording.
-    }
-  } finally {
-    if (prior === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
-    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = prior;
-    rmSync(root, {recursive: true, force: true});
   }
 });

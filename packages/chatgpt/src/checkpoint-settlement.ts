@@ -13,8 +13,7 @@ export class WebCheckpointOperationClosed extends Error {
   }
 }
 
-export type CheckpointResponseRejection = "plain_body_unavailable" | "json_invalid" | "envelope_invalid"
-  | "operation_mismatch" | "source_mismatch" | "receipt_mismatch" | "summary_empty" | "summary_budget";
+export type CheckpointResponseRejection = "plain_body_unavailable" | "receipt_mismatch" | "summary_empty" | "summary_budget";
 /** Only created after an exact owned provider operation reached a proven completion. */
 export class WebCheckpointResponseRejected extends Error {
   constructor(readonly receipt: {

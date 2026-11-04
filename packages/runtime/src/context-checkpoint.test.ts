@@ -298,7 +298,7 @@ describe("durable checkpoint settlement", () => {
   test("successful release always closes locally; only exact completion classifies a rejected response",async()=>{
     const {WebCheckpointResponseRejected}=await import("@chatgpt-tela/chatgpt");
     for(const scenario of ["exact","task","source","epoch","empty-operation","generic","close-failed"]){
-      const receipt={nativeTaskId:"task-1",sourceRevisionId:"revision-2",webEpochId:"checkpoint-epoch-1",providerOperationId:"op",reason:"json_invalid" as const};
+      const receipt={nativeTaskId:"task-1",sourceRevisionId:"revision-2",webEpochId:"checkpoint-epoch-1",providerOperationId:"op",reason:"summary_empty" as const};
       if(scenario==="task")receipt.nativeTaskId="foreign";
       if(scenario==="source")receipt.sourceRevisionId="foreign";
       if(scenario==="epoch")receipt.webEpochId="foreign";
