@@ -6,7 +6,8 @@ Only work without sufficient acceptance evidence is listed here. Existing source
 
 - **Unattended coordinator recovery and idle usage.** The isolated synthetic failure reached an existing Web receiver and was read back. Real failed-job ownership, dormant Native coordinator wakeup/resumption, and coordinator request/token usage during a waiting interval remain unaccepted. Do not add polling, replay scheduling, blind retries, or a second Goal engine.
 - **End-to-end Web acceptance.** Verify durable result delivery to the calling task, simultaneous live jobs, exact cancellation and uncertain-ACK recovery, image and continuation paths, and job-to-browser attribution with one-shot approval boundaries on disposable owned tasks.
-- **Installed Goal control.** An isolated same-turn completion passed. The installed live attempt ended during provider streaming before a Goal tool invocation or return was observed; its upstream cause remains unknown. Do not treat it as proof of a Goal-tool defect or successful installed control.
+- **Remote Web result delivery.** Source Chat HTTP/MCP and installed local stdio reads returned correct text, but remote Web delivery to the calling model remains unaccepted. Preserve this distinction when investigating missing results; server emission alone does not establish model receipt.
+- **Installed Goal control.** Isolated same-turn completion and explicit Native Goal completion returned successfully. An earlier provider stream failure preceded any observed Goal invocation; its upstream cause remains unknown. A fresh Web read followed by same-turn completion and no extra turn remains unaccepted.
 - **Visible presentation.** Live sidebar title behavior remains unaccepted. Review the existing Work session preview and contextual help without adding an observer or browser bridge.
 
 ## Context preservation and failure recovery
