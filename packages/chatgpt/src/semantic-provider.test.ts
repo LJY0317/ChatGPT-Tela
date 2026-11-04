@@ -447,7 +447,10 @@ describe("ChatGPT semantic provider", () => {
         const state = await provider.observeTurn(lease, submitted.value);
         expect(state.state).toBe(mode === "ambiguous" ? "ambiguous" : "proven");
         const rows = readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line));
-        expect(rows.find(row => row.stage === "web_tool_continuation_armed")).toMatchObject({ assistant_count: 0, continuation_pending: true });
+        expect(rows.find(row => row.stage === "web_tool_continuation_armed")).toMatchObject({
+          assistant_count: 0, continuation_pending: true,
+          parent_fingerprint: diagnosticFingerprint("SYNTHETIC_PRIVATE_CALL"),
+        });
         expect(rows.find(row => row.stage === "web_semantic_state_observed")).toMatchObject({
           assistant_count: additions.length, parentless_assistant_count: mode === "parentless" ? 1 : 0,
           matched_assistant_count: mode === "matched" ? 1 : 0, complete_assistant_count: additions.length,

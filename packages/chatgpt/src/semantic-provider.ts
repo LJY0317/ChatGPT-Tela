@@ -62,7 +62,6 @@ interface TrackedTurn extends TurnOwnership {
   deferredCompletionEvidence?: Set<string>;
   waitSnapshotCount?: number;
   lastWaitSnapshotAt?: number;
-  diagnosticBoundaryCount?: number;
   publicProgress?: string;
   missingPublicProgressCaptured?: boolean;
   titleOnlyPublicProgressCaptured?: boolean;
@@ -1945,16 +1944,14 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       callId,
       assistantFingerprint: assistantFingerprint(assistant),
     };
-    if ((tracked.diagnosticBoundaryCount ?? 0) < 16) {
-      tracked.diagnosticBoundaryCount = (tracked.diagnosticBoundaryCount ?? 0) + 1;
-      emitDiagnosticEvent("chatgpt_tela_work", "web_tool_continuation_armed", {
-        ...turnObservationFields(snapshot, tracked), assistant_phase: assistant?.phase ?? "absent",
-        ...(tracked.approvalObservation.phase ? { phase: tracked.approvalObservation.phase } : {}),
-        ...(tracked.approvalObservation.cardFingerprint ? { card_fingerprint: tracked.approvalObservation.cardFingerprint } : {}),
-        // A returned Native result is evidence, not proof that a particular approval was accepted.
-        tool_result_observed: true,
-      });
-    }
+    emitDiagnosticEvent("chatgpt_tela_work", "web_tool_continuation_armed", {
+      ...turnObservationFields(snapshot, tracked), assistant_phase: assistant?.phase ?? "absent",
+      parent_fingerprint: diagnosticFingerprint(callId),
+      ...(tracked.approvalObservation.phase ? { phase: tracked.approvalObservation.phase } : {}),
+      ...(tracked.approvalObservation.cardFingerprint ? { card_fingerprint: tracked.approvalObservation.cardFingerprint } : {}),
+      // A returned Native result is evidence, not proof that a particular approval was accepted.
+      tool_result_observed: true,
+    });
     return {
       state: "proven",
       value: { providerTurnId: tracked.handle.providerTurnId, callId },
