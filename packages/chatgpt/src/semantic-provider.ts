@@ -1944,14 +1944,18 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       callId,
       assistantFingerprint: assistantFingerprint(assistant),
     };
-    emitDiagnosticEvent("chatgpt_tela_work", "web_tool_continuation_armed", {
-      ...turnObservationFields(snapshot, tracked), assistant_phase: assistant?.phase ?? "absent",
-      parent_fingerprint: diagnosticFingerprint(callId),
-      ...(tracked.approvalObservation.phase ? { phase: tracked.approvalObservation.phase } : {}),
-      ...(tracked.approvalObservation.cardFingerprint ? { card_fingerprint: tracked.approvalObservation.cardFingerprint } : {}),
-      // A returned Native result is evidence, not proof that a particular approval was accepted.
-      tool_result_observed: true,
-    });
+    try {
+      emitDiagnosticEvent("chatgpt_tela_work", "web_tool_continuation_armed", {
+        ...turnObservationFields(snapshot, tracked), assistant_phase: assistant?.phase ?? "absent",
+        parent_fingerprint: diagnosticFingerprint(callId),
+        ...(tracked.approvalObservation.phase ? { phase: tracked.approvalObservation.phase } : {}),
+        ...(tracked.approvalObservation.cardFingerprint ? { card_fingerprint: tracked.approvalObservation.cardFingerprint } : {}),
+        // A returned Native result is evidence, not proof that a particular approval was accepted.
+        tool_result_observed: true,
+      });
+    } catch {
+      // Diagnostics must not alter a proven tool continuation boundary.
+    }
     return {
       state: "proven",
       value: { providerTurnId: tracked.handle.providerTurnId, callId },

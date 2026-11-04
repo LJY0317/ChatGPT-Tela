@@ -500,17 +500,21 @@ export class RuntimeTurnChannel {
 
   /** Observation only: local delivery/result receipt is not proof of host execution or policy origin. */
   #toolEvidence(stage: string, pending: PendingTool, fields: Readonly<Record<string, DiagnosticScalar>> = {}): void {
-    emitDiagnosticEvent("chatgpt_tela_work", stage, {
-      ...pending.diagnosticContract,
-      scope_fingerprint: diagnosticFingerprint(this.#binding.authority.threadId),
-      turn_fingerprint: diagnosticFingerprint(this.#binding.authority.turnId),
-      operation_fingerprint: diagnosticFingerprint(pending.invocation.callId),
-      mode: pending.invocation.mode, policy: this.#binding.authority.sandbox.kind,
-      root_count: this.#binding.authority.workspaceRoots.length,
-      native_delivery_committed: pending.nativeDelivery === "delivered",
-      result_received: pending.result !== undefined,
-      execution_proven: false, origin_proven: false, ...fields,
-    });
+    try {
+      emitDiagnosticEvent("chatgpt_tela_work", stage, {
+        ...pending.diagnosticContract,
+        scope_fingerprint: diagnosticFingerprint(this.#binding.authority.threadId),
+        turn_fingerprint: diagnosticFingerprint(this.#binding.authority.turnId),
+        operation_fingerprint: diagnosticFingerprint(pending.invocation.callId),
+        mode: pending.invocation.mode, policy: this.#binding.authority.sandbox.kind,
+        root_count: this.#binding.authority.workspaceRoots.length,
+        native_delivery_committed: pending.nativeDelivery === "delivered",
+        result_received: pending.result !== undefined,
+        execution_proven: false, origin_proven: false, ...fields,
+      });
+    } catch {
+      // Diagnostic fingerprints must never interfere with tool delivery or replay.
+    }
   }
 
   #move(to: TurnPhase): void {

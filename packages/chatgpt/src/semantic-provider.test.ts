@@ -425,6 +425,35 @@ describe("ChatGPT semantic provider", () => {
       expect(driver.activated).toEqual([]);
     }finally{await surface.host.close();}
   });
+  test("unhashable tool handoff ID does not interrupt owned continuation", async () => {
+    const scratch=mkdtempSync(join(tmpdir(),"tela-unhashable-handoff-"));
+    const file=join(scratch,"events.jsonl");
+    const prior=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+    const driver=new FixtureDriver(fixture("ready-new-chat"));
+    const {host,lease}=await leaseFor(driver);
+    const provider=new ChatGptSemanticProvider();
+    try {
+      const pending=provider.submitTurn(lease,request());
+      while(driver.current.revision==="r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted=await pending;
+      if(submitted.state!=="proven") throw Error("fixture submit failed");
+      for(const callId of ["PRIVATE\u0000CALL", "x".repeat(16_385)]) {
+        const armed=await provider.armToolContinuation(lease,submitted.value,callId);
+        expect(armed.state).toBe("proven");
+        if(armed.state==="proven") expect(armed.value.callId).toBe(callId);
+      }
+      const raw=readFileSync(file,"utf8");
+      expect(raw).not.toContain("PRIVATE");
+      expect(raw).not.toContain("x".repeat(128));
+    } finally {
+      await host.close();
+      if(prior===undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;
+      await new Promise(resolve=>setImmediate(resolve));rmSync(scratch,{recursive:true,force:true});
+    }
+  });
   test.each(["absent", "parentless", "matched", "ambiguous"] as const)(
     "failure snapshot separates %s assistant linkage without payload evidence", async mode => {
       const scratch = mkdtempSync(join(tmpdir(), "tela-semantic-evidence-"));

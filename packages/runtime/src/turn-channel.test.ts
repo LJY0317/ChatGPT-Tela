@@ -314,6 +314,29 @@ test("progress replay handles reentrant publication and failing subscribers with
   expect(replay).toEqual(seen);
 });
 
+test("unhashable call IDs do not interrupt Native tool delivery and replay", async () => {
+  const scratch=mkdtempSync(join(tmpdir(),"tela-unhashable-call-"));const file=join(scratch,"events.jsonl");
+  const prior=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+  try {
+    for(const callId of ["PRIVATE\u0000CALL","x".repeat(16_385)]) {
+      const channel=new RuntimeTurnChannel(binding([tool("PRIVATE_WIRE")]));channel.markSubmitted();channel.markAccepted();
+      const waiting=channel.requestTool({callId,wireName:"PRIVATE_WIRE",mode:"structured",arguments:{value:"PRIVATE_ARGUMENT"}});
+      channel.markNativeToolDelivered(callId);
+      const result={callId,content:"PRIVATE_RESULT",isError:false};
+      channel.deliverNativeToolResult(result);channel.releaseNativeToolResultToWeb(callId);
+      expect(await waiting).toEqual(result);
+      channel.markWebContinuation();channel.complete("completed");
+      expect(await channel.waitForFinal()).toBe("completed");
+    }
+    const raw=readFileSync(file,"utf8");
+    expect(raw).not.toContain("PRIVATE_");
+    expect(raw).not.toContain("x".repeat(128));
+  }finally{
+    if(prior===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=prior;
+    await new Promise(resolve=>setImmediate(resolve));rmSync(scratch,{recursive:true,force:true});
+  }
+});
+
 test("Native diagnostic witnesses correlate a queued call, local delivery and error result without asserting execution", async () => {
   const scratch=mkdtempSync(join(tmpdir(),"tela-native-tool-witness-"));const file=join(scratch,"events.jsonl");
   const prior=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
