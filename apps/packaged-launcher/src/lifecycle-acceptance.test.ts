@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildPackagedPayload, prepareOwnedDirectory, CURRENT_PACKAGED_LIFECYCLE,
+  buildPackagedPayload, prepareOwnedDirectory, OWNERSHIP_MARKER, CURRENT_PACKAGED_LIFECYCLE,
   readOwnershipManifest, resolveProductPaths, packagedUninstallJournalPath, withPackagedTransitionOwner,
   type ServiceRegistrationCommandResult, type ServiceRegistrationCommandRunner,
   PackagedServiceShutdownNotStartedError, packagedUpgradeJournalPath,
@@ -15,6 +15,7 @@ import { runPackagedChatCommand } from "./chat";
 import { runPackagedServicesCommand } from "./services";
 import { readConfigurationInput, runPackagedBootstrapCommand } from "./bootstrap";
 import { resolveChatGptTelaBrowserProfile } from "@chatgpt-tela/development-runtime/browser-profile";
+import { prepareInstalledProfileOwnership } from "../../cli/src/profile-ownership";
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 
 const removeFixture = registerTemporaryFixtureCleanup();
@@ -73,6 +74,10 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     };
     const options = { platform: "linux" as const, home, environment: {}, runner, shutdownService };
     const paths = resolveProductPaths(options);
+    const profileRoot = join(home, ".config", "ChatGPT Tela");
+    const legacyProfile = join(profileRoot, "Canary-Profile3");
+    mkdirSync(legacyProfile, { recursive: true });
+    writeFileSync(join(legacyProfile, "legacy-fixture.txt"), "external profile fixture");
     // Synthetic external state, never read or write the real app or its private databases.
     const external = [join(home, "official-app"), join(home, "default-config.toml"), join(home, "native-conversation.txt"), join(home, "user-project.txt")];
     for (const path of external) writeFileSync(path, "external fixture: preserve exactly\n");
@@ -184,6 +189,20 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
       writeFileSync(join(setupProfile.userDataDir, "login-fixture.txt"), "synthetic login state\n");
       return 0;
     } });
+    // The ordinary Codex connect path now prepares ownership before Electron starts.
+    const direct = await prepareInstalledProfileOwnership({
+      slot: 2, productPaths: paths, installId: manifest.installId,
+      environment: { CHATGPT_TELA_PROFILE_ROOT: profileRoot },
+    });
+    expect(direct.browserProfile.state).toBe("created-owned");
+    expect(existsSync(join(direct.profile.userDataDir, OWNERSHIP_MARKER))).toBe(true);
+    writeFileSync(join(direct.profile.userDataDir, "connected-fixture.txt"), "synthetic runtime state");
+    const legacy = await prepareInstalledProfileOwnership({
+      slot: 3, productPaths: paths, installId: manifest.installId,
+      environment: { CHATGPT_TELA_PROFILE_ROOT: profileRoot },
+    });
+    expect(legacy.browserProfile.state).toBe("external-existing");
+    expect(readOwnershipManifest(paths.installManifest)?.resources.some(row => row.id === "browser-profile:3")).toBe(false);
     await expect(runPackagedBootstrapCommand(["setup", "--slot", "1"], { ...bootstrap, launchSetup: async () => { throw new Error("fixture setup failed"); } })).rejects.toThrow("fixture setup failed");
     const afterFailure = await runProductUninstall({ ...options, mode: "dry-run", removeData: true, serviceRegistrationRunner: runner });
     expect(afterFailure.activityBlockers).toEqual([]);
@@ -200,6 +219,8 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     const assertSaved = () => {
       expect(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).toBe(productConfig);
       expect(readFileSync(join(setupProfile.userDataDir, "login-fixture.txt"), "utf8")).toBe("synthetic login state\n");
+      expect(readFileSync(join(direct.profile.userDataDir, "connected-fixture.txt"), "utf8")).toBe("synthetic runtime state");
+      expect(readFileSync(join(legacyProfile, "legacy-fixture.txt"), "utf8")).toBe("external profile fixture");
       expect(readFileSync(preferences, "utf8")).toBe(prefs);
       expect(readFileSync(binding, "utf8")).toBe("synthetic login binding\n");
       for (const path of external) expect(readFileSync(path, "utf8")).toBe("external fixture: preserve exactly\n");
@@ -266,7 +287,8 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     const removed = await uninstall("apply", true);
     expect(removed).toMatchObject({ failedCount: 0, preservedCount: 0, manifestRemoved: true });
     for (const path of [paths.binaryRoot, paths.configRoot, paths.cacheRoot, paths.logsRoot,
-      paths.serviceState("chat"), browser, setupProfile.userDataDir, paths.installManifest]) expect(existsSync(path)).toBe(false);
+      paths.serviceState("chat"), browser, setupProfile.userDataDir, direct.profile.userDataDir, paths.installManifest]) expect(existsSync(path)).toBe(false);
+    expect(readFileSync(join(legacyProfile, "legacy-fixture.txt"), "utf8")).toBe("external profile fixture");
     expect(runner.loaded.size).toBe(0);
     for (const path of external) expect(readFileSync(path, "utf8")).toBe("external fixture: preserve exactly\n");
   } finally { removeFixture(root); }

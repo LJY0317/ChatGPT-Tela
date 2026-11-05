@@ -10,27 +10,33 @@ import {
 import { prepareProfileOwnership } from "./profile-ownership";
 
 describe("CLI profile ownership preparation", () => {
-  test("fresh setup owns only browser/profile metadata needed for clean removal", async () => {
+  test("simultaneous fresh slots retain both browser registrations and shared metadata", async () => {
     const home = mkdtempSync(join(tmpdir(), "tela-profile-own-"));
     const productPaths = resolveProductPaths({ platform: "darwin", home, environment: { HOME: home } });
     try {
-      const result = await prepareProfileOwnership({
-        slot: 1,
+      const results = await Promise.all([1, 2].map(slot => prepareProfileOwnership({
+        slot,
         productPaths,
         productVersion: "0.0.0",
         platform: "darwin",
         homeDirectory: home,
         environment: { HOME: home },
-      });
-      expect(result.browserProfile.state).toBe("created-owned");
-      expect(result.accountBindings.state).toBe("created-owned");
-      expect(existsSync(join(result.profile.userDataDir, OWNERSHIP_MARKER))).toBe(true);
+      })));
+      const one = results[0]!;
+      const two = results[1]!;
+      expect(one.browserProfile.state).toBe("created-owned");
+      expect(two.browserProfile.state).toBe("created-owned");
+      expect(existsSync(join(one.profile.userDataDir, OWNERSHIP_MARKER))).toBe(true);
+      expect(existsSync(join(two.profile.userDataDir, OWNERSHIP_MARKER))).toBe(true);
       const resources = readOwnershipManifest(productPaths.installManifest)?.resources ?? [];
       expect(resources).toContainEqual({ kind: "directory", id: "browser-profile:1", owner: "codex",
-        path: result.profile.userDataDir, dataClass: "browser-profile" });
+        path: one.profile.userDataDir, dataClass: "browser-profile" });
+      expect(resources).toContainEqual({ kind: "directory", id: "browser-profile:2", owner: "codex",
+        path: two.profile.userDataDir, dataClass: "browser-profile" });
       expect(resources).toContainEqual({ kind: "directory", id: "account-bindings", owner: "codex",
-        path: join(result.profile.profileRoot, "account-bindings"), dataClass: "state" });
-      expect(resources.some(resource => resource.kind === "directory" && resource.path === result.profile.profileRoot)).toBe(false);
+        path: join(one.profile.profileRoot, "account-bindings"), dataClass: "state" });
+      expect(resources.filter(resource => resource.kind === "directory" && resource.id.startsWith("browser-profile:")).length).toBe(2);
+      expect(resources.some(resource => resource.kind === "directory" && resource.path === one.profile.profileRoot)).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

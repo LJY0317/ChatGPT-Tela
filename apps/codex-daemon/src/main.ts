@@ -10,8 +10,8 @@ import { createLocalNativeAccountProof, type TrustedNativeProfileSession } from 
 import { startWebDelegationRetention } from "../../../packages/codex-service/src/web-delegation-retention";
 import { WebDelegationStore, reconcileWebDelegationCapacity } from "../../../packages/codex-service/src/web-delegation";
 import { approvalDelayMilliseconds, consumeSavedChatAcceptance, readProductPreferences, setWorkProfileConnection, webDelegationLimit } from "@chatgpt-tela/product-config";
-import { resolveProductPaths, readOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
-import { prepareProfileOwnership } from "../../cli/src/profile-ownership";
+import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
+import { prepareInstalledProfileOwnership } from "../../cli/src/profile-ownership";
 import { diagnosticFailureClass, emitDiagnosticEvent, observeDaemonUncaughtFailures, reportDaemonFailure } from "@chatgpt-tela/core";
 import {
   removeServiceRuntimeDescriptor,
@@ -44,9 +44,7 @@ async function main(): Promise<void> {
     profileRuntimeCommand: [runtimeExecutable, runtimeEntrypoint],
     environment: process.env,
     prepareProfileRuntime: async slot => {
-      const ownership = readOwnershipManifest(paths.installManifest);
-      if (!ownership || ownership.installId !== installId) throw Error("Codex profile requires the current installed owner");
-      await prepareProfileOwnership({ slot, productPaths: paths, productVersion: ownership.productVersion, environment: process.env });
+      await prepareInstalledProfileOwnership({ slot, productPaths: paths, installId, environment: process.env });
     },
     webDelegationCapacity: slot => reconcileWebDelegationCapacity(delegationAdapters, slot, lifecycle.signal),
     onProfileConnectionChanged: (...args) => { setWorkProfileConnection(...args); retention?.wake(); },

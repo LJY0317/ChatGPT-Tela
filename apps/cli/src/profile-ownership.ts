@@ -6,6 +6,7 @@ import {
 import {
   ensureOwnershipManifest,
   prepareOwnedDirectory,
+  readOwnershipManifest,
   type PrepareOwnedDirectoryResult,
   type ProductPaths,
 } from "@chatgpt-tela/product-lifecycle";
@@ -65,4 +66,19 @@ export async function prepareProfileOwnership(input: {
     },
   });
   return Object.freeze({ profile, browserProfile, accountBindings });
+}
+
+/** Installed Codex connections use setup's persistent profile registration. */
+export async function prepareInstalledProfileOwnership(input: {
+  readonly slot: number;
+  readonly productPaths: ProductPaths;
+  readonly installId: string;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+}): Promise<ProfileOwnershipPreparation> {
+  const ownership = readOwnershipManifest(input.productPaths.installManifest);
+  if (!ownership || ownership.installId !== input.installId) throw Error("Codex profile requires the current installed owner");
+  return prepareProfileOwnership({
+    slot: input.slot, productPaths: input.productPaths, productVersion: ownership.productVersion,
+    ...(input.environment ? { environment: input.environment } : {}),
+  });
 }

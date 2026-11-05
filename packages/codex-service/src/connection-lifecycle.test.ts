@@ -5,8 +5,8 @@ import type { CodexNativeTargetAdapter } from "./native-target";
 import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { prepareProfileOwnership } from "../../../apps/cli/src/profile-ownership";
-import { OWNERSHIP_MARKER, readOwnershipManifest, resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
+import { prepareInstalledProfileOwnership } from "../../../apps/cli/src/profile-ownership";
+import { OWNERSHIP_MARKER, ensureOwnershipManifest, readOwnershipManifest, resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 
 function fixture(state: string, targetState: string, desktopProcessId?: number) {
   const target = { slot: 1, adapterKind: "default-desktop" as const, id: "default", displayName: "ChatGPT", state: targetState, managed: true };
@@ -52,14 +52,16 @@ test("profile startup passes the exact owned slot to its optional environment au
 test("direct profile connection records fresh Electron partition ownership before runtime launch", async () => {
   const home = mkdtempSync(join(tmpdir(), "tela-direct-profile-owner-"));
   const paths = resolveProductPaths({ platform: "darwin", home, environment: {} });
+  const manifest = await ensureOwnershipManifest({ path: paths.installManifest, productVersion: "1.0.0" });
   const native = fixture("available", "stopped");
   const observed: string[] = [];
   const service = await startCodexService({
     config: {}, profileRuntimeCommand: ["unused"], nativeTargetAdapter: native.adapter,
     async prepareProfileRuntime(slot) {
       observed.push(`prepare:${slot}`);
-      const result = await prepareProfileOwnership({
-        slot, productPaths: paths, productVersion: "1.0.0", platform: "darwin", homeDirectory: home, environment: {},
+      const result = await prepareInstalledProfileOwnership({
+        slot, productPaths: paths, installId: manifest.installId,
+        environment: { CHATGPT_TELA_PROFILE_ROOT: join(home, "Library/Application Support/ChatGPT Tela") },
       });
       expect(result.browserProfile.state).toBe("created-owned");
     },
