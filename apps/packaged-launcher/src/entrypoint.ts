@@ -4,10 +4,11 @@ if (process.argv[2] === "--tela-operation-owner-v1") {
 } else if (process.argv[2] === "--tela-daemon") {
   const service = process.argv[3];
   process.argv.splice(2, 2);
+  const { launchDaemon } = await import("./daemon-entry");
   switch (service) {
-    case "gateway": await import("../../gateway-daemon/src/main"); break;
-    case "chat": await import("../../chat-daemon/src/main"); break;
-    case "codex": await import("../../codex-daemon/src/main"); break;
+    case "gateway": await launchDaemon("gateway", () => import("../../gateway-daemon/src/main")); break;
+    case "chat": await launchDaemon("chat", () => import("../../chat-daemon/src/main")); break;
+    case "codex": await launchDaemon("codex", () => import("../../codex-daemon/src/main")); break;
     default: throw new Error("packaged daemon must be gateway, chat, or codex");
   }
 } else if (process.argv[2] === "local-mcp") {

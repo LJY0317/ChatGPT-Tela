@@ -255,7 +255,7 @@ async function ensureSourceServices(
     await supervisor.ensure({
       service: "chat",
       descriptorPath: serviceDescriptorPath(productPaths, "chat"),
-      command: [process.execPath, resolve(repoRoot, "apps/chat-daemon/src/main.ts")],
+      command: [process.execPath, resolve(repoRoot, "apps/packaged-launcher/src/entrypoint.ts"), "--tela-daemon", "chat"],
       cwd: repoRoot,
       environment: {
         CHATGPT_TELA_INSTALL_ID: installId,
@@ -270,7 +270,7 @@ async function ensureSourceServices(
   const codex = await supervisor.ensure({
     service: "codex",
     descriptorPath: serviceDescriptorPath(productPaths, "codex"),
-    command: [process.execPath, resolve(repoRoot, "apps/codex-daemon/src/main.ts")],
+    command: [process.execPath, resolve(repoRoot, "apps/packaged-launcher/src/entrypoint.ts"), "--tela-daemon", "codex"],
     cwd: repoRoot,
     environment: {
       CHATGPT_TELA_INSTALL_ID: installId,
@@ -287,7 +287,7 @@ async function ensureSourceServices(
   await supervisor.ensure({
     service: "gateway",
     descriptorPath: serviceDescriptorPath(productPaths, "gateway"),
-    command: [process.execPath, resolve(repoRoot, "apps/gateway-daemon/src/main.ts")],
+    command: [process.execPath, resolve(repoRoot, "apps/packaged-launcher/src/entrypoint.ts"), "--tela-daemon", "gateway"],
     cwd: repoRoot,
     environment: {
       CHATGPT_TELA_INSTALL_ID: installId,

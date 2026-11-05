@@ -31,8 +31,8 @@ function directFailureClass(error: unknown): DiagnosticFailureClass {
   try {
     if (!error || typeof error !== "object") return "unknown";
     const item = error as { readonly name?: unknown; readonly code?: unknown; readonly message?: unknown };
+    if (item.code === "ENOENT" || item.code === "ERR_MODULE_NOT_FOUND") return "not_found";
     if (item.name === "TypeError") return "type_error";
-    if (item.code === "ENOENT") return "not_found";
     if (item.code === "tela_service_http_error") return "http_rejected";
     if (item.name === "AbortError") return "aborted";
     if (item.name === "TimeoutError" || item.code === "ETIMEDOUT") return "timeout";
